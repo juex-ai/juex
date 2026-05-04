@@ -42,7 +42,7 @@ deferral.
 - `internal/version/version_test.go` — JSON round-trip, build defaults, ldflags overrides, runtime context inclusion.
 - `internal/cli/cli_test.go` — short/verbose/JSON version forms, schema shape, dry-run sentinel + plan, missing env/cwd → `*notFoundError`, JSON error shape, exit-code mapping table.
 - `cmd/juex/main_test.go` — exec'd binary smoke (version + help + bad subcommand + missing prompt + missing env + `--cwd` flag accepted).
-- `tests/e2e/live_loading_test.go` — **builds the real `juex` binary**, points it at a tempdir with a skill plus an `mcp.json` that launches a real Python MCP server (via `uv run` against `tests/e2e/testdata/fake-mcp/server.py`, which uses the official `mcp` Python SDK). Asserts that `juex run --dry-run --json` reports both `read_skill` (skill loader registered the helper) **and** `mcp__local__echo` (MCP loader started the subprocess and registered the advertised tool). Skipped when `uv` is not on PATH.
+- `tests/e2e/live_loading_test.go` — **builds the real `juex` binary**, points it at a tempdir with a skill plus an `mcp.json` that launches a real Python MCP server (via `uv run` against `tests/e2e/testdata/fake-mcp/server.py`, which uses the official `mcp` Python SDK). Asserts that `juex run --dry-run --json` reports `mcp__local__echo` in the tool list (MCP loader started the subprocess and registered the advertised tool) **and** the `trim-tool` skill in the plan's `skills` array with its absolute path (skill loader scanned the dir and surfaced the path for the model to `read`). Skipped when `uv` is not on PATH.
 
 Run the suite:
 

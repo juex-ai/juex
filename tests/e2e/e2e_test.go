@@ -4,7 +4,7 @@
 // What this exercise covers:
 //
 //   - AGENTS.md hierarchy loading (project + subdir + global)
-//   - Skill loading + read_skill tool call
+//   - Skill loading (path appears in system prompt; model loads body via `read`)
 //   - Memory entries -> system prompt + memory_write/search round-trip
 //   - MCP stdio client -> registered as mcp__<server>__<tool> in the registry
 //   - Builtin tools end-to-end: write, read, edit, bash, grep
@@ -80,7 +80,7 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 		for _, t := range tools {
 			toolNames[t.Name] = true
 		}
-		for _, want := range []string{"read", "write", "edit", "bash", "grep", "read_skill", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
+		for _, want := range []string{"read", "write", "edit", "bash", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
 			if !toolNames[want] {
 				p.t.Errorf("tool %q missing from registry; have %v", want, keys(toolNames))
 			}
@@ -178,9 +178,6 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	if err := skillLoader.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if err := skillLoader.RegisterTool(reg); err != nil {
-		t.Fatal(err)
-	}
 	if err := memStore.RegisterTools(reg); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +246,10 @@ func TestEndToEnd_FullStack(t *testing.T) {
 						"name": "demo-finding", "description": "demo file now ends with FINAL",
 						"type": "project", "body": "edited via e2e",
 					}},
-					{Type: llm.BlockToolUse, ToolUseID: "t8", ToolName: "read_skill", Input: map[string]any{"name": "trim-tool"}},
+					// The model loads a skill body via the standard `read` tool;
+					// the absolute path was advertised in the system prompt's
+					// "Available Skills" section.
+					{Type: llm.BlockToolUse, ToolUseID: "t8", ToolName: "read", Input: map[string]any{"path": filepath.Join(projectAgents, "skills", "trim-tool", "SKILL.md")}},
 				}},
 				StopReason: llm.StopToolUse,
 			},

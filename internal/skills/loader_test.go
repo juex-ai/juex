@@ -1,13 +1,10 @@
 package skills
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/juex-ai/juex/internal/tools"
 )
 
 func writeSkill(t *testing.T, root, name, body string) {
@@ -79,26 +76,25 @@ func TestLoader_PromptSectionEmpty(t *testing.T) {
 	}
 }
 
-func TestLoader_ReadSkillTool(t *testing.T) {
+func TestLoader_PromptSectionExposesAbsolutePath(t *testing.T) {
+	// The prompt section must give the model the absolute path so it can
+	// load the body with the standard `read` builtin (no dedicated tool).
 	dir := t.TempDir()
-	writeSkill(t, dir, "mySkill", "---\nname: mySkill\ndescription: x\n---\nbody here")
+	writeSkill(t, dir, "mySkill", "---\nname: mySkill\ndescription: do x\n---\nbody here")
 	l := NewLoader(dir)
 	l.Load()
 
-	r := tools.NewRegistry()
-	if err := l.RegisterTool(r); err != nil {
-		t.Fatal(err)
+	section := l.PromptSection()
+	want := filepath.Join(dir, "mySkill", "SKILL.md")
+	if !strings.Contains(section, want) {
+		t.Fatalf("prompt section missing absolute path %q in:\n%s", want, section)
 	}
-	out, err := r.Call(context.Background(), "read_skill", map[string]any{"name": "mySkill"})
-	if err != nil {
-		t.Fatal(err)
+	if !strings.Contains(section, "do x") {
+		t.Fatalf("prompt section missing description in:\n%s", section)
 	}
-	if out != "body here" {
-		t.Fatalf("body = %q", out)
-	}
-
-	if _, err := r.Call(context.Background(), "read_skill", map[string]any{"name": "missing"}); err == nil {
-		t.Fatal("expected error for missing skill")
+	// Instruction line must point the model at the `read` builtin.
+	if !strings.Contains(section, "`read`") {
+		t.Fatalf("prompt should tell the model to use `read` against the path; got:\n%s", section)
 	}
 }
 

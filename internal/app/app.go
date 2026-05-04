@@ -85,9 +85,9 @@ func New(opts Options) (*App, error) {
 	if err := skillLoader.Load(); err != nil {
 		return nil, err
 	}
-	if err := skillLoader.RegisterTool(reg); err != nil {
-		return nil, err
-	}
+	// Skills are surfaced via the system prompt's "Available Skills"
+	// section (each entry includes its absolute path); the model loads a
+	// skill body with the standard `read` builtin. No dedicated tool.
 
 	memStore := memory.NewStore(cfg.MemoryDir())
 	if err := memStore.RegisterTools(reg); err != nil {

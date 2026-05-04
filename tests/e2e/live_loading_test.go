@@ -58,22 +58,38 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	}
 
 	var plan struct {
-		Tools []string `json:"tools"`
+		Tools  []string `json:"tools"`
+		Skills []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+		} `json:"skills"`
 	}
 	if err := json.Unmarshal(out, &plan); err != nil {
 		t.Fatalf("parse plan: %v\noutput:\n%s", err, out)
 	}
 
+	// MCP server started + tool registered.
 	have := map[string]bool{}
 	for _, name := range plan.Tools {
 		have[name] = true
 	}
-
-	if !have["read_skill"] {
-		t.Errorf("read_skill not in tool list (skills not loaded?). tools=%v", plan.Tools)
-	}
 	if !have["mcp__local__echo"] {
 		t.Errorf("mcp__local__echo not in tool list (MCP server not loaded?). tools=%v", plan.Tools)
+	}
+
+	// Skill loaded: name + absolute path appear in the dry-run plan.
+	skillFound := false
+	for _, s := range plan.Skills {
+		if s.Name == "trim-tool" {
+			skillFound = true
+			wantPath := filepath.Join(work, ".agents", "skills", "trim-tool", "SKILL.md")
+			if s.Path != wantPath {
+				t.Errorf("trim-tool path = %q, want %q", s.Path, wantPath)
+			}
+		}
+	}
+	if !skillFound {
+		t.Errorf("trim-tool not in plan.skills (skills not loaded?). skills=%+v", plan.Skills)
 	}
 }
 

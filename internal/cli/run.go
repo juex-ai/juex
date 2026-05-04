@@ -35,19 +35,30 @@ type errorJSON struct {
 }
 
 // dryRunPlan is the JSON shape emitted by `juex run --dry-run`.
+//
+// Derivable paths (memory_dir / sessions_dir under <work_dir>/.agents)
+// are intentionally omitted — readers can reconstruct them from work_dir.
 type dryRunPlan struct {
-	ProviderType string   `json:"provider_type"`
-	Model        string   `json:"model"`
-	BaseURL      string   `json:"base_url"`
-	WorkDir      string   `json:"work_dir"`
-	EnvFile      string   `json:"env_file,omitempty"`
-	Prompt       string   `json:"prompt"`
-	PromptChars  int      `json:"prompt_chars"`
-	SystemChars  int      `json:"system_prompt_chars"`
-	ToolCount    int      `json:"tool_count"`
-	Tools        []string `json:"tools"`
-	MemoryDir    string   `json:"memory_dir"`
-	SessionsDir  string   `json:"sessions_dir"`
+	ProviderType string         `json:"provider_type"`
+	Model        string         `json:"model"`
+	BaseURL      string         `json:"base_url"`
+	WorkDir      string         `json:"work_dir"`
+	EnvFile      string         `json:"env_file,omitempty"`
+	Prompt       string         `json:"prompt"`
+	PromptChars  int            `json:"prompt_chars"`
+	SystemChars  int            `json:"system_prompt_chars"`
+	ToolCount    int            `json:"tool_count"`
+	Tools        []string       `json:"tools"`
+	SkillCount   int            `json:"skill_count"`
+	Skills       []skillSummary `json:"skills,omitempty"`
+}
+
+// skillSummary mirrors what the system prompt's "Available Skills" section
+// shows: each skill's name + absolute SKILL.md path. Useful for agents
+// that want to enumerate skills programmatically (no parsing the prompt).
+type skillSummary struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
 }
 
 // noopProvider stands in for the real LLM provider during a dry run so
@@ -173,6 +184,12 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	for i, t := range toolList {
 		tools[i] = t.Name
 	}
+	var skillSummaries []skillSummary
+	if pb := a.Engine.Prompt; pb != nil && pb.Skills != nil {
+		for _, s := range pb.Skills.All() {
+			skillSummaries = append(skillSummaries, skillSummary{Name: s.Name, Path: s.Path})
+		}
+	}
 	plan := dryRunPlan{
 		ProviderType: cfg.ProviderType,
 		Model:        cfg.Model,
@@ -184,8 +201,8 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		SystemChars:  len(system),
 		ToolCount:    len(tools),
 		Tools:        tools,
-		MemoryDir:    cfg.MemoryDir(),
-		SessionsDir:  cfg.SessionsDir(),
+		SkillCount:   len(skillSummaries),
+		Skills:       skillSummaries,
 	}
 
 	if jsonOut {

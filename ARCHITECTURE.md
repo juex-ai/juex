@@ -161,7 +161,9 @@ func (r *Registry) Specs() []llm.ToolSpec
 func (r *Registry) Call(ctx, name, input) (string, error)
 ```
 
-Builtin set (5 file/exec + 3 meta):
+Builtin set (5 file/exec + 3 memory). Skills are NOT a tool — they are
+markdown files surfaced in the system prompt; the model reads a skill body
+with the standard `read` builtin against the path printed there.
 
 | Name | Purpose |
 |---|---|
@@ -170,7 +172,6 @@ Builtin set (5 file/exec + 3 meta):
 | `edit` | old -> new in-place replace |
 | `bash` | run shell (timeout, cwd; defaults to WorkDir) |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
-| `read_skill` | lazy-load full skill body |
 | `memory_write` | persist a memory entry |
 | `memory_search` | substring match |
 | `memory_delete` | remove an entry by name |
@@ -421,11 +422,15 @@ Loading flow:
 
 1. on startup, scan user + project skill dirs (project last → overrides)
 2. parse each SKILL.md frontmatter -> `name + description + body`
-3. concat all descriptions into the system prompt under `## Available Skills`
-4. expose a `read_skill(name)` tool; the body is loaded lazily on demand
+3. emit a `## Available Skills` section in the system prompt; each entry
+   shows the skill's **absolute SKILL.md path** alongside its description
+4. when the model decides a skill applies, it calls the standard `read`
+   builtin against that path — no dedicated `read_skill` tool
 
 No embedding retrieval / auto-activation in v0.0.1 — the LLM picks via
-description and calls `read_skill` when it wants the body.
+description and reads the file path when it wants the body. Dropping the
+dedicated tool follows agent-CLI principle 7 (fewer surfaces ⇒ fewer
+hallucinations).
 
 ---
 
