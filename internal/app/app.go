@@ -73,9 +73,8 @@ func New(opts Options) (*App, error) {
 
 	bus := events.NewBus()
 	if opts.Verbose {
-		bus.Subscribe("*", func(e events.Event) {
-			fmt.Fprintf(stderr, "[%s] %v\n", e.Type, e.Payload)
-		})
+		vp := newVerbosePrinter(stderr)
+		bus.Subscribe("*", vp.handle)
 	}
 
 	reg := tools.NewRegistry()

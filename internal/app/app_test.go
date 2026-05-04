@@ -121,7 +121,7 @@ func TestApp_VerboseEmitsToStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := stderr.String()
-	for _, want := range []string{"turn.started", "llm.requested", "turn.completed"} {
+	for _, want := range []string{"› user: x", "[turn 1]", "assistant: ok", "✓ done in"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("verbose stderr missing %q in:\n%s", want, body)
 		}

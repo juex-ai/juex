@@ -20,6 +20,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,8 +92,16 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 			return "", e.failTurn(turnID, fmt.Errorf("llm: %w", err))
 		}
 
+		// Enrich the responded event with the assistant's text + thinking +
+		// tool calls so verbose UIs can render them without subscribing to
+		// the conversation log. Bounded by what the LLM returned in this
+		// single turn, so payload size is reasonable.
 		e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: map[string]any{
-			"stop_reason": resp.StopReason, "usage": resp.Usage,
+			"stop_reason": resp.StopReason,
+			"usage":       resp.Usage,
+			"text":        responseText(resp.Message),
+			"thinking":    responseThinking(resp.Message),
+			"tool_calls":  responseToolCalls(resp.Message),
 		}})
 
 		// Always persist the assistant response, even if it is empty (so
@@ -127,7 +137,12 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 				} else {
 					block.Content = out
 					e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: map[string]any{
-						"name": call.ToolName, "len": len(out),
+						"name":        call.ToolName,
+						"tool_use_id": call.ToolUseID,
+						"len":         len(out),
+						// Truncated preview so events.jsonl stays readable
+						// for tools that return many KB.
+						"preview": truncate(out, 200),
 					}})
 				}
 				results[idx] = block
@@ -167,4 +182,57 @@ func newID() string {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// responseText concatenates every text block of an assistant message.
+// Used to enrich the llm.responded event payload for verbose UIs.
+func responseText(m llm.Message) string {
+	var sb strings.Builder
+	for _, b := range m.Blocks {
+		if b.Type == llm.BlockText {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
+}
+
+// responseThinking concatenates every reasoning block (anthropic thinking
+// or deepseek reasoning_content). Empty when the model didn't think.
+func responseThinking(m llm.Message) string {
+	var sb strings.Builder
+	for _, b := range m.Blocks {
+		if b.Type == llm.BlockReasoning {
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
+}
+
+// responseToolCalls returns one summary entry per tool_use block in the
+// assistant message: name + input map. Used by verbose UIs.
+func responseToolCalls(m llm.Message) []map[string]any {
+	var out []map[string]any
+	for _, b := range m.Blocks {
+		if b.Type == llm.BlockToolUse {
+			out = append(out, map[string]any{
+				"tool_use_id": b.ToolUseID,
+				"name":        b.ToolName,
+				"input":       b.Input,
+			})
+		}
+	}
+	return out
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated, total " + strconv.Itoa(len(s)) + " bytes)"
 }
