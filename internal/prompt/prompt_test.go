@@ -1,0 +1,195 @@
+package prompt
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/memory"
+	"github.com/juex-ai/juex/internal/skills"
+)
+
+func TestBuilder_AllSourcesPresent(t *testing.T) {
+	root := t.TempDir()
+	// AGENTS.md at the project root
+	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rule: be helpful"), 0o644)
+	// AGENTS.md at a subdir (cwd)
+	subdir := filepath.Join(root, "sub")
+	os.MkdirAll(subdir, 0o755)
+	os.WriteFile(filepath.Join(subdir, "AGENTS.md"), []byte("subdir rule: prefer brevity"), 0o644)
+
+	// global agents file
+	globalDir := t.TempDir()
+	globalAgents := filepath.Join(globalDir, "AGENTS.md")
+	os.WriteFile(globalAgents, []byte("global rule: be polite"), 0o644)
+
+	// skills dir
+	skillRoot := t.TempDir()
+	skillDir := filepath.Join(skillRoot, "x")
+	os.MkdirAll(skillDir, 0o755)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: x\ndescription: do X\n---\nbody"), 0o644)
+	loader := skills.NewLoader(skillRoot)
+	loader.Load()
+
+	// memory store
+	store := memory.NewStore(t.TempDir())
+	store.Write(memory.Entry{Name: "no-emoji", Description: "Never use emoji", Type: "feedback", Body: "Reason."})
+
+	b := &Builder{
+		GlobalAgentsMDPath: globalAgents,
+		AgentsMDDirs:       []string{root, subdir},
+		Memory:             store,
+		Skills:             loader,
+		Now:                func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+
+	got := b.Build()
+	mustContain(t, got, "project rule")
+	mustContain(t, got, "subdir rule")
+	mustContain(t, got, "global rule")
+	mustContain(t, got, "Available Skills")
+	mustContain(t, got, "do X")
+	mustContain(t, got, "Memory")
+	mustContain(t, got, "no-emoji")
+	mustContain(t, got, "Operating Context")
+	mustContain(t, got, "2026-05-01")
+}
+
+func TestBuilder_EmptySourcesSkipped(t *testing.T) {
+	b := &Builder{
+		AgentsMDDirs: []string{t.TempDir()}, // no AGENTS.md
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	got := b.Build()
+	if strings.Contains(got, "Available Skills") {
+		t.Errorf("should not have skills section: %q", got)
+	}
+	if strings.Contains(got, "## Memory") {
+		t.Errorf("should not have memory section")
+	}
+	mustContain(t, got, "Operating Context") // always present
+}
+
+func TestBuilder_AgentsMDOrderingDeterministic(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	os.WriteFile(filepath.Join(rootA, "AGENTS.md"), []byte("AAA"), 0o644)
+	os.WriteFile(filepath.Join(rootB, "AGENTS.md"), []byte("BBB"), 0o644)
+	b := &Builder{
+		AgentsMDDirs: []string{rootA, rootB},
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	got := b.Build()
+	posA := strings.Index(got, "AAA")
+	posB := strings.Index(got, "BBB")
+	if posA < 0 || posB < 0 {
+		t.Fatalf("missing one: %q", got)
+	}
+	if posA > posB {
+		t.Errorf("expected AAA before BBB; got: %q", got)
+	}
+}
+
+func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
+	globalDir := t.TempDir()
+	globalAgents := filepath.Join(globalDir, "AGENTS.md")
+	os.WriteFile(globalAgents, []byte("only-global-rule"), 0o644)
+
+	b := &Builder{
+		GlobalAgentsMDPath: globalAgents,
+		AgentsMDDirs:       []string{t.TempDir()}, // empty
+		Now:                func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	got := b.Build()
+	mustContain(t, got, "only-global-rule")
+	mustContain(t, got, "Operating Context")
+}
+
+func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("only-project-rule"), 0o644)
+
+	b := &Builder{
+		AgentsMDDirs: []string{root},
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	got := b.Build()
+	mustContain(t, got, "only-project-rule")
+}
+
+func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
+	b := &Builder{
+		AgentsMDDirs: []string{t.TempDir()},
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
+	}
+	got := b.Build()
+	for _, want := range []string{"cwd:", "os:", "time:", "2026-05-01T12:30:45Z"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("operating context missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuilder_MemorySectionRendersAllEntries(t *testing.T) {
+	store := memory.NewStore(t.TempDir())
+	store.Write(memory.Entry{Name: "one", Description: "first desc", Type: "feedback", Body: "b"})
+	store.Write(memory.Entry{Name: "two", Description: "second desc", Type: "user", Body: "b"})
+	store.Write(memory.Entry{Name: "three", Description: "third desc", Type: "project", Body: "b"})
+
+	b := &Builder{
+		AgentsMDDirs: []string{t.TempDir()},
+		Memory:       store,
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	got := b.Build()
+	for _, want := range []string{"## Memory", "first desc", "second desc", "third desc", "feedback", "user", "project"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("rule"), 0o644)
+
+	b := &Builder{
+		AgentsMDDirs: []string{root},
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	got := b.Build()
+	if !strings.Contains(got, "---") {
+		t.Fatalf("expected --- divider between sections, got:\n%s", got)
+	}
+}
+
+func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
+	// Memory writes between Build() calls must be reflected.
+	root := t.TempDir()
+	store := memory.NewStore(t.TempDir())
+	b := &Builder{
+		AgentsMDDirs: []string{root},
+		Memory:       store,
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+
+	first := b.Build()
+	if strings.Contains(first, "added-after") {
+		t.Fatal("entry should not be present yet")
+	}
+	store.Write(memory.Entry{Name: "added-after", Description: "added-after", Type: "feedback", Body: "b"})
+	second := b.Build()
+	if !strings.Contains(second, "added-after") {
+		t.Fatalf("rebuild missed new memory entry:\n%s", second)
+	}
+}
+
+func mustContain(t *testing.T, hay, needle string) {
+	t.Helper()
+	if !strings.Contains(hay, needle) {
+		t.Errorf("expected %q in:\n%s", needle, hay)
+	}
+}

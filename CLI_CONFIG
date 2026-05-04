@@ -1,0 +1,10 @@
+# Juex CLI metadata. Single source of truth for the version string.
+# Build scripts (Makefile, scripts/build.sh, scripts/install-local.sh) read
+# this file and inject the values into the binary via -ldflags -X.
+# To bump the release version: edit VERSION below, commit, then
+#   git tag v<VERSION> && git push --tags
+# (release.yml will run goreleaser).
+
+VERSION=0.0.1
+NAME=juex
+DESCRIPTION=Single-binary Go agent runtime

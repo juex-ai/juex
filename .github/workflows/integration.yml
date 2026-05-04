@@ -1,0 +1,37 @@
+name: integration
+on:
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - name: write env files
+        env:
+          ANTHROPIC_TYPE:  ${{ secrets.PROVIDER_API_TYPE_ANTHROPIC }}
+          ANTHROPIC_BASE:  ${{ secrets.PROVIDER_API_BASE_ANTHROPIC }}
+          ANTHROPIC_KEY:   ${{ secrets.PROVIDER_API_KEY_ANTHROPIC }}
+          ANTHROPIC_MODEL: ${{ secrets.PROVIDER_API_MODEL_ANTHROPIC }}
+          OPENAI_TYPE:     ${{ secrets.PROVIDER_API_TYPE_OPENAI }}
+          OPENAI_BASE:     ${{ secrets.PROVIDER_API_BASE_OPENAI }}
+          OPENAI_KEY:      ${{ secrets.PROVIDER_API_KEY_OPENAI }}
+          OPENAI_MODEL:    ${{ secrets.PROVIDER_API_MODEL_OPENAI }}
+        run: |
+          cat > .env.local.anthropic <<EOF
+          PROVIDER_API_TYPE=$ANTHROPIC_TYPE
+          PROVIDER_API_BASE=$ANTHROPIC_BASE
+          PROVIDER_API_KEY=$ANTHROPIC_KEY
+          PROVIDER_API_MODEL=$ANTHROPIC_MODEL
+          EOF
+          cat > .env.local.openai <<EOF
+          PROVIDER_API_TYPE=$OPENAI_TYPE
+          PROVIDER_API_BASE=$OPENAI_BASE
+          PROVIDER_API_KEY=$OPENAI_KEY
+          PROVIDER_API_MODEL=$OPENAI_MODEL
+          EOF
+      - run: go test -tags=integration ./tests/e2e/... -v -count=1

@@ -1,0 +1,54 @@
+project_name: juex
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: juex
+    main: ./cmd/juex
+    binary: juex
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/juex-ai/juex/internal/version.Version={{.Version}}
+      - -X github.com/juex-ai/juex/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/juex-ai/juex/internal/version.BuildTime={{.Date}}
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: juex
+    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}_{{.Arch}}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE*
+      - README.md
+      - ARCHITECTURE.md
+      - DESIGN.md
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: juex-ai
+    name: juex
+  draft: false
+  prerelease: auto

@@ -1,0 +1,55 @@
+.PHONY: test lint build snapshot release-dry integration clean help install-local cross
+
+# Read VERSION from CLI_CONFIG (single source of truth). The git describe
+# output is preferred when available (carries dirty / commit suffix), else
+# fall back to the bare CLI_CONFIG value (suffixed -dev).
+CLI_CONFIG_VERSION := $(shell awk -F= '/^VERSION=/{print $$2}' CLI_CONFIG)
+VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo $(CLI_CONFIG_VERSION)-dev)
+COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILDTIME := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+
+DIST_BIN := dist/juex
+
+LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
+           -X github.com/juex-ai/juex/internal/version.Commit=$(COMMIT) \
+           -X github.com/juex-ai/juex/internal/version.BuildTime=$(BUILDTIME)
+
+help:
+	@echo "Targets:"
+	@echo "  test          go test ./..."
+	@echo "  lint          golangci-lint run"
+	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
+	@echo "  install-local install ~/.local/bin/juex (builds via dist/)"
+	@echo "  cross         build all 6 platform archives in dist/ (no goreleaser)"
+	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
+	@echo "  release-dry   goreleaser release without publishing"
+	@echo "  integration   go test -tags=integration ./tests/e2e/..."
+	@echo "  clean         remove dist/"
+
+test:
+	go test ./... -count=1
+
+lint:
+	golangci-lint run
+
+build:
+	mkdir -p dist
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_BIN) ./cmd/juex
+
+install-local:
+	./scripts/install-local.sh
+
+cross:
+	./scripts/build.sh
+
+snapshot:
+	goreleaser release --snapshot --clean
+
+release-dry:
+	goreleaser release --skip=publish --clean
+
+integration:
+	go test -tags=integration ./tests/e2e/... -count=1
+
+clean:
+	rm -rf dist

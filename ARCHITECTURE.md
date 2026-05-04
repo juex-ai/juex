@@ -1,0 +1,525 @@
+# Juex v0.0.1 Architecture
+
+> Implementation guide. Read alongside `juex-agent-design-v1.md` (the design
+> philosophy doc) and `docs/superpowers/specs/2026-05-01-juex-v0.0.1-release-design.md`
+> (this release's spec). This document covers **how the code is structured**:
+> module layout, interfaces, data flow, and test strategy.
+>
+> Principle: **simplest possible prototype that covers every v0.1 must-have**
+> listed in §9.1 of the design doc — packaged as the first released version.
+
+---
+
+## 1. End-to-End Goal
+
+`juex` is a single binary that completes the following loop:
+
+```
+user types a prompt in the CLI
+  -> assemble system prompt from AGENTS.md + skills + memory entries
+  -> call the LLM (Anthropic or OpenAI-compatible)
+  -> execute tool calls in parallel (builtin / MCP / skill helpers)
+  -> persist conversation + emit events
+  -> append jsonl into <WorkDir>/.agents/sessions/<id>/
+```
+
+---
+
+## 2. Repository Layout
+
+```
+juex/
+├── cmd/juex/main.go              # 5-line entry: os.Exit(cli.Execute())
+├── internal/
+│   ├── app/        app.go        # runtime wiring (was in main.go)
+│   ├── cli/                      # cobra-based CLI surface
+│   │   ├── root.go               #   root cmd + persistent flags
+│   │   ├── run.go                #   `juex run "<prompt>"`
+│   │   ├── repl.go               #   `juex repl`
+│   │   └── version.go            #   `juex version [-v]`
+│   ├── version/    version.go    # ldflags-injected build metadata
+│   ├── config/     config.go     # .env loader + WorkDir-driven paths
+│   ├── events/     bus.go        # in-process EventBus (glob)
+│   ├── llm/                      # canonical Message/Block + provider adapters
+│   │   ├── types.go
+│   │   ├── provider.go
+│   │   ├── anthropic.go          # wraps anthropic-sdk-go
+│   │   └── openai.go             # wraps openai-go (handles DeepSeek too)
+│   ├── tools/                    # tool registry + 5 builtins
+│   │   ├── registry.go
+│   │   └── builtin.go
+│   ├── mcp/        client.go     # stdio JSON-RPC 2.0 client + RegisterAllLayered
+│   ├── skills/     loader.go     # SKILL.md frontmatter loader
+│   ├── memory/     memory.go     # AGENTS.md hierarchy + entry store
+│   ├── frontmatter/parser.go     # shared YAML frontmatter parser
+│   ├── prompt/     prompt.go     # system prompt assembly
+│   ├── session/    session.go    # conversation history + jsonl persistence
+│   └── runtime/    loop.go       # turn loop + parallel dispatcher
+├── tests/
+│   └── e2e/                      # cross-package end-to-end + integration tests
+│       ├── e2e_test.go           #   full-stack mock-LLM scenario
+│       └── integration_test.go   #   live LLM (build-tag gated)
+├── .github/workflows/
+│   ├── ci.yml                    # push/PR: lint + matrix tests + race
+│   ├── integration.yml           # workflow_dispatch: live LLM tests
+│   └── release.yml               # tag v*: goreleaser publishes 6 archives
+├── docs/superpowers/
+│   ├── specs/                    # design docs
+│   └── plans/                    # implementation plans
+├── .goreleaser.yml               # 6-platform cross-compile
+├── Makefile                      # test / lint / build / snapshot / integration
+├── go.mod / go.sum
+├── ARCHITECTURE.md / DESIGN.md / AGENTS.md / CLAUDE.md→AGENTS.md
+└── .env.example / .env.local.anthropic / .env.local.openai
+```
+
+Per-package unit tests stay co-located with their source files (idiomatic Go).
+Only the cross-package end-to-end tests live in `tests/e2e/`. That directory
+is inside the same module, so it can import `internal/...` freely.
+
+---
+
+## 3. Core Interfaces
+
+### 3.1 LLM Provider
+
+```go
+// internal/llm/types.go
+type Role string  // "user" | "assistant" | "system"
+
+type BlockType string
+const (
+    BlockText       BlockType = "text"
+    BlockToolUse    BlockType = "tool_use"
+    BlockToolResult BlockType = "tool_result"
+    BlockReasoning  BlockType = "reasoning"  // round-tripped for thinking models
+)
+
+type Block struct {
+    Type      BlockType
+    Text      string
+    ToolUseID string
+    ToolName  string
+    Input     map[string]any
+    Content   string
+    IsError   bool
+    Signature string   // anthropic thinking-block signature
+    Redacted  bool     // anthropic redacted_thinking
+}
+
+type Message struct {
+    Role   Role
+    Blocks []Block
+}
+
+type ToolSpec struct {
+    Name        string
+    Description string
+    Schema      map[string]any
+}
+
+type Response struct {
+    Message    Message
+    StopReason StopReason
+    Usage      Usage
+}
+
+// internal/llm/provider.go
+type Provider interface {
+    Name() string
+    Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error)
+}
+```
+
+Two implementations (`anthropic.go`, `openai.go`) wrap the official Go SDKs
+(`anthropic-sdk-go`, `openai-go`). Both honour `PROVIDER_API_BASE` from the
+env via `option.WithBaseURL`, so the OpenAI provider also covers DeepSeek /
+OpenRouter / Ollama. SDK types are confined to those two files; every other
+layer sees only the canonical types.
+
+The OpenAI adapter additionally captures `reasoning_content` from non-OpenAI
+endpoints (DeepSeek thinking models) and round-trips it on the next request,
+because those endpoints reject requests that omit it after a thinking turn.
+The Anthropic adapter does the same for `thinking` and `redacted_thinking`
+content blocks.
+
+### 3.2 Tools
+
+```go
+// internal/tools/registry.go
+type Tool struct {
+    Name        string
+    Description string
+    Schema      map[string]any
+    Handler     func(ctx context.Context, input map[string]any) (string, error)
+}
+
+type Registry struct { ... }
+func (r *Registry) Register(t Tool) error
+func (r *Registry) List() []Tool
+func (r *Registry) Specs() []llm.ToolSpec
+func (r *Registry) Call(ctx, name, input) (string, error)
+```
+
+Builtin set (5 file/exec + 3 meta):
+
+| Name | Purpose |
+|---|---|
+| `read` | read file (offset/limit) |
+| `write` | overwrite file |
+| `edit` | old -> new in-place replace |
+| `bash` | run shell (timeout, cwd; defaults to WorkDir) |
+| `grep` | content search; `path:line:content` (defaults to WorkDir) |
+| `read_skill` | lazy-load full skill body |
+| `memory_write` | persist a memory entry |
+| `memory_search` | substring match |
+| `memory_delete` | remove an entry by name |
+
+`tools.RegisterBuiltins(reg, workDir)` injects `workDir` so `bash` and `grep`
+fall back to it when the model does not pass an explicit `cwd` / `path`.
+
+### 3.3 Events
+
+```go
+// internal/events/bus.go
+type Event struct {
+    ID        string
+    Type      string
+    Timestamp time.Time
+    TurnID    string
+    Payload   any
+}
+
+type Bus struct { ... }
+func (b *Bus) Subscribe(pattern string, fn func(Event))  // glob: "tool.*"
+func (b *Bus) Emit(e Event)                              // synchronous fan-out
+```
+
+Standard event types: `turn.started/completed/errored`,
+`llm.requested/responded`, `tool.requested/completed/errored`,
+`memory.read/written`.
+
+### 3.4 Memory
+
+Layer 1 (AGENTS.md hierarchy: user-global + project + project subdir) is
+read directly by the prompt builder. Layer 2 (memory entries with
+frontmatter + `MEMORY.md` index) is owned by the work-local Store.
+
+```go
+// internal/memory/memory.go
+type Entry struct {
+    Name        string
+    Description string
+    Type        string  // user | feedback | project | reference
+    Body        string
+    CreatedAt   time.Time
+    UpdatedAt   time.Time
+}
+
+type Store struct { dir string; ... }   // dir = <WorkDir>/.agents/memory
+func (s *Store) Write(e Entry) error
+func (s *Store) Load() ([]Entry, error)
+func (s *Store) Search(q string) []Entry
+func (s *Store) Delete(name string) error
+```
+
+Sessions and memory are **work-local** in v0.0.1; the user-global
+`~/.agents/{memory,sessions}/` was removed. Skills, mcp.json, and AGENTS.md
+still come from both sides (project entries override user entries by name).
+
+### 3.5 Session
+
+```go
+// internal/session/session.go
+type Session struct {
+    ID      string
+    Dir     string                // <WorkDir>/.agents/sessions/<id>/
+    History []llm.Message
+}
+```
+
+Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
+`AppendEvent(e)` writes to `events.jsonl`.
+
+### 3.6 App + Runtime
+
+```go
+// internal/app/app.go
+type Options struct {
+    Config   config.Config
+    Provider llm.Provider // optional; injectable for tests
+    Verbose  bool
+    Stderr   io.Writer
+    WorkDir  string       // overrides Config.WorkDir
+}
+type App struct { Engine; Bus; Session; ... }
+func New(opts Options) (*App, error)
+func (a *App) Run(ctx, prompt) (string, error)
+func (a *App) REPL(ctx, in, out) error
+func (a *App) Close() error
+```
+
+```go
+// internal/runtime/loop.go
+type Engine struct {
+    Provider  llm.Provider
+    Tools     *tools.Registry
+    Bus       *events.Bus
+    Session   *session.Session
+    Prompt    *prompt.Builder
+    MaxIters  int           // default 25
+    MaxDur    time.Duration // default 5min
+}
+func (e *Engine) Turn(ctx, userInput) (string, error)
+```
+
+`Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
+single LLM response run via `errgroup`-style goroutines; results are
+re-attached to history in the original order.
+
+### 3.7 CLI (cobra)
+
+```
+juex
+├── run "<prompt>" [flags]
+├── repl [flags]
+└── version [-v]
+```
+
+Persistent flags inherited by all subcommands:
+
+| Flag | Short | Default |
+|---|---|---|
+| `--env` | `-e` | unset (path to `.env` override) |
+| `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
+| `--verbose` | `-V` | false (stream events to stderr) |
+
+`cmd/juex/main.go` is 5 lines: `os.Exit(cli.Execute())`.
+
+---
+
+## 4. Data Flow (one turn)
+
+```
+                       +----------------------+
+   user input ------>  | runtime.Engine.Turn  |
+                       +----------+-----------+
+                                  | emit turn.started
+                                  v
+                       +----------------------+
+                       | prompt.Build         | <--- AGENTS.md hierarchy
+                       |                      | <--- skills descriptions
+                       |                      | <--- memory entries
+                       |                      | <--- tool specs
+                       |                      | <--- operating context
+                       +----------+-----------+
+                                  v
+                       +----------------------+  emit llm.requested
+                       | Provider.Complete    |  ----------------->
+                       |                      |  emit llm.responded
+                       +----------+-----------+  <-----------------
+                                  |
+                          tool_use blocks?
+                          +-------+--------+
+                          no               yes ---> parallel:
+                          v                          for each:
+                  Session.Append                     | Registry.Call
+                  emit turn.completed                | emit tool.requested/completed
+                  return text                        v
+                                               history.append(tool_result)
+                                                    |
+                                                    +---> loop back to LLM
+```
+
+---
+
+## 5. Configuration
+
+`.env` fields (`.env.example` ships in the repo):
+
+| Variable | Description |
+|---|---|
+| `PROVIDER_API_TYPE` | `anthropic` or `openai` |
+| `PROVIDER_API_BASE` | full base URL (Anthropic, OpenAI, DeepSeek, etc.) |
+| `PROVIDER_API_KEY` | API key |
+| `PROVIDER_API_MODEL` | model name |
+
+Resolution order (later wins): `defaults` < `~/.agents/.env` < `<WorkDir>/.env`
+< `os.Environ` < `--env <path>` (if supplied).
+
+---
+
+## 6. Filesystem Conventions
+
+Resources split between user-global and work-local:
+
+```
+~/.agents/                       # user-global (read-only from juex's view)
+├── AGENTS.md                    # global agent rules
+├── mcp.json                     # global MCP servers (project may override)
+├── skills/<name>/SKILL.md       # global skills (project may override)
+└── .env                         # global env file
+
+<WorkDir>/                       # the agent's working directory (--cwd or $PWD)
+├── AGENTS.md                    # project rules (concatenated, not overriding)
+├── .env                         # project env override
+└── .agents/
+    ├── AGENTS.md                # subdir rules (also concatenated)
+    ├── mcp.json                 # project MCP (project wins on duplicate names)
+    ├── skills/<name>/SKILL.md   # project skills (project overrides user)
+    ├── memory/                  # work-local memory entries
+    │   ├── MEMORY.md
+    │   └── *.md
+    └── sessions/<id>/           # work-local conversation history
+        ├── conversation.jsonl
+        └── events.jsonl
+```
+
+**Migration from earlier prototype:** sessions and memory used to live under
+`~/.agents/`. v0.0.1 reads / writes only the work-local locations. Existing
+files under `~/.agents/sessions/` and `~/.agents/memory/` are left untouched
+— move them by hand if you want them per-project.
+
+---
+
+## 7. MCP
+
+Handwritten stdio client (no external SDK), ~250 lines. Supports:
+
+- `initialize` handshake
+- `tools/list`
+- `tools/call`
+- `notifications/initialized`
+
+Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
+
+`RegisterAllLayered(ctx, configs, reg)` merges multiple configs by server
+name with later-wins precedence. App passes `[user, project]` so a project
+`mcp.json` overrides any user-level server with the same name; the user
+server is not started in that case.
+
+---
+
+## 8. Skills (minimal)
+
+```
+.agents/skills/<name>/SKILL.md
+```
+
+Frontmatter example:
+
+```yaml
+---
+name: code-review-checklist
+description: Apply when reviewing changes. Walk through correctness, tests, ...
+type: model-invocable
+---
+<skill body>
+```
+
+Loading flow:
+
+1. on startup, scan user + project skill dirs (project last → overrides)
+2. parse each SKILL.md frontmatter -> `name + description + body`
+3. concat all descriptions into the system prompt under `## Available Skills`
+4. expose a `read_skill(name)` tool; the body is loaded lazily on demand
+
+No embedding retrieval / auto-activation in v0.0.1 — the LLM picks via
+description and calls `read_skill` when it wants the body.
+
+---
+
+## 9. Build, Release, CI
+
+### Make targets
+
+| Target | Effect |
+|---|---|
+| `make test` | `go test ./... -count=1` |
+| `make lint` | `golangci-lint run` |
+| `make build` | `bin/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
+| `make snapshot` | `goreleaser release --snapshot --clean` (6 archives in `dist/`) |
+| `make release-dry` | `goreleaser release --skip=publish --clean` |
+| `make integration` | `go test -tags=integration ./tests/e2e/...` |
+| `make clean` | `rm -rf bin dist` |
+
+### `goreleaser`
+
+Config (`.goreleaser.yml`, schema v2) produces 6 binaries:
+- `darwin/amd64` `darwin/arm64`
+- `linux/amd64` `linux/arm64`
+- `windows/amd64` `windows/arm64`
+
+Each binary stamped with the same ldflags as `make build`. Archives are
+`tar.gz` (Linux + Mac) or `zip` (Windows); a `checksums.txt` accompanies
+them. Triggered on `v*` tag push via the release workflow; runs entirely
+on GitHub Actions.
+
+### CI Workflows
+
+- `ci.yml` — push + PR, three jobs:
+  - `lint`: golangci-lint (default preset).
+  - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
+    runs `go test ./... -race -count=1`. Bash-tool tests skip on Windows
+    via a `runtime.GOOS` guard.
+- `integration.yml` — `workflow_dispatch` only. Hydrates `.env.local.anthropic`
+  and `.env.local.openai` from repo secrets, then runs
+  `-tags=integration ./tests/e2e/...`. Required secrets:
+
+  ```
+  PROVIDER_API_TYPE_ANTHROPIC   PROVIDER_API_BASE_ANTHROPIC
+  PROVIDER_API_KEY_ANTHROPIC    PROVIDER_API_MODEL_ANTHROPIC
+  PROVIDER_API_TYPE_OPENAI      PROVIDER_API_BASE_OPENAI
+  PROVIDER_API_KEY_OPENAI       PROVIDER_API_MODEL_OPENAI
+  ```
+- `release.yml` — `push: tags: ["v*"]`. Runs `goreleaser release --clean`
+  and publishes the GitHub Release.
+
+---
+
+## 10. Test Strategy
+
+Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
+
+| Package | Coverage highlights |
+|---|---|
+| `events` | exact + glob match, auto-fill ID/timestamp, ordering |
+| `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
+| `version` | default + ldflags override |
+| `tools` | registry duplicate, read/write/edit/grep/bash, regex grep, bash timeout, default-cwd from WorkDir |
+| `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
+| `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
+| `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |
+| `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
+| `session` | append → jsonl line counts, event subscription, load round-trip |
+| `runtime` | mock-provider script, parallel tool calls, budget breach, ctx cancel, unknown-tool, provider error, multi-turn |
+| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .agents/sessions, missing-key fail, default-cwd |
+| `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |
+| `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
+| `tests/e2e` | full-stack tempdir scenario; live OpenAI/Anthropic round-trip + multi-step (build-tag) |
+
+Total: 14 Go packages, 100+ unit tests, all green; 6 live integration tests
+gated by build tag.
+
+---
+
+## 11. Departures From the Design Doc
+
+| Decision | Design doc preference | v0.0.1 actual | Why |
+|---|---|---|---|
+| LLM client | official SDKs | **official SDKs** | matches design |
+| MCP client | mark3labs/mcp-go | **handwritten stdio** | only stdio + 3 RPCs needed |
+| Event dispatch | channel + goroutine pool | **synchronous map** | no async listener required yet |
+| Frontmatter | `gopkg.in/yaml.v3` | **handwritten** | top-level string fields only |
+| Config | viper / koanf | **handwritten KEY=VALUE** | four keys total |
+| CLI library | stdlib `flag` | **`spf13/cobra`** | industry-standard subcommand UX, persistent flags, automatic help |
+
+---
+
+## 12. One-Sentence Summary
+
+**Juex v0.0.1 = a Go binary with a cobra CLI, 5 builtin tools, an MCP stdio
+client, AGENTS.md/skills/memory loading, a synchronous turn loop, work-local
+jsonl persistence, an event bus, cross-platform releases via goreleaser, and
+GitHub Actions CI.** Stdlib-first; every module fits in a few hundred lines
+and leaves room to grow in any direction.
