@@ -308,3 +308,36 @@ func writeEnvFile(path, typ, base, key, model string) error {
 		"\nPROVIDER_API_KEY=" + key + "\nPROVIDER_API_MODEL=" + model + "\n"
 	return os.WriteFile(path, []byte(body), 0o644)
 }
+
+func TestRunCmd_ResumeAndSessionMutuallyExclusive(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	envFile := dir + "/.env"
+	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--resume", "--session", "abc", "x"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*usageError); !ok {
+		t.Fatalf("got %T", err)
+	}
+}
+
+func TestRunCmd_SessionFlagNotFound(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	envFile := dir + "/.env"
+	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--session", "missing", "x"})
+	err := root.Execute()
+	if _, ok := err.(*notFoundError); !ok {
+		t.Fatalf("got %T: %v", err, err)
+	}
+}

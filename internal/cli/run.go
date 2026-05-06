@@ -75,6 +75,7 @@ func newRunCmd(flags *persistentFlags) *cobra.Command {
 	var (
 		jsonOut bool
 		dryRun  bool
+		rf      resumeFlags
 	)
 	cmd := &cobra.Command{
 		Use:   "run [flags] <prompt>",
@@ -124,11 +125,18 @@ execution is printed and the process exits with code 10.`,
 				return runDryRun(cmd, flags, cfg, prompt, jsonOut)
 			}
 
+			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
+			if err != nil {
+				return emit(jsonOut, cmd.ErrOrStderr(), err,
+					"see 'juex sessions list' for valid ids", false)
+			}
+
 			a, err := app.New(app.Options{
-				Config:  cfg,
-				Verbose: flags.verbose,
-				WorkDir: cfg.WorkDir,
-				Stderr:  cmd.ErrOrStderr(),
+				Config:    cfg,
+				Verbose:   flags.verbose,
+				WorkDir:   cfg.WorkDir,
+				Stderr:    cmd.ErrOrStderr(),
+				ResumeDir: resumeDir,
 			})
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
@@ -158,6 +166,8 @@ execution is printed and the process exits with code 10.`,
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a JSON result on stdout (and JSON errors on stderr)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would execute (provider, model, prompt size, tool list); skip the LLM call; exit 10")
+	cmd.Flags().BoolVar(&rf.Resume, "resume", false, "interactively pick a past session to resume")
+	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
 	return cmd
 }
 
