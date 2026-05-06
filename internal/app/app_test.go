@@ -163,6 +163,42 @@ func TestApp_NewWithoutKeyFails(t *testing.T) {
 	}
 }
 
+func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
+	work := t.TempDir()
+	sessionsRoot := filepath.Join(work, ".agents", "sessions")
+	id := "20260506T103500-resume001"
+	dir := filepath.Join(sessionsRoot, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
+		`{"role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := New(Options{
+		Config:    config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider:  &stubProvider{},
+		WorkDir:   work,
+		ResumeDir: dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	if a.Session.ID != id {
+		t.Errorf("session id = %s, want %s", a.Session.ID, id)
+	}
+	if a.Session.Dir != dir {
+		t.Errorf("session dir = %s, want %s", a.Session.Dir, dir)
+	}
+	if len(a.Session.History) != 2 {
+		t.Errorf("history len = %d, want 2", len(a.Session.History))
+	}
+}
+
 func TestApp_NewDefaultsWorkDirToCwd(t *testing.T) {
 	// Switch into a fresh tempdir for this test so the default-cwd path
 	// does not leak files into the package directory.

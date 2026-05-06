@@ -34,6 +34,10 @@ type Options struct {
 	Verbose  bool
 	Stderr   io.Writer
 	WorkDir  string // if set, overrides Config.WorkDir
+	// ResumeDir, if non-empty, is the absolute path of an existing
+	// session directory to load instead of creating a new one. The
+	// session ID and on-disk files are reused; new messages append.
+	ResumeDir string
 }
 
 type App struct {
@@ -113,7 +117,13 @@ func New(opts Options) (*App, error) {
 		}
 	}
 
-	sess, err := session.New(cfg.SessionsDir())
+	var sess *session.Session
+	var err error
+	if opts.ResumeDir != "" {
+		sess, err = session.Load(opts.ResumeDir)
+	} else {
+		sess, err = session.New(cfg.SessionsDir())
+	}
 	if err != nil {
 		closeAll(mcpClients)
 		return nil, err
