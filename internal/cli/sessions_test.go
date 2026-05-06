@@ -119,3 +119,74 @@ func TestSessionsList_LimitTruncates(t *testing.T) {
 		t.Errorf("limit ignored: %d sessions", len(parsed.Sessions))
 	}
 }
+
+func TestSessionsShow_JSONIncludesMessages(t *testing.T) {
+	work := t.TempDir()
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
+		`{"role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
+	seedSession(t, work, "20260506T103500-show0001", body)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "show", "20260506T103500-show0001"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		ID       string `json:"id"`
+		Turns    int    `json:"turns"`
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out.String())
+	}
+	if parsed.ID != "20260506T103500-show0001" {
+		t.Errorf("id = %s", parsed.ID)
+	}
+	if len(parsed.Messages) != 2 {
+		t.Errorf("messages len = %d", len(parsed.Messages))
+	}
+	if parsed.Messages[0].Role != "user" || parsed.Messages[1].Role != "assistant" {
+		t.Errorf("roles wrong: %+v", parsed.Messages)
+	}
+}
+
+func TestSessionsShow_TextRendersTranscript(t *testing.T) {
+	work := t.TempDir()
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
+		`{"role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
+	seedSession(t, work, "20260506T103500-show0002", body)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "show", "20260506T103500-show0002", "--format", "text"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	body2 := out.String()
+	for _, want := range []string{"20260506T103500-show0002", "user>", "hi", "assistant>", "hello"} {
+		if !strings.Contains(body2, want) {
+			t.Errorf("missing %q in:\n%s", want, body2)
+		}
+	}
+}
+
+func TestSessionsShow_NotFound(t *testing.T) {
+	work := t.TempDir()
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "show", "missing-id"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*notFoundError); !ok {
+		t.Fatalf("expected *notFoundError, got %T: %v", err, err)
+	}
+}

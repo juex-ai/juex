@@ -2,9 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -19,6 +23,7 @@ func newSessionsCmd(flags *persistentFlags) *cobra.Command {
 		Short: "List, show, and resume past sessions",
 	}
 	cmd.AddCommand(newSessionsListCmd(flags))
+	cmd.AddCommand(newSessionsShowCmd(flags))
 	return cmd
 }
 
@@ -75,5 +80,71 @@ func renderSessionsTable(cmd *cobra.Command, infos []session.Info) {
 	for _, s := range infos {
 		fmt.Fprintf(w, "%-32s  %-20s  %5d  %s\n",
 			s.ID, s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
+	}
+}
+
+type sessionsShowOutput struct {
+	session.Info
+	Messages []llm.Message `json:"messages"`
+}
+
+func newSessionsShowCmd(flags *persistentFlags) *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "show <id>",
+		Short: "Print one session's metadata and transcript",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return &usageError{msg: "juex sessions show: <id> required"}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(flags)
+			if err != nil {
+				return err
+			}
+			id := args[0]
+			dir := filepath.Join(cfg.SessionsDir(), id)
+			info, msgs, err := session.LoadInfo(dir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return &notFoundError{msg: "session not found: " + id}
+				}
+				return err
+			}
+			switch format {
+			case "json", "":
+				cmdPrintln(cmd, mustJSON(sessionsShowOutput{Info: info, Messages: msgs}))
+			case "text":
+				renderSessionText(cmd, info, msgs)
+			default:
+				return &usageError{msg: "unknown --format value: " + format}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "json", "json|text")
+	return cmd
+}
+
+func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message) {
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "id:             %s\n", info.ID)
+	fmt.Fprintf(w, "started_at:     %s\n", info.StartedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "last_active_at: %s\n", info.LastActiveAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "turns:          %d\n\n", info.Turns)
+	for _, m := range msgs {
+		role := string(m.Role)
+		for _, b := range m.Blocks {
+			switch b.Type {
+			case llm.BlockText:
+				fmt.Fprintf(w, "%s> %s\n", role, b.Text)
+			case llm.BlockToolUse:
+				fmt.Fprintf(w, "tool> %s(%v)\n", b.ToolName, b.Input)
+			case llm.BlockToolResult:
+				fmt.Fprintf(w, "tool< %s\n", b.Content)
+			}
+		}
 	}
 }
