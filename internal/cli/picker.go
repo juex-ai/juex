@@ -25,7 +25,7 @@ func pickSession(in io.Reader, out io.Writer, infos []session.Info) (string, err
 	fmt.Fprintln(out)
 	for i, s := range infos {
 		fmt.Fprintf(out, "  %d) %s   %s   %s\n",
-			i+1, s.ID, humanAgo(s.LastActiveAt), truncate(s.Preview, 60))
+			i+1, s.ID, humanAgo(s.LastActiveAt), truncateRunes(s.Preview, 60))
 	}
 	fmt.Fprintln(out)
 	scanner := bufio.NewScanner(in)
@@ -61,7 +61,10 @@ func humanAgo(t time.Time) string {
 	}
 }
 
-func truncate(s string, n int) string {
+// Why: picker rows are visually clipped, so we append an ellipsis to
+// signal truncation; the session-package twin omits it because callers
+// there compose the preview into structured output.
+func truncateRunes(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
 		return s
