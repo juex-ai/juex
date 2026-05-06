@@ -457,28 +457,39 @@ func runFakeMCP() {
 // guard so build doesn't strip 'errors' import.
 var _ = errors.New
 
+// recordingProvider is a minimal Provider used only by the resume round-trip
+// test. Unlike scriptProvider it has no per-call assertion side-effects, so
+// it can be reused across tests without coordinating call indexes.
+type recordingProvider struct {
+	t       *testing.T
+	steps   []llm.Response
+	history [][]llm.Message
+}
+
+func (p *recordingProvider) Name() string { return "recording" }
+
+func (p *recordingProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	idx := len(p.history)
+	p.history = append(p.history, append([]llm.Message{}, hist...))
+	if idx >= len(p.steps) {
+		return llm.Response{}, fmt.Errorf("recordingProvider: exhausted at call %d", idx)
+	}
+	return p.steps[idx], nil
+}
+
 func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	work := t.TempDir()
 
-	// scriptProvider runs system-prompt + tool-registry assertions on its
-	// first call (idx == 0); those assertions are tailored to
-	// TestEndToEnd_FullStack's elaborate fixture set. Pre-bump `called` and
-	// prefix `steps` with a placeholder so this lighter-weight test skips
-	// those assertions while still recording a single real history snapshot
-	// at history[0].
-
 	// First turn: model receives an empty history.
-	prov1 := &scriptProvider{
+	prov1 := &recordingProvider{
 		t: t,
 		steps: []llm.Response{
-			{}, // unused; called is pre-bumped to 1 below.
 			{
 				Message:    llm.TextMessage(llm.RoleAssistant, "noted, alice"),
 				StopReason: llm.StopEndTurn,
 			},
 		},
 	}
-	prov1.called.Store(1)
 	a1, err := app.New(app.Options{
 		Config:   config.Config{ProviderType: "stub", WorkDir: work},
 		Provider: prov1,
@@ -495,6 +506,9 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 
 	// The engine appends the user message before calling Complete, so the
 	// first turn's snapshot contains exactly one entry (the new user prompt).
+	if len(prov1.history) == 0 {
+		t.Fatalf("first turn provider was never called")
+	}
 	if got := len(prov1.history[0]); got != 1 {
 		t.Errorf("first turn saw history of len %d, want 1 (just the new user prompt)", got)
 	} else if prov1.history[0][0].FirstText() != "remember: alice" {
@@ -502,17 +516,15 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	}
 
 	// Second turn: same session dir, model should see the prior pair.
-	prov2 := &scriptProvider{
+	prov2 := &recordingProvider{
 		t: t,
 		steps: []llm.Response{
-			{}, // unused; called is pre-bumped to 1 below.
 			{
 				Message:    llm.TextMessage(llm.RoleAssistant, "you are alice"),
 				StopReason: llm.StopEndTurn,
 			},
 		},
 	}
-	prov2.called.Store(1)
 	a2, err := app.New(app.Options{
 		Config:    config.Config{ProviderType: "stub", WorkDir: work},
 		Provider:  prov2,
@@ -534,6 +546,9 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		t.Errorf("session id changed: %s vs %s", a2.Session.ID, filepath.Base(sessionDir))
 	}
 	// Resumed history is prior pair (user+assistant) + the new user prompt.
+	if len(prov2.history) == 0 {
+		t.Fatalf("second turn provider was never called")
+	}
 	if got := len(prov2.history[0]); got != 3 {
 		t.Errorf("second turn history len = %d, want 3 (prior user+assistant + new user)", got)
 	} else {
