@@ -140,6 +140,12 @@ func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message
 			switch b.Type {
 			case llm.BlockText:
 				fmt.Fprintf(w, "%s> %s\n", role, b.Text)
+			case llm.BlockReasoning:
+				if b.Redacted {
+					fmt.Fprintln(w, "thinking> [redacted]")
+				} else {
+					fmt.Fprintf(w, "thinking> %s\n", b.Text)
+				}
 			case llm.BlockToolUse:
 				fmt.Fprintf(w, "tool> %s(%v)\n", b.ToolName, b.Input)
 			case llm.BlockToolResult:

@@ -175,6 +175,27 @@ func TestSessionsShow_TextRendersTranscript(t *testing.T) {
 	}
 }
 
+func TestSessionsShow_TextRendersReasoning(t *testing.T) {
+	work := t.TempDir()
+	body := `{"role":"assistant","blocks":[{"type":"reasoning","text":"step one"},{"type":"text","text":"answer"}]}` + "\n" +
+		`{"role":"assistant","blocks":[{"type":"reasoning","content":"x","redacted":true}]}` + "\n"
+	seedSession(t, work, "20260506T103500-show0003", body)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "show", "20260506T103500-show0003", "--format", "text"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	body2 := out.String()
+	for _, want := range []string{"thinking> step one", "thinking> [redacted]", "assistant> answer"} {
+		if !strings.Contains(body2, want) {
+			t.Errorf("missing %q in:\n%s", want, body2)
+		}
+	}
+}
+
 func TestSessionsShow_NotFound(t *testing.T) {
 	work := t.TempDir()
 	root := newRootCmd()
