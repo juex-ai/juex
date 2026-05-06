@@ -7,7 +7,8 @@ import (
 )
 
 func newREPLCmd(flags *persistentFlags) *cobra.Command {
-	return &cobra.Command{
+	var rf resumeFlags
+	cmd := &cobra.Command{
 		Use:   "repl",
 		Short: "Interactive REPL: read a prompt from stdin, print the answer, repeat",
 		Args:  cobra.NoArgs,
@@ -16,11 +17,16 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
+			if err != nil {
+				return err
+			}
 			a, err := app.New(app.Options{
-				Config:  cfg,
-				Verbose: flags.verbose,
-				WorkDir: cfg.WorkDir,
-				Stderr:  cmd.ErrOrStderr(),
+				Config:    cfg,
+				Verbose:   flags.verbose,
+				WorkDir:   cfg.WorkDir,
+				Stderr:    cmd.ErrOrStderr(),
+				ResumeDir: resumeDir,
 			})
 			if err != nil {
 				return err
@@ -30,4 +36,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			return a.REPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
+	cmd.Flags().BoolVar(&rf.Resume, "resume", false, "interactively pick a past session to resume")
+	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
+	return cmd
 }

@@ -30,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -454,3 +456,107 @@ func runFakeMCP() {
 
 // guard so build doesn't strip 'errors' import.
 var _ = errors.New
+
+// recordingProvider is a minimal Provider used only by the resume round-trip
+// test. Unlike scriptProvider it has no per-call assertion side-effects, so
+// it can be reused across tests without coordinating call indexes.
+type recordingProvider struct {
+	steps   []llm.Response
+	history [][]llm.Message
+}
+
+func (p *recordingProvider) Name() string { return "recording" }
+
+func (p *recordingProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	idx := len(p.history)
+	p.history = append(p.history, append([]llm.Message{}, hist...))
+	if idx >= len(p.steps) {
+		return llm.Response{}, fmt.Errorf("recordingProvider: exhausted at call %d", idx)
+	}
+	return p.steps[idx], nil
+}
+
+func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
+	work := t.TempDir()
+
+	// First turn: model receives an empty history.
+	prov1 := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "noted, alice"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a1, err := app.New(app.Options{
+		Config:   config.Config{ProviderType: "stub", WorkDir: work},
+		Provider: prov1,
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a1.Run(context.Background(), "remember: alice"); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := a1.Session.Dir
+	a1.Close()
+
+	// The engine appends the user message before calling Complete, so the
+	// first turn's snapshot contains exactly one entry (the new user prompt).
+	if len(prov1.history) == 0 {
+		t.Fatalf("first turn provider was never called")
+	}
+	if got := len(prov1.history[0]); got != 1 {
+		t.Errorf("first turn saw history of len %d, want 1 (just the new user prompt)", got)
+	} else if prov1.history[0][0].FirstText() != "remember: alice" {
+		t.Errorf("first turn user message = %q", prov1.history[0][0].FirstText())
+	}
+
+	// Second turn: same session dir, model should see the prior pair.
+	prov2 := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "you are alice"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a2, err := app.New(app.Options{
+		Config:    config.Config{ProviderType: "stub", WorkDir: work},
+		Provider:  prov2,
+		WorkDir:   work,
+		ResumeDir: sessionDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a2.Close()
+	out, err := a2.Run(context.Background(), "who am I?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "you are alice" {
+		t.Errorf("got %q", out)
+	}
+	if a2.Session.ID != filepath.Base(sessionDir) {
+		t.Errorf("session id changed: %s vs %s", a2.Session.ID, filepath.Base(sessionDir))
+	}
+	// Resumed history is prior pair (user+assistant) + the new user prompt.
+	if len(prov2.history) == 0 {
+		t.Fatalf("second turn provider was never called")
+	}
+	if got := len(prov2.history[0]); got != 3 {
+		t.Errorf("second turn history len = %d, want 3 (prior user+assistant + new user)", got)
+	} else {
+		if prov2.history[0][0].FirstText() != "remember: alice" {
+			t.Errorf("first replayed message = %q", prov2.history[0][0].FirstText())
+		}
+		if prov2.history[0][1].FirstText() != "noted, alice" {
+			t.Errorf("second replayed message = %q", prov2.history[0][1].FirstText())
+		}
+		if prov2.history[0][2].FirstText() != "who am I?" {
+			t.Errorf("third (new user) message = %q", prov2.history[0][2].FirstText())
+		}
+	}
+}

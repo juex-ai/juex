@@ -115,6 +115,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newREPLCmd(flags))
 	cmd.AddCommand(newVersionCmd(flags))
 	cmd.AddCommand(newSchemaCmd(flags))
+	cmd.AddCommand(newSessionsCmd(flags))
 	return cmd
 }
 
