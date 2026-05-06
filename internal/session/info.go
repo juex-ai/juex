@@ -48,7 +48,7 @@ func List(root string) ([]Info, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		info, _, err := loadInfoLight(dir, true)
+		info, _, err := loadInfo(dir)
 		if err != nil {
 			continue // skip unreadable sessions
 		}
@@ -66,13 +66,12 @@ func List(root string) ([]Info, error) {
 // LoadInfo returns both the Info summary and the full message slice for
 // dir. Used by `juex sessions show <id>`.
 func LoadInfo(dir string) (Info, []llm.Message, error) {
-	return loadInfoLight(dir, false)
+	return loadInfo(dir)
 }
 
-// loadInfoLight is the workhorse for List (skipMessages=true) and
-// LoadInfo (skipMessages=false). Returns an error for any caller that
-// cannot proceed; List filters those errors out itself.
-func loadInfoLight(dir string, skipMessages bool) (Info, []llm.Message, error) {
+// loadInfo is the workhorse for List and LoadInfo. Returns an error for
+// any caller that cannot proceed; List filters those errors out itself.
+func loadInfo(dir string) (Info, []llm.Message, error) {
 	convPath := filepath.Join(dir, conversationFile)
 	st, err := os.Stat(convPath)
 	if err != nil {
@@ -105,9 +104,6 @@ func loadInfoLight(dir string, skipMessages bool) (Info, []llm.Message, error) {
 				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
 			}
 		}
-	}
-	if skipMessages {
-		return info, nil, nil
 	}
 	return info, msgs, nil
 }
