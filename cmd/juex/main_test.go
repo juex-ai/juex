@@ -39,7 +39,7 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		out, _ := exec.Command(bin, "help").CombinedOutput()
 		body := string(out)
 		// cobra renders subcommand list under "Available Commands"
-		for _, want := range []string{"run", "repl", "version"} {
+		for _, want := range []string{"run", "repl", "sessions", "version"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("help output missing %q in:\n%s", want, body)
 			}

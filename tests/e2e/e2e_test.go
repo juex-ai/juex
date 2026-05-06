@@ -461,7 +461,6 @@ var _ = errors.New
 // test. Unlike scriptProvider it has no per-call assertion side-effects, so
 // it can be reused across tests without coordinating call indexes.
 type recordingProvider struct {
-	t       *testing.T
 	steps   []llm.Response
 	history [][]llm.Message
 }
@@ -482,7 +481,6 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 
 	// First turn: model receives an empty history.
 	prov1 := &recordingProvider{
-		t: t,
 		steps: []llm.Response{
 			{
 				Message:    llm.TextMessage(llm.RoleAssistant, "noted, alice"),
@@ -517,7 +515,6 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 
 	// Second turn: same session dir, model should see the prior pair.
 	prov2 := &recordingProvider{
-		t: t,
 		steps: []llm.Response{
 			{
 				Message:    llm.TextMessage(llm.RoleAssistant, "you are alice"),

@@ -136,7 +136,12 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "repl"`,
 		`"name": "version"`,
 		`"name": "schema"`,
-		`"name": "cwd"`, // persistent flag dumped on subcommands
+		`"name": "sessions"`,
+		`"name": "list"`,
+		`"name": "show"`,
+		`"name": "resume"`,  // flag
+		`"name": "session"`, // flag
+		`"name": "cwd"`,     // persistent flag dumped on subcommands
 		`"shorthand": "C"`,
 		`"persistent": true`,
 	} {

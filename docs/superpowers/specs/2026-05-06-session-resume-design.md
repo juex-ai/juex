@@ -76,10 +76,8 @@ Rules:
 
 Sort: `last_active_at DESC`. Tie-breaker: `started_at DESC` (later created session wins).
 
-Format defaults:
-
-- stdout is a TTY → fixed-width table.
-- stdout is not a TTY → `--format` defaults to `json`.
+Format defaults: `--format` defaults to `json` (agent-friendly). Pass
+`--format table` for a fixed-width human view.
 
 JSON shape:
 
@@ -102,7 +100,10 @@ JSON shape:
 
 ## 6. `sessions show <id>` Output
 
-JSON shape (default when not a TTY):
+`--format` defaults to `json` (agent-friendly). Pass `--format text` for a
+human-readable transcript.
+
+JSON shape:
 
 ```json
 {
@@ -118,9 +119,9 @@ JSON shape (default when not a TTY):
 }
 ```
 
-Text shape (TTY default): a header (`id`, `started_at`, `last_active_at`,
-`turns`) followed by a rendered transcript — one block per line, prefixed
-with `user>` / `assistant>` / `tool>`.
+Text shape: a header (`id`, `started_at`, `last_active_at`, `turns`)
+followed by a rendered transcript — one block per line, prefixed with
+`user>` / `assistant>` / `tool>`.
 
 `show` reads only `conversation.jsonl`. `events.jsonl` is not exposed
 through this command in v0.1; readers can `cat` it directly if needed.
