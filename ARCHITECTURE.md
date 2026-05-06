@@ -240,18 +240,24 @@ type Session struct {
 ```
 
 Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
-`AppendEvent(e)` writes to `events.jsonl`.
+`AppendEvent(e)` writes to `events.jsonl`. `session.Load(dir)` re-hydrates
+an existing session in place (used by `--resume`).
+
+`session.List(root)` returns a time-sorted summary of every session
+directory under `root`; `session.LoadInfo(dir)` returns one session's
+summary plus its full message slice. Both are read-only.
 
 ### 3.6 App + Runtime
 
 ```go
 // internal/app/app.go
 type Options struct {
-    Config   config.Config
-    Provider llm.Provider // optional; injectable for tests
-    Verbose  bool
-    Stderr   io.Writer
-    WorkDir  string       // overrides Config.WorkDir
+    Config    config.Config
+    Provider  llm.Provider // optional; injectable for tests
+    Verbose   bool
+    Stderr    io.Writer
+    WorkDir   string       // overrides Config.WorkDir
+    ResumeDir string       // load existing session dir instead of creating one
 }
 type App struct { Engine; Bus; Session; ... }
 func New(opts Options) (*App, error)
@@ -282,8 +288,12 @@ re-attached to history in the original order.
 
 ```
 juex
-├── run "<prompt>" [flags]
-├── repl [flags]
+├── run "<prompt>" [flags]   (--resume | --session <id>)
+├── repl [flags]             (--resume | --session <id>)
+├── sessions
+│   ├── list   [--limit N] [--format json|table]
+│   └── show <id> [--format json|text]
+├── schema
 └── version [-v]
 ```
 
