@@ -119,7 +119,11 @@ func TestLiveBinary_SchemaIncludesAllSubcommands(t *testing.T) {
 // buildJuex compiles the real juex binary into the test's tempdir.
 func buildJuex(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(t.TempDir(), "juex")
+	name := "juex"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	out := filepath.Join(t.TempDir(), name)
 	root, err := findRepoRoot()
 	if err != nil {
 		t.Fatal(err)
