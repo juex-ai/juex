@@ -293,6 +293,7 @@ juex
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
 │   └── show <id> [--format json|text]
+├── serve [--addr <host:port>] [--cors]
 ├── schema
 └── version [-v]
 ```
@@ -306,6 +307,39 @@ Persistent flags inherited by all subcommands:
 | `--verbose` | `-V` | false (stream events to stderr) |
 
 `cmd/juex/main.go` is 5 lines: `os.Exit(cli.Execute())`.
+
+### 3.8 Web Layer
+
+```go
+// internal/web/server.go
+type Server struct { ... }
+func NewServer(Options) *Server
+func (s *Server) Handler() http.Handler
+func (s *Server) Run(ctx) error
+```
+
+`juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no
+auth). Each session gets its own `*app.App`; events flow to a
+per-session broadcaster that fans out to connected SSE clients. Slow
+clients are dropped after a 5s buffer-full timeout. Templates and
+static assets (htmx 2.0.4 vendored, plus a tiny vanilla JS SSE
+handler) are embedded with `go:embed` — no build step.
+
+Routes:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | session list |
+| GET | `/sessions/<id>` | transcript + prompt form |
+| GET | `/sessions/new` | new-session form |
+| GET | `/api/sessions` | JSON list |
+| POST | `/api/sessions` | create session |
+| GET | `/api/sessions/<id>` | JSON transcript |
+| POST | `/api/sessions/<id>/turns` | start a turn |
+| GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
+| POST | `/api/sessions/<id>/interrupt` | cancel current turn |
+| GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
+| GET | `/static/*` | embedded CSS / JS |
 
 ---
 
