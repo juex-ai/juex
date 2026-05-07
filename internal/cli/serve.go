@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -11,10 +12,7 @@ import (
 )
 
 func newServeCmd(flags *persistentFlags) *cobra.Command {
-	var (
-		addr string
-		cors bool
-	)
+	var addr string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run a local HTTP server for the current WorkDir",
@@ -31,10 +29,12 @@ and the server flushes session jsonl before exit.`,
 			if err != nil {
 				return err
 			}
+			if !isLoopbackAddr(addr) {
+				return &usageError{msg: "juex serve: --addr must bind to loopback (got " + addr + ")"}
+			}
 			srv := web.NewServer(web.Options{
 				Cfg:  cfg,
 				Addr: addr,
-				CORS: cors,
 			})
 
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -45,6 +45,17 @@ and the server flushes session jsonl before exit.`,
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
-	cmd.Flags().BoolVar(&cors, "cors", false, "allow CORS from http://localhost:*")
 	return cmd
+}
+
+// isLoopbackAddr reports whether addr is a host:port that binds to a
+// loopback interface. We accept the three syntactic forms that net/http
+// resolves to lo0 without surprises.
+func isLoopbackAddr(addr string) bool {
+	for _, prefix := range []string{"127.0.0.1:", "[::1]:", "localhost:"} {
+		if strings.HasPrefix(addr, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -45,13 +45,11 @@ from the browser.
 ## 4. CLI Surface
 
 ```
-juex serve [--addr 127.0.0.1:8080] [--cors]
+juex serve [--addr 127.0.0.1:8080]
 ```
 
 - `--addr` defaults to `127.0.0.1:8080`. Binding to `0.0.0.0` is
   rejected with a usage error in v0.1 (no auth + remote bind = footgun).
-- `--cors` is off by default; on, it sets
-  `Access-Control-Allow-Origin: http://localhost:*` for local dev.
 - Ctrl-C / SIGTERM → `http.Server.Shutdown` with a 10-second deadline.
   All running turns receive `ctx.Cancel()` and a chance to flush.
 
@@ -139,7 +137,6 @@ internal/web/
 type Server struct {
     Cfg        config.Config
     Addr       string
-    CORS       bool
     sessions   sync.Map         // id → *activeSession
     nextEvent  atomic.Uint64    // strict-monotonic event id
     httpSrv    *http.Server

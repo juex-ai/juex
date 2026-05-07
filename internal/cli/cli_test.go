@@ -141,7 +141,6 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "show"`,
 		`"name": "serve"`,
 		`"name": "addr"`,
-		`"name": "cors"`,
 		`"name": "resume"`,  // flag
 		`"name": "session"`, // flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands

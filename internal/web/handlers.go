@@ -100,6 +100,9 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
+	if msgs == nil {
+		msgs = []llm.Message{}
+	}
 	writeJSON(w, http.StatusOK, sessionShowResponse{Info: info, Messages: msgs})
 }
 

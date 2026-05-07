@@ -23,7 +23,6 @@ import (
 type Options struct {
 	Cfg      config.Config
 	Addr     string
-	CORS     bool
 	Provider llm.Provider // optional; injected for tests
 }
 
@@ -181,9 +180,21 @@ func validLoopback(addr string) bool {
 
 // openSession constructs an *app.App for resumeDir (or a fresh session
 // when resumeDir == "") and stores it under its session id.
+//
+// For the resume path (resumeDir != "") we re-check the sessions map
+// under createMu so two concurrent first-touches of the same on-disk
+// session collapse to a single *app.App. The fresh-create path
+// (resumeDir == "") doesn't need the re-check: app.New allocates a new
+// id every call, so concurrent fresh creates produce distinct sessions.
 func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSession, error) {
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	if resumeDir != "" {
+		id := filepath.Base(resumeDir)
+		if v, ok := s.sessions.Load(id); ok {
+			return v.(*activeSession), nil
+		}
+	}
 	a, err := app.New(app.Options{
 		Config:    s.opts.Cfg,
 		Provider:  s.opts.Provider,
