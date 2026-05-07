@@ -301,82 +301,24 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	t.Fatalf("did not receive turn.started; collected:\n%s", collected)
 }
 
-func TestHTMLIndex_RendersSessionList(t *testing.T) {
+func TestSPAFallback_ServesIndexForUnknownRoute(t *testing.T) {
 	srv := newTestServer(t)
-	seedSession(t, srv.opts.Cfg.WorkDir, "20260507T101010-htmlidx",
-		`{"role":"user","blocks":[{"type":"text","text":"hello"}]}`+"\n")
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
-	}
-	for _, want := range []string{"<html", "20260507T101010-htmlidx", "hello", "/sessions/new"} {
-		if !strings.Contains(string(body), want) {
-			t.Errorf("missing %q in:\n%s", want, body)
+	for _, path := range []string{"/", "/sessions/some-arbitrary-id", "/anything/at/all"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
 		}
-	}
-}
-
-func TestHTMLSession_RendersTranscript(t *testing.T) {
-	srv := newTestServer(t)
-	id := "20260507T101010-htmlpg"
-	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
-		`{"role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
-	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/sessions/" + id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		t.Fatalf("status = %d body=%s", resp.StatusCode, out)
-	}
-	for _, want := range []string{id, "Send", "Interrupt", "id=\"messages\"", "id=\"prompt-form\""} {
-		if !strings.Contains(string(out), want) {
-			t.Errorf("missing %q in:\n%s", want, out)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("GET %s: status = %d, body=%s", path, resp.StatusCode, body)
 		}
-	}
-}
-
-func TestHTMLSession_NotFound(t *testing.T) {
-	srv := newTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-	resp, _ := http.Get(ts.URL + "/sessions/missing")
-	defer resp.Body.Close()
-	if resp.StatusCode != 404 {
-		t.Errorf("status = %d", resp.StatusCode)
-	}
-}
-
-func TestHTMLSession_NewPageRenders(t *testing.T) {
-	srv := newTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL + "/sessions/new")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
-	}
-	for _, want := range []string{"<form", "/api/sessions", "Create"} {
-		if !strings.Contains(string(body), want) {
-			t.Errorf("missing %q in:\n%s", want, body)
+		if !strings.Contains(string(body), "<!doctype html") &&
+			!strings.Contains(string(body), "<!DOCTYPE html") {
+			t.Errorf("GET %s: body does not look like HTML:\n%s", path, body)
 		}
 	}
 }
