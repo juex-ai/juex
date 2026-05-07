@@ -59,6 +59,11 @@ func (b *broadcaster) subscribe() *subscriber {
 	return s
 }
 
+// unsubscribe removes s from the broadcaster. The subscriber's channel
+// is intentionally NOT closed here — only (*broadcaster).close closes
+// channels, so publish goroutines never panic on send-to-closed.
+// Consumers must observe s.isLive() or their request ctx.Done() to
+// detect they've been dropped (e.g. by the slow-client path).
 func (b *broadcaster) unsubscribe(s *subscriber) {
 	b.mu.Lock()
 	delete(b.subs, s)
