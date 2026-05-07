@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -93,6 +94,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case rest == "" && r.Method == http.MethodGet:
 		s.handleSessionShow(w, r, id)
+	case strings.HasPrefix(rest, "turns/") && r.Method == http.MethodGet:
+		s.handleTurnStatus(w, r, id, strings.TrimPrefix(rest, "turns/"))
 	case rest == "turns" && r.Method == http.MethodPost:
 		s.handleStartTurn(w, r, id)
 	default:

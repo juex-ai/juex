@@ -140,6 +140,30 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	writeJSON(w, http.StatusAccepted, map[string]any{"turn_id": turnID})
 }
 
+func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, turnID string) {
+	as, err := s.getActiveSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+	as.turnsMu.Lock()
+	t, ok := as.turns[turnID]
+	var state, errStr string
+	if ok {
+		state, errStr = t.State, t.Err
+	}
+	as.turnsMu.Unlock()
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "turn not found: "+turnID)
+		return
+	}
+	resp := map[string]any{"state": state}
+	if errStr != "" {
+		resp["error"] = errStr
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // runTurn executes one engine turn and updates state machine + cancel
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {

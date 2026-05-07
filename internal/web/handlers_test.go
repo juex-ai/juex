@@ -193,3 +193,37 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	}
 	t.Fatal("timed out waiting for ack to be persisted")
 }
+
+func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	var c struct{ ID string }
+	json.NewDecoder(created.Body).Decode(&c)
+	created.Body.Close()
+
+	turnResp, _ := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"hi"}`))
+	var t1 struct {
+		TurnID string `json:"turn_id"`
+	}
+	json.NewDecoder(turnResp.Body).Decode(&t1)
+	turnResp.Body.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r, _ := http.Get(ts.URL + "/api/sessions/" + c.ID + "/turns/" + t1.TurnID)
+		var st struct {
+			State string `json:"state"`
+		}
+		json.NewDecoder(r.Body).Decode(&st)
+		r.Body.Close()
+		if st.State == "done" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("turn never reached done state")
+}
