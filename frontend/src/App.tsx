@@ -1,17 +1,19 @@
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { AppShell } from "@/components/AppShell";
+import { Sessions } from "@/pages/Sessions";
+import { Session } from "@/pages/Session";
 
-function App() {
-  return (
-    <main className="p-8 font-sans">
-      <h1 className="text-2xl font-semibold">juex web viewer</h1>
-      <div className="mt-4 flex items-center gap-3">
-        <Button>Send</Button>
-        <Button variant="outline">Stop</Button>
-        <Badge variant="secondary">scaffold ready</Badge>
-      </div>
-    </main>
-  );
+const router = createBrowserRouter([
+  {
+    path: "/",
+    element: <AppShell />,
+    children: [
+      { index: true, element: <Sessions /> },
+      { path: "sessions/:id", element: <Session /> },
+    ],
+  },
+]);
+
+export default function App() {
+  return <RouterProvider router={router} />;
 }
-
-export default App;
