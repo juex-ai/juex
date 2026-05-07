@@ -166,11 +166,28 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	// Wait briefly for the goroutine to finish (stub provider returns immediately).
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		show, _ := http.Get(ts.URL + "/api/sessions/" + c.ID)
-		body, _ := io.ReadAll(show.Body)
-		show.Body.Close()
-		if strings.Contains(string(body), `"text":"ack"`) {
-			return
+		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
+		if err == nil {
+			var parsed struct {
+				Messages []struct {
+					Role   string `json:"role"`
+					Blocks []struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					} `json:"blocks"`
+				} `json:"messages"`
+			}
+			json.NewDecoder(show.Body).Decode(&parsed)
+			show.Body.Close()
+			for _, m := range parsed.Messages {
+				if m.Role == "assistant" {
+					for _, b := range m.Blocks {
+						if b.Type == "text" && b.Text == "ack" {
+							return
+						}
+					}
+				}
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

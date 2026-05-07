@@ -25,7 +25,9 @@ type errorJSON struct {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(v)
 }
 
 func writeErr(w http.ResponseWriter, status int, kind, msg string) {
