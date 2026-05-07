@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // seedSession writes a minimal conversation.jsonl under
@@ -131,4 +132,47 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	if !strings.Contains(string(body), parsed.ID) {
 		t.Errorf("created id %q not found in list:\n%s", parsed.ID, body)
 	}
+}
+
+func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// Create a session first.
+	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	var c struct{ ID string }
+	json.NewDecoder(created.Body).Decode(&c)
+	created.Body.Close()
+
+	// Submit a turn.
+	body := strings.NewReader(`{"prompt":"hi"}`)
+	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 202 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+	var got struct {
+		TurnID string `json:"turn_id"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.TurnID == "" {
+		t.Errorf("missing turn_id")
+	}
+
+	// Wait briefly for the goroutine to finish (stub provider returns immediately).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		show, _ := http.Get(ts.URL + "/api/sessions/" + c.ID)
+		body, _ := io.ReadAll(show.Body)
+		show.Body.Close()
+		if strings.Contains(string(body), `"text":"ack"`) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for ack to be persisted")
 }

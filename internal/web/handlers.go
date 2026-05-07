@@ -1,7 +1,9 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,9 +25,7 @@ type errorJSON struct {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeErr(w http.ResponseWriter, status int, kind, msg string) {
@@ -99,4 +99,60 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	writeJSON(w, http.StatusOK, sessionShowResponse{Info: info, Messages: msgs})
+}
+
+// turnRequest is the wire shape for POST /turns.
+type turnRequest struct {
+	Prompt string `json:"prompt"`
+}
+
+func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id string) {
+	as, err := s.getActiveSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+
+	var req turnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Prompt == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body with non-empty prompt")
+		return
+	}
+
+	as.cancelMu.Lock()
+	if as.cancel != nil {
+		as.cancelMu.Unlock()
+		writeErr(w, http.StatusConflict, "conflict", "turn in progress")
+		return
+	}
+	turnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	as.cancel = cancel
+	as.turnsMu.Lock()
+	as.turns[turnID] = &turnState{ID: turnID, State: "running"}
+	as.turnsMu.Unlock()
+	as.cancelMu.Unlock()
+
+	go s.runTurn(ctx, as, turnID, req.Prompt)
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"turn_id": turnID})
+}
+
+// runTurn executes one engine turn and updates state machine + cancel
+// bookkeeping when it finishes.
+func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {
+	_, err := as.app.Engine.Turn(ctx, prompt)
+	as.cancelMu.Lock()
+	as.cancel = nil
+	as.cancelMu.Unlock()
+	as.turnsMu.Lock()
+	if t, ok := as.turns[turnID]; ok {
+		if err != nil {
+			t.State = "errored"
+			t.Err = err.Error()
+		} else {
+			t.State = "done"
+		}
+	}
+	as.turnsMu.Unlock()
 }
