@@ -56,6 +56,8 @@ __pycache__
 # build outputs
 bin/
 dist/
+frontend/node_modules/
+frontend/dist/
 
 # juex runtime state (per-project session/memory artefacts)
 .agents/sessions/
