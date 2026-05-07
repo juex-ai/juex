@@ -86,6 +86,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/sessions/", s.handleSessionPage)
 	mux.Handle("/static/", http.StripPrefix("/static/", staticFileServer()))
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)

@@ -1,7 +1,7 @@
 {{define "content"}}
 <p><strong>id:</strong> {{.Info.ID}} · <strong>turns:</strong> {{.Info.Turns}} · <strong>last active:</strong> {{.Info.LastActiveAt.Format "2006-01-02 15:04:05"}}</p>
 
-<pre>{{range .Messages}}{{range .Blocks}}{{if eq .Type "text"}}{{$.RoleOf .}}{{": "}}{{.Text}}
+<pre>{{range .Messages}}{{range .Blocks}}{{if eq .Type "text"}}{{RoleOf .}}{{": "}}{{.Text}}
 {{else if eq .Type "reasoning"}}thinking: {{.Text}}
 {{else if eq .Type "tool_use"}}tool> {{.ToolName}}({{printf "%v" .Input}})
 {{else if eq .Type "tool_result"}}tool< {{.Content}}

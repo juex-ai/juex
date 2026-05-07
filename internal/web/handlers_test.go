@@ -323,3 +323,39 @@ func TestHTMLIndex_RendersSessionList(t *testing.T) {
 		}
 	}
 }
+
+func TestHTMLSession_RendersTranscript(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-htmlpg"
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
+		`{"role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/sessions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, out)
+	}
+	for _, want := range []string{id, "hi", "hello", "Send", "Interrupt", "id=\"live\""} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestHTMLSession_NotFound(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, _ := http.Get(ts.URL + "/sessions/missing")
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
