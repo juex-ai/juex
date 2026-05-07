@@ -403,3 +403,26 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 		t.Errorf("expected stderr warning, got: %s", out2.String())
 	}
 }
+
+func TestIsLoopbackAddr(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:8080", true},
+		{"127.42.0.99:8080", true}, // anywhere in 127.0.0.0/8
+		{"[::1]:8080", true},
+		{"localhost:8080", true},
+		{"localhost", true}, // bare host
+		{"0.0.0.0:8080", false},
+		{"192.168.1.5:8080", false},
+		{"10.0.0.1:8080", false},
+		{"", false},
+		{"not-an-address", false},
+	}
+	for _, c := range cases {
+		if got := isLoopbackAddr(c.addr); got != c.want {
+			t.Errorf("isLoopbackAddr(%q) = %v, want %v", c.addr, got, c.want)
+		}
+	}
+}

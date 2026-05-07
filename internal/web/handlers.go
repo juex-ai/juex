@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -209,8 +210,11 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 		// session record so we never read outside the sessions dir.
 		f, err := os.Open(filepath.Join(as.app.Session.Dir, "events.jsonl"))
 		if err == nil {
-			replayed, _ := replaySince(f, since)
+			replayed, replayErr := replaySince(f, since)
 			f.Close()
+			if replayErr != nil {
+				log.Printf("web: events replay for %s: %v", id, replayErr)
+			}
 			for _, e := range replayed {
 				if err := writeSSEFrame(w, e); err != nil {
 					return

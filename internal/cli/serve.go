@@ -2,9 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -57,14 +57,25 @@ and the server flushes session jsonl before exit.`,
 	return cmd
 }
 
-// isLoopbackAddr reports whether addr is a host:port that binds to a
-// loopback interface. We accept the three syntactic forms that net/http
-// resolves to lo0 without surprises.
+// isLoopbackAddr returns true if addr's host portion is a loopback
+// destination ("localhost" or any IP in 127.0.0.0/8 or ::1). Accepts
+// either "host:port" or "host" form. Returns false on parse failures —
+// the caller turns that into a usage error.
 func isLoopbackAddr(addr string) bool {
-	for _, prefix := range []string{"127.0.0.1:", "[::1]:", "localhost:"} {
-		if strings.HasPrefix(addr, prefix) {
-			return true
-		}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Maybe the user passed just a host. Try treating addr as host.
+		host = addr
 	}
-	return false
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
 }
