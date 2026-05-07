@@ -30,6 +30,7 @@ type Options struct {
 // Server is a long-running HTTP server for one WorkDir.
 type Server struct {
 	opts     Options
+	render   *renderer
 	sessions sync.Map // session id (string) → *activeSession
 	nextTurn atomic.Uint64
 
@@ -62,7 +63,11 @@ func NewServer(opts Options) *Server {
 	if opts.Addr == "" {
 		opts.Addr = "127.0.0.1:8080"
 	}
-	return &Server{opts: opts}
+	r, err := newRenderer()
+	if err != nil {
+		panic(fmt.Sprintf("web: parse templates: %v", err))
+	}
+	return &Server{opts: opts, render: r}
 }
 
 // Handler returns the http.Handler wired with every route. Exposed so
@@ -80,6 +85,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
+	mux.HandleFunc("/", s.handleIndex)
+	mux.Handle("/static/", http.StripPrefix("/static/", staticFileServer()))
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)
 }

@@ -234,6 +234,26 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	}
 }
 
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		writeErr(w, http.StatusNotFound, "not_found", "no such page")
+		return
+	}
+	infos, err := session.List(s.opts.Cfg.SessionsDir())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	if infos == nil {
+		infos = []session.Info{}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.render.Render(w, "index.html", struct {
+		Title    string
+		Sessions []session.Info
+	}{Title: "sessions", Sessions: infos})
+}
+
 // runTurn executes one engine turn and updates state machine + cancel
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {

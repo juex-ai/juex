@@ -300,3 +300,26 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	}
 	t.Fatalf("did not receive turn.started; collected:\n%s", collected)
 }
+
+func TestHTMLIndex_RendersSessionList(t *testing.T) {
+	srv := newTestServer(t)
+	seedSession(t, srv.opts.Cfg.WorkDir, "20260507T101010-htmlidx",
+		`{"role":"user","blocks":[{"type":"text","text":"hello"}]}`+"\n")
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	for _, want := range []string{"<html", "20260507T101010-htmlidx", "hello", "/sessions/new"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+}
