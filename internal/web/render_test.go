@@ -38,6 +38,20 @@ func TestRenderer_IndexShowsSessions(t *testing.T) {
 	}
 }
 
+func TestRenderer_UnknownPageReturnsError(t *testing.T) {
+	r, err := newRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := r.Render(&buf, "does-not-exist.html", nil); err == nil {
+		t.Fatal("expected error for unknown page")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("buffer was written despite error: %q", buf.String())
+	}
+}
+
 func TestStaticFileServer_ServesEmbeddedCSS(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("/static/", http.StripPrefix("/static/", staticFileServer()))

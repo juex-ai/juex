@@ -248,10 +248,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		infos = []session.Info{}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.render.Render(w, "index.html", struct {
+	if err := s.render.Render(w, "index.html", struct {
 		Title    string
 		Sessions []session.Info
-	}{Title: "sessions", Sessions: infos})
+	}{Title: "sessions", Sessions: infos}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", "render failed: "+err.Error())
+		return
+	}
 }
 
 func (s *Server) handleSessionPage(w http.ResponseWriter, r *http.Request) {
@@ -276,7 +279,7 @@ func (s *Server) handleSessionPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.render.Render(w, "session.html", struct {
+	if err := s.render.Render(w, "session.html", struct {
 		Title       string
 		Info        session.Info
 		Messages    []llm.Message
@@ -286,12 +289,18 @@ func (s *Server) handleSessionPage(w http.ResponseWriter, r *http.Request) {
 		Info:        info,
 		Messages:    msgs,
 		LastEventID: "",
-	})
+	}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", "render failed: "+err.Error())
+		return
+	}
 }
 
 func (s *Server) handleNewSessionPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = s.render.Render(w, "new.html", struct{ Title string }{Title: "new session"})
+	if err := s.render.Render(w, "new.html", struct{ Title string }{Title: "new session"}); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", "render failed: "+err.Error())
+		return
+	}
 }
 
 // runTurn executes one engine turn and updates state machine + cancel

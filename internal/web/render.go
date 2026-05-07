@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"html/template"
@@ -63,10 +64,17 @@ func newRenderer() (*renderer, error) {
 	return r, nil
 }
 
+// Render executes the page template into a buffer first so an error never
+// produces partial output. Callers can rely on: error → nothing written.
 func (r *renderer) Render(w io.Writer, page string, data any) error {
 	t, ok := r.tpls[page]
 	if !ok {
 		return fmt.Errorf("web: unknown page %q", page)
 	}
-	return t.ExecuteTemplate(w, "layout", data)
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, "layout", data); err != nil {
+		return err
+	}
+	_, err := w.Write(buf.Bytes())
+	return err
 }
