@@ -366,11 +366,14 @@ the `colors` extension.
 
 Pico is gone; shadcn's defaults are our baseline.
 
-- Body: `font-sans` → system stack (San Francisco, Segoe UI, Inter if you
-  install it).
+- Body: **Geist** (Vercel's open-source font, OFL), bundled via
+  `@fontsource-variable/geist` as part of the shadcn `nova` preset. Falls
+  back to the system sans-serif stack.
 - Code: `font-mono` → system monospace (SF Mono, Menlo, Consolas).
 - 14px base, 1.5 line-height.
-- We do not bundle web fonts; everything renders without network.
+- The Geist webfont adds ~60 KB to the initial bundle and is self-hosted
+  (no third-party CDN call at runtime). Trade-off accepted to match the
+  modern AI-tool aesthetic.
 
 ---
 
