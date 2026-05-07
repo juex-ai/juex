@@ -359,3 +359,24 @@ func TestHTMLSession_NotFound(t *testing.T) {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
 }
+
+func TestHTMLSession_NewPageRenders(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/sessions/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
+	}
+	for _, want := range []string{"<form", "/api/sessions", "Create"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+}
