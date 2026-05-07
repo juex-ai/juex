@@ -89,7 +89,7 @@ juex/
 │   │       ├── Composer.tsx
 │   │       ├── StatusPill.tsx
 │   │       └── ui/                 # shadcn primitives, copy-pasted
-│   └── dist/                       # build output; COMMITTED so go build alone works
+│   └── dist/                       # build output; gitignored — produced by `make web`
 └── internal/web/
     ├── server.go                   # Server, Run, Shutdown, sessions map
     ├── handlers.go                 # JSON + SSE handlers (no HTML)
@@ -105,34 +105,38 @@ old design are removed. `internal/web/embed.go` exposes
 `//go:embed all:../../frontend/dist` and a SPA-friendly handler that serves
 `index.html` for any non-asset path so React Router can take over routing.
 
+`frontend/dist/` is **not committed**. Building `juex` requires Node + pnpm:
+`go build` will fail (empty embed) until `make web` has run. The contract is
+"build the binary from source = run the full toolchain"; we don't ship a
+pre-built bundle.
+
 ---
 
 ## 4. Build / dev workflow
 
-**Day-to-day Go work:** `go build` and `go test` keep working unchanged. The
-`frontend/dist/` directory is committed so that no Node toolchain is needed
-to ship a binary.
-
-**Frontend hacking:**
+**First build, or after `frontend/` source changes:**
 
 ```bash
-cd frontend
-pnpm install
-pnpm dev          # Vite dev server on :5173, proxies /api and SSE to :8080
+make web          # cd frontend && pnpm install && pnpm build → frontend/dist/
+make build        # go build with ldflags; embeds the dist
 ```
 
-Vite's `server.proxy` config routes `/api` and `/sessions/*/events` to the
-running `juex serve` instance on `127.0.0.1:8080`.
+`make build` depends on `make web`; running it without a built `dist/`
+fails the `go:embed` directive at compile time with a clear error. This is
+intentional — building `juex` from source means running the full toolchain
+(Go + Node + pnpm).
 
-**Producing a release build:**
+**Frontend HMR loop:**
 
 ```bash
-make web          # cd frontend && pnpm install && pnpm build
-make build        # go build with ldflags as before; embeds the dist
+make web-dev      # cd frontend && pnpm dev (Vite on :5173)
 ```
 
-CI runs `make web && make test` so committed `dist/` cannot drift from
-source.
+In another shell run `juex serve` on its default `:8080`. Vite's
+`server.proxy` config forwards `/api` and `/sessions/*/events` to the Go
+server. Edit React, see changes instantly.
+
+**CI** runs `make web && make test && make build`.
 
 ---
 
@@ -211,19 +215,23 @@ the bottom when a new message lands and the user is already near the bottom
 ### 7.4 MessageCard
 
 ```tsx
-<article className="rounded-lg border bg-card p-4 shadow-sm">
-  <header className="mb-2 flex items-center gap-2">
-    <RoleAvatar role={role} />
-    <span className="text-xs font-semibold uppercase tracking-wide
-                     text-muted-foreground">{role}</span>
+<article className={cn(
+  "rounded-lg border-l-2 border bg-card p-4 shadow-sm",
+  roleBorderClass(role), // user/assistant/system → border-l-juex-*
+)}>
+  <header className="mb-2">
+    <span className={cn(
+      "text-xs font-semibold uppercase tracking-wide",
+      roleTextClass(role),
+    )}>{role}</span>
   </header>
   <div className="space-y-3">{blocks.map(renderBlock)}</div>
 </article>
 ```
 
-`RoleAvatar` is a small coloured circle with a single letter (`U`, `A`, `S`)
-or a lucide icon (`User`, `Bot`, `Wrench`). Border-left tint is dropped in
-favour of a coloured avatar — feels more modern.
+The role colour shows up as a 2px left border on the card and as the colour
+of the role label text in the header. No avatar circle — keeps the card
+clean and lets long content breathe.
 
 ### 7.5 BlockText
 
