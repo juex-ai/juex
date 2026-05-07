@@ -1,4 +1,13 @@
-.PHONY: test lint build snapshot release-dry integration clean help install-local cross
+.PHONY: test lint build snapshot release-dry integration clean help install-local cross web web-dev
+
+web:
+	cd frontend && pnpm install && pnpm build
+	rm -rf internal/web/dist
+	mkdir -p internal/web/dist
+	cp -R frontend/dist/. internal/web/dist/
+
+web-dev:
+	cd frontend && pnpm dev
 
 # Read VERSION from CLI_CONFIG (single source of truth). The git describe
 # output is preferred when available (carries dirty / commit suffix), else
@@ -32,7 +41,7 @@ test:
 lint:
 	golangci-lint run
 
-build:
+build: web
 	mkdir -p dist
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST_BIN) ./cmd/juex
 

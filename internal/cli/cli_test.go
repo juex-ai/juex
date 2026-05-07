@@ -64,7 +64,7 @@ func TestRootHelpListsSubcommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := out.String()
-	for _, want := range []string{"run", "repl", "sessions", "version", "Available Commands"} {
+	for _, want := range []string{"run", "repl", "sessions", "serve", "version", "Available Commands"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("help missing %q in:\n%s", want, body)
 		}
@@ -139,6 +139,9 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "sessions"`,
 		`"name": "list"`,
 		`"name": "show"`,
+		`"name": "serve"`,
+		`"name": "addr"`,
+		`"name": "unsafe-bind-any"`,
 		`"name": "resume"`,  // flag
 		`"name": "session"`, // flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
@@ -360,5 +363,66 @@ func TestREPLCmd_AcceptsResumeFlags(t *testing.T) {
 	err := root.Execute()
 	if _, ok := err.(*usageError); !ok {
 		t.Fatalf("got %T: %v", err, err)
+	}
+}
+
+func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
+	// Without --unsafe-bind-any, a non-loopback addr is a usage error.
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	envFile := dir + "/.env"
+	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	root.SetArgs([]string{"-C", dir, "--env", envFile, "serve", "--addr", "0.0.0.0:0"})
+	err := root.Execute()
+	if _, ok := err.(*usageError); !ok {
+		t.Fatalf("expected *usageError without --unsafe-bind-any, got %T: %v", err, err)
+	}
+
+	// With --unsafe-bind-any, the loopback check is skipped. We don't
+	// actually want to bind here, so we use a port that's almost
+	// certainly already in use to force srv.Run to error quickly with a
+	// bind failure (general error, not usage error). Pass an obviously
+	// unavailable address.
+	root2 := newRootCmd()
+	var out2 bytes.Buffer
+	root2.SetOut(&out2)
+	root2.SetErr(&out2)
+	root2.SetArgs([]string{"-C", dir, "--env", envFile, "serve", "--addr", "300.300.300.300:0", "--unsafe-bind-any"})
+	err2 := root2.Execute()
+	if err2 == nil {
+		t.Fatal("expected non-nil error from invalid bind address")
+	}
+	if _, ok := err2.(*usageError); ok {
+		t.Fatalf("expected non-usage error with --unsafe-bind-any, got *usageError: %v", err2)
+	}
+	// Confirm the warning was printed.
+	if !strings.Contains(out2.String(), "WARNING: --unsafe-bind-any") {
+		t.Errorf("expected stderr warning, got: %s", out2.String())
+	}
+}
+
+func TestIsLoopbackAddr(t *testing.T) {
+	cases := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:8080", true},
+		{"127.42.0.99:8080", true}, // anywhere in 127.0.0.0/8
+		{"[::1]:8080", true},
+		{"localhost:8080", true},
+		{"localhost", true}, // bare host
+		{"0.0.0.0:8080", false},
+		{"192.168.1.5:8080", false},
+		{"10.0.0.1:8080", false},
+		{"", false},
+		{"not-an-address", false},
+	}
+	for _, c := range cases {
+		if got := isLoopbackAddr(c.addr); got != c.want {
+			t.Errorf("isLoopbackAddr(%q) = %v, want %v", c.addr, got, c.want)
+		}
 	}
 }
