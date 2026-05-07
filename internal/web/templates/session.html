@@ -1,27 +1,29 @@
 {{define "content"}}
-<p><strong>id:</strong> {{.Info.ID}} · <strong>turns:</strong> {{.Info.Turns}} · <strong>last active:</strong> {{.Info.LastActiveAt.Format "2006-01-02 15:04:05"}}</p>
+<div class="session" data-session-id="{{.Info.ID}}">
+  <header class="session-meta">
+    <span><strong>id:</strong> <code>{{.Info.ID}}</code></span>
+    <span><strong>turns:</strong> <span id="turns-count">{{.Info.Turns}}</span></span>
+    <span><strong>last active:</strong> {{.Info.LastActiveAt.Format "2006-01-02 15:04:05"}}</span>
+  </header>
 
-<pre>{{range .Messages}}{{range .Blocks}}{{if eq .Type "text"}}{{RoleOf .}}{{": "}}{{.Text}}
-{{else if eq .Type "reasoning"}}thinking: {{.Text}}
-{{else if eq .Type "tool_use"}}tool> {{.ToolName}}({{printf "%v" .Input}})
-{{else if eq .Type "tool_result"}}tool< {{.Content}}
-{{end}}{{end}}{{end}}</pre>
+  <section id="messages" class="messages" aria-live="polite"></section>
 
-<h2>Live</h2>
-<ul id="live"></ul>
-
-<form id="prompt-form">
-  <textarea name="prompt" placeholder="Type a prompt…"></textarea>
-  <button type="submit">Send</button>
-</form>
-
-<form hx-post="/api/sessions/{{.Info.ID}}/interrupt" hx-target="this" hx-swap="none">
-  <button type="submit">Interrupt</button>
-</form>
+  <footer class="composer">
+    <form id="prompt-form">
+      <textarea name="prompt" rows="3" placeholder="Type a prompt…"></textarea>
+      <div class="composer-row">
+        <span id="status" class="status status-idle"><span class="status-dot"></span>idle</span>
+        <div class="composer-actions">
+          <button type="button" id="interrupt-btn" class="btn-interrupt">Interrupt</button>
+          <button type="submit" class="btn-send">Send</button>
+        </div>
+      </div>
+    </form>
+  </footer>
+</div>
 
 <script>
-  juexBindPromptForm({{.Info.ID}});
-  juexSubscribe({{.Info.ID}}, {{.LastEventID}});
+  juexInitSession({{.Info.ID}});
 </script>
 {{end}}
 {{template "layout" .}}

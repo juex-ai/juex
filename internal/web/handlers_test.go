@@ -342,7 +342,7 @@ func TestHTMLSession_RendersTranscript(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, out)
 	}
-	for _, want := range []string{id, "hi", "hello", "Send", "Interrupt", "id=\"live\""} {
+	for _, want := range []string{id, "Send", "Interrupt", "id=\"messages\"", "id=\"prompt-form\""} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}

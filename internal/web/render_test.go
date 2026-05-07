@@ -67,7 +67,7 @@ func TestStaticFileServer_ServesEmbeddedCSS(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "role-user") {
-		t.Errorf("body did not contain role-user; got: %s", body)
+	if !strings.Contains(string(body), "msg-user") {
+		t.Errorf("body did not contain msg-user; got: %s", body)
 	}
 }
