@@ -36,16 +36,17 @@ SSE API; it does not render any HTML.
 
 | Layer | Choice | Why |
 |---|---|---|
-| Build tool | **Vite 5** | Standard React app scaffolding, fast HMR. |
+| Build tool | **Vite** (latest) | Standard React app scaffolding, fast HMR. |
 | Language | **TypeScript** | Catches API-shape drift between client and server. |
-| UI runtime | **React 18** | de facto for shadcn/ui and the wider ecosystem. |
+| UI runtime | **React** (latest from Vite template) | de facto for shadcn/ui and the wider ecosystem. |
 | Routing | **React Router v6** | small, well-known. |
 | Styling | **Tailwind CSS v4** | utility-first, great with shadcn/ui, no runtime CSS-in-JS. |
-| Components | **shadcn/ui** | de facto modern aesthetic; copy-paste components, no runtime lock-in. |
-| Markdown | **react-markdown** + `remark-gfm` | tables / strikethrough / autolinks. |
-| Code highlighting | **rehype-highlight** + highlight.js core | syntax-highlighted code in assistant text and tool inputs. |
+| Base components | **shadcn/ui** | de facto modern aesthetic; copy-paste components, no runtime lock-in. |
+| AI-chat components | **prompt-kit** (https://www.prompt-kit.com) | shadcn-style copy-paste components for chat UIs. Brings markdown, code-block, message, reasoning, tool, prompt-input, scroll-button, chain-of-thought. MIT. |
 | Icons | **lucide-react** | shadcn-default icon set. |
 | Package manager | **pnpm** | fast, clean `node_modules` layout. |
+
+prompt-kit is installed via shadcn's CLI (`pnpm dlx shadcn@latest add prompt-kit/<component>`), which copies one TSX file into `src/components/prompt-kit/` per component. No runtime npm dependency on prompt-kit — we own the code. Markdown rendering and code highlighting are baked into prompt-kit's `markdown` and `code-block` components, so we don't bring in `react-markdown` / `rehype-highlight` separately.
 
 **License audit:** Vite (MIT), React (MIT), Tailwind (MIT), shadcn/ui (MIT —
 copied into our repo), react-markdown (MIT), rehype-highlight (MIT),
@@ -80,15 +81,16 @@ juex/
 │   │       ├── Sidebar.tsx
 │   │       ├── SidebarSessionList.tsx
 │   │       ├── PageHeader.tsx
-│   │       ├── MessageList.tsx
-│   │       ├── MessageCard.tsx
-│   │       ├── BlockText.tsx       # markdown + code highlighting
-│   │       ├── BlockThinking.tsx   # collapsed reasoning
-│   │       ├── BlockToolUse.tsx    # tool call card with JSON input
-│   │       ├── BlockToolResult.tsx # collapsed tool result
-│   │       ├── Composer.tsx
+│   │       ├── MessageList.tsx     # wraps prompt-kit/chat-container
+│   │       ├── MessageCard.tsx     # wraps prompt-kit/message
+│   │       ├── BlockText.tsx       # wraps prompt-kit/markdown
+│   │       ├── BlockThinking.tsx   # wraps prompt-kit/reasoning
+│   │       ├── BlockToolUse.tsx    # wraps prompt-kit/tool
+│   │       ├── BlockToolResult.tsx # wraps prompt-kit/tool result variant
+│   │       ├── Composer.tsx        # wraps prompt-kit/prompt-input
 │   │       ├── StatusPill.tsx
-│   │       └── ui/                 # shadcn primitives, copy-pasted
+│   │       ├── prompt-kit/         # prompt-kit primitives (added via shadcn CLI)
+│   │       └── ui/                 # shadcn primitives (added via shadcn CLI)
 │   └── dist/                       # build output; gitignored — produced by `make web`
 └── internal/web/
     ├── server.go                   # Server, Run, Shutdown, sessions map
