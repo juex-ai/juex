@@ -64,7 +64,7 @@ func TestRootHelpListsSubcommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := out.String()
-	for _, want := range []string{"run", "repl", "sessions", "version", "Available Commands"} {
+	for _, want := range []string{"run", "repl", "sessions", "serve", "version", "Available Commands"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("help missing %q in:\n%s", want, body)
 		}
@@ -139,6 +139,9 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "sessions"`,
 		`"name": "list"`,
 		`"name": "show"`,
+		`"name": "serve"`,
+		`"name": "addr"`,
+		`"name": "cors"`,
 		`"name": "resume"`,  // flag
 		`"name": "session"`, // flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
