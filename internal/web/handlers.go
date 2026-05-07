@@ -164,6 +164,23 @@ func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, tu
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id string) {
+	as, err := s.getActiveSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+	as.cancelMu.Lock()
+	cancelled := false
+	if as.cancel != nil {
+		as.cancel()
+		as.cancel = nil
+		cancelled = true
+	}
+	as.cancelMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"cancelled": cancelled})
+}
+
 // runTurn executes one engine turn and updates state machine + cancel
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {

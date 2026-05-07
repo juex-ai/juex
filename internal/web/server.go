@@ -98,6 +98,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleTurnStatus(w, r, id, strings.TrimPrefix(rest, "turns/"))
 	case rest == "turns" && r.Method == http.MethodPost:
 		s.handleStartTurn(w, r, id)
+	case rest == "interrupt" && r.Method == http.MethodPost:
+		s.handleInterrupt(w, r, id)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
 	}

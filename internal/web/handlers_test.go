@@ -227,3 +227,30 @@ func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
 	}
 	t.Fatal("turn never reached done state")
 }
+
+func TestPostInterrupt_IdempotentWhenIdle(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	var c struct{ ID string }
+	json.NewDecoder(created.Body).Decode(&c)
+	created.Body.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/interrupt", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+	var got struct {
+		Cancelled bool `json:"cancelled"`
+	}
+	json.NewDecoder(resp.Body).Decode(&got)
+	if got.Cancelled {
+		t.Errorf("expected cancelled=false when nothing running")
+	}
+}
