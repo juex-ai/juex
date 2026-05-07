@@ -3,7 +3,11 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -41,4 +45,37 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		infos = []session.Info{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": infos})
+}
+
+// sessionPathID extracts <id> from /api/sessions/<id>[/<rest>].
+// Returns ("", "") when the URL doesn't match the expected prefix.
+func sessionPathID(p string) (id, rest string) {
+	const prefix = "/api/sessions/"
+	if !strings.HasPrefix(p, prefix) {
+		return "", ""
+	}
+	tail := p[len(prefix):]
+	if i := strings.IndexByte(tail, '/'); i >= 0 {
+		return tail[:i], tail[i+1:]
+	}
+	return tail, ""
+}
+
+type sessionShowResponse struct {
+	session.Info
+	Messages []llm.Message `json:"messages"`
+}
+
+func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id string) {
+	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	info, msgs, err := session.LoadInfo(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sessionShowResponse{Info: info, Messages: msgs})
 }

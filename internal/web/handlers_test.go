@@ -54,3 +54,47 @@ func TestGetSessionsList_ReturnsSeededSession(t *testing.T) {
 		t.Errorf("preview = %q", parsed.Sessions[0].Preview)
 	}
 }
+
+func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-show01"
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n" +
+		`{"role":"assistant","blocks":[{"type":"text","text":"hello"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var parsed struct {
+		ID       string `json:"id"`
+		Messages []struct {
+			Role string `json:"role"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ID != id || len(parsed.Messages) != 2 {
+		t.Errorf("got %+v", parsed)
+	}
+}
+
+func TestGetSessionShow_NotFound(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, _ := http.Get(ts.URL + "/api/sessions/missing")
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}

@@ -76,6 +76,22 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
+	mux.HandleFunc("/api/sessions/", s.dispatchSession)
+}
+
+// dispatchSession routes /api/sessions/<id>[/...] to the matching handler.
+func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
+	id, _ := sessionPathID(r.URL.Path)
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "missing session id")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.handleSessionShow(w, r, id)
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET on this path")
+	}
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled. On
