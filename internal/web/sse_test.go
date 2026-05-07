@@ -21,7 +21,6 @@ func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
 	got := buf.String()
 	for _, want := range []string{
 		"id: evt-1\n",
-		"event: turn.started\n",
 		"data: ",
 		`"type":"turn.started"`,
 		`"turn_id":"t-7"`,

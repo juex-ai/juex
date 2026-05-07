@@ -10,7 +10,7 @@
 <h2>Live</h2>
 <ul id="live"></ul>
 
-<form hx-post="/api/sessions/{{.Info.ID}}/turns" hx-ext="json-enc" hx-target="this" hx-swap="none">
+<form id="prompt-form">
   <textarea name="prompt" placeholder="Type a prompt…"></textarea>
   <button type="submit">Send</button>
 </form>
@@ -19,6 +19,9 @@
   <button type="submit">Interrupt</button>
 </form>
 
-<script>juexSubscribe({{.Info.ID}}, {{.LastEventID}});</script>
+<script>
+  juexBindPromptForm({{.Info.ID}});
+  juexSubscribe({{.Info.ID}}, {{.LastEventID}});
+</script>
 {{end}}
 {{template "layout" .}}

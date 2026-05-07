@@ -1,7 +1,15 @@
 {{define "content"}}
-<form action="/api/sessions" method="post" hx-post="/api/sessions" hx-redirect="true">
+<form id="new-form">
   <p>Create a fresh session in this WorkDir.</p>
   <button type="submit">Create</button>
 </form>
+<script>
+  document.getElementById("new-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    fetch("/api/sessions", {method: "POST", headers: {"Content-Type": "application/json"}})
+      .then(function (r) { return r.json(); })
+      .then(function (j) { if (j && j.id) window.location.href = "/sessions/" + encodeURIComponent(j.id); });
+  });
+</script>
 {{end}}
 {{template "layout" .}}

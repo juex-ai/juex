@@ -15,3 +15,23 @@ function juexSubscribe(sessionId, lastEventId) {
     es.close();
   });
 }
+
+// Wire the prompt form to POST JSON to the session's /turns endpoint.
+function juexBindPromptForm(sessionId) {
+  const form = document.getElementById("prompt-form");
+  if (!form) return;
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    const fd = new FormData(form);
+    const prompt = fd.get("prompt");
+    if (!prompt) return;
+    fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/turns", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({prompt: prompt}),
+    }).then(function () {
+      const ta = form.querySelector("textarea");
+      if (ta) ta.value = "";
+    });
+  });
+}
