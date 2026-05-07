@@ -2,10 +2,12 @@ package web
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -96,5 +98,37 @@ func TestGetSessionShow_NotFound(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 201 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var parsed struct {
+		ID  string `json:"id"`
+		Dir string `json:"dir"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ID == "" || parsed.Dir == "" {
+		t.Errorf("got %+v", parsed)
+	}
+	// The created session must show up in subsequent List call.
+	resp2, _ := http.Get(ts.URL + "/api/sessions")
+	defer resp2.Body.Close()
+	body, _ := io.ReadAll(resp2.Body)
+	if !strings.Contains(string(body), parsed.ID) {
+		t.Errorf("created id %q not found in list:\n%s", parsed.ID, body)
 	}
 }

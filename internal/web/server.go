@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -37,8 +40,9 @@ type Server struct {
 // activeSession wraps an app.App with the bookkeeping the web server
 // needs for SSE fan-out and turn cancellation.
 type activeSession struct {
-	app   *app.App
-	bcast *broadcaster
+	app       *app.App
+	bcast     *broadcaster
+	StartedAt time.Time
 
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc // nil when no turn is running
@@ -156,4 +160,43 @@ func validLoopback(addr string) bool {
 		}
 	}
 	return false
+}
+
+// openSession constructs an *app.App for resumeDir (or a fresh session
+// when resumeDir == "") and stores it under its session id.
+func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSession, error) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+	a, err := app.New(app.Options{
+		Config:    s.opts.Cfg,
+		Provider:  s.opts.Provider,
+		WorkDir:   s.opts.Cfg.WorkDir,
+		ResumeDir: resumeDir,
+	})
+	if err != nil {
+		return nil, err
+	}
+	as := &activeSession{
+		app:       a,
+		bcast:     newBroadcaster(),
+		StartedAt: time.Now(),
+		turns:     map[string]*turnState{},
+	}
+	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
+	s.sessions.Store(a.Session.ID, as)
+	return as, nil
+}
+
+// getActiveSession returns the active session for id; opens it from
+// disk if not already in memory. Returns nil if the on-disk dir is
+// missing.
+func (s *Server) getActiveSession(ctx context.Context, id string) (*activeSession, error) {
+	if v, ok := s.sessions.Load(id); ok {
+		return v.(*activeSession), nil
+	}
+	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
+		return nil, err
+	}
+	return s.openSession(ctx, dir)
 }

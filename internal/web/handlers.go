@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/session"
@@ -32,10 +33,17 @@ func writeErr(w http.ResponseWriter, status int, kind, msg string) {
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
-		return
+	switch r.Method {
+	case http.MethodGet:
+		s.listSessions(w, r)
+	case http.MethodPost:
+		s.createSession(w, r)
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or POST")
 	}
+}
+
+func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	infos, err := session.List(s.opts.Cfg.SessionsDir())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -45,6 +53,19 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		infos = []session.Info{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": infos})
+}
+
+func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
+	as, err := s.openSession(r.Context(), "")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":         as.app.Session.ID,
+		"dir":        as.app.Session.Dir,
+		"started_at": as.StartedAt.UTC().Format(time.RFC3339),
+	})
 }
 
 // sessionPathID extracts <id> from /api/sessions/<id>[/<rest>].
