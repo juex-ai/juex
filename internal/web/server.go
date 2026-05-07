@@ -21,9 +21,10 @@ import (
 // Options configures a Server. Provider is optional; if unset, the
 // server constructs one per-session via cfg.NewProvider().
 type Options struct {
-	Cfg      config.Config
-	Addr     string
-	Provider llm.Provider // optional; injected for tests
+	Cfg          config.Config
+	Addr         string
+	Provider     llm.Provider // optional; injected for tests
+	AllowAnyBind bool         // bypass the loopback bind check; CLI sets this for --unsafe-bind-any
 }
 
 // Server is a long-running HTTP server for one WorkDir.
@@ -118,7 +119,7 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 // shutdown it cancels every running turn, closes every active app, and
 // then calls http.Server.Shutdown with a 10s deadline.
 func (s *Server) Run(ctx context.Context) error {
-	if !validLoopback(s.opts.Addr) {
+	if !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex serve: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
 	srv := &http.Server{

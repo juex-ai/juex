@@ -45,11 +45,15 @@ from the browser.
 ## 4. CLI Surface
 
 ```
-juex serve [--addr 127.0.0.1:8080]
+juex serve [--addr 127.0.0.1:8080] [--unsafe-bind-any]
 ```
 
 - `--addr` defaults to `127.0.0.1:8080`. Binding to `0.0.0.0` is
   rejected with a usage error in v0.1 (no auth + remote bind = footgun).
+- `--unsafe-bind-any` bypasses the loopback bind check; user takes
+  responsibility for network-level access control (e.g. netbird overlay,
+  internal LAN, reverse proxy with auth). Prints a WARNING to stderr on
+  startup. Off by default.
 - Ctrl-C / SIGTERM → `http.Server.Shutdown` with a 10-second deadline.
   All running turns receive `ctx.Cancel()` and a chance to flush.
 

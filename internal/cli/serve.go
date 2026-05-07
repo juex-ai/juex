@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -12,7 +13,10 @@ import (
 )
 
 func newServeCmd(flags *persistentFlags) *cobra.Command {
-	var addr string
+	var (
+		addr          string
+		unsafeBindAny bool
+	)
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run a local HTTP server for the current WorkDir",
@@ -29,12 +33,16 @@ and the server flushes session jsonl before exit.`,
 			if err != nil {
 				return err
 			}
-			if !isLoopbackAddr(addr) {
-				return &usageError{msg: "juex serve: --addr must bind to loopback (got " + addr + ")"}
+			if !unsafeBindAny && !isLoopbackAddr(addr) {
+				return &usageError{msg: "juex serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
+			}
+			if unsafeBindAny {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
 			}
 			srv := web.NewServer(web.Options{
-				Cfg:  cfg,
-				Addr: addr,
+				Cfg:          cfg,
+				Addr:         addr,
+				AllowAnyBind: unsafeBindAny,
 			})
 
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -45,6 +53,7 @@ and the server flushes session jsonl before exit.`,
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
+	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
 	return cmd
 }
 

@@ -141,6 +141,7 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "show"`,
 		`"name": "serve"`,
 		`"name": "addr"`,
+		`"name": "unsafe-bind-any"`,
 		`"name": "resume"`,  // flag
 		`"name": "session"`, // flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
@@ -362,5 +363,43 @@ func TestREPLCmd_AcceptsResumeFlags(t *testing.T) {
 	err := root.Execute()
 	if _, ok := err.(*usageError); !ok {
 		t.Fatalf("got %T: %v", err, err)
+	}
+}
+
+func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
+	// Without --unsafe-bind-any, a non-loopback addr is a usage error.
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	envFile := dir + "/.env"
+	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	root.SetArgs([]string{"-C", dir, "--env", envFile, "serve", "--addr", "0.0.0.0:0"})
+	err := root.Execute()
+	if _, ok := err.(*usageError); !ok {
+		t.Fatalf("expected *usageError without --unsafe-bind-any, got %T: %v", err, err)
+	}
+
+	// With --unsafe-bind-any, the loopback check is skipped. We don't
+	// actually want to bind here, so we use a port that's almost
+	// certainly already in use to force srv.Run to error quickly with a
+	// bind failure (general error, not usage error). Pass an obviously
+	// unavailable address.
+	root2 := newRootCmd()
+	var out2 bytes.Buffer
+	root2.SetOut(&out2)
+	root2.SetErr(&out2)
+	root2.SetArgs([]string{"-C", dir, "--env", envFile, "serve", "--addr", "300.300.300.300:0", "--unsafe-bind-any"})
+	err2 := root2.Execute()
+	if err2 == nil {
+		t.Fatal("expected non-nil error from invalid bind address")
+	}
+	if _, ok := err2.(*usageError); ok {
+		t.Fatalf("expected non-usage error with --unsafe-bind-any, got *usageError: %v", err2)
+	}
+	// Confirm the warning was printed.
+	if !strings.Contains(out2.String(), "WARNING: --unsafe-bind-any") {
+		t.Errorf("expected stderr warning, got: %s", out2.String())
 	}
 }
