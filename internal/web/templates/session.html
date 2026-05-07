@@ -1,0 +1,24 @@
+{{define "content"}}
+<p><strong>id:</strong> {{.Info.ID}} · <strong>turns:</strong> {{.Info.Turns}} · <strong>last active:</strong> {{.Info.LastActiveAt.Format "2006-01-02 15:04:05"}}</p>
+
+<pre>{{range .Messages}}{{range .Blocks}}{{if eq .Type "text"}}{{$.RoleOf .}}{{": "}}{{.Text}}
+{{else if eq .Type "reasoning"}}thinking: {{.Text}}
+{{else if eq .Type "tool_use"}}tool> {{.ToolName}}({{printf "%v" .Input}})
+{{else if eq .Type "tool_result"}}tool< {{.Content}}
+{{end}}{{end}}{{end}}</pre>
+
+<h2>Live</h2>
+<ul id="live"></ul>
+
+<form hx-post="/api/sessions/{{.Info.ID}}/turns" hx-ext="json-enc" hx-target="this" hx-swap="none">
+  <textarea name="prompt" placeholder="Type a prompt…"></textarea>
+  <button type="submit">Send</button>
+</form>
+
+<form hx-post="/api/sessions/{{.Info.ID}}/interrupt" hx-target="this" hx-swap="none">
+  <button type="submit">Interrupt</button>
+</form>
+
+<script>juexSubscribe({{.Info.ID}}, {{.LastEventID}});</script>
+{{end}}
+{{template "layout" .}}
