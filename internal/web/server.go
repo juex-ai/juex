@@ -75,6 +75,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
+	mux.HandleFunc("/api/sessions", s.handleListSessions)
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled. On
