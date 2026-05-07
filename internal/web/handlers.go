@@ -181,6 +181,59 @@ func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id stri
 	writeJSON(w, http.StatusOK, map[string]any{"cancelled": cancelled})
 }
 
+func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id string) {
+	as, err := s.getActiveSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "general_error", "streaming not supported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	since := r.URL.Query().Get("since")
+	if since == "" {
+		since = r.Header.Get("Last-Event-ID")
+	}
+	if since != "" {
+		// Replay missed events from events.jsonl. The path comes from the
+		// session record so we never read outside the sessions dir.
+		f, err := os.Open(filepath.Join(as.app.Session.Dir, "events.jsonl"))
+		if err == nil {
+			replayed, _ := replaySince(f, since)
+			f.Close()
+			for _, e := range replayed {
+				if err := writeSSEFrame(w, e); err != nil {
+					return
+				}
+			}
+		}
+	}
+
+	sub := as.bcast.subscribe()
+	defer sub.unsubscribe()
+	ctx := r.Context()
+	for {
+		select {
+		case e, ok := <-sub.ch:
+			if !ok {
+				return
+			}
+			if err := writeSSEFrame(w, e); err != nil {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // runTurn executes one engine turn and updates state machine + cancel
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {

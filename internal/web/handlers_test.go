@@ -254,3 +254,49 @@ func TestPostInterrupt_IdempotentWhenIdle(t *testing.T) {
 		t.Errorf("expected cancelled=false when nothing running")
 	}
 }
+
+func TestSSEEvents_ReceivesPublished(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	var c struct{ ID string }
+	json.NewDecoder(created.Body).Decode(&c)
+	created.Body.Close()
+
+	// Connect to the SSE stream first.
+	req, _ := http.NewRequest("GET", ts.URL+"/api/sessions/"+c.ID+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Errorf("content-type = %q", resp.Header.Get("Content-Type"))
+	}
+
+	// Submit a turn — at minimum, a turn.started/turn.completed pair fires.
+	go func() {
+		http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+			strings.NewReader(`{"prompt":"hi"}`))
+	}()
+
+	// Read until we see one full SSE frame containing turn.started.
+	buf := make([]byte, 4096)
+	deadline := time.Now().Add(2 * time.Second)
+	collected := ""
+	for time.Now().Before(deadline) {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			collected += string(buf[:n])
+			if strings.Contains(collected, "turn.started") {
+				return
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	t.Fatalf("did not receive turn.started; collected:\n%s", collected)
+}
