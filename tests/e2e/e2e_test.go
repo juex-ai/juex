@@ -193,7 +193,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	}
 	defer func() {
 		for _, c := range mcpClients {
-			_ = c.Close()
+			c.Close()
 		}
 	}()
 
@@ -203,7 +203,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = sess.Close() }()
+	defer sess.Close()
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
@@ -533,7 +533,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = a2.Close() }()
+	defer a2.Close()
 	out, err := a2.Run(context.Background(), "who am I?")
 	if err != nil {
 		t.Fatal(err)

@@ -37,7 +37,7 @@ func TestGetSessionsList_ReturnsSeededSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -72,7 +72,7 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -99,7 +99,7 @@ func TestGetSessionShow_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -114,7 +114,7 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != 201 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -133,7 +133,7 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp2.Body.Close() }()
+	defer resp2.Body.Close()
 	body, _ := io.ReadAll(resp2.Body)
 	if !strings.Contains(string(body), parsed.ID) {
 		t.Errorf("created id %q not found in list:\n%s", parsed.ID, body)
@@ -154,7 +154,7 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
-	_ = created.Body.Close()
+	created.Body.Close()
 
 	// Submit a turn.
 	body := strings.NewReader(`{"prompt":"hi"}`)
@@ -162,7 +162,7 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != 202 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -191,10 +191,10 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 				} `json:"messages"`
 			}
 			if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
-				_ = show.Body.Close()
+				show.Body.Close()
 				t.Fatal(err)
 			}
-			_ = show.Body.Close()
+			show.Body.Close()
 			for _, m := range parsed.Messages {
 				if m.Role == "assistant" {
 					for _, b := range m.Blocks {
@@ -223,7 +223,7 @@ func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
-	_ = created.Body.Close()
+	created.Body.Close()
 
 	turnResp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"hi"}`))
@@ -236,7 +236,7 @@ func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
 	if err := json.NewDecoder(turnResp.Body).Decode(&t1); err != nil {
 		t.Fatal(err)
 	}
-	_ = turnResp.Body.Close()
+	turnResp.Body.Close()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -248,10 +248,10 @@ func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
 			State string `json:"state"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
-			_ = r.Body.Close()
+			r.Body.Close()
 			t.Fatal(err)
 		}
-		_ = r.Body.Close()
+		r.Body.Close()
 		if st.State == "done" {
 			return
 		}
@@ -273,13 +273,13 @@ func TestPostInterrupt_IdempotentWhenIdle(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
-	_ = created.Body.Close()
+	created.Body.Close()
 
 	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/interrupt", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -307,7 +307,7 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
-	_ = created.Body.Close()
+	created.Body.Close()
 
 	// Connect to the SSE stream first.
 	req, _ := http.NewRequest("GET", ts.URL+"/api/sessions/"+c.ID+"/events", nil)
@@ -315,7 +315,7 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.Header.Get("Content-Type") != "text/event-stream" {
 		t.Errorf("content-type = %q", resp.Header.Get("Content-Type"))
 	}
@@ -325,7 +325,7 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 		resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 			strings.NewReader(`{"prompt":"hi"}`))
 		if err == nil {
-			_ = resp.Body.Close()
+			resp.Body.Close()
 		}
 	}()
 
@@ -359,7 +359,7 @@ func TestSPAFallback_ServesIndexForUnknownRoute(t *testing.T) {
 			t.Fatalf("GET %s: %v", path, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
+		resp.Body.Close()
 		if resp.StatusCode != 200 {
 			t.Fatalf("GET %s: status = %d, body=%s", path, resp.StatusCode, body)
 		}

@@ -18,7 +18,7 @@ func TestSession_AppendsToConversationJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = s.Close() }()
+	defer s.Close()
 
 	_ = s.Append(llm.TextMessage(llm.RoleUser, "hello"))
 	_ = s.Append(llm.TextMessage(llm.RoleAssistant, "hi"))
@@ -39,7 +39,7 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = s.Close() }()
+	defer s.Close()
 
 	_ = s.AppendEvent(events.Event{Type: "turn.started", Payload: "x"})
 	_ = s.AppendEvent(events.Event{Type: "tool.completed", Payload: "y"})
@@ -56,7 +56,7 @@ func TestSession_BusSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = s.Close() }()
+	defer s.Close()
 	bus := events.NewBus()
 	s.SubscribeBus(bus)
 
@@ -86,7 +86,7 @@ func TestSession_LoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = s2.Close() }()
+	defer s2.Close()
 	if len(s2.History) != 2 {
 		t.Fatalf("loaded history len = %d", len(s2.History))
 	}

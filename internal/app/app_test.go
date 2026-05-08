@@ -40,7 +40,7 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = a.Close() })
+	t.Cleanup(func() { a.Close() })
 	return a, prov
 }
 
@@ -115,7 +115,7 @@ func TestApp_VerboseEmitsToStderr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = a.Close() }()
+	defer a.Close()
 
 	if _, err := a.Run(context.Background(), "x"); err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestApp_SessionWritesIntoWorkDirAgents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = a.Close() }()
+	defer a.Close()
 
 	if _, err := a.Run(context.Background(), "x"); err != nil {
 		t.Fatal(err)
@@ -186,7 +186,7 @@ func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = a.Close() }()
+	defer a.Close()
 
 	if a.Session.ID != id {
 		t.Errorf("session id = %s, want %s", a.Session.ID, id)
@@ -219,7 +219,7 @@ func TestApp_NewDefaultsWorkDirToCwd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = a.Close() }()
+	defer a.Close()
 	if a.Session == nil {
 		t.Fatal("session not built")
 	}

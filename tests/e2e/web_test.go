@@ -52,7 +52,7 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
 		t.Fatal(err)
 	}
-	_ = created.Body.Close()
+	created.Body.Close()
 	if c.ID == "" {
 		t.Fatal("no session id")
 	}
@@ -67,7 +67,7 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("turn POST status = %d body=%s", resp.StatusCode, body)
 	}
-	_ = resp.Body.Close()
+	resp.Body.Close()
 
 	// 3. Wait until turn shows in transcript.
 	deadline := time.Now().Add(2 * time.Second)
@@ -83,10 +83,10 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 			} `json:"messages"`
 		}
 		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
-			_ = show.Body.Close()
+			show.Body.Close()
 			t.Fatal(err)
 		}
-		_ = show.Body.Close()
+		show.Body.Close()
 		for _, m := range parsed.Messages {
 			if m.Role == "assistant" {
 				for _, b := range m.Blocks {

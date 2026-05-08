@@ -212,7 +212,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 		f, err := os.Open(filepath.Join(as.app.Session.Dir, "events.jsonl"))
 		if err == nil {
 			replayed, replayErr := replaySince(f, since)
-			_ = f.Close()
+			f.Close()
 			if replayErr != nil {
 				log.Printf("web: events replay for %s: %v", id, replayErr)
 			}

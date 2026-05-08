@@ -142,7 +142,7 @@ execution is printed and the process exits with code 10.`,
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"check PROVIDER_API_TYPE / PROVIDER_API_KEY / PROVIDER_API_MODEL in your .env file", false)
 			}
-			defer func() { _ = a.Close() }()
+			defer a.Close()
 
 			start := time.Now()
 			out, err := a.Run(cmd.Context(), prompt)
@@ -186,7 +186,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		return emit(jsonOut, cmd.ErrOrStderr(), err,
 			"dry-run wiring failed; check skills/MCP/memory config", false)
 	}
-	defer func() { _ = a.Close() }()
+	defer a.Close()
 
 	system := a.Engine.Prompt.Build()
 	toolList := a.Engine.Tools.List()
@@ -235,7 +235,7 @@ func emit(jsonOut bool, stderr io.Writer, err error, suggestion string, retryabl
 			Suggestion: suggestion,
 			Retryable:  retryable,
 		}
-		_, _ = fmt.Fprintln(stderr, mustJSON(body))
+		fmt.Fprintln(stderr, mustJSON(body))
 	}
 	return err
 }

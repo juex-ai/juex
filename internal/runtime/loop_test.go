@@ -60,7 +60,7 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { sess.Close() })
 	sess.SubscribeBus(bus)
 	pb := &prompt.Builder{
 		AgentsMDDirs: []string{t.TempDir()},
@@ -155,7 +155,7 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { sess.Close() })
 	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
 	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb}
 
@@ -204,7 +204,7 @@ func TestTurn_BudgetExceeded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { sess.Close() })
 	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
 	eng := &Engine{Provider: prov, Tools: reg, Bus: events.NewBus(), Session: sess, Prompt: pb, MaxIters: 3, MaxDur: 30 * time.Second}
 

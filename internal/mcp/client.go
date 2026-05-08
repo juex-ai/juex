@@ -114,12 +114,12 @@ func Connect(ctx context.Context, name string, spec ServerSpec) (*Client, error)
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": clientName, "version": clientVersion},
 	}); err != nil {
-		_ = c.Close()
+		c.Close()
 		return nil, fmt.Errorf("mcp[%s]: initialize: %w", name, err)
 	}
 	// notifications/initialized — no id, no response expected
 	if err := c.notify("notifications/initialized", map[string]any{}); err != nil {
-		_ = c.Close()
+		c.Close()
 		return nil, err
 	}
 	return c, nil
@@ -238,7 +238,7 @@ func (c *Client) Close() error {
 		return nil
 	}
 	if c.in != nil {
-		_ = c.in.Close()
+		c.in.Close()
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()

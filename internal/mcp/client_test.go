@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -139,7 +138,7 @@ func TestMCPClient_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = client.Close() }()
+	defer client.Close()
 
 	tlist, err := client.ListTools(ctx)
 	if err != nil {
@@ -180,7 +179,7 @@ func TestMCPRegisterAll(t *testing.T) {
 	}
 	defer func() {
 		for _, c := range clients {
-			_ = c.Close()
+			c.Close()
 		}
 	}()
 
@@ -223,7 +222,7 @@ func TestMCPClient_ToolErrorPropagates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = client.Close() }()
+	defer client.Close()
 	out, err := client.CallTool(ctx, "fail", map[string]any{})
 	if err == nil {
 		t.Fatalf("expected error, got out=%q", out)
@@ -246,7 +245,7 @@ func TestMCPClient_EnvVarReachesServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = client.Close() }()
+	defer client.Close()
 	out, err := client.CallTool(ctx, "envcheck", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +276,7 @@ func TestMCPClient_ToolWithNoSchemaGetsDefault(t *testing.T) {
 	}
 	defer func() {
 		for _, c := range clients {
-			_ = c.Close()
+			c.Close()
 		}
 	}()
 	tool, ok := r.Get("mcp__fake__noschema")
@@ -303,7 +302,7 @@ func TestMCPRegisterAll_MultipleServers(t *testing.T) {
 	}
 	defer func() {
 		for _, c := range clients {
-			_ = c.Close()
+			c.Close()
 		}
 	}()
 	if len(clients) != 2 {
@@ -324,7 +323,7 @@ func TestMCPClient_ContextCancellationStopsCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = client.Close() }()
+	defer client.Close()
 	cancCtx, cancCancel := context.WithCancel(ctx)
 	cancCancel() // cancel immediately
 	if _, err := client.CallTool(cancCtx, "echo", map[string]any{"text": "x"}); err == nil {
@@ -350,7 +349,7 @@ func TestRegisterAllLayered_ProjectOverridesUser(t *testing.T) {
 	}
 	defer func() {
 		for _, c := range clients {
-			_ = c.Close()
+			c.Close()
 		}
 	}()
 
@@ -384,7 +383,7 @@ func TestRegisterAllLayered_DistinctServersAllRegister(t *testing.T) {
 	}
 	defer func() {
 		for _, c := range clients {
-			_ = c.Close()
+			c.Close()
 		}
 	}()
 	for _, name := range []string{"mcp__a__echo", "mcp__b__echo"} {
@@ -409,5 +408,4 @@ func TestLoadConfig_Parse(t *testing.T) {
 	if !ok || x.Command != "foo" || len(x.Args) != 1 || x.Env["K"] != "V" {
 		t.Fatalf("parsed = %+v", c)
 	}
-	_ = fmt.Sprintf
 }

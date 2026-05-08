@@ -110,24 +110,24 @@ func (vp *verbosePrinter) printIndentedBlock(label, body string, dimAll bool) {
 		if dimAll {
 			vp.printlnDim(prefix + line)
 		} else {
-			_, _ = fmt.Fprintln(vp.w, prefix+line)
+			fmt.Fprintln(vp.w, prefix+line)
 		}
 	}
 }
 
 func (vp *verbosePrinter) printlnDim(s string) {
 	if vp.isTTY {
-		_, _ = fmt.Fprintln(vp.w, "\x1b[2m"+s+"\x1b[0m")
+		fmt.Fprintln(vp.w, "\x1b[2m"+s+"\x1b[0m")
 	} else {
-		_, _ = fmt.Fprintln(vp.w, s)
+		fmt.Fprintln(vp.w, s)
 	}
 }
 
 func (vp *verbosePrinter) printlnRed(s string) {
 	if vp.isTTY {
-		_, _ = fmt.Fprintln(vp.w, "\x1b[31m"+s+"\x1b[0m")
+		fmt.Fprintln(vp.w, "\x1b[31m"+s+"\x1b[0m")
 	} else {
-		_, _ = fmt.Fprintln(vp.w, s)
+		fmt.Fprintln(vp.w, s)
 	}
 }
 
@@ -207,13 +207,13 @@ func (s *spinner) run(stopCh chan struct{}) {
 	for {
 		select {
 		case <-stopCh:
-			_, _ = fmt.Fprint(s.w, "\r\x1b[2K") // clear line
+			fmt.Fprint(s.w, "\r\x1b[2K") // clear line
 			return
 		case <-ticker.C:
 			s.mu.Lock()
 			m := s.msg
 			s.mu.Unlock()
-			_, _ = fmt.Fprintf(s.w, "\r\x1b[2K\x1b[2m%s %s\x1b[0m", spinnerFrames[i], m)
+			fmt.Fprintf(s.w, "\r\x1b[2K\x1b[2m%s %s\x1b[0m", spinnerFrames[i], m)
 			i = (i + 1) % len(spinnerFrames)
 		}
 	}

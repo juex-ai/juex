@@ -82,7 +82,7 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = sess.Close() }()
+	defer sess.Close()
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{

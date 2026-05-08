@@ -79,7 +79,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintln(w, "ok")
+		fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)
@@ -161,7 +161,7 @@ func (s *Server) Close() {
 		as.cancelMu.Unlock()
 		as.turnWG.Wait()
 		as.bcast.close()
-		_ = as.app.Close()
+		as.app.Close()
 		return true
 	})
 }

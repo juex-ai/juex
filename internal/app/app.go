@@ -199,6 +199,6 @@ func (a *App) Close() error {
 
 func closeAll(clients []*mcp.Client) {
 	for _, c := range clients {
-		_ = c.Close()
+		c.Close()
 	}
 }

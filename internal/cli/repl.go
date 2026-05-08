@@ -31,7 +31,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = a.Close() }()
+			defer a.Close()
 			cmdPrintln(cmd, "juex repl - type your prompt (empty line + Ctrl-D to quit)")
 			return a.REPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},

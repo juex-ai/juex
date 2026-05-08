@@ -76,9 +76,9 @@ func renderSessionsTable(cmd *cobra.Command, infos []session.Info) {
 		return
 	}
 	w := cmd.OutOrStdout()
-	_, _ = fmt.Fprintf(w, "%-32s  %-20s  %-5s  %s\n", "ID", "LAST_ACTIVE", "TURNS", "PREVIEW")
+	fmt.Fprintf(w, "%-32s  %-20s  %-5s  %s\n", "ID", "LAST_ACTIVE", "TURNS", "PREVIEW")
 	for _, s := range infos {
-		_, _ = fmt.Fprintf(w, "%-32s  %-20s  %5d  %s\n",
+		fmt.Fprintf(w, "%-32s  %-20s  %5d  %s\n",
 			s.ID, s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
 	}
 }
@@ -130,26 +130,26 @@ func newSessionsShowCmd(flags *persistentFlags) *cobra.Command {
 
 func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message) {
 	w := cmd.OutOrStdout()
-	_, _ = fmt.Fprintf(w, "id:             %s\n", info.ID)
-	_, _ = fmt.Fprintf(w, "started_at:     %s\n", info.StartedAt.Format(time.RFC3339))
-	_, _ = fmt.Fprintf(w, "last_active_at: %s\n", info.LastActiveAt.Format(time.RFC3339))
-	_, _ = fmt.Fprintf(w, "turns:          %d\n\n", info.Turns)
+	fmt.Fprintf(w, "id:             %s\n", info.ID)
+	fmt.Fprintf(w, "started_at:     %s\n", info.StartedAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "last_active_at: %s\n", info.LastActiveAt.Format(time.RFC3339))
+	fmt.Fprintf(w, "turns:          %d\n\n", info.Turns)
 	for _, m := range msgs {
 		role := string(m.Role)
 		for _, b := range m.Blocks {
 			switch b.Type {
 			case llm.BlockText:
-				_, _ = fmt.Fprintf(w, "%s> %s\n", role, b.Text)
+				fmt.Fprintf(w, "%s> %s\n", role, b.Text)
 			case llm.BlockReasoning:
 				if b.Redacted {
-					_, _ = fmt.Fprintln(w, "thinking> [redacted]")
+					fmt.Fprintln(w, "thinking> [redacted]")
 				} else {
-					_, _ = fmt.Fprintf(w, "thinking> %s\n", b.Text)
+					fmt.Fprintf(w, "thinking> %s\n", b.Text)
 				}
 			case llm.BlockToolUse:
-				_, _ = fmt.Fprintf(w, "tool> %s(%v)\n", b.ToolName, b.Input)
+				fmt.Fprintf(w, "tool> %s(%v)\n", b.ToolName, b.Input)
 			case llm.BlockToolResult:
-				_, _ = fmt.Fprintf(w, "tool< %s\n", b.Content)
+				fmt.Fprintf(w, "tool< %s\n", b.Content)
 			}
 		}
 	}

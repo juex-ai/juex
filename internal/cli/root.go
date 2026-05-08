@@ -143,5 +143,5 @@ func loadConfig(flags *persistentFlags) (config.Config, error) {
 // cmdPrintln is a small helper so subcommands always write to the cobra
 // command's stdout (which tests can capture via cmd.SetOut).
 func cmdPrintln(c *cobra.Command, s string) {
-	_, _ = fmt.Fprintln(c.OutOrStdout(), s)
+	fmt.Fprintln(c.OutOrStdout(), s)
 }

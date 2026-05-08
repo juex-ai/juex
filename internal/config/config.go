@@ -173,7 +173,7 @@ func readEnvFile(path string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	out := map[string]string{}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
