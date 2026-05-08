@@ -37,7 +37,7 @@ and the server flushes session jsonl before exit.`,
 				return &usageError{msg: "juex serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
 			}
 			if unsafeBindAny {
-				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
+				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
 			}
 			srv := web.NewServer(web.Options{
 				Cfg:          cfg,

@@ -137,6 +137,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	as.turnsMu.Lock()
 	as.turns[turnID] = &turnState{ID: turnID, State: "running"}
 	as.turnsMu.Unlock()
+	as.turnWG.Add(1)
 	as.cancelMu.Unlock()
 
 	go s.runTurn(ctx, as, turnID, req.Prompt)
@@ -211,7 +212,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 		f, err := os.Open(filepath.Join(as.app.Session.Dir, "events.jsonl"))
 		if err == nil {
 			replayed, replayErr := replaySince(f, since)
-			f.Close()
+			_ = f.Close()
 			if replayErr != nil {
 				log.Printf("web: events replay for %s: %v", id, replayErr)
 			}
@@ -244,6 +245,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 // runTurn executes one engine turn and updates state machine + cancel
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {
+	defer as.turnWG.Done()
 	_, err := as.app.Engine.Turn(ctx, prompt)
 	as.cancelMu.Lock()
 	as.cancel = nil

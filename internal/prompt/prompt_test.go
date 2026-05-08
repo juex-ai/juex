@@ -14,29 +14,45 @@ import (
 func TestBuilder_AllSourcesPresent(t *testing.T) {
 	root := t.TempDir()
 	// AGENTS.md at the project root
-	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rule: be helpful"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rule: be helpful"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	// AGENTS.md at a subdir (cwd)
 	subdir := filepath.Join(root, "sub")
-	os.MkdirAll(subdir, 0o755)
-	os.WriteFile(filepath.Join(subdir, "AGENTS.md"), []byte("subdir rule: prefer brevity"), 0o644)
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subdir, "AGENTS.md"), []byte("subdir rule: prefer brevity"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// global agents file
 	globalDir := t.TempDir()
 	globalAgents := filepath.Join(globalDir, "AGENTS.md")
-	os.WriteFile(globalAgents, []byte("global rule: be polite"), 0o644)
+	if err := os.WriteFile(globalAgents, []byte("global rule: be polite"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	// skills dir
 	skillRoot := t.TempDir()
 	skillDir := filepath.Join(skillRoot, "x")
-	os.MkdirAll(skillDir, 0o755)
-	os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
-		[]byte("---\nname: x\ndescription: do X\n---\nbody"), 0o644)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: x\ndescription: do X\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	loader := skills.NewLoader(skillRoot)
-	loader.Load()
+	if err := loader.Load(); err != nil {
+		t.Fatal(err)
+	}
 
 	// memory store
 	store := memory.NewStore(t.TempDir())
-	store.Write(memory.Entry{Name: "no-emoji", Description: "Never use emoji", Type: "feedback", Body: "Reason."})
+	if err := store.Write(memory.Entry{Name: "no-emoji", Description: "Never use emoji", Type: "feedback", Body: "Reason."}); err != nil {
+		t.Fatal(err)
+	}
 
 	b := &Builder{
 		GlobalAgentsMDPath: globalAgents,
@@ -76,8 +92,12 @@ func TestBuilder_EmptySourcesSkipped(t *testing.T) {
 func TestBuilder_AgentsMDOrderingDeterministic(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
-	os.WriteFile(filepath.Join(rootA, "AGENTS.md"), []byte("AAA"), 0o644)
-	os.WriteFile(filepath.Join(rootB, "AGENTS.md"), []byte("BBB"), 0o644)
+	if err := os.WriteFile(filepath.Join(rootA, "AGENTS.md"), []byte("AAA"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "AGENTS.md"), []byte("BBB"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	b := &Builder{
 		AgentsMDDirs: []string{rootA, rootB},
 		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
@@ -96,7 +116,9 @@ func TestBuilder_AgentsMDOrderingDeterministic(t *testing.T) {
 func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
 	globalDir := t.TempDir()
 	globalAgents := filepath.Join(globalDir, "AGENTS.md")
-	os.WriteFile(globalAgents, []byte("only-global-rule"), 0o644)
+	if err := os.WriteFile(globalAgents, []byte("only-global-rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	b := &Builder{
 		GlobalAgentsMDPath: globalAgents,
@@ -110,7 +132,9 @@ func TestBuilder_OnlyGlobalAgentsMD(t *testing.T) {
 
 func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("only-project-rule"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("only-project-rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	b := &Builder{
 		AgentsMDDirs: []string{root},
@@ -135,9 +159,15 @@ func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 
 func TestBuilder_MemorySectionRendersAllEntries(t *testing.T) {
 	store := memory.NewStore(t.TempDir())
-	store.Write(memory.Entry{Name: "one", Description: "first desc", Type: "feedback", Body: "b"})
-	store.Write(memory.Entry{Name: "two", Description: "second desc", Type: "user", Body: "b"})
-	store.Write(memory.Entry{Name: "three", Description: "third desc", Type: "project", Body: "b"})
+	if err := store.Write(memory.Entry{Name: "one", Description: "first desc", Type: "feedback", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Write(memory.Entry{Name: "two", Description: "second desc", Type: "user", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Write(memory.Entry{Name: "three", Description: "third desc", Type: "project", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
 
 	b := &Builder{
 		AgentsMDDirs: []string{t.TempDir()},
@@ -154,7 +184,9 @@ func TestBuilder_MemorySectionRendersAllEntries(t *testing.T) {
 
 func TestBuilder_SectionsSeparatedByDivider(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("rule"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	b := &Builder{
 		AgentsMDDirs: []string{root},
@@ -180,7 +212,9 @@ func TestBuilder_RebuildsFreshEachCall(t *testing.T) {
 	if strings.Contains(first, "added-after") {
 		t.Fatal("entry should not be present yet")
 	}
-	store.Write(memory.Entry{Name: "added-after", Description: "added-after", Type: "feedback", Body: "b"})
+	if err := store.Write(memory.Entry{Name: "added-after", Description: "added-after", Type: "feedback", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
 	second := b.Build()
 	if !strings.Contains(second, "added-after") {
 		t.Fatalf("rebuild missed new memory entry:\n%s", second)

@@ -37,7 +37,7 @@ func TestGetSessionsList_ReturnsSeededSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -72,7 +72,7 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -95,8 +95,11 @@ func TestGetSessionShow_NotFound(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, _ := http.Get(ts.URL + "/api/sessions/missing")
-	defer resp.Body.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions/missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -111,7 +114,7 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 201 {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
@@ -126,8 +129,11 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 		t.Errorf("got %+v", parsed)
 	}
 	// The created session must show up in subsequent List call.
-	resp2, _ := http.Get(ts.URL + "/api/sessions")
-	defer resp2.Body.Close()
+	resp2, err := http.Get(ts.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
 	body, _ := io.ReadAll(resp2.Body)
 	if !strings.Contains(string(body), parsed.ID) {
 		t.Errorf("created id %q not found in list:\n%s", parsed.ID, body)
@@ -140,10 +146,15 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	defer ts.Close()
 
 	// Create a session first.
-	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var c struct{ ID string }
-	json.NewDecoder(created.Body).Decode(&c)
-	created.Body.Close()
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	_ = created.Body.Close()
 
 	// Submit a turn.
 	body := strings.NewReader(`{"prompt":"hi"}`)
@@ -151,14 +162,16 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 202 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
 	var got struct {
 		TurnID string `json:"turn_id"`
 	}
-	json.NewDecoder(resp.Body).Decode(&got)
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got.TurnID == "" {
 		t.Errorf("missing turn_id")
 	}
@@ -177,8 +190,11 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 					} `json:"blocks"`
 				} `json:"messages"`
 			}
-			json.NewDecoder(show.Body).Decode(&parsed)
-			show.Body.Close()
+			if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
+				_ = show.Body.Close()
+				t.Fatal(err)
+			}
+			_ = show.Body.Close()
 			for _, m := range parsed.Messages {
 				if m.Role == "assistant" {
 					for _, b := range m.Blocks {
@@ -199,27 +215,43 @@ func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var c struct{ ID string }
-	json.NewDecoder(created.Body).Decode(&c)
-	created.Body.Close()
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	_ = created.Body.Close()
 
-	turnResp, _ := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+	turnResp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var t1 struct {
 		TurnID string `json:"turn_id"`
 	}
-	json.NewDecoder(turnResp.Body).Decode(&t1)
-	turnResp.Body.Close()
+	if err := json.NewDecoder(turnResp.Body).Decode(&t1); err != nil {
+		t.Fatal(err)
+	}
+	_ = turnResp.Body.Close()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		r, _ := http.Get(ts.URL + "/api/sessions/" + c.ID + "/turns/" + t1.TurnID)
+		r, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/turns/" + t1.TurnID)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var st struct {
 			State string `json:"state"`
 		}
-		json.NewDecoder(r.Body).Decode(&st)
-		r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
+			_ = r.Body.Close()
+			t.Fatal(err)
+		}
+		_ = r.Body.Close()
 		if st.State == "done" {
 			return
 		}
@@ -233,23 +265,30 @@ func TestPostInterrupt_IdempotentWhenIdle(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var c struct{ ID string }
-	json.NewDecoder(created.Body).Decode(&c)
-	created.Body.Close()
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	_ = created.Body.Close()
 
 	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/interrupt", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
 	var got struct {
 		Cancelled bool `json:"cancelled"`
 	}
-	json.NewDecoder(resp.Body).Decode(&got)
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got.Cancelled {
 		t.Errorf("expected cancelled=false when nothing running")
 	}
@@ -260,10 +299,15 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var c struct{ ID string }
-	json.NewDecoder(created.Body).Decode(&c)
-	created.Body.Close()
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	_ = created.Body.Close()
 
 	// Connect to the SSE stream first.
 	req, _ := http.NewRequest("GET", ts.URL+"/api/sessions/"+c.ID+"/events", nil)
@@ -271,15 +315,18 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.Header.Get("Content-Type") != "text/event-stream" {
 		t.Errorf("content-type = %q", resp.Header.Get("Content-Type"))
 	}
 
 	// Submit a turn — at minimum, a turn.started/turn.completed pair fires.
 	go func() {
-		http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 			strings.NewReader(`{"prompt":"hi"}`))
+		if err == nil {
+			_ = resp.Body.Close()
+		}
 	}()
 
 	// Read until we see one full SSE frame containing turn.started.
@@ -312,7 +359,7 @@ func TestSPAFallback_ServesIndexForUnknownRoute(t *testing.T) {
 			t.Fatalf("GET %s: %v", path, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != 200 {
 			t.Fatalf("GET %s: status = %d, body=%s", path, resp.StatusCode, body)
 		}

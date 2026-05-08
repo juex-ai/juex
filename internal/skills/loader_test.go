@@ -61,7 +61,9 @@ func TestLoader_PromptSection(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "x", "---\nname: x\ndescription: do x\n---\n")
 	l := NewLoader(dir)
-	l.Load()
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
 	got := l.PromptSection()
 	if !strings.Contains(got, "Available Skills") || !strings.Contains(got, "do x") {
 		t.Fatalf("section = %q", got)
@@ -70,7 +72,9 @@ func TestLoader_PromptSection(t *testing.T) {
 
 func TestLoader_PromptSectionEmpty(t *testing.T) {
 	l := NewLoader(t.TempDir())
-	l.Load()
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
 	if l.PromptSection() != "" {
 		t.Fatalf("expected empty section")
 	}
@@ -82,7 +86,9 @@ func TestLoader_PromptSectionExposesAbsolutePath(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "mySkill", "---\nname: mySkill\ndescription: do x\n---\nbody here")
 	l := NewLoader(dir)
-	l.Load()
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
 
 	section := l.PromptSection()
 	want := filepath.Join(dir, "mySkill", "SKILL.md")
@@ -158,7 +164,9 @@ func TestLoader_AllSortedByName(t *testing.T) {
 		writeSkill(t, dir, n, "---\nname: "+n+"\ndescription: "+n+"\n---\nbody")
 	}
 	l := NewLoader(dir)
-	l.Load()
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
 	all := l.All()
 	if len(all) != 4 {
 		t.Fatalf("len = %d", len(all))
@@ -176,7 +184,9 @@ func TestLoader_PromptSectionListsAllSkills(t *testing.T) {
 	writeSkill(t, dir, "two", "---\nname: two\ndescription: TWO_DESC\n---\n")
 	writeSkill(t, dir, "three", "---\nname: three\ndescription: THREE_DESC\n---\n")
 	l := NewLoader(dir)
-	l.Load()
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
 	s := l.PromptSection()
 	for _, want := range []string{"ONE_DESC", "TWO_DESC", "THREE_DESC", "one", "two", "three"} {
 		if !strings.Contains(s, want) {
@@ -190,7 +200,9 @@ func TestLoader_ReloadDoesNotLeakStaleSkills(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "first", "---\nname: first\ndescription: d\n---\nbody")
 	l := NewLoader(dir)
-	l.Load()
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := l.Get("first"); !ok {
 		t.Fatal("first not loaded")
 	}
@@ -198,7 +210,9 @@ func TestLoader_ReloadDoesNotLeakStaleSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeSkill(t, dir, "second", "---\nname: second\ndescription: d\n---\nbody")
-	l.Load()
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := l.Get("first"); ok {
 		t.Fatal("first should have been dropped on reload")
 	}

@@ -242,7 +242,7 @@ func grepTool(defaultPath string) Tool {
 				if err != nil {
 					return nil
 				}
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 				rel, _ := filepath.Rel(path, p)
 				if rel == "" {
 					rel = p

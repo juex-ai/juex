@@ -39,26 +39,35 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: prov,
 	})
+	t.Cleanup(srv.Close)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
 	// 1. Create session.
-	created, _ := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var c struct{ ID string }
-	json.NewDecoder(created.Body).Decode(&c)
-	created.Body.Close()
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	_ = created.Body.Close()
 	if c.ID == "" {
 		t.Fatal("no session id")
 	}
 
 	// 2. Submit a turn.
-	resp, _ := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resp.StatusCode != 202 {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("turn POST status = %d body=%s", resp.StatusCode, body)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	// 3. Wait until turn shows in transcript.
 	deadline := time.Now().Add(2 * time.Second)
@@ -73,8 +82,11 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 				} `json:"blocks"`
 			} `json:"messages"`
 		}
-		json.NewDecoder(show.Body).Decode(&parsed)
-		show.Body.Close()
+		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
+			_ = show.Body.Close()
+			t.Fatal(err)
+		}
+		_ = show.Body.Close()
 		for _, m := range parsed.Messages {
 			if m.Role == "assistant" {
 				for _, b := range m.Blocks {

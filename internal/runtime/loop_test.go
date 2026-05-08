@@ -60,7 +60,7 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sess.Close() })
+	t.Cleanup(func() { _ = sess.Close() })
 	sess.SubscribeBus(bus)
 	pb := &prompt.Builder{
 		AgentsMDDirs: []string{t.TempDir()},
@@ -151,8 +151,11 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "all done"), StopReason: llm.StopEndTurn},
 	}}
 	bus := events.NewBus()
-	sess, _ := session.New(t.TempDir())
-	t.Cleanup(func() { sess.Close() })
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
 	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
 	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb}
 
@@ -197,12 +200,15 @@ func TestTurn_BudgetExceeded(t *testing.T) {
 		Handler: func(ctx context.Context, in map[string]any) (string, error) { return "x", nil },
 	})
 
-	sess, _ := session.New(t.TempDir())
-	t.Cleanup(func() { sess.Close() })
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
 	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
 	eng := &Engine{Provider: prov, Tools: reg, Bus: events.NewBus(), Session: sess, Prompt: pb, MaxIters: 3, MaxDur: 30 * time.Second}
 
-	_, err := eng.Turn(context.Background(), "loop")
+	_, err = eng.Turn(context.Background(), "loop")
 	if err == nil || !strings.Contains(err.Error(), "iterations exceeded") {
 		t.Fatalf("expected budget breach, got %v", err)
 	}

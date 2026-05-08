@@ -189,7 +189,9 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	root.SetErr(&out)
 	dir := t.TempDir()
 	envFile := dir + "/.env"
-	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
 	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
 	if _, ok := err.(*dryRunOK); !ok {
@@ -324,7 +326,9 @@ func TestRunCmd_ResumeAndSessionMutuallyExclusive(t *testing.T) {
 	root.SetErr(&out)
 	dir := t.TempDir()
 	envFile := dir + "/.env"
-	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
 	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--resume", "--session", "abc", "x"})
 	err := root.Execute()
 	if err == nil {
@@ -342,7 +346,9 @@ func TestRunCmd_SessionFlagNotFound(t *testing.T) {
 	root.SetErr(&out)
 	dir := t.TempDir()
 	envFile := dir + "/.env"
-	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
 	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--session", "missing", "x"})
 	err := root.Execute()
 	if _, ok := err.(*notFoundError); !ok {
@@ -353,7 +359,9 @@ func TestRunCmd_SessionFlagNotFound(t *testing.T) {
 func TestREPLCmd_AcceptsResumeFlags(t *testing.T) {
 	dir := t.TempDir()
 	envFile := dir + "/.env"
-	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
 
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -374,7 +382,9 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	root.SetErr(&out)
 	dir := t.TempDir()
 	envFile := dir + "/.env"
-	writeEnvFile(envFile, "openai", "https://x", "k", "m")
+	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
 	root.SetArgs([]string{"-C", dir, "--env", envFile, "serve", "--addr", "0.0.0.0:0"})
 	err := root.Execute()
 	if _, ok := err.(*usageError); !ok {

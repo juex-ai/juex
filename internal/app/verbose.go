@@ -21,12 +21,12 @@ import (
 // On a non-TTY writer the spinner is suppressed and we print plain status
 // lines instead so CI logs stay readable.
 type verbosePrinter struct {
-	w       io.Writer
-	isTTY   bool
-	spin    *spinner
-	mu      sync.Mutex
-	turn    int
-	tStart  time.Time
+	w      io.Writer
+	isTTY  bool
+	spin   *spinner
+	mu     sync.Mutex
+	turn   int
+	tStart time.Time
 }
 
 func newVerbosePrinter(w io.Writer) *verbosePrinter {
@@ -110,24 +110,24 @@ func (vp *verbosePrinter) printIndentedBlock(label, body string, dimAll bool) {
 		if dimAll {
 			vp.printlnDim(prefix + line)
 		} else {
-			fmt.Fprintln(vp.w, prefix+line)
+			_, _ = fmt.Fprintln(vp.w, prefix+line)
 		}
 	}
 }
 
 func (vp *verbosePrinter) printlnDim(s string) {
 	if vp.isTTY {
-		fmt.Fprintln(vp.w, "\x1b[2m"+s+"\x1b[0m")
+		_, _ = fmt.Fprintln(vp.w, "\x1b[2m"+s+"\x1b[0m")
 	} else {
-		fmt.Fprintln(vp.w, s)
+		_, _ = fmt.Fprintln(vp.w, s)
 	}
 }
 
 func (vp *verbosePrinter) printlnRed(s string) {
 	if vp.isTTY {
-		fmt.Fprintln(vp.w, "\x1b[31m"+s+"\x1b[0m")
+		_, _ = fmt.Fprintln(vp.w, "\x1b[31m"+s+"\x1b[0m")
 	} else {
-		fmt.Fprintln(vp.w, s)
+		_, _ = fmt.Fprintln(vp.w, s)
 	}
 }
 
@@ -207,13 +207,13 @@ func (s *spinner) run(stopCh chan struct{}) {
 	for {
 		select {
 		case <-stopCh:
-			fmt.Fprint(s.w, "\r\x1b[2K") // clear line
+			_, _ = fmt.Fprint(s.w, "\r\x1b[2K") // clear line
 			return
 		case <-ticker.C:
 			s.mu.Lock()
 			m := s.msg
 			s.mu.Unlock()
-			fmt.Fprintf(s.w, "\r\x1b[2K\x1b[2m%s %s\x1b[0m", spinnerFrames[i], m)
+			_, _ = fmt.Fprintf(s.w, "\r\x1b[2K\x1b[2m%s %s\x1b[0m", spinnerFrames[i], m)
 			i = (i + 1) % len(spinnerFrames)
 		}
 	}

@@ -30,6 +30,7 @@ func newTestServer(t *testing.T) *Server {
 		Cfg:      cfg,
 		Provider: stubProvider{},
 	})
+	t.Cleanup(srv.Close)
 	return srv
 }
 
@@ -42,7 +43,7 @@ func TestServer_HealthzReturnsOK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}

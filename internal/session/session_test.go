@@ -18,7 +18,7 @@ func TestSession_AppendsToConversationJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	_ = s.Append(llm.TextMessage(llm.RoleUser, "hello"))
 	_ = s.Append(llm.TextMessage(llm.RoleAssistant, "hi"))
@@ -39,7 +39,7 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	_ = s.AppendEvent(events.Event{Type: "turn.started", Payload: "x"})
 	_ = s.AppendEvent(events.Event{Type: "tool.completed", Payload: "y"})
@@ -52,8 +52,11 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 
 func TestSession_BusSubscription(t *testing.T) {
 	root := t.TempDir()
-	s, _ := New(root)
-	defer s.Close()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
 	bus := events.NewBus()
 	s.SubscribeBus(bus)
 
@@ -68,17 +71,22 @@ func TestSession_BusSubscription(t *testing.T) {
 
 func TestSession_LoadRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	s, _ := New(root)
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_ = s.Append(llm.TextMessage(llm.RoleUser, "msg-1"))
 	_ = s.Append(llm.TextMessage(llm.RoleAssistant, "msg-2"))
 	dir := s.Dir
-	s.Close()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	s2, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s2.Close()
+	defer func() { _ = s2.Close() }()
 	if len(s2.History) != 2 {
 		t.Fatalf("loaded history len = %d", len(s2.History))
 	}

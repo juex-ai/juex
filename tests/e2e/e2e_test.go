@@ -193,7 +193,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	}
 	defer func() {
 		for _, c := range mcpClients {
-			c.Close()
+			_ = c.Close()
 		}
 	}()
 
@@ -203,7 +203,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sess.Close()
+	defer func() { _ = sess.Close() }()
 	sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
@@ -500,7 +500,9 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionDir := a1.Session.Dir
-	a1.Close()
+	if err := a1.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	// The engine appends the user message before calling Complete, so the
 	// first turn's snapshot contains exactly one entry (the new user prompt).
@@ -531,7 +533,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer a2.Close()
+	defer func() { _ = a2.Close() }()
 	out, err := a2.Run(context.Background(), "who am I?")
 	if err != nil {
 		t.Fatal(err)

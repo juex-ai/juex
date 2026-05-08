@@ -34,7 +34,9 @@ func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
 
 func TestWriteSSEFrame_DataIsOneLine(t *testing.T) {
 	var buf bytes.Buffer
-	writeSSEFrame(&buf, events.Event{ID: "x1", Type: "x", Payload: map[string]any{"text": "line1\nline2"}})
+	if err := writeSSEFrame(&buf, events.Event{ID: "x1", Type: "x", Payload: map[string]any{"text": "line1\nline2"}}); err != nil {
+		t.Fatal(err)
+	}
 	body := buf.String()
 	dataLines := 0
 	for _, line := range strings.Split(strings.TrimRight(body, "\n"), "\n") {

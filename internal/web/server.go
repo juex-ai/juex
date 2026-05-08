@@ -47,6 +47,7 @@ type activeSession struct {
 
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc // nil when no turn is running
+	turnWG   sync.WaitGroup
 
 	turnsMu sync.Mutex
 	turns   map[string]*turnState
@@ -78,7 +79,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ok")
+		_, _ = fmt.Fprintln(w, "ok")
 	})
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)
@@ -138,11 +139,12 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	s.closeAll()
+	s.Close()
 	return srv.Shutdown(shutdownCtx)
 }
 
-func (s *Server) closeAll() {
+// Close cancels running turns and releases every active session.
+func (s *Server) Close() {
 	s.closeMu.Lock()
 	if s.closed {
 		s.closeMu.Unlock()
@@ -157,6 +159,7 @@ func (s *Server) closeAll() {
 			as.cancel()
 		}
 		as.cancelMu.Unlock()
+		as.turnWG.Wait()
 		as.bcast.close()
 		_ = as.app.Close()
 		return true

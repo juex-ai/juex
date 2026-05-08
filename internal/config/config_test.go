@@ -10,7 +10,9 @@ func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	body := "PROVIDER_API_TYPE=openai\nPROVIDER_API_BASE=\"https://example.com\"\nPROVIDER_API_KEY=sk-x\nPROVIDER_API_MODEL=gpt-4\n# comment\n"
-	os.WriteFile(envPath, []byte(body), 0o644)
+	if err := os.WriteFile(envPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("PROVIDER_API_TYPE", "")
 	t.Setenv("PROVIDER_API_BASE", "")

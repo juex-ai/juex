@@ -27,7 +27,7 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 		buf, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(buf, &capturedBody)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"id":"msg_1","type":"message","role":"assistant","model":"claude-test",
 			"content":[
 				{"type":"text","text":"hi there"},
@@ -89,7 +89,7 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 			t.Errorf("missing auth: %v", r.Header)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"id":"cmpl_1","object":"chat.completion","model":"gpt-test",
 			"choices":[{
 				"index":0,
@@ -149,7 +149,7 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 		buf, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(buf, &captured)
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`))
+		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`))
 	}))
 	defer srv.Close()
 

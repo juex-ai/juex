@@ -52,7 +52,7 @@ func New(rootDir string) (*Session, error) {
 	}
 	eventFD, err := os.OpenFile(filepath.Join(dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		convFD.Close()
+		_ = convFD.Close()
 		return nil, err
 	}
 	return &Session{
@@ -125,7 +125,7 @@ func Load(dir string) (*Session, error) {
 	}
 	eventFD, err := os.OpenFile(filepath.Join(dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		convFD.Close()
+		_ = convFD.Close()
 		return nil, err
 	}
 	return &Session{

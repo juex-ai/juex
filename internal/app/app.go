@@ -174,10 +174,14 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		text, err := a.Engine.Turn(ctx, line)
 		if err != nil {
-			fmt.Fprintln(out, "error:", err)
+			if _, writeErr := fmt.Fprintln(out, "error:", err); writeErr != nil {
+				return writeErr
+			}
 			continue
 		}
-		fmt.Fprintln(out, text)
+		if _, err := fmt.Fprintln(out, text); err != nil {
+			return err
+		}
 	}
 	return sc.Err()
 }
