@@ -52,7 +52,10 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 
 func TestSession_BusSubscription(t *testing.T) {
 	root := t.TempDir()
-	s, _ := New(root)
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer s.Close()
 	bus := events.NewBus()
 	s.SubscribeBus(bus)
@@ -68,11 +71,16 @@ func TestSession_BusSubscription(t *testing.T) {
 
 func TestSession_LoadRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	s, _ := New(root)
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_ = s.Append(llm.TextMessage(llm.RoleUser, "msg-1"))
 	_ = s.Append(llm.TextMessage(llm.RoleAssistant, "msg-2"))
 	dir := s.Dir
-	s.Close()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	s2, err := Load(dir)
 	if err != nil {

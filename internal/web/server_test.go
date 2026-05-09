@@ -30,6 +30,7 @@ func newTestServer(t *testing.T) *Server {
 		Cfg:      cfg,
 		Provider: stubProvider{},
 	})
+	t.Cleanup(srv.Close)
 	return srv
 }
 

@@ -10,7 +10,9 @@ func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, ".env")
 	body := "PROVIDER_API_TYPE=openai\nPROVIDER_API_BASE=\"https://example.com\"\nPROVIDER_API_KEY=sk-x\nPROVIDER_API_MODEL=gpt-4\n# comment\n"
-	os.WriteFile(envPath, []byte(body), 0o644)
+	if err := os.WriteFile(envPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	t.Setenv("PROVIDER_API_TYPE", "")
 	t.Setenv("PROVIDER_API_BASE", "")
@@ -58,46 +60,53 @@ func TestLoad_DefaultsWorkDirToCwd(t *testing.T) {
 
 func TestSkillDirs_AndPaths(t *testing.T) {
 	cfg := Config{
-		HomeAgentsDir: "/u/.agents",
-		WorkDir:       "/proj",
+		HomeAgentsDir: filepath.Join("/u", ".agents"),
+		WorkDir:       filepath.Join("/proj"),
 	}
+	wantUserSkills := filepath.Join("/u", ".agents", "skills")
+	wantProjSkills := filepath.Join("/proj", ".agents", "skills")
 	skills := cfg.SkillDirs()
-	if len(skills) != 2 || skills[0] != "/u/.agents/skills" || skills[1] != "/proj/.agents/skills" {
+	if len(skills) != 2 || skills[0] != wantUserSkills || skills[1] != wantProjSkills {
 		t.Fatalf("skills = %v", skills)
 	}
-	if cfg.MemoryDir() != "/proj/.agents/memory" {
-		t.Fatalf("memory dir = %q", cfg.MemoryDir())
+	if want := filepath.Join("/proj", ".agents", "memory"); cfg.MemoryDir() != want {
+		t.Fatalf("memory dir = %q, want %q", cfg.MemoryDir(), want)
 	}
-	if cfg.SessionsDir() != "/proj/.agents/sessions" {
-		t.Fatalf("sessions dir = %q", cfg.SessionsDir())
+	if want := filepath.Join("/proj", ".agents", "sessions"); cfg.SessionsDir() != want {
+		t.Fatalf("sessions dir = %q, want %q", cfg.SessionsDir(), want)
 	}
 	mcp := cfg.MCPConfigPaths()
-	if len(mcp) != 2 || mcp[0] != "/u/.agents/mcp.json" || mcp[1] != "/proj/.agents/mcp.json" {
+	wantUserMCP := filepath.Join("/u", ".agents", "mcp.json")
+	wantProjMCP := filepath.Join("/proj", ".agents", "mcp.json")
+	if len(mcp) != 2 || mcp[0] != wantUserMCP || mcp[1] != wantProjMCP {
 		t.Fatalf("mcp = %v", mcp)
 	}
 	dirs := cfg.AgentsMDDirs()
-	if len(dirs) != 2 || dirs[0] != "/proj" || dirs[1] != "/proj/.agents" {
+	wantProjAgents := filepath.Join("/proj", ".agents")
+	if len(dirs) != 2 || dirs[0] != filepath.Clean("/proj") || dirs[1] != wantProjAgents {
 		t.Fatalf("agents md dirs = %v", dirs)
 	}
-	if cfg.ProjectAgentsDir() != "/proj/.agents" {
-		t.Fatalf("project agents dir = %q", cfg.ProjectAgentsDir())
+	if cfg.ProjectAgentsDir() != wantProjAgents {
+		t.Fatalf("project agents dir = %q, want %q", cfg.ProjectAgentsDir(), wantProjAgents)
 	}
 }
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
-	cfg := Config{HomeAgentsDir: "/u/.agents"}
+	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents")}
 	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
 	if len(cfg.AgentsMDDirs()) != 0 {
 		t.Fatalf("expected empty AgentsMDDirs, got %v", cfg.AgentsMDDirs())
 	}
+	wantSkills := filepath.Join("/u", ".agents", "skills")
 	skills := cfg.SkillDirs()
-	if len(skills) != 1 || skills[0] != "/u/.agents/skills" {
+	if len(skills) != 1 || skills[0] != wantSkills {
 		t.Fatalf("skills = %v", skills)
 	}
+	wantMCP := filepath.Join("/u", ".agents", "mcp.json")
 	mcp := cfg.MCPConfigPaths()
-	if len(mcp) != 1 || mcp[0] != "/u/.agents/mcp.json" {
+	if len(mcp) != 1 || mcp[0] != wantMCP {
 		t.Fatalf("mcp = %v", mcp)
 	}
 }

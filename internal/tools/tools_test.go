@@ -69,7 +69,9 @@ func TestBuiltins_EditAmbiguous(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")
-	os.WriteFile(path, []byte("a a a"), 0o644)
+	if err := os.WriteFile(path, []byte("a a a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := r.Call(context.Background(), "edit", map[string]any{"path": path, "old": "a", "new": "b"}); err == nil {
 		t.Fatal("expected ambiguity error")
@@ -94,8 +96,12 @@ func TestBuiltins_Grep(t *testing.T) {
 	RegisterBuiltins(r, "")
 
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\nalphabet"), 0o644)
-	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("gamma"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\nalphabet"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("gamma"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := r.Call(context.Background(), "grep", map[string]any{"pattern": "alpha", "path": dir})
 	if err != nil {
@@ -111,7 +117,9 @@ func TestBuiltins_GrepNoMatches(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, "")
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out, err := r.Call(context.Background(), "grep", map[string]any{"pattern": "zzz", "path": dir})
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +162,9 @@ func TestBuiltins_ReadOffsetLimit(t *testing.T) {
 	RegisterBuiltins(r, "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lines.txt")
-	os.WriteFile(path, []byte("a\nb\nc\nd\ne"), 0o644)
+	if err := os.WriteFile(path, []byte("a\nb\nc\nd\ne"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out, err := r.Call(context.Background(), "read", map[string]any{"path": path, "offset": 2, "limit": 2})
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +178,9 @@ func TestBuiltins_GrepRegex(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, "")
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\nTWO\nthree\n42abc"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\nTWO\nthree\n42abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out, err := r.Call(context.Background(), "grep", map[string]any{"pattern": `^\d+`, "path": dir})
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +216,9 @@ func TestBuiltins_BashDefaultsToWorkDir(t *testing.T) {
 func TestBuiltins_GrepDefaultsToWorkDir(t *testing.T) {
 	r := NewRegistry()
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "f.txt"), []byte("alpha"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	RegisterBuiltins(r, dir)
 	out, err := r.Call(context.Background(), "grep", map[string]any{"pattern": "alpha"})
 	if err != nil {

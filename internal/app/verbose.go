@@ -21,12 +21,12 @@ import (
 // On a non-TTY writer the spinner is suppressed and we print plain status
 // lines instead so CI logs stay readable.
 type verbosePrinter struct {
-	w       io.Writer
-	isTTY   bool
-	spin    *spinner
-	mu      sync.Mutex
-	turn    int
-	tStart  time.Time
+	w      io.Writer
+	isTTY  bool
+	spin   *spinner
+	mu     sync.Mutex
+	turn   int
+	tStart time.Time
 }
 
 func newVerbosePrinter(w io.Writer) *verbosePrinter {

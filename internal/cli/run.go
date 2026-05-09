@@ -218,8 +218,8 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	if jsonOut {
 		cmdPrintln(cmd, mustJSON(plan))
 	} else {
-		fmt.Fprintln(cmd.OutOrStdout(), "DRY RUN — would execute:")
-		fmt.Fprintln(cmd.OutOrStdout(), mustJSON(plan))
+		cmdPrintln(cmd, "DRY RUN — would execute:")
+		cmdPrintln(cmd, mustJSON(plan))
 	}
 	return &dryRunOK{msg: "dry run complete"}
 }

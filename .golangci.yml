@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      exclude-functions:
+        # CLI/debug output errors are not actionable for this binary.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # Test/fake-server response helpers; callers assert through client-side behavior.
+        - (*encoding/json.Encoder).Encode
+        - (net/http.ResponseWriter).Write
+        # Best-effort cleanup; substantive close failures are checked inline.
+        - (*github.com/juex-ai/juex/internal/app.App).Close
+        - (*github.com/juex-ai/juex/internal/mcp.Client).Close
+        - (*github.com/juex-ai/juex/internal/session.Session).Close
+        - (io.ReadCloser).Close
+        - (io.WriteCloser).Close
+        - (*os.File).Close

@@ -238,7 +238,7 @@ func (c *Client) Close() error {
 		return nil
 	}
 	if c.in != nil {
-		_ = c.in.Close()
+		c.in.Close()
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()

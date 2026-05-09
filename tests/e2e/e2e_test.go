@@ -418,7 +418,7 @@ func runFakeMCP() {
 		method, _ := req["method"].(string)
 		switch method {
 		case "initialize":
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": idVal,
 				"result": map[string]any{
 					"protocolVersion": "2024-11-05",
@@ -427,7 +427,7 @@ func runFakeMCP() {
 				},
 			})
 		case "tools/list":
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": idVal,
 				"result": map[string]any{
 					"tools": []map[string]any{
@@ -439,14 +439,14 @@ func runFakeMCP() {
 			params, _ := req["params"].(map[string]any)
 			args, _ := params["arguments"].(map[string]any)
 			text, _ := args["text"].(string)
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": idVal,
 				"result": map[string]any{
 					"content": []map[string]any{{"type": "text", "text": "echoed: " + text}},
 				},
 			})
 		default:
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": idVal,
 				"error": map[string]any{"code": -32601, "message": "method not found"},
 			})
@@ -500,7 +500,9 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionDir := a1.Session.Dir
-	a1.Close()
+	if err := a1.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	// The engine appends the user message before calling Complete, so the
 	// first turn's snapshot contains exactly one entry (the new user prompt).

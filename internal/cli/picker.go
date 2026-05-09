@@ -21,16 +21,26 @@ func pickSession(in io.Reader, out io.Writer, infos []session.Info) (string, err
 	if len(infos) == 0 {
 		return "", errors.New("no sessions to choose from")
 	}
-	fmt.Fprintln(out, "juex sessions — pick one to resume:")
-	fmt.Fprintln(out)
-	for i, s := range infos {
-		fmt.Fprintf(out, "  %d) %s   %s   %s\n",
-			i+1, s.ID, humanAgo(s.LastActiveAt), truncateRunes(s.Preview, 60))
+	if _, err := fmt.Fprintln(out, "juex sessions — pick one to resume:"); err != nil {
+		return "", err
 	}
-	fmt.Fprintln(out)
+	if _, err := fmt.Fprintln(out); err != nil {
+		return "", err
+	}
+	for i, s := range infos {
+		if _, err := fmt.Fprintf(out, "  %d) %s   %s   %s\n",
+			i+1, s.ID, humanAgo(s.LastActiveAt), truncateRunes(s.Preview, 60)); err != nil {
+			return "", err
+		}
+	}
+	if _, err := fmt.Fprintln(out); err != nil {
+		return "", err
+	}
 	scanner := bufio.NewScanner(in)
 	for attempt := 0; attempt < pickerMaxAttempts; attempt++ {
-		fmt.Fprintf(out, "Enter 1-%d (q to cancel): ", len(infos))
+		if _, err := fmt.Fprintf(out, "Enter 1-%d (q to cancel): ", len(infos)); err != nil {
+			return "", err
+		}
 		if !scanner.Scan() {
 			return "", errors.New("session selection cancelled")
 		}
@@ -42,7 +52,9 @@ func pickSession(in io.Reader, out io.Writer, infos []session.Info) (string, err
 		if err == nil && n >= 1 && n <= len(infos) {
 			return infos[n-1].ID, nil
 		}
-		fmt.Fprintf(out, "  invalid selection: %q\n", line)
+		if _, err := fmt.Fprintf(out, "  invalid selection: %q\n", line); err != nil {
+			return "", err
+		}
 	}
 	return "", errors.New("session selection cancelled")
 }

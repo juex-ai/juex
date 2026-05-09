@@ -25,11 +25,20 @@ func makeSession(t *testing.T, root, id string, msgs []llm.Message, mtime time.T
 		t.Fatal(err)
 	}
 	for _, m := range msgs {
-		buf, _ := json.Marshal(m)
-		f.Write(buf)
-		f.Write([]byte{'\n'})
+		buf, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(buf); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write([]byte{'\n'}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if !mtime.IsZero() {
 		if err := os.Chtimes(convPath, mtime, mtime); err != nil {
 			t.Fatal(err)
@@ -116,7 +125,9 @@ func TestList_SkipsDirsWithoutConversationJSONL(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "20260506T100000-empty0001"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(root, "stray.txt"), []byte("x"), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := List(root)
 	if err != nil {

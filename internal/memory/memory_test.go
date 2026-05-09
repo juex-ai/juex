@@ -50,9 +50,15 @@ func TestStore_WriteLoadDelete(t *testing.T) {
 
 func TestStore_Search(t *testing.T) {
 	s := NewStore(t.TempDir())
-	s.Write(Entry{Name: "a", Description: "apple seed", Type: "user", Body: "x"})
-	s.Write(Entry{Name: "b", Description: "banana", Type: "feedback", Body: "apple in body"})
-	s.Write(Entry{Name: "c", Description: "carrot", Type: "user", Body: "z"})
+	if err := s.Write(Entry{Name: "a", Description: "apple seed", Type: "user", Body: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(Entry{Name: "b", Description: "banana", Type: "feedback", Body: "apple in body"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(Entry{Name: "c", Description: "carrot", Type: "user", Body: "z"}); err != nil {
+		t.Fatal(err)
+	}
 
 	hits, _ := s.Search("apple")
 	if len(hits) != 2 {
@@ -76,7 +82,9 @@ func TestStore_PromptSection(t *testing.T) {
 	if section, _ := s.PromptSection(); section != "" {
 		t.Fatalf("empty store should yield empty section, got %q", section)
 	}
-	s.Write(Entry{Name: "x", Description: "desc", Type: "user", Body: "body"})
+	if err := s.Write(Entry{Name: "x", Description: "desc", Type: "user", Body: "body"}); err != nil {
+		t.Fatal(err)
+	}
 	section, _ := s.PromptSection()
 	if !strings.Contains(section, "## Memory") || !strings.Contains(section, "desc") {
 		t.Fatalf("section = %q", section)
@@ -115,8 +123,12 @@ func TestStore_Tools(t *testing.T) {
 func TestLoadAgentsMD(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()
-	os.WriteFile(filepath.Join(dir1, "AGENTS.md"), []byte("rule one"), 0o644)
-	os.WriteFile(filepath.Join(dir2, "AGENTS.md"), []byte("rule two"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir1, "AGENTS.md"), []byte("rule one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir2, "AGENTS.md"), []byte("rule two"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out := LoadAgentsMD("", []string{dir1, dir2})
 	if !strings.Contains(out, "rule one") || !strings.Contains(out, "rule two") {
@@ -201,7 +213,9 @@ func TestStore_DeleteNonexistentIsNoError(t *testing.T) {
 
 func TestStore_SearchCaseInsensitive(t *testing.T) {
 	s := NewStore(t.TempDir())
-	s.Write(Entry{Name: "foo", Description: "MIXED Case Description", Type: "user", Body: "some BODY here"})
+	if err := s.Write(Entry{Name: "foo", Description: "MIXED Case Description", Type: "user", Body: "some BODY here"}); err != nil {
+		t.Fatal(err)
+	}
 	for _, q := range []string{"mixed", "MIXED", "case", "body", "BODY"} {
 		hits, _ := s.Search(q)
 		if len(hits) != 1 {
@@ -214,8 +228,12 @@ func TestStore_IndexFileShape(t *testing.T) {
 	// Index file lists entries with name + type + description; format is
 	// stable enough for humans to scan.
 	s := NewStore(t.TempDir())
-	s.Write(Entry{Name: "alpha", Description: "first entry", Type: "feedback", Body: "b"})
-	s.Write(Entry{Name: "beta", Description: "second entry", Type: "user", Body: "b"})
+	if err := s.Write(Entry{Name: "alpha", Description: "first entry", Type: "feedback", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Write(Entry{Name: "beta", Description: "second entry", Type: "user", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
 	idx, err := os.ReadFile(filepath.Join(s.dir, indexFile))
 	if err != nil {
 		t.Fatal(err)
@@ -232,11 +250,19 @@ func TestLoadAgentsMD_FullThreeLayer(t *testing.T) {
 	homeDir := t.TempDir()
 	root := t.TempDir()
 	subAgents := filepath.Join(root, ".agents")
-	os.MkdirAll(subAgents, 0o755)
+	if err := os.MkdirAll(subAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
-	os.WriteFile(filepath.Join(homeDir, "AGENTS.md"), []byte("global rule"), 0o644)
-	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rule"), 0o644)
-	os.WriteFile(filepath.Join(subAgents, "AGENTS.md"), []byte("subdir rule"), 0o644)
+	if err := os.WriteFile(filepath.Join(homeDir, "AGENTS.md"), []byte("global rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subAgents, "AGENTS.md"), []byte("subdir rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	out := LoadAgentsMD(filepath.Join(homeDir, "AGENTS.md"), []string{root, subAgents})
 	for _, want := range []string{"global rule", "project rule", "subdir rule"} {
@@ -252,7 +278,9 @@ func TestLoadAgentsMD_FullThreeLayer(t *testing.T) {
 
 func TestLoadAgentsMD_EmptyFileSkipped(t *testing.T) {
 	root := t.TempDir()
-	os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(""), 0o644)
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	out := LoadAgentsMD("", []string{root})
 	if out != "" {
 		t.Fatalf("empty file should yield empty output, got %q", out)
@@ -268,12 +296,12 @@ func TestLoadAgentsMD_MissingFilesSkipped(t *testing.T) {
 
 func TestSanitize(t *testing.T) {
 	cases := map[string]string{
-		"Hello World":  "hello_world",
-		"a/b/c":        "a_b_c",
-		"file.name":    "file.name",
-		"with-dash":    "with-dash",
-		"under_score":  "under_score",
-		"日本":           "__",
+		"Hello World": "hello_world",
+		"a/b/c":       "a_b_c",
+		"file.name":   "file.name",
+		"with-dash":   "with-dash",
+		"under_score": "under_score",
+		"日本":          "__",
 	}
 	for in, want := range cases {
 		if got := sanitize(in); got != want {

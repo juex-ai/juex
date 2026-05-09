@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -398,7 +397,9 @@ func TestLoadConfig_Parse(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/mcp.json"
 	body := `{"mcpServers":{"x":{"command":"foo","args":["bar"],"env":{"K":"V"}}}}`
-	os.WriteFile(path, []byte(body), 0o644)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	c, err := LoadConfig(path)
 	if err != nil {
 		t.Fatal(err)
@@ -407,5 +408,4 @@ func TestLoadConfig_Parse(t *testing.T) {
 	if !ok || x.Command != "foo" || len(x.Args) != 1 || x.Env["K"] != "V" {
 		t.Fatalf("parsed = %+v", c)
 	}
-	_ = fmt.Sprintf
 }

@@ -43,7 +43,7 @@ func spaHandler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
-		_, _ = w.Write(index)
+		w.Write(index)
 	})
 }
 

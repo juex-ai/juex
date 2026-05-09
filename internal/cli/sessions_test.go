@@ -110,11 +110,15 @@ func TestSessionsList_LimitTruncates(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetArgs([]string{"-C", work, "sessions", "list", "--limit", "2"})
-	root.Execute()
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
 	var parsed struct {
 		Sessions []map[string]any `json:"sessions"`
 	}
-	json.Unmarshal(out.Bytes(), &parsed)
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatal(err)
+	}
 	if len(parsed.Sessions) != 2 {
 		t.Errorf("limit ignored: %d sessions", len(parsed.Sessions))
 	}

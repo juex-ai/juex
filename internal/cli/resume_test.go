@@ -32,8 +32,12 @@ func TestResolveSessionDir_SessionFlagFound(t *testing.T) {
 	work := t.TempDir()
 	id := "20260506T103500-resolve01"
 	dir := filepath.Join(work, ".agents", "sessions", id)
-	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(""), 0o644)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := resolveSessionDir(resumeFlags{Session: id}, filepath.Join(work, ".agents", "sessions"), nil, &bytes.Buffer{}, true)
 	if err != nil {
@@ -68,9 +72,13 @@ func TestResolveSessionDir_ResumeTTYUsesPicker(t *testing.T) {
 	work := t.TempDir()
 	id := "20260506T103500-pickone01"
 	dir := filepath.Join(work, ".agents", "sessions", id)
-	os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
-	os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(body), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	in := strings.NewReader("1\n")
 	var out bytes.Buffer

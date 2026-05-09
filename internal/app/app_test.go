@@ -223,12 +223,21 @@ func TestApp_NewDefaultsWorkDirToCwd(t *testing.T) {
 	if a.Session == nil {
 		t.Fatal("session not built")
 	}
-	// macOS resolves /var/... -> /private/var/... so resolve before compare.
-	resolved, _ := filepath.EvalSymlinks(dir)
-	if resolved == "" {
-		resolved = dir
+	// Resolve both sides to canonical paths before comparing:
+	// - macOS rewrites /var/... -> /private/var/...
+	// - Windows can return 8.3 short names (RUNNER~1) where the long form
+	//   is "runneradmin"; EvalSymlinks normalises to the long form.
+	resolveSessionParent := func(p string) string {
+		r, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return p
+		}
+		return r
 	}
-	if !strings.HasPrefix(a.Session.Dir, filepath.Join(resolved, ".agents", "sessions")) {
-		t.Fatalf("session dir %q not under %q/.agents/sessions", a.Session.Dir, resolved)
+	wantParent := resolveSessionParent(filepath.Join(dir, ".agents", "sessions"))
+	gotParent := resolveSessionParent(filepath.Dir(a.Session.Dir))
+	if !strings.HasPrefix(gotParent, wantParent) {
+		t.Fatalf("session dir %q (resolved parent %q) not under %q",
+			a.Session.Dir, gotParent, wantParent)
 	}
 }

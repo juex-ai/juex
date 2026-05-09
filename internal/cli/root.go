@@ -14,13 +14,13 @@ import (
 // Exit code conventions (principle 6 from the agent-CLI guide). Stable
 // across versions; treat as part of the public contract.
 const (
-	ExitSuccess        = 0
-	ExitGeneralError   = 1
-	ExitUsageError     = 2
-	ExitNotFound       = 3
-	ExitPermission     = 4
-	ExitConflict       = 5
-	ExitDryRun         = 10
+	ExitSuccess      = 0
+	ExitGeneralError = 1
+	ExitUsageError   = 2
+	ExitNotFound     = 3
+	ExitPermission   = 4
+	ExitConflict     = 5
+	ExitDryRun       = 10
 )
 
 // Execute runs the root cobra command and returns the process exit code.

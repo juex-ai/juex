@@ -28,7 +28,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(v)
+	enc.Encode(v)
 }
 
 func writeErr(w http.ResponseWriter, status int, kind, msg string) {
@@ -137,6 +137,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	as.turnsMu.Lock()
 	as.turns[turnID] = &turnState{ID: turnID, State: "running"}
 	as.turnsMu.Unlock()
+	as.turnWG.Add(1)
 	as.cancelMu.Unlock()
 
 	go s.runTurn(ctx, as, turnID, req.Prompt)
@@ -244,6 +245,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 // runTurn executes one engine turn and updates state machine + cancel
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {
+	defer as.turnWG.Done()
 	_, err := as.app.Engine.Turn(ctx, prompt)
 	as.cancelMu.Lock()
 	as.cancel = nil
