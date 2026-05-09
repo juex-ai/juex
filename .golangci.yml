@@ -8,6 +8,9 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+        # Test/fake-server response helpers; callers assert through client-side behavior.
+        - (*encoding/json.Encoder).Encode
+        - (net/http.ResponseWriter).Write
         # Best-effort cleanup; substantive close failures are checked inline.
         - (*github.com/juex-ai/juex/internal/app.App).Close
         - (*github.com/juex-ai/juex/internal/mcp.Client).Close

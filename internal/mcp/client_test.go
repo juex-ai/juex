@@ -38,7 +38,7 @@ func runFakeServer() {
 		}
 		switch method {
 		case "initialize":
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      idVal,
 				"result": map[string]any{
@@ -75,7 +75,7 @@ func runFakeServer() {
 					"description": "Tool with no schema",
 				})
 			}
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      idVal,
 				"result":  map[string]any{"tools": tools},
@@ -86,7 +86,7 @@ func runFakeServer() {
 			args, _ := params["arguments"].(map[string]any)
 			// "fail" tool always returns isError: true.
 			if name == "fail" {
-				_ = enc.Encode(map[string]any{
+				enc.Encode(map[string]any{
 					"jsonrpc": "2.0",
 					"id":      idVal,
 					"result": map[string]any{
@@ -99,7 +99,7 @@ func runFakeServer() {
 			// "envcheck" tool: returns the value of the JUEX_FAKE_MCP_TAG env var,
 			// proving the spec.Env propagates to the subprocess.
 			if name == "envcheck" {
-				_ = enc.Encode(map[string]any{
+				enc.Encode(map[string]any{
 					"jsonrpc": "2.0",
 					"id":      idVal,
 					"result": map[string]any{
@@ -109,7 +109,7 @@ func runFakeServer() {
 				continue
 			}
 			text, _ := args["text"].(string)
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      idVal,
 				"result": map[string]any{
@@ -117,7 +117,7 @@ func runFakeServer() {
 				},
 			})
 		default:
-			_ = enc.Encode(map[string]any{
+			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      idVal,
 				"error":   map[string]any{"code": -32601, "message": "method not found"},

@@ -236,7 +236,7 @@ func TestApp_NewDefaultsWorkDirToCwd(t *testing.T) {
 	}
 	wantParent := resolveSessionParent(filepath.Join(dir, ".agents", "sessions"))
 	gotParent := resolveSessionParent(filepath.Dir(a.Session.Dir))
-	if !strings.HasPrefix(gotParent, wantParent) && gotParent != wantParent {
+	if !strings.HasPrefix(gotParent, wantParent) {
 		t.Fatalf("session dir %q (resolved parent %q) not under %q",
 			a.Session.Dir, gotParent, wantParent)
 	}
