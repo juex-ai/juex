@@ -59,10 +59,7 @@ bin/
 frontend/node_modules/
 frontend/dist/
 
-# Web build output: everything inside internal/web/dist/ is regenerated
-# by `make web`, except the committed stub.
-internal/web/dist/*
-!internal/web/dist/index.html
+internal/web/dist
 
 # juex runtime state (per-project session/memory artefacts)
 .agents/sessions/
