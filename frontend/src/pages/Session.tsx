@@ -224,21 +224,33 @@ export function Session() {
       eventString(e, "preview") ??
       "";
     if (!toolUseID && !content) return;
-    setLiveMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        turn_id: e.turn_id,
-        blocks: [
-          {
-            type: "tool_result",
-            tool_use_id: toolUseID,
-            content,
-            is_error: isError,
-          },
-        ],
-      },
-    ]);
+    const block: NonNullable<Message["blocks"]>[number] = {
+      type: "tool_result",
+      tool_use_id: toolUseID,
+      content,
+      is_error: isError,
+    };
+    setLiveMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (
+        last?.role === "user" &&
+        last.turn_id === e.turn_id &&
+        last.blocks?.every((b) => b.type === "tool_result")
+      ) {
+        return [
+          ...prev.slice(0, -1),
+          { ...last, blocks: [...(last.blocks ?? []), block] },
+        ];
+      }
+      return [
+        ...prev,
+        {
+          role: "user",
+          turn_id: e.turn_id,
+          blocks: [block],
+        },
+      ];
+    });
     scrollToLatest();
   }
 }

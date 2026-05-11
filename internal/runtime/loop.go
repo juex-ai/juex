@@ -105,10 +105,8 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 		}})
 
 		toolCalls := resp.Message.ToolCalls()
-		if len(resp.Message.Blocks) > 0 {
-			if err := e.Session.Append(resp.Message); err != nil {
-				return "", e.failTurn(turnID, fmt.Errorf("session append assistant: %w", err))
-			}
+		if err := e.Session.Append(resp.Message); err != nil {
+			return "", e.failTurn(turnID, fmt.Errorf("session append assistant: %w", err))
 		}
 		if len(toolCalls) == 0 {
 			lastText = resp.Message.FirstText()

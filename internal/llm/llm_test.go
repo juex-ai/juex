@@ -80,7 +80,7 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestAnthropic_SkipsEmptyHistoryMessages(t *testing.T) {
+func TestAnthropic_CompactsEmptyHistoryMessages(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -100,6 +100,7 @@ func TestAnthropic_SkipsEmptyHistoryMessages(t *testing.T) {
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{}},
 		{Role: RoleAssistant, Blocks: nil},
+		TextMessage(RoleUser, "again"),
 	}
 	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -110,7 +111,11 @@ func TestAnthropic_SkipsEmptyHistoryMessages(t *testing.T) {
 		t.Fatalf("messages missing: %+v", capturedBody)
 	}
 	if len(msgs) != 1 {
-		t.Fatalf("messages len = %d, want 1; body=%+v", len(msgs), capturedBody)
+		t.Fatalf("messages len = %d, want merged user message; body=%+v", len(msgs), capturedBody)
+	}
+	content, ok := msgs[0].(map[string]any)["content"].([]any)
+	if !ok || len(content) != 2 {
+		t.Fatalf("merged content = %+v, want two text blocks", msgs[0])
 	}
 }
 
@@ -172,7 +177,7 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestOpenAI_SkipsEmptyHistoryMessages(t *testing.T) {
+func TestOpenAI_CompactsEmptyHistoryMessages(t *testing.T) {
 	type wireReq struct {
 		Messages []map[string]any `json:"messages"`
 	}
@@ -190,6 +195,7 @@ func TestOpenAI_SkipsEmptyHistoryMessages(t *testing.T) {
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{}},
 		{Role: RoleAssistant, Blocks: nil},
+		TextMessage(RoleUser, "again"),
 		{Role: RoleSystem, Blocks: nil},
 	}
 	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
@@ -200,6 +206,9 @@ func TestOpenAI_SkipsEmptyHistoryMessages(t *testing.T) {
 	}
 	if captured.Messages[0]["role"] != "user" {
 		t.Fatalf("first message = %+v, want user", captured.Messages[0])
+	}
+	if captured.Messages[0]["content"] != "hello\nagain" {
+		t.Fatalf("first content = %+v, want merged user text", captured.Messages[0]["content"])
 	}
 }
 
