@@ -56,6 +56,7 @@ juex/
 │   ├── prompt/     prompt.go     # system prompt assembly
 │   ├── session/    session.go    # conversation history + jsonl persistence
 │   ├── runtime/    loop.go       # turn loop + parallel dispatcher
+│   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
 │   └── web/                      # HTTP API, SSE, SPA asset embedding
 ├── tests/
 │   └── e2e/                      # cross-package end-to-end + integration tests
@@ -564,12 +565,13 @@ Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
 | `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
 | `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |
 | `runtime` | mock-provider script, parallel tool calls, budget breach, ctx cancel, unknown-tool, provider error, multi-turn |
+| `netbootstrap` | resolv.conf parsing (IPv4/IPv6/comments/malformed), JUEX_DNS env var, Termux PREFIX auto-detect, applyResolver wiring, idempotent install |
 | `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario; live OpenAI/Anthropic round-trip + multi-step (build-tag) |
 
-Total: 14 Go packages, 100+ unit tests, all green; 6 live integration tests
+Total: 15 Go packages, 100+ unit tests, all green; 6 live integration tests
 gated by build tag.
 
 ---

@@ -7,6 +7,7 @@ require (
 	github.com/openai/openai-go v1.12.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20260508183218-b8a14a8d65f8
 	gopkg.in/yaml.v3 v3.0.1
 )
 
