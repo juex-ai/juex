@@ -225,26 +225,23 @@ func TestSessionsDelete_RemovesSessionAndHistory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(historyPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(historyPath, []byte(`{
-  "sessions": [
-    {
-      "id": "`+id+`",
-      "dir": "`+dir+`",
-      "started_at": "2026-05-06T10:35:00Z",
-      "last_active_at": "2026-05-06T10:35:00Z",
-      "turns": 1,
-      "preview": "bye"
-    }
-  ],
-  "last": {
-    "id": "`+id+`",
-    "dir": "`+dir+`",
-    "started_at": "2026-05-06T10:35:00Z",
-    "last_active_at": "2026-05-06T10:35:00Z",
-    "turns": 1,
-    "preview": "bye"
-  }
-}`), 0o644); err != nil {
+	entry := map[string]any{
+		"id":             id,
+		"dir":            dir,
+		"started_at":     "2026-05-06T10:35:00Z",
+		"last_active_at": "2026-05-06T10:35:00Z",
+		"turns":          1,
+		"preview":        "bye",
+	}
+	historyData, err := json.MarshalIndent(map[string]any{
+		"sessions": []map[string]any{entry},
+		"last":     entry,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyData = append(historyData, '\n')
+	if err := os.WriteFile(historyPath, historyData, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
