@@ -298,6 +298,70 @@ func TestPostInterrupt_IdempotentWhenIdle(t *testing.T) {
 	}
 }
 
+func TestDeleteSession_RemovesSessionAndListEntry(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-delete1"
+	seedSession(t, srv.opts.Cfg.WorkDir, id,
+		`{"role":"user","blocks":[{"type":"text","text":"delete me"}]}`+"\n")
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/"+id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body=%s", resp.StatusCode, body)
+	}
+	var got struct {
+		Deleted bool   `json:"deleted"`
+		ID      string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Deleted || got.ID != id {
+		t.Fatalf("response = %+v", got)
+	}
+
+	resp2, err := http.Get(ts.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	body, _ := io.ReadAll(resp2.Body)
+	if strings.Contains(string(body), id) {
+		t.Fatalf("deleted session still listed:\n%s", body)
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), id)); !os.IsNotExist(err) {
+		t.Fatalf("deleted dir stat err = %v, want not exist", err)
+	}
+}
+
+func TestDeleteSession_NotFound(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/missing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())

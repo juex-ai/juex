@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -109,5 +110,78 @@ func TestRecordHistoryUpsertsAndSetsLast(t *testing.T) {
 	}
 	if h.Last == nil || h.Last.ID != first.ID || h.Last.Alias != "daily" {
 		t.Fatalf("last = %+v, want first with alias", h.Last)
+	}
+}
+
+func TestDeleteRemovesDirectoryAndHistoryEntry(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	sessionsRoot := filepath.Join(root, "sessions")
+	olderTime := time.Date(2026, 5, 6, 10, 0, 0, 0, time.UTC)
+	newerTime := time.Date(2026, 5, 6, 11, 0, 0, 0, time.UTC)
+	olderDir := makeSession(t, sessionsRoot, "20260506T100000-old00001",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "old")}, olderTime)
+	newerDir := makeSession(t, sessionsRoot, "20260506T110000-new00001",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "new")}, newerTime)
+
+	older, _, err := LoadInfo(olderDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, _, err := LoadInfo(newerDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordHistory(historyPath, older); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordHistory(historyPath, newer); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(sessionsRoot, historyPath, newer.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(newerDir); !os.IsNotExist(err) {
+		t.Fatalf("deleted dir stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(olderDir); err != nil {
+		t.Fatalf("older dir should remain: %v", err)
+	}
+
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Sessions) != 1 || h.Sessions[0].ID != older.ID {
+		t.Fatalf("history sessions = %+v, want only older", h.Sessions)
+	}
+	if h.Last == nil || h.Last.ID != older.ID {
+		t.Fatalf("last = %+v, want older", h.Last)
+	}
+}
+
+func TestDeleteLastHistoryEntryClearsLast(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	sessionsRoot := filepath.Join(root, "sessions")
+	dir := makeSession(t, sessionsRoot, "20260506T100000-only0001",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "only")}, time.Now())
+	info, _, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordHistory(historyPath, info); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(sessionsRoot, historyPath, info.ID); err != nil {
+		t.Fatal(err)
+	}
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.Sessions) != 0 || h.Last != nil {
+		t.Fatalf("history = %+v, want empty sessions and nil last", h)
 	}
 }

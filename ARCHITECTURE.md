@@ -296,7 +296,8 @@ juex
 ├── repl [flags]             (--resume[=last|alias|id] | --session <id>) [--alias <name>]
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
-│   └── show <id> [--format json|text]
+│   ├── show <id> [--format json|text]
+│   └── delete <id>
 ├── serve [--addr <host:port>] [--cors]
 ├── schema
 └── version [-v]
@@ -340,6 +341,7 @@ Routes:
 | GET | `/api/sessions` | JSON list |
 | POST | `/api/sessions` | create session |
 | GET | `/api/sessions/<id>` | JSON transcript |
+| DELETE | `/api/sessions/<id>` | delete session and remove it from history |
 | POST | `/api/sessions/<id>/turns` | start a turn |
 | GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |

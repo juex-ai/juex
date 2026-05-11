@@ -112,6 +112,19 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	})
 }
 
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id string) {
+	s.closeActiveSession(id)
+	if err := session.Delete(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id); err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
+}
+
 // turnRequest is the wire shape for POST /turns.
 type turnRequest struct {
 	Prompt string `json:"prompt"`

@@ -20,10 +20,11 @@ type sessionsListOutput struct {
 func newSessionsCmd(flags *persistentFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sessions",
-		Short: "List, show, and resume past sessions",
+		Short: "List, show, delete, and resume past sessions",
 	}
 	cmd.AddCommand(newSessionsListCmd(flags))
 	cmd.AddCommand(newSessionsShowCmd(flags))
+	cmd.AddCommand(newSessionsDeleteCmd(flags))
 	return cmd
 }
 
@@ -154,4 +155,33 @@ func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message
 			}
 		}
 	}
+}
+
+func newSessionsDeleteCmd(flags *persistentFlags) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "delete <id>",
+		Short: "Delete one session and remove it from history",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return &usageError{msg: "juex sessions delete: <id> required"}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(flags)
+			if err != nil {
+				return err
+			}
+			id := args[0]
+			if err := session.Delete(cfg.SessionsDir(), cfg.HistoryPath(), id); err != nil {
+				if os.IsNotExist(err) {
+					return &notFoundError{msg: "session not found: " + id}
+				}
+				return err
+			}
+			cmdPrintln(cmd, mustJSON(map[string]any{"deleted": true, "id": id}))
+			return nil
+		},
+	}
+	return cmd
 }

@@ -1,13 +1,35 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { listSessions } from "@/api";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { Trash2 } from "lucide-react";
+import { deleteSession, listSessions } from "@/api";
+import { Button } from "@/components/ui/button";
 import type { SessionInfo } from "@/types";
 import { cn } from "@/lib/utils";
 
 export function SidebarSessionList() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [deletingID, setDeletingID] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
   const params = useParams<{ id?: string }>();
+
+  async function handleDelete(id: string) {
+    const session = sessions.find((s) => s.id === id);
+    const label = session?.preview || id;
+    if (!window.confirm(`Delete "${label}"?`)) return;
+    setDeletingID(id);
+    try {
+      await deleteSession(id);
+      setSessions((current) => current.filter((s) => s.id !== id));
+      if (params.id === id) {
+        navigate("/");
+      }
+    } catch (e) {
+      console.error("deleteSession failed", e);
+    } finally {
+      setDeletingID(null);
+    }
+  }
 
   useEffect(() => {
     let live = true;
@@ -40,19 +62,35 @@ export function SidebarSessionList() {
   return (
     <nav className="flex flex-col gap-0.5 px-2 py-1">
       {sessions.map((s) => (
-        <Link
+        <div
           key={s.id}
-          to={`/sessions/${encodeURIComponent(s.id)}`}
           className={cn(
-            "rounded-md px-2 py-1.5 text-sm hover:bg-muted/60 transition-colors",
+            "group/session flex items-center rounded-md pr-1 hover:bg-muted/60 transition-colors",
             s.id === params.id && "bg-muted",
           )}
         >
-          <div className="line-clamp-1">{s.preview || "(empty)"}</div>
-          <div className="text-muted-foreground mt-0.5 text-xs">
-            {humanAgo(s.last_active_at)}
-          </div>
-        </Link>
+          <Link
+            to={`/sessions/${encodeURIComponent(s.id)}`}
+            className="min-w-0 flex-1 px-2 py-1.5 text-sm"
+          >
+            <div className="line-clamp-1">{s.preview || "(empty)"}</div>
+            <div className="text-muted-foreground mt-0.5 text-xs">
+              {humanAgo(s.last_active_at)}
+            </div>
+          </Link>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            title="Delete session"
+            aria-label="Delete session"
+            disabled={deletingID === s.id}
+            onClick={() => void handleDelete(s.id)}
+            className="opacity-0 group-hover/session:opacity-100 focus-visible:opacity-100"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+        </div>
       ))}
     </nav>
   );
