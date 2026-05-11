@@ -13,6 +13,10 @@ jobs:
         with:
           go-version: stable
           cache: true
+      - name: Prepare embedded web dist
+        run: |
+          mkdir -p internal/web/dist
+          printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
@@ -35,5 +39,10 @@ jobs:
         if: matrix.os != 'windows-latest'
         with:
           version: latest
+      - name: Prepare embedded web dist
+        run: |
+          mkdir -p internal/web/dist
+          printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
+        shell: bash
       - run: go test ./... -race -count=1
         shell: bash

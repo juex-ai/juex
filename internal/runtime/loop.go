@@ -104,13 +104,10 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 			"tool_calls":  responseToolCalls(resp.Message),
 		}})
 
-		// Always persist the assistant response, even if it is empty (so
-		// the conversation log shows what the model returned).
+		toolCalls := resp.Message.ToolCalls()
 		if err := e.Session.Append(resp.Message); err != nil {
 			return "", e.failTurn(turnID, fmt.Errorf("session append assistant: %w", err))
 		}
-
-		toolCalls := resp.Message.ToolCalls()
 		if len(toolCalls) == 0 {
 			lastText = resp.Message.FirstText()
 			break

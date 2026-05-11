@@ -78,6 +78,7 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	}
 	var parsed struct {
 		ID       string `json:"id"`
+		Model    string `json:"model"`
 		Messages []struct {
 			Role string `json:"role"`
 		} `json:"messages"`
@@ -87,6 +88,9 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	}
 	if parsed.ID != id || len(parsed.Messages) != 2 {
 		t.Errorf("got %+v", parsed)
+	}
+	if parsed.Model != "m" {
+		t.Errorf("model = %q", parsed.Model)
 	}
 }
 

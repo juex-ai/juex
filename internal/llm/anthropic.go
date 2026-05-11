@@ -95,7 +95,7 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 
 func toAnthropicMessages(history []Message) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
-	for _, m := range history {
+	for _, m := range compactHistoryForProvider(history) {
 		var blocks []anthropic.ContentBlockParamUnion
 		for _, b := range m.Blocks {
 			switch b.Type {

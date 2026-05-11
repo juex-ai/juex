@@ -1,2 +1,6 @@
 [tools]
 node = "24"
+
+[env]
+TASKLINE_PROJECT = "juex"
+TASKLINE_SERVER = "http://mini4.nb.hi:8787"

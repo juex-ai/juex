@@ -94,6 +94,26 @@ func TestTurn_PlainResponse(t *testing.T) {
 	}
 }
 
+func TestTurn_PersistsEmptyAssistantResponse(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: nil}, StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	out, err := eng.Turn(context.Background(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Fatalf("out = %q, want empty", out)
+	}
+	if len(eng.Session.History) != 2 {
+		t.Fatalf("history len = %d, want user and assistant messages; history=%+v", len(eng.Session.History), eng.Session.History)
+	}
+	if eng.Session.History[1].Role != llm.RoleAssistant || len(eng.Session.History[1].Blocks) != 0 {
+		t.Fatalf("assistant message = %+v, want empty assistant", eng.Session.History[1])
+	}
+}
+
 func TestTurn_OneToolCallThenEnd(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{

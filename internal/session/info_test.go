@@ -171,6 +171,28 @@ func TestLoadInfo_ReturnsFullMessages(t *testing.T) {
 	}
 }
 
+func TestLoadInfo_NormalizesNullBlocks(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260509T074114-a20bf346")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(`{"role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, msgs, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	if msgs[0].Blocks == nil {
+		t.Fatal("blocks is nil, want empty slice")
+	}
+}
+
 func TestLoadInfo_NotFound(t *testing.T) {
 	_, _, err := LoadInfo(filepath.Join(t.TempDir(), "missing"))
 	if err == nil {

@@ -97,6 +97,7 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 		if err := json.Unmarshal(line, &m); err != nil {
 			return Info{}, nil, err
 		}
+		m = normalizeMessage(m)
 		msgs = append(msgs, m)
 		if m.Role == llm.RoleUser {
 			info.Turns++

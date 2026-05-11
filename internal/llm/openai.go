@@ -96,7 +96,7 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Mes
 // tool_call_id <-> tool message linkage is preserved.
 func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnion {
 	var out []openai.ChatCompletionMessageParamUnion
-	for _, m := range history {
+	for _, m := range compactHistoryForProvider(history) {
 		switch m.Role {
 		case RoleUser:
 			var userText strings.Builder
@@ -153,7 +153,9 @@ func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnio
 			}
 			out = append(out, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
 		case RoleSystem:
-			out = append(out, openai.SystemMessage(m.FirstText()))
+			if text := m.FirstText(); text != "" {
+				out = append(out, openai.SystemMessage(text))
+			}
 		}
 	}
 	return out
