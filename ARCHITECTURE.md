@@ -1,9 +1,9 @@
-# Juex v0.0.1 Architecture
+# Juex Architecture
 
-> Implementation guide. Read alongside `juex-agent-design-v1.md` (the design
-> philosophy doc) and `docs/superpowers/specs/2026-05-01-juex-v0.0.1-release-design.md`
-> (this release's spec). This document covers **how the code is structured**:
-> module layout, interfaces, data flow, and test strategy.
+> Implementation guide. Read alongside `PHILOSOPHY.md` for product and
+> engineering principles, and `DESIGN.md` for the web UI design guide. This
+> document covers **how the code is structured**: module layout, interfaces,
+> data flow, storage, and test strategy.
 >
 > Principle: **simplest possible prototype that covers every v0.1 must-have**
 > listed in §9.1 of the design doc — packaged as the first released version.
@@ -30,6 +30,7 @@ user types a prompt in the CLI
 ```
 juex/
 ├── cmd/juex/main.go              # 5-line entry: os.Exit(cli.Execute())
+├── frontend/                     # React + Vite web UI source
 ├── internal/
 │   ├── app/        app.go        # runtime wiring (was in main.go)
 │   ├── cli/                      # cobra-based CLI surface
@@ -54,7 +55,8 @@ juex/
 │   ├── frontmatter/parser.go     # shared YAML frontmatter parser
 │   ├── prompt/     prompt.go     # system prompt assembly
 │   ├── session/    session.go    # conversation history + jsonl persistence
-│   └── runtime/    loop.go       # turn loop + parallel dispatcher
+│   ├── runtime/    loop.go       # turn loop + parallel dispatcher
+│   └── web/                      # HTTP API, SSE, SPA asset embedding
 ├── tests/
 │   └── e2e/                      # cross-package end-to-end + integration tests
 │       ├── e2e_test.go           #   full-stack mock-LLM scenario
@@ -69,7 +71,8 @@ juex/
 ├── .goreleaser.yml               # 6-platform cross-compile
 ├── Makefile                      # test / lint / build / snapshot / integration
 ├── go.mod / go.sum
-├── ARCHITECTURE.md / DESIGN.md / AGENTS.md / CLAUDE.md→AGENTS.md
+├── README.md / PHILOSOPHY.md / ARCHITECTURE.md / DESIGN.md
+├── AGENTS.md / CLAUDE.md→AGENTS.md
 └── juex.yaml / .env.example / .env.local.anthropic / .env.local.openai
 ```
 
@@ -327,17 +330,17 @@ func (s *Server) Run(ctx) error
 `juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no
 auth). Each session gets its own `*app.App`; events flow to a
 per-session broadcaster that fans out to connected SSE clients. Slow
-clients are dropped after a 5s buffer-full timeout. Templates and
-static assets (htmx 2.0.4 vendored, plus a tiny vanilla JS SSE
-handler) are embedded with `go:embed` — no build step.
+clients are dropped after a 5s buffer-full timeout. `make web` builds the
+React SPA in `frontend/`, copies the bundle to `internal/web/dist`, and the
+Go binary embeds that directory with `go:embed`.
 
 Routes:
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | session list |
-| GET | `/sessions/<id>` | transcript + prompt form |
-| GET | `/sessions/new` | new-session form |
+| GET | `/` | React SPA entry |
+| GET | `/sessions/<id>` | React SPA session route |
+| GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/sessions` | JSON list |
 | POST | `/api/sessions` | create session |
 | GET | `/api/sessions/<id>` | JSON transcript |
@@ -346,7 +349,6 @@ Routes:
 | GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
-| GET | `/static/*` | embedded CSS / JS |
 
 ---
 
@@ -491,8 +493,8 @@ Loading flow:
 4. when the model decides a skill applies, it calls the standard `read`
    builtin against that path — no dedicated `read_skill` tool
 
-No embedding retrieval / auto-activation in v0.0.1 — the LLM picks via
-description and reads the file path when it wants the body. Dropping the
+No embedding retrieval / auto-activation yet — the LLM picks via description
+and reads the file path when it wants the body. Dropping the
 dedicated tool follows agent-CLI principle 7 (fewer surfaces ⇒ fewer
 hallucinations).
 
@@ -506,11 +508,11 @@ hallucinations).
 |---|---|
 | `make test` | `go test ./... -count=1` |
 | `make lint` | `golangci-lint run` |
-| `make build` | `bin/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
+| `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
 | `make snapshot` | `goreleaser release --snapshot --clean` (6 archives in `dist/`) |
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
-| `make clean` | `rm -rf bin dist` |
+| `make clean` | `rm -rf dist` |
 
 ### `goreleaser`
 
@@ -560,7 +562,7 @@ Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
 | `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |
 | `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
-| `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index |
+| `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |
 | `runtime` | mock-provider script, parallel tool calls, budget breach, ctx cancel, unknown-tool, provider error, multi-turn |
 | `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |
@@ -572,23 +574,22 @@ gated by build tag.
 
 ---
 
-## 11. Departures From the Design Doc
+## 11. Departures From Early Design Notes
 
-| Decision | Design doc preference | v0.0.1 actual | Why |
+| Decision | Early preference | Current implementation | Why |
 |---|---|---|---|
 | LLM client | official SDKs | **official SDKs** | matches design |
 | MCP client | mark3labs/mcp-go | **handwritten stdio** | only stdio + 3 RPCs needed |
 | Event dispatch | channel + goroutine pool | **synchronous map** | no async listener required yet |
 | Frontmatter | `gopkg.in/yaml.v3` | **handwritten** | top-level string fields only |
-| Config | viper / koanf | **handwritten KEY=VALUE** | four keys total |
+| Config | viper / koanf | **small YAML loader + explicit dotenv fallback** | few runtime fields, predictable precedence |
 | CLI library | stdlib `flag` | **`spf13/cobra`** | industry-standard subcommand UX, persistent flags, automatic help |
 
 ---
 
 ## 12. One-Sentence Summary
 
-**Juex v0.0.1 = a Go binary with a cobra CLI, 5 builtin tools, an MCP stdio
-client, AGENTS.md/skills/memory loading, a synchronous turn loop, work-local
-jsonl persistence, an event bus, cross-platform releases via goreleaser, and
-GitHub Actions CI.** Stdlib-first; every module fits in a few hundred lines
-and leaves room to grow in any direction.
+**Juex is a Go binary with a cobra CLI, React web UI, builtin and MCP tools,
+AGENTS.md/skills/memory loading, a synchronous turn loop, work-local JSONL
+persistence, an event bus, cross-platform releases via goreleaser, and GitHub
+Actions CI.** Stdlib-first; modules stay small enough to test and explain.

@@ -202,6 +202,8 @@ shows:
 - Second line: relative timestamp ("2m ago", "yesterday", "Mar 5").
 
 Active session has a subtle background tint (Tailwind `bg-muted`).
+Each row may expose a compact trash icon for deleting the session; destructive
+actions require a browser confirmation before calling the API.
 
 ### 7.2 PageHeader
 
