@@ -8,9 +8,9 @@ import (
 
 func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
-	envPath := filepath.Join(dir, ".env")
-	body := "PROVIDER_API_TYPE=openai\nPROVIDER_API_BASE=\"https://example.com\"\nPROVIDER_API_KEY=sk-x\nPROVIDER_API_MODEL=gpt-4\n# comment\n"
-	if err := os.WriteFile(envPath, []byte(body), 0o644); err != nil {
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -19,7 +19,7 @@ func TestLoadFromFile(t *testing.T) {
 	t.Setenv("PROVIDER_API_KEY", "")
 	t.Setenv("PROVIDER_API_MODEL", "")
 
-	cfg, err := LoadFromFile(envPath)
+	cfg, err := LoadFromFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,48 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
+func TestLoad_DefaultRuntimeConfigPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://default.example", "sk-default", "gpt-default")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderType != "openai" || cfg.BaseURL != "https://default.example" || cfg.APIKey != "sk-default" || cfg.Model != "gpt-default" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoad_DoesNotReadProjectDotEnvByDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("PROVIDER_API_TYPE=anthropic\nPROVIDER_API_MODEL=claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderType != "openai" || cfg.Model != "gpt-yaml" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
 func TestLoad_OSEnvOverridesFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
+
 	t.Setenv("PROVIDER_API_TYPE", "anthropic")
 	t.Setenv("PROVIDER_API_BASE", "https://api.anthropic.com")
 	t.Setenv("PROVIDER_API_KEY", "k")
@@ -96,7 +137,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents")}
-	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.ProjectAgentsDir() != "" {
+	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
 	if len(cfg.AgentsMDDirs()) != 0 {
@@ -118,5 +159,16 @@ func TestNewProvider_RequiresType(t *testing.T) {
 	cfg := Config{APIKey: "x", Model: "m"}
 	if _, err := cfg.NewProvider(); err == nil {
 		t.Fatal("expected error for empty type")
+	}
+}
+
+func writeJuexConfig(t *testing.T, path, typ, base, key, model string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "provider:\n  type: " + typ + "\n  base_url: " + base + "\n  api_key: " + key + "\n  model: " + model + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

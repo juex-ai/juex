@@ -89,9 +89,10 @@ type dryRunOK struct{ msg string }
 func (d *dryRunOK) Error() string { return d.msg }
 
 type persistentFlags struct {
-	envPath string
-	cwd     string
-	verbose bool
+	configPath string
+	envPath    string
+	cwd        string
+	verbose    bool
 }
 
 func newRootCmd() *cobra.Command {
@@ -105,7 +106,8 @@ func newRootCmd() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.PersistentFlags().StringVarP(&flags.envPath, "env", "e", "", "path to .env override")
+	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
+	cmd.PersistentFlags().StringVarP(&flags.envPath, "env", "e", "", "legacy path to explicit .env override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
 	// --verbose has no short form at root level so each subcommand can use
 	// -v locally (see version.go); cobra would otherwise conflict.
@@ -120,24 +122,38 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
-// loadConfig returns the resolved config, with --env and --cwd applied.
+// loadConfig returns the resolved config, with --config/--env and --cwd applied.
 func loadConfig(flags *persistentFlags) (config.Config, error) {
 	var (
 		cfg config.Config
 		err error
 	)
-	if flags.envPath != "" {
-		cfg, err = config.LoadFromFile(flags.envPath)
+	configPath, err := explicitConfigPath(flags)
+	if err != nil {
+		return cfg, err
+	}
+	if configPath != "" {
+		cfg, err = config.LoadFromFileForWorkDir(configPath, flags.cwd)
 	} else {
-		cfg, err = config.Load()
+		cfg, err = config.LoadForWorkDir(flags.cwd)
 	}
 	if err != nil {
 		return cfg, err
 	}
-	if flags.cwd != "" {
-		cfg.WorkDir = flags.cwd
-	}
 	return cfg, nil
+}
+
+func explicitConfigPath(flags *persistentFlags) (string, error) {
+	if flags == nil {
+		return "", nil
+	}
+	if flags.configPath != "" && flags.envPath != "" {
+		return "", &usageError{msg: "--config and --env are mutually exclusive"}
+	}
+	if flags.configPath != "" {
+		return flags.configPath, nil
+	}
+	return flags.envPath, nil
 }
 
 // cmdPrintln is a small helper so subcommands always write to the cobra

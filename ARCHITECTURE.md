@@ -38,7 +38,7 @@ juex/
 │   │   ├── repl.go               #   `juex repl`
 │   │   └── version.go            #   `juex version [-v]`
 │   ├── version/    version.go    # ldflags-injected build metadata
-│   ├── config/     config.go     # .env loader + WorkDir-driven paths
+│   ├── config/     config.go     # juex.yaml loader + WorkDir-driven paths
 │   ├── events/     bus.go        # in-process EventBus (glob)
 │   ├── llm/                      # canonical Message/Block + provider adapters
 │   │   ├── types.go
@@ -70,7 +70,7 @@ juex/
 ├── Makefile                      # test / lint / build / snapshot / integration
 ├── go.mod / go.sum
 ├── ARCHITECTURE.md / DESIGN.md / AGENTS.md / CLAUDE.md→AGENTS.md
-└── .env.example / .env.local.anthropic / .env.local.openai
+└── juex.yaml / .env.example / .env.local.anthropic / .env.local.openai
 ```
 
 Per-package unit tests stay co-located with their source files (idiomatic Go).
@@ -306,7 +306,8 @@ Persistent flags inherited by all subcommands:
 
 | Flag | Short | Default |
 |---|---|---|
-| `--env` | `-e` | unset (path to `.env` override) |
+| `--config` |  | unset (path to `juex.yaml` override) |
+| `--env` | `-e` | unset (legacy explicit `.env` override) |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
 | `--verbose` | `-V` | false (stream events to stderr) |
 
@@ -384,17 +385,28 @@ Routes:
 
 ## 5. Configuration
 
-`.env` fields (`.env.example` ships in the repo):
+Runtime config lives in `<WorkDir>/.juex/juex.yaml`; the repository root
+ships `juex.yaml` as a copyable template:
 
-| Variable | Description |
+```yaml
+provider:
+  type: openai
+  base_url: ""
+  api_key: ""
+  model: ""
+```
+
+| Field | Description |
 |---|---|
-| `PROVIDER_API_TYPE` | `anthropic` or `openai` |
-| `PROVIDER_API_BASE` | full base URL (Anthropic, OpenAI, DeepSeek, etc.) |
-| `PROVIDER_API_KEY` | API key |
-| `PROVIDER_API_MODEL` | model name |
+| `provider.type` | `anthropic` or `openai` |
+| `provider.base_url` | full base URL (Anthropic, OpenAI, DeepSeek, etc.) |
+| `provider.api_key` | API key |
+| `provider.model` | model name |
 
-Resolution order (later wins): `defaults` < `~/.agents/.env` < `<WorkDir>/.env`
-< `os.Environ` < `--env <path>` (if supplied).
+Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
+< `os.Environ` < `--config <path>` (if supplied). `--env <path>` remains a
+legacy explicit override for old dotenv files, but `.env` is no longer read by
+default.
 
 ---
 
@@ -406,17 +418,17 @@ Resources split between user-global and work-local:
 ~/.agents/                       # user-global (read-only from juex's view)
 ├── AGENTS.md                    # global agent rules
 ├── mcp.json                     # global MCP servers (project may override)
-├── skills/<name>/SKILL.md       # global skills (project may override)
-└── .env                         # global env file
+└── skills/<name>/SKILL.md       # global skills (project may override)
 
 <WorkDir>/                       # the agent's working directory (--cwd or $PWD)
 ├── AGENTS.md                    # project rules (concatenated, not overriding)
-├── .env                         # project env override
+├── juex.yaml                    # template for .juex/juex.yaml
 ├── .agents/
 │   ├── AGENTS.md                # subdir rules (also concatenated)
 │   ├── mcp.json                 # project MCP (project wins on duplicate names)
 │   └── skills/<name>/SKILL.md   # project skills (project overrides user)
 └── .juex/
+    ├── juex.yaml                # local runtime provider config
     ├── history.json             # session index + last session object
     ├── memory/                  # work-local memory entries
     │   ├── MEMORY.md

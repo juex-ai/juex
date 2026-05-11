@@ -43,7 +43,7 @@ type dryRunPlan struct {
 	Model        string         `json:"model"`
 	BaseURL      string         `json:"base_url"`
 	WorkDir      string         `json:"work_dir"`
-	EnvFile      string         `json:"env_file,omitempty"`
+	ConfigFile   string         `json:"config_file,omitempty"`
 	Prompt       string         `json:"prompt"`
 	PromptChars  int            `json:"prompt_chars"`
 	SystemChars  int            `json:"system_prompt_chars"`
@@ -86,7 +86,7 @@ errors emit a structured JSON object on stderr.
 With --dry-run no LLM call is made; instead a JSON preview of the planned
 execution is printed and the process exits with code 10.`,
 		Example: `  juex run "summarise README.md"
-  juex run --env .env.local.openai "what is in scope.txt?"
+  juex run --config .juex/juex.yaml "what is in scope.txt?"
   juex -C /path/to/project run "do thing"
   juex run --json "do thing" | jq -r .text
   juex run --dry-run "do thing"     # exits 10 with a JSON plan`,
@@ -99,11 +99,15 @@ execution is printed and the process exits with code 10.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate paths BEFORE calling loadConfig so we surface the
 			// right exit code (3 not found) instead of a generic error.
-			if flags.envPath != "" {
-				if _, err := os.Stat(flags.envPath); err != nil {
+			configPath, err := explicitConfigPath(flags)
+			if err != nil {
+				return emit(jsonOut, cmd.ErrOrStderr(), err, "pass only one config override flag", false)
+			}
+			if configPath != "" {
+				if _, err := os.Stat(configPath); err != nil {
 					return emit(jsonOut, cmd.ErrOrStderr(), &notFoundError{
-						msg: "--env file not found: " + flags.envPath,
-					}, "verify the path exists; default search is ./.env and ~/.agents/.env", false)
+						msg: "config file not found: " + configPath,
+					}, "verify the path exists; default search is ./.juex/juex.yaml", false)
 				}
 			}
 			if flags.cwd != "" {
@@ -116,7 +120,7 @@ execution is printed and the process exits with code 10.`,
 			cfg, err := loadConfig(flags)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"set PROVIDER_API_TYPE/_BASE/_KEY/_MODEL in .env (see .env.example)", false)
+					"set provider.type / provider.api_key / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
 			}
 
 			prompt := strings.Join(args, " ")
@@ -141,7 +145,7 @@ execution is printed and the process exits with code 10.`,
 			})
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"check PROVIDER_API_TYPE / PROVIDER_API_KEY / PROVIDER_API_MODEL in your .env file", false)
+					"check provider.type / provider.api_key / provider.model in .juex/juex.yaml", false)
 			}
 			defer a.Close()
 
@@ -208,7 +212,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		Model:        cfg.Model,
 		BaseURL:      cfg.BaseURL,
 		WorkDir:      cfg.WorkDir,
-		EnvFile:      flags.envPath,
+		ConfigFile:   configFileForPlan(flags),
 		Prompt:       userPrompt,
 		PromptChars:  len(userPrompt),
 		SystemChars:  len(system),
@@ -225,6 +229,14 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		cmdPrintln(cmd, mustJSON(plan))
 	}
 	return &dryRunOK{msg: "dry run complete"}
+}
+
+func configFileForPlan(flags *persistentFlags) string {
+	path, err := explicitConfigPath(flags)
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 // emit prints err in the right format and returns it (so cobra picks the

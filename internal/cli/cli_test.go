@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -144,6 +145,7 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "unsafe-bind-any"`,
 		`"name": "resume"`,  // flag
 		`"name": "session"`, // flag
+		`"name": "config"`,  // persistent flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
 		`"shorthand": "C"`,
 		`"persistent": true`,
@@ -204,6 +206,27 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	}
 	if !strings.HasPrefix(strings.TrimSpace(body), "{") {
 		t.Fatalf("expected JSON, got:\n%s", body)
+	}
+}
+
+func TestRunCmd_DryRunLoadsDefaultJuexYAML(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configPath := dir + "/.juex/juex.yaml"
+	if err := writeJuexConfigFile(configPath, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{"-C", dir, "run", "--dry-run", "--json", "hello"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	}
+	body := out.String()
+	if !strings.Contains(body, `"provider_type": "openai"`) || strings.Contains(body, `"config_file"`) {
+		t.Fatalf("unexpected dry-run body:\n%s", body)
 	}
 }
 
@@ -316,6 +339,15 @@ func classifyForTest(err error) int {
 func writeEnvFile(path, typ, base, key, model string) error {
 	body := "PROVIDER_API_TYPE=" + typ + "\nPROVIDER_API_BASE=" + base +
 		"\nPROVIDER_API_KEY=" + key + "\nPROVIDER_API_MODEL=" + model + "\n"
+	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+func writeJuexConfigFile(path, typ, base, key, model string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	body := "provider:\n  type: " + typ + "\n  base_url: " + base +
+		"\n  api_key: " + key + "\n  model: " + model + "\n"
 	return os.WriteFile(path, []byte(body), 0o644)
 }
 

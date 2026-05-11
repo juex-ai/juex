@@ -1,0 +1,7 @@
+# Copy this template to .juex/juex.yaml in the project you want juex to run in.
+# The .juex directory is local runtime state and should not be committed.
+provider:
+  type: openai
+  base_url: ""
+  api_key: ""
+  model: ""

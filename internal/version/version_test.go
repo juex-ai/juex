@@ -21,7 +21,7 @@ func TestVerbose_BuildOnly(t *testing.T) {
 		}
 	}
 	// Optional fields should not appear when empty.
-	for _, mustNot := range []string{"work_dir:", "env_file:", "provider_type:"} {
+	for _, mustNot := range []string{"work_dir:", "config_file:", "provider_type:"} {
 		if strings.Contains(out, mustNot) {
 			t.Errorf("Verbose() should not contain %q with empty Info; got:\n%s", mustNot, out)
 		}
@@ -31,7 +31,7 @@ func TestVerbose_BuildOnly(t *testing.T) {
 func TestVerbose_WithRuntimeContext(t *testing.T) {
 	info := Build()
 	info.WorkDir = "/tmp/x"
-	info.EnvFile = "/tmp/.env"
+	info.ConfigFile = "/tmp/juex.yaml"
 	info.ProviderType = "openai"
 	info.Model = "gpt-test"
 	info.BaseURL = "https://x"
@@ -39,7 +39,7 @@ func TestVerbose_WithRuntimeContext(t *testing.T) {
 	out := info.Verbose()
 	for _, want := range []string{
 		"work_dir:      /tmp/x",
-		"env_file:      /tmp/.env",
+		"config_file:   /tmp/juex.yaml",
 		"provider_type: openai",
 		"model:         gpt-test",
 		"base_url:      https://x",

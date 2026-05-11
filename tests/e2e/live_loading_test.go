@@ -38,14 +38,17 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	envFile := filepath.Join(work, ".env")
-	if err := os.WriteFile(envFile, []byte("PROVIDER_API_TYPE=openai\nPROVIDER_API_BASE=https://example\nPROVIDER_API_KEY=k\nPROVIDER_API_MODEL=m\n"), 0o644); err != nil {
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("provider:\n  type: openai\n  base_url: https://example\n  api_key: k\n  model: m\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	cmd := exec.Command(bin,
 		"--cwd", work,
-		"--env", envFile,
+		"--config", configPath,
 		"run", "--dry-run", "--json", "x")
 	// Use Output() so stdout (the JSON plan) is not contaminated by stderr
 	// (uv's "Installed N packages" log on first run).
