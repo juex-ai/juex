@@ -17,7 +17,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
+			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cfg.HistoryPath(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
 			if err != nil {
 				return err
 			}
@@ -27,6 +27,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 				WorkDir:   cfg.WorkDir,
 				Stderr:    cmd.ErrOrStderr(),
 				ResumeDir: resumeDir,
+				Alias:     rf.Alias,
 			})
 			if err != nil {
 				return err
@@ -36,7 +37,9 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			return a.REPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
-	cmd.Flags().BoolVar(&rf.Resume, "resume", false, "interactively pick a past session to resume")
+	cmd.Flags().StringVar(&rf.Resume, "resume", "", "resume a past session by id, alias, or 'last'; omit value for interactive picker")
+	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
+	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
 	return cmd
 }

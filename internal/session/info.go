@@ -23,6 +23,7 @@ const previewMaxRunes = 80
 // (no live file handles, no event subscription).
 type Info struct {
 	ID           string    `json:"id"`
+	Alias        string    `json:"alias,omitempty"`
 	Dir          string    `json:"dir"`
 	StartedAt    time.Time `json:"started_at"`
 	LastActiveAt time.Time `json:"last_active_at"`
@@ -78,8 +79,13 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 		return Info{}, nil, err
 	}
 	id := filepath.Base(dir)
+	alias, err := LoadAlias(dir)
+	if err != nil {
+		return Info{}, nil, err
+	}
 	info := Info{
 		ID:           id,
+		Alias:        alias,
 		Dir:          dir,
 		LastActiveAt: st.ModTime(),
 		StartedAt:    parseStartedAt(id, st.ModTime()),

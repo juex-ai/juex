@@ -69,11 +69,14 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 	if len(skills) != 2 || skills[0] != wantUserSkills || skills[1] != wantProjSkills {
 		t.Fatalf("skills = %v", skills)
 	}
-	if want := filepath.Join("/proj", ".agents", "memory"); cfg.MemoryDir() != want {
+	if want := filepath.Join("/proj", ".juex", "memory"); cfg.MemoryDir() != want {
 		t.Fatalf("memory dir = %q, want %q", cfg.MemoryDir(), want)
 	}
-	if want := filepath.Join("/proj", ".agents", "sessions"); cfg.SessionsDir() != want {
+	if want := filepath.Join("/proj", ".juex", "sessions"); cfg.SessionsDir() != want {
 		t.Fatalf("sessions dir = %q, want %q", cfg.SessionsDir(), want)
+	}
+	if want := filepath.Join("/proj", ".juex", "history.json"); cfg.HistoryPath() != want {
+		t.Fatalf("history path = %q, want %q", cfg.HistoryPath(), want)
 	}
 	mcp := cfg.MCPConfigPaths()
 	wantUserMCP := filepath.Join("/u", ".agents", "mcp.json")
@@ -93,7 +96,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents")}
-	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.ProjectAgentsDir() != "" {
+	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
 	if len(cfg.AgentsMDDirs()) != 0 {

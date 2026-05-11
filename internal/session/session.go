@@ -6,17 +6,17 @@
 //	conversation.jsonl   one llm.Message per line
 //	events.jsonl         one events.Event per line
 //
-// v0.1 only persists; reload (Load) is provided for future use but is not
-// wired into the CLI.
+// The CLI and web server use Load to resume existing sessions.
 package session
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,19 +32,35 @@ const (
 type Session struct {
 	ID      string
 	Dir     string
+	Alias   string
 	History []llm.Message
 
-	mu      sync.Mutex
-	convFD  *os.File
-	eventFD *os.File
+	mu          sync.Mutex
+	convFD      *os.File
+	eventFD     *os.File
+	historyPath string
+}
+
+type Options struct {
+	Alias       string
+	HistoryPath string
 }
 
 // New creates a new session under rootDir. rootDir is created if missing.
 func New(rootDir string) (*Session, error) {
+	return NewWithOptions(rootDir, Options{})
+}
+
+func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	id := newID()
 	dir := filepath.Join(rootDir, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
+	}
+	if opts.Alias != "" {
+		if err := SetAlias(dir, opts.Alias); err != nil {
+			return nil, err
+		}
 	}
 	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -56,20 +72,31 @@ func New(rootDir string) (*Session, error) {
 		return nil, err
 	}
 	return &Session{
-		ID:      id,
-		Dir:     dir,
-		convFD:  convFD,
-		eventFD: eventFD,
+		ID:          id,
+		Dir:         dir,
+		Alias:       opts.Alias,
+		convFD:      convFD,
+		eventFD:     eventFD,
+		historyPath: opts.HistoryPath,
 	}, nil
 }
 
 // Append adds m to the in-memory history and writes it to conversation.jsonl.
 func (s *Session) Append(m llm.Message) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	m = normalizeMessage(m)
 	s.History = append(s.History, m)
-	return writeJSONL(s.convFD, m)
+	if err := writeJSONL(s.convFD, m); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	info, ok := s.historyInfoLocked()
+	historyPath := s.historyPath
+	s.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return RecordHistory(historyPath, info)
 }
 
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
@@ -103,7 +130,21 @@ func (s *Session) Close() error {
 // The new session shares the same id (= directory basename) and appends to
 // the existing files.
 func Load(dir string) (*Session, error) {
+	return LoadWithOptions(dir, Options{})
+}
+
+func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	id := filepath.Base(dir)
+	alias, err := LoadAlias(dir)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Alias != "" {
+		if err := SetAlias(dir, opts.Alias); err != nil {
+			return nil, err
+		}
+		alias = opts.Alias
+	}
 	convPath := filepath.Join(dir, conversationFile)
 	data, err := os.ReadFile(convPath)
 	if err != nil {
@@ -131,11 +172,13 @@ func Load(dir string) (*Session, error) {
 		return nil, err
 	}
 	return &Session{
-		ID:      id,
-		Dir:     dir,
-		History: history,
-		convFD:  convFD,
-		eventFD: eventFD,
+		ID:          id,
+		Dir:         dir,
+		Alias:       alias,
+		History:     history,
+		convFD:      convFD,
+		eventFD:     eventFD,
+		historyPath: opts.HistoryPath,
 	}, nil
 }
 
@@ -182,8 +225,37 @@ func splitLines(data []byte) [][]byte {
 	return out
 }
 
+func (s *Session) historyInfoLocked() (Info, bool) {
+	if s.historyPath == "" {
+		return Info{}, false
+	}
+	info := Info{
+		ID:        s.ID,
+		Alias:     s.Alias,
+		Dir:       s.Dir,
+		StartedAt: parseStartedAt(s.ID, time.Now().UTC()),
+	}
+	if st, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err == nil {
+		info.LastActiveAt = st.ModTime()
+	} else {
+		info.LastActiveAt = time.Now().UTC()
+	}
+	for _, m := range s.History {
+		if m.Role != llm.RoleUser {
+			continue
+		}
+		info.Turns++
+		if info.Preview == "" {
+			info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
+		}
+	}
+	return info, true
+}
+
 func newID() string {
 	var b [4]byte
-	rand.New(rand.NewSource(time.Now().UnixNano())).Read(b[:])
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		panic(fmt.Errorf("session: random id bytes: %w", err))
+	}
 	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
 }

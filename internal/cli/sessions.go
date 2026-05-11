@@ -76,10 +76,10 @@ func renderSessionsTable(cmd *cobra.Command, infos []session.Info) {
 		return
 	}
 	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "%-32s  %-20s  %-5s  %s\n", "ID", "LAST_ACTIVE", "TURNS", "PREVIEW")
+	fmt.Fprintf(w, "%-32s  %-16s  %-20s  %-5s  %s\n", "ID", "ALIAS", "LAST_ACTIVE", "TURNS", "PREVIEW")
 	for _, s := range infos {
-		fmt.Fprintf(w, "%-32s  %-20s  %5d  %s\n",
-			s.ID, s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
+		fmt.Fprintf(w, "%-32s  %-16s  %-20s  %5d  %s\n",
+			s.ID, truncateRunes(s.Alias, 16), s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
 	}
 }
 
@@ -131,6 +131,7 @@ func newSessionsShowCmd(flags *persistentFlags) *cobra.Command {
 func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message) {
 	w := cmd.OutOrStdout()
 	fmt.Fprintf(w, "id:             %s\n", info.ID)
+	fmt.Fprintf(w, "alias:          %s\n", info.Alias)
 	fmt.Fprintf(w, "started_at:     %s\n", info.StartedAt.Format(time.RFC3339))
 	fmt.Fprintf(w, "last_active_at: %s\n", info.LastActiveAt.Format(time.RFC3339))
 	fmt.Fprintf(w, "turns:          %d\n\n", info.Turns)

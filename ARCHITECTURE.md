@@ -20,7 +20,7 @@ user types a prompt in the CLI
   -> call the LLM (Anthropic or OpenAI-compatible)
   -> execute tool calls in parallel (builtin / MCP / skill helpers)
   -> persist conversation + emit events
-  -> append jsonl into <WorkDir>/.agents/sessions/<id>/
+  -> append jsonl into <WorkDir>/.juex/sessions/<id>/
 ```
 
 ---
@@ -217,16 +217,17 @@ type Entry struct {
     UpdatedAt   time.Time
 }
 
-type Store struct { dir string; ... }   // dir = <WorkDir>/.agents/memory
+type Store struct { dir string; ... }   // dir = <WorkDir>/.juex/memory
 func (s *Store) Write(e Entry) error
 func (s *Store) Load() ([]Entry, error)
 func (s *Store) Search(q string) []Entry
 func (s *Store) Delete(name string) error
 ```
 
-Sessions and memory are **work-local** in v0.0.1; the user-global
-`~/.agents/{memory,sessions}/` was removed. Skills, mcp.json, and AGENTS.md
-still come from both sides (project entries override user entries by name).
+Sessions and memory are **work-local** runtime data under `<WorkDir>/.juex/`.
+Skills, mcp.json, and AGENTS.md still live under `.agents` and come from both
+user-global and project-local scopes (project entries override user entries by
+name).
 
 ### 3.5 Session
 
@@ -234,7 +235,8 @@ still come from both sides (project entries override user entries by name).
 // internal/session/session.go
 type Session struct {
     ID      string
-    Dir     string                // <WorkDir>/.agents/sessions/<id>/
+    Alias   string
+    Dir     string                // <WorkDir>/.juex/sessions/<id>/
     History []llm.Message
 }
 ```
@@ -246,6 +248,8 @@ an existing session in place (used by `--resume`).
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. Both are read-only.
+`<WorkDir>/.juex/history.json` stores a compact `{sessions, last}` index for
+resume-by-alias and resume-last lookups.
 
 ### 3.6 App + Runtime
 
@@ -288,8 +292,8 @@ re-attached to history in the original order.
 
 ```
 juex
-├── run "<prompt>" [flags]   (--resume | --session <id>)
-├── repl [flags]             (--resume | --session <id>)
+├── run "<prompt>" [flags]   (--resume[=last|alias|id] | --session <id>) [--alias <name>]
+├── repl [flags]             (--resume[=last|alias|id] | --session <id>) [--alias <name>]
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
 │   └── show <id> [--format json|text]
@@ -408,10 +412,12 @@ Resources split between user-global and work-local:
 <WorkDir>/                       # the agent's working directory (--cwd or $PWD)
 ├── AGENTS.md                    # project rules (concatenated, not overriding)
 ├── .env                         # project env override
-└── .agents/
-    ├── AGENTS.md                # subdir rules (also concatenated)
-    ├── mcp.json                 # project MCP (project wins on duplicate names)
-    ├── skills/<name>/SKILL.md   # project skills (project overrides user)
+├── .agents/
+│   ├── AGENTS.md                # subdir rules (also concatenated)
+│   ├── mcp.json                 # project MCP (project wins on duplicate names)
+│   └── skills/<name>/SKILL.md   # project skills (project overrides user)
+└── .juex/
+    ├── history.json             # session index + last session object
     ├── memory/                  # work-local memory entries
     │   ├── MEMORY.md
     │   └── *.md
@@ -421,9 +427,9 @@ Resources split between user-global and work-local:
 ```
 
 **Migration from earlier prototype:** sessions and memory used to live under
-`~/.agents/`. v0.0.1 reads / writes only the work-local locations. Existing
-files under `~/.agents/sessions/` and `~/.agents/memory/` are left untouched
-— move them by hand if you want them per-project.
+`.agents/` or `~/.agents/`. The runtime now reads / writes project-local
+runtime data under `.juex/`. Existing files under old session/memory locations
+are left untouched — move them by hand if you want them per-project.
 
 ---
 
@@ -540,9 +546,9 @@ Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
 | `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |
 | `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
-| `session` | append → jsonl line counts, event subscription, load round-trip |
+| `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index |
 | `runtime` | mock-provider script, parallel tool calls, budget breach, ctx cancel, unknown-tool, provider error, multi-turn |
-| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .agents/sessions, missing-key fail, default-cwd |
+| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario; live OpenAI/Anthropic round-trip + multi-step (build-tag) |
