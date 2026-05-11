@@ -103,7 +103,7 @@ func withHistoryLock(path string, fn func() error) error {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		if err == nil {
 			f.Close()
-			defer os.Remove(lockPath)
+			defer func() { _ = os.Remove(lockPath) }()
 			return fn()
 		}
 		if !errors.Is(err, os.ErrExist) {
@@ -130,7 +130,7 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
