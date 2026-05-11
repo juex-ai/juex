@@ -106,7 +106,7 @@ func withHistoryLock(path string, fn func() error) error {
 			defer func() { _ = os.Remove(lockPath) }()
 			return fn()
 		}
-		if !errors.Is(err, os.ErrExist) {
+		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrPermission) {
 			return err
 		}
 		if st, statErr := os.Stat(lockPath); statErr == nil && time.Since(st.ModTime()) > 30*time.Second {
