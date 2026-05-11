@@ -7,18 +7,30 @@ metadata:
 
 # Juex Local Test
 
-After completing any code change, build, start services, and run all affected tests. Do NOT ask the user — all scripts are idempotent and safe.
+After completing any code change, run the affected tests first, then finish
+with the repository-level verification that matches this project. Do NOT ask
+the user before running these commands; they are non-destructive.
 
 ## Execution Steps
 
-1. **Build** — `bash scripts/build.sh`
-2. **Start services** — `./scripts/start_local.sh`
-3. **Run unit tests** — `go test -v ./path/to/changed/package/...` for each changed package that has `*_test.go` files
-4. **Run integration tests** — `./tests/run.sh --skip-start <suite>` for each affected suite (services already running from step 2)
+Use the project toolchain wrapper when available:
+
+```bash
+mise exec -- <command>
+```
+
+1. **Focused Go tests while iterating** — run `go test -v ./path/to/changed/package/...` for each changed Go package that has `*_test.go` files. For cross-package changes, include `./tests/e2e/...`.
+2. **Full Go test suite** — `make test` runs `go test ./... -count=1`, including the non-live e2e tests under `tests/e2e`.
+3. **Live integration entrypoint** — `make integration` runs `go test -tags=integration ./tests/e2e/... -count=1`. These tests read `.env.local.openai` and `.env.local.anthropic`; missing files or empty keys are expected to skip the live cases.
+4. **Frontend and embedded binary build** — `make build` runs `make web` first (`cd frontend && pnpm install && pnpm build`), copies the bundle into `internal/web/dist`, then builds `dist/juex`.
+5. **CI parity when the change is risky** — run `go test ./... -race -count=1` after changes to concurrency, runtime, MCP, tools, events, session, or web request handling.
+
+There is no local service startup step for the current suite. Web tests use
+`httptest`, and live integration tests drive the runtime directly.
 
 ## Failure Handling
 
 - If build fails → fix compilation errors first, do not proceed to tests
-- If a service fails to start → check `.log/<service>.log`, fix before running tests
 - If unit tests fail → fix before running integration tests
 - If integration tests fail → report failures with error details, do not suppress or work around them
+- If `make integration` skips live cases because env files or keys are absent, report the skip clearly; do not invent credentials or replace it with a fake live test
