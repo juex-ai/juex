@@ -1,73 +1,58 @@
-# React + TypeScript + Vite
+# Juex Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This directory contains the React + Vite web UI served by `juex serve`.
+The Go server owns the JSON/SSE API and embeds the production bundle from
+`internal/web/dist`.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- React + TypeScript
+- Vite
+- React Router
+- Tailwind CSS v4
+- shadcn/ui primitives
+- prompt-kit components copied into `src/components/prompt-kit/`
+- lucide-react icons
 
-## React Compiler
+## Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Build the embedded bundle at least once, then run the Go server in one shell:
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+mise exec -- make web
+mise exec -- go run ./cmd/juex serve
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Run Vite in another shell:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+mise exec -- pnpm --dir frontend dev
 ```
+
+Vite proxies `/api` and session event requests to the Go server.
+
+## Build
+
+From the repository root:
+
+```bash
+mise exec -- make web
+mise exec -- make build
+```
+
+`make web` runs `pnpm install && pnpm build`, then copies `frontend/dist/`
+into `internal/web/dist/` for Go embedding.
+
+## Source Map
+
+| Path | Purpose |
+| --- | --- |
+| `src/api.ts` | typed fetch helpers and SSE subscription |
+| `src/types.ts` | TypeScript mirror of Go API/session/message shapes |
+| `src/pages/` | route-level views |
+| `src/components/` | app components |
+| `src/components/ui/` | shadcn primitives |
+| `src/components/prompt-kit/` | copied prompt-kit primitives |
+
+When Go API response shapes change, update `src/types.ts` and the matching
+client helper in the same PR.

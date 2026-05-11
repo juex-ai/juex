@@ -1,1 +1,91 @@
-# juex
+# Juex
+
+Juex is a small Go agent runtime packaged as one binary. It provides a CLI,
+a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
+tools, MCP stdio tools, project skills, work-local memory, and resumable
+session history.
+
+The project is intentionally narrow: it is a runtime for experimenting with
+agent loops, not a hosted service or a framework with plugins for every
+integration.
+
+## Quick Start
+
+Build the binary:
+
+```bash
+mise exec -- make build
+```
+
+Create runtime config in the work directory where you want the agent to run:
+
+```bash
+mkdir -p .juex
+cp juex.yaml .juex/juex.yaml
+```
+
+Fill in provider settings, then run:
+
+```bash
+./dist/juex run "summarize this repository"
+./dist/juex repl
+./dist/juex serve
+```
+
+`juex serve` starts a loopback-only web UI on `127.0.0.1:8080`.
+
+## Common Commands
+
+| Command | Purpose |
+| --- | --- |
+| `juex run "<prompt>"` | Run one prompt and exit. |
+| `juex repl` | Start an interactive CLI session. |
+| `juex run --resume=last "<prompt>"` | Continue the last session in this work directory. |
+| `juex sessions list` | List recorded sessions. |
+| `juex sessions show <id>` | Print session metadata and transcript. |
+| `juex sessions delete <id>` | Delete one session and remove it from history. |
+| `juex serve` | Start the React web UI and JSON/SSE API. |
+| `juex schema` | Emit the command tree as JSON for tools and agents. |
+
+## Runtime Files
+
+Juex keeps runtime state in the current work directory:
+
+```text
+.juex/
+├── juex.yaml
+├── history.json
+├── memory/
+└── sessions/<id>/
+    ├── conversation.jsonl
+    └── events.jsonl
+```
+
+Project configuration for agents, MCP servers, and skills lives under
+`.agents/`. Runtime state lives under `.juex/` so it can stay uncommitted.
+
+## Development
+
+Use the project toolchain wrapper when available:
+
+```bash
+mise exec -- make test
+mise exec -- make integration
+mise exec -- make build
+mise exec -- go test ./... -race -count=1
+```
+
+The frontend lives in `frontend/`; `make build` runs the frontend build,
+copies it into `internal/web/dist`, and embeds it into `dist/juex`.
+
+## Documentation
+
+| File | Purpose |
+| --- | --- |
+| `AGENTS.md` | Working rules for agents in this repository. |
+| `PHILOSOPHY.md` | Product and engineering principles. |
+| `ARCHITECTURE.md` | Implementation map: modules, interfaces, data flow, tests. |
+| `DESIGN.md` | Web UI design guide. |
+| `frontend/README.md` | Frontend-specific development notes. |
+| `docs/AGENT_CLI_AUDIT.md` | CLI audit against agent-oriented CLI principles. |
+| `docs/superpowers/` | Historical specs and implementation plans. |
