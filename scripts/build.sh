@@ -57,7 +57,7 @@ for entry in "${PLATFORMS[@]}"; do
   bin="${DIST}/${base}/juex${ext}"
   mkdir -p "${DIST}/${base}"
 
-  echo "  → ${GOOS}/${GOARCH}"
+  echo "  → ${GOOS}/${arch_label}"
   if [ "$GOARCH" = "arm" ]; then
     CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" GOARM="$ARM_VERSION" \
       go build -trimpath -ldflags "$LDFLAGS" -o "$bin" ./cmd/juex
