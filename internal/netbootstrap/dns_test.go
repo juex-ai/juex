@@ -1,6 +1,7 @@
 package netbootstrap
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"net"
@@ -206,6 +207,92 @@ func TestApplyResolver_NonEmpty_SetsPreferGoAndDial(t *testing.T) {
 	}
 	if r.Dial == nil {
 		t.Fatal("Dial should be non-nil after install")
+	}
+}
+
+// recordingDialer captures the (network, addr) pairs each call receives
+// and returns the configured (conn,err) tuple from a script.
+type recordingDialer struct {
+	calls   []struct{ network, addr string }
+	results []dialResult
+}
+
+type dialResult struct {
+	conn net.Conn
+	err  error
+}
+
+func (d *recordingDialer) dial(_ context.Context, network, addr string) (net.Conn, error) {
+	d.calls = append(d.calls, struct{ network, addr string }{network, addr})
+	if len(d.results) == 0 {
+		return nil, errors.New("recordingDialer: no scripted result")
+	}
+	r := d.results[0]
+	d.results = d.results[1:]
+	return r.conn, r.err
+}
+
+func TestFallbackDial_PassesNetworkThrough(t *testing.T) {
+	rec := &recordingDialer{results: []dialResult{{nil, nil}}}
+	dial := makeFallbackDial([]string{"1.1.1.1:53"}, rec.dial)
+	if _, err := dial(context.Background(), "tcp", ""); err != nil {
+		t.Fatalf("dial err: %v", err)
+	}
+	if len(rec.calls) != 1 || rec.calls[0].network != "tcp" {
+		t.Fatalf("expected one call with network=tcp, got %#v", rec.calls)
+	}
+}
+
+func TestFallbackDial_RoundRobinAcrossCalls(t *testing.T) {
+	servers := []string{"a:53", "b:53", "c:53"}
+	rec := &recordingDialer{results: []dialResult{{nil, nil}, {nil, nil}, {nil, nil}}}
+	dial := makeFallbackDial(servers, rec.dial)
+	for i := 0; i < 3; i++ {
+		if _, err := dial(context.Background(), "udp", ""); err != nil {
+			t.Fatalf("call %d err: %v", i, err)
+		}
+	}
+	got := []string{rec.calls[0].addr, rec.calls[1].addr, rec.calls[2].addr}
+	want := []string{"a:53", "b:53", "c:53"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round-robin order: got %v, want %v", got, want)
+	}
+}
+
+func TestFallbackDial_RetriesEachServerInOrder(t *testing.T) {
+	// First two servers fail, third succeeds. Within one Dial call we
+	// should see attempts in fixed offset+i order, not skipping any.
+	servers := []string{"a:53", "b:53", "c:53"}
+	rec := &recordingDialer{
+		results: []dialResult{
+			{nil, errors.New("a down")},
+			{nil, errors.New("b down")},
+			{nil, nil},
+		},
+	}
+	dial := makeFallbackDial(servers, rec.dial)
+	if _, err := dial(context.Background(), "udp", ""); err != nil {
+		t.Fatalf("expected success on third attempt, got %v", err)
+	}
+	got := []string{rec.calls[0].addr, rec.calls[1].addr, rec.calls[2].addr}
+	want := []string{"a:53", "b:53", "c:53"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("retry order: got %v, want %v", got, want)
+	}
+}
+
+func TestFallbackDial_AllFailReturnsLastErr(t *testing.T) {
+	servers := []string{"a:53", "b:53"}
+	rec := &recordingDialer{
+		results: []dialResult{
+			{nil, errors.New("a")},
+			{nil, errors.New("b last")},
+		},
+	}
+	dial := makeFallbackDial(servers, rec.dial)
+	_, err := dial(context.Background(), "udp", "")
+	if err == nil || err.Error() != "b last" {
+		t.Fatalf("expected last error 'b last', got %v", err)
 	}
 }
 

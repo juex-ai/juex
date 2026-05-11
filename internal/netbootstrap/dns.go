@@ -114,20 +114,23 @@ func normalizeNameserver(s string) string {
 	return ""
 }
 
-// applyResolver wires a fallback Dial function into r so DNS lookups go to
-// the supplied servers in round-robin order. No-op when servers is empty.
-func applyResolver(r *net.Resolver, servers []string) {
-	if len(servers) == 0 || r == nil {
-		return
-	}
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
+// dialFn matches the signature of (*net.Dialer).DialContext so tests can
+// inject a recording fake without touching the real network stack.
+type dialFn func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// makeFallbackDial returns a Dial function suitable for net.Resolver.Dial
+// that round-robins across servers and retries the next server on failure.
+// The network argument from the resolver (e.g. "udp" or "tcp" — the latter
+// is used for the truncated-response fallback per RFC 5966) is forwarded
+// unchanged to the underlying dial.
+func makeFallbackDial(servers []string, dial dialFn) func(ctx context.Context, network, _ string) (net.Conn, error) {
 	var idx atomic.Uint64
-	r.PreferGo = true
-	r.Dial = func(ctx context.Context, network, _ string) (net.Conn, error) {
+	return func(ctx context.Context, network, _ string) (net.Conn, error) {
+		offset := int(idx.Add(1) - 1)
 		var lastErr error
 		for i := 0; i < len(servers); i++ {
-			pick := servers[(int(idx.Add(1))-1+i)%len(servers)]
-			conn, err := dialer.DialContext(ctx, "udp", pick)
+			pick := servers[(offset+i)%len(servers)]
+			conn, err := dial(ctx, network, pick)
 			if err == nil {
 				return conn, nil
 			}
@@ -135,6 +138,17 @@ func applyResolver(r *net.Resolver, servers []string) {
 		}
 		return nil, lastErr
 	}
+}
+
+// applyResolver wires a fallback Dial function into r so DNS lookups go to
+// the supplied servers in round-robin order. No-op when servers is empty.
+func applyResolver(r *net.Resolver, servers []string) {
+	if len(servers) == 0 || r == nil {
+		return
+	}
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	r.PreferGo = true
+	r.Dial = makeFallbackDial(servers, dialer.DialContext)
 }
 
 // Install applies fallback DNS resolution for environments without a
