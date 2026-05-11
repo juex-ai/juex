@@ -26,11 +26,10 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    # GoReleaser adds README/LICENSE by default when files is empty.
+    # Use a glob that should not match anything so archives contain only juex.
     files:
-      - LICENSE*
-      - README.md
-      - ARCHITECTURE.md
-      - DESIGN.md
+      - none*
 
 checksum:
   name_template: "checksums.txt"
