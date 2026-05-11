@@ -95,9 +95,15 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 		return cfg, err
 	}
 	if isDotEnvPath(path) {
-		return loadFromDotEnvFile(cfg, path)
+		cfg, err = loadFromDotEnvFile(cfg, path)
+	} else {
+		err = applyYAMLFile(&cfg, path, false)
 	}
-	return cfg, applyYAMLFile(&cfg, path, false)
+	if err != nil {
+		return cfg, err
+	}
+	applyOSEnv(&cfg)
+	return cfg, nil
 }
 
 // NewProvider constructs the LLM provider implied by the config.
@@ -294,5 +300,10 @@ func applyEnvMap(cfg *Config, values map[string]string) {
 }
 
 func isDotEnvPath(path string) bool {
-	return strings.HasPrefix(filepath.Base(path), ".env")
+	base := filepath.Base(path)
+	ext := strings.ToLower(filepath.Ext(base))
+	if ext == ".yaml" || ext == ".yml" {
+		return false
+	}
+	return strings.HasPrefix(base, ".env")
 }

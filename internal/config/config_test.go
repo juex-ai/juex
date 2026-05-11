@@ -28,6 +28,42 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_OSEnvOverridesExplicitConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://file.example", "sk-file", "gpt-file")
+
+	t.Setenv("PROVIDER_API_TYPE", "anthropic")
+	t.Setenv("PROVIDER_API_BASE", "https://env.example")
+	t.Setenv("PROVIDER_API_KEY", "sk-env")
+	t.Setenv("PROVIDER_API_MODEL", "claude-env")
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderType != "anthropic" || cfg.BaseURL != "https://env.example" || cfg.APIKey != "sk-env" || cfg.Model != "claude-env" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_EnvYAMLExtensionUsesYAMLParser(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".env.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderType != "openai" || cfg.Model != "gpt-yaml" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
 func TestLoad_DefaultRuntimeConfigPath(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
