@@ -2,9 +2,9 @@
 # Build juex for every supported (GOOS, GOARCH) combination.
 #
 # Output:
-#   dist/juex_<version>_<os>_<arch>[.exe]   raw binaries (inside subdir)
-#   dist/juex_<version>_<os>_<arch>.tar.gz  archive (zip on windows)
-#   dist/checksums.txt                      sha256 of each archive
+#   dist/juex_<version>_<os>_<arch>/juex[.exe]  raw binary
+#   dist/juex_<version>_<os>_<arch>.tar.gz      binary-only archive (zip on windows)
+#   dist/checksums.txt                          sha256 of each archive
 #
 # Usage:
 #   scripts/build.sh             # uses CLI_CONFIG VERSION + git describe
@@ -53,10 +53,6 @@ for entry in "${PLATFORMS[@]}"; do
   echo "  → ${GOOS}/${GOARCH}"
   CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
     go build -trimpath -ldflags "$LDFLAGS" -o "$bin" ./cmd/juex
-
-  for f in LICENSE LICENSE.md README.md ARCHITECTURE.md DESIGN.md CLI_CONFIG; do
-    [ -f "$f" ] && cp "$f" "${DIST}/${base}/" || true
-  done
 
   if [ "$GOOS" = "windows" ]; then
     (cd "$DIST" && zip -qr "${base}.zip" "${base}")

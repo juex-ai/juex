@@ -521,10 +521,10 @@ Config (`.goreleaser.yml`, schema v2) produces 6 binaries:
 - `linux/amd64` `linux/arm64`
 - `windows/amd64` `windows/arm64`
 
-Each binary stamped with the same ldflags as `make build`. Archives are
-`tar.gz` (Linux + Mac) or `zip` (Windows); a `checksums.txt` accompanies
-them. Triggered on `v*` tag push via the release workflow; runs entirely
-on GitHub Actions.
+Each binary is stamped with the same ldflags as `make build`. Archives are
+binary-only `tar.gz` files (Linux + Mac) or `zip` files (Windows); a
+`checksums.txt` accompanies them. Triggered on `v*` tag push via the release
+workflow; runs entirely on GitHub Actions.
 
 ### CI Workflows
 
