@@ -32,7 +32,7 @@ type Info struct {
 	// Runtime context (optional). Each field is independent input — none
 	// of them is derivable from the others.
 	WorkDir      string `json:"work_dir,omitempty"`
-	EnvFile      string `json:"env_file,omitempty"`
+	ConfigFile   string `json:"config_file,omitempty"`
 	ProviderType string `json:"provider_type,omitempty"`
 	Model        string `json:"model,omitempty"`
 	BaseURL      string `json:"base_url,omitempty"`
@@ -65,8 +65,8 @@ func (i Info) Verbose() string {
 	if i.WorkDir != "" {
 		out += "\n  work_dir:      " + i.WorkDir
 	}
-	if i.EnvFile != "" {
-		out += "\n  env_file:      " + i.EnvFile
+	if i.ConfigFile != "" {
+		out += "\n  config_file:   " + i.ConfigFile
 	}
 	if i.ProviderType != "" {
 		out += "\n  provider_type: " + i.ProviderType

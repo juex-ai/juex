@@ -13,7 +13,7 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "version",
-		Short: "Print build info; with --verbose also dump runtime context (workdir, env, provider)",
+		Short: "Print build info; with --verbose also dump runtime context (workdir, config, provider)",
 		Args:  cobra.NoArgs,
 		Example: `  juex version                  # short: "juex 0.0.1"
   juex version --verbose        # multi-line: build + runtime context
@@ -27,14 +27,14 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 			showRuntime := verbose || flags.verbose || jsonOut
 			info := version.Build()
 			if showRuntime {
-				// Soft-fail: if config can't load (missing .env, etc.) we
+				// Soft-fail: if config can't load (missing override file, etc.) we
 				// still surface as much runtime context as we can. cfg's
 				// WorkDir / HomeAgentsDir come from Load() which only fails
 				// on os.Getwd, so they are usually populated even when the
-				// .env override is missing.
+				// config override is missing.
 				cfg, _ := loadConfig(flags)
 				info.WorkDir = cfg.WorkDir
-				info.EnvFile = flags.envPath
+				info.ConfigFile = configFileForPlan(flags)
 				info.ProviderType = cfg.ProviderType
 				info.Model = cfg.Model
 				info.BaseURL = cfg.BaseURL

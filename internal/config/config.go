@@ -1,5 +1,5 @@
-// Package config wires the runtime: env loading, agents-dir resolution, and
-// LLM provider construction. Everything that needs a filesystem path lives
+// Package config wires the runtime: config-file loading, agents-dir resolution,
+// and LLM provider construction. Everything that needs a filesystem path lives
 // here so other packages can stay path-agnostic.
 package config
 
@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"gopkg.in/yaml.v3"
 )
 
 // Config holds runtime-wide settings.
@@ -29,68 +30,79 @@ type Config struct {
 	WorkDir       string // explicit; defaults to os.Getwd()
 }
 
-// Load resolves config from env vars and optional .env files.
+type fileConfig struct {
+	Provider providerConfig `yaml:"provider"`
+}
+
+type providerConfig struct {
+	Type    string `yaml:"type"`
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+	Model   string `yaml:"model"`
+}
+
+var providerEnvKeys = []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL"}
+
+// Load resolves config from <WorkDir>/.juex/juex.yaml and OS env vars.
 //
-// Priority (later wins): defaults < ~/.agents/.env < <WorkDir>/.env < os.Environ.
+// Priority (later wins): defaults < <WorkDir>/.juex/juex.yaml < os.Environ.
 func Load() (Config, error) {
+	return LoadForWorkDir("")
+}
+
+// LoadForWorkDir is Load with an explicit working directory.
+func LoadForWorkDir(workDir string) (Config, error) {
 	cfg := Config{}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return cfg, err
+	if workDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return cfg, err
+		}
+		workDir = cwd
 	}
-	cfg.WorkDir = cwd
+	cfg.WorkDir = workDir
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")
 	}
 
-	envFiles := []string{
-		filepath.Join(cfg.HomeAgentsDir, ".env"),
-		filepath.Join(cwd, ".env"),
+	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true); err != nil {
+		return cfg, err
 	}
-	envSnapshot := map[string]string{}
-	for _, p := range envFiles {
-		if data, err := readEnvFile(p); err == nil {
-			for k, v := range data {
-				envSnapshot[k] = v
-			}
-		}
-	}
-	for _, key := range []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL"} {
-		if v, ok := os.LookupEnv(key); ok && v != "" {
-			envSnapshot[key] = v
-		}
-	}
-	cfg.ProviderType = envSnapshot["PROVIDER_API_TYPE"]
-	cfg.BaseURL = envSnapshot["PROVIDER_API_BASE"]
-	cfg.APIKey = envSnapshot["PROVIDER_API_KEY"]
-	cfg.Model = envSnapshot["PROVIDER_API_MODEL"]
+	applyOSEnv(&cfg)
 	return cfg, nil
 }
 
-// LoadFromFile is a convenience for tests / `juex run --env <path>`.
+// LoadFromFile is a convenience for tests / `juex run --config <path>`.
 // It applies overrides from path on top of Load(); WorkDir is unaffected.
+// Legacy .env-style files are accepted only when explicitly passed.
 func LoadFromFile(path string) (Config, error) {
-	cfg, err := Load()
+	return LoadFromFileForWorkDir(path, "")
+}
+
+// LoadFromFileForWorkDir is LoadFromFile with an explicit working directory.
+func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
+	var (
+		cfg Config
+		err error
+	)
+	if workDir != "" {
+		cfg, err = LoadForWorkDir(workDir)
+	} else {
+		cfg, err = Load()
+	}
 	if err != nil {
 		return cfg, err
 	}
-	overrides, err := readEnvFile(path)
+	if isDotEnvPath(path) {
+		cfg, err = loadFromDotEnvFile(cfg, path)
+	} else {
+		err = applyYAMLFile(&cfg, path, false)
+	}
 	if err != nil {
 		return cfg, err
 	}
-	if v, ok := overrides["PROVIDER_API_TYPE"]; ok && v != "" {
-		cfg.ProviderType = v
-	}
-	if v, ok := overrides["PROVIDER_API_BASE"]; ok && v != "" {
-		cfg.BaseURL = v
-	}
-	if v, ok := overrides["PROVIDER_API_KEY"]; ok && v != "" {
-		cfg.APIKey = v
-	}
-	if v, ok := overrides["PROVIDER_API_MODEL"]; ok && v != "" {
-		cfg.Model = v
-	}
+	applyOSEnv(&cfg)
 	return cfg, nil
 }
 
@@ -161,6 +173,14 @@ func (c Config) HistoryPath() string {
 	return filepath.Join(c.JuexDir(), "history.json")
 }
 
+// RuntimeConfigPath returns the work-local runtime config file path.
+func (c Config) RuntimeConfigPath() string {
+	if c.WorkDir == "" {
+		return ""
+	}
+	return filepath.Join(c.JuexDir(), "juex.yaml")
+}
+
 // AgentsMDDirs returns directories that may contain AGENTS.md (project root
 // + project .agents subdir). The home-global AGENTS.md is loaded separately
 // because its absolute path is required.
@@ -209,4 +229,81 @@ func readEnvFile(path string) (map[string]string, error) {
 		}
 	}
 	return out, sc.Err()
+}
+
+func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if missingOK && os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var fc fileConfig
+	if err := yaml.Unmarshal(data, &fc); err != nil {
+		return fmt.Errorf("config: parse %s: %w", path, err)
+	}
+	applyProviderConfig(cfg, fc.Provider)
+	return nil
+}
+
+func applyProviderConfig(cfg *Config, p providerConfig) {
+	if p.Type != "" {
+		cfg.ProviderType = p.Type
+	}
+	if p.BaseURL != "" {
+		cfg.BaseURL = p.BaseURL
+	}
+	if p.APIKey != "" {
+		cfg.APIKey = p.APIKey
+	}
+	if p.Model != "" {
+		cfg.Model = p.Model
+	}
+}
+
+func applyOSEnv(cfg *Config) {
+	values := map[string]string{}
+	for _, key := range providerEnvKeys {
+		if v, ok := os.LookupEnv(key); ok && v != "" {
+			values[key] = v
+		}
+	}
+	applyEnvMap(cfg, values)
+}
+
+func loadFromDotEnvFile(cfg Config, path string) (Config, error) {
+	overrides, err := readEnvFile(path)
+	if err != nil {
+		return cfg, err
+	}
+	applyEnvMap(&cfg, overrides)
+	return cfg, nil
+}
+
+func applyEnvMap(cfg *Config, values map[string]string) {
+	if v, ok := values["PROVIDER_API_TYPE"]; ok && v != "" {
+		cfg.ProviderType = v
+	}
+	if v, ok := values["PROVIDER_API_BASE"]; ok && v != "" {
+		cfg.BaseURL = v
+	}
+	if v, ok := values["PROVIDER_API_KEY"]; ok && v != "" {
+		cfg.APIKey = v
+	}
+	if v, ok := values["PROVIDER_API_MODEL"]; ok && v != "" {
+		cfg.Model = v
+	}
+}
+
+func isDotEnvPath(path string) bool {
+	base := filepath.Base(path)
+	ext := strings.ToLower(filepath.Ext(base))
+	if ext == ".yaml" || ext == ".yml" {
+		return false
+	}
+	return strings.HasPrefix(base, ".env")
 }

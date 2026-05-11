@@ -62,5 +62,6 @@ frontend/dist/
 internal/web/dist
 
 # juex runtime state (per-project session/memory artefacts)
+.juex/
 .agents/sessions/
 .agents/memory/
