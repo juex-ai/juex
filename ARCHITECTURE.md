@@ -65,7 +65,7 @@ juex/
 ├── .github/workflows/
 │   ├── ci.yml                    # push/PR: lint + matrix tests + race
 │   ├── integration.yml           # workflow_dispatch: live LLM tests
-│   └── release.yml               # tag v*: goreleaser publishes 6 archives
+│   └── release.yml               # tag v*: goreleaser publishes 7 archives
 ├── docs/superpowers/
 │   ├── specs/                    # design docs
 │   └── plans/                    # implementation plans
@@ -510,17 +510,22 @@ hallucinations).
 | `make test` | `go test ./... -count=1` |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
-| `make snapshot` | `goreleaser release --snapshot --clean` (6 archives in `dist/`) |
+| `make snapshot` | `goreleaser release --snapshot --clean` (7 archives in `dist/`) |
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
 | `make clean` | `rm -rf dist` |
 
 ### `goreleaser`
 
-Config (`.goreleaser.yml`, schema v2) produces 6 binaries:
+Config (`.goreleaser.yml`, schema v2) produces 7 binaries:
 - `darwin/amd64` `darwin/arm64`
-- `linux/amd64` `linux/arm64`
+- `linux/amd64` `linux/arm64` `linux/armv7`
 - `windows/amd64` `windows/arm64`
+
+The `linux/armv7` build (`GOARM=7`) covers Pi 2+, modern 32-bit Android
+(notably Termux on older devices), BeagleBone, and similar. Pi 1 / Pi
+Zero (ARMv6) are not covered; users with that hardware should build
+locally with `GOARM=6`.
 
 Each binary is stamped with the same ldflags as `make build`. Archives are
 binary-only `tar.gz` files (Linux + Mac) or `zip` files (Windows); a
