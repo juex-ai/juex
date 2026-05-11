@@ -99,6 +99,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case rest == "" && r.Method == http.MethodGet:
 		s.handleSessionShow(w, r, id)
+	case rest == "" && r.Method == http.MethodDelete:
+		s.handleDeleteSession(w, r, id)
 	case strings.HasPrefix(rest, "turns/") && r.Method == http.MethodGet:
 		s.handleTurnStatus(w, r, id, strings.TrimPrefix(rest, "turns/"))
 	case rest == "turns" && r.Method == http.MethodPost:
@@ -164,6 +166,22 @@ func (s *Server) Close() {
 		as.app.Close()
 		return true
 	})
+}
+
+func (s *Server) closeActiveSession(id string) {
+	v, ok := s.sessions.LoadAndDelete(id)
+	if !ok {
+		return
+	}
+	as := v.(*activeSession)
+	as.cancelMu.Lock()
+	if as.cancel != nil {
+		as.cancel()
+	}
+	as.cancelMu.Unlock()
+	as.turnWG.Wait()
+	as.bcast.close()
+	as.app.Close()
 }
 
 // validLoopback enforces "127.0.0.1" / "::1" / "localhost" hosts. The

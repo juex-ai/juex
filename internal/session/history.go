@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -94,6 +95,85 @@ func RecordHistory(path string, info Info) error {
 		data = append(data, '\n')
 		return atomicWriteFile(path, data, 0o644)
 	})
+}
+
+// Delete removes one on-disk session and drops its entry from history.
+func Delete(root, historyPath, id string) error {
+	dir, ok := sessionDir(root, id)
+	if !ok {
+		return os.ErrNotExist
+	}
+	if _, err := os.Stat(filepath.Join(dir, conversationFile)); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return RemoveHistory(historyPath, id)
+}
+
+// RemoveHistory drops id from history.json. Missing history is a no-op.
+func RemoveHistory(path, id string) error {
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return withHistoryLock(path, func() error {
+		h, err := LoadHistory(path)
+		if err != nil {
+			return err
+		}
+		kept := h.Sessions[:0]
+		removedLast := h.Last != nil && h.Last.ID == id
+		for _, info := range h.Sessions {
+			if info.ID == id {
+				continue
+			}
+			kept = append(kept, info)
+		}
+		h.Sessions = kept
+		if removedLast {
+			h.Last = newestHistorySession(h.Sessions)
+		}
+		if len(h.Sessions) == 0 {
+			h.Last = nil
+		}
+		data, err := json.MarshalIndent(h, "", "  ")
+		if err != nil {
+			return err
+		}
+		data = append(data, '\n')
+		return atomicWriteFile(path, data, 0o644)
+	})
+}
+
+func newestHistorySession(infos []Info) *Info {
+	if len(infos) == 0 {
+		return nil
+	}
+	candidates := append([]Info(nil), infos...)
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if !candidates[i].LastActiveAt.Equal(candidates[j].LastActiveAt) {
+			return candidates[i].LastActiveAt.After(candidates[j].LastActiveAt)
+		}
+		return candidates[i].StartedAt.After(candidates[j].StartedAt)
+	})
+	return &candidates[0]
+}
+
+func sessionDir(root, id string) (string, bool) {
+	if root == "" || id == "" || id == "." || id == ".." {
+		return "", false
+	}
+	if filepath.Clean(id) != id || filepath.Base(id) != id {
+		return "", false
+	}
+	return filepath.Join(root, id), true
 }
 
 func withHistoryLock(path string, fn func() error) error {

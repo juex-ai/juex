@@ -1,6 +1,7 @@
 import type {
   BusEvent,
   CreateSessionResponse,
+  DeleteSessionResponse,
   InterruptResponse,
   SessionShowResponse,
   SessionsListResponse,
@@ -45,6 +46,14 @@ export async function createSession(): Promise<CreateSessionResponse> {
 export async function getSession(id: string): Promise<SessionShowResponse> {
   return jsonOrThrow(
     await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}`),
+  );
+}
+
+export async function deleteSession(id: string): Promise<DeleteSessionResponse> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   );
 }
 

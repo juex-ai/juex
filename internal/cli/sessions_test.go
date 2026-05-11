@@ -215,3 +215,71 @@ func TestSessionsShow_NotFound(t *testing.T) {
 		t.Fatalf("expected *notFoundError, got %T: %v", err, err)
 	}
 }
+
+func TestSessionsDelete_RemovesSessionAndHistory(t *testing.T) {
+	work := t.TempDir()
+	id := "20260506T103500-delete01"
+	body := `{"role":"user","blocks":[{"type":"text","text":"bye"}]}` + "\n"
+	dir := seedSession(t, work, id, body)
+	historyPath := filepath.Join(work, ".juex", "history.json")
+	if err := os.MkdirAll(filepath.Dir(historyPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry := map[string]any{
+		"id":             id,
+		"dir":            dir,
+		"started_at":     "2026-05-06T10:35:00Z",
+		"last_active_at": "2026-05-06T10:35:00Z",
+		"turns":          1,
+		"preview":        "bye",
+	}
+	historyData, err := json.MarshalIndent(map[string]any{
+		"sessions": []map[string]any{entry},
+		"last":     entry,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyData = append(historyData, '\n')
+	if err := os.WriteFile(historyPath, historyData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "delete", id})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"deleted": true`) || !strings.Contains(out.String(), id) {
+		t.Fatalf("delete output = %s", out.String())
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("deleted dir stat err = %v, want not exist", err)
+	}
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), id) {
+		t.Fatalf("history still contains deleted id:\n%s", data)
+	}
+}
+
+func TestSessionsDelete_NotFound(t *testing.T) {
+	work := t.TempDir()
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "delete", "missing-id"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*notFoundError); !ok {
+		t.Fatalf("expected *notFoundError, got %T: %v", err, err)
+	}
+}

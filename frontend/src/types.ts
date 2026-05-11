@@ -69,6 +69,11 @@ export interface CreateSessionResponse {
   started_at: string;
 }
 
+export interface DeleteSessionResponse {
+  deleted: boolean;
+  id: string;
+}
+
 export interface StartTurnResponse {
   turn_id: string;
 }
