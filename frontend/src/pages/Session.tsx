@@ -200,7 +200,7 @@ export function Session() {
     setLiveMessages((prev) => {
       let found = false;
       const next = prev.map((m) => {
-        if (m.turn_id === e.turn_id && m.role === "assistant") {
+        if (m.turn_id === e.turn_id && m.role === "assistant" && m.pending) {
           found = true;
           return { ...m, pending: false, blocks };
         }
