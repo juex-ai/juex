@@ -3,8 +3,10 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const metadataFile = "session.json"
@@ -27,7 +29,7 @@ func SetAlias(dir, alias string) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(filepath.Join(dir, metadataFile), data, 0o644)
+	return atomicWriteFile(filepath.Join(dir, metadataFile), data, 0o644)
 }
 
 func LoadAlias(dir string) (string, error) {
@@ -67,30 +69,78 @@ func RecordHistory(path string, info Info) error {
 	if path == "" {
 		return nil
 	}
-	h, err := LoadHistory(path)
-	if err != nil {
-		return err
-	}
-	replaced := false
-	for i := range h.Sessions {
-		if h.Sessions[i].ID == info.ID {
-			h.Sessions[i] = info
-			replaced = true
-			break
+	return withHistoryLock(path, func() error {
+		h, err := LoadHistory(path)
+		if err != nil {
+			return err
 		}
+		replaced := false
+		for i := range h.Sessions {
+			if h.Sessions[i].ID == info.ID {
+				h.Sessions[i] = info
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			h.Sessions = append(h.Sessions, info)
+		}
+		infoCopy := info
+		h.Last = &infoCopy
+		data, err := json.MarshalIndent(h, "", "  ")
+		if err != nil {
+			return err
+		}
+		data = append(data, '\n')
+		return atomicWriteFile(path, data, 0o644)
+	})
+}
+
+func withHistoryLock(path string, fn func() error) error {
+	lockPath := path + ".lock"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if err == nil {
+			f.Close()
+			defer os.Remove(lockPath)
+			return fn()
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return err
+		}
+		if st, statErr := os.Stat(lockPath); statErr == nil && time.Since(st.ModTime()) > 30*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("session: timed out waiting for history lock %s", lockPath)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if !replaced {
-		h.Sessions = append(h.Sessions, info)
-	}
-	infoCopy := info
-	h.Last = &infoCopy
+}
+
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(h, "", "  ")
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o644)
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

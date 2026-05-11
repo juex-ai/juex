@@ -10,10 +10,10 @@
 package session
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,13 +84,19 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 // Append adds m to the in-memory history and writes it to conversation.jsonl.
 func (s *Session) Append(m llm.Message) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	m = normalizeMessage(m)
 	s.History = append(s.History, m)
 	if err := writeJSONL(s.convFD, m); err != nil {
+		s.mu.Unlock()
 		return err
 	}
-	return s.recordHistoryLocked()
+	info, ok := s.historyInfoLocked()
+	historyPath := s.historyPath
+	s.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return RecordHistory(historyPath, info)
 }
 
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
@@ -219,9 +225,9 @@ func splitLines(data []byte) [][]byte {
 	return out
 }
 
-func (s *Session) recordHistoryLocked() error {
+func (s *Session) historyInfoLocked() (Info, bool) {
 	if s.historyPath == "" {
-		return nil
+		return Info{}, false
 	}
 	info := Info{
 		ID:        s.ID,
@@ -243,11 +249,13 @@ func (s *Session) recordHistoryLocked() error {
 			info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
 		}
 	}
-	return RecordHistory(s.historyPath, info)
+	return info, true
 }
 
 func newID() string {
 	var b [4]byte
-	rand.New(rand.NewSource(time.Now().UnixNano())).Read(b[:])
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		panic(fmt.Errorf("session: random id bytes: %w", err))
+	}
 	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
 }
