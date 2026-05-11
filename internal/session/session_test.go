@@ -33,6 +33,30 @@ func TestSession_AppendsToConversationJSONL(t *testing.T) {
 	}
 }
 
+func TestSession_AppendNormalizesNilBlocks(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.Append(llm.Message{Role: llm.RoleAssistant}); err != nil {
+		t.Fatal(err)
+	}
+	if s.History[0].Blocks == nil {
+		t.Fatal("history blocks is nil, want empty slice")
+	}
+
+	data, _ := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if strings.Contains(string(data), `"blocks":null`) {
+		t.Fatalf("conversation contains null blocks: %s", data)
+	}
+	if !strings.Contains(string(data), `"blocks":[]`) {
+		t.Fatalf("conversation missing empty blocks array: %s", data)
+	}
+}
+
 func TestSession_AppendEventToJSONL(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)
@@ -98,6 +122,29 @@ func TestSession_LoadRoundTrip(t *testing.T) {
 		if s2.ID != filepath.Base(dir) {
 			t.Errorf("id = %s vs dir base %s", s2.ID, filepath.Base(dir))
 		}
+	}
+}
+
+func TestSession_LoadNormalizesNullBlocks(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260509T074114-a20bf346")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte(`{"role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if len(s.History) != 1 {
+		t.Fatalf("history len = %d, want 1", len(s.History))
+	}
+	if s.History[0].Blocks == nil {
+		t.Fatal("loaded blocks is nil, want empty slice")
 	}
 }
 

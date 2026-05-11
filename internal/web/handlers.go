@@ -88,6 +88,7 @@ func sessionPathID(p string) (id, rest string) {
 type sessionShowResponse struct {
 	session.Info
 	Messages []llm.Message `json:"messages"`
+	Model    string        `json:"model,omitempty"`
 }
 
 func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id string) {
@@ -104,7 +105,11 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	if msgs == nil {
 		msgs = []llm.Message{}
 	}
-	writeJSON(w, http.StatusOK, sessionShowResponse{Info: info, Messages: msgs})
+	writeJSON(w, http.StatusOK, sessionShowResponse{
+		Info:     info,
+		Messages: msgs,
+		Model:    s.opts.Cfg.Model,
+	})
 }
 
 // turnRequest is the wire shape for POST /turns.

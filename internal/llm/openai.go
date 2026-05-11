@@ -151,9 +151,14 @@ func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnio
 					"reasoning_content": strings.Join(reasoningParts, "\n"),
 				})
 			}
+			if len(textParts) == 0 && len(reasoningParts) == 0 && len(toolCalls) == 0 {
+				continue
+			}
 			out = append(out, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
 		case RoleSystem:
-			out = append(out, openai.SystemMessage(m.FirstText()))
+			if text := m.FirstText(); text != "" {
+				out = append(out, openai.SystemMessage(text))
+			}
 		}
 	}
 	return out

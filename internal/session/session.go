@@ -67,6 +67,7 @@ func New(rootDir string) (*Session, error) {
 func (s *Session) Append(m llm.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	m = normalizeMessage(m)
 	s.History = append(s.History, m)
 	return writeJSONL(s.convFD, m)
 }
@@ -117,6 +118,7 @@ func Load(dir string) (*Session, error) {
 		if err := json.Unmarshal(line, &m); err != nil {
 			return nil, fmt.Errorf("session: parse %s: %w", convPath, err)
 		}
+		m = normalizeMessage(m)
 		history = append(history, m)
 	}
 	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -156,6 +158,13 @@ func writeJSONL(w *os.File, v any) error {
 	buf = append(buf, '\n')
 	_, err = w.Write(buf)
 	return err
+}
+
+func normalizeMessage(m llm.Message) llm.Message {
+	if m.Blocks == nil {
+		m.Blocks = []llm.Block{}
+	}
+	return m
 }
 
 func splitLines(data []byte) [][]byte {

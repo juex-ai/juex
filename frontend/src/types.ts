@@ -40,7 +40,9 @@ export type Block = TextBlock | ReasoningBlock | ToolUseBlock | ToolResultBlock;
 
 export interface Message {
   role: Role;
-  blocks: Block[];
+  blocks?: Block[] | null;
+  pending?: boolean;
+  turn_id?: string;
 }
 
 export interface SessionInfo {
@@ -54,6 +56,7 @@ export interface SessionInfo {
 
 export interface SessionShowResponse extends SessionInfo {
   messages: Message[];
+  model?: string;
 }
 
 export interface SessionsListResponse {

@@ -113,6 +113,9 @@ func toAnthropicMessages(history []Message) []anthropic.MessageParam {
 				blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError))
 			}
 		}
+		if len(blocks) == 0 {
+			continue
+		}
 		switch m.Role {
 		case RoleUser:
 			out = append(out, anthropic.NewUserMessage(blocks...))

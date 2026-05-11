@@ -28,19 +28,26 @@ export function StatusPill({ status }: { status: Status }) {
             : "error";
   const isAnimated = status.kind === "running" || status.kind === "tool";
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium",
-        styles[status.kind],
-      )}
-    >
+    <div className="flex min-w-0 items-center gap-2">
       <span
         className={cn(
-          "size-1.5 rounded-full bg-current",
-          isAnimated && "animate-pulse",
+          "inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-1 text-xs font-medium",
+          styles[status.kind],
         )}
-      />
-      {label}
-    </span>
+      >
+        <span
+          className={cn(
+            "size-1.5 rounded-full bg-current",
+            isAnimated && "animate-pulse",
+          )}
+        />
+        {label}
+      </span>
+      {status.kind === "error" && status.detail ? (
+        <span className="text-juex-error min-w-0 truncate text-xs" title={status.detail}>
+          {status.detail}
+        </span>
+      ) : null}
+    </div>
   );
 }

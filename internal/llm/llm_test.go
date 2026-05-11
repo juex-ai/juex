@@ -80,6 +80,40 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestAnthropic_SkipsEmptyHistoryMessages(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"msg_1","type":"message","role":"assistant","model":"claude-test",
+			"content":[{"type":"text","text":"ok"}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":10,"output_tokens":1}
+		}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}, nil)
+	hist := []Message{
+		TextMessage(RoleUser, "hello"),
+		{Role: RoleAssistant, Blocks: []Block{}},
+		{Role: RoleAssistant, Blocks: nil},
+	}
+	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	msgs, ok := capturedBody["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages missing: %+v", capturedBody)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1; body=%+v", len(msgs), capturedBody)
+	}
+}
+
 func TestOpenAI_RoundTrip(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -135,6 +169,37 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	}
 	if calls[0].Input["pattern"] != "foo" {
 		t.Errorf("tool input = %+v", calls[0].Input)
+	}
+}
+
+func TestOpenAI_SkipsEmptyHistoryMessages(t *testing.T) {
+	type wireReq struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	var captured wireReq
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{Type: "openai", BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	hist := []Message{
+		TextMessage(RoleUser, "hello"),
+		{Role: RoleAssistant, Blocks: []Block{}},
+		{Role: RoleAssistant, Blocks: nil},
+		{Role: RoleSystem, Blocks: nil},
+	}
+	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(captured.Messages) != 1 {
+		t.Fatalf("messages len = %d, want 1; messages=%+v", len(captured.Messages), captured.Messages)
+	}
+	if captured.Messages[0]["role"] != "user" {
+		t.Fatalf("first message = %+v, want user", captured.Messages[0])
 	}
 }
 
