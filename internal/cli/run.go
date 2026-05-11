@@ -36,7 +36,7 @@ type errorJSON struct {
 
 // dryRunPlan is the JSON shape emitted by `juex run --dry-run`.
 //
-// Derivable paths (memory_dir / sessions_dir under <work_dir>/.agents)
+// Derivable paths (memory_dir / sessions_dir under <work_dir>/.juex)
 // are intentionally omitted — readers can reconstruct them from work_dir.
 type dryRunPlan struct {
 	ProviderType string         `json:"provider_type"`
@@ -125,7 +125,7 @@ execution is printed and the process exits with code 10.`,
 				return runDryRun(cmd, flags, cfg, prompt, jsonOut)
 			}
 
-			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
+			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cfg.HistoryPath(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"see 'juex sessions list' for valid ids", false)
@@ -137,6 +137,7 @@ execution is printed and the process exits with code 10.`,
 				WorkDir:   cfg.WorkDir,
 				Stderr:    cmd.ErrOrStderr(),
 				ResumeDir: resumeDir,
+				Alias:     rf.Alias,
 			})
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
@@ -166,8 +167,10 @@ execution is printed and the process exits with code 10.`,
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a JSON result on stdout (and JSON errors on stderr)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would execute (provider, model, prompt size, tool list); skip the LLM call; exit 10")
-	cmd.Flags().BoolVar(&rf.Resume, "resume", false, "interactively pick a past session to resume")
+	cmd.Flags().StringVar(&rf.Resume, "resume", "", "resume a past session by id, alias, or 'last'; omit value for interactive picker")
+	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
+	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
 	return cmd
 }
 

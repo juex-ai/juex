@@ -16,9 +16,9 @@ import (
 // Config holds runtime-wide settings.
 //
 // HomeAgentsDir hosts user-global resources (AGENTS.md, skills, mcp.json).
-// WorkDir hosts work-local resources (project AGENTS.md, project skills,
-// project mcp.json, memory entries, session jsonl). Sessions and memory are
-// **not** read from HomeAgentsDir in v0.0.1.
+// WorkDir hosts work-local resources. Project AGENTS.md, skills, and mcp.json
+// live under .agents. Runtime data (memory, sessions, history) lives under
+// .juex so it does not overlap with project agent configuration.
 type Config struct {
 	ProviderType string // "anthropic" | "openai"
 	BaseURL      string
@@ -115,6 +115,14 @@ func (c Config) ProjectAgentsDir() string {
 	return filepath.Join(c.WorkDir, ".agents")
 }
 
+// JuexDir is <WorkDir>/.juex and stores runtime data.
+func (c Config) JuexDir() string {
+	if c.WorkDir == "" {
+		return ""
+	}
+	return filepath.Join(c.WorkDir, ".juex")
+}
+
 // SkillDirs returns the skill directories in load order:
 // user-global first, project-local second (project entries override
 // user entries by name).
@@ -134,7 +142,7 @@ func (c Config) MemoryDir() string {
 	if c.WorkDir == "" {
 		return ""
 	}
-	return filepath.Join(c.WorkDir, ".agents", "memory")
+	return filepath.Join(c.JuexDir(), "memory")
 }
 
 // SessionsDir returns the work-local sessions root.
@@ -142,7 +150,15 @@ func (c Config) SessionsDir() string {
 	if c.WorkDir == "" {
 		return ""
 	}
-	return filepath.Join(c.WorkDir, ".agents", "sessions")
+	return filepath.Join(c.JuexDir(), "sessions")
+}
+
+// HistoryPath returns the work-local session history index path.
+func (c Config) HistoryPath() string {
+	if c.WorkDir == "" {
+		return ""
+	}
+	return filepath.Join(c.JuexDir(), "history.json")
 }
 
 // AgentsMDDirs returns directories that may contain AGENTS.md (project root

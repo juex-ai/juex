@@ -9,10 +9,10 @@ import (
 	"testing"
 )
 
-// seedSession writes a session dir under <work>/.agents/sessions/<id>/.
+// seedSession writes a session dir under <work>/.juex/sessions/<id>/.
 func seedSession(t *testing.T, work, id string, jsonlBody string) string {
 	t.Helper()
-	dir := filepath.Join(work, ".agents", "sessions", id)
+	dir := filepath.Join(work, ".juex", "sessions", id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

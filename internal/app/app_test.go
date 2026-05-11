@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 type stubProvider struct {
@@ -128,7 +129,7 @@ func TestApp_VerboseEmitsToStderr(t *testing.T) {
 	}
 }
 
-func TestApp_SessionWritesIntoWorkDirAgents(t *testing.T) {
+func TestApp_SessionWritesIntoWorkDirJuex(t *testing.T) {
 	dir := t.TempDir()
 	prov := &stubProvider{replies: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
@@ -146,10 +147,44 @@ func TestApp_SessionWritesIntoWorkDirAgents(t *testing.T) {
 	if _, err := a.Run(context.Background(), "x"); err != nil {
 		t.Fatal(err)
 	}
-	// Session must live under <WorkDir>/.agents/sessions/<id>/
-	sessRoot := filepath.Join(dir, ".agents", "sessions")
+	// Session must live under <WorkDir>/.juex/sessions/<id>/.
+	sessRoot := filepath.Join(dir, ".juex", "sessions")
 	if !strings.HasPrefix(a.Session.Dir, sessRoot) {
 		t.Fatalf("session dir %s not under %s", a.Session.Dir, sessRoot)
+	}
+}
+
+func TestApp_WritesSessionHistoryWithAlias(t *testing.T) {
+	dir := t.TempDir()
+	prov := &stubProvider{replies: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
+	}}
+	a, err := New(Options{
+		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: prov,
+		WorkDir:  dir,
+		Alias:    "daily",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	if _, err := a.Run(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	h, err := session.LoadHistory(filepath.Join(dir, ".juex", "history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Last == nil {
+		t.Fatal("history last is nil")
+	}
+	if h.Last.ID != a.Session.ID || h.Last.Alias != "daily" {
+		t.Fatalf("last = %+v, want id %s alias daily", h.Last, a.Session.ID)
+	}
+	if len(h.Sessions) != 1 || h.Sessions[0].ID != a.Session.ID {
+		t.Fatalf("sessions = %+v", h.Sessions)
 	}
 }
 
@@ -165,7 +200,7 @@ func TestApp_NewWithoutKeyFails(t *testing.T) {
 
 func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	work := t.TempDir()
-	sessionsRoot := filepath.Join(work, ".agents", "sessions")
+	sessionsRoot := filepath.Join(work, ".juex", "sessions")
 	id := "20260506T103500-resume001"
 	dir := filepath.Join(sessionsRoot, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -234,7 +269,7 @@ func TestApp_NewDefaultsWorkDirToCwd(t *testing.T) {
 		}
 		return r
 	}
-	wantParent := resolveSessionParent(filepath.Join(dir, ".agents", "sessions"))
+	wantParent := resolveSessionParent(filepath.Join(dir, ".juex", "sessions"))
 	gotParent := resolveSessionParent(filepath.Dir(a.Session.Dir))
 	if !strings.HasPrefix(gotParent, wantParent) {
 		t.Fatalf("session dir %q (resolved parent %q) not under %q",

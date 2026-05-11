@@ -13,10 +13,10 @@ import (
 )
 
 // seedSession writes a minimal conversation.jsonl under
-// <work>/.agents/sessions/<id>/ so session.List can find it.
+// <work>/.juex/sessions/<id>/ so session.List can find it.
 func seedSession(t *testing.T, work, id, body string) {
 	t.Helper()
-	dir := filepath.Join(work, ".agents", "sessions", id)
+	dir := filepath.Join(work, ".juex", "sessions", id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -38,6 +38,7 @@ type Options struct {
 	// session directory to load instead of creating a new one. The
 	// session ID and on-disk files are reused; new messages append.
 	ResumeDir string
+	Alias     string
 }
 
 type App struct {
@@ -120,9 +121,15 @@ func New(opts Options) (*App, error) {
 	var sess *session.Session
 	var err error
 	if opts.ResumeDir != "" {
-		sess, err = session.Load(opts.ResumeDir)
+		sess, err = session.LoadWithOptions(opts.ResumeDir, session.Options{
+			Alias:       opts.Alias,
+			HistoryPath: cfg.HistoryPath(),
+		})
 	} else {
-		sess, err = session.New(cfg.SessionsDir())
+		sess, err = session.NewWithOptions(cfg.SessionsDir(), session.Options{
+			Alias:       opts.Alias,
+			HistoryPath: cfg.HistoryPath(),
+		})
 	}
 	if err != nil {
 		closeAll(mcpClients)
