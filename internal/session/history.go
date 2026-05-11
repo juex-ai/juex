@@ -163,8 +163,7 @@ func newestHistorySession(infos []Info) *Info {
 		}
 		return candidates[i].StartedAt.After(candidates[j].StartedAt)
 	})
-	info := candidates[0]
-	return &info
+	return &candidates[0]
 }
 
 func sessionDir(root, id string) (string, bool) {

@@ -113,6 +113,9 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id string) {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+
 	s.closeActiveSession(id)
 	if err := session.Delete(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id); err != nil {
 		if os.IsNotExist(err) {
