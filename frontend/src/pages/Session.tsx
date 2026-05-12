@@ -32,7 +32,7 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { StatusPill, type Status } from "@/components/StatusPill";
-import { toDisplayUnits, toolState } from "@/lib/display-units";
+import { messagesToGroups, toolState, type MessageGroup } from "@/lib/display-units";
 import { getSession, interrupt, startTurn, subscribeEvents } from "@/api";
 import type { Message as ChatMessage, SessionShowResponse } from "@/types";
 
@@ -155,6 +155,7 @@ export function Session() {
   }
 
   const messages: ChatMessage[] = [...(data.messages ?? []), ...liveMessages];
+  const groups = messagesToGroups(messages);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -167,11 +168,8 @@ export function Session() {
       </header>
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full max-w-3xl">
-          {messages.map((message, idx) => (
-            <MessageView
-              key={`${message.turn_id ?? "msg"}-${idx}`}
-              message={message}
-            />
+          {groups.map((group) => (
+            <MessageGroupView key={group.key} group={group} />
           ))}
         </ConversationContent>
         <ConversationScrollButton />
@@ -380,15 +378,13 @@ function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
   return blocks;
 }
 
-function MessageView({ message }: { message: ChatMessage }) {
-  const units = toDisplayUnits(message.blocks);
-  const isPending = Boolean(message.pending);
-  const isEmpty = units.length === 0;
+function MessageGroupView({ group }: { group: MessageGroup }) {
+  const isEmpty = group.units.length === 0;
 
   return (
-    <Message from={message.role}>
+    <Message from={group.role}>
       <div className="flex w-full flex-col gap-2">
-        {units.map((unit, i) => {
+        {group.units.map((unit, i) => {
           if (unit.kind === "text") {
             return (
               <MessageContent key={i}>
@@ -440,7 +436,7 @@ function MessageView({ message }: { message: ChatMessage }) {
             </Tool>
           );
         })}
-        {isPending && isEmpty ? (
+        {group.pending && isEmpty ? (
           <div className="text-muted-foreground animate-pulse text-sm">...</div>
         ) : null}
       </div>
