@@ -32,9 +32,14 @@ PLATFORMS=(
   "darwin arm64"
   "linux amd64"
   "linux arm64"
+  "linux arm"
   "windows amd64"
   "windows arm64"
 )
+
+# GOARM applies only when GOARCH=arm. v7 covers Pi 2+, modern 32-bit
+# Android, BeagleBone, etc. (matches goreleaser config).
+ARM_VERSION=7
 
 DIST=dist
 rm -rf "$DIST"
@@ -46,13 +51,20 @@ for entry in "${PLATFORMS[@]}"; do
   read -r GOOS GOARCH <<<"$entry"
   ext=""
   if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-  base="juex_${VERSION}_${GOOS}_${GOARCH}"
+  arch_label="$GOARCH"
+  if [ "$GOARCH" = "arm" ]; then arch_label="armv${ARM_VERSION}"; fi
+  base="juex_${VERSION}_${GOOS}_${arch_label}"
   bin="${DIST}/${base}/juex${ext}"
   mkdir -p "${DIST}/${base}"
 
-  echo "  → ${GOOS}/${GOARCH}"
-  CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-    go build -trimpath -ldflags "$LDFLAGS" -o "$bin" ./cmd/juex
+  echo "  → ${GOOS}/${arch_label}"
+  if [ "$GOARCH" = "arm" ]; then
+    CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" GOARM="$ARM_VERSION" \
+      go build -trimpath -ldflags "$LDFLAGS" -o "$bin" ./cmd/juex
+  else
+    CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+      go build -trimpath -ldflags "$LDFLAGS" -o "$bin" ./cmd/juex
+  fi
 
   if [ "$GOOS" = "windows" ]; then
     (cd "$DIST" && zip -qr "${base}.zip" "${base}")

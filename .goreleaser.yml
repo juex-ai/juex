@@ -17,11 +17,22 @@ builds:
       - -X github.com/juex-ai/juex/internal/version.Commit={{.ShortCommit}}
       - -X github.com/juex-ai/juex/internal/version.BuildTime={{.Date}}
     goos: [darwin, linux, windows]
-    goarch: [amd64, arm64]
+    goarch: [amd64, arm64, arm]
+    goarm: ["7"]
+    ignore:
+      # 32-bit arm only ships on linux; darwin and windows have no
+      # consumer hardware target for it.
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
 
 archives:
   - id: juex
-    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}_{{.Arch}}"
+    # `{{ .Arm }}` resolves to the GOARM number on arm builds (empty
+    # otherwise), so a v7 archive becomes juex_X.Y.Z_linux_armv7.tar.gz.
+    # This makes the ABI explicit so users on ARMv6 devices know to skip it.
+    name_template: "{{.ProjectName}}_{{.Version}}_{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}"
     formats: [tar.gz]
     format_overrides:
       - goos: windows
