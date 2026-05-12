@@ -61,7 +61,7 @@ directly.
 
 **License audit:** Vite (MIT), React (MIT), Tailwind (MIT), shadcn/ui (MIT —
 copied into our repo), AI Elements (Apache-2.0 — copied into our repo),
-streamdown (MIT), shiki (MIT), lucide-react (ISC),
+streamdown (Apache-2.0), shiki (MIT), lucide-react (ISC),
 `use-stick-to-bottom` (MIT). All permissive and compatible.
 
 **Bundle target:** keep the gzipped bundle under **500 KB**. Verify via
