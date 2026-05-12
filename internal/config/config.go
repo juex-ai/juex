@@ -41,7 +41,7 @@ type providerConfig struct {
 	ThinkingEffort string `yaml:"thinking_effort"`
 }
 
-var providerEnvKeys = []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL"}
+var providerEnvKeys = []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT"}
 
 // Load resolves config from <WorkDir>/.juex/juex.yaml and OS env vars.
 //
@@ -259,6 +259,9 @@ func applyEnvMap(cfg *Config, values map[string]string) {
 	}
 	if v, ok := values["PROVIDER_API_MODEL"]; ok && v != "" {
 		cfg.Model = v
+	}
+	if v, ok := values["PROVIDER_THINKING_EFFORT"]; ok && v != "" {
+		cfg.ThinkingEffort = v
 	}
 }
 
