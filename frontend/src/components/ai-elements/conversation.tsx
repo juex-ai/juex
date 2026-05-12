@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { UIMessage } from "ai";
+import type { UIMessage, UIMessagePart } from "./_local-types";
 import { ArrowDownIcon, DownloadIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useCallback } from "react";
@@ -102,8 +102,8 @@ export const ConversationScrollButton = ({
 
 const getMessageText = (message: UIMessage): string =>
   message.parts
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
+    .filter((part: UIMessagePart) => part.type === "text")
+    .map((part: UIMessagePart) => part.text)
     .join("");
 
 export type ConversationDownloadProps = Omit<
