@@ -4,11 +4,9 @@
 package config
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"gopkg.in/yaml.v3"
@@ -77,7 +75,6 @@ func LoadForWorkDir(workDir string) (Config, error) {
 
 // LoadFromFile is a convenience for tests / `juex run --config <path>`.
 // It applies overrides from path on top of Load(); WorkDir is unaffected.
-// Legacy .env-style files are accepted only when explicitly passed.
 func LoadFromFile(path string) (Config, error) {
 	return LoadFromFileForWorkDir(path, "")
 }
@@ -96,11 +93,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if isDotEnvPath(path) {
-		cfg, err = loadFromDotEnvFile(cfg, path)
-	} else {
-		err = applyYAMLFile(&cfg, path, false)
-	}
+	err = applyYAMLFile(&cfg, path, false)
 	if err != nil {
 		return cfg, err
 	}
@@ -207,33 +200,6 @@ func (c Config) MCPConfigPaths() []string {
 	return out
 }
 
-func readEnvFile(path string) (map[string]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	out := map[string]string{}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		eq := strings.Index(line, "=")
-		if eq < 0 {
-			continue
-		}
-		k := strings.TrimSpace(line[:eq])
-		v := strings.TrimSpace(line[eq+1:])
-		v = strings.Trim(v, `"'`)
-		if k != "" {
-			out[k] = v
-		}
-	}
-	return out, sc.Err()
-}
-
 func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 	if path == "" {
 		return nil
@@ -281,15 +247,6 @@ func applyOSEnv(cfg *Config) {
 	applyEnvMap(cfg, values)
 }
 
-func loadFromDotEnvFile(cfg Config, path string) (Config, error) {
-	overrides, err := readEnvFile(path)
-	if err != nil {
-		return cfg, err
-	}
-	applyEnvMap(&cfg, overrides)
-	return cfg, nil
-}
-
 func applyEnvMap(cfg *Config, values map[string]string) {
 	if v, ok := values["PROVIDER_API_TYPE"]; ok && v != "" {
 		cfg.ProviderType = v
@@ -305,11 +262,3 @@ func applyEnvMap(cfg *Config, values map[string]string) {
 	}
 }
 
-func isDotEnvPath(path string) bool {
-	base := filepath.Base(path)
-	ext := strings.ToLower(filepath.Ext(base))
-	if ext == ".yaml" || ext == ".yml" {
-		return false
-	}
-	return strings.HasPrefix(base, ".env")
-}

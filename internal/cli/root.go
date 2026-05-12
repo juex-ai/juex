@@ -90,7 +90,6 @@ func (d *dryRunOK) Error() string { return d.msg }
 
 type persistentFlags struct {
 	configPath string
-	envPath    string
 	cwd        string
 	verbose    bool
 }
@@ -107,7 +106,6 @@ func newRootCmd() *cobra.Command {
 		},
 	}
 	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
-	cmd.PersistentFlags().StringVarP(&flags.envPath, "env", "e", "", "legacy path to explicit .env override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
 	// --verbose has no short form at root level so each subcommand can use
 	// -v locally (see version.go); cobra would otherwise conflict.
@@ -147,13 +145,7 @@ func explicitConfigPath(flags *persistentFlags) (string, error) {
 	if flags == nil {
 		return "", nil
 	}
-	if flags.configPath != "" && flags.envPath != "" {
-		return "", &usageError{msg: "--config and --env are mutually exclusive"}
-	}
-	if flags.configPath != "" {
-		return flags.configPath, nil
-	}
-	return flags.envPath, nil
+	return flags.configPath, nil
 }
 
 // cmdPrintln is a small helper so subcommands always write to the cobra
