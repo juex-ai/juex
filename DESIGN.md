@@ -42,18 +42,31 @@ SSE API; it does not render any HTML.
 | Routing | **React Router v6** | small, well-known. |
 | Styling | **Tailwind CSS v4** | utility-first, great with shadcn/ui, no runtime CSS-in-JS. |
 | Base components | **shadcn/ui** | de facto modern aesthetic; copy-paste components, no runtime lock-in. |
-| AI-chat components | **prompt-kit** (https://www.prompt-kit.com) | shadcn-style copy-paste components for chat UIs. Brings markdown, code-block, message, reasoning, tool, prompt-input, scroll-button, chain-of-thought. MIT. |
+| AI-chat components | **AI Elements** (https://ai-sdk.dev/elements) | shadcn-style copy-paste components for chat UIs. Brings Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput. Copied into `src/components/ai-elements/`. Apache-2.0. |
+| Markdown / code | **streamdown** + **shiki** | streamdown renders message text and reasoning (markdown, GFM tables, KaTeX, mermaid, CJK); shiki highlights tool input/output JSON in the standalone `CodeBlock`. |
 | Icons | **lucide-react** | shadcn-default icon set. |
 | Package manager | **pnpm** | fast, clean `node_modules` layout. |
 
-prompt-kit is installed via shadcn's CLI (`pnpm dlx shadcn@latest add prompt-kit/<component>`), which copies one TSX file into `src/components/prompt-kit/` per component. No runtime npm dependency on prompt-kit — we own the code. Markdown rendering and code highlighting are baked into prompt-kit's `markdown` and `code-block` components, so we don't bring in `react-markdown` / `rehype-highlight` separately.
+AI Elements is installed via `pnpm dlx ai-elements@latest add <component>`,
+which copies one TSX file into `src/components/ai-elements/` per component.
+No runtime npm dependency on `@ai-elements/*` — we own the code. The
+`import type { ... } from "ai"` statements in the copied files are
+replaced with `src/components/ai-elements/_local-types.ts` so we do not
+need the `ai` package at runtime or build time. Markdown rendering and
+code highlighting inside messages and reasoning blocks are handled by
+`streamdown` (used internally by AI Elements' `MessageResponse` and
+`Reasoning`). The standalone `CodeBlock` AI Elements component, which
+renders tool-call input / output JSON inside `Tool` cards, uses `shiki`
+directly.
 
 **License audit:** Vite (MIT), React (MIT), Tailwind (MIT), shadcn/ui (MIT —
-copied into our repo), react-markdown (MIT), rehype-highlight (MIT),
-highlight.js (BSD-3), lucide-react (ISC). All permissive and compatible.
+copied into our repo), AI Elements (Apache-2.0 — copied into our repo),
+streamdown (MIT), shiki (MIT), lucide-react (ISC),
+`use-stick-to-bottom` (MIT). All permissive and compatible.
 
-**Bundle target:** keep the gzipped bundle under **300KB**. shadcn lets us
-include only the components we actually use; tree-shaking handles the rest.
+**Bundle target:** keep the gzipped bundle under **500 KB**. Verify via
+`pnpm build`'s size reporter on every PR that changes `frontend/`. Current
+size is ~435 KB gzipped.
 
 ---
 
@@ -74,22 +87,26 @@ juex/
 │   │   ├── App.tsx                 # routes
 │   │   ├── api.ts                  # typed fetch + SSE helpers
 │   │   ├── types.ts                # mirror of internal/llm + internal/session types
+│   │   ├── lib/
+│   │   │   ├── utils.ts            # shadcn `cn` helper
+│   │   │   └── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
 │   │   ├── pages/
 │   │   │   ├── Sessions.tsx        # /
 │   │   │   └── Session.tsx         # /sessions/:id
 │   │   └── components/
+│   │       ├── AppShell.tsx
 │   │       ├── Sidebar.tsx
 │   │       ├── SidebarSessionList.tsx
-│   │       ├── PageHeader.tsx
-│   │       ├── MessageList.tsx     # wraps prompt-kit/chat-container
-│   │       ├── MessageCard.tsx     # wraps prompt-kit/message
-│   │       ├── BlockText.tsx       # wraps prompt-kit/markdown
-│   │       ├── BlockThinking.tsx   # wraps prompt-kit/reasoning
-│   │       ├── BlockToolUse.tsx    # wraps prompt-kit/tool
-│   │       ├── BlockToolResult.tsx # wraps prompt-kit/tool result variant
-│   │       ├── Composer.tsx        # wraps prompt-kit/prompt-input
 │   │       ├── StatusPill.tsx
-│   │       ├── prompt-kit/         # prompt-kit primitives (added via shadcn CLI)
+│   │       ├── ai-elements/        # AI Elements primitives (copied via shadcn CLI)
+│   │       │   ├── _local-types.ts
+│   │       │   ├── conversation.tsx
+│   │       │   ├── message.tsx
+│   │       │   ├── reasoning.tsx
+│   │       │   ├── tool.tsx
+│   │       │   ├── code-block.tsx
+│   │       │   ├── prompt-input.tsx
+│   │       │   └── shimmer.tsx
 │   │       └── ui/                 # shadcn primitives (added via shadcn CLI)
 │   └── dist/                       # build output; gitignored — produced by `make web`
 └── internal/web/
@@ -210,111 +227,88 @@ actions require a browser confirmation before calling the API.
 A horizontal strip showing session id (truncated, copy-on-click), turn count,
 and last-active time. Uses shadcn `Badge` for the turn count.
 
-### 7.3 MessageList
+### 7.3 Conversation
 
-Vertical stack of `MessageCard` components, with 12px gaps. Auto-scrolls to
-the bottom when a new message lands and the user is already near the bottom
-(do not yank if the user has scrolled up to read history).
+`<Conversation>` (AI Elements) wraps the scrollable transcript. It composes
+`use-stick-to-bottom` so the view follows new content unless the user has
+scrolled up; `<ConversationScrollButton>` reveals a "scroll to bottom"
+affordance whenever that happens. Inside, `<ConversationContent>` holds
+the message column at `max-w-3xl mx-auto` so long lines do not get
+awkwardly wide. The previous manual `scrollRequest` state is gone —
+stick-to-bottom handles initial-load and streaming-update scrolling.
 
-### 7.4 MessageCard
+### 7.4 Message
 
-```tsx
-<article className={cn(
-  "rounded-lg border-l-2 border bg-card p-4 shadow-sm",
-  roleBorderClass(role), // user/assistant/system → border-l-juex-*
-)}>
-  <header className="mb-2">
-    <span className={cn(
-      "text-xs font-semibold uppercase tracking-wide",
-      roleTextClass(role),
-    )}>{role}</span>
-  </header>
-  <div className="space-y-3">{blocks.map(renderBlock)}</div>
-</article>
-```
+`<Message from={role}>` (AI Elements) is the unit per message. AI Elements
+encodes the user-vs-assistant layout through internal `is-user` /
+`is-assistant` group classes: user messages render as a right-aligned
+chat bubble, assistant messages as a left-aligned full-width block.
+Inside, we render reasoning / tool sub-units as siblings of
+`<MessageContent>`.
 
-The role colour shows up as a 2px left border on the card and as the colour
-of the role label text in the header. No avatar circle — keeps the card
-clean and lets long content breathe.
+### 7.5 Text rendering
 
-### 7.5 BlockText
+`<MessageContent>` wraps `<MessageResponse>{text}</MessageResponse>`.
+`MessageResponse` uses streamdown internally to render markdown, GFM
+tables, syntax-highlighted code blocks, math (KaTeX), CJK breaks, and
+mermaid. We do not configure streamdown further; AI Elements' defaults
+are the design.
 
-```tsx
-<ReactMarkdown
-  remarkPlugins={[remarkGfm]}
-  rehypePlugins={[rehypeHighlight]}
-  components={{
-    pre: ({children}) => <pre className="overflow-x-auto rounded-md bg-muted p-3">{children}</pre>,
-    code: ({inline, ...props}) => inline
-      ? <code className="rounded bg-muted px-1 py-0.5 text-sm" {...props} />
-      : <code {...props} />,
-    a: ({href, children}) => <a href={href} target="_blank" rel="noreferrer" className="text-primary underline-offset-2 hover:underline">{children}</a>,
-  }}
->
-  {block.text}
-</ReactMarkdown>
-```
+### 7.6 Reasoning
 
-GFM tables, strikethrough, autolinks supported. Code fences picked up by
-highlight.js automatically.
+`<Reasoning>` is collapsible. Trigger reads "Thinking…" with a chevron
+that rotates on open; body is the reasoning text rendered through
+streamdown. We pass `isStreaming={false}` because blocks arrive complete,
+not token-streamed. Redacted reasoning is rendered with trigger text
+`Thinking [redacted]` and body `[redacted by provider]`.
 
-### 7.6 BlockThinking
+### 7.7 Tool
 
-shadcn `Collapsible`. Trigger reads "Thinking…" with a `ChevronRight` that
-rotates on open. Body is the reasoning text in `text-muted-foreground italic`.
+`<Tool>` is a single collapsible card that represents a `tool_use` +
+`tool_result` pair. The render layer in `pages/Session.tsx` calls
+`toDisplayUnits` from `src/lib/display-units.ts` to fold the two blocks
+into one display unit (see §13).
 
-For redacted blocks: trigger says "Thinking [redacted]"; body shows
-`[redacted by provider]`.
+| `use` | `result` | `result.is_error` | state passed to `<ToolHeader>` |
+|---|---|---|---|
+| present | absent | — | `input-available` |
+| present | present | false | `output-available` |
+| present | present | true | `output-error` |
+| absent | present | false/absent | `output-available` (orphan) |
+| absent | present | true | `output-error` (orphan) |
 
-### 7.7 BlockToolUse
+`<ToolHeader type={\`tool-${tool_name}\`}>` is the visible badge.
+`<ToolInput input={…}>` renders the parameter JSON via the standalone
+AI Elements `CodeBlock` (which uses shiki for highlighting). `<ToolOutput
+output={…}>` wraps the result; when the result is an error we pass
+`output={null}` and put the error string in `errorText` so it renders
+once and in the destructive theme. Tools in `input-available` and
+`output-error` states default to open; successful results stay closed
+until the user expands.
 
-A tinted card nested inside the assistant message body:
-
-```tsx
-<aside className="rounded-md border-l-2 border-l-violet-500 bg-violet-50/50 dark:bg-violet-950/30 p-3">
-  <header className="mb-2 flex items-baseline gap-2">
-    <Wrench className="size-4 text-violet-600" />
-    <strong className="font-semibold text-violet-700 dark:text-violet-300">{tool_name}</strong>
-    <span className="text-xs text-muted-foreground font-mono">#{tool_use_id.slice(0,8)}</span>
-  </header>
-  <pre className="overflow-x-auto rounded bg-background p-2 text-sm">
-    <code className="language-json">{prettyJSON(input)}</code>
-  </pre>
-</aside>
-```
-
-### 7.8 BlockToolResult
-
-shadcn `Collapsible`. Summary shows truncated preview (first 120 chars,
-whitespace collapsed). Body is `<pre><code>` with content. If `is_error`,
-summary text is red and prefixed `[error]`.
-
-### 7.9 Composer
+### 7.8 Composer
 
 ```tsx
-<footer className="sticky bottom-0 border-t bg-background/95 backdrop-blur p-4">
-  <Textarea
-    placeholder="Type a prompt…"
-    value={text}
-    onChange={(e) => setText(e.target.value)}
-    onKeyDown={onKeyDown}    // Enter submit, Shift+Enter newline
-    className="min-h-[3rem] resize-none"
-  />
-  <div className="mt-2 flex items-center justify-between">
-    <StatusPill state={status} />
-    <div className="flex gap-2">
-      <Button variant="outline" onClick={onInterrupt} disabled={status === "idle"}>
-        <Square className="mr-2 size-3.5" />Stop
-      </Button>
-      <Button onClick={onSend} disabled={!text.trim() || status === "running" || status === "tool"}>
-        <SendHorizonal className="mr-2 size-3.5" />Send
-      </Button>
-    </div>
-  </div>
-</footer>
+<PromptInput onSubmit={({ text }) => handleSend(text)}>
+  <PromptInputBody>
+    <PromptInputTextarea placeholder="Type a prompt..." />
+    <PromptInputFooter>
+      <PromptInputTools>
+        <StatusPill status={status} />
+      </PromptInputTools>
+      {status.kind === "running" || status.kind === "tool"
+        ? <PromptInputButton variant="outline" onClick={onInterrupt}>Stop</PromptInputButton>
+        : <PromptInputSubmit />}
+    </PromptInputFooter>
+  </PromptInputBody>
+</PromptInput>
 ```
 
-### 7.10 StatusPill
+Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>`
+handles both natively. `Stop` and `Send` are mutually exclusive; the
+composer always shows exactly one of them.
+
+### 7.9 StatusPill
 
 | State | Visual |
 |---|---|
@@ -397,6 +391,10 @@ directly by SSE events:
 We never inject HTML over SSE. JSON is the source of truth; SSE is the
 notification channel.
 
+`StatusPill` derives its label from the discriminated `Status` union
+(`idle | running | tool {name} | done | error {detail}`), so a single
+state value covers both the colour pill and the textual hint.
+
 ---
 
 ## 11. Accessibility
@@ -449,6 +447,12 @@ export interface Message { role: Role; blocks: Block[] }
 The Go side is the source of truth; if we change `internal/llm/types.go` we
 update this mirror in the same PR.
 
+The render layer folds `Block[]` into a `DisplayUnit[]` (see
+`src/lib/display-units.ts`) so that each `tool_use` and its matching
+`tool_result` collapse into one display unit. This is a render-only
+transformation; `types.ts` and the persisted JSONL on disk are
+unchanged.
+
 ---
 
 ## 14. Out of scope (deferred)
@@ -459,6 +463,13 @@ update this mirror in the same PR.
 - Inline "regenerate" / "edit" affordances.
 - Theme customisation beyond OS dark mode.
 - Internationalisation (English-only UI strings for now).
+- AI SDK runtime hooks (`useChat`, `streamText` client helpers). Our SSE
+  event stream is the source of truth; AI Elements components are driven
+  by our own state, not by `useChat`.
+- AI Elements features not adopted in v0.1: `MessageBranch`, `Sources`,
+  `ModelSelector`, `Attachments`, `Suggestion`, `SpeechInput`,
+  `Artifact`, `ChainOfThought`, `Plan`, `Task`, `Checkpoint`,
+  `Confirmation`, `Persona`.
 
 ---
 
