@@ -164,11 +164,11 @@ func TestRunCmd_DryRunReturnsDryRunOK(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	dir := t.TempDir()
-	envFile := dir + "/.env"
-	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--dry-run", "hello"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "hello"})
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("expected *dryRunOK")
@@ -190,11 +190,11 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	dir := t.TempDir()
-	envFile := dir + "/.env"
-	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--dry-run", "--json", "hello"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
 	if _, ok := err.(*dryRunOK); !ok {
 		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
@@ -235,7 +235,7 @@ func TestRunCmd_MissingEnvFileExits3(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"--env", "/no/such/file", "run", "x"})
+	root.SetArgs([]string{"--config", "/no/such/file", "run", "x"})
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("expected error")
@@ -266,7 +266,7 @@ func TestRunCmd_JSONErrorShape(t *testing.T) {
 	var stdout bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetArgs([]string{"--env", "/no/such/file", "run", "--json", "x"})
+	root.SetArgs([]string{"--config", "/no/such/file", "run", "--json", "x"})
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("expected error")
@@ -336,11 +336,7 @@ func classifyForTest(err error) int {
 	}
 }
 
-func writeEnvFile(path, typ, base, key, model string) error {
-	body := "PROVIDER_API_TYPE=" + typ + "\nPROVIDER_API_BASE=" + base +
-		"\nPROVIDER_API_KEY=" + key + "\nPROVIDER_API_MODEL=" + model + "\n"
-	return os.WriteFile(path, []byte(body), 0o644)
-}
+
 
 func writeJuexConfigFile(path, typ, base, key, model string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -357,11 +353,11 @@ func TestRunCmd_ResumeAndSessionMutuallyExclusive(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	dir := t.TempDir()
-	envFile := dir + "/.env"
-	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--resume", "--session", "abc", "x"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--resume", "--session", "abc", "x"})
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("expected error")
@@ -377,11 +373,11 @@ func TestRunCmd_SessionFlagNotFound(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	dir := t.TempDir()
-	envFile := dir + "/.env"
-	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--env", envFile, "run", "--session", "missing", "x"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--session", "missing", "x"})
 	err := root.Execute()
 	if _, ok := err.(*notFoundError); !ok {
 		t.Fatalf("got %T: %v", err, err)
@@ -390,8 +386,8 @@ func TestRunCmd_SessionFlagNotFound(t *testing.T) {
 
 func TestREPLCmd_AcceptsResumeFlags(t *testing.T) {
 	dir := t.TempDir()
-	envFile := dir + "/.env"
-	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -399,7 +395,7 @@ func TestREPLCmd_AcceptsResumeFlags(t *testing.T) {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", dir, "--env", envFile, "repl", "--resume", "--session", "x"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "repl", "--resume", "--session", "x"})
 	err := root.Execute()
 	if _, ok := err.(*usageError); !ok {
 		t.Fatalf("got %T: %v", err, err)
@@ -413,11 +409,11 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	dir := t.TempDir()
-	envFile := dir + "/.env"
-	if err := writeEnvFile(envFile, "openai", "https://x", "k", "m"); err != nil {
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--env", envFile, "serve", "--addr", "0.0.0.0:0"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "serve", "--addr", "0.0.0.0:0"})
 	err := root.Execute()
 	if _, ok := err.(*usageError); !ok {
 		t.Fatalf("expected *usageError without --unsafe-bind-any, got %T: %v", err, err)
@@ -432,7 +428,7 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	var out2 bytes.Buffer
 	root2.SetOut(&out2)
 	root2.SetErr(&out2)
-	root2.SetArgs([]string{"-C", dir, "--env", envFile, "serve", "--addr", "300.300.300.300:0", "--unsafe-bind-any"})
+	root2.SetArgs([]string{"-C", dir, "--config", configFile, "serve", "--addr", "300.300.300.300:0", "--unsafe-bind-any"})
 	err2 := root2.Execute()
 	if err2 == nil {
 		t.Fatal("expected non-nil error from invalid bind address")
