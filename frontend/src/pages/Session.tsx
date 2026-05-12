@@ -174,11 +174,7 @@ export function Session() {
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full max-w-3xl">
           {groups.map((group) => (
-            <MessageGroupView
-              key={group.key}
-              group={group}
-              model={data.model}
-            />
+            <MessageGroupView key={group.key} group={group} />
           ))}
         </ConversationContent>
         <ConversationScrollButton />
@@ -248,19 +244,20 @@ export function Session() {
   function applyAssistantResponse(e: { turn_id?: string; payload?: unknown }) {
     if (!e.turn_id) return;
     const blocks = assistantBlocks(e.payload);
+    const model = eventString(e, "model");
     setLiveMessages((prev) => {
       let found = false;
       const next = prev.map((m) => {
         if (m.turn_id === e.turn_id && m.role === "assistant" && m.pending) {
           found = true;
-          return { ...m, pending: false, blocks };
+          return { ...m, pending: false, blocks, model };
         }
         return m;
       });
       if (found) return next;
       return [
         ...next,
-        { role: "assistant", turn_id: e.turn_id, pending: false, blocks },
+        { role: "assistant", turn_id: e.turn_id, pending: false, blocks, model },
       ];
     });
   }
@@ -387,22 +384,19 @@ function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
   return blocks;
 }
 
-function MessageGroupView({
-  group,
-  model,
-}: {
-  group: MessageGroup;
-  model?: string;
-}) {
+function MessageGroupView({ group }: { group: MessageGroup }) {
   const isEmpty = group.units.length === 0;
-  const showModel = group.role === "assistant" && !!model;
+  // Per-message model (stamped at generation time). Falls back to nothing
+  // for older messages that pre-date the persistence change; the header
+  // already shows the current session-level model in that case.
+  const showModel = group.role === "assistant" && !!group.model;
 
   return (
     <Message from={group.role}>
       <div className="flex w-full flex-col gap-2">
         {showModel ? (
           <span className="text-muted-foreground font-mono text-xs">
-            {model}
+            {group.model}
           </span>
         ) : null}
         {group.units.map((unit, i) => {

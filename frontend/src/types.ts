@@ -43,6 +43,10 @@ export interface Message {
   blocks?: Block[] | null;
   pending?: boolean;
   turn_id?: string;
+  // Model that produced this assistant message. Stamped by the provider at
+  // generation time so resumed sessions retain attribution even if the
+  // current config has been swapped to a different model.
+  model?: string;
 }
 
 export interface SessionInfo {

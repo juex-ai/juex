@@ -55,7 +55,7 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Mes
 	}
 	choice := completion.Choices[0]
 
-	out := Message{Role: RoleAssistant}
+	out := Message{Role: RoleAssistant, Model: p.Name()}
 	// DeepSeek and similar providers attach `reasoning_content` to the
 	// assistant message. We surface it as a Block so it round-trips on the
 	// next call (DeepSeek rejects requests that omit it after a thinking

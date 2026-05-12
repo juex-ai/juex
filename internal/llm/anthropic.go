@@ -50,7 +50,7 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 		return Response{}, fmt.Errorf("anthropic: %w", err)
 	}
 
-	out := Message{Role: RoleAssistant}
+	out := Message{Role: RoleAssistant, Model: p.Name()}
 	for _, block := range msg.Content {
 		switch block.Type {
 		case "text":

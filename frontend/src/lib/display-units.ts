@@ -23,6 +23,8 @@ export type MessageGroup = {
   role: Role;
   pending: boolean;
   units: DisplayUnit[];
+  /** Model that produced this message (assistant only). */
+  model?: string;
 };
 
 // Walk all messages in order and produce the render groups. tool_use lives in
@@ -83,6 +85,7 @@ export function messagesToGroups(
       role: msg.role,
       pending,
       units,
+      model: msg.model,
     });
   }
 
