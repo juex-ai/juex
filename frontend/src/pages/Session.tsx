@@ -25,7 +25,6 @@ import {
 } from "@/components/ai-elements/tool";
 import {
   PromptInput,
-  PromptInputBody,
   PromptInputButton,
   PromptInputFooter,
   PromptInputSubmit,
@@ -185,24 +184,22 @@ export function Session() {
               if (text) void handleSend(text);
             }}
           >
-            <PromptInputBody>
-              <PromptInputTextarea placeholder="Type a prompt..." />
-              <PromptInputFooter>
-                <PromptInputTools>
-                  <StatusPill status={status} />
-                </PromptInputTools>
-                {status.kind === "running" || status.kind === "tool" ? (
-                  <PromptInputButton
-                    variant="outline"
-                    onClick={() => void handleInterrupt()}
-                  >
-                    Stop
-                  </PromptInputButton>
-                ) : (
-                  <PromptInputSubmit />
-                )}
-              </PromptInputFooter>
-            </PromptInputBody>
+            <PromptInputTextarea placeholder="Type a prompt..." />
+            <PromptInputFooter>
+              <PromptInputTools>
+                <StatusPill status={status} />
+              </PromptInputTools>
+              {status.kind === "running" || status.kind === "tool" ? (
+                <PromptInputButton
+                  variant="outline"
+                  onClick={() => void handleInterrupt()}
+                >
+                  Stop
+                </PromptInputButton>
+              ) : (
+                <PromptInputSubmit />
+              )}
+            </PromptInputFooter>
           </PromptInput>
         </div>
       </div>
