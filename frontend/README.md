@@ -10,8 +10,10 @@ The Go server owns the JSON/SSE API and embeds the production bundle from
 - Vite
 - React Router
 - Tailwind CSS v4
-- shadcn/ui primitives
-- prompt-kit components copied into `src/components/prompt-kit/`
+- shadcn/ui primitives (copied via shadcn CLI)
+- AI Elements primitives (copied via `pnpm dlx ai-elements@latest add`)
+- streamdown for markdown / KaTeX / mermaid rendering inside AI Elements
+- shiki for code highlighting inside the standalone `CodeBlock`
 - lucide-react icons
 
 ## Development
@@ -49,10 +51,11 @@ into `internal/web/dist/` for Go embedding.
 | --- | --- |
 | `src/api.ts` | typed fetch helpers and SSE subscription |
 | `src/types.ts` | TypeScript mirror of Go API/session/message shapes |
+| `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
 | `src/components/ui/` | shadcn primitives |
-| `src/components/prompt-kit/` | copied prompt-kit primitives |
+| `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |
 
 When Go API response shapes change, update `src/types.ts` and the matching
 client helper in the same PR.
