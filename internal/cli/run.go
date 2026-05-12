@@ -99,10 +99,7 @@ execution is printed and the process exits with code 10.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate paths BEFORE calling loadConfig so we surface the
 			// right exit code (3 not found) instead of a generic error.
-			configPath, err := explicitConfigPath(flags)
-			if err != nil {
-				return emit(jsonOut, cmd.ErrOrStderr(), err, "pass only one config override flag", false)
-			}
+			configPath := explicitConfigPath(flags)
 			if configPath != "" {
 				if _, err := os.Stat(configPath); err != nil {
 					return emit(jsonOut, cmd.ErrOrStderr(), &notFoundError{
@@ -232,11 +229,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 }
 
 func configFileForPlan(flags *persistentFlags) string {
-	path, err := explicitConfigPath(flags)
-	if err != nil {
-		return ""
-	}
-	return path
+	return explicitConfigPath(flags)
 }
 
 // emit prints err in the right format and returns it (so cobra picks the

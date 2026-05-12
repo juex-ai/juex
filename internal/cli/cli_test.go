@@ -230,7 +230,7 @@ func TestRunCmd_DryRunLoadsDefaultJuexYAML(t *testing.T) {
 	}
 }
 
-func TestRunCmd_MissingEnvFileExits3(t *testing.T) {
+func TestRunCmd_MissingConfigFileExits3(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)

@@ -349,13 +349,17 @@ func TestAnthropic_ThinkingEffort(t *testing.T) {
 	if !ok {
 		t.Fatalf("thinking not present or wrong type: %+v", capturedBody["thinking"])
 	}
-	if thinking["type"] != "adaptive" {
-		t.Errorf("thinking.type = %v, want %q", thinking["type"], "adaptive")
+	if thinking["type"] != "enabled" {
+		t.Errorf("thinking.type = %v, want %q", thinking["type"], "enabled")
+	}
+	budgetTokens, _ := thinking["budget_tokens"].(float64)
+	if budgetTokens != 2048 {
+		t.Errorf("thinking.budget_tokens = %v, want 2048", budgetTokens)
 	}
 	// max_tokens should be bumped when thinking is enabled
 	maxTokens, _ := capturedBody["max_tokens"].(float64)
-	if maxTokens != 16384 {
-		t.Errorf("max_tokens = %v, want 16384", maxTokens)
+	if maxTokens != 8192 {
+		t.Errorf("max_tokens = %v, want 8192", maxTokens)
 	}
 }
 

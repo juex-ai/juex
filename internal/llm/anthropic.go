@@ -36,18 +36,30 @@ func (p *anthropicProvider) Name() string { return "anthropic:" + p.cfg.Model }
 
 func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
 	maxTokens := int64(4096)
-	if p.cfg.ThinkingEffort != "" {
+	var budgetTokens int64
+	switch p.cfg.ThinkingEffort {
+	case "low":
+		budgetTokens = 2048
+		maxTokens = 8192
+	case "medium":
+		budgetTokens = 8192
 		maxTokens = 16384
+	case "high":
+		budgetTokens = 32768
+		maxTokens = 64000
 	}
+
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.cfg.Model),
 		MaxTokens: maxTokens,
 		Messages:  toAnthropicMessages(history),
 		Tools:     toAnthropicTools(tools),
 	}
-	if p.cfg.ThinkingEffort != "" {
+	if budgetTokens > 0 {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{
-			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{},
+			OfEnabled: &anthropic.ThinkingConfigEnabledParam{
+				BudgetTokens: budgetTokens,
+			},
 		}
 	}
 	if sys != "" {

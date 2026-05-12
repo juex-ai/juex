@@ -120,16 +120,13 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
-// loadConfig returns the resolved config, with --config/--env and --cwd applied.
+// loadConfig returns the resolved config, with --config and --cwd applied.
 func loadConfig(flags *persistentFlags) (config.Config, error) {
 	var (
 		cfg config.Config
 		err error
 	)
-	configPath, err := explicitConfigPath(flags)
-	if err != nil {
-		return cfg, err
-	}
+	configPath := explicitConfigPath(flags)
 	if configPath != "" {
 		cfg, err = config.LoadFromFileForWorkDir(configPath, flags.cwd)
 	} else {
@@ -141,11 +138,11 @@ func loadConfig(flags *persistentFlags) (config.Config, error) {
 	return cfg, nil
 }
 
-func explicitConfigPath(flags *persistentFlags) (string, error) {
+func explicitConfigPath(flags *persistentFlags) string {
 	if flags == nil {
-		return "", nil
+		return ""
 	}
-	return flags.configPath, nil
+	return flags.configPath
 }
 
 // cmdPrintln is a small helper so subcommands always write to the cobra
