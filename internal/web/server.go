@@ -83,6 +83,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)
+	mux.HandleFunc("/api/files/tree", s.handleFilesTree)
+	mux.HandleFunc("/api/files/content", s.handleFilesContent)
 	// SPA: anything else is the React app.
 	spa := spaHandler()
 	mux.Handle("/", spa)
