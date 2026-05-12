@@ -396,7 +396,7 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
             const text = unit.block.text ?? unit.block.content ?? "";
             if (unit.block.redacted) {
               return (
-                <Reasoning key={i} isStreaming={false} defaultOpen>
+                <Reasoning key={i} isStreaming={false}>
                   <ReasoningTrigger>Thinking [redacted]</ReasoningTrigger>
                   <ReasoningContent>
                     [redacted by provider]
@@ -405,7 +405,7 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
               );
             }
             return (
-              <Reasoning key={i} isStreaming={false} defaultOpen>
+              <Reasoning key={i} isStreaming={false}>
                 <ReasoningTrigger />
                 <ReasoningContent>{text}</ReasoningContent>
               </Reasoning>
