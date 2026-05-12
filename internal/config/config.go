@@ -21,10 +21,11 @@ import (
 // live under .agents. Runtime data (memory, sessions, history) lives under
 // .juex so it does not overlap with project agent configuration.
 type Config struct {
-	ProviderType string // "anthropic" | "openai"
-	BaseURL      string
-	APIKey       string
-	Model        string
+	ProviderType   string // "anthropic" | "openai"
+	BaseURL        string
+	APIKey         string
+	Model          string
+	ThinkingEffort string // "low", "medium", "high", or "" (provider default)
 
 	HomeAgentsDir string // ~/.agents (user-global)
 	WorkDir       string // explicit; defaults to os.Getwd()
@@ -35,10 +36,11 @@ type fileConfig struct {
 }
 
 type providerConfig struct {
-	Type    string `yaml:"type"`
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
-	Model   string `yaml:"model"`
+	Type           string `yaml:"type"`
+	BaseURL        string `yaml:"base_url"`
+	APIKey         string `yaml:"api_key"`
+	Model          string `yaml:"model"`
+	ThinkingEffort string `yaml:"thinking_effort"`
 }
 
 var providerEnvKeys = []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL"}
@@ -112,10 +114,11 @@ func (c Config) NewProvider() (llm.Provider, error) {
 		return nil, fmt.Errorf("config: PROVIDER_API_TYPE is empty")
 	}
 	return llm.New(llm.Config{
-		Type:    c.ProviderType,
-		BaseURL: c.BaseURL,
-		APIKey:  c.APIKey,
-		Model:   c.Model,
+		Type:           c.ProviderType,
+		BaseURL:        c.BaseURL,
+		APIKey:         c.APIKey,
+		Model:          c.Model,
+		ThinkingEffort: c.ThinkingEffort,
 	})
 }
 
@@ -262,6 +265,9 @@ func applyProviderConfig(cfg *Config, p providerConfig) {
 	}
 	if p.Model != "" {
 		cfg.Model = p.Model
+	}
+	if p.ThinkingEffort != "" {
+		cfg.ThinkingEffort = p.ThinkingEffort
 	}
 }
 

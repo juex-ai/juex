@@ -35,11 +35,20 @@ func NewAnthropic(cfg Config, _ any) Provider {
 func (p *anthropicProvider) Name() string { return "anthropic:" + p.cfg.Model }
 
 func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
+	maxTokens := int64(4096)
+	if p.cfg.ThinkingEffort != "" {
+		maxTokens = 16384
+	}
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.cfg.Model),
-		MaxTokens: 4096,
+		MaxTokens: maxTokens,
 		Messages:  toAnthropicMessages(history),
 		Tools:     toAnthropicTools(tools),
+	}
+	if p.cfg.ThinkingEffort != "" {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{
+			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{},
+		}
 	}
 	if sys != "" {
 		params.System = []anthropic.TextBlockParam{{Text: sys}}

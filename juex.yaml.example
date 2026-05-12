@@ -5,3 +5,6 @@ provider:
   base_url: ""
   api_key: ""
   model: ""
+  # Optional: control reasoning depth for thinking models.
+  # Valid values: "low", "medium", "high". Omit to use the provider default.
+  # thinking_effort: ""

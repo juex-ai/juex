@@ -13,10 +13,11 @@ type Provider interface {
 }
 
 type Config struct {
-	Type    string
-	BaseURL string
-	APIKey  string
-	Model   string
+	Type           string
+	BaseURL        string
+	APIKey         string
+	Model          string
+	ThinkingEffort string // "low", "medium", "high", or "" (provider default)
 }
 
 // New constructs the appropriate Provider for cfg.Type.
