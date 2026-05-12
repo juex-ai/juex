@@ -162,6 +162,11 @@ export function Session() {
       <header className="flex items-baseline gap-3 border-b px-6 py-3 text-sm">
         <code className="font-mono text-xs">{data.id}</code>
         <Badge variant="secondary">{data.turns} turns</Badge>
+        {data.model ? (
+          <Badge variant="outline" className="font-mono text-xs">
+            {data.model}
+          </Badge>
+        ) : null}
         <span className="text-muted-foreground text-xs">
           last active {new Date(data.last_active_at).toLocaleString()}
         </span>
@@ -169,7 +174,11 @@ export function Session() {
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full max-w-3xl">
           {groups.map((group) => (
-            <MessageGroupView key={group.key} group={group} />
+            <MessageGroupView
+              key={group.key}
+              group={group}
+              model={data.model}
+            />
           ))}
         </ConversationContent>
         <ConversationScrollButton />
@@ -378,12 +387,24 @@ function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
   return blocks;
 }
 
-function MessageGroupView({ group }: { group: MessageGroup }) {
+function MessageGroupView({
+  group,
+  model,
+}: {
+  group: MessageGroup;
+  model?: string;
+}) {
   const isEmpty = group.units.length === 0;
+  const showModel = group.role === "assistant" && !!model;
 
   return (
     <Message from={group.role}>
       <div className="flex w-full flex-col gap-2">
+        {showModel ? (
+          <span className="text-muted-foreground font-mono text-xs">
+            {model}
+          </span>
+        ) : null}
         {group.units.map((unit, i) => {
           if (unit.kind === "text") {
             return (
