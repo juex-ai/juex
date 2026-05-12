@@ -1,26 +1,48 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
-import { MessageList } from "@/components/MessageList";
-import { Composer } from "@/components/Composer";
-import type { Status } from "@/components/StatusPill";
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from "@/components/ai-elements/conversation";
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@/components/ai-elements/message";
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from "@/components/ai-elements/reasoning";
+import {
+  Tool,
+  ToolContent,
+  ToolHeader,
+  ToolInput,
+  ToolOutput,
+} from "@/components/ai-elements/tool";
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputButton,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+} from "@/components/ai-elements/prompt-input";
+import { StatusPill, type Status } from "@/components/StatusPill";
+import { toDisplayUnits, toolState } from "@/lib/display-units";
 import { getSession, interrupt, startTurn, subscribeEvents } from "@/api";
-import type { Message, SessionShowResponse } from "@/types";
+import type { Message as ChatMessage, SessionShowResponse } from "@/types";
 
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const [data, setData] = useState<SessionShowResponse | null>(null);
-  const [liveMessages, setLiveMessages] = useState<Message[]>([]);
+  const [liveMessages, setLiveMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [scrollRequest, setScrollRequest] = useState<ScrollRequest>({
-    version: 0,
-    force: false,
-  });
   const doneTimerRef = useRef<number | null>(null);
-
-  const scrollToLatest = useCallback((force = false) => {
-    setScrollRequest((r) => ({ version: r.version + 1, force }));
-  }, []);
 
   // refresh is stable per id; both effects depend on it via [id].
   const refresh = useCallback(async () => {
@@ -28,11 +50,10 @@ export function Session() {
       const r = await getSession(id);
       setData(r);
       setLiveMessages([]);
-      scrollToLatest();
     } catch (e) {
       console.error("getSession failed", e);
     }
-  }, [id, scrollToLatest]);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
@@ -43,7 +64,6 @@ export function Session() {
         if (!cancelled) {
           setData(r);
           setLiveMessages([]);
-          scrollToLatest(true);
         }
       } catch (e) {
         if (!cancelled) console.error("getSession failed", e);
@@ -52,7 +72,7 @@ export function Session() {
     return () => {
       cancelled = true;
     };
-  }, [id, scrollToLatest]);
+  }, [id]);
 
   // SSE subscription.
   useEffect(() => {
@@ -135,29 +155,57 @@ export function Session() {
     return <div className="text-muted-foreground p-8">Loading...</div>;
   }
 
-  const messages: Message[] = [...(data.messages ?? []), ...liveMessages];
+  const messages: ChatMessage[] = [...(data.messages ?? []), ...liveMessages];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-baseline gap-3 border-b px-6 py-3 text-sm">
+      <header className="flex items-baseline gap-3 border-b px-6 py-3 text-sm">
         <code className="font-mono text-xs">{data.id}</code>
         <Badge variant="secondary">{data.turns} turns</Badge>
         <span className="text-muted-foreground text-xs">
           last active {new Date(data.last_active_at).toLocaleString()}
         </span>
+      </header>
+      <Conversation className="min-h-0 flex-1">
+        <ConversationContent className="mx-auto w-full max-w-3xl">
+          {messages.map((message, idx) => (
+            <MessageView
+              key={`${message.turn_id ?? "msg"}-${idx}`}
+              message={message}
+            />
+          ))}
+        </ConversationContent>
+        <ConversationScrollButton />
+      </Conversation>
+      <div className="border-t bg-background/95 px-4 py-3 backdrop-blur">
+        <div className="mx-auto w-full max-w-3xl">
+          <PromptInput
+            onSubmit={(msg) => {
+              const text = msg.text?.trim();
+              if (text) void handleSend(text);
+            }}
+          >
+            <PromptInputBody>
+              <PromptInputTextarea placeholder="Type a prompt..." />
+              <PromptInputFooter>
+                <PromptInputTools>
+                  <StatusPill status={status} />
+                </PromptInputTools>
+                {status.kind === "running" || status.kind === "tool" ? (
+                  <PromptInputButton
+                    variant="outline"
+                    onClick={() => void handleInterrupt()}
+                  >
+                    Stop
+                  </PromptInputButton>
+                ) : (
+                  <PromptInputSubmit />
+                )}
+              </PromptInputFooter>
+            </PromptInputBody>
+          </PromptInput>
+        </div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col">
-        <MessageList
-          messages={messages}
-          model={data.model}
-          scrollRequest={scrollRequest}
-        />
-      </div>
-      <Composer
-        status={status}
-        onSend={handleSend}
-        onInterrupt={handleInterrupt}
-      />
     </div>
   );
 
@@ -191,7 +239,6 @@ export function Session() {
         },
       ];
     });
-    scrollToLatest();
   }
 
   function applyAssistantResponse(e: { turn_id?: string; payload?: unknown }) {
@@ -212,7 +259,6 @@ export function Session() {
         { role: "assistant", turn_id: e.turn_id, pending: false, blocks },
       ];
     });
-    scrollToLatest();
   }
 
   function appendToolResult(e: { turn_id?: string; payload?: unknown }, isError: boolean) {
@@ -224,7 +270,7 @@ export function Session() {
       eventString(e, "preview") ??
       "";
     if (!toolUseID && !content) return;
-    const block: NonNullable<Message["blocks"]>[number] = {
+    const block: NonNullable<ChatMessage["blocks"]>[number] = {
       type: "tool_result",
       tool_use_id: toolUseID,
       content,
@@ -251,17 +297,11 @@ export function Session() {
         },
       ];
     });
-    scrollToLatest();
   }
 }
 
-type ScrollRequest = {
-  version: number;
-  force: boolean;
-};
-
 function findPendingTurnForInput(
-  messages: Message[],
+  messages: ChatMessage[],
   input: string,
 ): string | undefined {
   for (const message of messages) {
@@ -279,7 +319,7 @@ function findPendingTurnForInput(
   return undefined;
 }
 
-function messageText(message: Message): string | undefined {
+function messageText(message: ChatMessage): string | undefined {
   const block = message.blocks?.find((b) => b.type === "text");
   return block && "text" in block && typeof block.text === "string"
     ? block.text
@@ -314,8 +354,8 @@ function eventString(e: { payload?: unknown }, key: string): string | undefined 
   return undefined;
 }
 
-function assistantBlocks(payload: unknown): Message["blocks"] {
-  const blocks: NonNullable<Message["blocks"]> = [];
+function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
+  const blocks: NonNullable<ChatMessage["blocks"]> = [];
   if (!payload || typeof payload !== "object") return blocks;
   const record = payload as Record<string, unknown>;
 
@@ -341,4 +381,72 @@ function assistantBlocks(payload: unknown): Message["blocks"] {
     }
   }
   return blocks;
+}
+
+function MessageView({ message }: { message: ChatMessage }) {
+  const units = toDisplayUnits(message.blocks);
+  const isPending = Boolean(message.pending);
+  const isEmpty = units.length === 0;
+
+  return (
+    <Message from={message.role}>
+      <div className="flex w-full flex-col gap-2">
+        {units.map((unit, i) => {
+          if (unit.kind === "text") {
+            return (
+              <MessageContent key={i}>
+                <MessageResponse>{unit.block.text}</MessageResponse>
+              </MessageContent>
+            );
+          }
+          if (unit.kind === "reasoning") {
+            const text = unit.block.text ?? unit.block.content ?? "";
+            if (unit.block.redacted) {
+              return (
+                <Reasoning key={i} isStreaming={false}>
+                  <ReasoningTrigger>Thinking [redacted]</ReasoningTrigger>
+                  <ReasoningContent>
+                    [redacted by provider]
+                  </ReasoningContent>
+                </Reasoning>
+              );
+            }
+            return (
+              <Reasoning key={i} isStreaming={false}>
+                <ReasoningTrigger />
+                <ReasoningContent>{text}</ReasoningContent>
+              </Reasoning>
+            );
+          }
+          // unit.kind === "tool"
+          const state = toolState(unit.use, unit.result);
+          const toolName = unit.use?.tool_name ?? "tool";
+          return (
+            <Tool
+              key={i}
+              defaultOpen={state === "output-error" || state === "input-available"}
+            >
+              <ToolHeader type={`tool-${toolName}`} state={state} />
+              <ToolContent>
+                {unit.use ? <ToolInput input={unit.use.input} /> : null}
+                {unit.result ? (
+                  <ToolOutput
+                    output={
+                      unit.result.is_error ? null : (
+                        <MessageResponse>{unit.result.content}</MessageResponse>
+                      )
+                    }
+                    errorText={unit.result.is_error ? unit.result.content : undefined}
+                  />
+                ) : null}
+              </ToolContent>
+            </Tool>
+          );
+        })}
+        {isPending && isEmpty ? (
+          <div className="text-muted-foreground animate-pulse text-sm">...</div>
+        ) : null}
+      </div>
+    </Message>
+  );
 }
