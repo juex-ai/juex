@@ -42,6 +42,10 @@ export function toDisplayUnits(blocks: Block[] | null | undefined): DisplayUnit[
       case "tool_result": {
         const existing = block.tool_use_id ? byId.get(block.tool_use_id) : undefined;
         if (existing) {
+          // Last-wins on repeated ids. internal/runtime/loop.go emits
+          // exactly one tool_result per tool_use, so the protocol does
+          // not produce repeats today; this branch only fires if that
+          // ever changes.
           existing.result = block;
         } else {
           units.push({ kind: "tool", use: null, result: block });

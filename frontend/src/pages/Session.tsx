@@ -179,9 +179,9 @@ export function Session() {
       <div className="border-t bg-background/95 px-4 py-3 backdrop-blur">
         <div className="mx-auto w-full max-w-3xl">
           <PromptInput
-            onSubmit={(msg) => {
+            onSubmit={async (msg) => {
               const text = msg.text?.trim();
-              if (text) void handleSend(text);
+              if (text) await handleSend(text);
             }}
           >
             <PromptInputTextarea placeholder="Type a prompt..." />
