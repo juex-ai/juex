@@ -20,13 +20,13 @@ type schemaCommand struct {
 
 // schemaFlag is one flag's introspection record.
 type schemaFlag struct {
-	Name      string `json:"name"`             // long form, no leading --
-	Shorthand string `json:"shorthand,omitempty"`
-	Type      string `json:"type"`
-	Default   string `json:"default,omitempty"`
-	Usage     string `json:"usage,omitempty"`
-	Required  bool   `json:"required,omitempty"`
-	Persistent bool  `json:"persistent,omitempty"` // inherited from a parent
+	Name       string `json:"name"` // long form, no leading --
+	Shorthand  string `json:"shorthand,omitempty"`
+	Type       string `json:"type"`
+	Default    string `json:"default,omitempty"`
+	Usage      string `json:"usage,omitempty"`
+	Required   bool   `json:"required,omitempty"`
+	Persistent bool   `json:"persistent,omitempty"` // inherited from a parent
 }
 
 func newSchemaCmd(_ *persistentFlags) *cobra.Command {

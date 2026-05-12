@@ -208,3 +208,43 @@ func writeJuexConfig(t *testing.T, path, typ, base, key, model string) {
 		t.Fatal(err)
 	}
 }
+
+func TestLoadFromFile_ThinkingEffort(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n  thinking_effort: low\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "low" {
+		t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, "low")
+	}
+}
+
+func TestLoadFromFile_ThinkingEffortEmpty(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "" {
+		t.Fatalf("ThinkingEffort = %q, want empty", cfg.ThinkingEffort)
+	}
+}

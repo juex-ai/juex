@@ -45,6 +45,9 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Mes
 		Messages: msgs,
 		Tools:    toOpenAITools(tools),
 	}
+	if p.cfg.ThinkingEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(p.cfg.ThinkingEffort)
+	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {

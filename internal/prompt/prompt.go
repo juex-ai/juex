@@ -2,11 +2,11 @@
 //
 // Layout (in order, matching design doc §4.1):
 //
-//	1. AGENTS.md hierarchy (user-global -> project root -> cwd subdir)
-//	2. Skills index (descriptions only)
-//	3. Memory section (Layer 2 entries)
-//	4. Tool list (auto-supplied to the provider, not duplicated here)
-//	5. Operating context (cwd, time, OS)
+//  1. AGENTS.md hierarchy (user-global -> project root -> cwd subdir)
+//  2. Skills index (descriptions only)
+//  3. Memory section (Layer 2 entries)
+//  4. Tool list (auto-supplied to the provider, not duplicated here)
+//  5. Operating context (cwd, time, OS)
 //
 // The builder is rebuilt from scratch every turn so that memory edits and
 // skill changes propagate immediately.
