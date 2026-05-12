@@ -269,3 +269,21 @@ func TestNewProvider_Errors(t *testing.T) {
 		t.Error("unknown type should error")
 	}
 }
+
+func TestExtractReasoningContent(t *testing.T) {
+	cases := map[string]struct{ in, want string }{
+		"deepseek":  {`{"role":"assistant","content":"hi","reasoning_content":"deepseek thoughts"}`, "deepseek thoughts"},
+		"ollama":    {`{"role":"assistant","content":"hi","reasoning":"ollama thoughts"}`, "ollama thoughts"},
+		"thinking":  {`{"role":"assistant","content":"hi","thinking":"plain thinking"}`, "plain thinking"},
+		"none":      {`{"role":"assistant","content":"hi"}`, ""},
+		"empty":     {``, ""},
+		"prefer-rc": {`{"reasoning_content":"a","reasoning":"b","thinking":"c"}`, "a"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := extractReasoningContent(tc.in); got != tc.want {
+				t.Errorf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}

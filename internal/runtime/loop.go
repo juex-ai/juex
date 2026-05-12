@@ -102,6 +102,7 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 			"text":        responseText(resp.Message),
 			"thinking":    responseThinking(resp.Message),
 			"tool_calls":  responseToolCalls(resp.Message),
+			"model":       resp.Message.Model,
 		}})
 
 		toolCalls := resp.Message.ToolCalls()

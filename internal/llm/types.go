@@ -46,6 +46,11 @@ type Block struct {
 type Message struct {
 	Role   Role    `json:"role"`
 	Blocks []Block `json:"blocks"`
+	// Model is the provider:model name responsible for producing this
+	// message. Only set on assistant messages (provider-stamped at
+	// generation time so resuming a session under a different config
+	// preserves the original attribution).
+	Model string `json:"model,omitempty"`
 }
 
 // TextMessage is a convenience constructor for a single-text-block message.

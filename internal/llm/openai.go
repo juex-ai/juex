@@ -55,7 +55,7 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Mes
 	}
 	choice := completion.Choices[0]
 
-	out := Message{Role: RoleAssistant}
+	out := Message{Role: RoleAssistant, Model: p.Name()}
 	// DeepSeek and similar providers attach `reasoning_content` to the
 	// assistant message. We surface it as a Block so it round-trips on the
 	// next call (DeepSeek rejects requests that omit it after a thinking
@@ -147,8 +147,15 @@ func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnio
 			}
 			am.ToolCalls = toolCalls
 			if len(reasoningParts) > 0 {
+				joined := strings.Join(reasoningParts, "\n")
+				// Set every known field name. Providers that don't recognise a
+				// given field ignore it; providers that require theirs (DeepSeek
+				// rejects requests that omit `reasoning_content` after a thinking
+				// turn) still get what they need.
 				am.SetExtraFields(map[string]any{
-					"reasoning_content": strings.Join(reasoningParts, "\n"),
+					"reasoning_content": joined,
+					"reasoning":         joined,
+					"thinking":          joined,
 				})
 			}
 			out = append(out, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
@@ -175,18 +182,31 @@ func toOpenAITools(tools []ToolSpec) []openai.ChatCompletionToolParam {
 	return out
 }
 
-// extractReasoningContent pulls the (non-standard) `reasoning_content` field
-// from a raw assistant message JSON payload. Returns "" if absent or not a
-// string.
+// extractReasoningContent pulls a reasoning/thinking string out of a raw
+// assistant message payload. Field names vary by provider:
+//   - DeepSeek and most "OpenAI-compatible" thinking surfaces use `reasoning_content`.
+//   - Ollama's OpenAI shim uses `reasoning`.
+//   - Some other shims have surfaced `thinking`.
+//
+// We try them in that order and return the first non-empty value.
 func extractReasoningContent(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	var probe struct {
 		ReasoningContent string `json:"reasoning_content"`
+		Reasoning        string `json:"reasoning"`
+		Thinking         string `json:"thinking"`
 	}
 	_ = json.Unmarshal([]byte(raw), &probe)
-	return probe.ReasoningContent
+	switch {
+	case probe.ReasoningContent != "":
+		return probe.ReasoningContent
+	case probe.Reasoning != "":
+		return probe.Reasoning
+	default:
+		return probe.Thinking
+	}
 }
 
 func mapOpenAIStop(s string) StopReason {
