@@ -11,12 +11,14 @@ import (
 )
 
 const maxFilePreviewBytes = 256 * 1024
+const maxFileTreeDepth = 12
 
 type FileNode struct {
-	Name     string      `json:"name"`
-	Path     string      `json:"path"`
-	IsDir    bool        `json:"is_dir"`
-	Children []*FileNode `json:"children,omitempty"`
+	Name              string      `json:"name"`
+	Path              string      `json:"path"`
+	IsDir             bool        `json:"is_dir"`
+	Children          []*FileNode `json:"children,omitempty"`
+	ChildrenTruncated bool        `json:"children_truncated,omitempty"`
 }
 
 type FileContent struct {
@@ -45,7 +47,7 @@ func (s *Server) handleFilesTree(w http.ResponseWriter, r *http.Request) {
 		root = resolvedRoot
 	}
 
-	tree, err := buildFileTree(root, "")
+	tree, err := buildFileTree(root, "", 0)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
@@ -53,7 +55,7 @@ func (s *Server) handleFilesTree(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tree)
 }
 
-func buildFileTree(root, relPath string) (*FileNode, error) {
+func buildFileTree(root, relPath string, depth int) (*FileNode, error) {
 	absPath := filepath.Join(root, relPath)
 	info, err := os.Lstat(absPath)
 	if err != nil {
@@ -62,7 +64,7 @@ func buildFileTree(root, relPath string) (*FileNode, error) {
 
 	node := &FileNode{
 		Name:  filepath.Base(absPath),
-		Path:  relPath,
+		Path:  filepath.ToSlash(relPath),
 		IsDir: info.IsDir(),
 	}
 	if relPath == "" {
@@ -71,6 +73,10 @@ func buildFileTree(root, relPath string) (*FileNode, error) {
 	}
 
 	if node.IsDir {
+		if depth >= maxFileTreeDepth {
+			node.ChildrenTruncated = true
+			return node, nil
+		}
 		entries, err := os.ReadDir(absPath)
 		if err != nil {
 			return nil, err
@@ -82,7 +88,7 @@ func buildFileTree(root, relPath string) (*FileNode, error) {
 				continue
 			}
 			childRel := filepath.Join(relPath, name)
-			child, err := buildFileTree(root, childRel)
+			child, err := buildFileTree(root, childRel, depth+1)
 			if err == nil && child != nil {
 				children = append(children, child)
 			}

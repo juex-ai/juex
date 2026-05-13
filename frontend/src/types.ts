@@ -105,6 +105,7 @@ export interface FileNode {
   name: string;
   path: string;
   is_dir: boolean;
+  children_truncated?: boolean;
   children?: FileNode[];
 }
 

@@ -122,13 +122,16 @@ export function subscribeEvents(
   return () => es.close();
 }
 
-export async function getFileTree(): Promise<FileNode> {
-  return jsonOrThrow(await fetch(`${BASE}/api/files/tree`));
+export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {
+  return jsonOrThrow(await fetch(`${BASE}/api/files/tree`, { signal }));
 }
 
-export async function getFileContent(path: string): Promise<FileContentResponse> {
+export async function getFileContent(
+  path: string,
+  signal?: AbortSignal,
+): Promise<FileContentResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/files/content?path=${encodeURIComponent(path)}`),
+    await fetch(`${BASE}/api/files/content?path=${encodeURIComponent(path)}`, { signal }),
   );
 }
 

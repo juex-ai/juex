@@ -43,6 +43,45 @@ func TestFilesTreeReturnsSortedWorkDir(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("children = %v, want %v", names, want)
 	}
+	if got := root.Children[1].Children[0].Path; got != "cmd/main.go" {
+		t.Fatalf("nested path = %q, want forward slash path", got)
+	}
+}
+
+func TestFilesTreeLimitsDepth(t *testing.T) {
+	srv := newTestServer(t)
+	deep := srv.opts.Cfg.WorkDir
+	for i := 0; i < maxFileTreeDepth+2; i++ {
+		deep = filepath.Join(deep, "d")
+	}
+	mustWriteFile(t, filepath.Join(deep, "too-deep.txt"), "hidden")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files/tree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	var root FileNode
+	if err := json.NewDecoder(resp.Body).Decode(&root); err != nil {
+		t.Fatal(err)
+	}
+	node := &root
+	for i := 0; i < maxFileTreeDepth; i++ {
+		if len(node.Children) != 1 {
+			t.Fatalf("depth %d children = %d", i, len(node.Children))
+		}
+		node = node.Children[0]
+	}
+	if !node.ChildrenTruncated || len(node.Children) != 0 {
+		t.Fatalf("truncated node = %+v", node)
+	}
 }
 
 func TestFilesContentReturnsPreview(t *testing.T) {

@@ -1,7 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getFileTree, getFileContent } from "@/api";
 import type { FileContentResponse, FileNode } from "@/types";
-import { Folder, FolderOpen, File as FileIcon, ChevronRight, ChevronDown } from "lucide-react";
+import {
+  Folder,
+  FolderOpen,
+  File as FileIcon,
+  ChevronRight,
+  ChevronDown,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Sheet,
@@ -17,27 +23,53 @@ export function FileTreePanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<FileContentResponse | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    getFileTree()
+    const controller = new AbortController();
+    let live = true;
+    getFileTree(controller.signal)
       .then((next) => {
+        if (!live) return;
         setTree(next);
         setError(null);
       })
       .catch((e) => {
+        if (isAbortError(e)) return;
+        if (!live) return;
         console.error(e);
         setError("Failed to load directory.");
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (live) setLoading(false);
+      });
+    return () => {
+      live = false;
+      controller.abort();
+      previewAbortRef.current?.abort();
+    };
   }, []);
 
   const handleFileClick = async (path: string) => {
+    previewAbortRef.current?.abort();
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
     try {
-      setPreviewFile(await getFileContent(path));
+      const content = await getFileContent(path, controller.signal);
+      if (previewAbortRef.current === controller) {
+        setPreviewFile(content);
+      }
     } catch (e) {
+      if (isAbortError(e)) return;
       console.error(e);
       const message = e instanceof Error ? e.message : "Failed to load file content.";
-      setPreviewFile({ path, content: message, size: 0, truncated: false });
+      if (previewAbortRef.current === controller) {
+        setPreviewFile({ path, content: message, size: 0, truncated: false });
+      }
+    } finally {
+      if (previewAbortRef.current === controller) {
+        previewAbortRef.current = null;
+      }
     }
   };
 
@@ -129,13 +161,20 @@ function TreeNode({
         )}
         <span className="truncate">{node.name}</span>
       </button>
-      {expanded && node.children && (
+      {expanded && (node.children || node.children_truncated) && (
         <div className="ml-3 flex flex-col border-l border-sidebar-border pl-2">
-          {node.children.map((child) => (
+          {node.children?.map((child) => (
             <TreeNode key={child.path} node={child} depth={depth + 1} onFileClick={onFileClick} />
           ))}
+          {node.children_truncated && (
+            <div className="px-2 py-1 text-xs text-muted-foreground">Depth limit reached.</div>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
 }
