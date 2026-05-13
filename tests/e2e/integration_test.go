@@ -33,7 +33,7 @@ var liveConfigEnvKeys = []string{
 
 var defaultLiveConfigNames = []string{
 	"juex.qwen.yaml",
-	"juex.anthropic.yaml",
+	"juex.minimax.yaml",
 }
 
 type liveConfig struct {
@@ -75,7 +75,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 		}
 	}
 	if len(matches) == 0 {
-		t.Skip("none of .juex/juex.qwen.yaml or .juex/juex.anthropic.yaml are present; skipping live tests")
+		t.Skip("none of .juex/juex.qwen.yaml or .juex/juex.minimax.yaml are present; skipping live tests")
 	}
 	// Clear OS env vars so the explicit .juex/*.yaml file wins.
 	for _, k := range liveConfigEnvKeys {

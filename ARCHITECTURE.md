@@ -554,7 +554,7 @@ workflow; runs entirely on GitHub Actions.
     runs `go test ./... -race -count=1`. Bash-tool tests skip on Windows
     via a `runtime.GOOS` guard.
 - `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/juex.qwen.yaml`
-  and `.juex/juex.anthropic.yaml` provider configs from repo secrets, then
+  and `.juex/juex.minimax.yaml` provider configs from repo secrets, then
   runs `-tags=integration ./tests/e2e/...`. Required secrets:
 
   ```

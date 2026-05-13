@@ -23,7 +23,7 @@ jobs:
           OPENAI_MODEL:    ${{ secrets.PROVIDER_API_MODEL_OPENAI }}
         run: |
           mkdir -p .juex
-          cat > .juex/juex.anthropic.yaml <<EOF
+          cat > .juex/juex.minimax.yaml <<EOF
           provider:
             type: "$ANTHROPIC_TYPE"
             base_url: "$ANTHROPIC_BASE"
