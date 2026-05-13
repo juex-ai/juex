@@ -54,6 +54,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
+| `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |
 

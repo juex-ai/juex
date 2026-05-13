@@ -7,6 +7,8 @@ import type {
   SessionsListResponse,
   StartTurnResponse,
   TurnStatusResponse,
+  FileContentResponse,
+  FileNode,
 } from "./types";
 
 const BASE = "";  // same-origin; Vite dev proxy handles /api → :8080
@@ -118,6 +120,19 @@ export function subscribeEvents(
     es.addEventListener("error", opts.onError);
   }
   return () => es.close();
+}
+
+export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {
+  return jsonOrThrow(await fetch(`${BASE}/api/files/tree`, { signal }));
+}
+
+export async function getFileContent(
+  path: string,
+  signal?: AbortSignal,
+): Promise<FileContentResponse> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/files/content?path=${encodeURIComponent(path)}`, { signal }),
+  );
 }
 
 export { APIError };
