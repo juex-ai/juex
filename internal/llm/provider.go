@@ -12,6 +12,8 @@ type Provider interface {
 	Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error)
 }
 
+const providerMaxRetries = 10
+
 type Config struct {
 	Type           string
 	BaseURL        string
