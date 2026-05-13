@@ -111,3 +111,31 @@ export interface FileContentResponse {
   size: number;
   truncated: boolean;
 }
+
+export interface RuntimeStatusResponse {
+  mcp: {
+    configured: number;
+    connected: number;
+    servers: MCPServerInfo[];
+  };
+  skills: {
+    count: number;
+    items: SkillInfo[];
+  };
+}
+
+export interface MCPServerInfo {
+  name: string;
+  command: string;
+  args?: string[];
+  connected: boolean;
+  tool_count: number;
+}
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  type?: string;
+  source: string;
+  path: string;
+}

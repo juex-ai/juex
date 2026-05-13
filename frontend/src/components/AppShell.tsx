@@ -1,5 +1,5 @@
-import { Outlet } from "react-router-dom";
-import { useState } from "react";
+import { Link, Outlet } from "react-router-dom";
+import { useEffect, useState } from "react";
 import {
   SidebarProvider,
   SidebarInset,
@@ -8,7 +8,10 @@ import {
 import { Sidebar } from "@/components/Sidebar";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { Button } from "@/components/ui/button";
-import { FolderIcon, FolderOpenIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { FolderIcon, FolderOpenIcon, Wrench } from "lucide-react";
+import { getRuntimeStatus } from "@/api";
+import type { RuntimeStatusResponse } from "@/types";
 import {
   Tooltip,
   TooltipContent,
@@ -18,6 +21,25 @@ import {
 
 export function AppShell() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [runtimeStatus, setRuntimeStatus] =
+    useState<RuntimeStatusResponse | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const refreshRuntimeStatus = () => {
+      getRuntimeStatus()
+        .then((status) => {
+          if (live) setRuntimeStatus(status);
+        })
+        .catch((e) => console.error("getRuntimeStatus failed", e));
+    };
+    refreshRuntimeStatus();
+    const interval = window.setInterval(refreshRuntimeStatus, 30_000);
+    return () => {
+      live = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   return (
     <SidebarProvider className="h-svh min-h-0 overflow-hidden">
@@ -28,29 +50,57 @@ export function AppShell() {
             <div className="flex items-center gap-2">
               <SidebarTrigger className="-ml-1" />
               <span className="font-semibold">juex</span>
+              {runtimeStatus ? (
+                <div className="flex items-center gap-1">
+                  <Badge variant="outline" className="font-mono text-xs">
+                    MCP {runtimeStatus.mcp.connected}/
+                    {runtimeStatus.mcp.configured} connected
+                  </Badge>
+                  <Badge variant="outline" className="font-mono text-xs">
+                    SKILLS {runtimeStatus.skills.count}
+                  </Badge>
+                </div>
+              ) : null}
             </div>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => setRightPanelOpen(!rightPanelOpen)}
-                    aria-label={rightPanelOpen ? "Hide workspace" : "Show workspace"}
-                  >
-                    {rightPanelOpen ? (
-                      <FolderOpenIcon className="size-4" />
-                    ) : (
-                      <FolderIcon className="size-4" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {rightPanelOpen ? "Hide workspace" : "Show workspace"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <div className="flex items-center gap-1">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <Link to="/runtime" aria-label="Runtime details">
+                        <Wrench className="size-4" />
+                      </Link>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Runtime details</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => setRightPanelOpen(!rightPanelOpen)}
+                      aria-label={rightPanelOpen ? "Hide workspace" : "Show workspace"}
+                    >
+                      {rightPanelOpen ? (
+                        <FolderOpenIcon className="size-4" />
+                      ) : (
+                        <FolderIcon className="size-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {rightPanelOpen ? "Hide workspace" : "Show workspace"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
           </header>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <Outlet />

@@ -55,6 +55,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
+| `src/pages/Runtime.tsx` | MCP and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |
 

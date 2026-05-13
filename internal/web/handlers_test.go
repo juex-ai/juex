@@ -491,7 +491,7 @@ func TestSPAFallback_ServesIndexForUnknownRoute(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	for _, path := range []string{"/", "/sessions/some-arbitrary-id", "/anything/at/all"} {
+	for _, path := range []string{"/", "/sessions/some-arbitrary-id", "/runtime", "/anything/at/all"} {
 		resp, err := http.Get(ts.URL + path)
 		if err != nil {
 			t.Fatalf("GET %s: %v", path, err)

@@ -9,6 +9,7 @@ import type {
   TurnStatusResponse,
   FileContentResponse,
   FileNode,
+  RuntimeStatusResponse,
 } from "./types";
 
 const BASE = "";  // same-origin; Vite dev proxy handles /api → :8080
@@ -133,6 +134,10 @@ export async function getFileContent(
   return jsonOrThrow(
     await fetch(`${BASE}/api/files/content?path=${encodeURIComponent(path)}`, { signal }),
   );
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatusResponse> {
+  return jsonOrThrow(await fetch(`${BASE}/api/runtime`));
 }
 
 export { APIError };
