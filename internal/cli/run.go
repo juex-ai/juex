@@ -19,10 +19,12 @@ import (
 
 // runResult is the JSON shape emitted on success when --json is set.
 type runResult struct {
-	Text       string `json:"text"`
-	SessionID  string `json:"session_id"`
-	SessionDir string `json:"session_dir"`
-	DurationMs int64  `json:"duration_ms"`
+	Text       string    `json:"text"`
+	SessionID  string    `json:"session_id"`
+	SessionDir string    `json:"session_dir"`
+	DurationMs int64     `json:"duration_ms"`
+	TokenUsage llm.Usage `json:"token_usage"`
+	TokenTotal int       `json:"token_total"`
 }
 
 // errorJSON mirrors principle 9 (errors as guides):
@@ -152,6 +154,7 @@ execution is printed and the process exits with code 10.`,
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"see events.jsonl in the session dir for full lifecycle trace", true)
 			}
+			usage := a.TokenUsage()
 
 			if jsonOut {
 				cmdPrintln(cmd, mustJSON(runResult{
@@ -159,9 +162,12 @@ execution is printed and the process exits with code 10.`,
 					SessionID:  a.Session.ID,
 					SessionDir: a.Session.Dir,
 					DurationMs: time.Since(start).Milliseconds(),
+					TokenUsage: usage,
+					TokenTotal: usage.TotalTokens(),
 				}))
 			} else {
 				cmdPrintln(cmd, out)
+				cmdPrintln(cmd, app.FormatTokenUsage(usage))
 			}
 			return nil
 		},

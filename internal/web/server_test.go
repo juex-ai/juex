@@ -18,6 +18,7 @@ func (stubProvider) Complete(ctx context.Context, sys string, h []llm.Message, t
 	return llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "ack"),
 		StopReason: llm.StopEndTurn,
+		Usage:      llm.Usage{InputTokens: 4, OutputTokens: 2},
 	}, nil
 }
 

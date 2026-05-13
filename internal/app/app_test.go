@@ -49,6 +49,7 @@ func TestApp_RunSingleTurn(t *testing.T) {
 	a, _ := newStubApp(t, llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "hello back"),
 		StopReason: llm.StopEndTurn,
+		Usage:      llm.Usage{InputTokens: 8, OutputTokens: 3},
 	})
 	out, err := a.Run(context.Background(), "hi")
 	if err != nil {
@@ -57,12 +58,31 @@ func TestApp_RunSingleTurn(t *testing.T) {
 	if out != "hello back" {
 		t.Fatalf("out = %q", out)
 	}
+	if got := a.TokenUsage(); got != (llm.Usage{InputTokens: 8, OutputTokens: 3}) {
+		t.Fatalf("usage = %+v", got)
+	}
+}
+
+func TestFormatTokenUsage(t *testing.T) {
+	got := FormatTokenUsage(llm.Usage{InputTokens: 12, OutputTokens: 5})
+	want := "tokens: 17 total (input 12, output 5)"
+	if got != want {
+		t.Fatalf("FormatTokenUsage() = %q, want %q", got, want)
+	}
 }
 
 func TestApp_REPLProcessesMultipleLines(t *testing.T) {
 	a, prov := newStubApp(t,
-		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "one"), StopReason: llm.StopEndTurn},
-		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "two"), StopReason: llm.StopEndTurn},
+		llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "one"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 1, OutputTokens: 2},
+		},
+		llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "two"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 3, OutputTokens: 4},
+		},
 	)
 
 	in := strings.NewReader("first\n\nsecond\n") // blank line is ignored
@@ -73,6 +93,14 @@ func TestApp_REPLProcessesMultipleLines(t *testing.T) {
 	body := out.String()
 	if !strings.Contains(body, "one") || !strings.Contains(body, "two") {
 		t.Fatalf("repl output = %q", body)
+	}
+	for _, want := range []string{
+		"tokens: 3 total (input 1, output 2)",
+		"tokens: 10 total (input 4, output 6)",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("repl output missing %q in:\n%s", want, body)
+		}
 	}
 	if prov.calls != 2 {
 		t.Fatalf("expected 2 LLM calls, got %d", prov.calls)
@@ -103,7 +131,11 @@ func TestApp_REPLContinuesAfterTurnError(t *testing.T) {
 func TestApp_VerboseEmitsToStderr(t *testing.T) {
 	dir := t.TempDir()
 	prov := &stubProvider{replies: []llm.Response{
-		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
+		{
+			Message:    llm.TextMessage(llm.RoleAssistant, "ok"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 5, OutputTokens: 2},
+		},
 	}}
 	var stderr bytes.Buffer
 	a, err := New(Options{
@@ -122,7 +154,7 @@ func TestApp_VerboseEmitsToStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := stderr.String()
-	for _, want := range []string{"› user: x", "[turn 1]", "assistant: ok", "✓ done in"} {
+	for _, want := range []string{"› user: x", "[turn 1]", "assistant: ok", "tokens: 7 total", "✓ done in"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("verbose stderr missing %q in:\n%s", want, body)
 		}

@@ -51,6 +51,9 @@ type Message struct {
 	// generation time so resuming a session under a different config
 	// preserves the original attribution).
 	Model string `json:"model,omitempty"`
+	// Usage is provider-reported token usage for this assistant message.
+	// It is nil for user messages and older transcripts without usage data.
+	Usage *Usage `json:"usage,omitempty"`
 }
 
 // TextMessage is a convenience constructor for a single-text-block message.
@@ -88,6 +91,32 @@ type ToolSpec struct {
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+}
+
+func (u Usage) TotalTokens() int {
+	return u.InputTokens + u.OutputTokens
+}
+
+func (u Usage) IsZero() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0
+}
+
+func (u *Usage) Add(v Usage) {
+	if u == nil {
+		return
+	}
+	u.InputTokens += v.InputTokens
+	u.OutputTokens += v.OutputTokens
+}
+
+func SumUsage(messages []Message) Usage {
+	var total Usage
+	for _, msg := range messages {
+		if msg.Usage != nil {
+			total.Add(*msg.Usage)
+		}
+	}
+	return total
 }
 
 type StopReason string

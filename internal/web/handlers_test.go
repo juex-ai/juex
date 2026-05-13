@@ -212,8 +212,16 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
 		if err == nil {
 			var parsed struct {
+				TokenUsage struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"token_usage"`
 				Messages []struct {
-					Role   string `json:"role"`
+					Role  string `json:"role"`
+					Usage struct {
+						InputTokens  int `json:"input_tokens"`
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
 					Blocks []struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
@@ -229,6 +237,12 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 				if m.Role == "assistant" {
 					for _, b := range m.Blocks {
 						if b.Type == "text" && b.Text == "ack" {
+							if parsed.TokenUsage.InputTokens != 4 || parsed.TokenUsage.OutputTokens != 2 {
+								t.Fatalf("token_usage = %+v", parsed.TokenUsage)
+							}
+							if m.Usage.InputTokens != 4 || m.Usage.OutputTokens != 2 {
+								t.Fatalf("message usage = %+v", m.Usage)
+							}
 							if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); err != nil {
 								t.Fatalf("conversation stat after turn err = %v", err)
 							}

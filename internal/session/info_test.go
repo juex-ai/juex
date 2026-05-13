@@ -76,8 +76,15 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 	dir := makeSession(t, root, "20260506T103500-abcd1234",
 		[]llm.Message{
 			llm.TextMessage(llm.RoleUser, "summarise README.md"),
-			llm.TextMessage(llm.RoleAssistant, "the readme says hello world"),
+			messageWithUsage(
+				llm.TextMessage(llm.RoleAssistant, "the readme says hello world"),
+				llm.Usage{InputTokens: 10, OutputTokens: 4},
+			),
 			llm.TextMessage(llm.RoleUser, "follow up"),
+			messageWithUsage(
+				llm.TextMessage(llm.RoleAssistant, "done"),
+				llm.Usage{InputTokens: 7, OutputTokens: 3},
+			),
 		}, time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC))
 
 	got, err := List(root)
@@ -96,10 +103,18 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 	if got[0].Dir != dir {
 		t.Errorf("dir = %s, want %s", got[0].Dir, dir)
 	}
+	if got[0].TokenUsage != (llm.Usage{InputTokens: 17, OutputTokens: 7}) {
+		t.Errorf("token_usage = %+v", got[0].TokenUsage)
+	}
 	want := time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC)
 	if !got[0].StartedAt.Equal(want) {
 		t.Errorf("started_at = %v, want %v", got[0].StartedAt, want)
 	}
+}
+
+func messageWithUsage(msg llm.Message, usage llm.Usage) llm.Message {
+	msg.Usage = &usage
+	return msg
 }
 
 func TestList_TruncatesPreviewToRunes(t *testing.T) {
