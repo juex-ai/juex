@@ -74,7 +74,7 @@ juex/
 ├── go.mod / go.sum
 ├── README.md / PHILOSOPHY.md / ARCHITECTURE.md / DESIGN.md
 ├── AGENTS.md / CLAUDE.md→AGENTS.md
-└── juex.yaml / .env.example / .env.local.anthropic / .env.local.openai
+└── juex.yaml.example
 ```
 
 Per-package unit tests stay co-located with their source files (idiomatic Go).
@@ -312,7 +312,6 @@ Persistent flags inherited by all subcommands:
 | Flag | Short | Default |
 |---|---|---|
 | `--config` |  | unset (path to `juex.yaml` override) |
-| `--env` | `-e` | unset (legacy explicit `.env` override) |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
 | `--verbose` | `-V` | false (stream events to stderr) |
 
@@ -391,7 +390,7 @@ Routes:
 ## 5. Configuration
 
 Runtime config lives in `<WorkDir>/.juex/juex.yaml`; the repository root
-ships `juex.yaml` as a copyable template:
+ships `juex.yaml.example` as a copyable template:
 
 ```yaml
 provider:
@@ -407,10 +406,10 @@ provider:
 | `provider.base_url` | full base URL (Anthropic, OpenAI, DeepSeek, etc.) |
 | `provider.api_key` | API key |
 | `provider.model` | model name |
+| `provider.thinking_effort` | optional reasoning depth for thinking models |
 
 Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
-< `os.Environ` < `--config <path>` (if supplied). `--env <path>` remains a
-legacy explicit override for old dotenv files, but `.env` is no longer read by
+< `--config <path>` (if supplied) < `os.Environ`. `.env` is no longer read by
 default.
 
 ---
@@ -427,7 +426,7 @@ Resources split between user-global and work-local:
 
 <WorkDir>/                       # the agent's working directory (--cwd or $PWD)
 ├── AGENTS.md                    # project rules (concatenated, not overriding)
-├── juex.yaml                    # template for .juex/juex.yaml
+├── juex.yaml.example            # template for .juex/juex.yaml
 ├── .agents/
 │   ├── AGENTS.md                # subdir rules (also concatenated)
 │   ├── mcp.json                 # project MCP (project wins on duplicate names)
@@ -539,9 +538,9 @@ workflow; runs entirely on GitHub Actions.
   - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
     runs `go test ./... -race -count=1`. Bash-tool tests skip on Windows
     via a `runtime.GOOS` guard.
-- `integration.yml` — `workflow_dispatch` only. Hydrates `.env.local.anthropic`
-  and `.env.local.openai` from repo secrets, then runs
-  `-tags=integration ./tests/e2e/...`. Required secrets:
+- `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/juex.qwen.yaml`
+  and `.juex/juex.anthropic.yaml` provider configs from repo secrets, then
+  runs `-tags=integration ./tests/e2e/...`. Required secrets:
 
   ```
   PROVIDER_API_TYPE_ANTHROPIC   PROVIDER_API_BASE_ANTHROPIC
@@ -589,7 +588,7 @@ gated by build tag.
 | MCP client | mark3labs/mcp-go | **handwritten stdio** | only stdio + 3 RPCs needed |
 | Event dispatch | channel + goroutine pool | **synchronous map** | no async listener required yet |
 | Frontmatter | `gopkg.in/yaml.v3` | **handwritten** | top-level string fields only |
-| Config | viper / koanf | **small YAML loader + explicit dotenv fallback** | few runtime fields, predictable precedence |
+| Config | viper / koanf | **small YAML loader** | few runtime fields, predictable precedence |
 | CLI library | stdlib `flag` | **`spf13/cobra`** | industry-standard subcommand UX, persistent flags, automatic help |
 
 ---

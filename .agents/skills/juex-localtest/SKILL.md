@@ -21,7 +21,7 @@ mise exec -- <command>
 
 1. **Focused Go tests while iterating** — run `go test -v ./path/to/changed/package/...` for each changed Go package that has `*_test.go` files. For cross-package changes, include `./tests/e2e/...`.
 2. **Full Go test suite** — `make test` runs `go test ./... -count=1`, including the non-live e2e tests under `tests/e2e`.
-3. **Live integration entrypoint** — `make integration` runs `go test -tags=integration ./tests/e2e/... -count=1`. These tests read `.env.local.openai` and `.env.local.anthropic`; missing files or empty keys are expected to skip the live cases.
+3. **Live integration entrypoint** — `make integration` runs `go test -tags=integration ./tests/e2e/... -count=1`. These tests load live provider configs from `.juex/*.yaml`, currently `.juex/juex.qwen.yaml` and `.juex/juex.anthropic.yaml`. Missing files, empty keys, or incomplete provider config are expected to skip the affected live cases.
 4. **Frontend and embedded binary build** — `make build` runs `make web` first (`cd frontend && pnpm install && pnpm build`), copies the bundle into `internal/web/dist`, then builds `dist/juex`.
 5. **CI parity when the change is risky** — run `go test ./... -race -count=1` after changes to concurrency, runtime, MCP, tools, events, session, or web request handling.
 
@@ -33,4 +33,4 @@ There is no local service startup step for the current suite. Web tests use
 - If build fails → fix compilation errors first, do not proceed to tests
 - If unit tests fail → fix before running integration tests
 - If integration tests fail → report failures with error details, do not suppress or work around them
-- If `make integration` skips live cases because env files or keys are absent, report the skip clearly; do not invent credentials or replace it with a fake live test
+- If `make integration` skips live cases because the expected `.juex/*.yaml` files, keys, or required provider fields are absent, report the skip clearly; do not invent credentials or replace it with a fake live test

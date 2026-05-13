@@ -21,7 +21,7 @@ Create runtime config in the work directory where you want the agent to run:
 
 ```bash
 mkdir -p .juex
-cp juex.yaml .juex/juex.yaml
+cp juex.yaml.example .juex/juex.yaml
 ```
 
 Fill in provider settings, then run:

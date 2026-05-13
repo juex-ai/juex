@@ -52,7 +52,7 @@ Juex is a single-binary Go agent runtime. It currently includes:
 - Backend/API work: add or update handler or CLI tests and run the affected Go packages.
 - Web work: build the frontend and verify the UI in a browser when behavior is visible.
 - Documentation-only work: check filenames, headings, links, and stale references.
-- Live integration tests are behind the `integration` build tag and read `.env.local.anthropic` / `.env.local.openai`; never commit real credentials.
+- Live integration tests are behind the `integration` build tag and read selected local provider configs from `.juex/*.yaml`; never commit real credentials.
 
 Prefer project tooling:
 
