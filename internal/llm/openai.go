@@ -21,7 +21,10 @@ type openAIProvider struct {
 }
 
 func NewOpenAI(cfg Config, _ any) Provider {
-	opts := []option.RequestOption{option.WithAPIKey(cfg.APIKey)}
+	opts := []option.RequestOption{
+		option.WithAPIKey(cfg.APIKey),
+		option.WithMaxRetries(providerMaxRetries),
+	}
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
 	}

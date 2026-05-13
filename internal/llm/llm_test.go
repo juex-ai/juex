@@ -177,6 +177,91 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestProviders_RetryPolicy(t *testing.T) {
+	cases := []struct {
+		name       string
+		provider   func(baseURL string) Provider
+		serverErr  string
+		badReqErr  string
+		successRes string
+	}{
+		{
+			name: "anthropic",
+			provider: func(baseURL string) Provider {
+				return NewAnthropic(Config{Type: "anthropic", BaseURL: baseURL, APIKey: "test-key", Model: "claude-test"}, nil)
+			},
+			serverErr: `{"type":"error","error":{"type":"api_error","message":"temporary server error"}}`,
+			badReqErr: `{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`,
+			successRes: `{
+				"id":"msg_1","type":"message","role":"assistant","model":"claude-test",
+				"content":[{"type":"text","text":"ok"}],
+				"stop_reason":"end_turn",
+				"usage":{"input_tokens":1,"output_tokens":1}
+			}`,
+		},
+		{
+			name: "openai",
+			provider: func(baseURL string) Provider {
+				return NewOpenAI(Config{Type: "openai", BaseURL: baseURL, APIKey: "k", Model: "m"}, nil)
+			},
+			serverErr: `{"error":{"message":"temporary server error","type":"server_error"}}`,
+			badReqErr: `{"error":{"message":"bad request","type":"invalid_request_error"}}`,
+			successRes: `{
+				"id":"cmpl_1","object":"chat.completion","model":"gpt-test",
+				"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+				"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+			}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name+"/recoverable", func(t *testing.T) {
+			attempts := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts++
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("retry-after-ms", "0")
+				if attempts <= providerMaxRetries {
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(tc.serverErr))
+					return
+				}
+				w.Write([]byte(tc.successRes))
+			}))
+			defer srv.Close()
+
+			resp, err := tc.provider(srv.URL).Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if attempts != providerMaxRetries+1 {
+				t.Fatalf("attempts = %d, want %d", attempts, providerMaxRetries+1)
+			}
+			if resp.Message.FirstText() != "ok" {
+				t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+			}
+		})
+
+		t.Run(tc.name+"/bad_request", func(t *testing.T) {
+			attempts := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts++
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(tc.badReqErr))
+			}))
+			defer srv.Close()
+
+			if _, err := tc.provider(srv.URL).Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err == nil {
+				t.Fatal("expected error")
+			}
+			if attempts != 1 {
+				t.Fatalf("attempts = %d, want 1", attempts)
+			}
+		})
+	}
+}
+
 func TestOpenAI_CompactsEmptyHistoryMessages(t *testing.T) {
 	type wireReq struct {
 		Messages []map[string]any `json:"messages"`

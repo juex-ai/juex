@@ -140,7 +140,10 @@ Two implementations (`anthropic.go`, `openai.go`) wrap the official Go SDKs
 (`anthropic-sdk-go`, `openai-go`). Both honour `PROVIDER_API_BASE` from the
 env via `option.WithBaseURL`, so the OpenAI provider also covers DeepSeek /
 OpenRouter / Ollama. SDK types are confined to those two files; every other
-layer sees only the canonical types.
+layer sees only the canonical types. Both SDK clients use `WithMaxRetries(10)`;
+the SDKs apply exponential backoff for recoverable transport/API failures
+such as network errors and 5xx responses, while ordinary request errors are
+returned immediately.
 
 The OpenAI adapter additionally captures `reasoning_content` from non-OpenAI
 endpoints (DeepSeek thinking models) and round-trips it on the next request,
