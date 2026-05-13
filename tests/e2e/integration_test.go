@@ -1,12 +1,10 @@
 //go:build integration
 
 // Live integration smoke tests. Build-tag gated so they only run when
-// explicitly opted in (no API key in CI). Reads .env.local.anthropic or
-// .env.local.openai from the repository root.
+// explicitly opted in (no API key in normal CI). Reads provider configs from
+// .juex/*.yaml in the repository root.
 //
-//	go test -tags=integration ./internal/e2e/ -run Live
-//	# or pick a provider:
-//	go test -tags=integration ./internal/e2e/ -run LiveOpenAI
+//	go test -tags=integration ./tests/e2e/... -run Live
 package e2e
 
 import (
@@ -24,6 +22,25 @@ import (
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
+
+var liveConfigEnvKeys = []string{
+	"PROVIDER_API_TYPE",
+	"PROVIDER_API_BASE",
+	"PROVIDER_API_KEY",
+	"PROVIDER_API_MODEL",
+	"PROVIDER_THINKING_EFFORT",
+}
+
+var defaultLiveConfigNames = []string{
+	"juex.qwen.yaml",
+	"juex.anthropic.yaml",
+}
+
+type liveConfig struct {
+	name string
+	path string
+	cfg  config.Config
+}
 
 // repoRoot walks up from the test file location until it finds go.mod.
 func repoRoot(t *testing.T) string {
@@ -44,25 +61,48 @@ func repoRoot(t *testing.T) string {
 	return ""
 }
 
-func loadEnv(t *testing.T, name string) config.Config {
+func loadLiveConfigs(t *testing.T) []liveConfig {
 	t.Helper()
 	root := repoRoot(t)
-	envPath := filepath.Join(root, name)
-	if _, err := os.Stat(envPath); err != nil {
-		t.Skipf("%s not present (%v); skipping live test", envPath, err)
+	var matches []string
+	for _, name := range defaultLiveConfigNames {
+		path := filepath.Join(root, ".juex", name)
+		if _, err := os.Stat(path); err == nil {
+			matches = append(matches, path)
+		}
 	}
-	// Clear OS env vars so the .env file wins.
-	for _, k := range []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL"} {
+	if len(matches) == 0 {
+		t.Skip("none of .juex/juex.qwen.yaml or .juex/juex.anthropic.yaml are present; skipping live tests")
+	}
+	// Clear OS env vars so the explicit .juex/*.yaml file wins.
+	for _, k := range liveConfigEnvKeys {
 		t.Setenv(k, "")
 	}
-	cfg, err := config.LoadFromFile(envPath)
-	if err != nil {
-		t.Fatalf("load env: %v", err)
+
+	var out []liveConfig
+	for _, path := range matches {
+		cfg, err := config.LoadFromFileForWorkDir(path, root)
+		if err != nil {
+			t.Fatalf("load live config %s: %v", path, err)
+		}
+		if cfg.APIKey == "" {
+			t.Logf("%s has no API key set; skipping it", path)
+			continue
+		}
+		if cfg.ProviderType == "" || cfg.Model == "" {
+			t.Logf("%s has incomplete provider config; skipping it", path)
+			continue
+		}
+		out = append(out, liveConfig{
+			name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)),
+			path: path,
+			cfg:  cfg,
+		})
 	}
-	if cfg.APIKey == "" {
-		t.Skipf("%s has no API key set", envPath)
+	if len(out) == 0 {
+		t.Skip("no usable .juex/*.yaml live configs found; skipping live tests")
 	}
-	return cfg
+	return out
 }
 
 // runLiveTurn drives one real LLM turn with the supplied prompt against the
@@ -91,14 +131,14 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	}
 	eng := &runtime.Engine{
 		Provider: provider, Tools: reg, Bus: bus, Session: sess, Prompt: pb,
-		MaxIters: 10, MaxDur: 60 * time.Second,
+		MaxIters: 10, MaxDur: 180 * time.Second,
 	}
 
 	bus.Subscribe("*", func(e events.Event) {
 		t.Logf("[event] %s payload=%v", e.Type, e.Payload)
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 210*time.Second)
 	defer cancel()
 	out, err := eng.Turn(ctx, userPrompt)
 	if err != nil {
@@ -108,75 +148,64 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	return out
 }
 
-func TestLiveOpenAI_PlainCompletion(t *testing.T) {
-	cfg := loadEnv(t, ".env.local.openai")
-	out := runLiveTurn(t, cfg, "Reply with exactly one word: PONG")
-	if !strings.Contains(strings.ToUpper(out), "PONG") {
-		t.Fatalf("expected PONG in response, got %q", out)
+func TestLiveConfigs_PlainCompletion(t *testing.T) {
+	for _, lc := range loadLiveConfigs(t) {
+		t.Run(lc.name, func(t *testing.T) {
+			t.Logf("using config %s", lc.path)
+			out := runLiveTurn(t, lc.cfg, "Reply with exactly one word: PONG")
+			if !strings.Contains(strings.ToUpper(out), "PONG") {
+				t.Fatalf("expected PONG in response, got %q", out)
+			}
+		})
 	}
 }
 
-func TestLiveOpenAI_ToolUse(t *testing.T) {
-	cfg := loadEnv(t, ".env.local.openai")
-	dir := t.TempDir()
-	target := filepath.Join(dir, "secret.txt")
-	if err := os.WriteFile(target, []byte("the magic phrase is JUEX_LIVE_42"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	prompt := "There is a file at " + target +
-		". Use the `read` tool to read it, then reply containing the magic phrase verbatim."
-	out := runLiveTurn(t, cfg, prompt)
-	if !strings.Contains(out, "JUEX_LIVE_42") {
-		t.Fatalf("model did not surface phrase from file; got %q", out)
-	}
-}
-
-func TestLiveAnthropic_PlainCompletion(t *testing.T) {
-	cfg := loadEnv(t, ".env.local.anthropic")
-	out := runLiveTurn(t, cfg, "Reply with exactly one word: PONG")
-	if !strings.Contains(strings.ToUpper(out), "PONG") {
-		t.Fatalf("expected PONG in response, got %q", out)
+func TestLiveConfigs_ToolUse(t *testing.T) {
+	for _, lc := range loadLiveConfigs(t) {
+		t.Run(lc.name, func(t *testing.T) {
+			t.Logf("using config %s", lc.path)
+			dir := t.TempDir()
+			target := filepath.Join(dir, "secret.txt")
+			if err := os.WriteFile(target, []byte("the magic phrase is JUEX_LIVE_42"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			prompt := "There is a file at " + target +
+				". Use the `read` tool to read it, then reply containing the magic phrase verbatim."
+			out := runLiveTurn(t, lc.cfg, prompt)
+			if !strings.Contains(out, "JUEX_LIVE_42") {
+				t.Fatalf("model did not surface phrase from file; got %q", out)
+			}
+		})
 	}
 }
 
-func TestLiveAnthropic_ToolUse(t *testing.T) {
-	cfg := loadEnv(t, ".env.local.anthropic")
-	dir := t.TempDir()
-	target := filepath.Join(dir, "secret.txt")
-	if err := os.WriteFile(target, []byte("the magic phrase is JUEX_LIVE_42"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	prompt := "There is a file at " + target +
-		". Use the `read` tool to read it, then reply containing the magic phrase verbatim."
-	out := runLiveTurn(t, cfg, prompt)
-	if !strings.Contains(out, "JUEX_LIVE_42") {
-		t.Fatalf("model did not surface phrase from file; got %q", out)
-	}
-}
-
-// TestLiveOpenAI_MultiStep gives the model a workflow that requires writing,
+// TestLiveConfigs_MultiStep gives the model a workflow that requires writing,
 // editing, and verifying — at least three tool rounds — to exercise the
 // turn loop's iteration / parallelism paths against a real model.
-func TestLiveOpenAI_MultiStep(t *testing.T) {
-	cfg := loadEnv(t, ".env.local.openai")
-	dir := t.TempDir()
-	target := filepath.Join(dir, "scratch.txt")
+func TestLiveConfigs_MultiStep(t *testing.T) {
+	for _, lc := range loadLiveConfigs(t) {
+		t.Run(lc.name, func(t *testing.T) {
+			t.Logf("using config %s", lc.path)
+			dir := t.TempDir()
+			target := filepath.Join(dir, "scratch.txt")
 
-	prompt := "You will work in directory " + dir + ". " +
-		"Step 1: use the `write` tool to create scratch.txt with content `start`. " +
-		"Step 2: use the `edit` tool to replace `start` with `JUEX_LIVE_42`. " +
-		"Step 3: use the `bash` tool to run `cat " + target + "`. " +
-		"Step 4: reply with the final file contents only, on a single line."
-	out := runLiveTurn(t, cfg, prompt)
-	if !strings.Contains(out, "JUEX_LIVE_42") {
-		t.Fatalf("model did not produce expected output: %q", out)
-	}
-	// Filesystem side-effect must be observable.
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read scratch.txt: %v", err)
-	}
-	if !strings.Contains(string(data), "JUEX_LIVE_42") {
-		t.Fatalf("scratch.txt content unexpected: %q", string(data))
+			prompt := "You will work in directory " + dir + ". " +
+				"Step 1: use the `write` tool to create scratch.txt with content `start`. " +
+				"Step 2: use the `edit` tool to replace `start` with `JUEX_LIVE_42`. " +
+				"Step 3: use the `bash` tool to run `cat " + target + "`. " +
+				"Step 4: reply with the final file contents only, on a single line."
+			out := runLiveTurn(t, lc.cfg, prompt)
+			if !strings.Contains(out, "JUEX_LIVE_42") {
+				t.Fatalf("model did not produce expected output: %q", out)
+			}
+			// Filesystem side-effect must be observable.
+			data, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("read scratch.txt: %v", err)
+			}
+			if !strings.Contains(string(data), "JUEX_LIVE_42") {
+				t.Fatalf("scratch.txt content unexpected: %q", string(data))
+			}
+		})
 	}
 }
