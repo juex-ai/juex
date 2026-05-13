@@ -67,11 +67,7 @@ export interface SessionsListResponse {
   sessions: SessionInfo[];
 }
 
-export interface CreateSessionResponse {
-  id: string;
-  dir: string;
-  started_at: string;
-}
+export type CreateSessionResponse = SessionInfo;
 
 export interface DeleteSessionResponse {
   deleted: boolean;

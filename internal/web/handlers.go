@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,9 +53,7 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	if infos == nil {
-		infos = []session.Info{}
-	}
+	infos = s.mergeActiveSessionInfos(infos)
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": infos})
 }
 
@@ -64,11 +63,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":         as.app.Session.ID,
-		"dir":        as.app.Session.Dir,
-		"started_at": as.StartedAt.UTC().Format(time.RFC3339),
-	})
+	writeJSON(w, http.StatusCreated, as.app.Session.Info(as.StartedAt.UTC()))
 }
 
 // sessionPathID extracts <id> from /api/sessions/<id>[/<rest>].
@@ -92,6 +87,19 @@ type sessionShowResponse struct {
 }
 
 func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id string) {
+	if v, ok := s.sessions.Load(id); ok {
+		as := v.(*activeSession)
+		info, msgs := as.app.Session.Snapshot(time.Now().UTC())
+		if msgs == nil {
+			msgs = []llm.Message{}
+		}
+		writeJSON(w, http.StatusOK, sessionShowResponse{
+			Info:     info,
+			Messages: msgs,
+			Model:    s.opts.Cfg.Model,
+		})
+		return
+	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
 	info, msgs, err := session.LoadInfo(dir)
 	if err != nil {
@@ -116,16 +124,45 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 
-	s.closeActiveSession(id)
+	closedActive := s.closeActiveSession(id)
 	if err := session.Delete(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id); err != nil {
 		if os.IsNotExist(err) {
-			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+			if !closedActive {
+				writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
+}
+
+func (s *Server) mergeActiveSessionInfos(persisted []session.Info) []session.Info {
+	byID := make(map[string]session.Info, len(persisted))
+	for _, info := range persisted {
+		byID[info.ID] = info
+	}
+	now := time.Now().UTC()
+	s.sessions.Range(func(_, v any) bool {
+		as := v.(*activeSession)
+		info := as.app.Session.Info(now)
+		byID[info.ID] = info
+		return true
+	})
+	infos := make([]session.Info, 0, len(byID))
+	for _, info := range byID {
+		infos = append(infos, info)
+	}
+	sort.SliceStable(infos, func(i, j int) bool {
+		if !infos[i].LastActiveAt.Equal(infos[j].LastActiveAt) {
+			return infos[i].LastActiveAt.After(infos[j].LastActiveAt)
+		}
+		return infos[i].StartedAt.After(infos[j].StartedAt)
+	})
+	return infos
 }
 
 // turnRequest is the wire shape for POST /turns.
@@ -218,6 +255,9 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 		writeErr(w, http.StatusInternalServerError, "general_error", "streaming not supported")
 		return
 	}
+	sub := as.bcast.subscribe()
+	defer sub.unsubscribe()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -245,8 +285,6 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 		}
 	}
 
-	sub := as.bcast.subscribe()
-	defer sub.unsubscribe()
 	ctx := r.Context()
 	for {
 		select {

@@ -39,6 +39,10 @@ type Options struct {
 	// session ID and on-disk files are reused; new messages append.
 	ResumeDir string
 	Alias     string
+	// LazySession delays creating the on-disk session directory until the
+	// first message or event is appended. Used by the web UI so abandoned
+	// empty chats do not leave local files behind.
+	LazySession bool
 }
 
 type App struct {
@@ -129,6 +133,7 @@ func New(opts Options) (*App, error) {
 		sess, err = session.NewWithOptions(cfg.SessionsDir(), session.Options{
 			Alias:       opts.Alias,
 			HistoryPath: cfg.HistoryPath(),
+			Lazy:        opts.LazySession,
 		})
 	}
 	if err != nil {

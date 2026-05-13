@@ -74,6 +74,25 @@ func TestSession_AppendEventToJSONL(t *testing.T) {
 	}
 }
 
+func TestSession_LazyCreatesNoFilesUntilAppend(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewWithOptions(root, Options{Lazy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if _, err := os.Stat(s.Dir); !os.IsNotExist(err) {
+		t.Fatalf("lazy session dir stat err = %v, want not exist", err)
+	}
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "hello")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err != nil {
+		t.Fatalf("conversation stat err = %v", err)
+	}
+}
+
 func TestSession_BusSubscription(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

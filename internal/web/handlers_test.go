@@ -123,14 +123,18 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 	var parsed struct {
-		ID  string `json:"id"`
-		Dir string `json:"dir"`
+		ID           string `json:"id"`
+		Dir          string `json:"dir"`
+		LastActiveAt string `json:"last_active_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.ID == "" || parsed.Dir == "" {
+	if parsed.ID == "" || parsed.Dir == "" || parsed.LastActiveAt == "" {
 		t.Errorf("got %+v", parsed)
+	}
+	if _, err := os.Stat(filepath.Join(parsed.Dir, "conversation.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("conversation stat err = %v, want not exist before first message", err)
 	}
 	// The created session must show up in subsequent List call.
 	resp2, err := http.Get(ts.URL + "/api/sessions")
@@ -141,6 +145,25 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	body, _ := io.ReadAll(resp2.Body)
 	if !strings.Contains(string(body), parsed.ID) {
 		t.Errorf("created id %q not found in list:\n%s", parsed.ID, body)
+	}
+
+	show, err := http.Get(ts.URL + "/api/sessions/" + parsed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer show.Body.Close()
+	if show.StatusCode != http.StatusOK {
+		t.Fatalf("show status = %d", show.StatusCode)
+	}
+	var shown struct {
+		ID       string `json:"id"`
+		Messages []any  `json:"messages"`
+	}
+	if err := json.NewDecoder(show.Body).Decode(&shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown.ID != parsed.ID || len(shown.Messages) != 0 {
+		t.Fatalf("show = %+v", shown)
 	}
 }
 
@@ -159,6 +182,9 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 	created.Body.Close()
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("conversation stat before turn err = %v, want not exist", err)
+	}
 
 	// Submit a turn.
 	body := strings.NewReader(`{"prompt":"hi"}`)
@@ -203,6 +229,9 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 				if m.Role == "assistant" {
 					for _, b := range m.Blocks {
 						if b.Type == "text" && b.Text == "ack" {
+							if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); err != nil {
+								t.Fatalf("conversation stat after turn err = %v", err)
+							}
 							return
 						}
 					}
@@ -362,6 +391,46 @@ func TestDeleteSession_NotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteSession_RemovesEmptyActiveSession(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/"+c.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, body=%s", resp.StatusCode, body)
+	}
+
+	resp2, err := http.Get(ts.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	body, _ := io.ReadAll(resp2.Body)
+	if strings.Contains(string(body), c.ID) {
+		t.Fatalf("empty active session still listed:\n%s", body)
+	}
+}
+
 func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
@@ -379,7 +448,8 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 
 	// Connect to the SSE stream first.
 	req, _ := http.NewRequest("GET", ts.URL+"/api/sessions/"+c.ID+"/events", nil)
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

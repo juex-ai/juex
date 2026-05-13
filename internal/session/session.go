@@ -44,6 +44,7 @@ type Session struct {
 type Options struct {
 	Alias       string
 	HistoryPath string
+	Lazy        bool
 }
 
 // New creates a new session under rootDir. rootDir is created if missing.
@@ -54,6 +55,14 @@ func New(rootDir string) (*Session, error) {
 func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	id := newID()
 	dir := filepath.Join(rootDir, id)
+	if opts.Lazy {
+		return &Session{
+			ID:          id,
+			Dir:         dir,
+			Alias:       opts.Alias,
+			historyPath: opts.HistoryPath,
+		}, nil
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -85,6 +94,10 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 func (s *Session) Append(m llm.Message) error {
 	s.mu.Lock()
 	m = normalizeMessage(m)
+	if err := s.ensureFilesLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	s.History = append(s.History, m)
 	if err := writeJSONL(s.convFD, m); err != nil {
 		s.mu.Unlock()
@@ -104,6 +117,9 @@ func (s *Session) Append(m llm.Message) error {
 func (s *Session) AppendEvent(e events.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.ensureFilesLocked(); err != nil {
+		return err
+	}
 	return writeJSONL(s.eventFD, e)
 }
 
@@ -190,6 +206,51 @@ func (s *Session) SubscribeBus(bus *events.Bus) {
 	})
 }
 
+// Info returns a summary of the in-memory session. For lazy sessions that have
+// not yet been persisted, now is used as the LastActiveAt fallback.
+func (s *Session) Info(now time.Time) Info {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.infoLocked(now)
+}
+
+// Snapshot returns the current summary and a copy of the in-memory history.
+func (s *Session) Snapshot(now time.Time) (Info, []llm.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msgs := append([]llm.Message(nil), s.History...)
+	return s.infoLocked(now), msgs
+}
+
+func (s *Session) ensureFilesLocked() error {
+	if s.convFD != nil && s.eventFD != nil {
+		return nil
+	}
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return err
+	}
+	if s.Alias != "" {
+		if err := SetAlias(s.Dir, s.Alias); err != nil {
+			return err
+		}
+	}
+	if s.convFD == nil {
+		convFD, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		s.convFD = convFD
+	}
+	if s.eventFD == nil {
+		eventFD, err := os.OpenFile(filepath.Join(s.Dir, eventsFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		s.eventFD = eventFD
+	}
+	return nil
+}
+
 func writeJSONL(w *os.File, v any) error {
 	if w == nil {
 		return fmt.Errorf("session: file closed")
@@ -229,16 +290,20 @@ func (s *Session) historyInfoLocked() (Info, bool) {
 	if s.historyPath == "" {
 		return Info{}, false
 	}
+	return s.infoLocked(time.Now().UTC()), true
+}
+
+func (s *Session) infoLocked(now time.Time) Info {
 	info := Info{
 		ID:        s.ID,
 		Alias:     s.Alias,
 		Dir:       s.Dir,
-		StartedAt: parseStartedAt(s.ID, time.Now().UTC()),
+		StartedAt: parseStartedAt(s.ID, now),
 	}
 	if st, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err == nil {
 		info.LastActiveAt = st.ModTime()
 	} else {
-		info.LastActiveAt = time.Now().UTC()
+		info.LastActiveAt = now
 	}
 	for _, m := range s.History {
 		if m.Role != llm.RoleUser {
@@ -249,7 +314,7 @@ func (s *Session) historyInfoLocked() (Info, bool) {
 			info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
 		}
 	}
-	return info, true
+	return info
 }
 
 func newID() string {

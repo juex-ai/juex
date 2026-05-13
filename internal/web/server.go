@@ -170,10 +170,10 @@ func (s *Server) Close() {
 	})
 }
 
-func (s *Server) closeActiveSession(id string) {
+func (s *Server) closeActiveSession(id string) bool {
 	v, ok := s.sessions.LoadAndDelete(id)
 	if !ok {
-		return
+		return false
 	}
 	as := v.(*activeSession)
 	as.cancelMu.Lock()
@@ -184,6 +184,7 @@ func (s *Server) closeActiveSession(id string) {
 	as.turnWG.Wait()
 	as.bcast.close()
 	as.app.Close()
+	return true
 }
 
 // validLoopback enforces "127.0.0.1" / "::1" / "localhost" hosts. The
@@ -216,10 +217,11 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 		}
 	}
 	a, err := app.New(app.Options{
-		Config:    s.opts.Cfg,
-		Provider:  s.opts.Provider,
-		WorkDir:   s.opts.Cfg.WorkDir,
-		ResumeDir: resumeDir,
+		Config:      s.opts.Cfg,
+		Provider:    s.opts.Provider,
+		WorkDir:     s.opts.Cfg.WorkDir,
+		ResumeDir:   resumeDir,
+		LazySession: resumeDir == "",
 	})
 	if err != nil {
 		return nil, err
