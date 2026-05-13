@@ -349,6 +349,8 @@ Routes:
 | GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
+| GET | `/api/files/tree` | workdir file tree for the web sidebar |
+| GET | `/api/files/content?path=<path>` | bounded text preview for one workdir file |
 
 ---
 

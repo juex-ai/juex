@@ -9,6 +9,12 @@ import { Sidebar } from "@/components/Sidebar";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { Button } from "@/components/ui/button";
 import { FolderIcon, FolderOpenIcon } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 export function AppShell() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -23,26 +29,36 @@ export function AppShell() {
               <SidebarTrigger className="-ml-1" />
               <span className="font-semibold">juex</span>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="text-muted-foreground hover:text-foreground"
-              onClick={() => setRightPanelOpen(!rightPanelOpen)}
-            >
-              {rightPanelOpen ? (
-                <FolderOpenIcon className="w-4 h-4" />
-              ) : (
-                <FolderIcon className="w-4 h-4" />
-              )}
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => setRightPanelOpen(!rightPanelOpen)}
+                    aria-label={rightPanelOpen ? "Hide workspace" : "Show workspace"}
+                  >
+                    {rightPanelOpen ? (
+                      <FolderOpenIcon className="size-4" />
+                    ) : (
+                      <FolderIcon className="size-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {rightPanelOpen ? "Hide workspace" : "Show workspace"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </header>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
             <Outlet />
           </div>
         </div>
         {rightPanelOpen && (
-          <div className="w-72 border-l bg-sidebar flex-shrink-0 flex flex-col h-full overflow-hidden transition-all">
-             <FileTreePanel />
+          <div className="flex h-full w-72 flex-shrink-0 flex-col overflow-hidden border-l bg-sidebar transition-all">
+            <FileTreePanel />
           </div>
         )}
       </SidebarInset>

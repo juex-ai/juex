@@ -161,27 +161,30 @@ server. Edit React, see changes instantly.
 
 ## 5. Page layout
 
-Every page renders a fixed two-column layout: a 240px sidebar on the left,
-content on the right. The right column owns its own header and composer
-(when applicable).
+Every page renders a fixed shell: a collapsible session sidebar on the left,
+the conversation column in the middle, and a collapsible workspace sidebar on
+the right. The middle column owns its own header and composer (when
+applicable).
 
 ```
-┌──────────────┬──────────────────────────────────┐
-│ + new chat   │ ← page header (id / meta)        │
-├──────────────┼──────────────────────────────────┤
-│ session A    │                                  │
-│ session B    │  message list                    │
-│ session C    │  (scrollable)                    │
-│ session D    │                                  │
-│ ...          ├──────────────────────────────────┤
-│              │ ┌──────────────────────────────┐ │
-│              │ │ textarea                     │ │
-│              │ └──────────────────────────────┘ │
-│              │ ● idle             [Stop][Send] │
-└──────────────┴──────────────────────────────────┘
+┌──────────────┬──────────────────────────────────┬──────────────┐
+│ + new chat   │ ← page header (id / meta)        │ workspace    │
+├──────────────┼──────────────────────────────────┼──────────────┤
+│ session A    │                                  │ file tree    │
+│ session B    │  message list                    │              │
+│ session C    │  (scrollable)                    │              │
+│ session D    │                                  │              │
+│ ...          ├──────────────────────────────────┤              │
+│              │ ┌──────────────────────────────┐ │              │
+│              │ │ textarea                     │ │              │
+│              │ └──────────────────────────────┘ │              │
+│              │ ● idle             [Stop][Send] │              │
+└──────────────┴──────────────────────────────────┴──────────────┘
 ```
 
 - Sidebar collapses to a hidden drawer (shadcn `Sheet`) below 768px.
+- Workspace sidebar is toggled from the header and opens file previews in a
+  right-side sheet.
 - Center column max-width is 880px; the rest is gutter so reading lines do
   not get awkwardly wide.
 - Composer is sticky to the bottom of the center column.

@@ -1,56 +1,78 @@
 import { useEffect, useState } from "react";
-import { getFileTree, getFileContent, type FileNode } from "@/api";
-import { Folder, FolderOpen, File as FileIcon, ChevronRight, ChevronDown, X } from "lucide-react";
+import { getFileTree, getFileContent } from "@/api";
+import type { FileContentResponse, FileNode } from "@/types";
+import { Folder, FolderOpen, File as FileIcon, ChevronRight, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 export function FileTreePanel() {
   const [tree, setTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
-  const [previewFile, setPreviewFile] = useState<{ path: string; content: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<FileContentResponse | null>(null);
 
   useEffect(() => {
     getFileTree()
-      .then(setTree)
-      .catch(console.error)
+      .then((next) => {
+        setTree(next);
+        setError(null);
+      })
+      .catch((e) => {
+        console.error(e);
+        setError("Failed to load directory.");
+      })
       .finally(() => setLoading(false));
   }, []);
 
   const handleFileClick = async (path: string) => {
     try {
-      const content = await getFileContent(path);
-      setPreviewFile({ path, content });
+      setPreviewFile(await getFileContent(path));
     } catch (e) {
       console.error(e);
-      setPreviewFile({ path, content: "Failed to load file content." });
+      const message = e instanceof Error ? e.message : "Failed to load file content.";
+      setPreviewFile({ path, content: message, size: 0, truncated: false });
     }
   };
 
   return (
-    <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground">
-      <div className="p-3 border-b font-medium text-sm flex items-center h-12 shrink-0">
+    <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+      <div className="flex h-12 shrink-0 items-center border-b p-3 text-sm font-medium">
         Workspace
       </div>
       <ScrollArea className="flex-1 p-2">
         {loading ? (
-          <div className="text-sm text-muted-foreground p-2 animate-pulse">Loading...</div>
+          <div className="animate-pulse p-2 text-sm text-muted-foreground">Loading...</div>
         ) : tree ? (
-          <TreeNode node={tree} onFileClick={handleFileClick} />
+          <TreeNode node={tree} depth={0} onFileClick={handleFileClick} />
         ) : (
-          <div className="text-sm text-muted-foreground p-2">Failed to load directory.</div>
+          <div className="p-2 text-sm text-muted-foreground">{error}</div>
         )}
       </ScrollArea>
 
       <Sheet open={!!previewFile} onOpenChange={(open) => !open && setPreviewFile(null)}>
-        <SheetContent className="w-full sm:max-w-xl p-0 flex flex-col gap-0 border-l" side="right">
-          <SheetHeader className="p-4 border-b">
-            <SheetTitle className="text-sm font-mono break-all pr-8">
+        <SheetContent className="flex w-full flex-col gap-0 border-l p-0 sm:max-w-xl" side="right">
+          <SheetHeader className="border-b p-4">
+            <SheetTitle className="break-all pr-8 font-mono text-sm">
               {previewFile?.path}
             </SheetTitle>
+            <SheetDescription className="sr-only">
+              File preview for {previewFile?.path}
+            </SheetDescription>
+            {previewFile?.truncated && (
+              <div className="text-xs text-muted-foreground">
+                Preview truncated at 256 KB.
+              </div>
+            )}
           </SheetHeader>
-          <div className="flex-1 overflow-auto p-4 bg-muted/30">
-            <pre className="text-xs font-mono whitespace-pre-wrap break-all">
+          <div className="flex-1 overflow-auto bg-muted/30 p-4">
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs">
               {previewFile?.content}
             </pre>
           </div>
@@ -60,43 +82,57 @@ export function FileTreePanel() {
   );
 }
 
-function TreeNode({ node, onFileClick }: { node: FileNode; onFileClick: (path: string) => void }) {
-  const [expanded, setExpanded] = useState(true); // default root expanded
+function TreeNode({
+  node,
+  depth,
+  onFileClick,
+}: {
+  node: FileNode;
+  depth: number;
+  onFileClick: (path: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(depth === 0);
 
   if (!node.is_dir) {
     return (
-      <div
-        className="flex items-center gap-1.5 py-1 px-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md cursor-pointer text-sm"
+      <button
+        type="button"
+        className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
         onClick={() => onFileClick(node.path)}
       >
-        <FileIcon className="w-4 h-4 shrink-0 text-muted-foreground" />
+        <FileIcon className="size-4 shrink-0 text-muted-foreground" />
         <span className="truncate">{node.name}</span>
-      </div>
+      </button>
     );
   }
 
   return (
     <div className="flex flex-col">
-      <div
-        className="flex items-center gap-1.5 py-1 px-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-md cursor-pointer text-sm"
+      <button
+        type="button"
+        className={cn(
+          "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          depth === 0 && "font-medium",
+        )}
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
       >
         {expanded ? (
-          <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-50" />
+          <ChevronDown className="size-3.5 shrink-0 opacity-50" />
         ) : (
-          <ChevronRight className="w-3.5 h-3.5 shrink-0 opacity-50" />
+          <ChevronRight className="size-3.5 shrink-0 opacity-50" />
         )}
         {expanded ? (
-          <FolderOpen className="w-4 h-4 shrink-0 text-blue-500" />
+          <FolderOpen className="size-4 shrink-0 text-amber-500" />
         ) : (
-          <Folder className="w-4 h-4 shrink-0 text-blue-500" />
+          <Folder className="size-4 shrink-0 text-amber-500" />
         )}
-        <span className="truncate font-medium">{node.name}</span>
-      </div>
+        <span className="truncate">{node.name}</span>
+      </button>
       {expanded && node.children && (
-        <div className="ml-3 pl-2 border-l border-sidebar-border flex flex-col">
-          {node.children.map((child, i) => (
-            <TreeNode key={i} node={child} onFileClick={onFileClick} />
+        <div className="ml-3 flex flex-col border-l border-sidebar-border pl-2">
+          {node.children.map((child) => (
+            <TreeNode key={child.path} node={child} depth={depth + 1} onFileClick={onFileClick} />
           ))}
         </div>
       )}

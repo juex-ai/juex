@@ -100,3 +100,17 @@ export interface BusEvent {
   turn_id?: string;
   payload?: unknown;
 }
+
+export interface FileNode {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  children?: FileNode[];
+}
+
+export interface FileContentResponse {
+  path: string;
+  content: string;
+  size: number;
+  truncated: boolean;
+}
