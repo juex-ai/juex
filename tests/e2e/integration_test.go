@@ -67,8 +67,11 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 	var matches []string
 	for _, name := range defaultLiveConfigNames {
 		path := filepath.Join(root, ".juex", name)
-		if _, err := os.Stat(path); err == nil {
+		_, err := os.Stat(path)
+		if err == nil {
 			matches = append(matches, path)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("error checking for live config %s: %v", path, err)
 		}
 	}
 	if len(matches) == 0 {
