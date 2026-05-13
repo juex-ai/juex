@@ -34,12 +34,17 @@ import {
 import { StatusPill, type Status } from "@/components/StatusPill";
 import { messagesToGroups, toolState, type MessageGroup } from "@/lib/display-units";
 import { getSession, interrupt, startTurn, subscribeEvents } from "@/api";
-import type { Message as ChatMessage, SessionShowResponse } from "@/types";
+import type {
+  Message as ChatMessage,
+  SessionShowResponse,
+  TokenUsage,
+} from "@/types";
 
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const [data, setData] = useState<SessionShowResponse | null>(null);
   const [liveMessages, setLiveMessages] = useState<ChatMessage[]>([]);
+  const [liveTokenUsage, setLiveTokenUsage] = useState<TokenUsage | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const doneTimerRef = useRef<number | null>(null);
 
@@ -49,6 +54,7 @@ export function Session() {
       const r = await getSession(id);
       setData(r);
       setLiveMessages([]);
+      setLiveTokenUsage(null);
     } catch (e) {
       console.error("getSession failed", e);
     }
@@ -63,6 +69,7 @@ export function Session() {
         if (!cancelled) {
           setData(r);
           setLiveMessages([]);
+          setLiveTokenUsage(null);
         }
       } catch (e) {
         if (!cancelled) console.error("getSession failed", e);
@@ -88,6 +95,7 @@ export function Session() {
             break;
           case "llm.responded":
             applyAssistantResponse(e);
+            applyTokenUsage(e);
             setStatus({ kind: "running" });
             break;
           case "tool.requested": {
@@ -156,6 +164,7 @@ export function Session() {
 
   const messages: ChatMessage[] = [...(data.messages ?? []), ...liveMessages];
   const groups = messagesToGroups(messages);
+  const tokenUsage = liveTokenUsage ?? data.token_usage;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -191,6 +200,7 @@ export function Session() {
             <PromptInputFooter>
               <PromptInputTools>
                 <StatusPill status={status} />
+                <TokenUsageLabel usage={tokenUsage} />
               </PromptInputTools>
               {status.kind === "running" || status.kind === "tool" ? (
                 <PromptInputButton
@@ -260,6 +270,11 @@ export function Session() {
         { role: "assistant", turn_id: e.turn_id, pending: false, blocks, model },
       ];
     });
+  }
+
+  function applyTokenUsage(e: { payload?: unknown }) {
+    const usage = eventTokenUsage(e);
+    if (usage) setLiveTokenUsage(usage);
   }
 
   function appendToolResult(e: { turn_id?: string; payload?: unknown }, isError: boolean) {
@@ -343,6 +358,24 @@ function eventInput(e: { payload?: unknown }): string | undefined {
   return eventString(e, "input");
 }
 
+function eventTokenUsage(e: { payload?: unknown }): TokenUsage | undefined {
+  if (!e.payload || typeof e.payload !== "object") return undefined;
+  const payload = e.payload as Record<string, unknown>;
+  const raw = payload.token_usage;
+  if (!raw || typeof raw !== "object") return undefined;
+  const usage = raw as Record<string, unknown>;
+  const input = eventNumber(usage.input_tokens);
+  const output = eventNumber(usage.output_tokens);
+  if (input === undefined || output === undefined) return undefined;
+  return { input_tokens: input, output_tokens: output };
+}
+
+function eventNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
 function eventString(e: { payload?: unknown }, key: string): string | undefined {
   if (
     e.payload &&
@@ -382,6 +415,16 @@ function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
     }
   }
   return blocks;
+}
+
+function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
+  const input = usage?.input_tokens ?? 0;
+  const output = usage?.output_tokens ?? 0;
+  return (
+    <span className="text-muted-foreground font-mono text-xs">
+      tokens {input + output} ({input} in / {output} out)
+    </span>
+  );
 }
 
 function MessageGroupView({ group }: { group: MessageGroup }) {

@@ -79,9 +79,18 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 
 func TestTurn_PlainResponse(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
-		{Message: llm.TextMessage(llm.RoleAssistant, "hello user"), StopReason: llm.StopEndTurn},
+		{
+			Message:    llm.TextMessage(llm.RoleAssistant, "hello user"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 10, OutputTokens: 5},
+		},
 	}}
-	eng, _ := newEngine(t, prov, false)
+	eng, bus := newEngine(t, prov, false)
+	var eventUsage llm.Usage
+	bus.Subscribe("llm.responded", func(e events.Event) {
+		p := e.Payload.(map[string]any)
+		eventUsage = p["token_usage"].(llm.Usage)
+	})
 	out, err := eng.Turn(context.Background(), "hi")
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +100,12 @@ func TestTurn_PlainResponse(t *testing.T) {
 	}
 	if len(eng.Session.History) != 2 {
 		t.Fatalf("history len = %d", len(eng.Session.History))
+	}
+	if eng.Session.History[1].Usage == nil || *eng.Session.History[1].Usage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+		t.Fatalf("assistant usage = %+v", eng.Session.History[1].Usage)
+	}
+	if eventUsage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+		t.Fatalf("event usage = %+v", eventUsage)
 	}
 }
 

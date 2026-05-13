@@ -306,12 +306,14 @@ func (s *Session) infoLocked(now time.Time) Info {
 		info.LastActiveAt = now
 	}
 	for _, m := range s.History {
-		if m.Role != llm.RoleUser {
-			continue
+		if m.Role == llm.RoleUser {
+			info.Turns++
+			if info.Preview == "" {
+				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
+			}
 		}
-		info.Turns++
-		if info.Preview == "" {
-			info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
+		if m.Usage != nil {
+			info.TokenUsage.Add(*m.Usage)
 		}
 	}
 	return info

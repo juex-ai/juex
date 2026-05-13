@@ -90,6 +90,12 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 		if err != nil {
 			return "", e.failTurn(turnID, fmt.Errorf("llm: %w", err))
 		}
+		msg := resp.Message
+		if !resp.Usage.IsZero() {
+			msg.Usage = &resp.Usage
+		}
+		totalUsage := llm.SumUsage(e.Session.History)
+		totalUsage.Add(resp.Usage)
 
 		// Enrich the responded event with the assistant's text + thinking +
 		// tool calls so verbose UIs can render them without subscribing to
@@ -98,18 +104,19 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 		e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: map[string]any{
 			"stop_reason": resp.StopReason,
 			"usage":       resp.Usage,
+			"token_usage": totalUsage,
 			"text":        responseText(resp.Message),
 			"thinking":    responseThinking(resp.Message),
 			"tool_calls":  responseToolCalls(resp.Message),
-			"model":       resp.Message.Model,
+			"model":       msg.Model,
 		}})
 
-		toolCalls := resp.Message.ToolCalls()
-		if err := e.Session.Append(resp.Message); err != nil {
+		toolCalls := msg.ToolCalls()
+		if err := e.Session.Append(msg); err != nil {
 			return "", e.failTurn(turnID, fmt.Errorf("session append assistant: %w", err))
 		}
 		if len(toolCalls) == 0 {
-			lastText = resp.Message.FirstText()
+			lastText = msg.FirstText()
 			break
 		}
 
@@ -160,6 +167,7 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 	e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: map[string]any{
 		"duration_ms": time.Since(start).Milliseconds(),
 		"output_len":  len(lastText),
+		"token_usage": llm.SumUsage(e.Session.History),
 	}})
 	return lastText, nil
 }

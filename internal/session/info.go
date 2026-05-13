@@ -29,6 +29,7 @@ type Info struct {
 	LastActiveAt time.Time `json:"last_active_at"`
 	Turns        int       `json:"turns"`
 	Preview      string    `json:"preview"`
+	TokenUsage   llm.Usage `json:"token_usage"`
 }
 
 // List enumerates every well-formed session directory under root and
@@ -110,6 +111,9 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 			if info.Preview == "" {
 				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
 			}
+		}
+		if m.Usage != nil {
+			info.TokenUsage.Add(*m.Usage)
 		}
 	}
 	return info, msgs, nil

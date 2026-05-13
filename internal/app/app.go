@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
@@ -175,6 +176,14 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	return a.Engine.Turn(ctx, prompt)
 }
 
+func (a *App) TokenUsage() llm.Usage {
+	if a == nil || a.Session == nil {
+		return llm.Usage{}
+	}
+	info := a.Session.Info(time.Now().UTC())
+	return info.TokenUsage
+}
+
 // REPL reads stdin lines, runs Turn for each non-empty line, prints the
 // result on out. Returns when the reader closes.
 func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
@@ -194,8 +203,16 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
 		if _, err := fmt.Fprintln(out, text); err != nil {
 			return err
 		}
+		if _, err := fmt.Fprintln(out, FormatTokenUsage(a.TokenUsage())); err != nil {
+			return err
+		}
 	}
 	return sc.Err()
+}
+
+func FormatTokenUsage(usage llm.Usage) string {
+	return fmt.Sprintf("tokens: %d total (input %d, output %d)",
+		usage.TotalTokens(), usage.InputTokens, usage.OutputTokens)
 }
 
 // Close releases session file handles and MCP subprocesses.

@@ -47,6 +47,12 @@ export interface Message {
   // generation time so resumed sessions retain attribution even if the
   // current config has been swapped to a different model.
   model?: string;
+  usage?: TokenUsage;
+}
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
 }
 
 export interface SessionInfo {
@@ -56,6 +62,7 @@ export interface SessionInfo {
   last_active_at: string;    // RFC3339
   turns: number;
   preview: string;
+  token_usage: TokenUsage;
 }
 
 export interface SessionShowResponse extends SessionInfo {

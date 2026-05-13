@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 )
 
 // verbosePrinter formats lifecycle events into a human-readable transcript
@@ -69,6 +70,9 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		}
 		if text, _ := p["text"].(string); text != "" {
 			vp.printIndentedBlock("assistant", text, false)
+		}
+		if usage, ok := usageFrom(p["token_usage"]); ok {
+			vp.printlnDim("  " + FormatTokenUsage(usage))
 		}
 	case "tool.requested":
 		name, _ := p["name"].(string)
@@ -164,6 +168,19 @@ func intFrom(v any) int {
 		return int(n)
 	}
 	return 0
+}
+
+func usageFrom(v any) (llm.Usage, bool) {
+	switch u := v.(type) {
+	case llm.Usage:
+		return u, true
+	case map[string]any:
+		return llm.Usage{
+			InputTokens:  intFrom(u["input_tokens"]),
+			OutputTokens: intFrom(u["output_tokens"]),
+		}, true
+	}
+	return llm.Usage{}, false
 }
 
 // ---- spinner ----

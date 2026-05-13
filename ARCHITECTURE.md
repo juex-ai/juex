@@ -114,6 +114,7 @@ type Block struct {
 type Message struct {
     Role   Role
     Blocks []Block
+    Usage  *Usage  // assistant-only provider token usage, persisted when known
 }
 
 type ToolSpec struct {

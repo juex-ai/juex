@@ -179,7 +179,7 @@ applicable).
 │              │ ┌──────────────────────────────┐ │              │
 │              │ │ textarea                     │ │              │
 │              │ └──────────────────────────────┘ │              │
-│              │ ● idle             [Stop][Send] │              │
+│              │ ● idle  tokens 42  [Stop][Send] │              │
 └──────────────┴──────────────────────────────────┴──────────────┘
 ```
 
@@ -204,7 +204,8 @@ card prompting the user to pick a session or start a new one.
 ### 6.2 Session detail (`/sessions/:id`)
 
 Same sidebar (highlighted entry for the current session). Right column:
-header strip + scrollable message list + sticky composer.
+header strip + scrollable message list + sticky composer. The composer footer
+shows the live status and the current conversation token total.
 
 When the user clicks `+ new chat` in the sidebar, the client POSTs
 `/api/sessions` and immediately navigates to `/sessions/<new-id>`.
@@ -443,6 +444,7 @@ export interface SessionInfo {
   last_active_at: string;
   turns: number;
   preview: string;
+  token_usage: { input_tokens: number; output_tokens: number };
 }
 
 export type Role = "user" | "assistant" | "system";

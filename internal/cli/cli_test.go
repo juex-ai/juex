@@ -336,8 +336,6 @@ func classifyForTest(err error) int {
 	}
 }
 
-
-
 func writeJuexConfigFile(path, typ, base, key, model string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
