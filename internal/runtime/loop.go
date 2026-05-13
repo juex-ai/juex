@@ -65,12 +65,11 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 	turnCtx, cancel := context.WithTimeout(ctx, maxDur)
 	defer cancel()
 
-	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: map[string]any{"input": userInput}})
-
 	userMsg := llm.TextMessage(llm.RoleUser, userInput)
 	if err := e.Session.Append(userMsg); err != nil {
 		return "", e.failTurn(turnID, fmt.Errorf("session append user: %w", err))
 	}
+	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: map[string]any{"input": userInput}})
 
 	systemPrompt := e.Prompt.Build()
 	tools := e.Tools.Specs()

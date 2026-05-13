@@ -6,7 +6,11 @@ import { Button } from "@/components/ui/button";
 import type { SessionInfo } from "@/types";
 import { cn } from "@/lib/utils";
 
-export function SidebarSessionList() {
+export function SidebarSessionList({
+  createdSession,
+}: {
+  createdSession: SessionInfo | null;
+}) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [deletingID, setDeletingID] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,6 +49,16 @@ export function SidebarSessionList() {
       live = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!createdSession) return;
+    setSessions((current) => {
+      const next = current.filter((s) => s.id !== createdSession.id);
+      next.unshift(createdSession);
+      return next;
+    });
+    setLoading(false);
+  }, [createdSession]);
 
   if (loading) {
     return (

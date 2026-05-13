@@ -249,6 +249,10 @@ Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
 `AppendEvent(e)` writes to `events.jsonl`. `session.Load(dir)` re-hydrates
 an existing session in place (used by `--resume`).
 
+New web sessions are lazy: `POST /api/sessions` allocates an in-memory
+session ID and only creates `.juex/sessions/<id>/` when the first message or
+event is appended. The CLI keeps eager persistence for `run` and `repl`.
+
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. Both are read-only.
@@ -333,6 +337,10 @@ per-session broadcaster that fans out to connected SSE clients. Slow
 clients are dropped after a 5s buffer-full timeout. `make web` builds the
 React SPA in `frontend/`, copies the bundle to `internal/web/dist`, and the
 Go binary embeds that directory with `go:embed`.
+
+The server merges active in-memory sessions into `GET /api/sessions` and
+`GET /api/sessions/<id>` so a newly created empty chat is visible in the web
+UI without forcing an immediate disk write.
 
 Routes:
 
