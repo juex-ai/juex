@@ -92,7 +92,8 @@ juex/
 │   │   │   └── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
 │   │   ├── pages/
 │   │   │   ├── Sessions.tsx        # /
-│   │   │   └── Session.tsx         # /sessions/:id
+│   │   │   ├── Session.tsx         # /sessions/:id
+│   │   │   └── Runtime.tsx         # /runtime
 │   │   └── components/
 │   │       ├── AppShell.tsx
 │   │       ├── Sidebar.tsx
@@ -185,6 +186,8 @@ applicable).
 - Sidebar collapses to a hidden drawer (shadcn `Sheet`) below 768px.
 - Workspace sidebar is toggled from the header and opens file previews in a
   right-side sheet.
+- Runtime status badges live beside the `juex` header label; the wrench icon
+  opens `/runtime` for MCP server and skill details.
 - Center column max-width is 880px; the rest is gutter so reading lines do
   not get awkwardly wide.
 - Composer is sticky to the bottom of the center column.
@@ -205,6 +208,12 @@ header strip + scrollable message list + sticky composer.
 
 When the user clicks `+ new chat` in the sidebar, the client POSTs
 `/api/sessions` and immediately navigates to `/sessions/<new-id>`.
+
+### 6.3 Runtime detail (`/runtime`)
+
+Shows the MCP configured/connected count, per-server tool counts, and the
+loaded skill list. The page uses dense tables because this is operational
+metadata, not a conversational surface.
 
 ---
 

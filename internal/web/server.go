@@ -36,6 +36,9 @@ type Server struct {
 	createMu sync.Mutex // serialises POST /api/sessions
 	closeMu  sync.Mutex
 	closed   bool
+
+	runtimeMu     sync.Mutex
+	runtimeSkills *skillsStatus
 }
 
 // activeSession wraps an app.App with the bookkeeping the web server
@@ -85,10 +88,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)
 	mux.HandleFunc("/api/files/tree", s.handleFilesTree)
 	mux.HandleFunc("/api/files/content", s.handleFilesContent)
+	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	// SPA: anything else is the React app.
 	spa := spaHandler()
 	mux.Handle("/", spa)
 	mux.Handle("/sessions/", spa)
+	mux.Handle("/runtime", spa)
 }
 
 // dispatchSession routes /api/sessions/<id>[/...] to the matching handler.

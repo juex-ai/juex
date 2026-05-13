@@ -2,6 +2,7 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { Sessions } from "@/pages/Sessions";
 import { Session } from "@/pages/Session";
+import { Runtime } from "@/pages/Runtime";
 
 const router = createBrowserRouter([
   {
@@ -10,6 +11,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Sessions /> },
       { path: "sessions/:id", element: <Session /> },
+      { path: "runtime", element: <Runtime /> },
     ],
   },
 ]);
