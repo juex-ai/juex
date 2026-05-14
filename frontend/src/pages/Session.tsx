@@ -34,7 +34,7 @@ import {
 import { StatusPill, type Status } from "@/components/StatusPill";
 import { messagesToGroups, toolState, type MessageGroup } from "@/lib/display-units";
 import { getSession, interrupt, startTurn, subscribeEvents } from "@/api";
-import { RadioIcon } from "lucide-react";
+import { ArchiveIcon, RadioIcon } from "lucide-react";
 import type {
   Message as ChatMessage,
   SessionShowResponse,
@@ -441,9 +441,10 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
   // already shows the current session-level model in that case.
   const showModel = group.role === "assistant" && !!group.model;
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
+  const isCompact = group.kind === "compact";
 
   return (
-    <Message from={group.role}>
+    <Message from={isCompact ? "assistant" : group.role}>
       <div className="flex w-full flex-col gap-2">
         {showModel ? (
           <span className="text-muted-foreground font-mono text-xs">
@@ -452,6 +453,9 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
         ) : null}
         {group.units.map((unit, i) => {
           if (unit.kind === "text") {
+            if (isCompact) {
+              return <CompactMessage key={i} text={unit.block.text} />;
+            }
             if (isMCPEvent) {
               return <MCPEventMessage key={i} text={unit.block.text} />;
             }
@@ -511,6 +515,26 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
       </div>
     </Message>
   );
+}
+
+function CompactMessage({ text }: { text: string }) {
+  const summary = parseCompactText(text);
+  return (
+    <MessageContent className="border border-amber-500/25 bg-amber-50 text-amber-950 dark:border-amber-400/25 dark:bg-amber-950/25 dark:text-amber-50">
+      <div className="flex items-center gap-2 text-xs font-medium">
+        <ArchiveIcon className="size-3.5" aria-hidden="true" />
+        <span>Context compacted</span>
+      </div>
+      <MessageResponse>{summary}</MessageResponse>
+    </MessageContent>
+  );
+}
+
+function parseCompactText(text: string): string {
+  const marker = "Summary of earlier conversation:";
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return text;
+  return text.slice(markerIndex + marker.length).trim();
 }
 
 function MCPEventMessage({ text }: { text: string }) {

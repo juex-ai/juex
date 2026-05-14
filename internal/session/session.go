@@ -306,7 +306,7 @@ func (s *Session) infoLocked(now time.Time) Info {
 		info.LastActiveAt = now
 	}
 	for _, m := range s.History {
-		if m.Role == llm.RoleUser {
+		if m.Role == llm.RoleUser && m.Kind != llm.MessageKindCompact {
 			info.Turns++
 			if info.Preview == "" {
 				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)

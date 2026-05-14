@@ -86,7 +86,7 @@ func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
 		t.Fatalf("history len = %d, want user and assistant", len(a.Session.History))
 	}
 	user := a.Session.History[0]
-	if user.Kind != "mcp_event" {
+	if user.Kind != llm.MessageKindMCPEvent {
 		t.Fatalf("user kind = %q", user.Kind)
 	}
 	if got := user.FirstText(); got != "local:message:[realtime] hello alice" {

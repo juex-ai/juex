@@ -80,6 +80,7 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 				llm.TextMessage(llm.RoleAssistant, "the readme says hello world"),
 				llm.Usage{InputTokens: 10, OutputTokens: 4},
 			),
+			compactTestMessage("old context summary"),
 			llm.TextMessage(llm.RoleUser, "follow up"),
 			messageWithUsage(
 				llm.TextMessage(llm.RoleAssistant, "done"),
@@ -110,6 +111,12 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 	if !got[0].StartedAt.Equal(want) {
 		t.Errorf("started_at = %v, want %v", got[0].StartedAt, want)
 	}
+}
+
+func compactTestMessage(text string) llm.Message {
+	msg := llm.TextMessage(llm.RoleUser, text)
+	msg.Kind = llm.MessageKindCompact
+	return msg
 }
 
 func messageWithUsage(msg llm.Message, usage llm.Usage) llm.Message {

@@ -211,6 +211,11 @@ MCP channel events render as compact user-side event bubbles with a small
 radio icon, a monospace `<mcp_name>:<event_type>` label, and the event content
 as the message body.
 
+Automatic context compaction renders as an assistant-side system bubble with
+an archive icon, a concise "Context compacted" label, and the persisted
+summary text. It is visually distinct from normal chat but stays in the same
+transcript flow so users can see when older context was summarized.
+
 When the user clicks `+ new chat` in the sidebar, the client POSTs
 `/api/sessions` and immediately navigates to `/sessions/<new-id>`.
 
