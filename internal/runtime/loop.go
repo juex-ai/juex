@@ -45,12 +45,27 @@ type Engine struct {
 	Prompt   *prompt.Builder
 	MaxIters int
 	MaxDur   time.Duration
+
+	// mu serializes turns for one Engine. MCP notifications can arrive while
+	// a user turn is running, and both paths append to the same session
+	// history; queuing them preserves the provider-facing transcript order.
+	mu sync.Mutex
 }
 
 // Turn drives one user input to completion. The returned string is the final
 // assistant text response (concatenated text blocks). Returns an error on
 // budget breach or context cancellation.
 func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
+	return e.TurnMessage(ctx, llm.TextMessage(llm.RoleUser, userInput))
+}
+
+// TurnMessage drives one already-constructed user message to completion.
+// It exists for system-originated user turns, such as MCP channel events,
+// that need app metadata while still reaching the provider as normal text.
+func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	maxIters := e.MaxIters
 	if maxIters <= 0 {
 		maxIters = defaultMaxIters
@@ -65,11 +80,14 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 	turnCtx, cancel := context.WithTimeout(ctx, maxDur)
 	defer cancel()
 
-	userMsg := llm.TextMessage(llm.RoleUser, userInput)
 	if err := e.Session.Append(userMsg); err != nil {
 		return "", e.failTurn(turnID, fmt.Errorf("session append user: %w", err))
 	}
-	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: map[string]any{"input": userInput}})
+	startPayload := map[string]any{"input": userMsg.FirstText()}
+	if userMsg.Kind != "" {
+		startPayload["kind"] = userMsg.Kind
+	}
+	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: startPayload})
 
 	systemPrompt := e.Prompt.Build()
 	tools := e.Tools.Specs()

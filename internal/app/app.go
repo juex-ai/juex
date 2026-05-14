@@ -51,6 +51,8 @@ type App struct {
 	Bus     *events.Bus
 	Session *session.Session
 	cleanup []func() error
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // New wires every subsystem and returns a ready-to-use App.
@@ -103,7 +105,6 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 
-	var mcpClients []*mcp.Client
 	var mcpConfigs []mcp.Config
 	for _, path := range cfg.MCPConfigPaths() {
 		mcpCfg, err := mcp.LoadConfig(path)
@@ -112,14 +113,6 @@ func New(opts Options) (*App, error) {
 		}
 		if len(mcpCfg.MCPServers) > 0 {
 			mcpConfigs = append(mcpConfigs, mcpCfg)
-		}
-	}
-	if len(mcpConfigs) > 0 {
-		clients, err := mcp.RegisterAllLayered(context.Background(), mcpConfigs, reg)
-		mcpClients = append(mcpClients, clients...)
-		if err != nil {
-			closeAll(mcpClients)
-			return nil, err
 		}
 	}
 
@@ -138,7 +131,6 @@ func New(opts Options) (*App, error) {
 		})
 	}
 	if err != nil {
-		closeAll(mcpClients)
 		return nil, err
 	}
 	sess.SubscribeBus(bus)
@@ -162,8 +154,23 @@ func New(opts Options) (*App, error) {
 		Prompt:   pb,
 	}
 
-	a := &App{Engine: eng, Bus: bus, Session: sess}
+	appCtx, appCancel := context.WithCancel(context.Background())
+	a := &App{Engine: eng, Bus: bus, Session: sess, ctx: appCtx, cancel: appCancel}
 	a.cleanup = append(a.cleanup, sess.Close)
+	var mcpClients []*mcp.Client
+	if len(mcpConfigs) > 0 {
+		clients, err := mcp.RegisterAllLayeredWithOptions(context.Background(), mcpConfigs, reg, mcp.ConnectOptions{
+			OnNotification: func(n mcp.Notification) {
+				_ = a.handleMCPNotification(a.ctx, n)
+			},
+		})
+		mcpClients = append(mcpClients, clients...)
+		if err != nil {
+			closeAll(mcpClients)
+			sess.Close()
+			return nil, err
+		}
+	}
 	for _, c := range mcpClients {
 		c := c
 		a.cleanup = append(a.cleanup, c.Close)
@@ -174,6 +181,25 @@ func New(opts Options) (*App, error) {
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	return a.Engine.Turn(ctx, prompt)
+}
+
+func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
+	if a == nil || a.Engine == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	eventType := n.EventType
+	if eventType == "" {
+		eventType = "notification"
+	}
+	msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("%s:%s:%s", n.ServerName, eventType, n.Content))
+	msg.Kind = "mcp_event"
+	_, err := a.Engine.TurnMessage(ctx, msg)
+	return err
 }
 
 func (a *App) TokenUsage() llm.Usage {
@@ -217,6 +243,9 @@ func FormatTokenUsage(usage llm.Usage) string {
 
 // Close releases session file handles and MCP subprocesses.
 func (a *App) Close() error {
+	if a.cancel != nil {
+		a.cancel()
+	}
 	var firstErr error
 	for _, fn := range a.cleanup {
 		if err := fn(); err != nil && firstErr == nil {

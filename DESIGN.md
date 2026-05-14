@@ -207,6 +207,10 @@ Same sidebar (highlighted entry for the current session). Right column:
 header strip + scrollable message list + sticky composer. The composer footer
 shows the live status and the current conversation token total.
 
+MCP channel events render as compact user-side event bubbles with a small
+radio icon, a monospace `<mcp_name>:<event_type>` label, and the event content
+as the message body.
+
 When the user clicks `+ new chat` in the sidebar, the client POSTs
 `/api/sessions` and immediately navigates to `/sessions/<new-id>`.
 

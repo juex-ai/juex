@@ -46,6 +46,9 @@ type Block struct {
 type Message struct {
 	Role   Role    `json:"role"`
 	Blocks []Block `json:"blocks"`
+	// Kind marks app-level message categories that still travel through
+	// providers as ordinary role/block messages. Empty means normal chat.
+	Kind string `json:"kind,omitempty"`
 	// Model is the provider:model name responsible for producing this
 	// message. Only set on assistant messages (provider-stamped at
 	// generation time so resuming a session under a different config

@@ -34,6 +34,7 @@ import {
 import { StatusPill, type Status } from "@/components/StatusPill";
 import { messagesToGroups, toolState, type MessageGroup } from "@/lib/display-units";
 import { getSession, interrupt, startTurn, subscribeEvents } from "@/api";
+import { RadioIcon } from "lucide-react";
 import type {
   Message as ChatMessage,
   SessionShowResponse,
@@ -87,7 +88,7 @@ export function Session() {
       onEvent: (e) => {
         switch (e.type) {
           case "turn.started":
-            appendLiveTurn(e.turn_id, eventInput(e), "event");
+            appendLiveTurn(e.turn_id, eventInput(e), eventKind(e), "event");
             setStatus({ kind: "running" });
             break;
           case "llm.requested":
@@ -139,7 +140,7 @@ export function Session() {
   async function handleSend(prompt: string) {
     try {
       const turn = await startTurn(id, prompt);
-      appendLiveTurn(turn.turn_id, prompt, "optimistic");
+      appendLiveTurn(turn.turn_id, prompt, undefined, "optimistic");
       setStatus({ kind: "running" });
     } catch (e) {
       console.error("startTurn failed", e);
@@ -222,6 +223,7 @@ export function Session() {
   function appendLiveTurn(
     turnID: string | undefined,
     input: string | undefined,
+    kind: string | undefined,
     source: "event" | "optimistic",
   ) {
     if (!turnID || !input) return;
@@ -239,6 +241,7 @@ export function Session() {
         {
           role: "user",
           turn_id: turnID,
+          kind,
           blocks: [{ type: "text", text: input }],
         },
         {
@@ -358,6 +361,10 @@ function eventInput(e: { payload?: unknown }): string | undefined {
   return eventString(e, "input");
 }
 
+function eventKind(e: { payload?: unknown }): string | undefined {
+  return eventString(e, "kind");
+}
+
 function eventTokenUsage(e: { payload?: unknown }): TokenUsage | undefined {
   if (!e.payload || typeof e.payload !== "object") return undefined;
   const payload = e.payload as Record<string, unknown>;
@@ -433,6 +440,7 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
   // for older messages that pre-date the persistence change; the header
   // already shows the current session-level model in that case.
   const showModel = group.role === "assistant" && !!group.model;
+  const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
 
   return (
     <Message from={group.role}>
@@ -444,6 +452,9 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
         ) : null}
         {group.units.map((unit, i) => {
           if (unit.kind === "text") {
+            if (isMCPEvent) {
+              return <MCPEventMessage key={i} text={unit.block.text} />;
+            }
             return (
               <MessageContent key={i}>
                 <MessageResponse>{unit.block.text}</MessageResponse>
@@ -500,4 +511,29 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
       </div>
     </Message>
   );
+}
+
+function MCPEventMessage({ text }: { text: string }) {
+  const event = parseMCPEventText(text);
+  return (
+    <MessageContent className="group-[.is-user]:border group-[.is-user]:border-teal-500/30 group-[.is-user]:bg-teal-50 group-[.is-user]:text-teal-950 group-[.is-user]:dark:border-teal-400/30 group-[.is-user]:dark:bg-teal-950/30 group-[.is-user]:dark:text-teal-50">
+      <div className="flex items-center gap-2 text-xs font-medium">
+        <RadioIcon className="size-3.5" aria-hidden="true" />
+        <span className="font-mono">{event.label}</span>
+      </div>
+      <MessageResponse>{event.content}</MessageResponse>
+    </MessageContent>
+  );
+}
+
+function parseMCPEventText(text: string): { label: string; content: string } {
+  const first = text.indexOf(":");
+  const second = first >= 0 ? text.indexOf(":", first + 1) : -1;
+  if (first < 0 || second < 0) {
+    return { label: "mcp:event", content: text };
+  }
+  return {
+    label: `${text.slice(0, first)}:${text.slice(first + 1, second)}`,
+    content: text.slice(second + 1),
+  };
 }

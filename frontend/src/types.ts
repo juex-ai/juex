@@ -41,6 +41,7 @@ export type Block = TextBlock | ReasoningBlock | ToolUseBlock | ToolResultBlock;
 export interface Message {
   role: Role;
   blocks?: Block[] | null;
+  kind?: string;
   pending?: boolean;
   turn_id?: string;
   // Model that produced this assistant message. Stamped by the provider at
