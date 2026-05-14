@@ -83,6 +83,39 @@ func TestParse_EmptyValue(t *testing.T) {
 	}
 }
 
+func TestParse_BlockScalarValue(t *testing.T) {
+	in := "---\nname: taskline-management\ndescription: |\n  Use whenever the user wants to track agent work\n  inside a project.\nversion: 0.4.0\n---\nbody"
+	p, err := Parse(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Fields["name"] != "taskline-management" {
+		t.Fatalf("name = %q", p.Fields["name"])
+	}
+	wantDesc := "Use whenever the user wants to track agent work\ninside a project."
+	if p.Fields["description"] != wantDesc {
+		t.Fatalf("description = %q, want %q", p.Fields["description"], wantDesc)
+	}
+	if p.Fields["version"] != "0.4.0" {
+		t.Fatalf("version = %q", p.Fields["version"])
+	}
+	if p.Body != "body" {
+		t.Fatalf("body = %q", p.Body)
+	}
+}
+
+func TestParse_FoldedBlockScalarPreservesParagraphBreaks(t *testing.T) {
+	in := "---\ndescription: >\n  first line\n  second line\n\n  next paragraph\n---\nbody"
+	p, err := Parse(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "first line second line\nnext paragraph"
+	if p.Fields["description"] != want {
+		t.Fatalf("description = %q, want %q", p.Fields["description"], want)
+	}
+}
+
 func TestParse_HashCommentLineSkipped(t *testing.T) {
 	in := "---\n# this is a comment\nname: real\n---\nbody"
 	p, err := Parse(in)

@@ -273,6 +273,8 @@ type Options struct {
     Verbose   bool
     Stderr    io.Writer
     WorkDir   string       // overrides Config.WorkDir
+    MCPManager *mcp.Manager // optional process-scoped MCP owner
+    DisableMCP bool         // skip config loading when caller handles MCP
     ResumeDir string       // load existing session dir instead of creating one
 }
 type App struct { Engine; Bus; Session; ... }
@@ -281,6 +283,11 @@ func (a *App) Run(ctx, prompt) (string, error)
 func (a *App) REPL(ctx, in, out) error
 func (a *App) Close() error
 ```
+
+`run` and `repl` create an app-local MCP manager because each command owns one
+runtime process and one active app. `serve` creates a process-scoped MCP manager
+at server startup, then each session app registers proxy tool handlers against
+that shared manager instead of starting its own MCP subprocesses.
 
 ```go
 // internal/runtime/loop.go
@@ -335,12 +342,12 @@ func (s *Server) Handler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no
-auth). Each session gets its own `*app.App`; events flow to a
-per-session broadcaster that fans out to connected SSE clients. Slow
-clients are dropped after a 5s buffer-full timeout. `make web` builds the
-React SPA in `frontend/`, copies the bundle to `internal/web/dist`, and the
-Go binary embeds that directory with `go:embed`.
+`juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no auth)
+and loads project MCP servers before accepting requests. Each session gets its
+own `*app.App`; events flow to a per-session broadcaster that fans out to
+connected SSE clients. Slow clients are dropped after a 5s buffer-full timeout.
+`make web` builds the React SPA in `frontend/`, copies the bundle to
+`internal/web/dist`, and the Go binary embeds that directory with `go:embed`.
 
 The server merges active in-memory sessions into `GET /api/sessions` and
 `GET /api/sessions/<id>` so a newly created empty chat is visible in the web
@@ -483,9 +490,22 @@ Handwritten stdio client (no external SDK). Supports:
 - `notifications/claude/channel`
 
 Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
+`mcp.Manager` owns the stdio clients for one process and can register those
+tools into multiple per-session registries. In `serve`, session tool handlers
+forward calls into the shared manager; closing a session does not close MCP.
+
 Claude channel notifications are formatted as
 `<mcp_name>:<event_type>:<event_content>` and run through the normal Agent
-turn loop as `mcp_event` user messages.
+turn loop as `mcp_event` user messages. For `run` and `repl`, notifications
+target the command's only app. For `serve`, notifications target
+`<WorkDir>/.juex/history.json.last`: the last session that wrote conversation
+messages. Opening, focusing, or streaming a web session does not change that
+target.
+
+MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
+stdout fails the connection as a protocol error; server logs must go to stderr.
+The web runtime status keeps the latest per-server connection error so `/runtime`
+can explain configured-but-disconnected servers.
 
 `RegisterAllLayered(ctx, configs, reg)` merges multiple configs by server
 name with later-wins precedence. App passes `[user, project]` so a project

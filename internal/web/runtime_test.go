@@ -3,13 +3,16 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -17,11 +20,7 @@ import (
 func TestGetRuntimeStatus_ReturnsConfiguredMCPAndSkills(t *testing.T) {
 	srv := newTestServer(t)
 	work := srv.opts.Cfg.WorkDir
-	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
-  "mcpServers": {
-    "alpha": { "command": "alpha-cmd", "args": ["--one"] }
-  }
-}`)
+	mustWriteWebFakeMCPConfig(t, work, false)
 	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "skills", "review", "SKILL.md"), `---
 name: review
 description: Review code changes
@@ -44,10 +43,10 @@ body`)
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.MCP.Configured != 1 || got.MCP.Connected != 0 {
+	if got.MCP.Configured != 1 || got.MCP.Connected != 1 {
 		t.Fatalf("mcp = %+v", got.MCP)
 	}
-	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Command != "alpha-cmd" {
+	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
 	if got.Skills.Count != 1 || got.Skills.Items[0].Name != "review" {
@@ -117,6 +116,57 @@ func TestRuntimeStatus_CountsConnectedMCPServersFromActiveTools(t *testing.T) {
 	}
 	if got.MCP.Servers[1].Name != "beta" || got.MCP.Servers[1].Connected {
 		t.Fatalf("beta = %+v", got.MCP.Servers[1])
+	}
+}
+
+func TestRuntimeStatusReportsMCPConnectionError(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "alpha": { "command": "alpha-cmd" }
+  }
+}`)
+	srv.recordMCPError(&mcp.ServerError{Server: "alpha", Op: "connect", Err: errors.New("invalid stdout")})
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MCP.Configured != 1 || got.MCP.Connected != 0 {
+		t.Fatalf("mcp = %+v", got.MCP)
+	}
+	if got.MCP.Servers[0].Status != "error" {
+		t.Fatalf("status = %q, want error", got.MCP.Servers[0].Status)
+	}
+	if got.MCP.Servers[0].Error == "" || got.MCP.Servers[0].Connected {
+		t.Fatalf("server = %+v", got.MCP.Servers[0])
+	}
+}
+
+func TestOpenSessionKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "alpha": { "command": "" }
+  }
+}`)
+	srv.recordMCPError(&mcp.ServerError{Server: "alpha", Op: "connect", Err: errors.New("old failure")})
+
+	if _, err := srv.openSession(context.Background(), ""); err != nil {
+		t.Fatalf("openSession returned error: %v", err)
+	}
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCP.Servers) != 1 {
+		t.Fatalf("servers = %+v", got.MCP.Servers)
+	}
+	if strings.Contains(got.MCP.Servers[0].Error, "old failure") {
+		t.Fatalf("stale error was not cleared: %+v", got.MCP.Servers[0])
+	}
+	if got.MCP.Servers[0].Status != "error" || !strings.Contains(got.MCP.Servers[0].Error, "missing command") {
+		t.Fatalf("server = %+v", got.MCP.Servers[0])
 	}
 }
 

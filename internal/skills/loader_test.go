@@ -41,6 +41,27 @@ func TestLoader_LoadsBothScopes(t *testing.T) {
 	}
 }
 
+func TestLoader_LoadsSymlinkedSkillDirectory(t *testing.T) {
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	writeSkill(t, targetRoot, "taskline-management", "---\nname: taskline-management\ndescription: task queue\n---\nbody")
+	if err := os.Symlink(filepath.Join(targetRoot, "taskline-management"), filepath.Join(root, "taskline-management")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	l := NewLoader(root)
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := l.Get("taskline-management")
+	if !ok {
+		t.Fatalf("loaded skills: %+v", l.All())
+	}
+	if s.Description != "task queue" {
+		t.Fatalf("description = %q", s.Description)
+	}
+}
+
 func TestLoader_ProjectOverridesUser(t *testing.T) {
 	user := t.TempDir()
 	project := t.TempDir()

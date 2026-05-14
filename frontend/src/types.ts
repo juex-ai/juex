@@ -136,8 +136,10 @@ export interface MCPServerInfo {
   name: string;
   command: string;
   args?: string[];
+  status: "not_started" | "connected" | "error";
   connected: boolean;
   tool_count: number;
+  error?: string;
 }
 
 export interface SkillInfo {

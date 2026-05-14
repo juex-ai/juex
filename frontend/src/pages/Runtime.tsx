@@ -40,12 +40,13 @@ export function Runtime() {
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Tools</th>
                   <th className="px-3 py-2 font-medium">Command</th>
+                  <th className="px-3 py-2 font-medium">Error</th>
                 </tr>
               </thead>
               <tbody>
                 {data.mcp.servers.length === 0 ? (
                   <tr>
-                    <td className="text-muted-foreground px-3 py-3" colSpan={4}>
+                    <td className="text-muted-foreground px-3 py-3" colSpan={5}>
                       No MCP servers configured.
                     </td>
                   </tr>
@@ -54,8 +55,8 @@ export function Runtime() {
                     <tr key={server.name} className="border-t">
                       <td className="px-3 py-2 font-medium">{server.name}</td>
                       <td className="px-3 py-2">
-                        <Badge variant={server.connected ? "secondary" : "outline"}>
-                          {server.connected ? "connected" : "not connected"}
+                        <Badge variant={mcpStatusVariant(server.status)}>
+                          {mcpStatusLabel(server.status)}
                         </Badge>
                       </td>
                       <td className="px-3 py-2 font-mono text-xs">
@@ -63,6 +64,9 @@ export function Runtime() {
                       </td>
                       <td className="max-w-[28rem] truncate px-3 py-2 font-mono text-xs">
                         {[server.command, ...(server.args ?? [])].join(" ")}
+                      </td>
+                      <td className="text-destructive max-w-[28rem] break-words px-3 py-2 font-mono text-xs">
+                        {server.error || "-"}
                       </td>
                     </tr>
                   ))
@@ -121,4 +125,16 @@ export function Runtime() {
       </div>
     </div>
   );
+}
+
+function mcpStatusLabel(status: string): string {
+  if (status === "connected") return "connected";
+  if (status === "error") return "error";
+  return "not started";
+}
+
+function mcpStatusVariant(status: string): "secondary" | "outline" | "destructive" {
+  if (status === "connected") return "secondary";
+  if (status === "error") return "destructive";
+  return "outline";
 }
