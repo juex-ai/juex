@@ -63,12 +63,8 @@ func Parse(raw string) (Parsed, error) {
 		return p, fmt.Errorf("frontmatter: missing closing ---")
 	}
 
-	scanner := bufio.NewScanner(strings.NewReader(fmBody))
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		if err := parseLine(scanner.Text(), p.Fields); err != nil {
-			return p, err
-		}
+	if err := parseFields(fmBody, p.Fields); err != nil {
+		return p, err
 	}
 	p.Body = body
 	return p, nil
@@ -100,20 +96,92 @@ func indexClosingFence(s string) int {
 	return -1
 }
 
-func parseLine(line string, into map[string]string) error {
-	trim := strings.TrimSpace(line)
-	if trim == "" || strings.HasPrefix(trim, "#") {
-		return nil
+func parseFields(raw string, into map[string]string) error {
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
 	}
-	colon := strings.Index(trim, ":")
-	if colon < 0 {
-		return fmt.Errorf("frontmatter: bad line: %q", line)
+	if err := scanner.Err(); err != nil {
+		return err
 	}
-	key := strings.TrimSpace(trim[:colon])
-	val := strings.TrimSpace(trim[colon+1:])
-	val = unquote(val)
-	into[key] = val
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trim := strings.TrimSpace(line)
+		if trim == "" || strings.HasPrefix(trim, "#") {
+			continue
+		}
+		colon := strings.Index(trim, ":")
+		if colon < 0 {
+			return fmt.Errorf("frontmatter: bad line: %q", line)
+		}
+		key := strings.TrimSpace(trim[:colon])
+		val := strings.TrimSpace(trim[colon+1:])
+		if blockScalarMode(val) != "" {
+			var block string
+			block, i = collectBlockScalar(lines, i+1, blockScalarMode(val))
+			into[key] = block
+			continue
+		}
+		into[key] = unquote(val)
+	}
 	return nil
+}
+
+func blockScalarMode(val string) string {
+	switch val {
+	case "|", "|-", "|+":
+		return "|"
+	case ">", ">-", ">+":
+		return ">"
+	default:
+		return ""
+	}
+}
+
+func collectBlockScalar(lines []string, start int, mode string) (string, int) {
+	indent := 0
+	for i := start; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		indent = leadingWhitespace(lines[i])
+		if indent == 0 {
+			return "", start - 1
+		}
+		break
+	}
+
+	var block []string
+	i := start
+	for ; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], "\r")
+		if strings.TrimSpace(line) != "" && leadingWhitespace(line) < indent {
+			break
+		}
+		if len(line) >= indent {
+			line = line[indent:]
+		} else {
+			line = ""
+		}
+		block = append(block, line)
+	}
+	if mode == ">" {
+		for j, line := range block {
+			block[j] = strings.TrimSpace(line)
+		}
+		return strings.Join(strings.Fields(strings.Join(block, " ")), " "), i - 1
+	}
+	return strings.TrimRight(strings.Join(block, "\n"), "\n"), i - 1
+}
+
+func leadingWhitespace(s string) int {
+	n := 0
+	for n < len(s) && (s[n] == ' ' || s[n] == '\t') {
+		n++
+	}
+	return n
 }
 
 // unquote strips a single matching pair of outer quotes (single or double).

@@ -28,6 +28,10 @@ func runFakeServer() {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
+		if os.Getenv("JUEX_FAKE_MCP_STDOUT_LOG") == "1" {
+			fmt.Fprintln(os.Stdout, "time=now level=INFO msg=not-json")
+			os.Unsetenv("JUEX_FAKE_MCP_STDOUT_LOG")
+		}
 		var req map[string]any
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
 			continue
@@ -297,6 +301,25 @@ func TestLoadConfig_Missing(t *testing.T) {
 	}
 	if len(c.MCPServers) != 0 {
 		t.Fatalf("want empty config, got %+v", c)
+	}
+}
+
+func TestConnect_InvalidStdoutReturnsProtocolError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := Connect(ctx, "noisy", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":            "1",
+			"JUEX_FAKE_MCP_STDOUT_LOG": "1",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid stdout error")
+	}
+	if !strings.Contains(err.Error(), "invalid stdout") || !strings.Contains(err.Error(), "not-json") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

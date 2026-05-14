@@ -56,10 +56,11 @@ func (l *Loader) Load() error {
 		}
 		source := sourceLabel(dir, l.dirs)
 		for _, e := range entries {
-			if !e.IsDir() {
+			skillDir, ok := skillDirPath(dir, e)
+			if !ok {
 				continue
 			}
-			path := filepath.Join(dir, e.Name(), "SKILL.md")
+			path := filepath.Join(skillDir, "SKILL.md")
 			data, err := os.ReadFile(path)
 			if err != nil {
 				continue
@@ -83,6 +84,21 @@ func (l *Loader) Load() error {
 		}
 	}
 	return nil
+}
+
+func skillDirPath(root string, e os.DirEntry) (string, bool) {
+	path := filepath.Join(root, e.Name())
+	if e.IsDir() {
+		return path, true
+	}
+	if e.Type()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return "", false
+	}
+	return path, true
 }
 
 // All returns every loaded skill, sorted by name.

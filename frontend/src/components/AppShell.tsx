@@ -41,6 +41,19 @@ export function AppShell() {
     };
   }, []);
 
+  const mcpErrorCount =
+    runtimeStatus?.mcp.servers.filter((server) => server.status === "error").length ??
+    0;
+  const mcpLabel = runtimeStatus
+    ? mcpErrorCount > 0
+      ? `MCP ${mcpErrorCount}/${runtimeStatus.mcp.configured} error`
+      : runtimeStatus.mcp.connected > 0
+        ? `MCP ${runtimeStatus.mcp.connected}/${runtimeStatus.mcp.configured} connected`
+        : runtimeStatus.mcp.configured > 0
+          ? `MCP not started (${runtimeStatus.mcp.configured})`
+          : "MCP 0 configured"
+    : "";
+
   return (
     <SidebarProvider className="h-svh min-h-0 overflow-hidden">
       <Sidebar />
@@ -52,9 +65,11 @@ export function AppShell() {
               <span className="font-semibold">juex</span>
               {runtimeStatus ? (
                 <div className="flex items-center gap-1">
-                  <Badge variant="outline" className="font-mono text-xs">
-                    MCP {runtimeStatus.mcp.connected}/
-                    {runtimeStatus.mcp.configured} connected
+                  <Badge
+                    variant={mcpErrorCount > 0 ? "destructive" : "outline"}
+                    className="font-mono text-xs"
+                  >
+                    {mcpLabel}
                   </Badge>
                   <Badge variant="outline" className="font-mono text-xs">
                     SKILLS {runtimeStatus.skills.count}

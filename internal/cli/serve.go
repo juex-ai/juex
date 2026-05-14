@@ -43,6 +43,8 @@ and the server flushes session jsonl before exit.`,
 				Cfg:          cfg,
 				Addr:         addr,
 				AllowAnyBind: unsafeBindAny,
+				Verbose:      flags.verbose,
+				Stderr:       cmd.ErrOrStderr(),
 			})
 
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

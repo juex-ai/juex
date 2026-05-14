@@ -24,8 +24,10 @@ type mcpServerInfo struct {
 	Name      string   `json:"name"`
 	Command   string   `json:"command"`
 	Args      []string `json:"args,omitempty"`
+	Status    string   `json:"status"`
 	Connected bool     `json:"connected"`
 	ToolCount int      `json:"tool_count"`
+	Error     string   `json:"error,omitempty"`
 }
 
 type skillsStatus struct {
@@ -60,16 +62,26 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		return runtimeStatusResponse{}, err
 	}
 	connected := s.connectedMCPServers()
+	mcpErrors := s.mcpErrors()
 	connectedCount := 0
 	servers := make([]mcpServerInfo, 0, len(mcpServers))
 	for name, spec := range mcpServers {
 		toolCount := connected[name]
+		status := "not_started"
+		errText := mcpErrors[name]
+		if toolCount > 0 {
+			status = "connected"
+		} else if errText != "" {
+			status = "error"
+		}
 		info := mcpServerInfo{
 			Name:      name,
 			Command:   spec.Command,
 			Args:      append([]string(nil), spec.Args...),
+			Status:    status,
 			Connected: toolCount > 0,
 			ToolCount: toolCount,
+			Error:     errText,
 		}
 		if info.Connected {
 			connectedCount++

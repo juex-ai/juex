@@ -15,6 +15,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -75,7 +76,8 @@ type Client struct {
 	in   io.WriteCloser
 
 	mu      sync.Mutex
-	pending map[string]chan rpcResponse
+	pending map[string]chan rpcCallResult
+	readErr error
 
 	nextID atomic.Int64
 	closed atomic.Bool
@@ -95,6 +97,39 @@ type Notification struct {
 
 type ConnectOptions struct {
 	OnNotification func(Notification)
+}
+
+// ServerError marks an MCP setup failure with the server name that produced
+// it so callers can surface per-server diagnostics.
+type ServerError struct {
+	Server string
+	Op     string
+	Err    error
+}
+
+func (e *ServerError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Op == "" {
+		return fmt.Sprintf("mcp[%s]: %v", e.Server, e.Err)
+	}
+	return fmt.Sprintf("mcp[%s]: %s: %v", e.Server, e.Op, e.Err)
+}
+
+func (e *ServerError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func ErrorServerName(err error) (string, bool) {
+	var serverErr *ServerError
+	if errors.As(err, &serverErr) && serverErr.Server != "" {
+		return serverErr.Server, true
+	}
+	return "", false
 }
 
 // Connect launches the server subprocess and performs the initialize handshake.
@@ -128,7 +163,7 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 		name:           name,
 		cmd:            cmd,
 		in:             stdin,
-		pending:        make(map[string]chan rpcResponse),
+		pending:        make(map[string]chan rpcCallResult),
 		onNotification: opts.OnNotification,
 	}
 	go c.readLoop(stdout)
@@ -234,12 +269,12 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 	for name, spec := range cfg.MCPServers {
 		client, err := ConnectWithOptions(ctx, name, spec, opts)
 		if err != nil {
-			return clients, err
+			return clients, &ServerError{Server: name, Op: "connect", Err: err}
 		}
 		clients = append(clients, client)
 		descs, err := client.ListTools(ctx)
 		if err != nil {
-			return clients, err
+			return clients, &ServerError{Server: name, Op: "tools/list", Err: err}
 		}
 		for _, d := range descs {
 			toolName := fmt.Sprintf("mcp__%s__%s", name, d.Name)
@@ -258,7 +293,7 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 				},
 			})
 			if err != nil {
-				return clients, err
+				return clients, &ServerError{Server: name, Op: "register tool " + toolName, Err: err}
 			}
 		}
 	}
@@ -298,6 +333,11 @@ type rpcResponse struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
+type rpcCallResult struct {
+	resp rpcResponse
+	err  error
+}
+
 type rpcEnvelope struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -310,8 +350,13 @@ type rpcEnvelope struct {
 func (c *Client) call(ctx context.Context, method string, params any) (rpcResponse, error) {
 	id := int(c.nextID.Add(1))
 	idKey := rpcIDKey(json.RawMessage(strconv.Itoa(id)))
-	ch := make(chan rpcResponse, 1)
+	ch := make(chan rpcCallResult, 1)
 	c.mu.Lock()
+	if c.readErr != nil {
+		err := c.readErr
+		c.mu.Unlock()
+		return rpcResponse{}, err
+	}
 	c.pending[idKey] = ch
 	c.mu.Unlock()
 	defer func() {
@@ -328,7 +373,11 @@ func (c *Client) call(ctx context.Context, method string, params any) (rpcRespon
 	select {
 	case <-ctx.Done():
 		return rpcResponse{}, ctx.Err()
-	case resp := <-ch:
+	case result := <-ch:
+		if result.err != nil {
+			return rpcResponse{}, result.err
+		}
+		resp := result.resp
 		if resp.Error != nil {
 			return resp, fmt.Errorf("mcp[%s].%s: %s (code=%d)", c.name, method, resp.Error.Message, resp.Error.Code)
 		}
@@ -360,7 +409,8 @@ func (c *Client) readLoop(r io.Reader) {
 		}
 		var msg rpcEnvelope
 		if err := json.Unmarshal(line, &msg); err != nil {
-			continue
+			c.failPending(fmt.Errorf("mcp[%s]: invalid stdout from server: %q", c.name, truncateProtocolLine(string(line), 300)))
+			return
 		}
 		idKey := rpcIDKey(msg.ID)
 		if idKey == "" {
@@ -372,9 +422,38 @@ func (c *Client) readLoop(r io.Reader) {
 		ch, ok := c.pending[idKey]
 		c.mu.Unlock()
 		if ok {
-			ch <- resp
+			ch <- rpcCallResult{resp: resp}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		c.failPending(fmt.Errorf("mcp[%s]: stdout read error: %w", c.name, err))
+		return
+	}
+	c.failPending(fmt.Errorf("mcp[%s]: stdout closed before response", c.name))
+}
+
+func (c *Client) failPending(err error) {
+	c.mu.Lock()
+	if c.readErr == nil {
+		c.readErr = err
+	}
+	pending := c.pending
+	c.pending = make(map[string]chan rpcCallResult)
+	c.mu.Unlock()
+	for _, ch := range pending {
+		select {
+		case ch <- rpcCallResult{err: err}:
+		default:
+		}
+	}
+}
+
+func truncateProtocolLine(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
 }
 
 func (c *Client) handleNotification(msg rpcEnvelope) {

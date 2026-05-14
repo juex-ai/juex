@@ -487,6 +487,11 @@ Claude channel notifications are formatted as
 `<mcp_name>:<event_type>:<event_content>` and run through the normal Agent
 turn loop as `mcp_event` user messages.
 
+MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
+stdout fails the connection as a protocol error; server logs must go to stderr.
+The web runtime status keeps the latest per-server connection error so `/runtime`
+can explain configured-but-disconnected servers.
+
 `RegisterAllLayered(ctx, configs, reg)` merges multiple configs by server
 name with later-wins precedence. App passes `[user, project]` so a project
 `mcp.json` overrides any user-level server with the same name; the user

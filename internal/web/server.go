@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 )
 
 // Options configures a Server. Provider is optional; if unset, the
@@ -25,6 +27,8 @@ type Options struct {
 	Addr         string
 	Provider     llm.Provider // optional; injected for tests
 	AllowAnyBind bool         // bypass the loopback bind check; CLI sets this for --unsafe-bind-any
+	Verbose      bool
+	Stderr       io.Writer
 }
 
 // Server is a long-running HTTP server for one WorkDir.
@@ -39,6 +43,7 @@ type Server struct {
 
 	runtimeMu     sync.Mutex
 	runtimeSkills *skillsStatus
+	runtimeMCPErr map[string]string
 }
 
 // activeSession wraps an app.App with the bookkeeping the web server
@@ -66,7 +71,7 @@ func NewServer(opts Options) *Server {
 	if opts.Addr == "" {
 		opts.Addr = "127.0.0.1:8080"
 	}
-	return &Server{opts: opts}
+	return &Server{opts: opts, runtimeMCPErr: map[string]string{}}
 }
 
 // Handler returns the http.Handler wired with every route. Exposed so
@@ -224,13 +229,18 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 	a, err := app.New(app.Options{
 		Config:      s.opts.Cfg,
 		Provider:    s.opts.Provider,
+		Verbose:     s.opts.Verbose,
+		Stderr:      s.stderr(),
 		WorkDir:     s.opts.Cfg.WorkDir,
 		ResumeDir:   resumeDir,
 		LazySession: resumeDir == "",
 	})
 	if err != nil {
+		s.recordMCPError(err)
+		s.logVerbose("juex serve: open session failed: %v", err)
 		return nil, err
 	}
+	s.clearMCPErrors()
 	as := &activeSession{
 		app:       a,
 		bcast:     newBroadcaster(),
@@ -240,6 +250,49 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
 	s.sessions.Store(a.Session.ID, as)
 	return as, nil
+}
+
+func (s *Server) stderr() io.Writer {
+	if s.opts.Stderr != nil {
+		return s.opts.Stderr
+	}
+	return os.Stderr
+}
+
+func (s *Server) logVerbose(format string, args ...any) {
+	if !s.opts.Verbose {
+		return
+	}
+	fmt.Fprintf(s.stderr(), format+"\n", args...)
+}
+
+func (s *Server) recordMCPError(err error) {
+	name, ok := mcp.ErrorServerName(err)
+	if !ok {
+		return
+	}
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	if s.runtimeMCPErr == nil {
+		s.runtimeMCPErr = map[string]string{}
+	}
+	s.runtimeMCPErr[name] = err.Error()
+}
+
+func (s *Server) clearMCPErrors() {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.runtimeMCPErr = map[string]string{}
+}
+
+func (s *Server) mcpErrors() map[string]string {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	out := make(map[string]string, len(s.runtimeMCPErr))
+	for name, msg := range s.runtimeMCPErr {
+		out[name] = msg
+	}
+	return out
 }
 
 // getActiveSession returns the active session for id; opens it from

@@ -221,9 +221,9 @@ When the user clicks `+ new chat` in the sidebar, the client POSTs
 
 ### 6.3 Runtime detail (`/runtime`)
 
-Shows the MCP configured/connected count, per-server tool counts, and the
-loaded skill list. The page uses dense tables because this is operational
-metadata, not a conversational surface.
+Shows the MCP configured/connected/error count, per-server status, tool counts,
+latest connection error, and the loaded skill list. The page uses dense tables
+because this is operational metadata, not a conversational surface.
 
 ---
 
