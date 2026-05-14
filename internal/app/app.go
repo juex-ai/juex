@@ -103,7 +103,6 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 
-	var mcpClients []*mcp.Client
 	var mcpConfigs []mcp.Config
 	for _, path := range cfg.MCPConfigPaths() {
 		mcpCfg, err := mcp.LoadConfig(path)
@@ -112,14 +111,6 @@ func New(opts Options) (*App, error) {
 		}
 		if len(mcpCfg.MCPServers) > 0 {
 			mcpConfigs = append(mcpConfigs, mcpCfg)
-		}
-	}
-	if len(mcpConfigs) > 0 {
-		clients, err := mcp.RegisterAllLayered(context.Background(), mcpConfigs, reg)
-		mcpClients = append(mcpClients, clients...)
-		if err != nil {
-			closeAll(mcpClients)
-			return nil, err
 		}
 	}
 
@@ -138,7 +129,6 @@ func New(opts Options) (*App, error) {
 		})
 	}
 	if err != nil {
-		closeAll(mcpClients)
 		return nil, err
 	}
 	sess.SubscribeBus(bus)
@@ -164,6 +154,20 @@ func New(opts Options) (*App, error) {
 
 	a := &App{Engine: eng, Bus: bus, Session: sess}
 	a.cleanup = append(a.cleanup, sess.Close)
+	var mcpClients []*mcp.Client
+	if len(mcpConfigs) > 0 {
+		clients, err := mcp.RegisterAllLayeredWithOptions(context.Background(), mcpConfigs, reg, mcp.ConnectOptions{
+			OnNotification: func(n mcp.Notification) {
+				_ = a.handleMCPNotification(context.Background(), n)
+			},
+		})
+		mcpClients = append(mcpClients, clients...)
+		if err != nil {
+			closeAll(mcpClients)
+			sess.Close()
+			return nil, err
+		}
+	}
 	for _, c := range mcpClients {
 		c := c
 		a.cleanup = append(a.cleanup, c.Close)
@@ -174,6 +178,20 @@ func New(opts Options) (*App, error) {
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	return a.Engine.Turn(ctx, prompt)
+}
+
+func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
+	if a == nil || a.Engine == nil {
+		return nil
+	}
+	eventType := n.EventType
+	if eventType == "" {
+		eventType = "notification"
+	}
+	msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("%s:%s:%s", n.ServerName, eventType, n.Content))
+	msg.Kind = "mcp_event"
+	_, err := a.Engine.TurnMessage(ctx, msg)
+	return err
 }
 
 func (a *App) TokenUsage() llm.Usage {

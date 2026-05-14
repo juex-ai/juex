@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -60,6 +61,36 @@ func TestApp_RunSingleTurn(t *testing.T) {
 	}
 	if got := a.TokenUsage(); got != (llm.Usage{InputTokens: 8, OutputTokens: 3}) {
 		t.Fatalf("usage = %+v", got)
+	}
+}
+
+func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "handled event"),
+		StopReason: llm.StopEndTurn,
+	})
+
+	err := a.handleMCPNotification(context.Background(), mcp.Notification{
+		ServerName: "local",
+		Method:     "notifications/claude/channel",
+		EventType:  "message",
+		Content:    "[realtime] hello alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
+	}
+	if len(a.Session.History) != 2 {
+		t.Fatalf("history len = %d, want user and assistant", len(a.Session.History))
+	}
+	user := a.Session.History[0]
+	if user.Kind != "mcp_event" {
+		t.Fatalf("user kind = %q", user.Kind)
+	}
+	if got := user.FirstText(); got != "local:message:[realtime] hello alice" {
+		t.Fatalf("user text = %q", got)
 	}
 }
 

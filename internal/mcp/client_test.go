@@ -80,6 +80,16 @@ func runFakeServer() {
 				"id":      idVal,
 				"result":  map[string]any{"tools": tools},
 			})
+			if os.Getenv("JUEX_FAKE_MCP_NOTIFY_CHANNEL") == "1" {
+				enc.Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"method":  "notifications/claude/channel",
+					"params": map[string]any{
+						"content": "[realtime] hello alice",
+						"meta":    map[string]any{"event_type": "message"},
+					},
+				})
+			}
 		case "tools/call":
 			params, _ := req["params"].(map[string]any)
 			name, _ := params["name"].(string)
@@ -160,6 +170,42 @@ func TestMCPClient_RoundTrip(t *testing.T) {
 	}
 	if out != "got: hello" {
 		t.Fatalf("call result = %q", out)
+	}
+}
+
+func TestMCPClient_ClaudeChannelNotification(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	got := make(chan Notification, 1)
+	client, err := ConnectWithOptions(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":                "1",
+			"JUEX_FAKE_MCP_NOTIFY_CHANNEL": "1",
+		},
+	}, ConnectOptions{
+		OnNotification: func(n Notification) {
+			got <- n
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	if _, err := client.ListTools(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case n := <-got:
+		if n.ServerName != "fake" || n.Method != "notifications/claude/channel" ||
+			n.EventType != "message" || n.Content != "[realtime] hello alice" {
+			t.Fatalf("notification = %+v", n)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for notification")
 	}
 }
 

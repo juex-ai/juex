@@ -78,10 +78,32 @@ type Client struct {
 
 	nextID atomic.Int64
 	closed atomic.Bool
+
+	onNotification func(Notification)
+}
+
+// Notification is a server-initiated MCP JSON-RPC notification that Juex
+// understands. Claude channel notifications carry realtime content and
+// meta.event_type for the agent-facing message formatter.
+type Notification struct {
+	ServerName string
+	Method     string
+	EventType  string
+	Content    string
+}
+
+type ConnectOptions struct {
+	OnNotification func(Notification)
 }
 
 // Connect launches the server subprocess and performs the initialize handshake.
 func Connect(ctx context.Context, name string, spec ServerSpec) (*Client, error) {
+	return ConnectWithOptions(ctx, name, spec, ConnectOptions{})
+}
+
+// ConnectWithOptions launches the server subprocess and performs the
+// initialize handshake while registering optional notification callbacks.
+func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts ConnectOptions) (*Client, error) {
 	if spec.Command == "" {
 		return nil, fmt.Errorf("mcp[%s]: missing command", name)
 	}
@@ -102,10 +124,11 @@ func Connect(ctx context.Context, name string, spec ServerSpec) (*Client, error)
 	}
 
 	c := &Client{
-		name:    name,
-		cmd:     cmd,
-		in:      stdin,
-		pending: make(map[int]chan rpcResponse),
+		name:           name,
+		cmd:            cmd,
+		in:             stdin,
+		pending:        make(map[int]chan rpcResponse),
+		onNotification: opts.OnNotification,
 	}
 	go c.readLoop(stdout)
 
@@ -185,22 +208,30 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 // Returns the connected clients in the order they were started so the caller
 // can Close them at shutdown.
 func RegisterAllLayered(ctx context.Context, configs []Config, reg *tools.Registry) ([]*Client, error) {
+	return RegisterAllLayeredWithOptions(ctx, configs, reg, ConnectOptions{})
+}
+
+func RegisterAllLayeredWithOptions(ctx context.Context, configs []Config, reg *tools.Registry, opts ConnectOptions) ([]*Client, error) {
 	merged := map[string]ServerSpec{}
 	for _, c := range configs {
 		for name, spec := range c.MCPServers {
 			merged[name] = spec
 		}
 	}
-	return RegisterAll(ctx, Config{MCPServers: merged}, reg)
+	return RegisterAllWithOptions(ctx, Config{MCPServers: merged}, reg, opts)
 }
 
 // RegisterAll connects servers from cfg and registers their tools (prefixed
 // `mcp__<server>__<tool>`) into reg. Returns the connected clients so the
 // caller can Close them at shutdown.
 func RegisterAll(ctx context.Context, cfg Config, reg *tools.Registry) ([]*Client, error) {
+	return RegisterAllWithOptions(ctx, cfg, reg, ConnectOptions{})
+}
+
+func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry, opts ConnectOptions) ([]*Client, error) {
 	var clients []*Client
 	for name, spec := range cfg.MCPServers {
-		client, err := Connect(ctx, name, spec)
+		client, err := ConnectWithOptions(ctx, name, spec, opts)
 		if err != nil {
 			return clients, err
 		}
@@ -267,6 +298,15 @@ type rpcResponse struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
+type rpcEnvelope struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      *int            `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+
 func (c *Client) call(ctx context.Context, method string, params any) (rpcResponse, error) {
 	id := int(c.nextID.Add(1))
 	ch := make(chan rpcResponse, 1)
@@ -317,14 +357,15 @@ func (c *Client) readLoop(r io.Reader) {
 		if len(line) == 0 {
 			continue
 		}
-		var resp rpcResponse
-		if err := json.Unmarshal(line, &resp); err != nil {
-			// Could be a server-initiated notification we don't handle in v0.1; ignore.
+		var msg rpcEnvelope
+		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
 		}
-		if resp.ID == 0 && resp.Result == nil && resp.Error == nil {
-			continue // not a response
+		if msg.ID == nil {
+			c.handleNotification(msg)
+			continue
 		}
+		resp := rpcResponse{JSONRPC: msg.JSONRPC, ID: *msg.ID, Result: msg.Result, Error: msg.Error}
 		c.mu.Lock()
 		ch, ok := c.pending[resp.ID]
 		c.mu.Unlock()
@@ -332,6 +373,29 @@ func (c *Client) readLoop(r io.Reader) {
 			ch <- resp
 		}
 	}
+}
+
+func (c *Client) handleNotification(msg rpcEnvelope) {
+	if c.onNotification == nil || msg.Method != "notifications/claude/channel" {
+		return
+	}
+	var params struct {
+		Content string         `json:"content"`
+		Meta    map[string]any `json:"meta"`
+	}
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		return
+	}
+	eventType := "notification"
+	if raw, ok := params.Meta["event_type"].(string); ok && raw != "" {
+		eventType = raw
+	}
+	go c.onNotification(Notification{
+		ServerName: c.name,
+		Method:     msg.Method,
+		EventType:  eventType,
+		Content:    params.Content,
+	})
 }
 
 func mergeEnv(extra map[string]string) []string {

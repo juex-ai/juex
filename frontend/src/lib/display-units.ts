@@ -21,6 +21,7 @@ export type DisplayUnit =
 export type MessageGroup = {
   key: string;
   role: Role;
+  kind?: string;
   pending: boolean;
   units: DisplayUnit[];
   /** Model that produced this message (assistant only). */
@@ -83,6 +84,7 @@ export function messagesToGroups(
     groups.push({
       key: `${msg.turn_id ?? "msg"}-${i}`,
       role: msg.role,
+      kind: msg.kind,
       pending,
       units,
       model: msg.model,

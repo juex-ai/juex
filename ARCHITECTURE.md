@@ -49,7 +49,7 @@ juex/
 │   ├── tools/                    # tool registry + 5 builtins
 │   │   ├── registry.go
 │   │   └── builtin.go
-│   ├── mcp/        client.go     # stdio JSON-RPC 2.0 client + RegisterAllLayered
+│   ├── mcp/        client.go     # stdio JSON-RPC 2.0 client, tools, notifications
 │   ├── skills/     loader.go     # SKILL.md frontmatter loader
 │   ├── memory/     memory.go     # AGENTS.md hierarchy + entry store
 │   ├── frontmatter/parser.go     # shared YAML frontmatter parser
@@ -466,14 +466,18 @@ are left untouched — move them by hand if you want them per-project.
 
 ## 7. MCP
 
-Handwritten stdio client (no external SDK), ~250 lines. Supports:
+Handwritten stdio client (no external SDK). Supports:
 
 - `initialize` handshake
 - `tools/list`
 - `tools/call`
 - `notifications/initialized`
+- `notifications/claude/channel`
 
 Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
+Claude channel notifications are formatted as
+`<mcp_name>:<event_type>:<event_content>` and run through the normal Agent
+turn loop as `mcp_event` user messages.
 
 `RegisterAllLayered(ctx, configs, reg)` merges multiple configs by server
 name with later-wins precedence. App passes `[user, project]` so a project

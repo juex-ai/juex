@@ -109,6 +109,34 @@ func TestTurn_PlainResponse(t *testing.T) {
 	}
 }
 
+func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "received"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var payloadKind string
+	bus.Subscribe("turn.started", func(e events.Event) {
+		p := e.Payload.(map[string]any)
+		payloadKind, _ = p["kind"].(string)
+	})
+
+	msg := llm.TextMessage(llm.RoleUser, "local:message:hello")
+	msg.Kind = "mcp_event"
+	out, err := eng.TurnMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "received" {
+		t.Fatalf("out = %q", out)
+	}
+	if got := eng.Session.History[0].Kind; got != "mcp_event" {
+		t.Fatalf("history kind = %q", got)
+	}
+	if payloadKind != "mcp_event" {
+		t.Fatalf("turn.started kind = %q", payloadKind)
+	}
+}
+
 func TestTurn_PersistsEmptyAssistantResponse(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: nil}, StopReason: llm.StopEndTurn},
