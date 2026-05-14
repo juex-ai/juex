@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 // Options configures a Server. Provider is optional; if unset, the
@@ -44,6 +45,10 @@ type Server struct {
 	runtimeMu     sync.Mutex
 	runtimeSkills *skillsStatus
 	runtimeMCPErr map[string]string
+
+	mcpMu      sync.Mutex
+	mcpStarted bool
+	mcpManager *mcp.Manager
 }
 
 // activeSession wraps an app.App with the bookkeeping the web server
@@ -133,6 +138,9 @@ func (s *Server) Run(ctx context.Context) error {
 	if !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex serve: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
+	if err := s.ensureMCPStarted(ctx); err != nil {
+		return err
+	}
 	srv := &http.Server{
 		Addr:              s.opts.Addr,
 		Handler:           s.Handler(),
@@ -166,6 +174,7 @@ func (s *Server) Close() {
 	}
 	s.closed = true
 	s.closeMu.Unlock()
+	s.closeMCPManager()
 	s.sessions.Range(func(_, v any) bool {
 		as := v.(*activeSession)
 		as.cancelMu.Lock()
@@ -218,6 +227,9 @@ func validLoopback(addr string) bool {
 // (resumeDir == "") doesn't need the re-check: app.New allocates a new
 // id every call, so concurrent fresh creates produce distinct sessions.
 func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSession, error) {
+	if err := s.ensureMCPStarted(ctx); err != nil {
+		return nil, err
+	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
 	if resumeDir != "" {
@@ -226,14 +238,17 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 			return v.(*activeSession), nil
 		}
 	}
-	s.clearMCPErrors()
 	a, err := app.New(app.Options{
-		Config:      s.opts.Cfg,
-		Provider:    s.opts.Provider,
-		Verbose:     s.opts.Verbose,
-		Stderr:      s.stderr(),
-		WorkDir:     s.opts.Cfg.WorkDir,
-		ResumeDir:   resumeDir,
+		Config:     s.opts.Cfg,
+		Provider:   s.opts.Provider,
+		Verbose:    s.opts.Verbose,
+		Stderr:     s.stderr(),
+		WorkDir:    s.opts.Cfg.WorkDir,
+		MCPManager: s.mcpManagerSnapshot(),
+		DisableMCP: true,
+		ResumeDir:  resumeDir,
+		// A fresh web session should not write history until the first
+		// message; MCP notifications target history.last instead.
 		LazySession: resumeDir == "",
 	})
 	if err != nil {
@@ -250,6 +265,125 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
 	s.sessions.Store(a.Session.ID, as)
 	return as, nil
+}
+
+func (s *Server) ensureMCPStarted(ctx context.Context) error {
+	s.mcpMu.Lock()
+	if s.mcpStarted {
+		s.mcpMu.Unlock()
+		return nil
+	}
+	s.mcpStarted = true
+	s.mcpMu.Unlock()
+
+	mcpConfigs, err := s.loadMCPConfigs()
+	if err != nil {
+		s.mcpMu.Lock()
+		s.mcpStarted = false
+		s.mcpMu.Unlock()
+		return err
+	}
+	if len(mcpConfigs) == 0 {
+		return nil
+	}
+	var ready atomic.Bool
+	var queuedMu sync.Mutex
+	var queued []mcp.Notification
+	handleNotification := func(n mcp.Notification) {
+		if !ready.Load() {
+			queuedMu.Lock()
+			queued = append(queued, n)
+			queuedMu.Unlock()
+			return
+		}
+		if err := s.handleMCPNotification(context.Background(), n); err != nil {
+			s.logVerbose("juex serve: MCP notification dropped: %v", err)
+		}
+	}
+	mgr, err := mcp.NewManagerLayered(ctx, mcpConfigs, mcp.ConnectOptions{
+		OnNotification: handleNotification,
+	})
+	if err != nil {
+		s.recordMCPError(err)
+		s.logVerbose("juex serve: MCP startup failed: %v", err)
+		return nil
+	}
+	s.clearMCPErrors()
+
+	s.mcpMu.Lock()
+	if s.isClosed() {
+		s.mcpMu.Unlock()
+		mgr.Close()
+		return nil
+	}
+	s.mcpManager = mgr
+	s.mcpMu.Unlock()
+	ready.Store(true)
+	queuedMu.Lock()
+	pending := append([]mcp.Notification(nil), queued...)
+	queued = nil
+	queuedMu.Unlock()
+	for _, n := range pending {
+		handleNotification(n)
+	}
+	return nil
+}
+
+func (s *Server) mcpManagerSnapshot() *mcp.Manager {
+	s.mcpMu.Lock()
+	defer s.mcpMu.Unlock()
+	return s.mcpManager
+}
+
+func (s *Server) mcpToolCounts() map[string]int {
+	mgr := s.mcpManagerSnapshot()
+	if mgr == nil {
+		return map[string]int{}
+	}
+	return mgr.ToolCounts()
+}
+
+func (s *Server) closeMCPManager() {
+	s.mcpMu.Lock()
+	mgr := s.mcpManager
+	s.mcpManager = nil
+	s.mcpMu.Unlock()
+	if mgr != nil {
+		_ = mgr.Close()
+	}
+}
+
+func (s *Server) isClosed() bool {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	return s.closed
+}
+
+func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
+	id, ok, err := s.lastWrittenSessionID()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		s.logVerbose("juex serve: MCP notification dropped: no last session")
+		return nil
+	}
+	as, err := s.getActiveSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	return as.app.HandleMCPNotification(ctx, n)
+}
+
+func (s *Server) lastWrittenSessionID() (string, bool, error) {
+	h, err := session.LoadHistory(s.opts.Cfg.HistoryPath())
+	if err != nil {
+		return "", false, err
+	}
+	if h.Last == nil || h.Last.ID == "" {
+		return "", false, nil
+	}
+	return h.Last.ID, true, nil
 }
 
 func (s *Server) stderr() io.Writer {

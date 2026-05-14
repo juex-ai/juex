@@ -222,8 +222,10 @@ When the user clicks `+ new chat` in the sidebar, the client POSTs
 ### 6.3 Runtime detail (`/runtime`)
 
 Shows the MCP configured/connected/error count, per-server status, tool counts,
-latest connection error, and the loaded skill list. The page uses dense tables
-because this is operational metadata, not a conversational surface.
+latest connection error, and the loaded skill list. `juex serve` starts MCP at
+server startup, so this page reports live process-level MCP state rather than
+waiting for a chat session to be opened. The page uses dense tables because
+this is operational metadata, not a conversational surface.
 
 ---
 

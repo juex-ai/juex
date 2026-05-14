@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"sort"
 	"strings"
@@ -57,19 +58,29 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
+	if err := s.ensureMCPStarted(context.Background()); err != nil {
+		return runtimeStatusResponse{}, err
+	}
 	mcpServers, err := s.configuredMCPServers()
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
 	connected := s.connectedMCPServers()
+	managerTools := s.mcpToolCounts()
+	for serverName, count := range managerTools {
+		if connected[serverName] < count {
+			connected[serverName] = count
+		}
+	}
 	mcpErrors := s.mcpErrors()
 	connectedCount := 0
 	servers := make([]mcpServerInfo, 0, len(mcpServers))
 	for name, spec := range mcpServers {
 		toolCount := connected[name]
+		_, managerConnected := managerTools[name]
 		status := "not_started"
 		errText := mcpErrors[name]
-		if toolCount > 0 {
+		if toolCount > 0 || managerConnected {
 			status = "connected"
 		} else if errText != "" {
 			status = "error"
@@ -79,7 +90,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 			Command:   spec.Command,
 			Args:      append([]string(nil), spec.Args...),
 			Status:    status,
-			Connected: toolCount > 0,
+			Connected: toolCount > 0 || managerConnected,
 			ToolCount: toolCount,
 			Error:     errText,
 		}
@@ -142,16 +153,30 @@ func cloneSkillsStatus(status skillsStatus) skillsStatus {
 
 func (s *Server) configuredMCPServers() (map[string]mcp.ServerSpec, error) {
 	merged := map[string]mcp.ServerSpec{}
-	for _, path := range s.opts.Cfg.MCPConfigPaths() {
-		cfg, err := mcp.LoadConfig(path)
-		if err != nil {
-			return nil, err
-		}
+	configs, err := s.loadMCPConfigs()
+	if err != nil {
+		return nil, err
+	}
+	for _, cfg := range configs {
 		for name, spec := range cfg.MCPServers {
 			merged[name] = spec
 		}
 	}
 	return merged, nil
+}
+
+func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
+	var configs []mcp.Config
+	for _, path := range s.opts.Cfg.MCPConfigPaths() {
+		cfg, err := mcp.LoadConfig(path)
+		if err != nil {
+			return nil, err
+		}
+		if len(cfg.MCPServers) > 0 {
+			configs = append(configs, cfg)
+		}
+	}
+	return configs, nil
 }
 
 func (s *Server) connectedMCPServers() map[string]int {

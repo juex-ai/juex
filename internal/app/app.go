@@ -35,6 +35,13 @@ type Options struct {
 	Verbose  bool
 	Stderr   io.Writer
 	WorkDir  string // if set, overrides Config.WorkDir
+	// MCPManager, when set, provides process-scoped MCP clients owned by
+	// the caller. App registers proxy tools into its per-session registry
+	// but does not close the manager.
+	MCPManager *mcp.Manager
+	// DisableMCP skips loading MCP configs. Used by serve when MCP startup
+	// failed at process scope but sessions should still be usable.
+	DisableMCP bool
 	// ResumeDir, if non-empty, is the absolute path of an existing
 	// session directory to load instead of creating a new one. The
 	// session ID and on-disk files are reused; new messages append.
@@ -106,13 +113,15 @@ func New(opts Options) (*App, error) {
 	}
 
 	var mcpConfigs []mcp.Config
-	for _, path := range cfg.MCPConfigPaths() {
-		mcpCfg, err := mcp.LoadConfig(path)
-		if err != nil {
-			return nil, err
-		}
-		if len(mcpCfg.MCPServers) > 0 {
-			mcpConfigs = append(mcpConfigs, mcpCfg)
+	if !opts.DisableMCP && opts.MCPManager == nil {
+		for _, path := range cfg.MCPConfigPaths() {
+			mcpCfg, err := mcp.LoadConfig(path)
+			if err != nil {
+				return nil, err
+			}
+			if len(mcpCfg.MCPServers) > 0 {
+				mcpConfigs = append(mcpConfigs, mcpCfg)
+			}
 		}
 	}
 
@@ -158,23 +167,27 @@ func New(opts Options) (*App, error) {
 	appCtx, appCancel := context.WithCancel(context.Background())
 	a := &App{Engine: eng, Bus: bus, Session: sess, ctx: appCtx, cancel: appCancel}
 	a.cleanup = append(a.cleanup, sess.Close)
-	var mcpClients []*mcp.Client
-	if len(mcpConfigs) > 0 {
-		clients, err := mcp.RegisterAllLayeredWithOptions(context.Background(), mcpConfigs, reg, mcp.ConnectOptions{
+	if opts.MCPManager != nil {
+		if err := opts.MCPManager.RegisterTools(reg); err != nil {
+			sess.Close()
+			return nil, err
+		}
+	} else if len(mcpConfigs) > 0 {
+		mgr, err := mcp.NewManagerLayered(context.Background(), mcpConfigs, mcp.ConnectOptions{
 			OnNotification: func(n mcp.Notification) {
 				_ = a.handleMCPNotification(a.ctx, n)
 			},
 		})
-		mcpClients = append(mcpClients, clients...)
 		if err != nil {
-			closeAll(mcpClients)
 			sess.Close()
 			return nil, err
 		}
-	}
-	for _, c := range mcpClients {
-		c := c
-		a.cleanup = append(a.cleanup, c.Close)
+		if err := mgr.RegisterTools(reg); err != nil {
+			mgr.Close()
+			sess.Close()
+			return nil, err
+		}
+		a.cleanup = append(a.cleanup, mgr.Close)
 	}
 	return a, nil
 }
@@ -201,6 +214,10 @@ func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) err
 	msg.Kind = llm.MessageKindMCPEvent
 	_, err := a.Engine.TurnMessage(ctx, msg)
 	return err
+}
+
+func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) error {
+	return a.handleMCPNotification(ctx, n)
 }
 
 func (a *App) TokenUsage() llm.Usage {
@@ -254,10 +271,4 @@ func (a *App) Close() error {
 		}
 	}
 	return firstErr
-}
-
-func closeAll(clients []*mcp.Client) {
-	for _, c := range clients {
-		c.Close()
-	}
 }
