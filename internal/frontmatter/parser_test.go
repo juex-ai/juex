@@ -104,6 +104,18 @@ func TestParse_BlockScalarValue(t *testing.T) {
 	}
 }
 
+func TestParse_FoldedBlockScalarPreservesParagraphBreaks(t *testing.T) {
+	in := "---\ndescription: >\n  first line\n  second line\n\n  next paragraph\n---\nbody"
+	p, err := Parse(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "first line second line\nnext paragraph"
+	if p.Fields["description"] != want {
+		t.Fatalf("description = %q, want %q", p.Fields["description"], want)
+	}
+}
+
 func TestParse_HashCommentLineSkipped(t *testing.T) {
 	in := "---\n# this is a comment\nname: real\n---\nbody"
 	p, err := Parse(in)

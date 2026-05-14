@@ -285,6 +285,33 @@ func TestMCPRegisterAll(t *testing.T) {
 	}
 }
 
+func TestMCPRegisterAll_ClosesPartialClientsOnRegisterError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := Config{
+		MCPServers: map[string]ServerSpec{
+			"fake": {Command: os.Args[0], Env: map[string]string{"JUEX_FAKE_MCP": "1"}},
+		},
+	}
+	r := tools.NewRegistry()
+	if err := r.Register(tools.Tool{
+		Name:    "mcp__fake__echo",
+		Schema:  map[string]any{"type": "object"},
+		Handler: func(context.Context, map[string]any) (string, error) { return "", nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	clients, err := RegisterAll(ctx, cfg, r)
+	if err == nil {
+		t.Fatal("expected duplicate tool registration error")
+	}
+	if len(clients) != 0 {
+		t.Fatalf("expected no partial clients returned after error, got %d", len(clients))
+	}
+}
+
 func TestConnect_BadCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

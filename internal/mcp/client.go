@@ -259,7 +259,8 @@ func RegisterAllLayeredWithOptions(ctx context.Context, configs []Config, reg *t
 
 // RegisterAll connects servers from cfg and registers their tools (prefixed
 // `mcp__<server>__<tool>`) into reg. Returns the connected clients so the
-// caller can Close them at shutdown.
+// caller can Close them at shutdown. On error, any clients opened during this
+// call are closed before returning.
 func RegisterAll(ctx context.Context, cfg Config, reg *tools.Registry) ([]*Client, error) {
 	return RegisterAllWithOptions(ctx, cfg, reg, ConnectOptions{})
 }
@@ -269,12 +270,14 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 	for name, spec := range cfg.MCPServers {
 		client, err := ConnectWithOptions(ctx, name, spec, opts)
 		if err != nil {
-			return clients, &ServerError{Server: name, Op: "connect", Err: err}
+			closeAll(clients)
+			return nil, &ServerError{Server: name, Op: "connect", Err: err}
 		}
 		clients = append(clients, client)
 		descs, err := client.ListTools(ctx)
 		if err != nil {
-			return clients, &ServerError{Server: name, Op: "tools/list", Err: err}
+			closeAll(clients)
+			return nil, &ServerError{Server: name, Op: "tools/list", Err: err}
 		}
 		for _, d := range descs {
 			toolName := fmt.Sprintf("mcp__%s__%s", name, d.Name)
@@ -293,11 +296,18 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 				},
 			})
 			if err != nil {
-				return clients, &ServerError{Server: name, Op: "register tool " + toolName, Err: err}
+				closeAll(clients)
+				return nil, &ServerError{Server: name, Op: "register tool " + toolName, Err: err}
 			}
 		}
 	}
 	return clients, nil
+}
+
+func closeAll(clients []*Client) {
+	for _, c := range clients {
+		c.Close()
+	}
 }
 
 func (c *Client) Close() error {

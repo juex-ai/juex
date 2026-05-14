@@ -168,12 +168,31 @@ func collectBlockScalar(lines []string, start int, mode string) (string, int) {
 		block = append(block, line)
 	}
 	if mode == ">" {
-		for j, line := range block {
-			block[j] = strings.TrimSpace(line)
-		}
-		return strings.Join(strings.Fields(strings.Join(block, " ")), " "), i - 1
+		return foldBlockLines(block), i - 1
 	}
 	return strings.TrimRight(strings.Join(block, "\n"), "\n"), i - 1
+}
+
+func foldBlockLines(lines []string) string {
+	var paragraphs []string
+	var paragraph []string
+	flush := func() {
+		if len(paragraph) == 0 {
+			return
+		}
+		paragraphs = append(paragraphs, strings.Join(paragraph, " "))
+		paragraph = nil
+	}
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			flush()
+			continue
+		}
+		paragraph = append(paragraph, trimmed)
+	}
+	flush()
+	return strings.Join(paragraphs, "\n")
 }
 
 func leadingWhitespace(s string) int {

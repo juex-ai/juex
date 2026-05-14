@@ -226,6 +226,7 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 			return v.(*activeSession), nil
 		}
 	}
+	s.clearMCPErrors()
 	a, err := app.New(app.Options{
 		Config:      s.opts.Cfg,
 		Provider:    s.opts.Provider,
@@ -240,7 +241,6 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 		s.logVerbose("juex serve: open session failed: %v", err)
 		return nil, err
 	}
-	s.clearMCPErrors()
 	as := &activeSession{
 		app:       a,
 		bcast:     newBroadcaster(),

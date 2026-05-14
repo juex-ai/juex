@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
@@ -142,6 +143,33 @@ func TestRuntimeStatusReportsMCPConnectionError(t *testing.T) {
 		t.Fatalf("status = %q, want error", got.MCP.Servers[0].Status)
 	}
 	if got.MCP.Servers[0].Error == "" || got.MCP.Servers[0].Connected {
+		t.Fatalf("server = %+v", got.MCP.Servers[0])
+	}
+}
+
+func TestOpenSessionClearsStaleMCPErrorBeforeRetry(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "alpha": { "command": "" }
+  }
+}`)
+	srv.recordMCPError(&mcp.ServerError{Server: "alpha", Op: "connect", Err: errors.New("old failure")})
+
+	if _, err := srv.openSession(context.Background(), ""); err == nil {
+		t.Fatal("expected session open to fail")
+	}
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCP.Servers) != 1 {
+		t.Fatalf("servers = %+v", got.MCP.Servers)
+	}
+	if strings.Contains(got.MCP.Servers[0].Error, "old failure") {
+		t.Fatalf("stale error was not cleared: %+v", got.MCP.Servers[0])
+	}
+	if got.MCP.Servers[0].Status != "error" || !strings.Contains(got.MCP.Servers[0].Error, "missing command") {
 		t.Fatalf("server = %+v", got.MCP.Servers[0])
 	}
 }
