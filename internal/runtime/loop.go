@@ -46,6 +46,9 @@ type Engine struct {
 	MaxIters int
 	MaxDur   time.Duration
 
+	// mu serializes turns for one Engine. MCP notifications can arrive while
+	// a user turn is running, and both paths append to the same session
+	// history; queuing them preserves the provider-facing transcript order.
 	mu sync.Mutex
 }
 

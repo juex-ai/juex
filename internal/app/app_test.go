@@ -94,6 +94,30 @@ func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
 	}
 }
 
+func TestApp_MCPNotificationUsesLifecycleContext(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "handled event"),
+		StopReason: llm.StopEndTurn,
+	})
+	a.cancel()
+
+	err := a.handleMCPNotification(a.ctx, mcp.Notification{
+		ServerName: "local",
+		Method:     "notifications/claude/channel",
+		EventType:  "message",
+		Content:    "ignored",
+	})
+	if err == nil {
+		t.Fatal("expected cancelled context error")
+	}
+	if prov.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	}
+	if len(a.Session.History) != 0 {
+		t.Fatalf("history len = %d, want 0", len(a.Session.History))
+	}
+}
+
 func TestFormatTokenUsage(t *testing.T) {
 	got := FormatTokenUsage(llm.Usage{InputTokens: 12, OutputTokens: 5})
 	want := "tokens: 17 total (input 12, output 5)"

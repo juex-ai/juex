@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,7 +75,7 @@ type Client struct {
 	in   io.WriteCloser
 
 	mu      sync.Mutex
-	pending map[int]chan rpcResponse
+	pending map[string]chan rpcResponse
 
 	nextID atomic.Int64
 	closed atomic.Bool
@@ -127,7 +128,7 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 		name:           name,
 		cmd:            cmd,
 		in:             stdin,
-		pending:        make(map[int]chan rpcResponse),
+		pending:        make(map[string]chan rpcResponse),
 		onNotification: opts.OnNotification,
 	}
 	go c.readLoop(stdout)
@@ -293,14 +294,13 @@ type rpcError struct {
 
 type rpcResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type rpcEnvelope struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      *int            `json:"id,omitempty"`
+	ID      json.RawMessage `json:"id,omitempty"`
 	Method  string          `json:"method,omitempty"`
 	Params  json.RawMessage `json:"params,omitempty"`
 	Result  json.RawMessage `json:"result,omitempty"`
@@ -309,13 +309,14 @@ type rpcEnvelope struct {
 
 func (c *Client) call(ctx context.Context, method string, params any) (rpcResponse, error) {
 	id := int(c.nextID.Add(1))
+	idKey := rpcIDKey(json.RawMessage(strconv.Itoa(id)))
 	ch := make(chan rpcResponse, 1)
 	c.mu.Lock()
-	c.pending[id] = ch
+	c.pending[idKey] = ch
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
-		delete(c.pending, id)
+		delete(c.pending, idKey)
 		c.mu.Unlock()
 	}()
 
@@ -361,13 +362,14 @@ func (c *Client) readLoop(r io.Reader) {
 		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
 		}
-		if msg.ID == nil {
+		idKey := rpcIDKey(msg.ID)
+		if idKey == "" {
 			c.handleNotification(msg)
 			continue
 		}
-		resp := rpcResponse{JSONRPC: msg.JSONRPC, ID: *msg.ID, Result: msg.Result, Error: msg.Error}
+		resp := rpcResponse{JSONRPC: msg.JSONRPC, Result: msg.Result, Error: msg.Error}
 		c.mu.Lock()
-		ch, ok := c.pending[resp.ID]
+		ch, ok := c.pending[idKey]
 		c.mu.Unlock()
 		if ok {
 			ch <- resp
@@ -396,6 +398,21 @@ func (c *Client) handleNotification(msg rpcEnvelope) {
 		EventType:  eventType,
 		Content:    params.Content,
 	})
+}
+
+func rpcIDKey(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n.String()
+	}
+	return string(raw)
 }
 
 func mergeEnv(extra map[string]string) []string {

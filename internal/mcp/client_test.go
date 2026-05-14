@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -33,6 +34,7 @@ func runFakeServer() {
 		}
 		method, _ := req["method"].(string)
 		idVal, hasID := req["id"]
+		responseID := fakeResponseID(idVal)
 		if !hasID {
 			continue // notification
 		}
@@ -40,7 +42,7 @@ func runFakeServer() {
 		case "initialize":
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
-				"id":      idVal,
+				"id":      responseID,
 				"result": map[string]any{
 					"protocolVersion": "2024-11-05",
 					"serverInfo":      map[string]any{"name": "fake", "version": "0"},
@@ -77,7 +79,7 @@ func runFakeServer() {
 			}
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
-				"id":      idVal,
+				"id":      responseID,
 				"result":  map[string]any{"tools": tools},
 			})
 			if os.Getenv("JUEX_FAKE_MCP_NOTIFY_CHANNEL") == "1" {
@@ -98,7 +100,7 @@ func runFakeServer() {
 			if name == "fail" {
 				enc.Encode(map[string]any{
 					"jsonrpc": "2.0",
-					"id":      idVal,
+					"id":      responseID,
 					"result": map[string]any{
 						"content": []map[string]any{{"type": "text", "text": "intentional failure"}},
 						"isError": true,
@@ -111,7 +113,7 @@ func runFakeServer() {
 			if name == "envcheck" {
 				enc.Encode(map[string]any{
 					"jsonrpc": "2.0",
-					"id":      idVal,
+					"id":      responseID,
 					"result": map[string]any{
 						"content": []map[string]any{{"type": "text", "text": "tag=" + os.Getenv("JUEX_FAKE_MCP_TAG")}},
 					},
@@ -121,7 +123,7 @@ func runFakeServer() {
 			text, _ := args["text"].(string)
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
-				"id":      idVal,
+				"id":      responseID,
 				"result": map[string]any{
 					"content": []map[string]any{{"type": "text", "text": "got: " + text}},
 				},
@@ -129,10 +131,22 @@ func runFakeServer() {
 		default:
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
-				"id":      idVal,
+				"id":      responseID,
 				"error":   map[string]any{"code": -32601, "message": "method not found"},
 			})
 		}
+	}
+}
+
+func fakeResponseID(idVal any) any {
+	if os.Getenv("JUEX_FAKE_MCP_STRING_IDS") != "1" {
+		return idVal
+	}
+	switch v := idVal.(type) {
+	case float64:
+		return fmt.Sprintf("%.0f", v)
+	default:
+		return fmt.Sprint(v)
 	}
 }
 
@@ -163,6 +177,31 @@ func TestMCPClient_RoundTrip(t *testing.T) {
 			t.Fatalf("tools missing %q in %+v", want, tlist)
 		}
 	}
+
+	out, err := client.CallTool(ctx, "echo", map[string]any{"text": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "got: hello" {
+		t.Fatalf("call result = %q", out)
+	}
+}
+
+func TestMCPClient_AcceptsStringResponseIDs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := Connect(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":            "1",
+			"JUEX_FAKE_MCP_STRING_IDS": "1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
 
 	out, err := client.CallTool(ctx, "echo", map[string]any{"text": "hello"})
 	if err != nil {

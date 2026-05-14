@@ -51,6 +51,8 @@ type App struct {
 	Bus     *events.Bus
 	Session *session.Session
 	cleanup []func() error
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // New wires every subsystem and returns a ready-to-use App.
@@ -152,13 +154,14 @@ func New(opts Options) (*App, error) {
 		Prompt:   pb,
 	}
 
-	a := &App{Engine: eng, Bus: bus, Session: sess}
+	appCtx, appCancel := context.WithCancel(context.Background())
+	a := &App{Engine: eng, Bus: bus, Session: sess, ctx: appCtx, cancel: appCancel}
 	a.cleanup = append(a.cleanup, sess.Close)
 	var mcpClients []*mcp.Client
 	if len(mcpConfigs) > 0 {
 		clients, err := mcp.RegisterAllLayeredWithOptions(context.Background(), mcpConfigs, reg, mcp.ConnectOptions{
 			OnNotification: func(n mcp.Notification) {
-				_ = a.handleMCPNotification(context.Background(), n)
+				_ = a.handleMCPNotification(a.ctx, n)
 			},
 		})
 		mcpClients = append(mcpClients, clients...)
@@ -183,6 +186,11 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
 	if a == nil || a.Engine == nil {
 		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	eventType := n.EventType
 	if eventType == "" {
@@ -235,6 +243,9 @@ func FormatTokenUsage(usage llm.Usage) string {
 
 // Close releases session file handles and MCP subprocesses.
 func (a *App) Close() error {
+	if a.cancel != nil {
+		a.cancel()
+	}
 	var firstErr error
 	for _, fn := range a.cleanup {
 		if err := fn(); err != nil && firstErr == nil {
