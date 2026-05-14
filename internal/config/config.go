@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"gopkg.in/yaml.v3"
@@ -24,6 +25,7 @@ type Config struct {
 	APIKey         string
 	Model          string
 	ThinkingEffort string // "low", "medium", "high", or "" (provider default)
+	ContextWindow  int    // provider context window in tokens; defaults to 256K
 
 	HomeAgentsDir string // ~/.agents (user-global)
 	WorkDir       string // explicit; defaults to os.Getwd()
@@ -39,9 +41,12 @@ type providerConfig struct {
 	APIKey         string `yaml:"api_key"`
 	Model          string `yaml:"model"`
 	ThinkingEffort string `yaml:"thinking_effort"`
+	ContextWindow  int    `yaml:"context_window"`
 }
 
-var providerEnvKeys = []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT"}
+const DefaultContextWindow = 256000
+
+var providerEnvKeys = []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
 // Load resolves config from <WorkDir>/.juex/juex.yaml and OS env vars.
 //
@@ -52,7 +57,7 @@ func Load() (Config, error) {
 
 // LoadForWorkDir is Load with an explicit working directory.
 func LoadForWorkDir(workDir string) (Config, error) {
-	cfg := Config{}
+	cfg := Config{ContextWindow: DefaultContextWindow}
 
 	if workDir == "" {
 		cwd, err := os.Getwd()
@@ -235,6 +240,9 @@ func applyProviderConfig(cfg *Config, p providerConfig) {
 	if p.ThinkingEffort != "" {
 		cfg.ThinkingEffort = p.ThinkingEffort
 	}
+	if p.ContextWindow > 0 {
+		cfg.ContextWindow = p.ContextWindow
+	}
 }
 
 func applyOSEnv(cfg *Config) {
@@ -263,5 +271,9 @@ func applyEnvMap(cfg *Config, values map[string]string) {
 	if v, ok := values["PROVIDER_THINKING_EFFORT"]; ok && v != "" {
 		cfg.ThinkingEffort = v
 	}
+	if v, ok := values["PROVIDER_CONTEXT_WINDOW"]; ok && v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.ContextWindow = n
+		}
+	}
 }
-

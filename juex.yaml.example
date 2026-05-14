@@ -8,3 +8,5 @@ provider:
   # Optional: control reasoning depth for thinking models.
   # Valid values: "low", "medium", "high". Omit to use the provider default.
   # thinking_effort: ""
+  # Optional: provider context window in tokens. Defaults to 256000.
+  # context_window: 256000

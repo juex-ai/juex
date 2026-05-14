@@ -26,9 +26,10 @@ func (errorProvider) Complete(ctx context.Context, sys string, h []llm.Message, 
 // mockProvider scripts a sequence of LLM responses. Each Complete() call
 // returns the next item in script.
 type mockProvider struct {
-	script []llm.Response
-	called int
-	delay  time.Duration
+	script    []llm.Response
+	called    int
+	delay     time.Duration
+	histories [][]llm.Message
 }
 
 func (m *mockProvider) Name() string { return "mock" }
@@ -44,6 +45,9 @@ func (m *mockProvider) Complete(ctx context.Context, sys string, history []llm.M
 	if m.called >= len(m.script) {
 		return llm.Response{}, fmt.Errorf("mockProvider: out of script (called=%d)", m.called)
 	}
+	historyCopy := make([]llm.Message, len(history))
+	copy(historyCopy, history)
+	m.histories = append(m.histories, historyCopy)
 	r := m.script[m.called]
 	m.called++
 	return r, nil
@@ -121,7 +125,7 @@ func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {
 	})
 
 	msg := llm.TextMessage(llm.RoleUser, "local:message:hello")
-	msg.Kind = "mcp_event"
+	msg.Kind = llm.MessageKindMCPEvent
 	out, err := eng.TurnMessage(context.Background(), msg)
 	if err != nil {
 		t.Fatal(err)
@@ -129,11 +133,86 @@ func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {
 	if out != "received" {
 		t.Fatalf("out = %q", out)
 	}
-	if got := eng.Session.History[0].Kind; got != "mcp_event" {
+	if got := eng.Session.History[0].Kind; got != llm.MessageKindMCPEvent {
 		t.Fatalf("history kind = %q", got)
 	}
-	if payloadKind != "mcp_event" {
+	if payloadKind != llm.MessageKindMCPEvent {
 		t.Fatalf("turn.started kind = %q", payloadKind)
+	}
+}
+
+func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answered latest"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 120
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	var completed bool
+	bus.Subscribe("context.compact.completed", func(e events.Event) {
+		completed = true
+	})
+
+	out, err := eng.Turn(context.Background(), "latest question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "answered latest" {
+		t.Fatalf("out = %q", out)
+	}
+	if !completed {
+		t.Fatal("missing context.compact.completed event")
+	}
+	if prov.called != 2 {
+		t.Fatalf("provider calls = %d, want compact + answer", prov.called)
+	}
+	if len(eng.Session.History) != 5 {
+		t.Fatalf("history len = %d, want old history retained plus compact/user/assistant", len(eng.Session.History))
+	}
+	compact := eng.Session.History[2]
+	if compact.Kind != llm.MessageKindCompact {
+		t.Fatalf("compact kind = %q", compact.Kind)
+	}
+	if !strings.Contains(compact.FirstText(), "summary of old work") {
+		t.Fatalf("compact text = %q", compact.FirstText())
+	}
+	secondCallHistory := prov.histories[1]
+	if len(secondCallHistory) != 2 {
+		t.Fatalf("second call history len = %d, want compact + latest user", len(secondCallHistory))
+	}
+	if secondCallHistory[0].Kind != llm.MessageKindCompact {
+		t.Fatalf("second call first kind = %q", secondCallHistory[0].Kind)
+	}
+	if got := secondCallHistory[1].FirstText(); got != "latest question" {
+		t.Fatalf("second call latest text = %q", got)
+	}
+}
+
+func TestTurn_DoesNotCompactBelowThreshold(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 10000
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "small previous turn")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "next"); err != nil {
+		t.Fatal(err)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want no compact", prov.called)
+	}
+	if len(prov.histories[0]) != 2 {
+		t.Fatalf("history len = %d, want previous + next", len(prov.histories[0]))
 	}
 }
 

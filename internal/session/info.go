@@ -106,7 +106,7 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 		}
 		m = normalizeMessage(m)
 		msgs = append(msgs, m)
-		if m.Role == llm.RoleUser {
+		if m.Role == llm.RoleUser && m.Kind != llm.MessageKindCompact {
 			info.Turns++
 			if info.Preview == "" {
 				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)

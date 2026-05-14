@@ -229,6 +229,53 @@ func TestLoadFromFile_ThinkingEffort(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_ContextWindow(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n  context_window: 128000\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContextWindow != 128000 {
+		t.Fatalf("ContextWindow = %d, want 128000", cfg.ContextWindow)
+	}
+}
+
+func TestLoadFromFile_ContextWindowDefaultAndEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+	t.Setenv("PROVIDER_CONTEXT_WINDOW", "64000")
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContextWindow != 64000 {
+		t.Fatalf("ContextWindow = %d, want env override 64000", cfg.ContextWindow)
+	}
+
+	t.Setenv("PROVIDER_CONTEXT_WINDOW", "")
+	cfg, err = LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContextWindow != DefaultContextWindow {
+		t.Fatalf("ContextWindow = %d, want default %d", cfg.ContextWindow, DefaultContextWindow)
+	}
+}
+
 func TestLoadFromFile_ThinkingEffortEmpty(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")

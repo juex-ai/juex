@@ -26,6 +26,15 @@ const (
 	BlockReasoning BlockType = "reasoning"
 )
 
+const (
+	// MessageKindMCPEvent marks user-visible MCP notification turns.
+	MessageKindMCPEvent = "mcp_event"
+	// MessageKindCompact marks an automatic context compaction summary. The
+	// persisted transcript keeps the original messages; provider calls only
+	// include the latest compact summary plus later messages.
+	MessageKindCompact = "compact"
+)
+
 type Block struct {
 	Type      BlockType      `json:"type"`
 	Text      string         `json:"text,omitempty"`

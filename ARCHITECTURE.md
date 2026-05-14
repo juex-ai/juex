@@ -413,6 +413,7 @@ provider:
   base_url: ""
   api_key: ""
   model: ""
+  context_window: 256000
 ```
 
 | Field | Description |
@@ -422,10 +423,17 @@ provider:
 | `provider.api_key` | API key |
 | `provider.model` | model name |
 | `provider.thinking_effort` | optional reasoning depth for thinking models |
+| `provider.context_window` | optional provider context window in tokens; defaults to `256000` |
 
 Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
 < `--config <path>` (if supplied) < `os.Environ`. `.env` is no longer read by
 default.
+
+When the estimated provider-facing context reaches 80% of
+`provider.context_window`, the runtime asks the configured provider to compact
+the prior conversation into a summary message. The original `conversation.jsonl`
+history remains intact; future provider calls include the latest compact
+summary plus later messages.
 
 ---
 

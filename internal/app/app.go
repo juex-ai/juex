@@ -147,11 +147,12 @@ func New(opts Options) (*App, error) {
 	}
 
 	eng := &runtime.Engine{
-		Provider: provider,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt:   pb,
+		Provider:      provider,
+		Tools:         reg,
+		Bus:           bus,
+		Session:       sess,
+		Prompt:        pb,
+		ContextWindow: cfg.ContextWindow,
 	}
 
 	appCtx, appCancel := context.WithCancel(context.Background())
@@ -197,7 +198,7 @@ func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) err
 		eventType = "notification"
 	}
 	msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("%s:%s:%s", n.ServerName, eventType, n.Content))
-	msg.Kind = "mcp_event"
+	msg.Kind = llm.MessageKindMCPEvent
 	_, err := a.Engine.TurnMessage(ctx, msg)
 	return err
 }

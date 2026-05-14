@@ -45,6 +45,9 @@ type Engine struct {
 	Prompt   *prompt.Builder
 	MaxIters int
 	MaxDur   time.Duration
+	// ContextWindow is the provider context window in tokens. When omitted,
+	// the engine uses DefaultContextWindowTokens.
+	ContextWindow int
 
 	// mu serializes turns for one Engine. MCP notifications can arrive while
 	// a user turn is running, and both paths append to the same session
@@ -80,6 +83,13 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 	turnCtx, cancel := context.WithTimeout(ctx, maxDur)
 	defer cancel()
 
+	systemPrompt := e.Prompt.Build()
+	tools := e.Tools.Specs()
+
+	if err := e.maybeCompact(turnCtx, turnID, systemPrompt, tools, userMsg); err != nil {
+		return "", e.failTurn(turnID, err)
+	}
+
 	if err := e.Session.Append(userMsg); err != nil {
 		return "", e.failTurn(turnID, fmt.Errorf("session append user: %w", err))
 	}
@@ -88,9 +98,6 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 		startPayload["kind"] = userMsg.Kind
 	}
 	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: startPayload})
-
-	systemPrompt := e.Prompt.Build()
-	tools := e.Tools.Specs()
 
 	var lastText string
 	for iter := 0; iter < maxIters; iter++ {
@@ -104,7 +111,7 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 			"iter": iter, "history_len": len(e.Session.History), "tool_count": len(tools),
 		}})
 
-		resp, err := e.Provider.Complete(turnCtx, systemPrompt, e.Session.History, tools)
+		resp, err := e.Provider.Complete(turnCtx, systemPrompt, providerHistory(e.Session.History), tools)
 		if err != nil {
 			return "", e.failTurn(turnID, fmt.Errorf("llm: %w", err))
 		}
