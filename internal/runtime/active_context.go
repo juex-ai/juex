@@ -42,6 +42,10 @@ func indexMessageID(history []llm.Message, id string) int {
 	return -1
 }
 
+func ActiveContextFromHistory(history []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {
+	return assembleActiveContext(history, incoming)
+}
+
 func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if e == nil || e.Session == nil {
 		return ActiveContextSnapshot{}

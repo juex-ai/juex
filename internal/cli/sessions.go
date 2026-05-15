@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,7 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -24,6 +28,8 @@ func newSessionsCmd(flags *persistentFlags) *cobra.Command {
 	}
 	cmd.AddCommand(newSessionsListCmd(flags))
 	cmd.AddCommand(newSessionsShowCmd(flags))
+	cmd.AddCommand(newSessionsContextCmd(flags))
+	cmd.AddCommand(newSessionsCompactCmd(flags))
 	cmd.AddCommand(newSessionsDeleteCmd(flags))
 	return cmd
 }
@@ -154,6 +160,142 @@ func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message
 				fmt.Fprintf(w, "tool< %s\n", b.Content)
 			}
 		}
+	}
+}
+
+func newSessionsContextCmd(flags *persistentFlags) *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "context <id>",
+		Short: "Print the active provider context for one session",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return &usageError{msg: "juex sessions context: <id> required"}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(flags)
+			if err != nil {
+				return err
+			}
+			id := args[0]
+			dir := filepath.Join(cfg.SessionsDir(), id)
+			_, msgs, err := session.LoadInfo(dir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return &notFoundError{msg: "session not found: " + id}
+				}
+				return err
+			}
+			snap := runtime.ActiveContextFromHistory(msgs)
+			switch format {
+			case "json", "":
+				cmdPrintln(cmd, mustJSON(snap))
+			case "text":
+				renderActiveContextText(cmd, snap)
+			default:
+				return &usageError{msg: "unknown --format value: " + format}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "json", "json|text")
+	return cmd
+}
+
+func renderActiveContextText(cmd *cobra.Command, snap runtime.ActiveContextSnapshot) {
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "estimated_tokens: %d\n\n", snap.EstimatedTokens)
+	for _, m := range snap.Messages {
+		role := string(m.Role)
+		if m.Kind != "" {
+			role += "[" + m.Kind + "]"
+		}
+		for _, b := range m.Blocks {
+			switch b.Type {
+			case llm.BlockText:
+				fmt.Fprintf(w, "%s> %s\n", role, b.Text)
+			case llm.BlockReasoning:
+				fmt.Fprintf(w, "%s thinking> %s\n", role, b.Text)
+			case llm.BlockToolUse:
+				fmt.Fprintf(w, "%s tool> %s(%v)\n", role, b.ToolName, b.Input)
+			case llm.BlockToolResult:
+				fmt.Fprintf(w, "%s tool< %s\n", role, b.Content)
+			}
+		}
+	}
+}
+
+func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
+	var (
+		format string
+		reason string
+	)
+	cmd := &cobra.Command{
+		Use:   "compact <id>",
+		Short: "Append a compact summary marker to one session",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return &usageError{msg: "juex sessions compact: <id> required"}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(flags)
+			if err != nil {
+				return err
+			}
+			result, err := compactSession(cmd.Context(), cfg, args[0], reason, nil)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return &notFoundError{msg: "session not found: " + args[0]}
+				}
+				return err
+			}
+			switch format {
+			case "json", "":
+				cmdPrintln(cmd, mustJSON(result))
+			case "text":
+				renderCompactResultText(cmd, result)
+			default:
+				return &usageError{msg: "unknown --format value: " + format}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "json", "json|text")
+	cmd.Flags().StringVar(&reason, "reason", "manual", "reason stored in compaction metadata")
+	return cmd
+}
+
+func compactSession(ctx context.Context, cfg config.Config, id, reason string, provider llm.Provider) (runtime.CompactionResult, error) {
+	if reason == "" {
+		reason = "manual"
+	}
+	dir := filepath.Join(cfg.SessionsDir(), id)
+	a, err := app.New(app.Options{
+		Config:     cfg,
+		Provider:   provider,
+		ResumeDir:  dir,
+		DisableMCP: true,
+	})
+	if err != nil {
+		return runtime.CompactionResult{}, err
+	}
+	defer a.Close()
+	return a.Compact(ctx, reason, false)
+}
+
+func renderCompactResultText(cmd *cobra.Command, result runtime.CompactionResult) {
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "message_id:      %s\n", result.MessageID)
+	fmt.Fprintf(w, "reason:          %s\n", result.Reason)
+	fmt.Fprintf(w, "tokens_before:   %d\n", result.TokensBefore)
+	fmt.Fprintf(w, "tokens_after:    %d\n", result.TokensAfter)
+	fmt.Fprintf(w, "summary_chars:   %d\n", result.SummaryChars)
+	if result.TailStartMessageID != "" {
+		fmt.Fprintf(w, "tail_start_id:   %s\n", result.TailStartMessageID)
 	}
 }
 

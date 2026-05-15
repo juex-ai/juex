@@ -198,6 +198,15 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	return a.Engine.Turn(ctx, prompt)
 }
 
+func (a *App) Compact(ctx context.Context, reason string, auto bool) (runtime.CompactionResult, error) {
+	if a == nil || a.Engine == nil {
+		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
+	}
+	sections := a.Engine.Prompt.Sections()
+	systemPrompt := prompt.JoinSections(sections)
+	return a.Engine.Compact(ctx, "session-compact", systemPrompt, reason, auto)
+}
+
 func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
 	if a == nil || a.Engine == nil {
 		return nil
