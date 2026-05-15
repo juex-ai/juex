@@ -162,6 +162,7 @@ func New(opts Options) (*App, error) {
 		Session:       sess,
 		Prompt:        pb,
 		ContextWindow: cfg.ContextWindow,
+		Compaction:    cfg.Compaction,
 	}
 
 	appCtx, appCancel := context.WithCancel(context.Background())

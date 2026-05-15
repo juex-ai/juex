@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -48,6 +49,7 @@ type Engine struct {
 	// ContextWindow is the provider context window in tokens. When omitted,
 	// the engine uses DefaultContextWindowTokens.
 	ContextWindow int
+	Compaction    config.CompactionConfig
 
 	// mu serializes turns for one Engine. MCP notifications can arrive while
 	// a user turn is running, and both paths append to the same session
@@ -101,6 +103,7 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: startPayload})
 
 	var lastText string
+	retriedOverflow := false
 	for iter := 0; iter < maxIters; iter++ {
 		select {
 		case <-turnCtx.Done():
@@ -112,9 +115,16 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 			"iter": iter, "history_len": len(e.Session.History), "tool_count": len(tools),
 		}})
 
-		requestHistory := providerHistory(e.Session.History)
+		requestHistory := e.ActiveContext().Messages
 		resp, err := e.Provider.Complete(turnCtx, systemPrompt, requestHistory, tools)
 		if err != nil {
+			if llm.IsContextOverflowError(err) && !retriedOverflow {
+				if _, compactErr := e.Compact(turnCtx, turnID, systemPrompt, "overflow_retry", true); compactErr != nil {
+					return "", e.failTurn(turnID, fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr))
+				}
+				retriedOverflow = true
+				continue
+			}
 			return "", e.failTurn(turnID, fmt.Errorf("llm: %w", err))
 		}
 		msg := resp.Message
