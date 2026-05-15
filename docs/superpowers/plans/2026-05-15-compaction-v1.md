@@ -17,7 +17,7 @@
 | File | Change | Responsibility |
 |---|---|---|
 | `internal/llm/provider.go` | modify | `CompleteOptions`, provider option helper, overflow classifier |
-| `internal/llm/anthropic.go` | modify | Anthropic streaming completion, compaction options, thinking disable |
+| `internal/llm/anthropic.go` | modify | Anthropic streaming completion and compaction output-budget options |
 | `internal/llm/openai.go` | modify | compaction `MaxOutputTokens` support |
 | `internal/llm/llm_test.go` | modify | streaming, options, overflow classifier tests |
 | `internal/llm/types.go` | modify | message ID and `CompactionMetadata` |
@@ -61,7 +61,7 @@
 Add these tests to `internal/llm/llm_test.go`:
 
 ```go
-func TestAnthropic_HighThinkingUsesStreaming(t *testing.T) {
+func TestAnthropic_AlwaysUsesStreaming(t *testing.T) {
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("accept") != "text/event-stream" {
@@ -103,7 +103,7 @@ func TestAnthropic_HighThinkingUsesStreaming(t *testing.T) {
 	}
 }
 
-func TestProviderCompleteOptions_DisablesThinkingForCompaction(t *testing.T) {
+func TestProviderCompleteOptions_PreservesThinkingForCompaction(t *testing.T) {
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -134,16 +134,15 @@ func TestProviderCompleteOptions_DisablesThinkingForCompaction(t *testing.T) {
 	_, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
 		Purpose:         "compaction",
 		MaxOutputTokens: 1234,
-		DisableThinking: true,
 	})
 	if err != nil {
 		t.Fatalf("CompleteWithOptions: %v", err)
 	}
-	if _, ok := captured["thinking"]; ok {
-		t.Fatalf("thinking present for compaction: %+v", captured["thinking"])
+	if _, ok := captured["thinking"]; !ok {
+		t.Fatalf("thinking should follow provider config for compaction")
 	}
-	if captured["max_tokens"] != float64(1234) {
-		t.Fatalf("max_tokens = %v, want 1234", captured["max_tokens"])
+	if captured["max_tokens"] != float64(32768+1234) {
+		t.Fatalf("max_tokens = %v, want thinking budget plus visible output", captured["max_tokens"])
 	}
 }
 
@@ -169,7 +168,7 @@ func TestIsContextOverflowError(t *testing.T) {
 Run:
 
 ```bash
-mise exec -- go test ./internal/llm -run 'TestAnthropic_HighThinkingUsesStreaming|TestProviderCompleteOptions_DisablesThinkingForCompaction|TestIsContextOverflowError' -count=1
+mise exec -- go test ./internal/llm -run 'TestAnthropic_AlwaysUsesStreaming|TestProviderCompleteOptions_PreservesThinkingForCompaction|TestIsContextOverflowError' -count=1
 ```
 
 Expected: FAIL because `ProviderWithOptions` and `IsContextOverflowError` do not exist, and Anthropic still uses non-streaming `Messages.New`.
@@ -182,7 +181,6 @@ Add to `internal/llm/provider.go`:
 type CompleteOptions struct {
 	Purpose         string
 	MaxOutputTokens int
-	DisableThinking bool
 }
 
 type ProviderWithOptions interface {
@@ -218,7 +216,9 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 }
 ```
 
-Build params with `maxTokens`, `DisableThinking`, and `MaxOutputTokens`, then call:
+Build params with `maxTokens` and `MaxOutputTokens`. If Anthropic thinking is
+enabled, preserve it and add the thinking budget to the visible output budget.
+Then call:
 
 ```go
 var acc anthropic.Message
@@ -236,12 +236,13 @@ return anthropicMessageToResponse(p.Name(), &acc), nil
 
 Extract existing response mapping into `anthropicMessageToResponse(model string, msg *anthropic.Message) Response`.
 
-In `internal/llm/openai.go`, add `CompleteWithOptions` and set both compatible token fields for compaction:
+In `internal/llm/openai.go`, add `CompleteWithOptions` and set only
+`max_completion_tokens` for compaction. Do not also send `max_tokens`; Ark-style
+OpenAI-compatible endpoints reject requests that contain both fields.
 
 ```go
 if opts.MaxOutputTokens > 0 {
 	params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
-	params.MaxTokens = openai.Int(int64(opts.MaxOutputTokens))
 }
 ```
 
@@ -809,7 +810,6 @@ Use `llm.CompleteWithOptions` for compaction:
 resp, err := llm.CompleteWithOptions(ctx, e.Provider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
 	Purpose: "compaction",
 	MaxOutputTokens: policy.SummaryMaxTokens,
-	DisableThinking: true,
 })
 ```
 

@@ -55,12 +55,11 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		budgetTokens = 32768
 		maxTokens = 64000
 	}
-	if opts.DisableThinking {
-		budgetTokens = 0
-		maxTokens = 4096
-	}
 	if opts.MaxOutputTokens > 0 {
 		maxTokens = int64(opts.MaxOutputTokens)
+		if budgetTokens > 0 {
+			maxTokens += budgetTokens
+		}
 	}
 
 	params := anthropic.MessageNewParams{
@@ -80,25 +79,17 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		params.System = []anthropic.TextBlockParam{{Text: sys}}
 	}
 
-	if anthropicRequiresStreaming(params) {
-		msg := anthropic.Message{}
-		stream := p.client.Messages.NewStreaming(ctx, params)
-		for stream.Next() {
-			if err := msg.Accumulate(stream.Current()); err != nil {
-				return Response{}, fmt.Errorf("anthropic stream: %w", err)
-			}
+	msg := anthropic.Message{}
+	stream := p.client.Messages.NewStreaming(ctx, params)
+	for stream.Next() {
+		if err := msg.Accumulate(stream.Current()); err != nil {
+			return Response{}, fmt.Errorf("anthropic stream: %w", err)
 		}
-		if err := stream.Err(); err != nil {
-			return Response{}, fmt.Errorf("anthropic: %w", err)
-		}
-		return p.responseFromMessage(&msg), nil
 	}
-
-	msg, err := p.client.Messages.New(ctx, params)
-	if err != nil {
+	if err := stream.Err(); err != nil {
 		return Response{}, fmt.Errorf("anthropic: %w", err)
 	}
-	return p.responseFromMessage(msg), nil
+	return p.responseFromMessage(&msg), nil
 }
 
 func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response {
@@ -143,11 +134,6 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 			OutputTokens: int(msg.Usage.OutputTokens),
 		},
 	}
-}
-
-func anthropicRequiresStreaming(params anthropic.MessageNewParams) bool {
-	_, err := anthropic.CalculateNonStreamingTimeout(int(params.MaxTokens), params.Model, nil)
-	return err != nil
 }
 
 func toAnthropicMessages(history []Message) []anthropic.MessageParam {

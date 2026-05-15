@@ -75,7 +75,6 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	resp, err := llm.CompleteWithOptions(ctx, e.Provider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
 		Purpose:         "compaction",
 		MaxOutputTokens: policy.SummaryMaxTokens,
-		DisableThinking: true,
 	})
 	if err != nil {
 		compactErr := fmt.Errorf("compact context: %w", err)

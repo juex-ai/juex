@@ -16,7 +16,6 @@ type Provider interface {
 type CompleteOptions struct {
 	Purpose         string
 	MaxOutputTokens int
-	DisableThinking bool
 }
 
 type ProviderWithOptions interface {

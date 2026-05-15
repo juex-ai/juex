@@ -220,7 +220,6 @@ an optional provider capability for request-specific options:
 type CompleteOptions struct {
     Purpose          string
     MaxOutputTokens  int
-    DisableThinking  bool
 }
 
 type ProviderWithOptions interface {
@@ -228,14 +227,19 @@ type ProviderWithOptions interface {
 }
 ```
 
-Runtime compaction calls use `Purpose="compaction"`,
-`MaxOutputTokens=summary_max_tokens`, and `DisableThinking=true`.
+Runtime compaction calls use `Purpose="compaction"` and
+`MaxOutputTokens=summary_max_tokens`. Provider thinking settings are not
+silently changed by compaction; if a provider has thinking enabled, the provider
+adapter must keep the request valid while preserving that setting.
 
-Anthropic should accumulate `Messages.NewStreaming` internally and return the
-same canonical `Response` shape. This fixes the SDK non-streaming timeout gate
-for high-thinking providers such as the current MiniMax config. OpenAI-compatible
-providers can remain non-streaming for V1, but should honor
-`MaxOutputTokens` for compaction when the SDK exposes the field.
+Anthropic should always accumulate `Messages.NewStreaming` internally and return
+the same canonical `Response` shape. This avoids the SDK non-streaming timeout
+gate for high-thinking providers such as the current MiniMax config and keeps
+one Anthropic request path. When Anthropic thinking is enabled,
+`MaxOutputTokens` is treated as the visible-output budget and the adapter adds
+the thinking budget to `max_tokens`. OpenAI-compatible providers can remain
+non-streaming for V1, but should honor `MaxOutputTokens` for compaction when the
+SDK exposes the field.
 
 ## Overflow Recovery
 
@@ -297,7 +301,7 @@ Unit tests:
 - active context returns compact summary before retained tail even though the
   compact marker is stored after the original transcript.
 - overflow errors compact and retry once.
-- Anthropic high-thinking calls use streaming and accumulate text, tool calls,
+- Anthropic calls use streaming and accumulate text, tool calls,
   stop reason, and usage.
 
 Cross-package tests:
