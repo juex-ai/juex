@@ -444,6 +444,13 @@ provider:
   api_key: ""
   model: ""
   context_window: 256000
+compaction:
+  enabled: true
+  reserve_tokens: 16384
+  keep_recent_tokens: 20000
+  tail_turns: 2
+  summary_max_tokens: 2048
+  tool_result_max_chars: 2000
 ```
 
 | Field | Description |
@@ -454,16 +461,23 @@ provider:
 | `provider.model` | model name |
 | `provider.thinking_effort` | optional reasoning depth for thinking models |
 | `provider.context_window` | optional provider context window in tokens; defaults to `256000` |
+| `compaction.enabled` | enables automatic and manual context compaction |
+| `compaction.reserve_tokens` | token budget held back from the provider window |
+| `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
+| `compaction.tail_turns` | minimum recent user turns retained verbatim |
+| `compaction.summary_max_tokens` | maximum output tokens for summary generation |
+| `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
 
 Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
 < `--config <path>` (if supplied) < `os.Environ`. `.env` is no longer read by
 default.
 
-When the estimated provider-facing context reaches 80% of
-`provider.context_window`, the runtime asks the configured provider to compact
-the prior conversation into a summary message. The original `conversation.jsonl`
-history remains intact; future provider calls include the latest compact
-summary plus later messages.
+Compaction is controlled by the `compaction` config section. The runtime keeps
+the full `conversation.jsonl` transcript, appends a compact boundary message
+with metadata, and assembles provider context as latest compact summary,
+retained recent tail, and messages after the compact marker. Manual compact and
+active-context inspection are available through `juex sessions compact`,
+`juex sessions context`, and matching Web API routes.
 
 ---
 
