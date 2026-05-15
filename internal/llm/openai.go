@@ -37,6 +37,10 @@ func NewOpenAI(cfg Config, _ any) Provider {
 func (p *openAIProvider) Name() string { return "openai:" + p.cfg.Model }
 
 func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
+}
+
+func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
 	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(history)+1)
 	if sys != "" {
 		msgs = append(msgs, openai.SystemMessage(sys))
@@ -50,6 +54,10 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Mes
 	}
 	if p.cfg.ThinkingEffort != "" {
 		params.ReasoningEffort = shared.ReasoningEffort(p.cfg.ThinkingEffort)
+	}
+	if opts.MaxOutputTokens > 0 {
+		params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
+		params.MaxTokens = openai.Int(int64(opts.MaxOutputTokens))
 	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)

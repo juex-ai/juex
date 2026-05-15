@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -473,5 +474,98 @@ func TestAnthropic_NoThinkingEffort(t *testing.T) {
 	maxTokens, _ := capturedBody["max_tokens"].(float64)
 	if maxTokens != 4096 {
 		t.Errorf("max_tokens = %v, want 4096", maxTokens)
+	}
+}
+
+func TestAnthropic_HighThinkingUsesStreaming(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\n")
+		fmt.Fprint(w, `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":11,"output_tokens":1}}}`+"\n\n")
+		fmt.Fprint(w, "event: content_block_start\n")
+		fmt.Fprint(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`+"\n\n")
+		fmt.Fprint(w, "event: content_block_delta\n")
+		fmt.Fprint(w, `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"streamed ok"}}`+"\n\n")
+		fmt.Fprint(w, "event: content_block_stop\n")
+		fmt.Fprint(w, `data: {"type":"content_block_stop","index":0}`+"\n\n")
+		fmt.Fprint(w, "event: message_delta\n")
+		fmt.Fprint(w, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":3}}`+"\n\n")
+		fmt.Fprint(w, "event: message_stop\n")
+		fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7", ThinkingEffort: "high"}, nil)
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Message.FirstText() != "streamed ok" {
+		t.Fatalf("text = %q", resp.Message.FirstText())
+	}
+	if resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 3 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+	if captured["stream"] != true {
+		t.Fatalf("stream flag = %v, want true", captured["stream"])
+	}
+}
+
+func TestProviderCompleteOptions_DisablesThinkingForCompaction(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"msg_1","type":"message","role":"assistant","model":"claude-test",
+			"content":[{"type":"text","text":"summary"}],
+			"stop_reason":"end_turn",
+			"usage":{"input_tokens":1,"output_tokens":2}
+		}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7", ThinkingEffort: "high"}, nil)
+	withOpts, ok := p.(ProviderWithOptions)
+	if !ok {
+		t.Fatal("anthropic provider does not implement ProviderWithOptions")
+	}
+	_, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		Purpose:         "compaction",
+		MaxOutputTokens: 1234,
+		DisableThinking: true,
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	if _, ok := captured["thinking"]; ok {
+		t.Fatalf("thinking present for compaction: %+v", captured["thinking"])
+	}
+	if captured["max_tokens"] != float64(1234) {
+		t.Fatalf("max_tokens = %v, want 1234", captured["max_tokens"])
+	}
+}
+
+func TestIsContextOverflowError(t *testing.T) {
+	for _, msg := range []string{
+		"openai: context_length_exceeded",
+		"maximum context length is 6400 tokens",
+		"prompt is too long",
+		"input length exceeds context window",
+	} {
+		if !IsContextOverflowError(fmt.Errorf("wrapped: %s", msg)) {
+			t.Fatalf("expected overflow for %q", msg)
+		}
+	}
+	if IsContextOverflowError(fmt.Errorf("rate limit exceeded")) {
+		t.Fatal("rate limit should not be classified as context overflow")
 	}
 }

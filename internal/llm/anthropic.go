@@ -38,6 +38,10 @@ func NewAnthropic(cfg Config, _ any) Provider {
 func (p *anthropicProvider) Name() string { return "anthropic:" + p.cfg.Model }
 
 func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
+}
+
+func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
 	maxTokens := int64(4096)
 	var budgetTokens int64
 	switch p.cfg.ThinkingEffort {
@@ -50,6 +54,13 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 	case "high":
 		budgetTokens = 32768
 		maxTokens = 64000
+	}
+	if opts.DisableThinking {
+		budgetTokens = 0
+		maxTokens = 4096
+	}
+	if opts.MaxOutputTokens > 0 {
+		maxTokens = int64(opts.MaxOutputTokens)
 	}
 
 	params := anthropic.MessageNewParams{
@@ -69,11 +80,28 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 		params.System = []anthropic.TextBlockParam{{Text: sys}}
 	}
 
+	if anthropicRequiresStreaming(params) {
+		msg := anthropic.Message{}
+		stream := p.client.Messages.NewStreaming(ctx, params)
+		for stream.Next() {
+			if err := msg.Accumulate(stream.Current()); err != nil {
+				return Response{}, fmt.Errorf("anthropic stream: %w", err)
+			}
+		}
+		if err := stream.Err(); err != nil {
+			return Response{}, fmt.Errorf("anthropic: %w", err)
+		}
+		return p.responseFromMessage(&msg), nil
+	}
+
 	msg, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return Response{}, fmt.Errorf("anthropic: %w", err)
 	}
+	return p.responseFromMessage(msg), nil
+}
 
+func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response {
 	out := Message{Role: RoleAssistant, Model: p.Name()}
 	for _, block := range msg.Content {
 		switch block.Type {
@@ -114,7 +142,12 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 			InputTokens:  int(msg.Usage.InputTokens),
 			OutputTokens: int(msg.Usage.OutputTokens),
 		},
-	}, nil
+	}
+}
+
+func anthropicRequiresStreaming(params anthropic.MessageNewParams) bool {
+	_, err := anthropic.CalculateNonStreamingTimeout(int(params.MaxTokens), params.Model, nil)
+	return err != nil
 }
 
 func toAnthropicMessages(history []Message) []anthropic.MessageParam {
