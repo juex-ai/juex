@@ -115,11 +115,11 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 			"iter": iter, "history_len": len(e.Session.History), "tool_count": len(tools),
 		}})
 
-		requestHistory := e.ActiveContext().Messages
+		requestHistory := e.activeContextLocked().Messages
 		resp, err := e.Provider.Complete(turnCtx, systemPrompt, requestHistory, tools)
 		if err != nil {
 			if llm.IsContextOverflowError(err) && !retriedOverflow {
-				if _, compactErr := e.Compact(turnCtx, turnID, systemPrompt, "overflow_retry", true); compactErr != nil {
+				if _, compactErr := e.compactLocked(turnCtx, turnID, systemPrompt, "overflow_retry", true); compactErr != nil {
 					return "", e.failTurn(turnID, fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr))
 				}
 				retriedOverflow = true

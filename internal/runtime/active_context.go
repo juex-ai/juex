@@ -47,6 +47,15 @@ func ActiveContextFromHistory(history []llm.Message, incoming ...llm.Message) Ac
 }
 
 func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
+	if e == nil {
+		return ActiveContextSnapshot{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.activeContextLocked(incoming...)
+}
+
+func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
 	if e == nil || e.Session == nil {
 		return ActiveContextSnapshot{}
 	}

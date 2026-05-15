@@ -172,12 +172,17 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 	}
 
 	as.cancelMu.Lock()
-	if as.cancel != nil {
+	if as.cancel != nil || as.compacting {
 		as.cancelMu.Unlock()
-		writeErr(w, http.StatusConflict, "conflict", "turn in progress")
+		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}
+	as.compacting = true
+	as.cancelMu.Unlock()
+
 	result, err := as.app.Compact(r.Context(), req.Reason, false)
+	as.cancelMu.Lock()
+	as.compacting = false
 	as.cancelMu.Unlock()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -249,9 +254,9 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	as.cancelMu.Lock()
-	if as.cancel != nil {
+	if as.cancel != nil || as.compacting {
 		as.cancelMu.Unlock()
-		writeErr(w, http.StatusConflict, "conflict", "turn in progress")
+		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}
 	turnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))

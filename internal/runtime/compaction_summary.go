@@ -51,13 +51,13 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 	for _, block := range msg.Blocks {
 		switch block.Type {
 		case llm.BlockText:
-			fmt.Fprintf(&sb, "text: %s\n", block.Text)
+			writeSummaryField(&sb, "text", block.Text, toolResultMaxChars)
 		case llm.BlockReasoning:
 			text := block.Text
 			if text == "" {
 				text = block.Content
 			}
-			fmt.Fprintf(&sb, "reasoning: %s\n", truncateForSummary(text, toolResultMaxChars))
+			writeSummaryField(&sb, "reasoning", text, toolResultMaxChars)
 		case llm.BlockToolUse:
 			input := "{}"
 			if len(block.Input) > 0 {
@@ -65,7 +65,12 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 					input = string(data)
 				}
 			}
-			fmt.Fprintf(&sb, "tool_use %s %s: %s\n", block.ToolUseID, block.ToolName, input)
+			truncated := truncateForSummary(input, toolResultMaxChars)
+			if truncated != input {
+				fmt.Fprintf(&sb, "tool_use %s %s: %s ...(truncated, total %d bytes)\n", block.ToolUseID, block.ToolName, truncated, len(input))
+			} else {
+				fmt.Fprintf(&sb, "tool_use %s %s: %s\n", block.ToolUseID, block.ToolName, input)
+			}
 		case llm.BlockToolResult:
 			content := block.Content
 			truncated := truncateForSummary(content, toolResultMaxChars)
@@ -77,6 +82,15 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 		}
 	}
 	return sb.String()
+}
+
+func writeSummaryField(sb *strings.Builder, label, value string, maxChars int) {
+	truncated := truncateForSummary(value, maxChars)
+	if truncated != value {
+		fmt.Fprintf(sb, "%s: %s ...(truncated, total %d bytes)\n", label, truncated, len(value))
+		return
+	}
+	fmt.Fprintf(sb, "%s: %s\n", label, value)
 }
 
 func truncateForSummary(s string, n int) string {

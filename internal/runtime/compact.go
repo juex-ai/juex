@@ -29,17 +29,23 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return nil
 	}
 
-	projected := e.ActiveContext(incoming).Messages
+	projected := e.activeContextLocked(incoming).Messages
 	estimated := estimateContextTokens(systemPrompt, tools, projected)
 	if estimated < policy.TriggerTokens {
 		return nil
 	}
 
-	_, err := e.Compact(ctx, turnID, systemPrompt, "auto", true)
+	_, err := e.compactLocked(ctx, turnID, systemPrompt, "auto", true)
 	return err
 }
 
 func (e *Engine) Compact(ctx context.Context, turnID, systemPrompt, reason string, auto bool) (CompactionResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.compactLocked(ctx, turnID, systemPrompt, reason, auto)
+}
+
+func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason string, auto bool) (CompactionResult, error) {
 	policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
@@ -53,7 +59,7 @@ func (e *Engine) Compact(ctx context.Context, turnID, systemPrompt, reason strin
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	tokensBefore := estimateContextTokens(systemPrompt, nil, e.ActiveContext().Messages)
+	tokensBefore := estimateContextTokens(systemPrompt, nil, e.activeContextLocked().Messages)
 	e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: map[string]any{
 		"reason":             reason,
 		"auto":               auto,

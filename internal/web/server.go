@@ -58,9 +58,10 @@ type activeSession struct {
 	bcast     *broadcaster
 	StartedAt time.Time
 
-	cancelMu sync.Mutex
-	cancel   context.CancelFunc // nil when no turn is running
-	turnWG   sync.WaitGroup
+	cancelMu   sync.Mutex
+	cancel     context.CancelFunc // nil when no turn is running
+	compacting bool
+	turnWG     sync.WaitGroup
 
 	turnsMu sync.Mutex
 	turns   map[string]*turnState

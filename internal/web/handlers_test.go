@@ -132,6 +132,42 @@ func TestPostSessionCompact(t *testing.T) {
 	}
 }
 
+func TestPostTurn_ConflictsWhileCompacting(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	v, ok := srv.sessions.Load(c.ID)
+	if !ok {
+		t.Fatal("created session not active")
+	}
+	as := v.(*activeSession)
+	as.cancelMu.Lock()
+	as.compacting = true
+	as.cancelMu.Unlock()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
 func TestGetSessionContext(t *testing.T) {
 	srv := newTestServer(t)
 	id := "20260515T010203-webctx"
