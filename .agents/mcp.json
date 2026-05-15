@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "chanwire": {
+      "type": "stdio",
+      "command": "chanwire",
+      "args": ["mcp"]
+    }
+  }
+}
