@@ -287,8 +287,10 @@ export function Session() {
               <TooltipProvider>
                 <PromptInputTools>
                   <StatusPill status={status} />
-                  <ContextUsageLabel usage={contextUsage} />
-                  <ActiveContextLabel snapshot={activeContext} />
+                  <ContextUsageLabel
+                    usage={contextUsage}
+                    activeContext={activeContext}
+                  />
                   <TokenUsageLabel usage={tokenUsage} />
                 </PromptInputTools>
                 {busy ? (
@@ -581,7 +583,13 @@ function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
   );
 }
 
-function ContextUsageLabel({ usage }: { usage?: ContextUsage }) {
+function ContextUsageLabel({
+  usage,
+  activeContext,
+}: {
+  usage?: ContextUsage;
+  activeContext?: ActiveContextSnapshot | null;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -590,13 +598,26 @@ function ContextUsageLabel({ usage }: { usage?: ContextUsage }) {
         </span>
       </TooltipTrigger>
       <TooltipContent className="block max-w-sm space-y-1.5 px-3 py-2 font-mono text-xs">
-        {usage ? <ContextUsageTooltip usage={usage} /> : "No context usage yet"}
+        {usage ? (
+          <ContextUsageTooltip usage={usage} activeContext={activeContext} />
+        ) : (
+          <>
+            <div>No context usage yet</div>
+            <ActiveContextDebugLine snapshot={activeContext} />
+          </>
+        )}
       </TooltipContent>
     </Tooltip>
   );
 }
 
-function ContextUsageTooltip({ usage }: { usage: ContextUsage }) {
+function ContextUsageTooltip({
+  usage,
+  activeContext,
+}: {
+  usage: ContextUsage;
+  activeContext?: ActiveContextSnapshot | null;
+}) {
   const windowTokens = usage.context_window ?? 0;
   const percent =
     windowTokens > 0
@@ -620,29 +641,24 @@ function ContextUsageTooltip({ usage }: { usage: ContextUsage }) {
           </div>
         ))}
       </div>
+      <ActiveContextDebugLine snapshot={activeContext} />
     </>
   );
 }
 
-function ActiveContextLabel({
+function ActiveContextDebugLine({
   snapshot,
 }: {
   snapshot?: ActiveContextSnapshot | null;
 }) {
+  if (!snapshot) return null;
   const count = snapshot?.messages?.length ?? 0;
   const tokens = snapshot?.estimated_tokens ?? 0;
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="bg-muted text-muted-foreground inline-flex shrink-0 items-center rounded-full px-2.5 py-1 font-mono text-xs">
-          active {count}/{formatTokenCount(tokens)}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="block max-w-xs space-y-1 px-3 py-2 font-mono text-xs">
-        <div>{count} messages in provider context</div>
-        <div>{formatTokenCount(tokens)} estimated tokens</div>
-      </TooltipContent>
-    </Tooltip>
+    <div className="text-background/75">
+      debug: active provider context {count} messages,{" "}
+      {formatTokenCount(tokens)} estimated tokens
+    </div>
   );
 }
 
