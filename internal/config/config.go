@@ -26,13 +26,15 @@ type Config struct {
 	Model          string
 	ThinkingEffort string // "low", "medium", "high", or "" (provider default)
 	ContextWindow  int    // provider context window in tokens; defaults to 256K
+	Compaction     CompactionConfig
 
 	HomeAgentsDir string // ~/.agents (user-global)
 	WorkDir       string // explicit; defaults to os.Getwd()
 }
 
 type fileConfig struct {
-	Provider providerConfig `yaml:"provider"`
+	Provider   providerConfig   `yaml:"provider"`
+	Compaction compactionConfig `yaml:"compaction"`
 }
 
 type providerConfig struct {
@@ -42,6 +44,24 @@ type providerConfig struct {
 	Model          string `yaml:"model"`
 	ThinkingEffort string `yaml:"thinking_effort"`
 	ContextWindow  int    `yaml:"context_window"`
+}
+
+type CompactionConfig struct {
+	Enabled            bool
+	ReserveTokens      int
+	KeepRecentTokens   int
+	TailTurns          int
+	SummaryMaxTokens   int
+	ToolResultMaxChars int
+}
+
+type compactionConfig struct {
+	Enabled            *bool `yaml:"enabled"`
+	ReserveTokens      int   `yaml:"reserve_tokens"`
+	KeepRecentTokens   int   `yaml:"keep_recent_tokens"`
+	TailTurns          int   `yaml:"tail_turns"`
+	SummaryMaxTokens   int   `yaml:"summary_max_tokens"`
+	ToolResultMaxChars int   `yaml:"tool_result_max_chars"`
 }
 
 const DefaultContextWindow = 256000
@@ -57,7 +77,7 @@ func Load() (Config, error) {
 
 // LoadForWorkDir is Load with an explicit working directory.
 func LoadForWorkDir(workDir string) (Config, error) {
-	cfg := Config{ContextWindow: DefaultContextWindow}
+	cfg := Config{ContextWindow: DefaultContextWindow, Compaction: DefaultCompactionConfig()}
 
 	if workDir == "" {
 		cwd, err := os.Getwd()
@@ -221,7 +241,19 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	applyProviderConfig(cfg, fc.Provider)
+	applyCompactionConfig(cfg, fc.Compaction)
 	return nil
+}
+
+func DefaultCompactionConfig() CompactionConfig {
+	return CompactionConfig{
+		Enabled:            true,
+		ReserveTokens:      16384,
+		KeepRecentTokens:   20000,
+		TailTurns:          2,
+		SummaryMaxTokens:   2048,
+		ToolResultMaxChars: 2000,
+	}
 }
 
 func applyProviderConfig(cfg *Config, p providerConfig) {
@@ -242,6 +274,27 @@ func applyProviderConfig(cfg *Config, p providerConfig) {
 	}
 	if p.ContextWindow > 0 {
 		cfg.ContextWindow = p.ContextWindow
+	}
+}
+
+func applyCompactionConfig(cfg *Config, c compactionConfig) {
+	if c.Enabled != nil {
+		cfg.Compaction.Enabled = *c.Enabled
+	}
+	if c.ReserveTokens > 0 {
+		cfg.Compaction.ReserveTokens = c.ReserveTokens
+	}
+	if c.KeepRecentTokens > 0 {
+		cfg.Compaction.KeepRecentTokens = c.KeepRecentTokens
+	}
+	if c.TailTurns > 0 {
+		cfg.Compaction.TailTurns = c.TailTurns
+	}
+	if c.SummaryMaxTokens > 0 {
+		cfg.Compaction.SummaryMaxTokens = c.SummaryMaxTokens
+	}
+	if c.ToolResultMaxChars > 0 {
+		cfg.Compaction.ToolResultMaxChars = c.ToolResultMaxChars
 	}
 }
 

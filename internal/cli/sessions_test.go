@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/llm"
 )
 
 // seedSession writes a session dir under <work>/.juex/sessions/<id>/.
@@ -214,6 +218,64 @@ func TestSessionsShow_NotFound(t *testing.T) {
 	if _, ok := err.(*notFoundError); !ok {
 		t.Fatalf("expected *notFoundError, got %T: %v", err, err)
 	}
+}
+
+func TestSessionsContextJSON(t *testing.T) {
+	work := t.TempDir()
+	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	seedSession(t, work, "20260515T010203-context", body)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "context", "20260515T010203-context", "--format", "json"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"messages"`) || !strings.Contains(out.String(), `"hi"`) {
+		t.Fatalf("output = %s", out.String())
+	}
+}
+
+func TestSessionsCompact(t *testing.T) {
+	work := t.TempDir()
+	id := "20260515T010203-compact"
+	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"` + strings.Repeat("old ", 80) + `"}]}` + "\n"
+	seedSession(t, work, id, body)
+	cfg := config.Config{
+		WorkDir:       work,
+		ContextWindow: config.DefaultContextWindow,
+		Compaction:    config.DefaultCompactionConfig(),
+	}
+	prov := &sessionsCompactProvider{response: llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "summary"),
+		StopReason: llm.StopEndTurn,
+	}}
+
+	result, err := compactSession(context.Background(), cfg, id, "manual", prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID == "" || result.Reason != "manual" || result.SummaryChars != len("summary") {
+		t.Fatalf("result = %+v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(work, ".juex", "sessions", id, "conversation.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"kind":"compact"`) || !strings.Contains(string(data), `summary`) || !strings.Contains(string(data), `"compaction"`) {
+		t.Fatalf("conversation not compacted:\n%s", data)
+	}
+}
+
+type sessionsCompactProvider struct {
+	response llm.Response
+}
+
+func (p *sessionsCompactProvider) Name() string { return "mock" }
+
+func (p *sessionsCompactProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	return p.response, nil
 }
 
 func TestSessionsDelete_RemovesSessionAndHistory(t *testing.T) {

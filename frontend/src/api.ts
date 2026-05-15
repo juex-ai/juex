@@ -1,5 +1,7 @@
 import type {
+  ActiveContextSnapshot,
   BusEvent,
+  CompactSessionResponse,
   CreateSessionResponse,
   DeleteSessionResponse,
   InterruptResponse,
@@ -78,6 +80,27 @@ export async function interrupt(id: string): Promise<InterruptResponse> {
     await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/interrupt`, {
       method: "POST",
     }),
+  );
+}
+
+export async function compactSession(
+  id: string,
+  reason = "manual",
+): Promise<CompactSessionResponse> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/compact`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    }),
+  );
+}
+
+export async function getSessionContext(
+  id: string,
+): Promise<ActiveContextSnapshot> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/context`),
   );
 }
 

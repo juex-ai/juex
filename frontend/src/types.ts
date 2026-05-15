@@ -39,15 +39,29 @@ export interface ToolResultBlock extends BlockBase {
 export type Block = TextBlock | ReasoningBlock | ToolUseBlock | ToolResultBlock;
 
 export interface Message {
+  id?: string;
   role: Role;
   blocks?: Block[] | null;
   kind?: string;
+  compaction?: CompactionMetadata;
   pending?: boolean;
   turn_id?: string;
   // Model that produced this assistant message. Stamped by the provider at
   // generation time so resumed sessions retain attribution even if the
   // current config has been swapped to a different model.
   model?: string;
+}
+
+export interface CompactionMetadata {
+  auto?: boolean;
+  reason?: string;
+  previous_summary_id?: string;
+  first_kept_message_id?: string;
+  tail_start_message_id?: string;
+  tokens_before?: number;
+  tokens_after?: number;
+  summary_chars?: number;
+  summary_model?: string;
 }
 
 export interface TokenUsage {
@@ -110,6 +124,23 @@ export interface TurnStatusResponse {
 
 export interface InterruptResponse {
   cancelled: boolean;
+}
+
+export interface CompactSessionResponse {
+  message_id?: string;
+  reason?: string;
+  auto?: boolean;
+  tokens_before?: number;
+  tokens_after?: number;
+  summary_chars?: number;
+  summary_model?: string;
+  tail_start_message_id?: string;
+  first_kept_message_id?: string;
+}
+
+export interface ActiveContextSnapshot {
+  messages: Message[];
+  estimated_tokens: number;
 }
 
 export interface BusEvent {

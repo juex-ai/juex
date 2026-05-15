@@ -249,6 +249,43 @@ func TestLoadFromFile_ContextWindow(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_CompactionConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\ncompaction:\n  enabled: false\n  reserve_tokens: 1000\n  keep_recent_tokens: 2000\n  tail_turns: 3\n  summary_max_tokens: 777\n  tool_result_max_chars: 888\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.TailTurns != 3 || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
+		t.Fatalf("Compaction = %+v", cfg.Compaction)
+	}
+}
+
+func TestLoadFromFile_CompactionDefaults(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 16384 || cfg.Compaction.KeepRecentTokens != 20000 || cfg.Compaction.TailTurns != 2 || cfg.Compaction.SummaryMaxTokens != 2048 || cfg.Compaction.ToolResultMaxChars != 2000 {
+		t.Fatalf("Compaction defaults = %+v", cfg.Compaction)
+	}
+}
+
 func TestLoadFromFile_ContextWindowDefaultAndEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")

@@ -95,7 +95,7 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 // Append adds m to the in-memory history and writes it to conversation.jsonl.
 func (s *Session) Append(m llm.Message) error {
 	s.mu.Lock()
-	m = normalizeMessage(m)
+	m = prepareNewMessage(m)
 	if err := s.ensureFilesLocked(); err != nil {
 		s.mu.Unlock()
 		return err
@@ -169,7 +169,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		return nil, err
 	}
 	var history []llm.Message
-	for _, line := range splitLines(data) {
+	for i, line := range splitLines(data) {
 		if len(line) == 0 {
 			continue
 		}
@@ -177,7 +177,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		if err := json.Unmarshal(line, &m); err != nil {
 			return nil, fmt.Errorf("session: parse %s: %w", convPath, err)
 		}
-		m = normalizeMessage(m)
+		m = normalizeLoadedMessage(m, i)
 		history = append(history, m)
 	}
 	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -287,7 +287,20 @@ func writeJSONL(w *os.File, v any) error {
 	return err
 }
 
-func normalizeMessage(m llm.Message) llm.Message {
+func prepareNewMessage(m llm.Message) llm.Message {
+	if m.ID == "" {
+		m.ID = newMessageID()
+	}
+	if m.Blocks == nil {
+		m.Blocks = []llm.Block{}
+	}
+	return m
+}
+
+func normalizeLoadedMessage(m llm.Message, index int) llm.Message {
+	if m.ID == "" {
+		m.ID = fmt.Sprintf("legacy-%06d", index+1)
+	}
 	if m.Blocks == nil {
 		m.Blocks = []llm.Block{}
 	}
@@ -347,4 +360,8 @@ func newID() string {
 		panic(fmt.Errorf("session: random id bytes: %w", err))
 	}
 	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
+}
+
+func newMessageID() string {
+	return "msg-" + newID()
 }

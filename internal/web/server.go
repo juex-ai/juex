@@ -58,9 +58,10 @@ type activeSession struct {
 	bcast     *broadcaster
 	StartedAt time.Time
 
-	cancelMu sync.Mutex
-	cancel   context.CancelFunc // nil when no turn is running
-	turnWG   sync.WaitGroup
+	cancelMu   sync.Mutex
+	cancel     context.CancelFunc // nil when no turn is running
+	compacting bool
+	turnWG     sync.WaitGroup
 
 	turnsMu sync.Mutex
 	turns   map[string]*turnState
@@ -126,6 +127,10 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleInterrupt(w, r, id)
 	case rest == "events" && r.Method == http.MethodGet:
 		s.handleEventsSSE(w, r, id)
+	case rest == "compact" && r.Method == http.MethodPost:
+		s.handleCompactSession(w, r, id)
+	case rest == "context" && r.Method == http.MethodGet:
+		s.handleSessionContext(w, r, id)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
 	}

@@ -162,6 +162,7 @@ func New(opts Options) (*App, error) {
 		Session:       sess,
 		Prompt:        pb,
 		ContextWindow: cfg.ContextWindow,
+		Compaction:    cfg.Compaction,
 	}
 
 	appCtx, appCancel := context.WithCancel(context.Background())
@@ -195,6 +196,15 @@ func New(opts Options) (*App, error) {
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	return a.Engine.Turn(ctx, prompt)
+}
+
+func (a *App) Compact(ctx context.Context, reason string, auto bool) (runtime.CompactionResult, error) {
+	if a == nil || a.Engine == nil {
+		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
+	}
+	sections := a.Engine.Prompt.Sections()
+	systemPrompt := prompt.JoinSections(sections)
+	return a.Engine.Compact(ctx, "session-compact", systemPrompt, reason, auto)
 }
 
 func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) error {

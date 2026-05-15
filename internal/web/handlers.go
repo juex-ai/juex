@@ -3,7 +3,9 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -147,6 +150,66 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
 }
 
+type compactRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id string) {
+	as, err := s.getActiveSession(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+	var req compactRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body")
+			return
+		}
+	}
+	if req.Reason == "" {
+		req.Reason = "manual"
+	}
+
+	as.cancelMu.Lock()
+	if as.cancel != nil || as.compacting {
+		as.cancelMu.Unlock()
+		writeErr(w, http.StatusConflict, "conflict", "session busy")
+		return
+	}
+	as.compacting = true
+	as.cancelMu.Unlock()
+
+	result, err := as.app.Compact(r.Context(), req.Reason, false)
+	as.cancelMu.Lock()
+	as.compacting = false
+	as.cancelMu.Unlock()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request, id string) {
+	if v, ok := s.sessions.Load(id); ok {
+		as := v.(*activeSession)
+		writeJSON(w, http.StatusOK, as.app.Engine.ActiveContext())
+		return
+	}
+	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	_, msgs, err := session.LoadInfo(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime.ActiveContextFromHistory(msgs))
+}
+
 func (s *Server) mergeActiveSessionInfos(persisted []session.Info) []session.Info {
 	byID := make(map[string]session.Info, len(persisted))
 	for _, info := range persisted {
@@ -191,9 +254,9 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	as.cancelMu.Lock()
-	if as.cancel != nil {
+	if as.cancel != nil || as.compacting {
 		as.cancelMu.Unlock()
-		writeErr(w, http.StatusConflict, "conflict", "turn in progress")
+		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}
 	turnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))

@@ -98,7 +98,7 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 		return Info{}, nil, err
 	}
 	var msgs []llm.Message
-	for _, line := range splitLines(data) {
+	for i, line := range splitLines(data) {
 		if len(line) == 0 {
 			continue
 		}
@@ -106,7 +106,7 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 		if err := json.Unmarshal(line, &m); err != nil {
 			return Info{}, nil, err
 		}
-		m = normalizeMessage(m)
+		m = normalizeLoadedMessage(m, i)
 		msgs = append(msgs, m)
 		if m.Role == llm.RoleUser && m.Kind != llm.MessageKindCompact {
 			info.Turns++

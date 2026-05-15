@@ -10,3 +10,11 @@ provider:
   # thinking_effort: ""
   # Optional: provider context window in tokens. Defaults to 256000.
   # context_window: 256000
+
+compaction:
+  enabled: true
+  reserve_tokens: 16384
+  keep_recent_tokens: 20000
+  tail_turns: 2
+  summary_max_tokens: 2048
+  tool_result_max_chars: 2000

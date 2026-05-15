@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -53,6 +54,32 @@ func (m *mockProvider) Complete(ctx context.Context, sys string, history []llm.M
 	return r, nil
 }
 
+type mockProviderWithErrors struct {
+	errs      []error
+	responses []llm.Response
+	called    int
+	histories [][]llm.Message
+}
+
+func (m *mockProviderWithErrors) Name() string { return "mock" }
+
+func (m *mockProviderWithErrors) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	historyCopy := make([]llm.Message, len(history))
+	copy(historyCopy, history)
+	m.histories = append(m.histories, historyCopy)
+	if m.called < len(m.errs) && m.errs[m.called] != nil {
+		err := m.errs[m.called]
+		m.called++
+		return llm.Response{}, err
+	}
+	idx := m.called - len(m.errs)
+	m.called++
+	if idx < 0 || idx >= len(m.responses) {
+		return llm.Response{}, fmt.Errorf("mockProviderWithErrors: out of script (called=%d)", m.called)
+	}
+	return m.responses[idx], nil
+}
+
 func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *events.Bus) {
 	t.Helper()
 	reg := tools.NewRegistry()
@@ -79,6 +106,128 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 		MaxIters: 10,
 		MaxDur:   30 * time.Second,
 	}, bus
+}
+
+func TestTurn_CompactionKeepsRecentTailInProviderContext(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 10, OutputTokens: 2}},
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 20, OutputTokens: 3}},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 200
+	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction.KeepRecentTokens = 80
+	eng.Compaction.TailTurns = 1
+	eng.Compaction.ReserveTokens = 50
+	for _, item := range []struct {
+		role llm.Role
+		text string
+	}{
+		{llm.RoleUser, strings.Repeat("old ", 80)},
+		{llm.RoleAssistant, "old answer"},
+		{llm.RoleUser, "recent question"},
+		{llm.RoleAssistant, "recent answer"},
+	} {
+		if err := eng.Session.Append(llm.TextMessage(item.role, item.text)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := eng.Turn(context.Background(), "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "answer" {
+		t.Fatalf("out = %q", out)
+	}
+	second := prov.histories[1]
+	if len(second) < 4 {
+		t.Fatalf("second provider history too short: %+v", second)
+	}
+	if second[0].Kind != llm.MessageKindCompact {
+		t.Fatalf("first active message kind = %q", second[0].Kind)
+	}
+	if !strings.Contains(messagesText(second), "recent question") || !strings.Contains(messagesText(second), "latest") {
+		t.Fatalf("active context missing retained tail or latest: %+v", second)
+	}
+}
+
+func TestTurn_CompactionFailureDoesNotAppendMarker(t *testing.T) {
+	prov := &mockProviderWithErrors{errs: []error{fmt.Errorf("summary failed")}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	_, err := eng.Turn(context.Background(), "latest")
+	if err == nil {
+		t.Fatal("expected compaction error")
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			t.Fatalf("unexpected compact marker after failure: %+v", msg)
+		}
+	}
+}
+
+func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
+	prov := &mockProviderWithErrors{
+		errs: []error{fmt.Errorf("context_length_exceeded")},
+		responses: []llm.Response{
+			{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 1, OutputTokens: 1}},
+			{Message: llm.TextMessage(llm.RoleAssistant, "after retry"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 2, OutputTokens: 1}},
+		},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 10000
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+		t.Fatal(err)
+	}
+	out, err := eng.Turn(context.Background(), "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "after retry" {
+		t.Fatalf("out = %q", out)
+	}
+	if prov.called != 3 {
+		t.Fatalf("provider calls = %d, want normal fail + compact + retry", prov.called)
+	}
+}
+
+func messagesText(msgs []llm.Message) string {
+	var sb strings.Builder
+	for _, msg := range msgs {
+		for _, block := range msg.Blocks {
+			sb.WriteString(block.Text)
+			sb.WriteString(block.Content)
+		}
+	}
+	return sb.String()
+}
+
+func TestCompact_ReturnsAppendedMessageIDAndMetadata(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.Compact(context.Background(), "turn-1", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID == "" {
+		t.Fatal("missing compact message id")
+	}
+	compact := eng.Session.History[len(eng.Session.History)-1]
+	if compact.ID != result.MessageID {
+		t.Fatalf("result message id = %q, compact id = %q", result.MessageID, compact.ID)
+	}
+	if compact.Compaction == nil || compact.Compaction.Reason != "manual" || compact.Compaction.SummaryChars != len("summary") {
+		t.Fatalf("compaction metadata = %+v", compact.Compaction)
+	}
 }
 
 func TestTurn_PlainResponse(t *testing.T) {
@@ -256,13 +405,13 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 		t.Fatalf("compact text = %q", compact.FirstText())
 	}
 	secondCallHistory := prov.histories[1]
-	if len(secondCallHistory) != 2 {
-		t.Fatalf("second call history len = %d, want compact + latest user", len(secondCallHistory))
+	if len(secondCallHistory) < 2 {
+		t.Fatalf("second call history len = %d, want compact marker plus active context", len(secondCallHistory))
 	}
 	if secondCallHistory[0].Kind != llm.MessageKindCompact {
 		t.Fatalf("second call first kind = %q", secondCallHistory[0].Kind)
 	}
-	if got := secondCallHistory[1].FirstText(); got != "latest question" {
+	if got := secondCallHistory[len(secondCallHistory)-1].FirstText(); got != "latest question" {
 		t.Fatalf("second call latest text = %q", got)
 	}
 }

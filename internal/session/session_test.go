@@ -57,6 +57,53 @@ func TestSession_AppendNormalizesNilBlocks(t *testing.T) {
 	}
 }
 
+func TestAppend_AssignsMessageID(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "hello")); err != nil {
+		t.Fatal(err)
+	}
+	if s.History[0].ID == "" {
+		t.Fatal("message ID was not assigned")
+	}
+
+	s2, err := Load(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if s2.History[0].ID != s.History[0].ID {
+		t.Fatalf("loaded ID = %q, want %q", s2.History[0].ID, s.History[0].ID)
+	}
+}
+
+func TestLoad_AssignsDeterministicLegacyIDs(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260515T010203-legacy")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"role":"user","blocks":[{"type":"text","text":"old"}]}` + "\n" +
+		`{"role":"assistant","blocks":[{"type":"text","text":"reply"}]}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.History[0].ID != "legacy-000001" || s.History[1].ID != "legacy-000002" {
+		t.Fatalf("legacy IDs = %q, %q", s.History[0].ID, s.History[1].ID)
+	}
+}
+
 func TestSession_AppendEventToJSONL(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

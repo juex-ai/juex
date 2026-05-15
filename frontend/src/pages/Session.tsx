@@ -43,9 +43,17 @@ import {
   toolState,
   type MessageGroup,
 } from "@/lib/display-units";
-import { getSession, interrupt, startTurn, subscribeEvents } from "@/api";
+import {
+  compactSession,
+  getSession,
+  getSessionContext,
+  interrupt,
+  startTurn,
+  subscribeEvents,
+} from "@/api";
 import { ArchiveIcon, RadioIcon } from "lucide-react";
 import type {
+  ActiveContextSnapshot,
   ContextUsage,
   Message as ChatMessage,
   SessionShowResponse,
@@ -59,6 +67,9 @@ export function Session() {
   const [liveTokenUsage, setLiveTokenUsage] = useState<TokenUsage | null>(null);
   const [liveContextUsage, setLiveContextUsage] =
     useState<ContextUsage | null>(null);
+  const [activeContext, setActiveContext] =
+    useState<ActiveContextSnapshot | null>(null);
+  const [isCompacting, setIsCompacting] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const doneTimerRef = useRef<number | null>(null);
 
@@ -70,6 +81,12 @@ export function Session() {
       setLiveMessages([]);
       setLiveTokenUsage(null);
       setLiveContextUsage(null);
+      try {
+        setActiveContext(await getSessionContext(id));
+      } catch (contextError) {
+        console.error("getSessionContext failed", contextError);
+        setActiveContext(null);
+      }
     } catch (e) {
       console.error("getSession failed", e);
     }
@@ -86,6 +103,12 @@ export function Session() {
           setLiveMessages([]);
           setLiveTokenUsage(null);
           setLiveContextUsage(null);
+          try {
+            setActiveContext(await getSessionContext(id));
+          } catch (contextError) {
+            console.error("getSessionContext failed", contextError);
+            setActiveContext(null);
+          }
         }
       } catch (e) {
         if (!cancelled) console.error("getSession failed", e);
@@ -145,6 +168,25 @@ export function Session() {
               setStatus({ kind: "error", detail: eventErrorDetail(e) }),
             );
             break;
+          case "context.compact.started":
+            setStatus({ kind: "running" });
+            break;
+          case "context.compact.completed":
+            refresh().then(() => {
+              setStatus({ kind: "done" });
+              if (doneTimerRef.current)
+                window.clearTimeout(doneTimerRef.current);
+              doneTimerRef.current = window.setTimeout(
+                () => setStatus({ kind: "idle" }),
+                1500,
+              );
+            });
+            break;
+          case "context.compact.errored":
+            refresh().then(() =>
+              setStatus({ kind: "error", detail: eventErrorDetail(e) }),
+            );
+            break;
         }
       },
     });
@@ -176,6 +218,30 @@ export function Session() {
     }
   }
 
+  async function handleCompact() {
+    if (!id) return;
+    setIsCompacting(true);
+    setStatus({ kind: "running" });
+    try {
+      await compactSession(id, "manual");
+      await refresh();
+      setStatus({ kind: "done" });
+      if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
+      doneTimerRef.current = window.setTimeout(
+        () => setStatus({ kind: "idle" }),
+        1500,
+      );
+    } catch (e) {
+      console.error("compactSession failed", e);
+      setStatus({
+        kind: "error",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setIsCompacting(false);
+    }
+  }
+
   if (!data) {
     return <div className="text-muted-foreground p-8">Loading...</div>;
   }
@@ -184,6 +250,7 @@ export function Session() {
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
   const contextUsage = liveContextUsage ?? data.context_usage;
+  const busy = status.kind === "running" || status.kind === "tool";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -217,23 +284,36 @@ export function Session() {
           >
             <PromptInputTextarea placeholder="Type a prompt..." />
             <PromptInputFooter>
-              <PromptInputTools>
-                <StatusPill status={status} />
-                <TooltipProvider>
-                  <ContextUsageLabel usage={contextUsage} />
+              <TooltipProvider>
+                <PromptInputTools>
+                  <StatusPill status={status} />
+                  <ContextUsageLabel
+                    usage={contextUsage}
+                    activeContext={activeContext}
+                  />
                   <TokenUsageLabel usage={tokenUsage} />
-                </TooltipProvider>
-              </PromptInputTools>
-              {status.kind === "running" || status.kind === "tool" ? (
-                <PromptInputButton
-                  variant="outline"
-                  onClick={() => void handleInterrupt()}
-                >
-                  Stop
-                </PromptInputButton>
-              ) : (
-                <PromptInputSubmit />
-              )}
+                </PromptInputTools>
+                {busy ? (
+                  <PromptInputButton
+                    variant="outline"
+                    onClick={() => void handleInterrupt()}
+                  >
+                    Stop
+                  </PromptInputButton>
+                ) : (
+                  <>
+                    <PromptInputButton
+                      variant="outline"
+                      tooltip="Compact context"
+                      disabled={isCompacting}
+                      onClick={() => void handleCompact()}
+                    >
+                      <ArchiveIcon className="size-4" aria-hidden="true" />
+                    </PromptInputButton>
+                    <PromptInputSubmit />
+                  </>
+                )}
+              </TooltipProvider>
             </PromptInputFooter>
           </PromptInput>
         </div>
@@ -503,7 +583,13 @@ function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
   );
 }
 
-function ContextUsageLabel({ usage }: { usage?: ContextUsage }) {
+function ContextUsageLabel({
+  usage,
+  activeContext,
+}: {
+  usage?: ContextUsage;
+  activeContext?: ActiveContextSnapshot | null;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -512,13 +598,26 @@ function ContextUsageLabel({ usage }: { usage?: ContextUsage }) {
         </span>
       </TooltipTrigger>
       <TooltipContent className="block max-w-sm space-y-1.5 px-3 py-2 font-mono text-xs">
-        {usage ? <ContextUsageTooltip usage={usage} /> : "No context usage yet"}
+        {usage ? (
+          <ContextUsageTooltip usage={usage} activeContext={activeContext} />
+        ) : (
+          <>
+            <div>No context usage yet</div>
+            <ActiveContextDebugLine snapshot={activeContext} />
+          </>
+        )}
       </TooltipContent>
     </Tooltip>
   );
 }
 
-function ContextUsageTooltip({ usage }: { usage: ContextUsage }) {
+function ContextUsageTooltip({
+  usage,
+  activeContext,
+}: {
+  usage: ContextUsage;
+  activeContext?: ActiveContextSnapshot | null;
+}) {
   const windowTokens = usage.context_window ?? 0;
   const percent =
     windowTokens > 0
@@ -542,7 +641,24 @@ function ContextUsageTooltip({ usage }: { usage: ContextUsage }) {
           </div>
         ))}
       </div>
+      <ActiveContextDebugLine snapshot={activeContext} />
     </>
+  );
+}
+
+function ActiveContextDebugLine({
+  snapshot,
+}: {
+  snapshot?: ActiveContextSnapshot | null;
+}) {
+  if (!snapshot) return null;
+  const count = snapshot?.messages?.length ?? 0;
+  const tokens = snapshot?.estimated_tokens ?? 0;
+  return (
+    <div className="text-background/75">
+      debug: active provider context {count} messages,{" "}
+      {formatTokenCount(tokens)} estimated tokens
+    </div>
   );
 }
 

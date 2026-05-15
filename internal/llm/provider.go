@@ -4,12 +4,22 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
 type Provider interface {
 	Name() string
 	Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error)
+}
+
+type CompleteOptions struct {
+	Purpose         string
+	MaxOutputTokens int
+}
+
+type ProviderWithOptions interface {
+	CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error)
 }
 
 const providerMaxRetries = 10
@@ -39,4 +49,30 @@ func New(cfg Config) (Provider, error) {
 	default:
 		return nil, fmt.Errorf("llm: unknown provider type %q", cfg.Type)
 	}
+}
+
+func CompleteWithOptions(ctx context.Context, p Provider, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
+	if withOpts, ok := p.(ProviderWithOptions); ok {
+		return withOpts.CompleteWithOptions(ctx, sys, history, tools, opts)
+	}
+	return p.Complete(ctx, sys, history, tools)
+}
+
+func IsContextOverflowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"context_length_exceeded",
+		"context window",
+		"maximum context length",
+		"prompt is too long",
+		"input length",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
 }
