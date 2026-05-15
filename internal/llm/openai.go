@@ -57,7 +57,6 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	}
 	if opts.MaxOutputTokens > 0 {
 		params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
-		params.MaxTokens = openai.Int(int64(opts.MaxOutputTokens))
 	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)

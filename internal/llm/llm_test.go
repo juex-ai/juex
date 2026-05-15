@@ -412,6 +412,35 @@ func TestOpenAI_NoThinkingEffort(t *testing.T) {
 	}
 }
 
+func TestOpenAI_CompleteOptionsUsesOneMaxTokenField(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{Type: "openai", BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	withOpts, ok := p.(ProviderWithOptions)
+	if !ok {
+		t.Fatal("openai provider does not implement ProviderWithOptions")
+	}
+	if _, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		Purpose:         "compaction",
+		MaxOutputTokens: 1234,
+	}); err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	if capturedBody["max_completion_tokens"] != float64(1234) {
+		t.Fatalf("max_completion_tokens = %v, want 1234", capturedBody["max_completion_tokens"])
+	}
+	if _, present := capturedBody["max_tokens"]; present {
+		t.Fatalf("max_tokens should be absent when max_completion_tokens is set: %+v", capturedBody)
+	}
+}
+
 func TestAnthropic_ThinkingEffort(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
