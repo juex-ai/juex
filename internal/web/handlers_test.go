@@ -109,6 +109,51 @@ func TestGetSessionShow_NotFound(t *testing.T) {
 	}
 }
 
+func TestPostSessionCompact(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260515T010203-webcompact"
+	seedSession(t, srv.opts.Cfg.WorkDir, id,
+		`{"id":"m1","role":"user","blocks":[{"type":"text","text":"`+strings.Repeat("old ", 200)+`"}]}`+"\n")
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/compact", "application/json", strings.NewReader(`{"reason":"manual"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"message_id"`) || !strings.Contains(string(body), `"manual"`) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestGetSessionContext(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260515T010203-webctx"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, `{"id":"m1","role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"messages"`) || !strings.Contains(string(body), `"hi"`) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
 func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
