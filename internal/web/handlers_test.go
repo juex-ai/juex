@@ -216,13 +216,22 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 					InputTokens  int `json:"input_tokens"`
 					OutputTokens int `json:"output_tokens"`
 				} `json:"token_usage"`
+				ContextUsage struct {
+					Model         string `json:"model"`
+					ContextWindow int    `json:"context_window"`
+					InputTokens   int    `json:"input_tokens"`
+					OutputTokens  int    `json:"output_tokens"`
+					TotalTokens   int    `json:"total_tokens"`
+					Breakdown     []struct {
+						Key    string `json:"key"`
+						Tokens int    `json:"tokens"`
+					} `json:"breakdown"`
+				} `json:"context_usage"`
 				Messages []struct {
-					Role  string `json:"role"`
-					Usage struct {
-						InputTokens  int `json:"input_tokens"`
-						OutputTokens int `json:"output_tokens"`
-					} `json:"usage"`
-					Blocks []struct {
+					Role         string    `json:"role"`
+					Usage        *struct{} `json:"usage,omitempty"`
+					ContextUsage *struct{} `json:"context_usage,omitempty"`
+					Blocks       []struct {
 						Type string `json:"type"`
 						Text string `json:"text"`
 					} `json:"blocks"`
@@ -240,8 +249,31 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 							if parsed.TokenUsage.InputTokens != 4 || parsed.TokenUsage.OutputTokens != 2 {
 								t.Fatalf("token_usage = %+v", parsed.TokenUsage)
 							}
-							if m.Usage.InputTokens != 4 || m.Usage.OutputTokens != 2 {
-								t.Fatalf("message usage = %+v", m.Usage)
+							if m.Usage != nil {
+								t.Fatalf("message usage should be omitted: %+v", m.Usage)
+							}
+							if m.ContextUsage != nil {
+								t.Fatalf("message context_usage should be omitted: %+v", m.ContextUsage)
+							}
+							if parsed.ContextUsage.Model != "stub" ||
+								parsed.ContextUsage.ContextWindow != 256000 ||
+								parsed.ContextUsage.InputTokens != 4 ||
+								parsed.ContextUsage.OutputTokens != 2 ||
+								parsed.ContextUsage.TotalTokens != 6 {
+								t.Fatalf("context_usage = %+v", parsed.ContextUsage)
+							}
+							if len(parsed.ContextUsage.Breakdown) == 0 {
+								t.Fatal("context_usage missing breakdown")
+							}
+							var hasResponse bool
+							for _, part := range parsed.ContextUsage.Breakdown {
+								if part.Key == "response" && part.Tokens == 2 {
+									hasResponse = true
+									break
+								}
+							}
+							if !hasResponse {
+								t.Fatalf("context_usage missing response breakdown: %+v", parsed.ContextUsage.Breakdown)
 							}
 							if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); err != nil {
 								t.Fatalf("conversation stat after turn err = %v", err)

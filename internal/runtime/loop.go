@@ -83,7 +83,8 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 	turnCtx, cancel := context.WithTimeout(ctx, maxDur)
 	defer cancel()
 
-	systemPrompt := e.Prompt.Build()
+	promptSections := e.Prompt.Sections()
+	systemPrompt := prompt.JoinSections(promptSections)
 	tools := e.Tools.Specs()
 
 	if err := e.maybeCompact(turnCtx, turnID, systemPrompt, tools, userMsg); err != nil {
@@ -111,22 +112,27 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 			"iter": iter, "history_len": len(e.Session.History), "tool_count": len(tools),
 		}})
 
-		resp, err := e.Provider.Complete(turnCtx, systemPrompt, providerHistory(e.Session.History), tools)
+		requestHistory := providerHistory(e.Session.History)
+		resp, err := e.Provider.Complete(turnCtx, systemPrompt, requestHistory, tools)
 		if err != nil {
 			return "", e.failTurn(turnID, fmt.Errorf("llm: %w", err))
 		}
 		msg := resp.Message
-		if !resp.Usage.IsZero() {
-			msg.Usage = &resp.Usage
+		if msg.Model == "" && e.Provider != nil {
+			msg.Model = e.Provider.Name()
 		}
-		totalUsage := llm.SumUsage(e.Session.History)
-		totalUsage.Add(resp.Usage)
+		var contextUsage *llm.ContextUsage
+		if !resp.Usage.IsZero() {
+			snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, promptSections, tools, requestHistory)
+			contextUsage = &snapshot
+		}
+		totalUsage := e.Session.RecordResponseUsage(resp.Usage, contextUsage)
 
 		// Enrich the responded event with the assistant's text + thinking +
 		// tool calls so verbose UIs can render them without subscribing to
 		// the conversation log. Bounded by what the LLM returned in this
 		// single turn, so payload size is reasonable.
-		e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: map[string]any{
+		payload := map[string]any{
 			"stop_reason": resp.StopReason,
 			"usage":       resp.Usage,
 			"token_usage": totalUsage,
@@ -134,7 +140,11 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 			"thinking":    responseThinking(resp.Message),
 			"tool_calls":  responseToolCalls(resp.Message),
 			"model":       msg.Model,
-		}})
+		}
+		if contextUsage != nil {
+			payload["context_usage"] = *contextUsage
+		}
+		e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload})
 
 		toolCalls := msg.ToolCalls()
 		if err := e.Session.Append(msg); err != nil {
@@ -192,7 +202,7 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (string, 
 	e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: map[string]any{
 		"duration_ms": time.Since(start).Milliseconds(),
 		"output_len":  len(lastText),
-		"token_usage": llm.SumUsage(e.Session.History),
+		"token_usage": e.Session.TokenUsageSnapshot(),
 	}})
 	return lastText, nil
 }

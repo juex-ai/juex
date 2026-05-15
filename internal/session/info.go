@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -22,14 +23,15 @@ const previewMaxRunes = 80
 // produced by List and LoadInfo and is safe to expose through the CLI
 // (no live file handles, no event subscription).
 type Info struct {
-	ID           string    `json:"id"`
-	Alias        string    `json:"alias,omitempty"`
-	Dir          string    `json:"dir"`
-	StartedAt    time.Time `json:"started_at"`
-	LastActiveAt time.Time `json:"last_active_at"`
-	Turns        int       `json:"turns"`
-	Preview      string    `json:"preview"`
-	TokenUsage   llm.Usage `json:"token_usage"`
+	ID           string            `json:"id"`
+	Alias        string            `json:"alias,omitempty"`
+	Dir          string            `json:"dir"`
+	StartedAt    time.Time         `json:"started_at"`
+	LastActiveAt time.Time         `json:"last_active_at"`
+	Turns        int               `json:"turns"`
+	Preview      string            `json:"preview"`
+	TokenUsage   llm.Usage         `json:"token_usage"`
+	ContextUsage *llm.ContextUsage `json:"context_usage,omitempty"`
 }
 
 // List enumerates every well-formed session directory under root and
@@ -112,11 +114,77 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
 			}
 		}
-		if m.Usage != nil {
-			info.TokenUsage.Add(*m.Usage)
+	}
+	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsage(dir)
+	return info, msgs, nil
+}
+
+func loadLatestSessionUsage(dir string) (llm.Usage, *llm.ContextUsage, error) {
+	data, err := os.ReadFile(filepath.Join(dir, eventsFile))
+	if err != nil {
+		return llm.Usage{}, nil, err
+	}
+	var tokenUsage llm.Usage
+	var latest *llm.ContextUsage
+	for _, line := range splitLines(data) {
+		if len(line) == 0 {
+			continue
+		}
+		var e events.Event
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		if e.Type != "llm.responded" {
+			continue
+		}
+		if usage, ok := tokenUsageFromPayload(e.Payload); ok {
+			tokenUsage = usage
+		}
+		if usage, ok := contextUsageFromPayload(e.Payload); ok {
+			latest = &usage
 		}
 	}
-	return info, msgs, nil
+	return tokenUsage, latest, nil
+}
+
+func tokenUsageFromPayload(payload any) (llm.Usage, bool) {
+	p, ok := payload.(map[string]any)
+	if !ok {
+		return llm.Usage{}, false
+	}
+	raw, ok := p["token_usage"]
+	if !ok {
+		return llm.Usage{}, false
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return llm.Usage{}, false
+	}
+	var usage llm.Usage
+	if err := json.Unmarshal(data, &usage); err != nil {
+		return llm.Usage{}, false
+	}
+	return usage, true
+}
+
+func contextUsageFromPayload(payload any) (llm.ContextUsage, bool) {
+	p, ok := payload.(map[string]any)
+	if !ok {
+		return llm.ContextUsage{}, false
+	}
+	raw, ok := p["context_usage"]
+	if !ok {
+		return llm.ContextUsage{}, false
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return llm.ContextUsage{}, false
+	}
+	var usage llm.ContextUsage
+	if err := json.Unmarshal(data, &usage); err != nil {
+		return llm.ContextUsage{}, false
+	}
+	return usage, true
 }
 
 // parseStartedAt extracts the timestamp prefix from a session id

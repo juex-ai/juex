@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Conversation,
   ConversationContent,
   ConversationScrollButton,
@@ -32,10 +38,15 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { StatusPill, type Status } from "@/components/StatusPill";
-import { messagesToGroups, toolState, type MessageGroup } from "@/lib/display-units";
+import {
+  messagesToGroups,
+  toolState,
+  type MessageGroup,
+} from "@/lib/display-units";
 import { getSession, interrupt, startTurn, subscribeEvents } from "@/api";
 import { ArchiveIcon, RadioIcon } from "lucide-react";
 import type {
+  ContextUsage,
   Message as ChatMessage,
   SessionShowResponse,
   TokenUsage,
@@ -46,6 +57,8 @@ export function Session() {
   const [data, setData] = useState<SessionShowResponse | null>(null);
   const [liveMessages, setLiveMessages] = useState<ChatMessage[]>([]);
   const [liveTokenUsage, setLiveTokenUsage] = useState<TokenUsage | null>(null);
+  const [liveContextUsage, setLiveContextUsage] =
+    useState<ContextUsage | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const doneTimerRef = useRef<number | null>(null);
 
@@ -56,6 +69,7 @@ export function Session() {
       setData(r);
       setLiveMessages([]);
       setLiveTokenUsage(null);
+      setLiveContextUsage(null);
     } catch (e) {
       console.error("getSession failed", e);
     }
@@ -71,6 +85,7 @@ export function Session() {
           setData(r);
           setLiveMessages([]);
           setLiveTokenUsage(null);
+          setLiveContextUsage(null);
         }
       } catch (e) {
         if (!cancelled) console.error("getSession failed", e);
@@ -97,10 +112,12 @@ export function Session() {
           case "llm.responded":
             applyAssistantResponse(e);
             applyTokenUsage(e);
+            applyContextUsage(e);
             setStatus({ kind: "running" });
             break;
           case "tool.requested": {
-            const name = eventString(e, "name") ?? eventString(e, "tool_name") ?? "?";
+            const name =
+              eventString(e, "name") ?? eventString(e, "tool_name") ?? "?";
             setStatus({ kind: "tool", name });
             break;
           }
@@ -166,6 +183,7 @@ export function Session() {
   const messages: ChatMessage[] = [...(data.messages ?? []), ...liveMessages];
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
+  const contextUsage = liveContextUsage ?? data.context_usage;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -201,7 +219,10 @@ export function Session() {
             <PromptInputFooter>
               <PromptInputTools>
                 <StatusPill status={status} />
-                <TokenUsageLabel usage={tokenUsage} />
+                <TooltipProvider>
+                  <ContextUsageLabel usage={contextUsage} />
+                  <TokenUsageLabel usage={tokenUsage} />
+                </TooltipProvider>
               </PromptInputTools>
               {status.kind === "running" || status.kind === "tool" ? (
                 <PromptInputButton
@@ -278,6 +299,11 @@ export function Session() {
   function applyTokenUsage(e: { payload?: unknown }) {
     const usage = eventTokenUsage(e);
     if (usage) setLiveTokenUsage(usage);
+  }
+
+  function applyContextUsage(e: { payload?: unknown }) {
+    const usage = eventContextUsage(e);
+    if (usage) setLiveContextUsage(usage);
   }
 
   function appendToolResult(e: { turn_id?: string; payload?: unknown }, isError: boolean) {
@@ -377,6 +403,41 @@ function eventTokenUsage(e: { payload?: unknown }): TokenUsage | undefined {
   return { input_tokens: input, output_tokens: output };
 }
 
+function eventContextUsage(e: { payload?: unknown }): ContextUsage | undefined {
+  if (!e.payload || typeof e.payload !== "object") return undefined;
+  const payload = e.payload as Record<string, unknown>;
+  const raw = payload.context_usage;
+  if (!raw || typeof raw !== "object") return undefined;
+  const usage = raw as Record<string, unknown>;
+  const input = eventNumber(usage.input_tokens);
+  const output = eventNumber(usage.output_tokens);
+  const total = eventNumber(usage.total_tokens);
+  if (input === undefined || output === undefined || total === undefined) {
+    return undefined;
+  }
+  const contextWindow = eventNumber(usage.context_window);
+  const model = typeof usage.model === "string" ? usage.model : undefined;
+  const breakdown = Array.isArray(usage.breakdown)
+    ? usage.breakdown.flatMap((part) => {
+        if (!part || typeof part !== "object") return [];
+        const record = part as Record<string, unknown>;
+        const key = typeof record.key === "string" ? record.key : "";
+        const label = typeof record.label === "string" ? record.label : "";
+        const tokens = eventNumber(record.tokens);
+        if (!key || !label || tokens === undefined) return [];
+        return [{ key, label, tokens }];
+      })
+    : undefined;
+  return {
+    model,
+    context_window: contextWindow,
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: total,
+    breakdown,
+  };
+}
+
 function eventNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
@@ -427,11 +488,79 @@ function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
 function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
   const input = usage?.input_tokens ?? 0;
   const output = usage?.output_tokens ?? 0;
+  const total = input + output;
   return (
-    <span className="text-muted-foreground font-mono text-xs">
-      tokens {input + output} ({input} in / {output} out)
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="bg-muted text-muted-foreground inline-flex shrink-0 items-center rounded-full px-2.5 py-1 font-mono text-xs">
+          tokens {formatTokenCount(total)}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {formatTokenCount(input)} in / {formatTokenCount(output)} out
+      </TooltipContent>
+    </Tooltip>
   );
+}
+
+function ContextUsageLabel({ usage }: { usage?: ContextUsage }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="bg-muted text-muted-foreground inline-flex shrink-0 items-center rounded-full px-2.5 py-1 font-mono text-xs">
+          context {usage ? formatTokenCount(usage.total_tokens) : "-"}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="block max-w-sm space-y-1.5 px-3 py-2 font-mono text-xs">
+        {usage ? <ContextUsageTooltip usage={usage} /> : "No context usage yet"}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ContextUsageTooltip({ usage }: { usage: ContextUsage }) {
+  const windowTokens = usage.context_window ?? 0;
+  const percent =
+    windowTokens > 0
+      ? Math.round((usage.total_tokens / windowTokens) * 1000) / 10
+      : 0;
+  return (
+    <>
+      <div>
+        {(usage.model && usage.model.trim()) || "unknown"}{" "}
+        {formatTokenCount(usage.total_tokens)}/{formatTokenCount(windowTokens)} tokens (
+        {formatPercent(percent)})
+      </div>
+      <div className="text-background/75">estimated breakdown</div>
+      <div className="space-y-0.5">
+        {(usage.breakdown ?? []).map((part) => (
+          <div key={part.key}>
+            - {part.label}: {formatTokenCount(part.tokens)} tokens
+            {windowTokens > 0
+              ? ` (${formatPercent((part.tokens / windowTokens) * 100)})`
+              : ""}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function formatTokenCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return value === 0 ? "0" : "-";
+  if (value >= 1_000_000) return `${trimFixed(value / 1_000_000)}m`;
+  if (value >= 1_000) return `${trimFixed(value / 1_000)}k`;
+  return Math.round(value).toString();
+}
+
+function formatPercent(value: number): string {
+  if (!Number.isFinite(value)) return "0%";
+  if (value > 0 && value < 0.1) return "0.0%";
+  return `${trimFixed(value)}%`;
+}
+
+function trimFixed(value: number): string {
+  return value.toFixed(1).replace(/\.0$/, "");
 }
 
 function MessageGroupView({ group }: { group: MessageGroup }) {

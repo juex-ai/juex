@@ -105,12 +105,84 @@ func TestTurn_PlainResponse(t *testing.T) {
 	if len(eng.Session.History) != 2 {
 		t.Fatalf("history len = %d", len(eng.Session.History))
 	}
-	if eng.Session.History[1].Usage == nil || *eng.Session.History[1].Usage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
-		t.Fatalf("assistant usage = %+v", eng.Session.History[1].Usage)
+	if got := eng.Session.Info(time.Now()).TokenUsage; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+		t.Fatalf("session token usage = %+v", got)
 	}
 	if eventUsage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
 		t.Fatalf("event usage = %+v", eventUsage)
 	}
+}
+
+func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
+	msg := llm.TextMessage(llm.RoleAssistant, "hello user")
+	msg.Model = "mock:model"
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message:    msg,
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 20, OutputTokens: 5},
+		},
+	}}
+	eng, bus := newEngine(t, prov, true)
+	eng.ContextWindow = 1000
+	var eventContext llm.ContextUsage
+	bus.Subscribe("llm.responded", func(e events.Event) {
+		p := e.Payload.(map[string]any)
+		eventContext = p["context_usage"].(llm.ContextUsage)
+	})
+
+	if _, err := eng.Turn(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+
+	info := eng.Session.Info(time.Now())
+	got := info.ContextUsage
+	if got == nil {
+		t.Fatal("session context usage is nil")
+	}
+	if got.Model != "mock:model" {
+		t.Fatalf("model = %q", got.Model)
+	}
+	if got.ContextWindow != 1000 {
+		t.Fatalf("context window = %d", got.ContextWindow)
+	}
+	if got.InputTokens != 20 || got.OutputTokens != 5 || got.TotalTokens != 25 {
+		t.Fatalf("tokens = input %d output %d total %d", got.InputTokens, got.OutputTokens, got.TotalTokens)
+	}
+	if eventContext.Model != got.Model ||
+		eventContext.ContextWindow != got.ContextWindow ||
+		eventContext.InputTokens != got.InputTokens ||
+		eventContext.OutputTokens != got.OutputTokens ||
+		eventContext.TotalTokens != got.TotalTokens ||
+		len(eventContext.Breakdown) != len(got.Breakdown) {
+		t.Fatalf("event context usage = %+v, want %+v", eventContext, *got)
+	}
+	parts := contextPartsByKey(got.Breakdown)
+	for _, key := range []string{"system_prompt", "system_tools", "mcp_tools", "memory_files", "skills", "messages", "response"} {
+		if _, ok := parts[key]; !ok {
+			t.Fatalf("missing context breakdown part %q in %+v", key, got.Breakdown)
+		}
+	}
+	if parts["system_prompt"].Tokens == 0 {
+		t.Fatalf("system prompt tokens = 0")
+	}
+	if parts["system_tools"].Tokens == 0 {
+		t.Fatalf("system tools tokens = 0")
+	}
+	if parts["messages"].Tokens == 0 {
+		t.Fatalf("messages tokens = 0")
+	}
+	if parts["response"].Tokens != 5 {
+		t.Fatalf("response tokens = %d, want 5", parts["response"].Tokens)
+	}
+}
+
+func contextPartsByKey(parts []llm.ContextUsagePart) map[string]llm.ContextUsagePart {
+	out := make(map[string]llm.ContextUsagePart, len(parts))
+	for _, part := range parts {
+		out[part.Key] = part
+	}
+	return out
 }
 
 func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {

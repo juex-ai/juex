@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -88,25 +87,7 @@ func providerHistory(history []llm.Message) []llm.Message {
 }
 
 func estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
-	chars := len(systemPrompt)
-	if len(tools) > 0 {
-		if data, err := json.Marshal(tools); err == nil {
-			chars += len(data)
-		}
-	}
-	for _, m := range history {
-		chars += len(m.Role) + len(m.Kind) + 8
-		for _, b := range m.Blocks {
-			chars += len(b.Type) + len(b.Text) + len(b.Content) + len(b.ToolUseID) + len(b.ToolName) + 8
-			if len(b.Input) > 0 {
-				if data, err := json.Marshal(b.Input); err == nil {
-					chars += len(data)
-				}
-			}
-		}
-	}
-	if chars <= 0 {
-		return 0
-	}
-	return (chars + 3) / 4
+	return estimateCharsAsTokens(len(systemPrompt)) +
+		estimateToolTokens(tools) +
+		estimateMessageTokens(history)
 }

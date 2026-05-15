@@ -179,7 +179,7 @@ applicable).
 │              │ ┌──────────────────────────────┐ │              │
 │              │ │ textarea                     │ │              │
 │              │ └──────────────────────────────┘ │              │
-│              │ ● idle  tokens 42  [Stop][Send] │              │
+│              │ ● idle  context 61.5k  tokens 42│              │
 └──────────────┴──────────────────────────────────┴──────────────┘
 ```
 
@@ -205,7 +205,8 @@ card prompting the user to pick a session or start a new one.
 
 Same sidebar (highlighted entry for the current session). Right column:
 header strip + scrollable message list + sticky composer. The composer footer
-shows the live status and the current conversation token total.
+shows the live status, latest request context total, and current conversation
+token total.
 
 MCP channel events render as compact user-side event bubbles with a small
 radio icon, a monospace `<mcp_name>:<event_type>` label, and the event content
@@ -319,6 +320,8 @@ until the user expands.
     <PromptInputFooter>
       <PromptInputTools>
         <StatusPill status={status} />
+        <ContextUsageLabel usage={contextUsage} />
+        <TokenUsageLabel usage={tokenUsage} />
       </PromptInputTools>
       {status.kind === "running" || status.kind === "tool"
         ? <PromptInputButton variant="outline" onClick={onInterrupt}>Stop</PromptInputButton>
@@ -331,6 +334,14 @@ until the user expands.
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>`
 handles both natively. `Stop` and `Send` are mutually exclusive; the
 composer always shows exactly one of them.
+
+`ContextUsageLabel` is a compact `context <total>` chip for the latest
+successful provider request. The total uses provider-reported
+`input_tokens + output_tokens`; its tooltip shows model, configured context
+window, percent used, and an estimated breakdown across system prompt, system
+tools, MCP tools, memory files, skills, messages, and response. `TokenUsageLabel`
+is a compact `tokens <total>` chip for cumulative conversation usage; its
+tooltip shows the input/output split.
 
 ### 7.9 StatusPill
 
@@ -456,6 +467,7 @@ export interface SessionInfo {
   turns: number;
   preview: string;
   token_usage: { input_tokens: number; output_tokens: number };
+  context_usage?: ContextUsage;
 }
 
 export type Role = "user" | "assistant" | "system";
@@ -466,7 +478,19 @@ export type Block =
   | { type: "tool_use"; tool_name: string; tool_use_id: string; input: unknown }
   | { type: "tool_result"; tool_use_id?: string; content: string; is_error?: boolean };
 
-export interface Message { role: Role; blocks: Block[] }
+export interface ContextUsage {
+  model?: string;
+  context_window?: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  breakdown?: { key: string; label: string; tokens: number }[];
+}
+
+export interface Message {
+  role: Role;
+  blocks: Block[];
+}
 ```
 
 The Go side is the source of truth; if we change `internal/llm/types.go` we

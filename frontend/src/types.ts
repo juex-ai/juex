@@ -48,12 +48,26 @@ export interface Message {
   // generation time so resumed sessions retain attribution even if the
   // current config has been swapped to a different model.
   model?: string;
-  usage?: TokenUsage;
 }
 
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
+}
+
+export interface ContextUsagePart {
+  key: string;
+  label: string;
+  tokens: number;
+}
+
+export interface ContextUsage {
+  model?: string;
+  context_window?: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  breakdown?: ContextUsagePart[];
 }
 
 export interface SessionInfo {
@@ -64,6 +78,7 @@ export interface SessionInfo {
   turns: number;
   preview: string;
   token_usage: TokenUsage;
+  context_usage?: ContextUsage;
 }
 
 export interface SessionShowResponse extends SessionInfo {
