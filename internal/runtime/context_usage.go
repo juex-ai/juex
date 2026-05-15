@@ -25,14 +25,29 @@ func contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sect
 		{Key: "messages", Label: "Messages", Tokens: estimateMessageTokens(history)},
 		{Key: "response", Label: "Response", Tokens: usage.OutputTokens},
 	}
+	inputTokens := usage.InputTokens
+	if inputTokens <= 0 {
+		inputTokens = estimatedInputTokens(breakdown)
+	}
 	return llm.ContextUsage{
 		Model:         model,
 		ContextWindow: contextWindow,
-		InputTokens:   usage.InputTokens,
+		InputTokens:   inputTokens,
 		OutputTokens:  usage.OutputTokens,
-		TotalTokens:   usage.TotalTokens(),
+		TotalTokens:   inputTokens + usage.OutputTokens,
 		Breakdown:     breakdown,
 	}
+}
+
+func estimatedInputTokens(parts []llm.ContextUsagePart) int {
+	var total int
+	for _, part := range parts {
+		if part.Key == "response" {
+			continue
+		}
+		total += part.Tokens
+	}
+	return total
 }
 
 func splitContextTools(tools []llm.ToolSpec) ([]llm.ToolSpec, []llm.ToolSpec) {
