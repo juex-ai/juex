@@ -53,6 +53,7 @@ type Block struct {
 }
 
 type Message struct {
+	ID     string  `json:"id,omitempty"`
 	Role   Role    `json:"role"`
 	Blocks []Block `json:"blocks"`
 	// Kind marks app-level message categories that still travel through
@@ -62,7 +63,20 @@ type Message struct {
 	// message. Only set on assistant messages (provider-stamped at
 	// generation time so resuming a session under a different config
 	// preserves the original attribution).
-	Model string `json:"model,omitempty"`
+	Model      string              `json:"model,omitempty"`
+	Compaction *CompactionMetadata `json:"compaction,omitempty"`
+}
+
+type CompactionMetadata struct {
+	Auto               bool   `json:"auto"`
+	Reason             string `json:"reason"`
+	PreviousSummaryID  string `json:"previous_summary_id,omitempty"`
+	FirstKeptMessageID string `json:"first_kept_message_id,omitempty"`
+	TailStartMessageID string `json:"tail_start_message_id,omitempty"`
+	TokensBefore       int    `json:"tokens_before"`
+	TokensAfter        int    `json:"tokens_after"`
+	SummaryChars       int    `json:"summary_chars"`
+	SummaryModel       string `json:"summary_model,omitempty"`
 }
 
 // TextMessage is a convenience constructor for a single-text-block message.

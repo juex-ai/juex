@@ -235,6 +235,34 @@ func TestLoadInfo_NormalizesNullBlocks(t *testing.T) {
 	}
 }
 
+func TestLoadInfo_NormalizesLegacyIDsAndPreservesCompactionMetadata(t *testing.T) {
+	root := t.TempDir()
+	compact := compactTestMessage("old context summary")
+	compact.Compaction = &llm.CompactionMetadata{
+		Auto:               true,
+		Reason:             "auto",
+		TailStartMessageID: "m2",
+		TokensBefore:       100,
+		TokensAfter:        40,
+		SummaryChars:       12,
+		SummaryModel:       "mock",
+	}
+	dir := makeSession(t, root, "20260515T010203-meta0001",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "legacy"), compact},
+		time.Now())
+
+	_, msgs, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msgs[0].ID != "legacy-000001" || msgs[1].ID != "legacy-000002" {
+		t.Fatalf("legacy IDs = %q, %q", msgs[0].ID, msgs[1].ID)
+	}
+	if msgs[1].Compaction == nil || msgs[1].Compaction.TokensBefore != 100 || msgs[1].Compaction.TailStartMessageID != "m2" {
+		t.Fatalf("compaction metadata = %+v", msgs[1].Compaction)
+	}
+}
+
 func TestLoadInfo_NotFound(t *testing.T) {
 	_, _, err := LoadInfo(filepath.Join(t.TempDir(), "missing"))
 	if err == nil {
