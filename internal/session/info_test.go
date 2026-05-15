@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -47,6 +48,26 @@ func makeSession(t *testing.T, root, id string, msgs []llm.Message, mtime time.T
 	return dir
 }
 
+func writeEvents(t *testing.T, dir string, evs []events.Event) {
+	t.Helper()
+	f, err := os.Create(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		buf, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(append(buf, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestList_SortsByLastActiveDesc(t *testing.T) {
 	root := t.TempDir()
 	older := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
@@ -76,17 +97,18 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 	dir := makeSession(t, root, "20260506T103500-abcd1234",
 		[]llm.Message{
 			llm.TextMessage(llm.RoleUser, "summarise README.md"),
-			messageWithUsage(
-				llm.TextMessage(llm.RoleAssistant, "the readme says hello world"),
-				llm.Usage{InputTokens: 10, OutputTokens: 4},
-			),
+			llm.TextMessage(llm.RoleAssistant, "the readme says hello world"),
 			compactTestMessage("old context summary"),
 			llm.TextMessage(llm.RoleUser, "follow up"),
-			messageWithUsage(
-				llm.TextMessage(llm.RoleAssistant, "done"),
-				llm.Usage{InputTokens: 7, OutputTokens: 3},
-			),
+			llm.TextMessage(llm.RoleAssistant, "done"),
 		}, time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC))
+	writeEvents(t, dir, []events.Event{{
+		Type: "llm.responded",
+		Payload: map[string]any{
+			"token_usage":   llm.Usage{InputTokens: 17, OutputTokens: 7},
+			"context_usage": llm.ContextUsage{Model: "mock", InputTokens: 7, OutputTokens: 3, TotalTokens: 10},
+		},
+	}})
 
 	got, err := List(root)
 	if err != nil {
@@ -107,6 +129,9 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 	if got[0].TokenUsage != (llm.Usage{InputTokens: 17, OutputTokens: 7}) {
 		t.Errorf("token_usage = %+v", got[0].TokenUsage)
 	}
+	if got[0].ContextUsage == nil || got[0].ContextUsage.TotalTokens != 10 {
+		t.Fatalf("context_usage = %+v, want latest total 10", got[0].ContextUsage)
+	}
 	want := time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC)
 	if !got[0].StartedAt.Equal(want) {
 		t.Errorf("started_at = %v, want %v", got[0].StartedAt, want)
@@ -116,11 +141,6 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 func compactTestMessage(text string) llm.Message {
 	msg := llm.TextMessage(llm.RoleUser, text)
 	msg.Kind = llm.MessageKindCompact
-	return msg
-}
-
-func messageWithUsage(msg llm.Message, usage llm.Usage) llm.Message {
-	msg.Usage = &usage
 	return msg
 }
 

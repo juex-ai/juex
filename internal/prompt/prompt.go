@@ -31,30 +31,47 @@ type Builder struct {
 	Now                func() time.Time
 }
 
+type Section struct {
+	Key  string
+	Text string
+}
+
 // Build composes the prompt. Empty or unavailable sources are skipped
 // gracefully — the resulting string is whatever applies.
 func (b *Builder) Build() string {
-	var sections []string
+	return JoinSections(b.Sections())
+}
 
+func (b *Builder) Sections() []Section {
+	var sections []Section
 	if agents := memory.LoadAgentsMD(b.GlobalAgentsMDPath, b.AgentsMDDirs); agents != "" {
-		sections = append(sections, agents)
+		sections = append(sections, Section{Key: "agents", Text: agents})
 	}
 
 	if b.Skills != nil {
 		if s := b.Skills.PromptSection(); s != "" {
-			sections = append(sections, s)
+			sections = append(sections, Section{Key: "skills", Text: s})
 		}
 	}
 
 	if b.Memory != nil {
 		if mem, _ := b.Memory.PromptSection(); mem != "" {
-			sections = append(sections, mem)
+			sections = append(sections, Section{Key: "memory_files", Text: mem})
 		}
 	}
 
-	sections = append(sections, b.operatingContext())
+	sections = append(sections, Section{Key: "operating_context", Text: b.operatingContext()})
+	return sections
+}
 
-	return strings.Join(sections, "\n\n---\n\n")
+func JoinSections(sections []Section) string {
+	parts := make([]string, 0, len(sections))
+	for _, section := range sections {
+		if section.Text != "" {
+			parts = append(parts, section.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n---\n\n")
 }
 
 func (b *Builder) operatingContext() string {

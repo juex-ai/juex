@@ -112,9 +112,23 @@ type Block struct {
 }
 
 type Message struct {
-    Role   Role
-    Blocks []Block
-    Usage  *Usage  // assistant-only provider token usage, persisted when known
+    Role         Role
+    Blocks       []Block
+}
+
+type ContextUsage struct {
+    Model         string
+    ContextWindow int
+    InputTokens   int
+    OutputTokens  int
+    TotalTokens   int
+    Breakdown     []ContextUsagePart
+}
+
+type ContextUsagePart struct {
+    Key    string
+    Label  string
+    Tokens int
 }
 
 type ToolSpec struct {
@@ -246,12 +260,21 @@ type Session struct {
     Alias   string
     Dir     string                // <WorkDir>/.juex/sessions/<id>/
     History []llm.Message
+    TokenUsage llm.Usage
+    ContextUsage *llm.ContextUsage
+}
+
+type Info struct {
+    TokenUsage   llm.Usage
+    ContextUsage *llm.ContextUsage // latest request context footprint for the session
 }
 ```
 
 Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
 `AppendEvent(e)` writes to `events.jsonl`. `session.Load(dir)` re-hydrates
-an existing session in place (used by `--resume`).
+an existing session in place (used by `--resume`). The latest `token_usage` and
+`context_usage` are restored from `llm.responded` events and exposed through
+session `Info`, not through individual messages.
 
 New web sessions are lazy: `POST /api/sessions` allocates an in-memory
 session ID and only creates `.juex/sessions/<id>/` when the first message or

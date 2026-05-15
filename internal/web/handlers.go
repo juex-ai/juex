@@ -86,6 +86,13 @@ type sessionShowResponse struct {
 	Model    string        `json:"model,omitempty"`
 }
 
+func messagesForSessionResponse(msgs []llm.Message) []llm.Message {
+	if msgs == nil {
+		return []llm.Message{}
+	}
+	return msgs
+}
+
 func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id string) {
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
@@ -95,7 +102,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		}
 		writeJSON(w, http.StatusOK, sessionShowResponse{
 			Info:     info,
-			Messages: msgs,
+			Messages: messagesForSessionResponse(msgs),
 			Model:    s.opts.Cfg.Model,
 		})
 		return
@@ -115,7 +122,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	}
 	writeJSON(w, http.StatusOK, sessionShowResponse{
 		Info:     info,
-		Messages: msgs,
+		Messages: messagesForSessionResponse(msgs),
 		Model:    s.opts.Cfg.Model,
 	})
 }

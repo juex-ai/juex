@@ -30,10 +30,12 @@ const (
 )
 
 type Session struct {
-	ID      string
-	Dir     string
-	Alias   string
-	History []llm.Message
+	ID           string
+	Dir          string
+	Alias        string
+	History      []llm.Message
+	TokenUsage   llm.Usage
+	ContextUsage *llm.ContextUsage
 
 	mu          sync.Mutex
 	convFD      *os.File
@@ -187,14 +189,17 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		convFD.Close()
 		return nil, err
 	}
+	tokenUsage, contextUsage, _ := loadLatestSessionUsage(dir)
 	return &Session{
-		ID:          id,
-		Dir:         dir,
-		Alias:       alias,
-		History:     history,
-		convFD:      convFD,
-		eventFD:     eventFD,
-		historyPath: opts.HistoryPath,
+		ID:           id,
+		Dir:          dir,
+		Alias:        alias,
+		History:      history,
+		TokenUsage:   tokenUsage,
+		ContextUsage: contextUsage,
+		convFD:       convFD,
+		eventFD:      eventFD,
+		historyPath:  opts.HistoryPath,
 	}, nil
 }
 
@@ -212,6 +217,24 @@ func (s *Session) Info(now time.Time) Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.infoLocked(now)
+}
+
+func (s *Session) RecordResponseUsage(usage llm.Usage, contextUsage *llm.ContextUsage) llm.Usage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !usage.IsZero() {
+		s.TokenUsage.Add(usage)
+	}
+	if contextUsage != nil {
+		s.ContextUsage = contextUsage
+	}
+	return s.TokenUsage
+}
+
+func (s *Session) TokenUsageSnapshot() llm.Usage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.TokenUsage
 }
 
 // Snapshot returns the current summary and a copy of the in-memory history.
@@ -312,10 +335,9 @@ func (s *Session) infoLocked(now time.Time) Info {
 				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
 			}
 		}
-		if m.Usage != nil {
-			info.TokenUsage.Add(*m.Usage)
-		}
 	}
+	info.TokenUsage = s.TokenUsage
+	info.ContextUsage = s.ContextUsage
 	return info
 }
 
