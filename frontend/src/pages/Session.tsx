@@ -165,6 +165,12 @@ export function Session() {
               detail: `${eventPendingCount(e)} pending input(s) dropped`,
             });
             break;
+          case "pending_input.rejected":
+            setStatus({
+              kind: "error",
+              detail: "pending input queue full",
+            });
+            break;
           case "turn.completed":
             refresh().then(() => {
               setStatus({ kind: "done" });

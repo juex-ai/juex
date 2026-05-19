@@ -100,6 +100,10 @@ func (vp *verbosePrinter) handle(e events.Event) {
 	case "pending_input.dropped":
 		count := intFrom(p["count"])
 		vp.printlnRed(fmt.Sprintf("  + dropped %d pending input(s)", count))
+	case "pending_input.rejected":
+		count := intFrom(p["pending_count"])
+		max := intFrom(p["max_pending_inputs"])
+		vp.printlnRed(fmt.Sprintf("  + rejected pending input (%d/%d)", count, max))
 	case "turn.completed":
 		elapsed := time.Since(vp.tStart).Round(time.Millisecond)
 		vp.printlnDim(fmt.Sprintf("✓ done in %s", elapsed))

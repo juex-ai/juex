@@ -619,7 +619,9 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	eng.MaxPendingInputs = 1
 	requested := make(chan struct{}, 1)
+	rejected := make(chan struct{}, 1)
 	bus.Subscribe("llm.requested", func(e events.Event) { signal(requested) })
+	bus.Subscribe("pending_input.rejected", func(e events.Event) { signal(rejected) })
 	done := make(chan error, 1)
 	go func() {
 		_, err := eng.Turn(context.Background(), "start")
@@ -636,6 +638,7 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	if status.PendingCount != 1 || status.MaxPendingInputs != 1 {
 		t.Fatalf("status = %+v", status)
 	}
+	waitSignal(t, rejected, "pending_input.rejected")
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}

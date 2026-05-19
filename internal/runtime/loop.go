@@ -69,6 +69,7 @@ type Engine struct {
 
 var (
 	ErrNoActiveTurn          = errors.New("runtime: no active turn accepting pending input")
+	ErrActiveTurnExists      = errors.New("runtime: active turn already accepting pending input")
 	ErrPendingInputQueueFull = errors.New("runtime: pending input queue full")
 )
 
@@ -83,6 +84,26 @@ type PendingInputStatus struct {
 // budget breach or context cancellation.
 func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 	return e.TurnMessage(ctx, llm.TextMessage(llm.RoleUser, userInput))
+}
+
+func (e *Engine) TurnWithID(ctx context.Context, userInput, turnID string) (string, error) {
+	return e.TurnMessageWithID(ctx, llm.TextMessage(llm.RoleUser, userInput), turnID)
+}
+
+func (e *Engine) ReserveTurnID(turnID string) error {
+	if e == nil {
+		return ErrNoActiveTurn
+	}
+	if turnID == "" {
+		return fmt.Errorf("runtime: empty turn id")
+	}
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	if e.activeTurnID != "" && e.activeTurnID != turnID {
+		return ErrActiveTurnExists
+	}
+	e.activeTurnID = turnID
+	return nil
 }
 
 func (e *Engine) EnqueuePendingInput(ctx context.Context, userInput string) (PendingInputStatus, error) {
@@ -109,6 +130,13 @@ func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message)
 	}
 	if len(e.pendingInput) >= max {
 		e.pendingMu.Unlock()
+		e.emit(events.Event{Type: "pending_input.rejected", TurnID: turnID, Payload: map[string]any{
+			"input":              userMsg.FirstText(),
+			"kind":               userMsg.Kind,
+			"pending_count":      status.PendingCount,
+			"max_pending_inputs": status.MaxPendingInputs,
+			"reason":             "queue_full",
+		}})
 		return status, ErrPendingInputQueueFull
 	}
 	e.pendingInput = append(e.pendingInput, userMsg)
@@ -141,6 +169,10 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 // It exists for system-originated user turns, such as MCP channel events,
 // that need app metadata while still reaching the provider as normal text.
 func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (out string, err error) {
+	return e.TurnMessageWithID(ctx, userMsg, "")
+}
+
+func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, turnID string) (out string, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -153,8 +185,10 @@ func (e *Engine) TurnMessage(ctx context.Context, userMsg llm.Message) (out stri
 		maxDur = defaultMaxDur
 	}
 
-	turnID := newID()
-	e.beginActiveTurn(turnID)
+	if turnID == "" {
+		turnID = newID()
+	}
+	turnID = e.beginActiveTurn(turnID)
 	activeClosed := false
 	defer func() {
 		if !activeClosed {
@@ -315,10 +349,14 @@ func (e *Engine) effectiveMaxPendingInputs() int {
 	return DefaultMaxPendingInput
 }
 
-func (e *Engine) beginActiveTurn(turnID string) {
+func (e *Engine) beginActiveTurn(turnID string) string {
 	e.pendingMu.Lock()
-	e.activeTurnID = turnID
+	if e.activeTurnID == "" {
+		e.activeTurnID = turnID
+	}
+	turnID = e.activeTurnID
 	e.pendingMu.Unlock()
+	return turnID
 }
 
 func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) error {

@@ -280,9 +280,6 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 			return
 		}
-		if activeTurn == "" {
-			activeTurn = status.TurnID
-		}
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"turn_id":            activeTurn,
 			"queued":             true,
@@ -292,6 +289,11 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	turnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))
+	if err := as.app.Engine.ReserveTurnID(turnID); err != nil {
+		as.cancelMu.Unlock()
+		writeErr(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	as.cancel = cancel
 	as.activeTurn = turnID
@@ -414,7 +416,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {
 	defer as.turnWG.Done()
-	_, err := as.app.Engine.Turn(ctx, prompt)
+	_, err := as.app.Engine.TurnWithID(ctx, prompt, turnID)
 	as.cancelMu.Lock()
 	as.cancel = nil
 	as.activeTurn = ""

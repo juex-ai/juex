@@ -340,6 +340,67 @@ func TestPostTurn_QueuesWhileRunning(t *testing.T) {
 	t.Fatal("timed out waiting for queued input transcript")
 }
 
+func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+	)
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	first, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstTurn struct {
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&firstTurn); err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+
+	second, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"follow up"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(second.Body)
+		t.Fatalf("second status = %d body = %s", second.StatusCode, body)
+	}
+	var queued struct {
+		TurnID       string `json:"turn_id"`
+		Queued       bool   `json:"queued"`
+		PendingCount int    `json:"pending_count"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if !queued.Queued || queued.TurnID != firstTurn.TurnID {
+		t.Fatalf("queued response = %+v, first turn = %+v", queued, firstTurn)
+	}
+	close(prov.release)
+}
+
 func transcriptContains(messages []struct {
 	Role   string `json:"role"`
 	Blocks []struct {

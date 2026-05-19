@@ -428,6 +428,7 @@ directly by SSE events:
 | `tool.completed`, `tool.errored` | status → `running` |
 | `pending_input.queued` | status → `pending <count>` |
 | `pending_input.drained` | status → `running` |
+| `pending_input.rejected`, `pending_input.dropped` | status → `error` |
 | `turn.completed` | refetch, then `done` for 1.5s, then `idle` |
 | `turn.errored` | refetch, status → `error` |
 
