@@ -254,6 +254,11 @@ func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) err
 	}
 	msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("%s:%s:%s", n.ServerName, eventType, n.Content))
 	msg.Kind = llm.MessageKindMCPEvent
+	if _, err := a.Engine.EnqueuePendingMessage(ctx, msg); err == nil {
+		return nil
+	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
+		return err
+	}
 	_, err := a.Engine.TurnMessage(ctx, msg)
 	return err
 }

@@ -323,8 +323,11 @@ until the user expands.
         <ContextUsageLabel usage={contextUsage} />
         <TokenUsageLabel usage={tokenUsage} />
       </PromptInputTools>
-      {status.kind === "running" || status.kind === "tool"
-        ? <PromptInputButton variant="outline" onClick={onInterrupt}>Stop</PromptInputButton>
+      {status.kind === "running" || status.kind === "tool" || status.kind === "pending"
+        ? <>
+            <PromptInputButton variant="outline" onClick={onInterrupt}>Stop</PromptInputButton>
+            <PromptInputSubmit />
+          </>
         : <PromptInputSubmit />}
     </PromptInputFooter>
   </PromptInputBody>
@@ -332,8 +335,9 @@ until the user expands.
 ```
 
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>`
-handles both natively. `Stop` and `Send` are mutually exclusive; the
-composer always shows exactly one of them.
+handles both natively. While a turn is running, `Stop` cancels the current
+turn and `Send` queues the typed text as pending input for the next provider
+call.
 
 `ContextUsageLabel` is a compact `context <total>` chip for the latest
 successful provider request. The total uses provider-reported
@@ -422,6 +426,8 @@ directly by SSE events:
 | `turn.started` | status → `running` |
 | `tool.requested` | status → `tool: <name>` |
 | `tool.completed`, `tool.errored` | status → `running` |
+| `pending_input.queued` | status → `pending <count>` |
+| `pending_input.drained` | status → `running` |
 | `turn.completed` | refetch, then `done` for 1.5s, then `idle` |
 | `turn.errored` | refetch, status → `error` |
 

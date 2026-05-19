@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
@@ -91,6 +93,90 @@ func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
 	}
 	if got := user.FirstText(); got != "local:message:[realtime] hello alice" {
 		t.Fatalf("user text = %q", got)
+	}
+}
+
+type blockingAppProvider struct {
+	started chan struct{}
+	release chan struct{}
+
+	mu        sync.Mutex
+	calls     int
+	histories [][]llm.Message
+}
+
+func newBlockingAppProvider() *blockingAppProvider {
+	return &blockingAppProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (p *blockingAppProvider) Name() string { return "blocking" }
+
+func (p *blockingAppProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	p.mu.Lock()
+	idx := p.calls
+	p.calls++
+	p.histories = append(p.histories, append([]llm.Message(nil), h...))
+	p.mu.Unlock()
+	if idx == 0 {
+		close(p.started)
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-p.release:
+		}
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn}, nil
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "handled queued event"), StopReason: llm.StopEndTurn}, nil
+}
+
+func TestApp_MCPNotificationQueuesDuringActiveTurn(t *testing.T) {
+	dir := t.TempDir()
+	prov := newBlockingAppProvider()
+	a, err := New(Options{
+		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: prov,
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		out, err := a.Run(context.Background(), "active")
+		if err == nil && out != "handled queued event" {
+			err = errors.New("unexpected output: " + out)
+		}
+		done <- err
+	}()
+	select {
+	case <-prov.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
+	}
+	if err := a.handleMCPNotification(context.Background(), mcp.Notification{
+		ServerName: "local",
+		EventType:  "message",
+		Content:    "queued",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(prov.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Session.History) != 4 {
+		t.Fatalf("history len = %d, want active user, first assistant, queued event, final assistant", len(a.Session.History))
+	}
+	if a.Session.History[2].Kind != llm.MessageKindMCPEvent {
+		t.Fatalf("queued message kind = %q", a.Session.History[2].Kind)
+	}
+	if got := a.Session.History[2].FirstText(); got != "local:message:queued" {
+		t.Fatalf("queued text = %q", got)
 	}
 }
 
