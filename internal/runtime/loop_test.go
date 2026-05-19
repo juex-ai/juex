@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -203,6 +204,22 @@ func messagesText(msgs []llm.Message) string {
 		}
 	}
 	return sb.String()
+}
+
+func signal(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+func waitSignal(t *testing.T, ch <-chan struct{}, name string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+	}
 }
 
 func TestCompact_ReturnsAppendedMessageIDAndMetadata(t *testing.T) {
@@ -491,6 +508,139 @@ func TestTurn_OneToolCallThenEnd(t *testing.T) {
 	}
 	if atomic.LoadInt32(&toolEvents) < 2 {
 		t.Errorf("expected requested+errored events, got %d", toolEvents)
+	}
+}
+
+func TestTurn_DrainsPendingInputAfterToolResults(t *testing.T) {
+	prov := &mockProvider{
+		delay: 50 * time.Millisecond,
+		script: []llm.Response{
+			{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "echo", Input: map[string]any{}},
+			}}, StopReason: llm.StopToolUse},
+			{Message: llm.TextMessage(llm.RoleAssistant, "steered"), StopReason: llm.StopEndTurn},
+		},
+	}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "echo",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "tool-ok", nil
+		},
+	})
+	requested := make(chan struct{}, 1)
+	var queued, drained int32
+	bus.Subscribe("llm.requested", func(e events.Event) { signal(requested) })
+	bus.Subscribe("pending_input.queued", func(e events.Event) { atomic.AddInt32(&queued, 1) })
+	bus.Subscribe("pending_input.drained", func(e events.Event) { atomic.AddInt32(&drained, 1) })
+
+	done := make(chan error, 1)
+	go func() {
+		out, err := eng.Turn(context.Background(), "start")
+		if err == nil && out != "steered" {
+			err = fmt.Errorf("out = %q", out)
+		}
+		done <- err
+	}()
+	waitSignal(t, requested, "llm.requested")
+	status, err := eng.EnqueuePendingInput(context.Background(), "please steer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingCount != 1 {
+		t.Fatalf("pending count = %d", status.PendingCount)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&queued) != 1 || atomic.LoadInt32(&drained) != 1 {
+		t.Fatalf("pending events queued=%d drained=%d", queued, drained)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want 2", len(prov.histories))
+	}
+	second := prov.histories[1]
+	if len(second) != 4 {
+		t.Fatalf("second history len = %d, history=%+v", len(second), second)
+	}
+	if second[2].Role != llm.RoleUser || second[2].Blocks[0].Type != llm.BlockToolResult {
+		t.Fatalf("tool result not before pending input: %+v", second)
+	}
+	if got := second[3].FirstText(); got != "please steer" {
+		t.Fatalf("pending input text = %q", got)
+	}
+}
+
+func TestTurn_PendingInputContinuesAfterPlainResponse(t *testing.T) {
+	prov := &mockProvider{
+		delay: 50 * time.Millisecond,
+		script: []llm.Response{
+			{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+			{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+		},
+	}
+	eng, bus := newEngine(t, prov, false)
+	requested := make(chan struct{}, 1)
+	bus.Subscribe("llm.requested", func(e events.Event) { signal(requested) })
+
+	done := make(chan error, 1)
+	go func() {
+		out, err := eng.Turn(context.Background(), "start")
+		if err == nil && out != "second" {
+			err = fmt.Errorf("out = %q", out)
+		}
+		done <- err
+	}()
+	waitSignal(t, requested, "llm.requested")
+	if _, err := eng.EnqueuePendingInput(context.Background(), "follow up"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want second call for pending input", len(prov.histories))
+	}
+	second := prov.histories[1]
+	if got := second[len(second)-1].FirstText(); got != "follow up" {
+		t.Fatalf("second call last message = %q", got)
+	}
+}
+
+func TestEngine_PendingInputBackpressure(t *testing.T) {
+	prov := &mockProvider{
+		delay: 80 * time.Millisecond,
+		script: []llm.Response{
+			{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+			{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+		},
+	}
+	eng, bus := newEngine(t, prov, false)
+	eng.MaxPendingInputs = 1
+	requested := make(chan struct{}, 1)
+	rejected := make(chan struct{}, 1)
+	bus.Subscribe("llm.requested", func(e events.Event) { signal(requested) })
+	bus.Subscribe("pending_input.rejected", func(e events.Event) { signal(rejected) })
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "start")
+		done <- err
+	}()
+	waitSignal(t, requested, "llm.requested")
+	if _, err := eng.EnqueuePendingInput(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := eng.EnqueuePendingInput(context.Background(), "two")
+	if !errors.Is(err, ErrPendingInputQueueFull) {
+		t.Fatalf("err = %v, want ErrPendingInputQueueFull", err)
+	}
+	if status.PendingCount != 1 || status.MaxPendingInputs != 1 {
+		t.Fatalf("status = %+v", status)
+	}
+	waitSignal(t, rejected, "pending_input.rejected")
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

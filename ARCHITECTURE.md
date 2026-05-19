@@ -328,6 +328,7 @@ type Engine struct {
     Prompt    *prompt.Builder
     MaxIters  int           // default 25
     MaxDur    time.Duration // default 5min
+    MaxPendingInputs int    // default 16
 }
 func (e *Engine) Turn(ctx, userInput) (string, error)
 ```
@@ -335,6 +336,13 @@ func (e *Engine) Turn(ctx, userInput) (string, error)
 `Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
 single LLM response run via `errgroup`-style goroutines; results are
 re-attached to history in the original order.
+
+While a turn is active, user messages and critical external events may be
+queued as pending input. The queue is bounded (`MaxPendingInputs`), rejects
+overflow loudly, and drains only before the next provider call. That keeps
+assistant `tool_use` and user `tool_result` adjacency intact while still
+allowing steering messages to join the active turn without mid-stream
+interrupts or rollback.
 
 ### 3.7 CLI (cobra)
 

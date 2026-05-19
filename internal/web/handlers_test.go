@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,8 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/llm"
 )
 
 // seedSession writes a minimal conversation.jsonl under
@@ -166,6 +171,251 @@ func TestPostTurn_ConflictsWhileCompacting(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
+}
+
+type pendingProvider struct {
+	started   chan struct{}
+	release   chan struct{}
+	responses []llm.Response
+
+	mu        sync.Mutex
+	calls     int
+	histories [][]llm.Message
+}
+
+func newPendingProvider(responses ...llm.Response) *pendingProvider {
+	return &pendingProvider{
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+		responses: responses,
+	}
+}
+
+func (p *pendingProvider) Name() string { return "pending-test" }
+
+func (p *pendingProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	p.mu.Lock()
+	idx := p.calls
+	p.calls++
+	p.histories = append(p.histories, append([]llm.Message(nil), h...))
+	p.mu.Unlock()
+	if idx == 0 {
+		close(p.started)
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-p.release:
+		}
+	}
+	if idx >= len(p.responses) {
+		return llm.Response{}, context.DeadlineExceeded
+	}
+	return p.responses[idx], nil
+}
+
+func (p *pendingProvider) history(idx int) []llm.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if idx < 0 || idx >= len(p.histories) {
+		return nil
+	}
+	return append([]llm.Message(nil), p.histories[idx]...)
+}
+
+func TestPostTurn_QueuesWhileRunning(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+	)
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	first, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(first.Body)
+		first.Body.Close()
+		t.Fatalf("first status = %d body = %s", first.StatusCode, body)
+	}
+	var firstTurn struct {
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&firstTurn); err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+	select {
+	case <-prov.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	second, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"follow up"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(second.Body)
+		t.Fatalf("second status = %d body = %s", second.StatusCode, body)
+	}
+	var queued struct {
+		TurnID       string `json:"turn_id"`
+		Queued       bool   `json:"queued"`
+		PendingCount int    `json:"pending_count"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if !queued.Queued || queued.TurnID != firstTurn.TurnID || queued.PendingCount != 1 {
+		t.Fatalf("queued response = %+v, first turn = %+v", queued, firstTurn)
+	}
+
+	statusResp, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/turns/" + firstTurn.TurnID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status struct {
+		State        string `json:"state"`
+		PendingCount int    `json:"pending_count"`
+	}
+	if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	statusResp.Body.Close()
+	if status.State != "running" || status.PendingCount != 1 {
+		t.Fatalf("turn status = %+v", status)
+	}
+
+	close(prov.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct {
+			Messages []struct {
+				Role   string `json:"role"`
+				Blocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"blocks"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
+			show.Body.Close()
+			t.Fatal(err)
+		}
+		show.Body.Close()
+		if transcriptContains(parsed.Messages, "follow up") && transcriptContains(parsed.Messages, "second") {
+			secondHistory := prov.history(1)
+			if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "follow up" {
+				t.Fatalf("second provider history = %+v", secondHistory)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for queued input transcript")
+}
+
+func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+	)
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	first, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstTurn struct {
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&firstTurn); err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+
+	second, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"follow up"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(second.Body)
+		t.Fatalf("second status = %d body = %s", second.StatusCode, body)
+	}
+	var queued struct {
+		TurnID       string `json:"turn_id"`
+		Queued       bool   `json:"queued"`
+		PendingCount int    `json:"pending_count"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	if !queued.Queued || queued.TurnID != firstTurn.TurnID {
+		t.Fatalf("queued response = %+v, first turn = %+v", queued, firstTurn)
+	}
+	close(prov.release)
+}
+
+func transcriptContains(messages []struct {
+	Role   string `json:"role"`
+	Blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"blocks"`
+}, text string) bool {
+	for _, msg := range messages {
+		for _, block := range msg.Blocks {
+			if block.Type == "text" && block.Text == text {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestGetSessionContext(t *testing.T) {

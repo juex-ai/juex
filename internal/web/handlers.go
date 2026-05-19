@@ -254,14 +254,49 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	as.cancelMu.Lock()
-	if as.cancel != nil || as.compacting {
+	if as.compacting {
 		as.cancelMu.Unlock()
 		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}
+	if as.cancel != nil {
+		activeTurn := as.activeTurn
+		as.cancelMu.Unlock()
+		status, err := as.app.Engine.EnqueuePendingInput(r.Context(), req.Prompt)
+		if err != nil {
+			if errors.Is(err, runtime.ErrPendingInputQueueFull) {
+				writeJSON(w, http.StatusTooManyRequests, errorJSON{
+					Error:      "pending_input_full",
+					Message:    fmt.Sprintf("pending input queue full (%d/%d)", status.PendingCount, status.MaxPendingInputs),
+					Suggestion: "wait for the active turn to drain pending input before sending more",
+					Retryable:  true,
+				})
+				return
+			}
+			if errors.Is(err, runtime.ErrNoActiveTurn) {
+				writeErr(w, http.StatusConflict, "conflict", "turn is not accepting pending input")
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"turn_id":            activeTurn,
+			"queued":             true,
+			"pending_count":      status.PendingCount,
+			"max_pending_inputs": status.MaxPendingInputs,
+		})
+		return
+	}
 	turnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))
+	if err := as.app.Engine.ReserveTurnID(turnID); err != nil {
+		as.cancelMu.Unlock()
+		writeErr(w, http.StatusConflict, "conflict", err.Error())
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	as.cancel = cancel
+	as.activeTurn = turnID
 	as.turnsMu.Lock()
 	as.turns[turnID] = &turnState{ID: turnID, State: "running"}
 	as.turnsMu.Unlock()
@@ -294,6 +329,11 @@ func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, tu
 	if errStr != "" {
 		resp["error"] = errStr
 	}
+	if state == "running" {
+		pending := as.app.Engine.PendingInputStatus()
+		resp["pending_count"] = pending.PendingCount
+		resp["max_pending_inputs"] = pending.MaxPendingInputs
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -308,6 +348,7 @@ func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id stri
 	if as.cancel != nil {
 		as.cancel()
 		as.cancel = nil
+		as.activeTurn = ""
 		cancelled = true
 	}
 	as.cancelMu.Unlock()
@@ -375,9 +416,10 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 // bookkeeping when it finishes.
 func (s *Server) runTurn(ctx context.Context, as *activeSession, turnID, prompt string) {
 	defer as.turnWG.Done()
-	_, err := as.app.Engine.Turn(ctx, prompt)
+	_, err := as.app.Engine.TurnWithID(ctx, prompt, turnID)
 	as.cancelMu.Lock()
 	as.cancel = nil
+	as.activeTurn = ""
 	as.cancelMu.Unlock()
 	as.turnsMu.Lock()
 	if t, ok := as.turns[turnID]; ok {

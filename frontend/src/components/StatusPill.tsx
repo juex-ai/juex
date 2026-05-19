@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 export type Status =
   | { kind: "idle" }
   | { kind: "running" }
+  | { kind: "pending"; count: number }
   | { kind: "tool"; name: string }
   | { kind: "done" }
   | { kind: "error"; detail?: string };
@@ -10,6 +11,7 @@ export type Status =
 const styles: Record<Status["kind"], string> = {
   idle: "bg-muted text-muted-foreground",
   running: "bg-juex-pending/15 text-juex-pending",
+  pending: "bg-juex-pending/15 text-juex-pending",
   tool: "bg-juex-tool/15 text-juex-tool",
   done: "bg-juex-done/15 text-juex-done",
   error: "bg-juex-error/15 text-juex-error",
@@ -21,12 +23,15 @@ export function StatusPill({ status }: { status: Status }) {
       ? "idle"
       : status.kind === "running"
         ? "running..."
+        : status.kind === "pending"
+          ? `pending ${status.count}`
         : status.kind === "tool"
           ? `tool: ${status.name}`
           : status.kind === "done"
             ? "done"
             : "error";
-  const isAnimated = status.kind === "running" || status.kind === "tool";
+  const isAnimated =
+    status.kind === "running" || status.kind === "pending" || status.kind === "tool";
   return (
     <div className="flex min-w-0 items-center gap-2">
       <span

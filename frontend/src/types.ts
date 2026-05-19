@@ -113,6 +113,9 @@ export interface DeleteSessionResponse {
 
 export interface StartTurnResponse {
   turn_id: string;
+  queued?: boolean;
+  pending_count?: number;
+  max_pending_inputs?: number;
 }
 
 export type TurnState = "running" | "done" | "errored";
@@ -120,6 +123,8 @@ export type TurnState = "running" | "done" | "errored";
 export interface TurnStatusResponse {
   state: TurnState;
   error?: string;
+  pending_count?: number;
+  max_pending_inputs?: number;
 }
 
 export interface InterruptResponse {

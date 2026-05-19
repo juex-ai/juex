@@ -152,6 +152,25 @@ export function Session() {
             appendToolResult(e, true);
             setStatus({ kind: "running" });
             break;
+          case "pending_input.queued":
+            appendPendingInput(eventInput(e), eventKind(e));
+            setStatus({ kind: "pending", count: eventPendingCount(e) });
+            break;
+          case "pending_input.drained":
+            setStatus({ kind: "running" });
+            break;
+          case "pending_input.dropped":
+            setStatus({
+              kind: "error",
+              detail: `${eventPendingCount(e)} pending input(s) dropped`,
+            });
+            break;
+          case "pending_input.rejected":
+            setStatus({
+              kind: "error",
+              detail: "pending input queue full",
+            });
+            break;
           case "turn.completed":
             refresh().then(() => {
               setStatus({ kind: "done" });
@@ -199,8 +218,13 @@ export function Session() {
   async function handleSend(prompt: string) {
     try {
       const turn = await startTurn(id, prompt);
-      appendLiveTurn(turn.turn_id, prompt, undefined, "optimistic");
-      setStatus({ kind: "running" });
+      if (turn.queued) {
+        appendPendingInput(prompt, undefined);
+        setStatus({ kind: "pending", count: turn.pending_count ?? 0 });
+      } else {
+        appendLiveTurn(turn.turn_id, prompt, undefined, "optimistic");
+        setStatus({ kind: "running" });
+      }
     } catch (e) {
       console.error("startTurn failed", e);
       setStatus({
@@ -250,7 +274,10 @@ export function Session() {
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
   const contextUsage = liveContextUsage ?? data.context_usage;
-  const busy = status.kind === "running" || status.kind === "tool";
+  const busy =
+    status.kind === "running" ||
+    status.kind === "pending" ||
+    status.kind === "tool";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -294,12 +321,15 @@ export function Session() {
                   <TokenUsageLabel usage={tokenUsage} />
                 </PromptInputTools>
                 {busy ? (
-                  <PromptInputButton
-                    variant="outline"
-                    onClick={() => void handleInterrupt()}
-                  >
-                    Stop
-                  </PromptInputButton>
+                  <>
+                    <PromptInputButton
+                      variant="outline"
+                      onClick={() => void handleInterrupt()}
+                    >
+                      Stop
+                    </PromptInputButton>
+                    <PromptInputSubmit />
+                  </>
                 ) : (
                   <>
                     <PromptInputButton
@@ -350,6 +380,30 @@ export function Session() {
           turn_id: turnID,
           pending: true,
           blocks: [],
+        },
+      ];
+    });
+  }
+
+  function appendPendingInput(input: string | undefined, kind: string | undefined) {
+    if (!input) return;
+    setLiveMessages((prev) => {
+      if (
+        prev.some(
+          (m) =>
+            m.role === "user" &&
+            m.kind === "pending_input" &&
+            messageText(m) === input,
+        )
+      ) {
+        return prev;
+      }
+      return [
+        ...prev,
+        {
+          role: "user",
+          kind: kind || "pending_input",
+          blocks: [{ type: "text", text: input }],
         },
       ];
     });
@@ -469,6 +523,12 @@ function eventInput(e: { payload?: unknown }): string | undefined {
 
 function eventKind(e: { payload?: unknown }): string | undefined {
   return eventString(e, "kind");
+}
+
+function eventPendingCount(e: { payload?: unknown }): number {
+  if (!e.payload || typeof e.payload !== "object") return 0;
+  const payload = e.payload as Record<string, unknown>;
+  return eventNumber(payload.pending_count) ?? eventNumber(payload.count) ?? 0;
 }
 
 function eventTokenUsage(e: { payload?: unknown }): TokenUsage | undefined {

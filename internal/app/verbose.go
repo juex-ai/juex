@@ -86,6 +86,24 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		name, _ := p["name"].(string)
 		errMsg, _ := p["error"].(string)
 		vp.printlnRed(fmt.Sprintf("  ← %s: ERROR %s", name, errMsg))
+	case "pending_input.queued":
+		count := intFrom(p["pending_count"])
+		max := intFrom(p["max_pending_inputs"])
+		if max > 0 {
+			vp.printlnDim(fmt.Sprintf("  + pending input (%d/%d)", count, max))
+		} else {
+			vp.printlnDim(fmt.Sprintf("  + pending input (%d)", count))
+		}
+	case "pending_input.drained":
+		count := intFrom(p["count"])
+		vp.printlnDim(fmt.Sprintf("  + drained %d pending input(s)", count))
+	case "pending_input.dropped":
+		count := intFrom(p["count"])
+		vp.printlnRed(fmt.Sprintf("  + dropped %d pending input(s)", count))
+	case "pending_input.rejected":
+		count := intFrom(p["pending_count"])
+		max := intFrom(p["max_pending_inputs"])
+		vp.printlnRed(fmt.Sprintf("  + rejected pending input (%d/%d)", count, max))
 	case "turn.completed":
 		elapsed := time.Since(vp.tStart).Round(time.Millisecond)
 		vp.printlnDim(fmt.Sprintf("✓ done in %s", elapsed))
