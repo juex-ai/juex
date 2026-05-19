@@ -35,7 +35,17 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 				cfg, _ := loadConfig(flags)
 				info.WorkDir = cfg.WorkDir
 				info.ConfigFile = configFileForPlan(flags)
-				info.ProviderType = cfg.ProviderType
+				if cfg.ProviderID != "" || cfg.ProviderType != "" || cfg.ProviderProtocol != "" {
+					if profile, err := cfg.ProviderProfile(); err == nil {
+						info.ProviderID = profile.ID
+						info.ProviderType = profile.Type
+						info.Protocol = string(profile.Protocol)
+					} else {
+						info.ProviderID = cfg.ProviderID
+						info.ProviderType = cfg.ProviderType
+						info.Protocol = cfg.ProviderProtocol
+					}
+				}
 				info.Model = cfg.Model
 				info.BaseURL = cfg.BaseURL
 			}

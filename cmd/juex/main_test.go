@@ -85,7 +85,7 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		if err := cmd.Run(); err == nil {
 			t.Fatalf("expected error, stderr was: %s", stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "PROVIDER_API_TYPE") {
+		if !strings.Contains(stderr.String(), "provider id/type/protocol") {
 			t.Fatalf("stderr: %s", stderr.String())
 		}
 	})

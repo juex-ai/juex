@@ -16,25 +16,40 @@ import (
 // every OpenAI-compatible endpoint (DeepSeek, OpenRouter, Ollama, ...) by
 // swapping option.WithBaseURL.
 type openAIProvider struct {
-	cfg    Config
-	client openai.Client
+	cfg     Config
+	profile ProviderProfile
+	client  openai.Client
 }
 
 func NewOpenAI(cfg Config, _ any) Provider {
+	profile, err := ResolveProfile(cfg)
+	if err != nil {
+		profile = customProfile(firstNonEmpty(cfg.ID, cfg.Type, "openai"))
+		profile.APIKey = cfg.APIKey
+		profile.Model = cfg.Model
+		profile.BaseURL = cfg.BaseURL
+	}
 	opts := []option.RequestOption{
-		option.WithAPIKey(cfg.APIKey),
+		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(providerMaxRetries),
 	}
-	if cfg.BaseURL != "" {
-		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	if profile.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(profile.BaseURL))
+	}
+	for k, v := range profile.Headers {
+		opts = append(opts, option.WithHeader(k, v))
+	}
+	for k, v := range profile.Query {
+		opts = append(opts, option.WithQuery(k, v))
 	}
 	return &openAIProvider{
-		cfg:    cfg,
-		client: openai.NewClient(opts...),
+		cfg:     profile.Config(),
+		profile: profile,
+		client:  openai.NewClient(opts...),
 	}
 }
 
-func (p *openAIProvider) Name() string { return "openai:" + p.cfg.Model }
+func (p *openAIProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
 
 func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
 	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
@@ -45,17 +60,19 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	if sys != "" {
 		msgs = append(msgs, openai.SystemMessage(sys))
 	}
-	msgs = append(msgs, toOpenAIMessages(history)...)
+	msgs = append(msgs, toOpenAIMessages(history, p.profile)...)
 
 	params := openai.ChatCompletionNewParams{
-		Model:    p.cfg.Model,
+		Model:    p.profile.Model,
 		Messages: msgs,
-		Tools:    toOpenAITools(tools),
 	}
-	if p.cfg.ThinkingEffort != "" {
-		params.ReasoningEffort = shared.ReasoningEffort(p.cfg.ThinkingEffort)
+	if p.profile.Capabilities.Tools {
+		params.Tools = toOpenAITools(tools)
 	}
-	if opts.MaxOutputTokens > 0 {
+	if p.profile.Capabilities.ReasoningEffort && p.profile.ThinkingEffort != "" {
+		params.ReasoningEffort = shared.ReasoningEffort(p.profile.ThinkingEffort)
+	}
+	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
 	}
 
@@ -107,7 +124,7 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 // toOpenAIMessages converts Juex history into OpenAI-shaped messages,
 // splitting user-role tool_result blocks into role=tool messages so the
 // tool_call_id <-> tool message linkage is preserved.
-func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnion {
+func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatCompletionMessageParamUnion {
 	var out []openai.ChatCompletionMessageParamUnion
 	for _, m := range compactHistoryForProvider(history) {
 		switch m.Role {
@@ -121,6 +138,9 @@ func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnio
 					}
 					userText.WriteString(b.Text)
 				case BlockToolResult:
+					if !profile.Capabilities.Tools {
+						continue
+					}
 					if userText.Len() > 0 {
 						out = append(out, openai.UserMessage(userText.String()))
 						userText.Reset()
@@ -141,8 +161,13 @@ func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnio
 				case BlockText:
 					textParts = append(textParts, b.Text)
 				case BlockReasoning:
-					reasoningParts = append(reasoningParts, b.Text)
+					if profile.Capabilities.ReasoningReplay {
+						reasoningParts = append(reasoningParts, b.Text)
+					}
 				case BlockToolUse:
+					if !profile.Capabilities.Tools {
+						continue
+					}
 					argBytes, _ := json.Marshal(b.Input)
 					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
 						ID: b.ToolUseID,
@@ -161,15 +186,13 @@ func toOpenAIMessages(history []Message) []openai.ChatCompletionMessageParamUnio
 			am.ToolCalls = toolCalls
 			if len(reasoningParts) > 0 {
 				joined := strings.Join(reasoningParts, "\n")
-				// Set every known field name. Providers that don't recognise a
-				// given field ignore it; providers that require theirs (DeepSeek
-				// rejects requests that omit `reasoning_content` after a thinking
-				// turn) still get what they need.
-				am.SetExtraFields(map[string]any{
-					"reasoning_content": joined,
-					"reasoning":         joined,
-					"thinking":          joined,
-				})
+				extra := map[string]any{}
+				for _, field := range profile.Compat.ReasoningReplayFields {
+					extra[field] = joined
+				}
+				if len(extra) > 0 {
+					am.SetExtraFields(extra)
+				}
 			}
 			out = append(out, openai.ChatCompletionMessageParamUnion{OfAssistant: &am})
 		case RoleSystem:

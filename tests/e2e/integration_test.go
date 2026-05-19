@@ -24,11 +24,14 @@ import (
 )
 
 var liveConfigEnvKeys = []string{
+	"PROVIDER_API_ID",
 	"PROVIDER_API_TYPE",
+	"PROVIDER_API_PROTOCOL",
 	"PROVIDER_API_BASE",
 	"PROVIDER_API_KEY",
 	"PROVIDER_API_MODEL",
 	"PROVIDER_THINKING_EFFORT",
+	"PROVIDER_CONTEXT_WINDOW",
 }
 
 var defaultLiveConfigNames = []string{
@@ -92,7 +95,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 			t.Logf("%s has no API key set; skipping it", path)
 			continue
 		}
-		if cfg.ProviderType == "" || cfg.Model == "" {
+		if (cfg.ProviderType == "" && cfg.ProviderID == "" && cfg.ProviderProtocol == "") || cfg.Model == "" {
 			t.Logf("%s has incomplete provider config; skipping it", path)
 			continue
 		}

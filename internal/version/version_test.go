@@ -32,7 +32,9 @@ func TestVerbose_WithRuntimeContext(t *testing.T) {
 	info := Build()
 	info.WorkDir = "/tmp/x"
 	info.ConfigFile = "/tmp/juex.yaml"
+	info.ProviderID = "openai"
 	info.ProviderType = "openai"
+	info.Protocol = "openai/responses"
 	info.Model = "gpt-test"
 	info.BaseURL = "https://x"
 
@@ -40,7 +42,9 @@ func TestVerbose_WithRuntimeContext(t *testing.T) {
 	for _, want := range []string{
 		"work_dir:      /tmp/x",
 		"config_file:   /tmp/juex.yaml",
+		"provider_id:   openai",
 		"provider_type: openai",
+		"protocol:      openai/responses",
 		"model:         gpt-test",
 		"base_url:      https://x",
 	} {

@@ -41,7 +41,9 @@ type errorJSON struct {
 // Derivable paths (memory_dir / sessions_dir under <work_dir>/.juex)
 // are intentionally omitted — readers can reconstruct them from work_dir.
 type dryRunPlan struct {
+	ProviderID   string         `json:"provider_id,omitempty"`
 	ProviderType string         `json:"provider_type"`
+	Protocol     string         `json:"protocol,omitempty"`
 	Model        string         `json:"model"`
 	BaseURL      string         `json:"base_url"`
 	WorkDir      string         `json:"work_dir"`
@@ -120,7 +122,7 @@ execution is printed and the process exits with code 10.`,
 			cfg, err := loadConfig(flags)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"set provider.type / provider.api_key / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
+					"set provider.id or provider.type plus provider.api_key / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
 			}
 
 			prompt := strings.Join(args, " ")
@@ -145,7 +147,7 @@ execution is printed and the process exits with code 10.`,
 			})
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"check provider.type / provider.api_key / provider.model in .juex/juex.yaml", false)
+					"check provider.id/provider.protocol or provider.type plus provider.api_key / provider.model in .juex/juex.yaml", false)
 			}
 			defer a.Close()
 
@@ -212,8 +214,23 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 			skillSummaries = append(skillSummaries, skillSummary{Name: s.Name, Path: s.Path})
 		}
 	}
+	providerID := cfg.ProviderID
+	providerType := cfg.ProviderType
+	protocol := cfg.ProviderProtocol
+	if cfg.ProviderID != "" || cfg.ProviderType != "" || cfg.ProviderProtocol != "" {
+		profile, err := cfg.ProviderProfile()
+		if err != nil {
+			return emit(jsonOut, cmd.ErrOrStderr(), err,
+				"check provider.id / provider.type / provider.protocol in .juex/juex.yaml", false)
+		}
+		providerID = profile.ID
+		providerType = profile.Type
+		protocol = string(profile.Protocol)
+	}
 	plan := dryRunPlan{
-		ProviderType: cfg.ProviderType,
+		ProviderID:   providerID,
+		ProviderType: providerType,
+		Protocol:     protocol,
 		Model:        cfg.Model,
 		BaseURL:      cfg.BaseURL,
 		WorkDir:      cfg.WorkDir,

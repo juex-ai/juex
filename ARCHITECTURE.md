@@ -41,11 +41,13 @@ juex/
 │   ├── version/    version.go    # ldflags-injected build metadata
 │   ├── config/     config.go     # juex.yaml loader + WorkDir-driven paths
 │   ├── events/     bus.go        # in-process EventBus (glob)
-│   ├── llm/                      # canonical Message/Block + provider adapters
+│   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
 │   │   ├── provider.go
+│   │   ├── profile.go            # provider presets, protocol, capabilities
 │   │   ├── anthropic.go          # wraps anthropic-sdk-go
-│   │   └── openai.go             # wraps openai-go (handles DeepSeek too)
+│   │   ├── openai.go             # Chat Completions / compatible chat
+│   │   └── openai_responses.go   # OpenAI Responses adapter
 │   ├── tools/                    # tool registry + 5 builtins
 │   │   ├── registry.go
 │   │   └── builtin.go
@@ -143,6 +145,30 @@ type Response struct {
     Usage      Usage
 }
 
+type Protocol string  // anthropic/messages | openai/responses | openai/chat | openai-compatible/chat
+
+type ProviderProfile struct {
+    ID             string
+    Type           string
+    Protocol       Protocol
+    BaseURL        string
+    APIKey         string
+    Model          string
+    ThinkingEffort string
+    Headers        map[string]string
+    Query          map[string]string
+    Capabilities   ProviderCapabilities
+    Compat         CompatOptions
+}
+
+type ProviderCapabilities struct {
+    Tools           bool
+    Streaming       bool
+    ReasoningEffort bool
+    ReasoningReplay bool
+    MaxOutputTokens bool
+}
+
 // internal/llm/provider.go
 type Provider interface {
     Name() string
@@ -150,20 +176,31 @@ type Provider interface {
 }
 ```
 
-Two implementations (`anthropic.go`, `openai.go`) wrap the official Go SDKs
-(`anthropic-sdk-go`, `openai-go`). Both honour `PROVIDER_API_BASE` from the
-env via `option.WithBaseURL`, so the OpenAI provider also covers DeepSeek /
-OpenRouter / Ollama. SDK types are confined to those two files; every other
-layer sees only the canonical types. Both SDK clients use `WithMaxRetries(10)`;
-the SDKs apply exponential backoff for recoverable transport/API failures
-such as network errors and 5xx responses, while ordinary request errors are
-returned immediately.
+Provider profiles resolve a user config into one wire protocol, a small preset,
+and explicit capability gates. Current protocol families are
+`anthropic/messages`, `openai/responses`, `openai/chat`, and
+`openai-compatible/chat`. Presets exist for `openai`, `anthropic`,
+`openrouter`, `deepseek`, `qwen`/`dashscope`, `moonshot`/`kimi`, `minimax`,
+`volcengine`/`ark`, and `openai-compatible`; unknown custom profiles should
+set `provider.protocol` explicitly.
 
-The OpenAI adapter additionally captures `reasoning_content` from non-OpenAI
-endpoints (DeepSeek thinking models) and round-trips it on the next request,
-because those endpoints reject requests that omit it after a thinking turn.
-The Anthropic adapter does the same for `thinking` and `redacted_thinking`
-content blocks.
+SDK types remain confined to adapter files. `anthropic.go` wraps
+`anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
+OpenAI-compatible Chat through `openai-go`; `openai_responses.go` wraps the
+OpenAI Responses API. Both SDK clients use `WithMaxRetries(10)`; the SDKs
+apply exponential backoff for recoverable transport/API failures such as
+network errors and 5xx responses, while ordinary request errors are returned
+immediately.
+
+Capability gates decide which request features are sent. If a profile disables
+tools, tool specs and provider-facing tool history are omitted. If it disables
+reasoning effort or reasoning replay, those fields are not emitted. This keeps
+unsupported provider features from leaking into the wire payload instead of
+relying on every endpoint to ignore unknown fields. Reasoning replay fields are
+provider-compatible knobs: OpenAI-compatible chat can replay
+`reasoning_content` / `reasoning` / `thinking`, Anthropic replays thinking
+blocks, and Responses stores reasoning item IDs plus encrypted content when the
+provider returns them.
 
 ### 3.2 Tools
 
@@ -453,11 +490,24 @@ ships `juex.yaml.example` as a copyable template:
 
 ```yaml
 provider:
+  id: openai
   type: openai
+  protocol: openai/chat
   base_url: ""
   api_key: ""
   model: ""
   context_window: 256000
+  headers: {}
+  query: {}
+  capabilities:
+    tools: true
+    streaming: false
+    reasoning_effort: true
+    reasoning_replay: true
+    max_output_tokens: true
+  compat:
+    reasoning_replay_fields:
+      - reasoning_content
 compaction:
   enabled: true
   reserve_tokens: 16384
@@ -469,12 +519,18 @@ compaction:
 
 | Field | Description |
 |---|---|
-| `provider.type` | `anthropic` or `openai` |
+| `provider.id` | optional preset id such as `openai`, `anthropic`, `deepseek`, `qwen`, `kimi`, `minimax`, `ark`, or `openai-compatible` |
+| `provider.type` | legacy SDK family, `anthropic` or `openai`; still accepted for old configs |
+| `provider.protocol` | wire family: `anthropic/messages`, `openai/responses`, `openai/chat`, or `openai-compatible/chat` |
 | `provider.base_url` | full base URL (Anthropic, OpenAI, DeepSeek, etc.) |
 | `provider.api_key` | API key |
 | `provider.model` | model name |
 | `provider.thinking_effort` | optional reasoning depth for thinking models |
 | `provider.context_window` | optional provider context window in tokens; defaults to `256000` |
+| `provider.headers` | optional static HTTP headers for this provider profile |
+| `provider.query` | optional static query params for this provider profile |
+| `provider.capabilities` | optional gates for tools, streaming, reasoning effort/replay, and max output tokens |
+| `provider.compat.reasoning_replay_fields` | OpenAI-compatible raw assistant fields to replay when reasoning replay is enabled |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
@@ -484,7 +540,10 @@ compaction:
 
 Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
 < `--config <path>` (if supplied) < `os.Environ`. `.env` is no longer read by
-default.
+default. Environment overrides include `PROVIDER_API_ID`,
+`PROVIDER_API_TYPE`, `PROVIDER_API_PROTOCOL`, `PROVIDER_API_BASE`,
+`PROVIDER_API_KEY`, `PROVIDER_API_MODEL`, `PROVIDER_THINKING_EFFORT`, and
+`PROVIDER_CONTEXT_WINDOW`.
 
 Compaction is controlled by the `compaction` config section. The runtime keeps
 the full `conversation.jsonl` transcript, appends a compact boundary message
@@ -641,8 +700,10 @@ workflow; runs entirely on GitHub Actions.
   runs `-tags=integration ./tests/e2e/...`. Required secrets:
 
   ```
+  PROVIDER_API_ID_ANTHROPIC     PROVIDER_API_PROTOCOL_ANTHROPIC
   PROVIDER_API_TYPE_ANTHROPIC   PROVIDER_API_BASE_ANTHROPIC
   PROVIDER_API_KEY_ANTHROPIC    PROVIDER_API_MODEL_ANTHROPIC
+  PROVIDER_API_ID_OPENAI        PROVIDER_API_PROTOCOL_OPENAI
   PROVIDER_API_TYPE_OPENAI      PROVIDER_API_BASE_OPENAI
   PROVIDER_API_KEY_OPENAI       PROVIDER_API_MODEL_OPENAI
   ```

@@ -477,6 +477,145 @@ func TestOpenAI_CompleteOptionsUsesOneMaxTokenField(t *testing.T) {
 	}
 }
 
+func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	disabled := false
+	p := NewOpenAI(Config{
+		Type:           "openai",
+		BaseURL:        srv.URL,
+		APIKey:         "k",
+		Model:          "m",
+		ThinkingEffort: "low",
+		Capabilities: CapabilityOverrides{
+			Tools:           &disabled,
+			ReasoningEffort: &disabled,
+			ReasoningReplay: &disabled,
+			MaxOutputTokens: &disabled,
+		},
+	}, nil)
+	withOpts, ok := p.(ProviderWithOptions)
+	if !ok {
+		t.Fatal("openai provider does not implement ProviderWithOptions")
+	}
+	history := []Message{
+		TextMessage(RoleUser, "do it"),
+		{Role: RoleAssistant, Blocks: []Block{
+			{Type: BlockReasoning, Text: "hidden"},
+			{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "read", Input: map[string]any{"path": "x"}},
+		}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", Content: "file"}}},
+	}
+	if _, err := withOpts.CompleteWithOptions(context.Background(), "", history, []ToolSpec{{Name: "read"}}, CompleteOptions{MaxOutputTokens: 123}); err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	for _, key := range []string{"tools", "reasoning_effort", "max_completion_tokens"} {
+		if _, present := capturedBody[key]; present {
+			t.Fatalf("%s should be absent when capability disabled: %+v", key, capturedBody)
+		}
+	}
+	msgs, _ := capturedBody["messages"].([]any)
+	for _, raw := range msgs {
+		msg, _ := raw.(map[string]any)
+		if msg["role"] == "tool" {
+			t.Fatalf("tool history should be omitted when tools are disabled: %+v", msgs)
+		}
+	}
+}
+
+func TestOpenAIResponses_RoundTrip(t *testing.T) {
+	var capturedBody map[string]any
+	var capturedHeader string
+	var capturedQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/responses") {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		capturedHeader = r.Header.Get("X-Juex-Test")
+		capturedQuery = r.URL.Query().Get("trace")
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
+			"output":[
+				{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought summary"}],"encrypted_content":"enc"},
+				{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello","annotations":[]}]},
+				{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\"path\":\"x\"}","status":"completed"}
+			],
+			"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}
+		}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:             "openai",
+		Protocol:       "openai/responses",
+		BaseURL:        srv.URL,
+		APIKey:         "k",
+		Model:          "gpt-test",
+		ThinkingEffort: "low",
+		Headers:        map[string]string{"X-Juex-Test": "yes"},
+		Query:          map[string]string{"trace": "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Complete(context.Background(), "system",
+		[]Message{
+			TextMessage(RoleUser, "hello"),
+			{Role: RoleAssistant, Blocks: []Block{
+				{Type: BlockReasoning, Text: "prior", Signature: "rs_prev", Content: "enc_prev", Redacted: true},
+				{Type: BlockToolUse, ToolUseID: "call_prev", ToolName: "read", Input: map[string]any{"path": "old"}},
+			}},
+			{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_prev", Content: "old file"}}},
+		},
+		[]ToolSpec{{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}}},
+	)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if capturedHeader != "yes" || capturedQuery != "1" {
+		t.Fatalf("header/query = %q/%q", capturedHeader, capturedQuery)
+	}
+	if capturedBody["model"] != "gpt-test" || capturedBody["instructions"] != "system" {
+		t.Fatalf("captured body = %+v", capturedBody)
+	}
+	if capturedBody["reasoning"] == nil || capturedBody["include"] == nil {
+		t.Fatalf("responses request should include reasoning controls: %+v", capturedBody)
+	}
+	tools, _ := capturedBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v", capturedBody["tools"])
+	}
+	input, _ := capturedBody["input"].([]any)
+	if len(input) < 4 {
+		t.Fatalf("input = %+v", input)
+	}
+	if resp.StopReason != StopToolUse {
+		t.Fatalf("stop reason = %s, want tool_use", resp.StopReason)
+	}
+	if resp.Message.FirstText() != "hello" {
+		t.Fatalf("text = %q", resp.Message.FirstText())
+	}
+	if calls := resp.Message.ToolCalls(); len(calls) != 1 || calls[0].ToolName != "read" || calls[0].Input["path"] != "x" {
+		t.Fatalf("tool calls = %+v", calls)
+	}
+	if len(resp.Message.Blocks) == 0 || resp.Message.Blocks[0].Type != BlockReasoning || resp.Message.Blocks[0].Signature != "rs_1" {
+		t.Fatalf("reasoning block not preserved: %+v", resp.Message.Blocks)
+	}
+	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+}
+
 func TestAnthropic_ThinkingEffort(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

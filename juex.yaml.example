@@ -1,6 +1,16 @@
 # Copy this template to .juex/juex.yaml in the project you want juex to run in.
 # The .juex directory is local runtime state and should not be committed.
 provider:
+  # id selects a small built-in provider preset. Current presets:
+  # openai, anthropic, openrouter, deepseek, qwen, dashscope, moonshot,
+  # kimi, minimax, volcengine, ark, openai-compatible.
+  # id: openai
+  # protocol selects the wire family. Omit to use the preset/default.
+  # Valid values: anthropic/messages, openai/responses, openai/chat,
+  # openai-compatible/chat.
+  # protocol: openai/chat
+  # type is the legacy provider switch. Keep using openai or anthropic for
+  # old configs, or prefer id/protocol for new profiles.
   type: openai
   base_url: ""
   api_key: ""
@@ -10,6 +20,22 @@ provider:
   # thinking_effort: ""
   # Optional: provider context window in tokens. Defaults to 256000.
   # context_window: 256000
+  # Optional provider-specific HTTP headers and query parameters.
+  # headers:
+  #   X-Provider-Feature: "1"
+  # query:
+  #   beta: "1"
+  # Optional capability gates. Unsupported features are not sent.
+  # capabilities:
+  #   tools: true
+  #   streaming: false
+  #   reasoning_effort: true
+  #   reasoning_replay: true
+  #   max_output_tokens: true
+  # Optional provider compatibility knobs.
+  # compat:
+  #   reasoning_replay_fields:
+  #     - reasoning_content
 
 compaction:
   enabled: true

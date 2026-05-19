@@ -172,6 +172,20 @@ export interface FileContentResponse {
 }
 
 export interface RuntimeStatusResponse {
+  provider: {
+    id?: string;
+    type?: string;
+    protocol?: string;
+    model?: string;
+    base_url?: string;
+    capabilities: {
+      tools: boolean;
+      streaming: boolean;
+      reasoning_effort: boolean;
+      reasoning_replay: boolean;
+      max_output_tokens: boolean;
+    };
+  };
   mcp: {
     configured: number;
     connected: number;

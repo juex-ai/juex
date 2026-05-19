@@ -17,25 +17,40 @@ import (
 // works against the canonical types in types.go, so swapping SDK versions or
 // dropping back to raw HTTP only touches this file.
 type anthropicProvider struct {
-	cfg    Config
-	client anthropic.Client
+	cfg     Config
+	profile ProviderProfile
+	client  anthropic.Client
 }
 
 func NewAnthropic(cfg Config, _ any) Provider {
+	profile, err := ResolveProfile(cfg)
+	if err != nil {
+		profile = presetProfile("anthropic")
+		profile.APIKey = cfg.APIKey
+		profile.Model = cfg.Model
+		profile.BaseURL = cfg.BaseURL
+	}
 	opts := []option.RequestOption{
-		option.WithAPIKey(cfg.APIKey),
+		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(providerMaxRetries),
 	}
-	if cfg.BaseURL != "" {
-		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	if profile.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(profile.BaseURL))
+	}
+	for k, v := range profile.Headers {
+		opts = append(opts, option.WithHeader(k, v))
+	}
+	for k, v := range profile.Query {
+		opts = append(opts, option.WithQuery(k, v))
 	}
 	return &anthropicProvider{
-		cfg:    cfg,
-		client: anthropic.NewClient(opts...),
+		cfg:     profile.Config(),
+		profile: profile,
+		client:  anthropic.NewClient(opts...),
 	}
 }
 
-func (p *anthropicProvider) Name() string { return "anthropic:" + p.cfg.Model }
+func (p *anthropicProvider) Name() string { return p.profile.ID + ":" + p.profile.Model }
 
 func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error) {
 	return p.CompleteWithOptions(ctx, sys, history, tools, CompleteOptions{})
@@ -44,18 +59,20 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
 	maxTokens := int64(4096)
 	var budgetTokens int64
-	switch p.cfg.ThinkingEffort {
-	case "low":
-		budgetTokens = 2048
-		maxTokens = 8192
-	case "medium":
-		budgetTokens = 8192
-		maxTokens = 16384
-	case "high":
-		budgetTokens = 32768
-		maxTokens = 64000
+	if p.profile.Capabilities.ReasoningEffort {
+		switch p.profile.ThinkingEffort {
+		case "low":
+			budgetTokens = 2048
+			maxTokens = 8192
+		case "medium":
+			budgetTokens = 8192
+			maxTokens = 16384
+		case "high":
+			budgetTokens = 32768
+			maxTokens = 64000
+		}
 	}
-	if opts.MaxOutputTokens > 0 {
+	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		maxTokens = int64(opts.MaxOutputTokens)
 		if budgetTokens > 0 {
 			maxTokens += budgetTokens
@@ -63,10 +80,12 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	}
 
 	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(p.cfg.Model),
+		Model:     anthropic.Model(p.profile.Model),
 		MaxTokens: maxTokens,
-		Messages:  toAnthropicMessages(history),
-		Tools:     toAnthropicTools(tools),
+		Messages:  toAnthropicMessages(history, p.profile),
+	}
+	if p.profile.Capabilities.Tools {
+		params.Tools = toAnthropicTools(tools)
 	}
 	if budgetTokens > 0 {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{
@@ -77,6 +96,14 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	}
 	if sys != "" {
 		params.System = []anthropic.TextBlockParam{{Text: sys}}
+	}
+
+	if !p.profile.Capabilities.Streaming {
+		msg, err := p.client.Messages.New(ctx, params)
+		if err != nil {
+			return Response{}, fmt.Errorf("anthropic: %w", err)
+		}
+		return p.responseFromMessage(msg), nil
 	}
 
 	msg := anthropic.Message{}
@@ -136,7 +163,7 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 	}
 }
 
-func toAnthropicMessages(history []Message) []anthropic.MessageParam {
+func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
 	for _, m := range compactHistoryForProvider(history) {
 		var blocks []anthropic.ContentBlockParamUnion
@@ -145,14 +172,23 @@ func toAnthropicMessages(history []Message) []anthropic.MessageParam {
 			case BlockText:
 				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
 			case BlockReasoning:
+				if !profile.Capabilities.ReasoningReplay {
+					continue
+				}
 				if b.Redacted {
 					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.Content))
 				} else {
 					blocks = append(blocks, anthropic.NewThinkingBlock(b.Signature, b.Text))
 				}
 			case BlockToolUse:
+				if !profile.Capabilities.Tools {
+					continue
+				}
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName))
 			case BlockToolResult:
+				if !profile.Capabilities.Tools {
+					continue
+				}
 				blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError))
 			}
 		}

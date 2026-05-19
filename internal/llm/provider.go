@@ -26,28 +26,42 @@ const providerMaxRetries = 10
 
 type Config struct {
 	Type           string
+	ID             string
+	Protocol       string
 	BaseURL        string
 	APIKey         string
 	Model          string
 	ThinkingEffort string // "low", "medium", "high", or "" (provider default)
+	Headers        map[string]string
+	Query          map[string]string
+	Capabilities   CapabilityOverrides
+	Compat         CompatOptions
 }
 
 // New constructs the appropriate Provider for cfg.Type.
-// Supported types: "anthropic", "openai".
+// Supported protocol families: "anthropic/messages", "openai/chat",
+// "openai-compatible/chat", and "openai/responses".
 func New(cfg Config) (Provider, error) {
-	if cfg.APIKey == "" {
+	profile, err := ResolveProfile(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if profile.APIKey == "" {
 		return nil, fmt.Errorf("llm: missing API key")
 	}
-	if cfg.Model == "" {
+	if profile.Model == "" {
 		return nil, fmt.Errorf("llm: missing model")
 	}
-	switch cfg.Type {
-	case "anthropic":
-		return NewAnthropic(cfg, &http.Client{Timeout: 120 * time.Second}), nil
-	case "openai":
-		return NewOpenAI(cfg, &http.Client{Timeout: 120 * time.Second}), nil
+	resolved := profile.Config()
+	switch profile.Protocol {
+	case ProtocolAnthropicMessages:
+		return NewAnthropic(resolved, &http.Client{Timeout: 120 * time.Second}), nil
+	case ProtocolOpenAIChat, ProtocolOpenAICompatibleChat:
+		return NewOpenAI(resolved, &http.Client{Timeout: 120 * time.Second}), nil
+	case ProtocolOpenAIResponses:
+		return NewOpenAIResponses(resolved, &http.Client{Timeout: 120 * time.Second}), nil
 	default:
-		return nil, fmt.Errorf("llm: unknown provider type %q", cfg.Type)
+		return nil, fmt.Errorf("llm: unsupported provider protocol %q", profile.Protocol)
 	}
 }
 
