@@ -170,6 +170,7 @@ export interface RuntimeStatusResponse {
   mcp: {
     configured: number;
     connected: number;
+    errors: number;
     servers: MCPServerInfo[];
   };
   skills: {

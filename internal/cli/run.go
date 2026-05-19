@@ -53,6 +53,7 @@ type dryRunPlan struct {
 	Tools        []string       `json:"tools"`
 	SkillCount   int            `json:"skill_count"`
 	Skills       []skillSummary `json:"skills,omitempty"`
+	MCP          app.MCPStatus  `json:"mcp"`
 }
 
 // skillSummary mirrors what the system prompt's "Available Skills" section
@@ -187,10 +188,11 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	// Build the app with a noop provider — that's the only piece dry-run
 	// can't reuse from the live wiring (no API key required for noop).
 	a, err := app.New(app.Options{
-		Config:   cfg,
-		Provider: noopProvider{},
-		WorkDir:  cfg.WorkDir,
-		Stderr:   cmd.ErrOrStderr(),
+		Config:              cfg,
+		Provider:            noopProvider{},
+		WorkDir:             cfg.WorkDir,
+		Stderr:              cmd.ErrOrStderr(),
+		SuppressMCPWarnings: jsonOut,
 	})
 	if err != nil {
 		return emit(jsonOut, cmd.ErrOrStderr(), err,
@@ -223,6 +225,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		Tools:        tools,
 		SkillCount:   len(skillSummaries),
 		Skills:       skillSummaries,
+		MCP:          a.MCPStatus(),
 	}
 
 	if jsonOut {

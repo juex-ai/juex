@@ -30,7 +30,9 @@ func runFakeServer() {
 	for scanner.Scan() {
 		if os.Getenv("JUEX_FAKE_MCP_STDOUT_LOG") == "1" {
 			fmt.Fprintln(os.Stdout, "time=now level=INFO msg=not-json")
-			os.Unsetenv("JUEX_FAKE_MCP_STDOUT_LOG")
+			if err := os.Unsetenv("JUEX_FAKE_MCP_STDOUT_LOG"); err != nil {
+				return
+			}
 		}
 		var req map[string]any
 		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
@@ -447,6 +449,44 @@ func TestMCPRegisterAll_MultipleServers(t *testing.T) {
 		if _, ok := r.Get(name); !ok {
 			t.Fatalf("missing tool %s, have %+v", name, r.List())
 		}
+	}
+}
+
+func TestNewManagerSoftKeepsHealthyServersAndRecordsFailures(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := Config{MCPServers: map[string]ServerSpec{
+		"alpha": {Command: os.Args[0], Env: map[string]string{"JUEX_FAKE_MCP": "1"}},
+		"beta":  {Command: ""},
+	}}
+	mgr, err := NewManagerSoft(ctx, cfg, ConnectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
+
+	counts := mgr.ToolCounts()
+	if counts["alpha"] == 0 {
+		t.Fatalf("tool counts = %+v", counts)
+	}
+	errs := mgr.StartupErrors()
+	if !strings.Contains(errs["beta"], "missing command") {
+		t.Fatalf("startup errors = %+v", errs)
+	}
+	reg := tools.NewRegistry()
+	if err := mgr.RegisterTools(reg); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get("mcp__alpha__echo"); !ok {
+		t.Fatalf("missing alpha tool, have %+v", reg.List())
+	}
+	if _, ok := reg.Get("mcp__beta__echo"); ok {
+		t.Fatalf("unexpected beta tool, have %+v", reg.List())
 	}
 }
 

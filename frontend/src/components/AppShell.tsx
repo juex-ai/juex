@@ -41,14 +41,17 @@ export function AppShell() {
     };
   }, []);
 
-  const mcpErrorCount =
-    runtimeStatus?.mcp.servers.filter((server) => server.status === "error").length ??
-    0;
+  const mcpErrorCount = runtimeStatus?.mcp.errors ?? 0;
+  const mcpConnectedLabel = runtimeStatus
+    ? `MCP ${runtimeStatus.mcp.connected}/${runtimeStatus.mcp.configured} connected`
+    : "";
   const mcpLabel = runtimeStatus
     ? mcpErrorCount > 0
-      ? `MCP ${mcpErrorCount}/${runtimeStatus.mcp.configured} error`
+      ? `${mcpConnectedLabel}, ${mcpErrorCount} ${
+          mcpErrorCount === 1 ? "error" : "errors"
+        }`
       : runtimeStatus.mcp.connected > 0
-        ? `MCP ${runtimeStatus.mcp.connected}/${runtimeStatus.mcp.configured} connected`
+        ? mcpConnectedLabel
         : runtimeStatus.mcp.configured > 0
           ? `MCP not started (${runtimeStatus.mcp.configured})`
           : "MCP 0 configured"

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -14,39 +15,74 @@ type Manager struct {
 	mu      sync.RWMutex
 	clients map[string]*Client
 	tools   map[string][]ToolDescriptor
+	errors  map[string]error
 	closed  bool
 }
 
-func NewManagerLayered(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
+func MergeConfigs(configs []Config) Config {
 	merged := map[string]ServerSpec{}
 	for _, c := range configs {
 		for name, spec := range c.MCPServers {
 			merged[name] = spec
 		}
 	}
-	return NewManager(ctx, Config{MCPServers: merged}, opts)
+	return Config{MCPServers: merged}
+}
+
+func NewManagerLayered(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
+	return NewManager(ctx, MergeConfigs(configs), opts)
+}
+
+func NewManagerLayeredSoft(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
+	return NewManagerSoft(ctx, MergeConfigs(configs), opts)
 }
 
 func NewManager(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {
+	return newManager(ctx, cfg, opts, false)
+}
+
+func NewManagerSoft(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {
+	return newManager(ctx, cfg, opts, true)
+}
+
+func newManager(ctx context.Context, cfg Config, opts ConnectOptions, soft bool) (*Manager, error) {
 	mgr := &Manager{
 		clients: map[string]*Client{},
 		tools:   map[string][]ToolDescriptor{},
+		errors:  map[string]error{},
 	}
 	for name, spec := range cfg.MCPServers {
 		client, err := ConnectWithOptions(ctx, name, spec, opts)
 		if err != nil {
-			mgr.Close()
-			return nil, &ServerError{Server: name, Op: "connect", Err: err}
+			serverErr := &ServerError{Server: name, Op: "connect", Err: err}
+			if soft {
+				mgr.errors[name] = serverErr
+				continue
+			}
+			return nil, closeManagerOnError(mgr, serverErr)
 		}
 		mgr.clients[name] = client
 		descs, err := client.ListTools(ctx)
 		if err != nil {
-			mgr.Close()
-			return nil, &ServerError{Server: name, Op: "tools/list", Err: err}
+			client.Close()
+			delete(mgr.clients, name)
+			serverErr := &ServerError{Server: name, Op: "tools/list", Err: err}
+			if soft {
+				mgr.errors[name] = serverErr
+				continue
+			}
+			return nil, closeManagerOnError(mgr, serverErr)
 		}
 		mgr.tools[name] = append([]ToolDescriptor(nil), descs...)
 	}
 	return mgr, nil
+}
+
+func closeManagerOnError(mgr *Manager, err *ServerError) error {
+	if closeErr := mgr.Close(); closeErr != nil {
+		err.Err = errors.Join(err.Err, fmt.Errorf("close partial clients: %w", closeErr))
+	}
+	return err
 }
 
 func (m *Manager) RegisterTools(reg *tools.Registry) error {
@@ -96,6 +132,21 @@ func (m *Manager) ToolCounts() map[string]int {
 	return out
 }
 
+func (m *Manager) StartupErrors() map[string]string {
+	out := map[string]string{}
+	if m == nil {
+		return out
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for serverName, err := range m.errors {
+		if err != nil {
+			out[serverName] = err.Error()
+		}
+	}
+	return out
+}
+
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil
@@ -112,6 +163,7 @@ func (m *Manager) Close() error {
 	}
 	m.clients = nil
 	m.tools = nil
+	m.errors = nil
 	m.mu.Unlock()
 
 	var firstErr error

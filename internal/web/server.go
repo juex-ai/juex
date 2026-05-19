@@ -305,7 +305,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) error {
 			s.logVerbose("juex serve: MCP notification dropped: %v", err)
 		}
 	}
-	mgr, err := mcp.NewManagerLayered(ctx, mcpConfigs, mcp.ConnectOptions{
+	mgr, err := mcp.NewManagerLayeredSoft(ctx, mcpConfigs, mcp.ConnectOptions{
 		OnNotification: handleNotification,
 	})
 	if err != nil {
@@ -313,12 +313,14 @@ func (s *Server) ensureMCPStarted(ctx context.Context) error {
 		s.logVerbose("juex serve: MCP startup failed: %v", err)
 		return nil
 	}
-	s.clearMCPErrors()
+	s.setMCPErrors(mgr.StartupErrors())
 
 	s.mcpMu.Lock()
 	if s.isClosed() {
 		s.mcpMu.Unlock()
-		mgr.Close()
+		if err := mgr.Close(); err != nil {
+			s.logVerbose("juex serve: MCP shutdown failed: %v", err)
+		}
 		return nil
 	}
 	s.mcpManager = mgr
@@ -418,10 +420,15 @@ func (s *Server) recordMCPError(err error) {
 	s.runtimeMCPErr[name] = err.Error()
 }
 
-func (s *Server) clearMCPErrors() {
+func (s *Server) setMCPErrors(errors map[string]string) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	s.runtimeMCPErr = map[string]string{}
+	for name, msg := range errors {
+		if msg != "" {
+			s.runtimeMCPErr[name] = msg
+		}
+	}
 }
 
 func (s *Server) mcpErrors() map[string]string {

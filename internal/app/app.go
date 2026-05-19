@@ -9,10 +9,12 @@ package app
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -42,6 +44,9 @@ type Options struct {
 	// DisableMCP skips loading MCP configs. Used by serve when MCP startup
 	// failed at process scope but sessions should still be usable.
 	DisableMCP bool
+	// SuppressMCPWarnings keeps optional MCP startup diagnostics out of stderr.
+	// Callers that expose structured diagnostics, such as dry-run JSON, set this.
+	SuppressMCPWarnings bool
 	// ResumeDir, if non-empty, is the absolute path of an existing
 	// session directory to load instead of creating a new one. The
 	// session ID and on-disk files are reused; new messages append.
@@ -60,6 +65,22 @@ type App struct {
 	cleanup []func() error
 	ctx     context.Context
 	cancel  context.CancelFunc
+	mcp     MCPStatus
+}
+
+type MCPStatus struct {
+	Configured int               `json:"configured"`
+	Connected  int               `json:"connected"`
+	Errors     int               `json:"errors"`
+	Servers    []MCPServerStatus `json:"servers"`
+}
+
+type MCPServerStatus struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	Connected bool   `json:"connected"`
+	ToolCount int    `json:"tool_count"`
+	Error     string `json:"error,omitempty"`
 }
 
 // New wires every subsystem and returns a ready-to-use App.
@@ -113,6 +134,7 @@ func New(opts Options) (*App, error) {
 	}
 
 	var mcpConfigs []mcp.Config
+	var mergedMCP mcp.Config
 	if !opts.DisableMCP && opts.MCPManager == nil {
 		for _, path := range cfg.MCPConfigPaths() {
 			mcpCfg, err := mcp.LoadConfig(path)
@@ -123,6 +145,7 @@ func New(opts Options) (*App, error) {
 				mcpConfigs = append(mcpConfigs, mcpCfg)
 			}
 		}
+		mergedMCP = mcp.MergeConfigs(mcpConfigs)
 	}
 
 	var sess *session.Session
@@ -167,14 +190,16 @@ func New(opts Options) (*App, error) {
 
 	appCtx, appCancel := context.WithCancel(context.Background())
 	a := &App{Engine: eng, Bus: bus, Session: sess, ctx: appCtx, cancel: appCancel}
+	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
 	a.cleanup = append(a.cleanup, sess.Close)
 	if opts.MCPManager != nil {
 		if err := opts.MCPManager.RegisterTools(reg); err != nil {
 			sess.Close()
 			return nil, err
 		}
+		a.mcp = buildMCPStatus(nil, opts.MCPManager.ToolCounts(), opts.MCPManager.StartupErrors())
 	} else if len(mcpConfigs) > 0 {
-		mgr, err := mcp.NewManagerLayered(context.Background(), mcpConfigs, mcp.ConnectOptions{
+		mgr, err := mcp.NewManagerLayeredSoft(context.Background(), mcpConfigs, mcp.ConnectOptions{
 			OnNotification: func(n mcp.Notification) {
 				_ = a.handleMCPNotification(a.ctx, n)
 			},
@@ -183,11 +208,18 @@ func New(opts Options) (*App, error) {
 			sess.Close()
 			return nil, err
 		}
+		startupErrors := mgr.StartupErrors()
+		if !opts.SuppressMCPWarnings {
+			writeMCPStartupWarnings(stderr, startupErrors)
+		}
 		if err := mgr.RegisterTools(reg); err != nil {
-			mgr.Close()
+			if closeErr := mgr.Close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
 			sess.Close()
 			return nil, err
 		}
+		a.mcp = buildMCPStatus(mergedMCP.MCPServers, mgr.ToolCounts(), startupErrors)
 		a.cleanup = append(a.cleanup, mgr.Close)
 	}
 	return a, nil
@@ -236,6 +268,77 @@ func (a *App) TokenUsage() llm.Usage {
 	}
 	info := a.Session.Info(time.Now().UTC())
 	return info.TokenUsage
+}
+
+func (a *App) MCPStatus() MCPStatus {
+	if a == nil {
+		return MCPStatus{}
+	}
+	status := a.mcp
+	status.Servers = append([]MCPServerStatus(nil), status.Servers...)
+	return status
+}
+
+func buildMCPStatus(configured map[string]mcp.ServerSpec, toolCounts map[string]int, startupErrors map[string]string) MCPStatus {
+	names := map[string]struct{}{}
+	for name := range configured {
+		names[name] = struct{}{}
+	}
+	for name := range toolCounts {
+		names[name] = struct{}{}
+	}
+	for name := range startupErrors {
+		names[name] = struct{}{}
+	}
+
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+
+	configuredCount := len(configured)
+	if configuredCount == 0 && len(names) > 0 {
+		configuredCount = len(names)
+	}
+	status := MCPStatus{
+		Configured: configuredCount,
+		Servers:    make([]MCPServerStatus, 0, len(ordered)),
+	}
+	for _, name := range ordered {
+		count, connected := toolCounts[name]
+		errText := startupErrors[name]
+		server := MCPServerStatus{
+			Name:      name,
+			Status:    "not_started",
+			Connected: connected,
+			ToolCount: count,
+			Error:     errText,
+		}
+		if server.Connected {
+			server.Status = "connected"
+			status.Connected++
+		} else if errText != "" {
+			server.Status = "error"
+			status.Errors++
+		}
+		status.Servers = append(status.Servers, server)
+	}
+	return status
+}
+
+func writeMCPStartupWarnings(w io.Writer, startupErrors map[string]string) {
+	if w == nil || len(startupErrors) == 0 {
+		return
+	}
+	names := make([]string, 0, len(startupErrors))
+	for name := range startupErrors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(w, "juex: warning: optional MCP server %q is unavailable: %s\n", name, startupErrors[name])
+	}
 }
 
 // REPL reads stdin lines, runs Turn for each non-empty line, prints the
