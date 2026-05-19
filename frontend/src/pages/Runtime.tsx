@@ -45,6 +45,14 @@ export function Runtime() {
                 </tr>
                 <tr className="border-t">
                   <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
+                    Auth
+                  </th>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {data.provider.auth || "-"}
+                  </td>
+                </tr>
+                <tr className="border-t">
+                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
                     Model
                   </th>
                   <td className="px-3 py-2 font-mono text-xs">

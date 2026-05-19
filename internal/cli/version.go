@@ -48,6 +48,7 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 				}
 				info.Model = cfg.Model
 				info.BaseURL = cfg.BaseURL
+				info.ProviderAuth = cfg.ProviderAuth
 			}
 			switch {
 			case jsonOut:
