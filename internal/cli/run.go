@@ -44,6 +44,7 @@ type dryRunPlan struct {
 	ProviderID   string         `json:"provider_id,omitempty"`
 	ProviderType string         `json:"provider_type"`
 	Protocol     string         `json:"protocol,omitempty"`
+	ProviderAuth string         `json:"provider_auth,omitempty"`
 	Model        string         `json:"model"`
 	BaseURL      string         `json:"base_url"`
 	WorkDir      string         `json:"work_dir"`
@@ -122,7 +123,7 @@ execution is printed and the process exits with code 10.`,
 			cfg, err := loadConfig(flags)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"set provider.id or provider.type plus provider.api_key / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
+					"set provider.id or provider.type plus provider.api_key or provider.auth / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
 			}
 
 			prompt := strings.Join(args, " ")
@@ -231,6 +232,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		ProviderID:   providerID,
 		ProviderType: providerType,
 		Protocol:     protocol,
+		ProviderAuth: cfg.ProviderAuth,
 		Model:        cfg.Model,
 		BaseURL:      cfg.BaseURL,
 		WorkDir:      cfg.WorkDir,

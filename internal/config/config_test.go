@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -409,4 +411,154 @@ func TestLoadFromFile_ProviderProfileEnvOverrides(t *testing.T) {
 	if profile.Type != "openai" || profile.Protocol != "openai/responses" {
 		t.Fatalf("profile = %+v", profile)
 	}
+}
+
+func TestLoadFromFile_CodexAuthUsesCachedAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"apiKey","OPENAI_API_KEY":"sk-codex"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  model: gpt-test\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderAuth != "codex" || cfg.APIKey != "sk-codex" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_CodexAuthUsesChatGPTTokenHeaders(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	idToken := fakeCodexIDToken(t, map[string]any{
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id":         "acct-from-jwt",
+			"chatgpt_account_is_fedramp": true,
+		},
+	})
+	authJSON := map[string]any{
+		"auth_mode": "chatgpt",
+		"tokens": map[string]any{
+			"access_token": "chatgpt-access",
+			"id_token":     idToken,
+		},
+	}
+	authBytes, err := json.Marshal(authJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(authPath, authBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  model: gpt-test\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "chatgpt-access" {
+		t.Fatalf("APIKey = %q", cfg.APIKey)
+	}
+	if cfg.ProviderHeaders["ChatGPT-Account-ID"] != "acct-from-jwt" || cfg.ProviderHeaders["X-OpenAI-Fedramp"] != "true" {
+		t.Fatalf("headers = %+v", cfg.ProviderHeaders)
+	}
+}
+
+func TestLoadFromFile_CodexAuthExplicitAPIKeyWins(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"OPENAI_API_KEY":"sk-codex"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  api_key: sk-explicit\n  model: gpt-test\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "sk-explicit" {
+		t.Fatalf("APIKey = %q", cfg.APIKey)
+	}
+}
+
+func TestLoadFromFile_CodexAuthRuntimeConfigCanBeOverridden(t *testing.T) {
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defaultConfig := filepath.Join(work, ".juex", "juex.yaml")
+	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + filepath.Join(work, "missing-auth.json") + "\n  model: missing\n"
+	if err := os.WriteFile(defaultConfig, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overrideConfig := filepath.Join(work, "override.yaml")
+	writeJuexConfig(t, overrideConfig, "openai", "https://example.com", "sk-override", "gpt-test")
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFileForWorkDir(overrideConfig, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "sk-override" || cfg.Model != "gpt-test" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_CodexAuthMissingCredentialErrors(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"chatgpt","tokens":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  model: gpt-test\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	if _, err := LoadFromFile(configPath); err == nil {
+		t.Fatal("expected missing codex credential error")
+	}
+}
+
+func fakeCodexIDToken(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header, err := json.Marshal(map[string]any{"alg": "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }

@@ -9,6 +9,11 @@ provider:
   # Valid values: anthropic/messages, openai/responses, openai/chat,
   # openai-compatible/chat.
   # protocol: openai/chat
+  # auth selects where credentials come from. Omit for api_key. Use codex to
+  # read file-backed Codex login credentials from $CODEX_HOME/auth.json or
+  # ~/.codex/auth.json. This does not refresh tokens or read OS keyrings.
+  # auth: api_key
+  # codex_auth_file: ~/.codex/auth.json
   # type is the legacy provider switch. Keep using openai or anthropic for
   # old configs, or prefer id/protocol for new profiles.
   type: openai

@@ -36,6 +36,7 @@ type Info struct {
 	ProviderID   string `json:"provider_id,omitempty"`
 	ProviderType string `json:"provider_type,omitempty"`
 	Protocol     string `json:"protocol,omitempty"`
+	ProviderAuth string `json:"provider_auth,omitempty"`
 	Model        string `json:"model,omitempty"`
 	BaseURL      string `json:"base_url,omitempty"`
 }
@@ -78,6 +79,9 @@ func (i Info) Verbose() string {
 	}
 	if i.Protocol != "" {
 		out += "\n  protocol:      " + i.Protocol
+	}
+	if i.ProviderAuth != "" {
+		out += "\n  provider_auth: " + i.ProviderAuth
 	}
 	if i.Model != "" {
 		out += "\n  model:         " + i.Model

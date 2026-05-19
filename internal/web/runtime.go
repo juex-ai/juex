@@ -21,6 +21,7 @@ type providerStatus struct {
 	ID           string                   `json:"id,omitempty"`
 	Type         string                   `json:"type,omitempty"`
 	Protocol     string                   `json:"protocol,omitempty"`
+	Auth         string                   `json:"auth,omitempty"`
 	Model        string                   `json:"model,omitempty"`
 	BaseURL      string                   `json:"base_url,omitempty"`
 	Capabilities llm.ProviderCapabilities `json:"capabilities"`
@@ -138,6 +139,7 @@ func (s *Server) providerStatus() providerStatus {
 		return providerStatus{
 			Model:   s.opts.Cfg.Model,
 			BaseURL: s.opts.Cfg.BaseURL,
+			Auth:    s.opts.Cfg.ProviderAuth,
 		}
 	}
 	profile, err := s.opts.Cfg.ProviderProfile()
@@ -146,6 +148,7 @@ func (s *Server) providerStatus() providerStatus {
 			ID:       s.opts.Cfg.ProviderID,
 			Type:     s.opts.Cfg.ProviderType,
 			Protocol: s.opts.Cfg.ProviderProtocol,
+			Auth:     s.opts.Cfg.ProviderAuth,
 			Model:    s.opts.Cfg.Model,
 			BaseURL:  s.opts.Cfg.BaseURL,
 		}
@@ -154,6 +157,7 @@ func (s *Server) providerStatus() providerStatus {
 		ID:           profile.ID,
 		Type:         profile.Type,
 		Protocol:     string(profile.Protocol),
+		Auth:         s.opts.Cfg.ProviderAuth,
 		Model:        profile.Model,
 		BaseURL:      profile.BaseURL,
 		Capabilities: profile.Capabilities,

@@ -493,6 +493,8 @@ provider:
   id: openai
   type: openai
   protocol: openai/chat
+  auth: api_key
+  codex_auth_file: ""
   base_url: ""
   api_key: ""
   model: ""
@@ -522,6 +524,8 @@ compaction:
 | `provider.id` | optional preset id such as `openai`, `anthropic`, `deepseek`, `qwen`, `kimi`, `minimax`, `ark`, or `openai-compatible` |
 | `provider.type` | legacy SDK family, `anthropic` or `openai`; still accepted for old configs |
 | `provider.protocol` | wire family: `anthropic/messages`, `openai/responses`, `openai/chat`, or `openai-compatible/chat` |
+| `provider.auth` | credential source: empty/`api_key` uses `provider.api_key`; `codex` reads file-backed Codex login credentials |
+| `provider.codex_auth_file` | optional Codex auth cache path; defaults to `$CODEX_HOME/auth.json` or `~/.codex/auth.json` |
 | `provider.base_url` | full base URL (Anthropic, OpenAI, DeepSeek, etc.) |
 | `provider.api_key` | API key |
 | `provider.model` | model name |
@@ -541,9 +545,15 @@ compaction:
 Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
 < `--config <path>` (if supplied) < `os.Environ`. `.env` is no longer read by
 default. Environment overrides include `PROVIDER_API_ID`,
-`PROVIDER_API_TYPE`, `PROVIDER_API_PROTOCOL`, `PROVIDER_API_BASE`,
-`PROVIDER_API_KEY`, `PROVIDER_API_MODEL`, `PROVIDER_THINKING_EFFORT`, and
-`PROVIDER_CONTEXT_WINDOW`.
+`PROVIDER_API_TYPE`, `PROVIDER_API_PROTOCOL`, `PROVIDER_AUTH`,
+`PROVIDER_CODEX_AUTH_FILE`, `PROVIDER_API_BASE`, `PROVIDER_API_KEY`,
+`PROVIDER_API_MODEL`, `PROVIDER_THINKING_EFFORT`, and `PROVIDER_CONTEXT_WINDOW`.
+When `provider.auth: codex` is selected and `provider.api_key` is empty, Juex
+loads the Codex CLI/app auth cache from file storage. API-key Codex logins use
+the cached `OPENAI_API_KEY`; ChatGPT logins use the cached access token and add
+`ChatGPT-Account-ID` / `X-OpenAI-Fedramp` headers when those claims are present.
+Juex does not start the interactive Codex login flow, refresh expired tokens, or
+read OS keyring credentials.
 
 Compaction is controlled by the `compaction` config section. The runtime keeps
 the full `conversation.jsonl` transcript, appends a compact boundary message

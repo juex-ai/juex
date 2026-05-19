@@ -35,6 +35,7 @@ func TestVerbose_WithRuntimeContext(t *testing.T) {
 	info.ProviderID = "openai"
 	info.ProviderType = "openai"
 	info.Protocol = "openai/responses"
+	info.ProviderAuth = "codex"
 	info.Model = "gpt-test"
 	info.BaseURL = "https://x"
 
@@ -45,6 +46,7 @@ func TestVerbose_WithRuntimeContext(t *testing.T) {
 		"provider_id:   openai",
 		"provider_type: openai",
 		"protocol:      openai/responses",
+		"provider_auth: codex",
 		"model:         gpt-test",
 		"base_url:      https://x",
 	} {
