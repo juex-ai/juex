@@ -44,7 +44,7 @@ func TestRunCmd_DryRunLoadsMCPAtStartup(t *testing.T) {
 	assertPathExists(t, marker)
 }
 
-func TestRunCmd_LoadsMCPBeforeTurn(t *testing.T) {
+func TestRunCmd_DryRunReportsMCPStartupErrors(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "juex.yaml")
 	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
@@ -58,15 +58,56 @@ func TestRunCmd_LoadsMCPBeforeTurn(t *testing.T) {
 
 	root := newRootCmd()
 	var out bytes.Buffer
+	var stderr bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("dry-run JSON should keep MCP diagnostics in stdout, stderr=%q", stderr.String())
+	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode dry-run JSON: %v\n%s", err, out.String())
+	}
+	if plan.MCP.Configured != 1 || plan.MCP.Connected != 0 || plan.MCP.Errors != 1 {
+		t.Fatalf("mcp = %+v", plan.MCP)
+	}
+	if len(plan.MCP.Servers) != 1 || plan.MCP.Servers[0].Status != "error" || !strings.Contains(plan.MCP.Servers[0].Error, "missing command") {
+		t.Fatalf("servers = %+v", plan.MCP.Servers)
+	}
+}
+
+func TestREPLCmd_WarnsAndContinuesWhenMCPStartupFails(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLITestFile(t, filepath.Join(dir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "alpha": { "command": "" }
+  }
+}`)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetIn(strings.NewReader(""))
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "hello"})
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("expected MCP startup failure")
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "repl"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "mcp[alpha]") || !strings.Contains(err.Error(), "missing command") {
-		t.Fatalf("expected MCP startup error, got %T: %v", err, err)
+	body := out.String()
+	if !strings.Contains(body, `optional MCP server "alpha" is unavailable`) {
+		t.Fatalf("expected MCP warning, got:\n%s", body)
+	}
+	if !strings.Contains(body, "juex repl") {
+		t.Fatalf("expected repl banner, got:\n%s", body)
 	}
 }
 

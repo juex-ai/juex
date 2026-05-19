@@ -18,6 +18,7 @@ type runtimeStatusResponse struct {
 type mcpStatus struct {
 	Configured int             `json:"configured"`
 	Connected  int             `json:"connected"`
+	Errors     int             `json:"errors"`
 	Servers    []mcpServerInfo `json:"servers"`
 }
 
@@ -74,6 +75,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	}
 	mcpErrors := s.mcpErrors()
 	connectedCount := 0
+	errorCount := 0
 	servers := make([]mcpServerInfo, 0, len(mcpServers))
 	for name, spec := range mcpServers {
 		toolCount := connected[name]
@@ -96,6 +98,8 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		}
 		if info.Connected {
 			connectedCount++
+		} else if info.Status == "error" {
+			errorCount++
 		}
 		servers = append(servers, info)
 	}
@@ -110,6 +114,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		MCP: mcpStatus{
 			Configured: len(servers),
 			Connected:  connectedCount,
+			Errors:     errorCount,
 			Servers:    servers,
 		},
 		Skills: skillStatus,
@@ -152,17 +157,11 @@ func cloneSkillsStatus(status skillsStatus) skillsStatus {
 }
 
 func (s *Server) configuredMCPServers() (map[string]mcp.ServerSpec, error) {
-	merged := map[string]mcp.ServerSpec{}
 	configs, err := s.loadMCPConfigs()
 	if err != nil {
 		return nil, err
 	}
-	for _, cfg := range configs {
-		for name, spec := range cfg.MCPServers {
-			merged[name] = spec
-		}
-	}
-	return merged, nil
+	return mcp.MergeConfigs(configs).MCPServers, nil
 }
 
 func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {

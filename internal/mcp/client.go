@@ -248,13 +248,7 @@ func RegisterAllLayered(ctx context.Context, configs []Config, reg *tools.Regist
 }
 
 func RegisterAllLayeredWithOptions(ctx context.Context, configs []Config, reg *tools.Registry, opts ConnectOptions) ([]*Client, error) {
-	merged := map[string]ServerSpec{}
-	for _, c := range configs {
-		for name, spec := range c.MCPServers {
-			merged[name] = spec
-		}
-	}
-	return RegisterAllWithOptions(ctx, Config{MCPServers: merged}, reg, opts)
+	return RegisterAllWithOptions(ctx, MergeConfigs(configs), reg, opts)
 }
 
 // RegisterAll connects servers from cfg and registers their tools (prefixed

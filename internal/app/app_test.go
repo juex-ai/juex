@@ -285,6 +285,39 @@ func TestApp_NewWithoutKeyFails(t *testing.T) {
 	}
 }
 
+func TestApp_NewSoftFailsOptionalMCPStartup(t *testing.T) {
+	dir := t.TempDir()
+	mcpPath := filepath.Join(dir, ".agents", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mcpPath, []byte(`{"mcpServers":{"alpha":{"command":""}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	a, err := New(Options{
+		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: &stubProvider{},
+		WorkDir:  dir,
+		Stderr:   &stderr,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	status := a.MCPStatus()
+	if status.Configured != 1 || status.Connected != 0 || status.Errors != 1 {
+		t.Fatalf("mcp status = %+v", status)
+	}
+	if len(status.Servers) != 1 || status.Servers[0].Status != "error" || !strings.Contains(status.Servers[0].Error, "missing command") {
+		t.Fatalf("mcp servers = %+v", status.Servers)
+	}
+	if !strings.Contains(stderr.String(), `optional MCP server "alpha" is unavailable`) {
+		t.Fatalf("stderr missing warning:\n%s", stderr.String())
+	}
+}
+
 func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	work := t.TempDir()
 	sessionsRoot := filepath.Join(work, ".juex", "sessions")

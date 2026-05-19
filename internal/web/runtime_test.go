@@ -143,6 +143,39 @@ func TestRuntimeStatusReportsMCPConnectionError(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusReportsPartialMCPStartup(t *testing.T) {
+	srv := newTestServer(t)
+	body, err := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"alpha": map[string]any{
+				"command": os.Args[0],
+				"env":     map[string]string{"JUEX_WEB_FAKE_MCP": "1"},
+			},
+			"beta": map[string]any{
+				"command": "",
+			},
+		},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), string(body))
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MCP.Configured != 2 || got.MCP.Connected != 1 || got.MCP.Errors != 1 {
+		t.Fatalf("mcp = %+v", got.MCP)
+	}
+	if got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
+		t.Fatalf("alpha = %+v", got.MCP.Servers[0])
+	}
+	if got.MCP.Servers[1].Name != "beta" || got.MCP.Servers[1].Status != "error" || !strings.Contains(got.MCP.Servers[1].Error, "missing command") {
+		t.Fatalf("beta = %+v", got.MCP.Servers[1])
+	}
+}
+
 func TestOpenSessionKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{

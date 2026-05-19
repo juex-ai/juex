@@ -28,8 +28,11 @@ export function Runtime() {
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h1 className="text-lg font-semibold">MCP</h1>
-            <Badge variant="secondary" className="font-mono text-xs">
-              {data.mcp.connected}/{data.mcp.configured} connected
+            <Badge
+              variant={data.mcp.errors > 0 ? "destructive" : "secondary"}
+              className="font-mono text-xs"
+            >
+              {mcpSummaryLabel(data)}
             </Badge>
           </div>
           <div className="overflow-hidden rounded-lg border">
@@ -131,6 +134,14 @@ function mcpStatusLabel(status: string): string {
   if (status === "connected") return "connected";
   if (status === "error") return "error";
   return "not started";
+}
+
+function mcpSummaryLabel(data: RuntimeStatusResponse): string {
+  const base = `${data.mcp.connected}/${data.mcp.configured} connected`;
+  if (data.mcp.errors === 0) return base;
+  return `${base}, ${data.mcp.errors} ${
+    data.mcp.errors === 1 ? "error" : "errors"
+  }`;
 }
 
 function mcpStatusVariant(status: string): "secondary" | "outline" | "destructive" {

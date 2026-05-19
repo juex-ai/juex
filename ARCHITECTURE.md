@@ -201,6 +201,12 @@ with the standard `read` builtin against the path printed there.
 `tools.RegisterBuiltins(reg, workDir)` injects `workDir` so `bash` and `grep`
 fall back to it when the model does not pass an explicit `cwd` / `path`.
 
+MCP servers are optional runtime extensions. Startup is attempted per
+configured server: servers that connect successfully register
+`mcp__<server>__<tool>` tools, while servers that fail to start or list tools
+are recorded as runtime diagnostics instead of preventing CLI or web sessions
+from using builtin tools, skills, memory, or other healthy MCP servers.
+
 ### 3.3 Events
 
 ```go
