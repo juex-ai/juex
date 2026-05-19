@@ -20,13 +20,19 @@ import (
 // live under .agents. Runtime data (memory, sessions, history) lives under
 // .juex so it does not overlap with project agent configuration.
 type Config struct {
-	ProviderType   string // "anthropic" | "openai"
-	BaseURL        string
-	APIKey         string
-	Model          string
-	ThinkingEffort string // "low", "medium", "high", or "" (provider default)
-	ContextWindow  int    // provider context window in tokens; defaults to 256K
-	Compaction     CompactionConfig
+	ProviderType         string // "anthropic" | "openai"
+	ProviderID           string
+	ProviderProtocol     string
+	BaseURL              string
+	APIKey               string
+	Model                string
+	ThinkingEffort       string // "low", "medium", "high", or "" (provider default)
+	ContextWindow        int    // provider context window in tokens; defaults to 256K
+	ProviderHeaders      map[string]string
+	ProviderQuery        map[string]string
+	ProviderCapabilities llm.CapabilityOverrides
+	ProviderCompat       llm.CompatOptions
+	Compaction           CompactionConfig
 
 	HomeAgentsDir string // ~/.agents (user-global)
 	WorkDir       string // explicit; defaults to os.Getwd()
@@ -38,12 +44,30 @@ type fileConfig struct {
 }
 
 type providerConfig struct {
-	Type           string `yaml:"type"`
-	BaseURL        string `yaml:"base_url"`
-	APIKey         string `yaml:"api_key"`
-	Model          string `yaml:"model"`
-	ThinkingEffort string `yaml:"thinking_effort"`
-	ContextWindow  int    `yaml:"context_window"`
+	ID             string                     `yaml:"id"`
+	Type           string                     `yaml:"type"`
+	Protocol       string                     `yaml:"protocol"`
+	BaseURL        string                     `yaml:"base_url"`
+	APIKey         string                     `yaml:"api_key"`
+	Model          string                     `yaml:"model"`
+	ThinkingEffort string                     `yaml:"thinking_effort"`
+	ContextWindow  int                        `yaml:"context_window"`
+	Headers        map[string]string          `yaml:"headers"`
+	Query          map[string]string          `yaml:"query"`
+	Capabilities   providerCapabilitiesConfig `yaml:"capabilities"`
+	Compat         providerCompatConfig       `yaml:"compat"`
+}
+
+type providerCapabilitiesConfig struct {
+	Tools           *bool `yaml:"tools"`
+	Streaming       *bool `yaml:"streaming"`
+	ReasoningEffort *bool `yaml:"reasoning_effort"`
+	ReasoningReplay *bool `yaml:"reasoning_replay"`
+	MaxOutputTokens *bool `yaml:"max_output_tokens"`
+}
+
+type providerCompatConfig struct {
+	ReasoningReplayFields []string `yaml:"reasoning_replay_fields"`
 }
 
 type CompactionConfig struct {
@@ -66,7 +90,7 @@ type compactionConfig struct {
 
 const DefaultContextWindow = 256000
 
-var providerEnvKeys = []string{"PROVIDER_API_TYPE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
+var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_TYPE", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
 // Load resolves config from <WorkDir>/.juex/juex.yaml and OS env vars.
 //
@@ -128,16 +152,30 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 
 // NewProvider constructs the LLM provider implied by the config.
 func (c Config) NewProvider() (llm.Provider, error) {
-	if c.ProviderType == "" {
-		return nil, fmt.Errorf("config: PROVIDER_API_TYPE is empty")
+	if c.ProviderType == "" && c.ProviderID == "" && c.ProviderProtocol == "" {
+		return nil, fmt.Errorf("config: provider id/type/protocol is empty")
 	}
-	return llm.New(llm.Config{
+	return llm.New(c.llmConfig())
+}
+
+func (c Config) ProviderProfile() (llm.ProviderProfile, error) {
+	return llm.ResolveProfile(c.llmConfig())
+}
+
+func (c Config) llmConfig() llm.Config {
+	return llm.Config{
 		Type:           c.ProviderType,
+		ID:             c.ProviderID,
+		Protocol:       c.ProviderProtocol,
 		BaseURL:        c.BaseURL,
 		APIKey:         c.APIKey,
 		Model:          c.Model,
 		ThinkingEffort: c.ThinkingEffort,
-	})
+		Headers:        c.ProviderHeaders,
+		Query:          c.ProviderQuery,
+		Capabilities:   c.ProviderCapabilities,
+		Compat:         c.ProviderCompat,
+	}
 }
 
 // ProjectAgentsDir is <WorkDir>/.agents.
@@ -257,8 +295,14 @@ func DefaultCompactionConfig() CompactionConfig {
 }
 
 func applyProviderConfig(cfg *Config, p providerConfig) {
+	if p.ID != "" {
+		cfg.ProviderID = p.ID
+	}
 	if p.Type != "" {
 		cfg.ProviderType = p.Type
+	}
+	if p.Protocol != "" {
+		cfg.ProviderProtocol = p.Protocol
 	}
 	if p.BaseURL != "" {
 		cfg.BaseURL = p.BaseURL
@@ -274,6 +318,12 @@ func applyProviderConfig(cfg *Config, p providerConfig) {
 	}
 	if p.ContextWindow > 0 {
 		cfg.ContextWindow = p.ContextWindow
+	}
+	cfg.ProviderHeaders = mergeStringMap(cfg.ProviderHeaders, p.Headers)
+	cfg.ProviderQuery = mergeStringMap(cfg.ProviderQuery, p.Query)
+	applyProviderCapabilitiesConfig(&cfg.ProviderCapabilities, p.Capabilities)
+	if len(p.Compat.ReasoningReplayFields) > 0 {
+		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
 	}
 }
 
@@ -309,8 +359,14 @@ func applyOSEnv(cfg *Config) {
 }
 
 func applyEnvMap(cfg *Config, values map[string]string) {
+	if v, ok := values["PROVIDER_API_ID"]; ok && v != "" {
+		cfg.ProviderID = v
+	}
 	if v, ok := values["PROVIDER_API_TYPE"]; ok && v != "" {
 		cfg.ProviderType = v
+	}
+	if v, ok := values["PROVIDER_API_PROTOCOL"]; ok && v != "" {
+		cfg.ProviderProtocol = v
 	}
 	if v, ok := values["PROVIDER_API_BASE"]; ok && v != "" {
 		cfg.BaseURL = v
@@ -329,4 +385,40 @@ func applyEnvMap(cfg *Config, values map[string]string) {
 			cfg.ContextWindow = n
 		}
 	}
+}
+
+func applyProviderCapabilitiesConfig(dst *llm.CapabilityOverrides, src providerCapabilitiesConfig) {
+	if src.Tools != nil {
+		dst.Tools = src.Tools
+	}
+	if src.Streaming != nil {
+		dst.Streaming = src.Streaming
+	}
+	if src.ReasoningEffort != nil {
+		dst.ReasoningEffort = src.ReasoningEffort
+	}
+	if src.ReasoningReplay != nil {
+		dst.ReasoningReplay = src.ReasoningReplay
+	}
+	if src.MaxOutputTokens != nil {
+		dst.MaxOutputTokens = src.MaxOutputTokens
+	}
+}
+
+func mergeStringMap(base, override map[string]string) map[string]string {
+	if len(override) == 0 {
+		return base
+	}
+	out := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range override {
+		if v == "" {
+			delete(out, k)
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }

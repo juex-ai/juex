@@ -27,6 +27,59 @@ export function Runtime() {
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-6">
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
+            <h1 className="text-lg font-semibold">Provider</h1>
+            <Badge variant="secondary" className="font-mono text-xs">
+              {data.provider.protocol || data.provider.type || "-"}
+            </Badge>
+          </div>
+          <div className="overflow-hidden rounded-lg border">
+            <table className="w-full text-left text-sm">
+              <tbody>
+                <tr>
+                  <th className="bg-muted/60 text-muted-foreground w-36 px-3 py-2 font-medium">
+                    ID
+                  </th>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {data.provider.id || "-"}
+                  </td>
+                </tr>
+                <tr className="border-t">
+                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
+                    Model
+                  </th>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {data.provider.model || "-"}
+                  </td>
+                </tr>
+                <tr className="border-t">
+                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
+                    Base URL
+                  </th>
+                  <td className="max-w-[42rem] truncate px-3 py-2 font-mono text-xs">
+                    {data.provider.base_url || "-"}
+                  </td>
+                </tr>
+                <tr className="border-t">
+                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
+                    Capabilities
+                  </th>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-2">
+                      {providerCapabilities(data).map((cap) => (
+                        <Badge key={cap} variant="outline">
+                          {cap}
+                        </Badge>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
             <h1 className="text-lg font-semibold">MCP</h1>
             <Badge
               variant={data.mcp.errors > 0 ? "destructive" : "secondary"}
@@ -134,6 +187,18 @@ function mcpStatusLabel(status: string): string {
   if (status === "connected") return "connected";
   if (status === "error") return "error";
   return "not started";
+}
+
+function providerCapabilities(data: RuntimeStatusResponse): string[] {
+  const caps = data.provider.capabilities;
+  const labels = [
+    caps.tools ? "tools" : "",
+    caps.streaming ? "streaming" : "",
+    caps.reasoning_effort ? "reasoning effort" : "",
+    caps.reasoning_replay ? "reasoning replay" : "",
+    caps.max_output_tokens ? "max output" : "",
+  ].filter(Boolean);
+  return labels.length > 0 ? labels : ["none"];
 }
 
 function mcpSummaryLabel(data: RuntimeStatusResponse): string {

@@ -332,3 +332,81 @@ func TestLoadFromFile_ThinkingEffortEmpty(t *testing.T) {
 		t.Fatalf("ThinkingEffort = %q, want empty", cfg.ThinkingEffort)
 	}
 }
+
+func TestLoadFromFile_ProviderProfile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `provider:
+  id: deepseek
+  protocol: openai-compatible/chat
+  base_url: https://api.deepseek.com
+  api_key: sk-x
+  model: deepseek-chat
+  headers:
+    X-Provider: juex
+  query:
+    beta: "1"
+  capabilities:
+    tools: false
+    reasoning_replay: true
+  compat:
+    reasoning_replay_fields:
+      - reasoning_content
+`
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "deepseek" || cfg.ProviderProtocol != "openai-compatible/chat" {
+		t.Fatalf("provider identity = id:%q protocol:%q", cfg.ProviderID, cfg.ProviderProtocol)
+	}
+	if cfg.ProviderHeaders["X-Provider"] != "juex" || cfg.ProviderQuery["beta"] != "1" {
+		t.Fatalf("headers/query = %+v / %+v", cfg.ProviderHeaders, cfg.ProviderQuery)
+	}
+	if cfg.ProviderCapabilities.Tools == nil || *cfg.ProviderCapabilities.Tools {
+		t.Fatalf("tools override = %+v, want false", cfg.ProviderCapabilities.Tools)
+	}
+	if got := cfg.ProviderCompat.ReasoningReplayFields; len(got) != 1 || got[0] != "reasoning_content" {
+		t.Fatalf("compat = %+v", cfg.ProviderCompat)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Type != "openai" || profile.Protocol != "openai-compatible/chat" || profile.Capabilities.Tools {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestLoadFromFile_ProviderProfileEnvOverrides(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://file.example", "sk-file", "gpt-file")
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_PROTOCOL", "openai/responses")
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.ProviderProtocol != "openai/responses" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Type != "openai" || profile.Protocol != "openai/responses" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}

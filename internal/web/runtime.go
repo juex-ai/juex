@@ -6,13 +6,24 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
 type runtimeStatusResponse struct {
-	MCP    mcpStatus    `json:"mcp"`
-	Skills skillsStatus `json:"skills"`
+	Provider providerStatus `json:"provider"`
+	MCP      mcpStatus      `json:"mcp"`
+	Skills   skillsStatus   `json:"skills"`
+}
+
+type providerStatus struct {
+	ID           string                   `json:"id,omitempty"`
+	Type         string                   `json:"type,omitempty"`
+	Protocol     string                   `json:"protocol,omitempty"`
+	Model        string                   `json:"model,omitempty"`
+	BaseURL      string                   `json:"base_url,omitempty"`
+	Capabilities llm.ProviderCapabilities `json:"capabilities"`
 }
 
 type mcpStatus struct {
@@ -111,6 +122,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	}
 
 	return runtimeStatusResponse{
+		Provider: s.providerStatus(),
 		MCP: mcpStatus{
 			Configured: len(servers),
 			Connected:  connectedCount,
@@ -119,6 +131,33 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		},
 		Skills: skillStatus,
 	}, nil
+}
+
+func (s *Server) providerStatus() providerStatus {
+	if s.opts.Cfg.ProviderID == "" && s.opts.Cfg.ProviderType == "" && s.opts.Cfg.ProviderProtocol == "" {
+		return providerStatus{
+			Model:   s.opts.Cfg.Model,
+			BaseURL: s.opts.Cfg.BaseURL,
+		}
+	}
+	profile, err := s.opts.Cfg.ProviderProfile()
+	if err != nil {
+		return providerStatus{
+			ID:       s.opts.Cfg.ProviderID,
+			Type:     s.opts.Cfg.ProviderType,
+			Protocol: s.opts.Cfg.ProviderProtocol,
+			Model:    s.opts.Cfg.Model,
+			BaseURL:  s.opts.Cfg.BaseURL,
+		}
+	}
+	return providerStatus{
+		ID:           profile.ID,
+		Type:         profile.Type,
+		Protocol:     string(profile.Protocol),
+		Model:        profile.Model,
+		BaseURL:      profile.BaseURL,
+		Capabilities: profile.Capabilities,
+	}
 }
 
 func (s *Server) cachedSkillsStatus() (skillsStatus, error) {
