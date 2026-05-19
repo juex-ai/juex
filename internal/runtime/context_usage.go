@@ -8,6 +8,8 @@ import (
 	"github.com/juex-ai/juex/internal/prompt"
 )
 
+const contextUsageResponseKey = "response"
+
 func contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sections []prompt.Section, tools []llm.ToolSpec, history []llm.Message) llm.ContextUsage {
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
@@ -23,7 +25,10 @@ func contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sect
 		{Key: "memory_files", Label: "Memory files", Tokens: estimateSectionTokens(sections, "memory_files")},
 		{Key: "skills", Label: "Skills", Tokens: estimateSectionTokens(sections, "skills")},
 		{Key: "messages", Label: "Messages", Tokens: estimateMessageTokens(history)},
-		{Key: "response", Label: "Response", Tokens: usage.OutputTokens},
+		{Key: contextUsageResponseKey, Label: "Response", Tokens: usage.OutputTokens},
+	}
+	if usage.InputTokens <= 0 {
+		usage.InputTokens = estimatedInputTokens(breakdown)
 	}
 	return llm.ContextUsage{
 		Model:         model,
@@ -33,6 +38,17 @@ func contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sect
 		TotalTokens:   usage.TotalTokens(),
 		Breakdown:     breakdown,
 	}
+}
+
+func estimatedInputTokens(parts []llm.ContextUsagePart) int {
+	var total int
+	for _, part := range parts {
+		if part.Key == contextUsageResponseKey {
+			continue
+		}
+		total += part.Tokens
+	}
+	return total
 }
 
 func splitContextTools(tools []llm.ToolSpec) ([]llm.ToolSpec, []llm.ToolSpec) {

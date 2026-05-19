@@ -337,11 +337,13 @@ composer always shows exactly one of them.
 
 `ContextUsageLabel` is a compact `context <total>` chip for the latest
 successful provider request. The total uses provider-reported
-`input_tokens + output_tokens`; its tooltip shows model, configured context
-window, percent used, and an estimated breakdown across system prompt, system
-tools, MCP tools, memory files, skills, messages, and response. `TokenUsageLabel`
-is a compact `tokens <total>` chip for cumulative conversation usage; its
-tooltip shows the input/output split.
+`input_tokens + output_tokens` when input usage is available; if a compatible
+provider omits input usage, it falls back to the estimated input breakdown plus
+the reported response tokens. Its tooltip shows model, configured context window,
+percent used, and an estimated breakdown across system prompt, system tools, MCP
+tools, memory files, skills, messages, and response. `TokenUsageLabel` is a
+compact `tokens <total>` chip for cumulative conversation usage; its tooltip
+shows the input/output split.
 
 ### 7.9 StatusPill
 
