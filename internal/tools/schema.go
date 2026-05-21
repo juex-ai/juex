@@ -17,18 +17,15 @@ func normalizeSchemaValue(value any, key, parentKey string) any {
 		if key == "enum" {
 			return nil
 		}
-		if parentKey == "properties" || key == "items" || key == "contains" || key == "not" {
+		if parentKey == "properties" || parentKey == "patternProperties" || key == "items" || key == "contains" || key == "not" {
 			return map[string]any{}
 		}
 		return nil
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for childKey, child := range v {
-			if child == nil && childKey == "additionalProperties" {
-				continue
-			}
 			normalized := normalizeSchemaValue(child, childKey, key)
-			if normalized == nil && childKey != "enum" {
+			if normalized == nil {
 				continue
 			}
 			out[childKey] = normalized
