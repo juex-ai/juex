@@ -704,6 +704,26 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestReadCodexSSERejectsOversizedLine(t *testing.T) {
+	payload := "data: " + strings.Repeat("x", maxCodexSSELineBytes+1) + "\n\n"
+
+	if _, err := readCodexSSE(strings.NewReader(payload)); err == nil || !strings.Contains(err.Error(), "Codex SSE read") {
+		t.Fatalf("expected oversized SSE line error, got %v", err)
+	}
+}
+
+func TestReadCodexSSERejectsTooManyDataLines(t *testing.T) {
+	var payload strings.Builder
+	for i := 0; i < maxCodexSSEDataLines+1; i++ {
+		payload.WriteString("data: {}\n")
+	}
+	payload.WriteString("\n")
+
+	if _, err := readCodexSSE(strings.NewReader(payload.String())); err == nil || !strings.Contains(err.Error(), "too many data lines") {
+		t.Fatalf("expected too many data lines error, got %v", err)
+	}
+}
+
 func TestAnthropic_ThinkingEffort(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

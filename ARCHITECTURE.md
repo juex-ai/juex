@@ -182,7 +182,10 @@ and explicit capability gates. Public custom protocol families are
 `openai-codex/responses` protocol is reserved for the `openai-codex` preset,
 which targets the ChatGPT Codex backend. Presets exist only for `openai`,
 `openai-codex`, and `anthropic`; unknown custom profiles must set
-`provider.protocol` explicitly.
+`provider.protocol` explicitly. Known presets own their protocol: `openai`
+uses `openai/responses`, `openai-codex` uses `openai-codex/responses`, and
+`anthropic` uses `anthropic/messages`. To use an OpenAI-compatible Chat
+provider, omit `provider.id` and set `provider.protocol: openai/chat`.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
@@ -540,6 +543,11 @@ Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
 default. Environment overrides include `PROVIDER_API_ID`,
 `PROVIDER_API_PROTOCOL`, `PROVIDER_API_BASE`, `PROVIDER_API_KEY`,
 `PROVIDER_API_MODEL`, `PROVIDER_THINKING_EFFORT`, and `PROVIDER_CONTEXT_WINDOW`.
+Each config layer that specifies `provider.id` or `provider.protocol` starts a
+new provider profile, so earlier `provider.base_url`, `provider.api_key`,
+`provider.model`, and capability settings do not carry across provider
+boundaries. Repeat provider-specific values in the same layer as the selector
+or supply them through environment overrides.
 Codex auth is not configurable. When `provider.id: openai-codex` is selected
 and `provider.api_key` is empty, Juex loads the Codex CLI/app auth cache from
 `$CODEX_HOME/auth.json` or `~/.codex/auth.json`. API-key Codex logins use the

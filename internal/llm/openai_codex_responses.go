@@ -13,7 +13,12 @@ import (
 	"strings"
 )
 
-const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
+const (
+	defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
+	maxCodexSSELineBytes      = 1 << 20
+	maxCodexSSEEventBytes     = 4 << 20
+	maxCodexSSEDataLines      = 1024
+)
 
 type openAICodexResponsesProvider struct {
 	cfg     Config
@@ -398,18 +403,22 @@ type codexWireError struct {
 }
 
 func readCodexSSE(r io.Reader) (codexWireResponse, error) {
-	reader := bufio.NewReader(r)
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxCodexSSELineBytes)
 	var (
 		dataLines []string
+		dataBytes int
 		finalResp *codexWireResponse
 		items     []codexWireItem
 	)
 	process := func() error {
 		if len(dataLines) == 0 {
+			dataBytes = 0
 			return nil
 		}
 		data := strings.TrimSpace(strings.Join(dataLines, "\n"))
 		dataLines = nil
+		dataBytes = 0
 		if data == "" || data == "[DONE]" {
 			return nil
 		}
@@ -437,27 +446,31 @@ func readCodexSSE(r io.Reader) (codexWireResponse, error) {
 		}
 		return nil
 	}
-	for {
-		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
-			line = strings.TrimRight(line, "\r\n")
-			if line == "" {
-				if err := process(); err != nil {
-					return codexWireResponse{}, err
-				}
-			} else if strings.HasPrefix(line, "data:") {
-				dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+	for scanner.Scan() {
+		line := strings.TrimRight(scanner.Text(), "\r")
+		if line == "" {
+			if err := process(); err != nil {
+				return codexWireResponse{}, err
 			}
+			continue
 		}
-		if err != nil {
-			if err == io.EOF {
-				if err := process(); err != nil {
-					return codexWireResponse{}, err
-				}
-				break
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if len(dataLines) >= maxCodexSSEDataLines {
+				return codexWireResponse{}, fmt.Errorf("Codex SSE event has too many data lines")
 			}
-			return codexWireResponse{}, err
+			dataBytes += len(data)
+			if dataBytes > maxCodexSSEEventBytes {
+				return codexWireResponse{}, fmt.Errorf("Codex SSE event data exceeds %d bytes", maxCodexSSEEventBytes)
+			}
+			dataLines = append(dataLines, data)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return codexWireResponse{}, fmt.Errorf("Codex SSE read: %w", err)
+	}
+	if err := process(); err != nil {
+		return codexWireResponse{}, err
 	}
 	if finalResp == nil {
 		if len(items) > 0 {

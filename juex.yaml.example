@@ -2,7 +2,8 @@
 # The .juex directory is local runtime state and should not be committed.
 provider:
   # Known presets: openai, openai-codex, anthropic.
-  # Known presets fix the protocol and default base URL.
+  # Known presets fix the protocol and default base URL. Do not combine a
+  # known id with a different protocol; omit id for custom providers.
   # id: openai
   #
   # For OpenAI Codex OAuth, use:
@@ -13,6 +14,9 @@ provider:
   # Valid custom protocol values: anthropic/messages, openai/responses,
   # openai/chat.
   # protocol: openai/chat
+  #
+  # A config layer with id or protocol starts a new provider profile. Repeat
+  # provider-specific values in that layer or set them with environment vars.
   #
   # Known providers usually leave base_url empty. Custom providers must set it.
   id: openai
