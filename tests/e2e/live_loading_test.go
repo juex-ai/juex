@@ -42,7 +42,7 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(configPath, []byte("provider:\n  type: openai\n  base_url: https://example\n  api_key: k\n  model: m\n"), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte("provider:\n  id: openai\n  base_url: https://example\n  api_key: k\n  model: m\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -29,7 +29,7 @@ export function Runtime() {
           <div className="flex items-center justify-between gap-3">
             <h1 className="text-lg font-semibold">Provider</h1>
             <Badge variant="secondary" className="font-mono text-xs">
-              {data.provider.protocol || data.provider.type || "-"}
+              {data.provider.protocol || data.provider.id || "-"}
             </Badge>
           </div>
           <div className="overflow-hidden rounded-lg border">
@@ -41,14 +41,6 @@ export function Runtime() {
                   </th>
                   <td className="px-3 py-2 font-mono text-xs">
                     {data.provider.id || "-"}
-                  </td>
-                </tr>
-                <tr className="border-t">
-                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
-                    Auth
-                  </th>
-                  <td className="px-3 py-2 font-mono text-xs">
-                    {data.provider.auth || "-"}
                   </td>
                 </tr>
                 <tr className="border-t">

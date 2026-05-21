@@ -26,7 +26,7 @@ func (stubProvider) Complete(ctx context.Context, sys string, h []llm.Message, t
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	work := t.TempDir()
-	cfg := config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work}
+	cfg := config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work}
 	srv := NewServer(Options{
 		Cfg:      cfg,
 		Provider: stubProvider{},

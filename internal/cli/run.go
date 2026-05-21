@@ -41,22 +41,20 @@ type errorJSON struct {
 // Derivable paths (memory_dir / sessions_dir under <work_dir>/.juex)
 // are intentionally omitted — readers can reconstruct them from work_dir.
 type dryRunPlan struct {
-	ProviderID   string         `json:"provider_id,omitempty"`
-	ProviderType string         `json:"provider_type"`
-	Protocol     string         `json:"protocol,omitempty"`
-	ProviderAuth string         `json:"provider_auth,omitempty"`
-	Model        string         `json:"model"`
-	BaseURL      string         `json:"base_url"`
-	WorkDir      string         `json:"work_dir"`
-	ConfigFile   string         `json:"config_file,omitempty"`
-	Prompt       string         `json:"prompt"`
-	PromptChars  int            `json:"prompt_chars"`
-	SystemChars  int            `json:"system_prompt_chars"`
-	ToolCount    int            `json:"tool_count"`
-	Tools        []string       `json:"tools"`
-	SkillCount   int            `json:"skill_count"`
-	Skills       []skillSummary `json:"skills,omitempty"`
-	MCP          app.MCPStatus  `json:"mcp"`
+	ProviderID  string         `json:"provider_id,omitempty"`
+	Protocol    string         `json:"protocol,omitempty"`
+	Model       string         `json:"model"`
+	BaseURL     string         `json:"base_url"`
+	WorkDir     string         `json:"work_dir"`
+	ConfigFile  string         `json:"config_file,omitempty"`
+	Prompt      string         `json:"prompt"`
+	PromptChars int            `json:"prompt_chars"`
+	SystemChars int            `json:"system_prompt_chars"`
+	ToolCount   int            `json:"tool_count"`
+	Tools       []string       `json:"tools"`
+	SkillCount  int            `json:"skill_count"`
+	Skills      []skillSummary `json:"skills,omitempty"`
+	MCP         app.MCPStatus  `json:"mcp"`
 }
 
 // skillSummary mirrors what the system prompt's "Available Skills" section
@@ -123,7 +121,7 @@ execution is printed and the process exits with code 10.`,
 			cfg, err := loadConfig(flags)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"set provider.id or provider.type plus provider.api_key or provider.auth / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
+					"set provider.id or provider.protocol plus provider.api_key / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
 			}
 
 			prompt := strings.Join(args, " ")
@@ -148,7 +146,7 @@ execution is printed and the process exits with code 10.`,
 			})
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"check provider.id/provider.protocol or provider.type plus provider.api_key / provider.model in .juex/juex.yaml", false)
+					"check provider.id/provider.protocol plus provider.api_key / provider.model in .juex/juex.yaml", false)
 			}
 			defer a.Close()
 
@@ -216,35 +214,31 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		}
 	}
 	providerID := cfg.ProviderID
-	providerType := cfg.ProviderType
 	protocol := cfg.ProviderProtocol
-	if cfg.ProviderID != "" || cfg.ProviderType != "" || cfg.ProviderProtocol != "" {
+	if cfg.ProviderID != "" || cfg.ProviderProtocol != "" {
 		profile, err := cfg.ProviderProfile()
 		if err != nil {
 			return emit(jsonOut, cmd.ErrOrStderr(), err,
-				"check provider.id / provider.type / provider.protocol in .juex/juex.yaml", false)
+				"check provider.id / provider.protocol in .juex/juex.yaml", false)
 		}
 		providerID = profile.ID
-		providerType = profile.Type
 		protocol = string(profile.Protocol)
 	}
 	plan := dryRunPlan{
-		ProviderID:   providerID,
-		ProviderType: providerType,
-		Protocol:     protocol,
-		ProviderAuth: cfg.ProviderAuth,
-		Model:        cfg.Model,
-		BaseURL:      cfg.BaseURL,
-		WorkDir:      cfg.WorkDir,
-		ConfigFile:   configFileForPlan(flags),
-		Prompt:       userPrompt,
-		PromptChars:  len(userPrompt),
-		SystemChars:  len(system),
-		ToolCount:    len(tools),
-		Tools:        tools,
-		SkillCount:   len(skillSummaries),
-		Skills:       skillSummaries,
-		MCP:          a.MCPStatus(),
+		ProviderID:  providerID,
+		Protocol:    protocol,
+		Model:       cfg.Model,
+		BaseURL:     cfg.BaseURL,
+		WorkDir:     cfg.WorkDir,
+		ConfigFile:  configFileForPlan(flags),
+		Prompt:      userPrompt,
+		PromptChars: len(userPrompt),
+		SystemChars: len(system),
+		ToolCount:   len(tools),
+		Tools:       tools,
+		SkillCount:  len(skillSummaries),
+		Skills:      skillSummaries,
+		MCP:         a.MCPStatus(),
 	}
 
 	if jsonOut {

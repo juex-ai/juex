@@ -37,7 +37,7 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	dir := t.TempDir()
 	prov := &stubProvider{replies: replies}
 	a, err := New(Options{
-		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
 		Provider: prov,
 		WorkDir:  dir,
 	})
@@ -136,7 +136,7 @@ func TestApp_MCPNotificationQueuesDuringActiveTurn(t *testing.T) {
 	dir := t.TempDir()
 	prov := newBlockingAppProvider()
 	a, err := New(Options{
-		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
 		Provider: prov,
 		WorkDir:  dir,
 	})
@@ -280,7 +280,7 @@ func TestApp_VerboseEmitsToStderr(t *testing.T) {
 	}}
 	var stderr bytes.Buffer
 	a, err := New(Options{
-		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
 		Provider: prov,
 		WorkDir:  dir,
 		Verbose:  true,
@@ -308,7 +308,7 @@ func TestApp_SessionWritesIntoWorkDirJuex(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	a, err := New(Options{
-		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
 		Provider: prov,
 		WorkDir:  dir,
 	})
@@ -333,7 +333,7 @@ func TestApp_WritesSessionHistoryWithAlias(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	a, err := New(Options{
-		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
 		Provider: prov,
 		WorkDir:  dir,
 		Alias:    "daily",
@@ -363,7 +363,7 @@ func TestApp_WritesSessionHistoryWithAlias(t *testing.T) {
 
 func TestApp_NewWithoutKeyFails(t *testing.T) {
 	_, err := New(Options{
-		Config:  config.Config{ProviderType: "openai" /* no key */, Model: "m", WorkDir: t.TempDir()},
+		Config:  config.Config{ProviderID: "openai" /* no key */, Model: "m", WorkDir: t.TempDir()},
 		WorkDir: t.TempDir(),
 	})
 	if err == nil {
@@ -382,7 +382,7 @@ func TestApp_NewSoftFailsOptionalMCPStartup(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 	a, err := New(Options{
-		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
 		Provider: &stubProvider{},
 		WorkDir:  dir,
 		Stderr:   &stderr,
@@ -419,7 +419,7 @@ func TestNew_ResumeDirReusesExistingSession(t *testing.T) {
 	}
 
 	a, err := New(Options{
-		Config:    config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Config:    config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider:  &stubProvider{},
 		WorkDir:   work,
 		ResumeDir: dir,
@@ -454,7 +454,7 @@ func TestApp_NewDefaultsWorkDirToCwd(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	a, err := New(Options{
-		Config:   config.Config{ProviderType: "openai", APIKey: "x", Model: "m"},
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m"},
 		Provider: prov,
 	})
 	if err != nil {

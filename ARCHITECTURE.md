@@ -145,7 +145,7 @@ type Response struct {
     Usage      Usage
 }
 
-type Protocol string  // anthropic/messages | openai/responses | openai/chat | openai-compatible/chat
+type Protocol string  // anthropic/messages | openai/responses | openai-codex/responses | openai/chat
 
 type ProviderProfile struct {
     ID             string
@@ -177,12 +177,12 @@ type Provider interface {
 ```
 
 Provider profiles resolve a user config into one wire protocol, a small preset,
-and explicit capability gates. Current protocol families are
-`anthropic/messages`, `openai/responses`, `openai/chat`, and
-`openai-compatible/chat`. Presets exist for `openai`, `anthropic`,
-`openrouter`, `deepseek`, `qwen`/`dashscope`, `moonshot`/`kimi`, `minimax`,
-`volcengine`/`ark`, and `openai-compatible`; unknown custom profiles should
-set `provider.protocol` explicitly.
+and explicit capability gates. Public custom protocol families are
+`anthropic/messages`, `openai/responses`, and `openai/chat`. The
+`openai-codex/responses` protocol is reserved for the `openai-codex` preset,
+which targets the ChatGPT Codex backend. Presets exist only for `openai`,
+`openai-codex`, and `anthropic`; unknown custom profiles must set
+`provider.protocol` explicitly.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
@@ -491,10 +491,6 @@ ships `juex.yaml.example` as a copyable template:
 ```yaml
 provider:
   id: openai
-  type: openai
-  protocol: openai/chat
-  auth: api_key
-  codex_auth_file: ""
   base_url: ""
   api_key: ""
   model: ""
@@ -521,12 +517,9 @@ compaction:
 
 | Field | Description |
 |---|---|
-| `provider.id` | optional preset id such as `openai`, `anthropic`, `deepseek`, `qwen`, `kimi`, `minimax`, `ark`, or `openai-compatible` |
-| `provider.type` | legacy SDK family, `anthropic` or `openai`; still accepted for old configs |
-| `provider.protocol` | wire family: `anthropic/messages`, `openai/responses`, `openai/chat`, or `openai-compatible/chat` |
-| `provider.auth` | credential source: empty/`api_key` uses `provider.api_key`; `codex` reads file-backed Codex login credentials |
-| `provider.codex_auth_file` | optional Codex auth cache path; defaults to `$CODEX_HOME/auth.json` or `~/.codex/auth.json` |
-| `provider.base_url` | full base URL (Anthropic, OpenAI, DeepSeek, etc.) |
+| `provider.id` | optional known preset id: `openai`, `openai-codex`, or `anthropic` |
+| `provider.protocol` | required for custom providers; public values are `anthropic/messages`, `openai/responses`, and `openai/chat` |
+| `provider.base_url` | full base URL for custom providers; known presets use their provider default unless overridden for testing |
 | `provider.api_key` | API key |
 | `provider.model` | model name |
 | `provider.thinking_effort` | optional reasoning depth for thinking models |
@@ -545,12 +538,12 @@ compaction:
 Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
 < `--config <path>` (if supplied) < `os.Environ`. `.env` is no longer read by
 default. Environment overrides include `PROVIDER_API_ID`,
-`PROVIDER_API_TYPE`, `PROVIDER_API_PROTOCOL`, `PROVIDER_AUTH`,
-`PROVIDER_CODEX_AUTH_FILE`, `PROVIDER_API_BASE`, `PROVIDER_API_KEY`,
+`PROVIDER_API_PROTOCOL`, `PROVIDER_API_BASE`, `PROVIDER_API_KEY`,
 `PROVIDER_API_MODEL`, `PROVIDER_THINKING_EFFORT`, and `PROVIDER_CONTEXT_WINDOW`.
-When `provider.auth: codex` is selected and `provider.api_key` is empty, Juex
-loads the Codex CLI/app auth cache from file storage. API-key Codex logins use
-the cached `OPENAI_API_KEY`; ChatGPT logins use the cached access token and add
+Codex auth is not configurable. When `provider.id: openai-codex` is selected
+and `provider.api_key` is empty, Juex loads the Codex CLI/app auth cache from
+`$CODEX_HOME/auth.json` or `~/.codex/auth.json`. API-key Codex logins use the
+cached `OPENAI_API_KEY`; ChatGPT logins use the cached access token and add
 `ChatGPT-Account-ID` / `X-OpenAI-Fedramp` headers when those claims are present.
 Juex does not start the interactive Codex login flow, refresh expired tokens, or
 read OS keyring credentials.
@@ -705,16 +698,16 @@ workflow; runs entirely on GitHub Actions.
   - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
     runs `go test ./... -race -count=1`. Bash-tool tests skip on Windows
     via a `runtime.GOOS` guard.
-- `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/juex.qwen.yaml`
-  and `.juex/juex.minimax.yaml` provider configs from repo secrets, then
+- `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/qwen.juex.yaml`
+  and `.juex/minimax.juex.yaml` provider configs from repo secrets, then
   runs `-tags=integration ./tests/e2e/...`. Required secrets:
 
   ```
-  PROVIDER_API_ID_ANTHROPIC     PROVIDER_API_PROTOCOL_ANTHROPIC
-  PROVIDER_API_TYPE_ANTHROPIC   PROVIDER_API_BASE_ANTHROPIC
+  PROVIDER_API_PROTOCOL_ANTHROPIC
+  PROVIDER_API_BASE_ANTHROPIC
   PROVIDER_API_KEY_ANTHROPIC    PROVIDER_API_MODEL_ANTHROPIC
-  PROVIDER_API_ID_OPENAI        PROVIDER_API_PROTOCOL_OPENAI
-  PROVIDER_API_TYPE_OPENAI      PROVIDER_API_BASE_OPENAI
+  PROVIDER_API_PROTOCOL_OPENAI
+  PROVIDER_API_BASE_OPENAI
   PROVIDER_API_KEY_OPENAI       PROVIDER_API_MODEL_OPENAI
   ```
 - `release.yml` — `push: tags: ["v*"]`. Runs `goreleaser release --clean`

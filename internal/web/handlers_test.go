@@ -229,7 +229,7 @@ func TestPostTurn_QueuesWhileRunning(t *testing.T) {
 	)
 	work := t.TempDir()
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -347,7 +347,7 @@ func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {
 	)
 	work := t.TempDir()
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)

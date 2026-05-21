@@ -81,7 +81,7 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	p := NewAnthropic(Config{
-		Type:    "anthropic",
+		ID:      "anthropic",
 		BaseURL: srv.URL,
 		APIKey:  "test-key",
 		Model:   "claude-test",
@@ -133,7 +133,7 @@ func TestAnthropic_CompactsEmptyHistoryMessages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}, nil)
+	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}, nil)
 	hist := []Message{
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{}},
@@ -183,10 +183,10 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	p := NewOpenAI(Config{
-		Type:    "openai",
-		BaseURL: srv.URL,
-		APIKey:  "test-key",
-		Model:   "gpt-test",
+		Protocol: string(ProtocolOpenAIChat),
+		BaseURL:  srv.URL,
+		APIKey:   "test-key",
+		Model:    "gpt-test",
 	}, nil)
 
 	resp, err := p.Complete(context.Background(), "system text",
@@ -227,7 +227,7 @@ func TestProviders_RetryPolicy(t *testing.T) {
 		{
 			name: "anthropic",
 			provider: func(baseURL string) Provider {
-				return NewAnthropic(Config{Type: "anthropic", BaseURL: baseURL, APIKey: "test-key", Model: "claude-test"}, nil)
+				return NewAnthropic(Config{ID: "anthropic", BaseURL: baseURL, APIKey: "test-key", Model: "claude-test"}, nil)
 			},
 			serverErr:          `{"type":"error","error":{"type":"api_error","message":"temporary server error"}}`,
 			badReqErr:          `{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`,
@@ -237,7 +237,7 @@ func TestProviders_RetryPolicy(t *testing.T) {
 		{
 			name: "openai",
 			provider: func(baseURL string) Provider {
-				return NewOpenAI(Config{Type: "openai", BaseURL: baseURL, APIKey: "k", Model: "m"}, nil)
+				return NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: baseURL, APIKey: "k", Model: "m"}, nil)
 			},
 			serverErr:          `{"error":{"message":"temporary server error","type":"server_error"}}`,
 			badReqErr:          `{"error":{"message":"bad request","type":"invalid_request_error"}}`,
@@ -312,7 +312,7 @@ func TestOpenAI_CompactsEmptyHistoryMessages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Type: "openai", BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
 	hist := []Message{
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{}},
@@ -349,7 +349,7 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Type: "openai", BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
 
 	hist := []Message{
 		TextMessage(RoleUser, "do it"),
@@ -381,14 +381,14 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 }
 
 func TestNewProvider_Errors(t *testing.T) {
-	if _, err := New(Config{Type: "anthropic", APIKey: "", Model: "m"}); err == nil {
+	if _, err := New(Config{ID: "anthropic", APIKey: "", Model: "m"}); err == nil {
 		t.Error("missing key should error")
 	}
-	if _, err := New(Config{Type: "anthropic", APIKey: "k"}); err == nil {
+	if _, err := New(Config{ID: "anthropic", APIKey: "k"}); err == nil {
 		t.Error("missing model should error")
 	}
-	if _, err := New(Config{Type: "bogus", APIKey: "k", Model: "m"}); err == nil {
-		t.Error("unknown type should error")
+	if _, err := New(Config{ID: "bogus", APIKey: "k", Model: "m"}); err == nil {
+		t.Error("unknown provider selector should error")
 	}
 }
 
@@ -420,7 +420,17 @@ func TestOpenAI_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Type: "openai", BaseURL: srv.URL, APIKey: "k", Model: "m", ThinkingEffort: "low"}, nil)
+	enabled := true
+	p := NewOpenAI(Config{
+		Protocol:       string(ProtocolOpenAIChat),
+		BaseURL:        srv.URL,
+		APIKey:         "k",
+		Model:          "m",
+		ThinkingEffort: "low",
+		Capabilities: CapabilityOverrides{
+			ReasoningEffort: &enabled,
+		},
+	}, nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -439,7 +449,7 @@ func TestOpenAI_NoThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Type: "openai", BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -458,7 +468,7 @@ func TestOpenAI_CompleteOptionsUsesOneMaxTokenField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Type: "openai", BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
 	withOpts, ok := p.(ProviderWithOptions)
 	if !ok {
 		t.Fatal("openai provider does not implement ProviderWithOptions")
@@ -489,7 +499,7 @@ func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
 
 	disabled := false
 	p := NewOpenAI(Config{
-		Type:           "openai",
+		Protocol:       string(ProtocolOpenAIChat),
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "m",
@@ -616,6 +626,84 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
+	var capturedBody map[string]any
+	var capturedAuth, capturedAccount, capturedOriginator, capturedBeta, capturedAccept string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/codex/responses") {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		capturedAuth = r.Header.Get("Authorization")
+		capturedAccount = r.Header.Get("chatgpt-account-id")
+		capturedOriginator = r.Header.Get("originator")
+		capturedBeta = r.Header.Get("OpenAI-Beta")
+		capturedAccept = r.Header.Get("Accept")
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"thought summary"}],"encrypted_content":"enc"},{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello","annotations":[]}]},{"type":"function_call","id":"fc_1","call_id":"call_1","name":"read","arguments":"{\"path\":\"x\"}","status":"completed"}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:             "openai-codex",
+		Protocol:       "openai-codex/responses",
+		BaseURL:        srv.URL,
+		APIKey:         "codex-token",
+		Model:          "gpt-test",
+		ThinkingEffort: "low",
+		Headers:        map[string]string{"ChatGPT-Account-ID": "acct_1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Complete(context.Background(), "system",
+		[]Message{
+			TextMessage(RoleUser, "hello"),
+			{Role: RoleAssistant, Blocks: []Block{
+				{Type: BlockReasoning, Text: "prior", Signature: "rs_prev", Content: "enc_prev", Redacted: true},
+				{Type: BlockToolUse, ToolUseID: "call_prev", ToolName: "read", Input: map[string]any{"path": "old"}},
+			}},
+			{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_prev", Content: "old file"}}},
+		},
+		[]ToolSpec{{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}}},
+	)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if capturedAuth != "Bearer codex-token" || capturedAccount != "acct_1" || capturedOriginator != "juex" {
+		t.Fatalf("headers auth/account/originator = %q/%q/%q", capturedAuth, capturedAccount, capturedOriginator)
+	}
+	if capturedBeta != "responses=experimental" || capturedAccept != "text/event-stream" {
+		t.Fatalf("headers beta/accept = %q/%q", capturedBeta, capturedAccept)
+	}
+	if capturedBody["model"] != "gpt-test" || capturedBody["instructions"] != "system" || capturedBody["stream"] != true {
+		t.Fatalf("captured body = %+v", capturedBody)
+	}
+	if capturedBody["reasoning"] == nil || capturedBody["include"] == nil {
+		t.Fatalf("codex request should include reasoning controls: %+v", capturedBody)
+	}
+	input, _ := capturedBody["input"].([]any)
+	if len(input) < 4 {
+		t.Fatalf("input = %+v", input)
+	}
+	if resp.StopReason != StopToolUse {
+		t.Fatalf("stop reason = %s, want tool_use", resp.StopReason)
+	}
+	if resp.Message.FirstText() != "hello" {
+		t.Fatalf("text = %q", resp.Message.FirstText())
+	}
+	if calls := resp.Message.ToolCalls(); len(calls) != 1 || calls[0].ToolName != "read" || calls[0].Input["path"] != "x" {
+		t.Fatalf("tool calls = %+v", calls)
+	}
+	if len(resp.Message.Blocks) == 0 || resp.Message.Blocks[0].Type != BlockReasoning || resp.Message.Blocks[0].Signature != "rs_1" {
+		t.Fatalf("reasoning block not preserved: %+v", resp.Message.Blocks)
+	}
+	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+}
+
 func TestAnthropic_ThinkingEffort(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -625,7 +713,7 @@ func TestAnthropic_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "low"}, nil)
+	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "low"}, nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -656,7 +744,7 @@ func TestAnthropic_NoThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}, nil)
+	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}, nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -692,7 +780,7 @@ func TestAnthropic_AlwaysUsesStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7"}, nil)
+	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7"}, nil)
 	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -719,7 +807,7 @@ func TestProviderCompleteOptions_PreservesThinkingForCompaction(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{Type: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7", ThinkingEffort: "high"}, nil)
+	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7", ThinkingEffort: "high"}, nil)
 	withOpts, ok := p.(ProviderWithOptions)
 	if !ok {
 		t.Fatal("anthropic provider does not implement ProviderWithOptions")

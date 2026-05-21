@@ -489,7 +489,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		},
 	}
 	a1, err := app.New(app.Options{
-		Config:   config.Config{ProviderType: "stub", WorkDir: work},
+		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work},
 		Provider: prov1,
 		WorkDir:  work,
 	})
@@ -525,7 +525,7 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 		},
 	}
 	a2, err := app.New(app.Options{
-		Config:    config.Config{ProviderType: "stub", WorkDir: work},
+		Config:    config.Config{ProviderProtocol: "openai/chat", WorkDir: work},
 		Provider:  prov2,
 		WorkDir:   work,
 		ResumeDir: sessionDir,

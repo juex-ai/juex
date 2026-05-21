@@ -4,6 +4,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,21 +21,18 @@ import (
 // live under .agents. Runtime data (memory, sessions, history) lives under
 // .juex so it does not overlap with project agent configuration.
 type Config struct {
-	ProviderType          string // "anthropic" | "openai"
-	ProviderID            string
-	ProviderProtocol      string
-	ProviderAuth          string
-	ProviderCodexAuthFile string
-	BaseURL               string
-	APIKey                string
-	Model                 string
-	ThinkingEffort        string // "low", "medium", "high", or "" (provider default)
-	ContextWindow         int    // provider context window in tokens; defaults to 256K
-	ProviderHeaders       map[string]string
-	ProviderQuery         map[string]string
-	ProviderCapabilities  llm.CapabilityOverrides
-	ProviderCompat        llm.CompatOptions
-	Compaction            CompactionConfig
+	ProviderID           string
+	ProviderProtocol     string
+	BaseURL              string
+	APIKey               string
+	Model                string
+	ThinkingEffort       string // "low", "medium", "high", or "" (provider default)
+	ContextWindow        int    // provider context window in tokens; defaults to 256K
+	ProviderHeaders      map[string]string
+	ProviderQuery        map[string]string
+	ProviderCapabilities llm.CapabilityOverrides
+	ProviderCompat       llm.CompatOptions
+	Compaction           CompactionConfig
 
 	HomeAgentsDir string // ~/.agents (user-global)
 	WorkDir       string // explicit; defaults to os.Getwd()
@@ -47,10 +45,7 @@ type fileConfig struct {
 
 type providerConfig struct {
 	ID             string                     `yaml:"id"`
-	Type           string                     `yaml:"type"`
 	Protocol       string                     `yaml:"protocol"`
-	Auth           string                     `yaml:"auth"`
-	CodexAuthFile  string                     `yaml:"codex_auth_file"`
 	BaseURL        string                     `yaml:"base_url"`
 	APIKey         string                     `yaml:"api_key"`
 	Model          string                     `yaml:"model"`
@@ -94,7 +89,7 @@ type compactionConfig struct {
 
 const DefaultContextWindow = 256000
 
-var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_TYPE", "PROVIDER_API_PROTOCOL", "PROVIDER_AUTH", "PROVIDER_CODEX_AUTH_FILE", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
+var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
 // Load resolves config from <WorkDir>/.juex/juex.yaml and OS env vars.
 //
@@ -128,15 +123,15 @@ func loadForWorkDir(workDir string, resolveAuth bool) (Config, error) {
 	}
 	applyOSEnv(&cfg)
 	if resolveAuth {
-		if err := resolveProviderAuth(&cfg); err != nil {
+		if err := resolveCodexAuth(&cfg); err != nil {
 			return cfg, err
 		}
 	}
 	return cfg, nil
 }
 
-func resolveProviderAuthInConfig(cfg Config) (Config, error) {
-	if err := resolveProviderAuth(&cfg); err != nil {
+func resolveCodexAuthInConfig(cfg Config) (Config, error) {
+	if err := resolveCodexAuth(&cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -167,13 +162,13 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 		return cfg, err
 	}
 	applyOSEnv(&cfg)
-	return resolveProviderAuthInConfig(cfg)
+	return resolveCodexAuthInConfig(cfg)
 }
 
 // NewProvider constructs the LLM provider implied by the config.
 func (c Config) NewProvider() (llm.Provider, error) {
-	if c.ProviderType == "" && c.ProviderID == "" && c.ProviderProtocol == "" {
-		return nil, fmt.Errorf("config: provider id/type/protocol is empty")
+	if c.ProviderID == "" && c.ProviderProtocol == "" {
+		return nil, fmt.Errorf("config: provider id/protocol is empty")
 	}
 	return llm.New(c.llmConfig())
 }
@@ -184,7 +179,6 @@ func (c Config) ProviderProfile() (llm.ProviderProfile, error) {
 
 func (c Config) llmConfig() llm.Config {
 	return llm.Config{
-		Type:           c.ProviderType,
 		ID:             c.ProviderID,
 		Protocol:       c.ProviderProtocol,
 		BaseURL:        c.BaseURL,
@@ -295,7 +289,9 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 		return err
 	}
 	var fc fileConfig
-	if err := yaml.Unmarshal(data, &fc); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&fc); err != nil {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	applyProviderConfig(cfg, fc.Provider)
@@ -315,21 +311,10 @@ func DefaultCompactionConfig() CompactionConfig {
 }
 
 func applyProviderConfig(cfg *Config, p providerConfig) {
-	if p.ID != "" {
-		cfg.ProviderID = p.ID
+	if providerSelectorSpecified(p.ID, p.Protocol) {
+		resetProviderConfig(cfg)
 	}
-	if p.Type != "" {
-		cfg.ProviderType = p.Type
-	}
-	if p.Protocol != "" {
-		cfg.ProviderProtocol = p.Protocol
-	}
-	if p.Auth != "" {
-		cfg.ProviderAuth = p.Auth
-	}
-	if p.CodexAuthFile != "" {
-		cfg.ProviderCodexAuthFile = p.CodexAuthFile
-	}
+	applyProviderSelectorConfig(cfg, p.ID, p.Protocol)
 	if p.BaseURL != "" {
 		cfg.BaseURL = p.BaseURL
 	}
@@ -351,6 +336,32 @@ func applyProviderConfig(cfg *Config, p providerConfig) {
 	if len(p.Compat.ReasoningReplayFields) > 0 {
 		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
 	}
+}
+
+func providerSelectorSpecified(id, protocol string) bool {
+	return id != "" || protocol != ""
+}
+
+func resetProviderConfig(cfg *Config) {
+	cfg.ProviderID = ""
+	cfg.ProviderProtocol = ""
+	cfg.BaseURL = ""
+	cfg.APIKey = ""
+	cfg.Model = ""
+	cfg.ThinkingEffort = ""
+	cfg.ContextWindow = DefaultContextWindow
+	cfg.ProviderHeaders = nil
+	cfg.ProviderQuery = nil
+	cfg.ProviderCapabilities = llm.CapabilityOverrides{}
+	cfg.ProviderCompat = llm.CompatOptions{}
+}
+
+func applyProviderSelectorConfig(cfg *Config, id, protocol string) {
+	if !providerSelectorSpecified(id, protocol) {
+		return
+	}
+	cfg.ProviderID = id
+	cfg.ProviderProtocol = protocol
 }
 
 func applyCompactionConfig(cfg *Config, c compactionConfig) {
@@ -385,20 +396,10 @@ func applyOSEnv(cfg *Config) {
 }
 
 func applyEnvMap(cfg *Config, values map[string]string) {
-	if v, ok := values["PROVIDER_API_ID"]; ok && v != "" {
-		cfg.ProviderID = v
-	}
-	if v, ok := values["PROVIDER_API_TYPE"]; ok && v != "" {
-		cfg.ProviderType = v
-	}
-	if v, ok := values["PROVIDER_API_PROTOCOL"]; ok && v != "" {
-		cfg.ProviderProtocol = v
-	}
-	if v, ok := values["PROVIDER_AUTH"]; ok && v != "" {
-		cfg.ProviderAuth = v
-	}
-	if v, ok := values["PROVIDER_CODEX_AUTH_FILE"]; ok && v != "" {
-		cfg.ProviderCodexAuthFile = v
+	id, hasID := values["PROVIDER_API_ID"]
+	protocol, hasProtocol := values["PROVIDER_API_PROTOCOL"]
+	if hasID || hasProtocol {
+		applyProviderSelectorConfig(cfg, id, protocol)
 	}
 	if v, ok := values["PROVIDER_API_BASE"]; ok && v != "" {
 		cfg.BaseURL = v
