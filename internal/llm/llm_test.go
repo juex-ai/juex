@@ -124,6 +124,42 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestAnthropic_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		writeAnthropicTextStream(w, "claude-test", "ok", "end_turn", 10, 5)
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{
+		ID:      "anthropic",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}, nil)
+
+	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
+		{Name: "list_agents", Description: "list agents", Schema: map[string]any{"type": "object"}},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	tools, _ := capturedBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v", capturedBody["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	inputSchema, _ := tool["input_schema"].(map[string]any)
+	props, ok := inputSchema["properties"].(map[string]any)
+	if !ok || props == nil {
+		t.Fatalf("properties should be an empty object, got %+v in schema %+v", inputSchema["properties"], inputSchema)
+	}
+	if len(props) != 0 {
+		t.Fatalf("properties = %+v, want empty object", props)
+	}
+}
+
 func TestAnthropic_CompactsEmptyHistoryMessages(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

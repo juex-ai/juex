@@ -205,7 +205,7 @@ func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic
 func toAnthropicTools(tools []ToolSpec) []anthropic.ToolUnionParam {
 	out := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
-		schema := anthropic.ToolInputSchemaParam{}
+		schema := anthropic.ToolInputSchemaParam{Properties: map[string]any{}}
 		if props, ok := t.Schema["properties"]; ok {
 			schema.Properties = props
 		}
