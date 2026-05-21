@@ -52,7 +52,7 @@ body`)
 	if got.Skills.Count != 1 || got.Skills.Items[0].Name != "review" {
 		t.Fatalf("skills = %+v", got.Skills)
 	}
-	if got.Provider.Type != "openai" || got.Provider.Protocol != "openai/chat" || got.Provider.Model != "m" {
+	if got.Provider.ID != "openai" || got.Provider.Protocol != "openai/responses" || got.Provider.Model != "m" {
 		t.Fatalf("provider = %+v", got.Provider)
 	}
 }

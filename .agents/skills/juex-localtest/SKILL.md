@@ -21,7 +21,7 @@ mise exec -- <command>
 
 1. **Focused Go tests while iterating** — run `go test -v ./path/to/changed/package/...` for each changed Go package that has `*_test.go` files. For cross-package changes, include `./tests/e2e/...`.
 2. **Full Go test suite** — `make test` runs `go test ./... -count=1`, including the non-live e2e tests under `tests/e2e`.
-3. **Live integration entrypoint** — `make integration` runs `go test -tags=integration ./tests/e2e/... -count=1`. These tests load live provider configs from `.juex/*.yaml`, currently `.juex/juex.qwen.yaml` and `.juex/juex.minimax.yaml`. Missing files, empty keys, or incomplete provider config are expected to skip the affected live cases.
+3. **Live integration entrypoint** — `make integration` runs `go test -tags=integration ./tests/e2e/... -count=1`. These tests load live provider configs from `.juex/*.yaml`, currently `.juex/qwen.juex.yaml` and `.juex/minimax.juex.yaml`. Missing files, empty keys, or incomplete provider config are expected to skip the affected live cases.
 4. **Frontend and embedded binary build** — `make build` runs `make web` first (`cd frontend && pnpm install && pnpm build`), copies the bundle into `internal/web/dist`, then builds `dist/juex`.
 5. **CI parity when the change is risky** — run `go test ./... -race -count=1` after changes to concurrency, runtime, MCP, tools, events, session, or web request handling.
 

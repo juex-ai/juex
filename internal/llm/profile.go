@@ -3,6 +3,7 @@ package llm
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 type Protocol string
@@ -10,8 +11,8 @@ type Protocol string
 const (
 	ProtocolAnthropicMessages    Protocol = "anthropic/messages"
 	ProtocolOpenAIResponses      Protocol = "openai/responses"
+	ProtocolOpenAICodexResponses Protocol = "openai-codex/responses"
 	ProtocolOpenAIChat           Protocol = "openai/chat"
-	ProtocolOpenAICompatibleChat Protocol = "openai-compatible/chat"
 )
 
 type ProviderCapabilities struct {
@@ -36,7 +37,6 @@ type CompatOptions struct {
 
 type ProviderProfile struct {
 	ID             string
-	Type           string
 	Protocol       Protocol
 	BaseURL        string
 	APIKey         string
@@ -50,7 +50,6 @@ type ProviderProfile struct {
 
 func (p ProviderProfile) Config() Config {
 	return Config{
-		Type:           p.Type,
 		ID:             p.ID,
 		Protocol:       string(p.Protocol),
 		BaseURL:        p.BaseURL,
@@ -73,45 +72,14 @@ func (p ProviderProfile) Config() Config {
 }
 
 func ResolveProfile(cfg Config) (ProviderProfile, error) {
-	id := firstNonEmpty(cfg.ID, cfg.Type, "custom")
-	profile := presetProfile(id)
-	if profile.ID == "" {
-		profile = customProfile(id)
+	profile, err := baseProfile(cfg)
+	if err != nil {
+		return ProviderProfile{}, err
 	}
-	if cfg.Type != "" {
-		if cfg.Protocol == "" && cfg.ID == "" && cfg.Type != "anthropic" && cfg.Type != "openai" {
-			return ProviderProfile{}, fmt.Errorf("llm: unknown provider type %q", cfg.Type)
-		}
-		profile.Type = cfg.Type
-	}
-	if cfg.Protocol != "" {
-		proto, err := parseProtocol(cfg.Protocol)
-		if err != nil {
-			return ProviderProfile{}, err
-		}
-		profile.Protocol = proto
-		profile.Type = typeForProtocol(proto)
-	} else if profile.Protocol == "" {
-		profile.Protocol = protocolForType(profile.Type)
-	}
-	if profile.Type == "" {
-		profile.Type = typeForProtocol(profile.Protocol)
-	}
-	if cfg.ID != "" {
-		profile.ID = cfg.ID
-	}
-	if cfg.BaseURL != "" {
-		profile.BaseURL = cfg.BaseURL
-	}
-	if cfg.APIKey != "" {
-		profile.APIKey = cfg.APIKey
-	}
-	if cfg.Model != "" {
-		profile.Model = cfg.Model
-	}
-	if cfg.ThinkingEffort != "" {
-		profile.ThinkingEffort = cfg.ThinkingEffort
-	}
+	profile.BaseURL = firstNonEmpty(cfg.BaseURL, profile.BaseURL)
+	profile.APIKey = firstNonEmpty(cfg.APIKey, profile.APIKey)
+	profile.Model = firstNonEmpty(cfg.Model, profile.Model)
+	profile.ThinkingEffort = firstNonEmpty(cfg.ThinkingEffort, profile.ThinkingEffort)
 	profile.Headers = mergeStringMap(profile.Headers, cfg.Headers)
 	profile.Query = mergeStringMap(profile.Query, cfg.Query)
 	profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
@@ -122,6 +90,37 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 		profile.Compat.ReasoningReplayFields = []string{"reasoning_content", "reasoning", "thinking"}
 	}
 	return profile, nil
+}
+
+func baseProfile(cfg Config) (ProviderProfile, error) {
+	id := strings.TrimSpace(cfg.ID)
+	rawProtocol := strings.TrimSpace(cfg.Protocol)
+
+	if id != "" {
+		profile := presetProfile(id)
+		if profile.ID != "" {
+			if rawProtocol != "" {
+				proto, err := parseProtocol(rawProtocol)
+				if err != nil {
+					return ProviderProfile{}, err
+				}
+				if proto != profile.Protocol {
+					return ProviderProfile{}, fmt.Errorf("llm: provider id %q uses fixed protocol %q; omit provider.protocol or remove provider.id for a custom provider", id, profile.Protocol)
+				}
+			}
+			return profile, nil
+		}
+		if rawProtocol == "" {
+			return ProviderProfile{}, fmt.Errorf("llm: unknown provider id %q requires provider.protocol", id)
+		}
+		return customProfileForProtocol(id, rawProtocol)
+	}
+
+	if rawProtocol != "" {
+		return customProfileForProtocol("custom", rawProtocol)
+	}
+
+	return ProviderProfile{}, fmt.Errorf("llm: provider id or protocol is empty")
 }
 
 func KnownProviderIDs() []string {
@@ -136,7 +135,6 @@ func KnownProviderIDs() []string {
 var providerPresets = map[string]ProviderProfile{
 	"anthropic": {
 		ID:       "anthropic",
-		Type:     "anthropic",
 		Protocol: ProtocolAnthropicMessages,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
@@ -149,8 +147,7 @@ var providerPresets = map[string]ProviderProfile{
 	},
 	"openai": {
 		ID:       "openai",
-		Type:     "openai",
-		Protocol: ProtocolOpenAIChat,
+		Protocol: ProtocolOpenAIResponses,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
 			ReasoningEffort: true,
@@ -159,53 +156,69 @@ var providerPresets = map[string]ProviderProfile{
 		},
 		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	},
-	"openai-compatible": openAICompatiblePreset("openai-compatible"),
-	"openrouter":        openAICompatiblePreset("openrouter"),
-	"deepseek":          openAICompatiblePreset("deepseek"),
-	"qwen":              openAICompatiblePreset("qwen"),
-	"dashscope":         openAICompatiblePreset("dashscope"),
-	"moonshot":          openAICompatiblePreset("moonshot"),
-	"kimi":              openAICompatiblePreset("kimi"),
-	"minimax": {
-		ID:       "minimax",
-		Type:     "anthropic",
-		Protocol: ProtocolAnthropicMessages,
+	"openai-codex": {
+		ID:       "openai-codex",
+		Protocol: ProtocolOpenAICodexResponses,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
-			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
 		},
-		Compat: CompatOptions{ReasoningReplayFields: []string{"thinking", "redacted_thinking"}},
+		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	},
-	"volcengine": openAICompatiblePreset("volcengine"),
-	"ark":        openAICompatiblePreset("ark"),
 }
 
-func openAICompatiblePreset(id string) ProviderProfile {
-	return ProviderProfile{
-		ID:       id,
-		Type:     "openai",
-		Protocol: ProtocolOpenAICompatibleChat,
-		Capabilities: ProviderCapabilities{
-			Tools:           true,
-			ReasoningReplay: true,
-			MaxOutputTokens: true,
-		},
-		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
+func customProfileForProtocol(id, rawProtocol string) (ProviderProfile, error) {
+	proto, err := parseProtocol(rawProtocol)
+	if err != nil {
+		return ProviderProfile{}, err
+	}
+	switch proto {
+	case ProtocolAnthropicMessages:
+		return ProviderProfile{
+			ID:       id,
+			Protocol: proto,
+			Capabilities: ProviderCapabilities{
+				Tools:           true,
+				Streaming:       true,
+				ReasoningEffort: true,
+				ReasoningReplay: true,
+				MaxOutputTokens: true,
+			},
+			Compat: CompatOptions{ReasoningReplayFields: []string{"thinking", "redacted_thinking"}},
+		}, nil
+	case ProtocolOpenAIResponses:
+		return ProviderProfile{
+			ID:       id,
+			Protocol: proto,
+			Capabilities: ProviderCapabilities{
+				Tools:           true,
+				ReasoningEffort: true,
+				ReasoningReplay: true,
+				MaxOutputTokens: true,
+			},
+			Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
+		}, nil
+	case ProtocolOpenAIChat:
+		return customOpenAIChatProfile(id, proto), nil
+	case ProtocolOpenAICodexResponses:
+		return ProviderProfile{}, fmt.Errorf("llm: protocol %q is reserved for provider id %q", proto, "openai-codex")
+	default:
+		return ProviderProfile{}, fmt.Errorf("llm: unsupported provider protocol %q", proto)
 	}
 }
 
-func customProfile(id string) ProviderProfile {
+func customOpenAIChatProfile(id string, proto Protocol) ProviderProfile {
 	return ProviderProfile{
 		ID:       id,
-		Type:     "openai",
-		Protocol: protocolForType(id),
+		Protocol: proto,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
+			ReasoningReplay: true,
 			MaxOutputTokens: true,
 		},
+		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	}
 }
 
@@ -221,32 +234,10 @@ func presetProfile(id string) ProviderProfile {
 
 func parseProtocol(in string) (Protocol, error) {
 	switch Protocol(in) {
-	case ProtocolAnthropicMessages, ProtocolOpenAIResponses, ProtocolOpenAIChat, ProtocolOpenAICompatibleChat:
+	case ProtocolAnthropicMessages, ProtocolOpenAIResponses, ProtocolOpenAICodexResponses, ProtocolOpenAIChat:
 		return Protocol(in), nil
 	default:
 		return "", fmt.Errorf("llm: unknown provider protocol %q", in)
-	}
-}
-
-func protocolForType(typ string) Protocol {
-	switch typ {
-	case "anthropic":
-		return ProtocolAnthropicMessages
-	case "openai":
-		return ProtocolOpenAIChat
-	default:
-		return ProtocolOpenAICompatibleChat
-	}
-}
-
-func typeForProtocol(proto Protocol) string {
-	switch proto {
-	case ProtocolAnthropicMessages:
-		return "anthropic"
-	case ProtocolOpenAIResponses, ProtocolOpenAIChat, ProtocolOpenAICompatibleChat:
-		return "openai"
-	default:
-		return ""
 	}
 }
 

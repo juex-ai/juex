@@ -2,25 +2,36 @@ package llm
 
 import "testing"
 
-func TestResolveProfile_PresetsAndProtocolOverride(t *testing.T) {
+func TestResolveProfile_KnownPresetUsesFixedProtocol(t *testing.T) {
 	profile, err := ResolveProfile(Config{
-		ID:       "deepseek",
-		APIKey:   "k",
-		Model:    "deepseek-chat",
-		BaseURL:  "https://api.deepseek.com",
-		Protocol: string(ProtocolOpenAICompatibleChat),
+		ID:      "openai",
+		APIKey:  "k",
+		Model:   "gpt-test",
+		BaseURL: "https://api.openai.com/v1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != "deepseek" || profile.Type != "openai" || profile.Protocol != ProtocolOpenAICompatibleChat {
+	if profile.ID != "openai" || profile.Protocol != ProtocolOpenAIResponses {
 		t.Fatalf("profile = %+v", profile)
 	}
-	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningReplay {
+	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
 		t.Fatalf("capabilities = %+v", profile.Capabilities)
 	}
 	if len(profile.Compat.ReasoningReplayFields) == 0 {
 		t.Fatalf("compat missing reasoning replay fields: %+v", profile.Compat)
+	}
+}
+
+func TestResolveProfile_RejectsKnownPresetProtocolOverride(t *testing.T) {
+	_, err := ResolveProfile(Config{
+		ID:       "openai",
+		Protocol: string(ProtocolOpenAIChat),
+		APIKey:   "k",
+		Model:    "gpt-test",
+	})
+	if err == nil {
+		t.Fatal("expected fixed protocol override error")
 	}
 }
 
@@ -46,17 +57,26 @@ func TestResolveProfile_CapabilityOverride(t *testing.T) {
 	}
 }
 
-func TestResolveProfile_CustomIDDefaultsToOpenAICompatibleFamily(t *testing.T) {
+func TestResolveProfile_CustomProtocolUsesCompatibleOpenAIChatDefaults(t *testing.T) {
 	profile, err := ResolveProfile(Config{
-		ID:     "local-proxy",
-		APIKey: "k",
-		Model:  "model",
+		Protocol: string(ProtocolOpenAIChat),
+		APIKey:   "k",
+		Model:    "model",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != "local-proxy" || profile.Type != "openai" || profile.Protocol != ProtocolOpenAICompatibleChat {
+	if profile.ID != "custom" || profile.Protocol != ProtocolOpenAIChat {
 		t.Fatalf("profile = %+v", profile)
+	}
+	if !profile.Capabilities.Tools || profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
+		t.Fatalf("capabilities = %+v, want conservative OpenAI-compatible chat defaults", profile.Capabilities)
+	}
+}
+
+func TestResolveProfile_UnknownIDRequiresProtocol(t *testing.T) {
+	if _, err := ResolveProfile(Config{ID: "local-proxy", APIKey: "k", Model: "model"}); err == nil {
+		t.Fatal("expected unknown id to require protocol")
 	}
 }
 

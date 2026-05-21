@@ -177,7 +177,7 @@ func TestRunCmd_DryRunReturnsDryRunOK(t *testing.T) {
 		t.Fatalf("got %T: %v", err, err)
 	}
 	body := out.String()
-	for _, want := range []string{`"provider_type": "openai"`, `"prompt": "hello"`, `"tools":`} {
+	for _, want := range []string{`"provider_id": "openai"`, `"protocol": "openai/responses"`, `"prompt": "hello"`, `"tools":`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("plan missing %q in:\n%s", want, body)
 		}
@@ -225,7 +225,7 @@ func TestRunCmd_DryRunLoadsDefaultJuexYAML(t *testing.T) {
 		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
 	}
 	body := out.String()
-	if !strings.Contains(body, `"provider_type": "openai"`) || strings.Contains(body, `"config_file"`) {
+	if !strings.Contains(body, `"provider_id": "openai"`) || !strings.Contains(body, `"protocol": "openai/responses"`) || strings.Contains(body, `"config_file"`) {
 		t.Fatalf("unexpected dry-run body:\n%s", body)
 	}
 }
@@ -336,11 +336,11 @@ func classifyForTest(err error) int {
 	}
 }
 
-func writeJuexConfigFile(path, typ, base, key, model string) error {
+func writeJuexConfigFile(path, id, base, key, model string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := "provider:\n  type: " + typ + "\n  base_url: " + base +
+	body := "provider:\n  id: " + id + "\n  base_url: " + base +
 		"\n  api_key: " + key + "\n  model: " + model + "\n"
 	return os.WriteFile(path, []byte(body), 0o644)
 }

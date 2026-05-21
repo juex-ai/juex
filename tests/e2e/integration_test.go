@@ -25,7 +25,6 @@ import (
 
 var liveConfigEnvKeys = []string{
 	"PROVIDER_API_ID",
-	"PROVIDER_API_TYPE",
 	"PROVIDER_API_PROTOCOL",
 	"PROVIDER_API_BASE",
 	"PROVIDER_API_KEY",
@@ -35,8 +34,8 @@ var liveConfigEnvKeys = []string{
 }
 
 var defaultLiveConfigNames = []string{
-	"juex.qwen.yaml",
-	"juex.minimax.yaml",
+	"qwen.juex.yaml",
+	"minimax.juex.yaml",
 }
 
 type liveConfig struct {
@@ -78,7 +77,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 		}
 	}
 	if len(matches) == 0 {
-		t.Skip("none of .juex/juex.qwen.yaml or .juex/juex.minimax.yaml are present; skipping live tests")
+		t.Skip("none of .juex/qwen.juex.yaml or .juex/minimax.juex.yaml are present; skipping live tests")
 	}
 	// Clear OS env vars so the explicit .juex/*.yaml file wins.
 	for _, k := range liveConfigEnvKeys {
@@ -95,7 +94,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 			t.Logf("%s has no API key set; skipping it", path)
 			continue
 		}
-		if (cfg.ProviderType == "" && cfg.ProviderID == "" && cfg.ProviderProtocol == "") || cfg.Model == "" {
+		if (cfg.ProviderID == "" && cfg.ProviderProtocol == "") || cfg.Model == "" {
 			t.Logf("%s has incomplete provider config; skipping it", path)
 			continue
 		}
@@ -154,6 +153,26 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	return out
 }
 
+func liveWorkspaceTempDir(t *testing.T, cfg config.Config, pattern string) string {
+	t.Helper()
+	workDir := cfg.WorkDir
+	if workDir == "" {
+		workDir = repoRoot(t)
+	}
+	base := filepath.Join(workDir, ".juex")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(base, pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return dir
+}
+
 func TestLiveConfigs_PlainCompletion(t *testing.T) {
 	for _, lc := range loadLiveConfigs(t) {
 		t.Run(lc.name, func(t *testing.T) {
@@ -170,12 +189,12 @@ func TestLiveConfigs_ToolUse(t *testing.T) {
 	for _, lc := range loadLiveConfigs(t) {
 		t.Run(lc.name, func(t *testing.T) {
 			t.Logf("using config %s", lc.path)
-			dir := t.TempDir()
+			dir := liveWorkspaceTempDir(t, lc.cfg, "live-tool-")
 			target := filepath.Join(dir, "secret.txt")
 			if err := os.WriteFile(target, []byte("the magic phrase is JUEX_LIVE_42"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			prompt := "There is a file at " + target +
+			prompt := "Inside the current Juex workdir, there is a file at " + target +
 				". Use the `read` tool to read it, then reply containing the magic phrase verbatim."
 			out := runLiveTurn(t, lc.cfg, prompt)
 			if !strings.Contains(out, "JUEX_LIVE_42") {
@@ -192,7 +211,7 @@ func TestLiveConfigs_MultiStep(t *testing.T) {
 	for _, lc := range loadLiveConfigs(t) {
 		t.Run(lc.name, func(t *testing.T) {
 			t.Logf("using config %s", lc.path)
-			dir := t.TempDir()
+			dir := liveWorkspaceTempDir(t, lc.cfg, "live-multistep-")
 			target := filepath.Join(dir, "scratch.txt")
 
 			prompt := "You will work in directory " + dir + ". " +

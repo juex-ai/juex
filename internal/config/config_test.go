@@ -11,12 +11,12 @@ import (
 func TestLoadFromFile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n"
+	body := "provider:\n  id: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Setenv("PROVIDER_API_TYPE", "")
+	t.Setenv("PROVIDER_API_ID", "")
 	t.Setenv("PROVIDER_API_BASE", "")
 	t.Setenv("PROVIDER_API_KEY", "")
 	t.Setenv("PROVIDER_API_MODEL", "")
@@ -25,7 +25,7 @@ func TestLoadFromFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderType != "openai" || cfg.BaseURL != "https://example.com" || cfg.APIKey != "sk-x" || cfg.Model != "gpt-4" {
+	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://example.com" || cfg.APIKey != "sk-x" || cfg.Model != "gpt-4" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
@@ -35,7 +35,7 @@ func TestLoadFromFile_OSEnvOverridesExplicitConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "juex.yaml")
 	writeJuexConfig(t, configPath, "openai", "https://file.example", "sk-file", "gpt-file")
 
-	t.Setenv("PROVIDER_API_TYPE", "anthropic")
+	t.Setenv("PROVIDER_API_ID", "anthropic")
 	t.Setenv("PROVIDER_API_BASE", "https://env.example")
 	t.Setenv("PROVIDER_API_KEY", "sk-env")
 	t.Setenv("PROVIDER_API_MODEL", "claude-env")
@@ -44,7 +44,7 @@ func TestLoadFromFile_OSEnvOverridesExplicitConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderType != "anthropic" || cfg.BaseURL != "https://env.example" || cfg.APIKey != "sk-env" || cfg.Model != "claude-env" {
+	if cfg.ProviderID != "anthropic" || cfg.BaseURL != "https://env.example" || cfg.APIKey != "sk-env" || cfg.Model != "claude-env" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
@@ -61,8 +61,24 @@ func TestLoadFromFile_EnvYAMLExtensionUsesYAMLParser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderType != "openai" || cfg.Model != "gpt-yaml" {
+	if cfg.ProviderID != "openai" || cfg.Model != "gpt-yaml" {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_UnknownYAMLFieldErrors(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  id: openai\n  unknown_field: true\n  api_key: sk-x\n  model: gpt-test\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	if _, err := LoadFromFile(configPath); err == nil {
+		t.Fatal("expected unknown YAML field error")
 	}
 }
 
@@ -78,7 +94,7 @@ func TestLoad_DefaultRuntimeConfigPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderType != "openai" || cfg.BaseURL != "https://default.example" || cfg.APIKey != "sk-default" || cfg.Model != "gpt-default" {
+	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://default.example" || cfg.APIKey != "sk-default" || cfg.Model != "gpt-default" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
@@ -89,7 +105,7 @@ func TestLoad_DoesNotReadProjectDotEnvByDefault(t *testing.T) {
 	for _, key := range providerEnvKeys {
 		t.Setenv(key, "")
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("PROVIDER_API_TYPE=anthropic\nPROVIDER_API_MODEL=claude\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("PROVIDER_API_ID=anthropic\nPROVIDER_API_MODEL=claude\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
@@ -98,7 +114,7 @@ func TestLoad_DoesNotReadProjectDotEnvByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderType != "openai" || cfg.Model != "gpt-yaml" {
+	if cfg.ProviderID != "openai" || cfg.Model != "gpt-yaml" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
@@ -108,7 +124,7 @@ func TestLoad_OSEnvOverridesFile(t *testing.T) {
 	t.Chdir(dir)
 	writeJuexConfig(t, filepath.Join(dir, ".juex", "juex.yaml"), "openai", "https://yaml.example", "sk-yaml", "gpt-yaml")
 
-	t.Setenv("PROVIDER_API_TYPE", "anthropic")
+	t.Setenv("PROVIDER_API_ID", "anthropic")
 	t.Setenv("PROVIDER_API_BASE", "https://api.anthropic.com")
 	t.Setenv("PROVIDER_API_KEY", "k")
 	t.Setenv("PROVIDER_API_MODEL", "claude")
@@ -117,13 +133,13 @@ func TestLoad_OSEnvOverridesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderType != "anthropic" || cfg.Model != "claude" {
+	if cfg.ProviderID != "anthropic" || cfg.Model != "claude" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
 
 func TestLoad_DefaultsWorkDirToCwd(t *testing.T) {
-	t.Setenv("PROVIDER_API_TYPE", "openai")
+	t.Setenv("PROVIDER_API_ID", "openai")
 	t.Setenv("PROVIDER_API_BASE", "https://x")
 	t.Setenv("PROVIDER_API_KEY", "k")
 	t.Setenv("PROVIDER_API_MODEL", "m")
@@ -193,19 +209,19 @@ func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestNewProvider_RequiresType(t *testing.T) {
+func TestNewProvider_RequiresProviderSelector(t *testing.T) {
 	cfg := Config{APIKey: "x", Model: "m"}
 	if _, err := cfg.NewProvider(); err == nil {
-		t.Fatal("expected error for empty type")
+		t.Fatal("expected error for empty provider selector")
 	}
 }
 
-func writeJuexConfig(t *testing.T, path, typ, base, key, model string) {
+func writeJuexConfig(t *testing.T, path, id, base, key, model string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := "provider:\n  type: " + typ + "\n  base_url: " + base + "\n  api_key: " + key + "\n  model: " + model + "\n"
+	body := "provider:\n  id: " + id + "\n  base_url: " + base + "\n  api_key: " + key + "\n  model: " + model + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +230,7 @@ func writeJuexConfig(t *testing.T, path, typ, base, key, model string) {
 func TestLoadFromFile_ThinkingEffort(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n  thinking_effort: low\n"
+	body := "provider:\n  id: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n  thinking_effort: low\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +250,7 @@ func TestLoadFromFile_ThinkingEffort(t *testing.T) {
 func TestLoadFromFile_ContextWindow(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n  context_window: 128000\n"
+	body := "provider:\n  id: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n  context_window: 128000\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +270,7 @@ func TestLoadFromFile_ContextWindow(t *testing.T) {
 func TestLoadFromFile_CompactionConfig(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\ncompaction:\n  enabled: false\n  reserve_tokens: 1000\n  keep_recent_tokens: 2000\n  tail_turns: 3\n  summary_max_tokens: 777\n  tool_result_max_chars: 888\n"
+	body := "provider:\n  id: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\ncompaction:\n  enabled: false\n  reserve_tokens: 1000\n  keep_recent_tokens: 2000\n  tail_turns: 3\n  summary_max_tokens: 777\n  tool_result_max_chars: 888\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +334,7 @@ func TestLoadFromFile_ContextWindowDefaultAndEnvOverride(t *testing.T) {
 func TestLoadFromFile_ThinkingEffortEmpty(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n"
+	body := "provider:\n  id: openai\n  base_url: https://example.com\n  api_key: sk-x\n  model: gpt-4\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -339,8 +355,7 @@ func TestLoadFromFile_ProviderProfile(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
 	body := `provider:
-  id: deepseek
-  protocol: openai-compatible/chat
+  protocol: openai/chat
   base_url: https://api.deepseek.com
   api_key: sk-x
   model: deepseek-chat
@@ -366,7 +381,7 @@ func TestLoadFromFile_ProviderProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderID != "deepseek" || cfg.ProviderProtocol != "openai-compatible/chat" {
+	if cfg.ProviderID != "" || cfg.ProviderProtocol != "openai/chat" {
 		t.Fatalf("provider identity = id:%q protocol:%q", cfg.ProviderID, cfg.ProviderProtocol)
 	}
 	if cfg.ProviderHeaders["X-Provider"] != "juex" || cfg.ProviderQuery["beta"] != "1" {
@@ -382,7 +397,42 @@ func TestLoadFromFile_ProviderProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Type != "openai" || profile.Protocol != "openai-compatible/chat" || profile.Capabilities.Tools {
+	if profile.ID != "custom" || profile.Protocol != "openai/chat" || profile.Capabilities.Tools {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestLoadFromFile_OpenAICodexIDUsesDefaultCodexAuth(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, "codex-home")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{"auth_mode":"apiKey","OPENAI_API_KEY":"sk-codex"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := "provider:\n  id: openai-codex\n  model: gpt-test\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai-codex" || cfg.APIKey != "sk-codex" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Protocol != "openai-codex/responses" {
 		t.Fatalf("profile = %+v", profile)
 	}
 }
@@ -408,38 +458,45 @@ func TestLoadFromFile_ProviderProfileEnvOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Type != "openai" || profile.Protocol != "openai/responses" {
+	if profile.Protocol != "openai/responses" {
 		t.Fatalf("profile = %+v", profile)
 	}
 }
 
-func TestLoadFromFile_CodexAuthUsesCachedAPIKey(t *testing.T) {
+func TestLoadFromFile_CodexAuthUsesDefaultCachedAPIKey(t *testing.T) {
 	dir := t.TempDir()
-	authPath := filepath.Join(dir, "auth.json")
-	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"apiKey","OPENAI_API_KEY":"sk-codex"}`), 0o600); err != nil {
+	codexHome := filepath.Join(dir, "codex-home")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{"auth_mode":"apiKey","OPENAI_API_KEY":"sk-codex"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  model: gpt-test\n"
+	body := "provider:\n  id: openai-codex\n  model: gpt-test\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range providerEnvKeys {
 		t.Setenv(key, "")
 	}
+	t.Setenv("CODEX_HOME", codexHome)
 
 	cfg, err := LoadFromFile(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProviderAuth != "codex" || cfg.APIKey != "sk-codex" {
+	if cfg.APIKey != "sk-codex" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
 
 func TestLoadFromFile_CodexAuthUsesChatGPTTokenHeaders(t *testing.T) {
 	dir := t.TempDir()
-	authPath := filepath.Join(dir, "auth.json")
+	codexHome := filepath.Join(dir, "codex-home")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	idToken := fakeCodexIDToken(t, map[string]any{
 		"https://api.openai.com/auth": map[string]any{
 			"chatgpt_account_id":         "acct-from-jwt",
@@ -457,17 +514,18 @@ func TestLoadFromFile_CodexAuthUsesChatGPTTokenHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(authPath, authBytes, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), authBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  model: gpt-test\n"
+	body := "provider:\n  id: openai-codex\n  model: gpt-test\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range providerEnvKeys {
 		t.Setenv(key, "")
 	}
+	t.Setenv("CODEX_HOME", codexHome)
 
 	cfg, err := LoadFromFile(configPath)
 	if err != nil {
@@ -476,6 +534,9 @@ func TestLoadFromFile_CodexAuthUsesChatGPTTokenHeaders(t *testing.T) {
 	if cfg.APIKey != "chatgpt-access" {
 		t.Fatalf("APIKey = %q", cfg.APIKey)
 	}
+	if cfg.ProviderID != "openai-codex" || cfg.ProviderProtocol != "openai-codex/responses" {
+		t.Fatalf("provider route = id:%q protocol:%q", cfg.ProviderID, cfg.ProviderProtocol)
+	}
 	if cfg.ProviderHeaders["ChatGPT-Account-ID"] != "acct-from-jwt" || cfg.ProviderHeaders["X-OpenAI-Fedramp"] != "true" {
 		t.Fatalf("headers = %+v", cfg.ProviderHeaders)
 	}
@@ -483,18 +544,15 @@ func TestLoadFromFile_CodexAuthUsesChatGPTTokenHeaders(t *testing.T) {
 
 func TestLoadFromFile_CodexAuthExplicitAPIKeyWins(t *testing.T) {
 	dir := t.TempDir()
-	authPath := filepath.Join(dir, "auth.json")
-	if err := os.WriteFile(authPath, []byte(`{"OPENAI_API_KEY":"sk-codex"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  api_key: sk-explicit\n  model: gpt-test\n"
+	body := "provider:\n  id: openai-codex\n  api_key: sk-explicit\n  model: gpt-test\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range providerEnvKeys {
 		t.Setenv(key, "")
 	}
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "missing-codex-home"))
 
 	cfg, err := LoadFromFile(configPath)
 	if err != nil {
@@ -511,7 +569,7 @@ func TestLoadFromFile_CodexAuthRuntimeConfigCanBeOverridden(t *testing.T) {
 		t.Fatal(err)
 	}
 	defaultConfig := filepath.Join(work, ".juex", "juex.yaml")
-	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + filepath.Join(work, "missing-auth.json") + "\n  model: missing\n"
+	body := "provider:\n  id: openai-codex\n  model: missing\n"
 	if err := os.WriteFile(defaultConfig, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -530,20 +588,59 @@ func TestLoadFromFile_CodexAuthRuntimeConfigCanBeOverridden(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_CustomProtocolClearsRuntimePresetIdentity(t *testing.T) {
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	defaultConfig := filepath.Join(work, ".juex", "juex.yaml")
+	body := "provider:\n  id: openai-codex\n  model: gpt-codex\n"
+	if err := os.WriteFile(defaultConfig, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overrideConfig := filepath.Join(work, "override.yaml")
+	body = "provider:\n  protocol: openai/chat\n  base_url: https://example.com\n  api_key: sk-override\n  model: custom-model\n"
+	if err := os.WriteFile(overrideConfig, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range providerEnvKeys {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := LoadFromFileForWorkDir(overrideConfig, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "" || cfg.ProviderProtocol != "openai/chat" {
+		t.Fatalf("cfg identity = id:%q protocol:%q", cfg.ProviderID, cfg.ProviderProtocol)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "custom" || profile.Protocol != "openai/chat" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
 func TestLoadFromFile_CodexAuthMissingCredentialErrors(t *testing.T) {
 	dir := t.TempDir()
-	authPath := filepath.Join(dir, "auth.json")
-	if err := os.WriteFile(authPath, []byte(`{"auth_mode":"chatgpt","tokens":{}}`), 0o600); err != nil {
+	codexHome := filepath.Join(dir, "codex-home")
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  type: openai\n  auth: codex\n  codex_auth_file: " + authPath + "\n  model: gpt-test\n"
+	body := "provider:\n  id: openai-codex\n  model: gpt-test\n"
 	if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, key := range providerEnvKeys {
 		t.Setenv(key, "")
 	}
+	t.Setenv("CODEX_HOME", codexHome)
 
 	if _, err := LoadFromFile(configPath); err == nil {
 		t.Fatal("expected missing codex credential error")

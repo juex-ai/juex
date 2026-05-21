@@ -25,7 +25,6 @@ type ProviderWithOptions interface {
 const providerMaxRetries = 10
 
 type Config struct {
-	Type           string
 	ID             string
 	Protocol       string
 	BaseURL        string
@@ -38,9 +37,10 @@ type Config struct {
 	Compat         CompatOptions
 }
 
-// New constructs the appropriate Provider for cfg.Type.
-// Supported protocol families: "anthropic/messages", "openai/chat",
-// "openai-compatible/chat", and "openai/responses".
+// New constructs the appropriate Provider for the resolved provider profile.
+// Public custom protocol families are "anthropic/messages", "openai/chat",
+// and "openai/responses"; "openai-codex/responses" is reserved for the
+// openai-codex preset.
 func New(cfg Config) (Provider, error) {
 	profile, err := ResolveProfile(cfg)
 	if err != nil {
@@ -56,10 +56,12 @@ func New(cfg Config) (Provider, error) {
 	switch profile.Protocol {
 	case ProtocolAnthropicMessages:
 		return NewAnthropic(resolved, &http.Client{Timeout: 120 * time.Second}), nil
-	case ProtocolOpenAIChat, ProtocolOpenAICompatibleChat:
+	case ProtocolOpenAIChat:
 		return NewOpenAI(resolved, &http.Client{Timeout: 120 * time.Second}), nil
 	case ProtocolOpenAIResponses:
 		return NewOpenAIResponses(resolved, &http.Client{Timeout: 120 * time.Second}), nil
+	case ProtocolOpenAICodexResponses:
+		return NewOpenAICodexResponses(resolved, &http.Client{Timeout: 120 * time.Second}), nil
 	default:
 		return nil, fmt.Errorf("llm: unsupported provider protocol %q", profile.Protocol)
 	}

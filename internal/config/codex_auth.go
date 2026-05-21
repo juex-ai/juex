@@ -9,11 +9,6 @@ import (
 	"strings"
 )
 
-const (
-	providerAuthAPIKey = "api_key"
-	providerAuthCodex  = "codex"
-)
-
 type codexAuthFile struct {
 	AuthMode     string           `json:"auth_mode"`
 	OpenAIAPIKey string           `json:"OPENAI_API_KEY"`
@@ -27,48 +22,54 @@ type codexAuthTokens struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func resolveProviderAuth(cfg *Config) error {
-	auth, err := normalizeProviderAuth(cfg.ProviderAuth)
-	if err != nil {
-		return err
-	}
-	cfg.ProviderAuth = auth
-	if auth != providerAuthCodex {
+type codexAuthCredential struct {
+	key     string
+	headers map[string]string
+	chatGPT bool
+}
+
+func resolveCodexAuth(cfg *Config) error {
+	if !providerUsesCodexAuth(*cfg) {
 		return nil
 	}
 	if cfg.APIKey != "" {
 		return nil
 	}
-	path, err := codexAuthPath(*cfg)
+	path, err := codexAuthPath()
 	if err != nil {
 		return err
 	}
-	key, headers, err := loadCodexAuth(path)
+	cred, err := loadCodexAuth(path)
 	if err != nil {
 		return err
 	}
-	cfg.APIKey = key
-	cfg.ProviderHeaders = mergeStringMap(headers, cfg.ProviderHeaders)
+	cfg.APIKey = cred.key
+	cfg.ProviderHeaders = mergeStringMap(cred.headers, cfg.ProviderHeaders)
+	if cred.chatGPT {
+		routeCodexChatGPTProvider(cfg)
+	}
 	return nil
 }
 
-func normalizeProviderAuth(auth string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(auth)) {
-	case "":
-		return "", nil
-	case providerAuthAPIKey, "api-key", "apikey":
-		return providerAuthAPIKey, nil
-	case providerAuthCodex, "codex-oauth", "codex_oauth":
-		return providerAuthCodex, nil
-	default:
-		return "", fmt.Errorf("config: unknown provider auth %q", auth)
+func providerUsesCodexAuth(cfg Config) bool {
+	switch strings.TrimSpace(cfg.ProviderID) {
+	case "openai-codex":
+		return true
+	}
+	return strings.TrimSpace(cfg.ProviderProtocol) == "openai-codex/responses"
+}
+
+func routeCodexChatGPTProvider(cfg *Config) {
+	switch strings.TrimSpace(cfg.ProviderProtocol) {
+	case "", "openai/responses", "openai/chat":
+		cfg.ProviderProtocol = "openai-codex/responses"
+	}
+	if strings.TrimSpace(cfg.ProviderID) == "" || strings.TrimSpace(cfg.ProviderID) == "openai" {
+		cfg.ProviderID = "openai-codex"
 	}
 }
 
-func codexAuthPath(cfg Config) (string, error) {
-	if cfg.ProviderCodexAuthFile != "" {
-		return expandHomePath(cfg.ProviderCodexAuthFile)
-	}
+func codexAuthPath() (string, error) {
 	if home := os.Getenv("CODEX_HOME"); home != "" {
 		return filepath.Join(home, "auth.json"), nil
 	}
@@ -79,38 +80,20 @@ func codexAuthPath(cfg Config) (string, error) {
 	return filepath.Join(home, ".codex", "auth.json"), nil
 }
 
-func expandHomePath(path string) (string, error) {
-	if path == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return home, nil
-	}
-	if strings.HasPrefix(path, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(home, path[2:]), nil
-	}
-	return path, nil
-}
-
-func loadCodexAuth(path string) (string, map[string]string, error) {
+func loadCodexAuth(path string) (codexAuthCredential, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", nil, fmt.Errorf("config: read Codex auth file %s: %w", path, err)
+		return codexAuthCredential{}, fmt.Errorf("config: read Codex auth file %s: %w", path, err)
 	}
 	var auth codexAuthFile
 	if err := json.Unmarshal(data, &auth); err != nil {
-		return "", nil, fmt.Errorf("config: parse Codex auth file %s: %w", path, err)
+		return codexAuthCredential{}, fmt.Errorf("config: parse Codex auth file %s: %w", path, err)
 	}
 	if key := strings.TrimSpace(auth.OpenAIAPIKey); key != "" {
-		return key, nil, nil
+		return codexAuthCredential{key: key}, nil
 	}
 	if auth.Tokens == nil || strings.TrimSpace(auth.Tokens.AccessToken) == "" {
-		return "", nil, fmt.Errorf("config: Codex auth file %s has no OPENAI_API_KEY or tokens.access_token", path)
+		return codexAuthCredential{}, fmt.Errorf("config: Codex auth file %s has no OPENAI_API_KEY or tokens.access_token", path)
 	}
 	headers := map[string]string{}
 	if accountID := firstNonEmpty(auth.Tokens.AccountID, codexAccountIDFromIDToken(auth.Tokens.IDToken)); accountID != "" {
@@ -119,7 +102,11 @@ func loadCodexAuth(path string) (string, map[string]string, error) {
 	if codexFedRAMPFromIDToken(auth.Tokens.IDToken) {
 		headers["X-OpenAI-Fedramp"] = "true"
 	}
-	return strings.TrimSpace(auth.Tokens.AccessToken), headers, nil
+	return codexAuthCredential{
+		key:     strings.TrimSpace(auth.Tokens.AccessToken),
+		headers: headers,
+		chatGPT: true,
+	}, nil
 }
 
 func firstNonEmpty(values ...string) string {

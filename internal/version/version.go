@@ -31,14 +31,12 @@ type Info struct {
 
 	// Runtime context (optional). Each field is independent input — none
 	// of them is derivable from the others.
-	WorkDir      string `json:"work_dir,omitempty"`
-	ConfigFile   string `json:"config_file,omitempty"`
-	ProviderID   string `json:"provider_id,omitempty"`
-	ProviderType string `json:"provider_type,omitempty"`
-	Protocol     string `json:"protocol,omitempty"`
-	ProviderAuth string `json:"provider_auth,omitempty"`
-	Model        string `json:"model,omitempty"`
-	BaseURL      string `json:"base_url,omitempty"`
+	WorkDir    string `json:"work_dir,omitempty"`
+	ConfigFile string `json:"config_file,omitempty"`
+	ProviderID string `json:"provider_id,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+	Model      string `json:"model,omitempty"`
+	BaseURL    string `json:"base_url,omitempty"`
 }
 
 // Build returns an Info populated only with build metadata. CLI layer adds
@@ -74,14 +72,8 @@ func (i Info) Verbose() string {
 	if i.ProviderID != "" {
 		out += "\n  provider_id:   " + i.ProviderID
 	}
-	if i.ProviderType != "" {
-		out += "\n  provider_type: " + i.ProviderType
-	}
 	if i.Protocol != "" {
 		out += "\n  protocol:      " + i.Protocol
-	}
-	if i.ProviderAuth != "" {
-		out += "\n  provider_auth: " + i.ProviderAuth
 	}
 	if i.Model != "" {
 		out += "\n  model:         " + i.Model

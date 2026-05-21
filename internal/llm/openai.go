@@ -24,10 +24,17 @@ type openAIProvider struct {
 func NewOpenAI(cfg Config, _ any) Provider {
 	profile, err := ResolveProfile(cfg)
 	if err != nil {
-		profile = customProfile(firstNonEmpty(cfg.ID, cfg.Type, "openai"))
+		profile = customOpenAIChatProfile(firstNonEmpty(cfg.ID, "openai"), ProtocolOpenAIChat)
 		profile.APIKey = cfg.APIKey
 		profile.Model = cfg.Model
 		profile.BaseURL = cfg.BaseURL
+		profile.ThinkingEffort = cfg.ThinkingEffort
+		profile.Headers = cloneStringMap(cfg.Headers)
+		profile.Query = cloneStringMap(cfg.Query)
+		profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
+		if len(cfg.Compat.ReasoningReplayFields) > 0 {
+			profile.Compat = cfg.Compat
+		}
 	}
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),

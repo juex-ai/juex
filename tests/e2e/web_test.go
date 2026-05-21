@@ -37,7 +37,7 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "noted"), StopReason: llm.StopEndTurn},
 	}}
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -151,7 +151,7 @@ func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
 	work := t.TempDir()
 	prov := newPendingWebProvider()
 	srv := web.NewServer(web.Options{
-		Cfg:      config.Config{ProviderType: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)

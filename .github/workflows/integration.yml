@@ -13,33 +13,25 @@ jobs:
           cache: true
       - name: write live config files
         env:
-          ANTHROPIC_ID:    ${{ secrets.PROVIDER_API_ID_ANTHROPIC }}
-          ANTHROPIC_TYPE:  ${{ secrets.PROVIDER_API_TYPE_ANTHROPIC }}
           ANTHROPIC_PROTOCOL: ${{ secrets.PROVIDER_API_PROTOCOL_ANTHROPIC }}
           ANTHROPIC_BASE:  ${{ secrets.PROVIDER_API_BASE_ANTHROPIC }}
           ANTHROPIC_KEY:   ${{ secrets.PROVIDER_API_KEY_ANTHROPIC }}
           ANTHROPIC_MODEL: ${{ secrets.PROVIDER_API_MODEL_ANTHROPIC }}
-          OPENAI_ID:       ${{ secrets.PROVIDER_API_ID_OPENAI }}
-          OPENAI_TYPE:     ${{ secrets.PROVIDER_API_TYPE_OPENAI }}
           OPENAI_PROTOCOL: ${{ secrets.PROVIDER_API_PROTOCOL_OPENAI }}
           OPENAI_BASE:     ${{ secrets.PROVIDER_API_BASE_OPENAI }}
           OPENAI_KEY:      ${{ secrets.PROVIDER_API_KEY_OPENAI }}
           OPENAI_MODEL:    ${{ secrets.PROVIDER_API_MODEL_OPENAI }}
         run: |
           mkdir -p .juex
-          cat > .juex/juex.minimax.yaml <<EOF
+          cat > .juex/minimax.juex.yaml <<EOF
           provider:
-            id: "$ANTHROPIC_ID"
-            type: "$ANTHROPIC_TYPE"
             protocol: "$ANTHROPIC_PROTOCOL"
             base_url: "$ANTHROPIC_BASE"
             api_key: "$ANTHROPIC_KEY"
             model: "$ANTHROPIC_MODEL"
           EOF
-          cat > .juex/juex.qwen.yaml <<EOF
+          cat > .juex/qwen.juex.yaml <<EOF
           provider:
-            id: "$OPENAI_ID"
-            type: "$OPENAI_TYPE"
             protocol: "$OPENAI_PROTOCOL"
             base_url: "$OPENAI_BASE"
             api_key: "$OPENAI_KEY"

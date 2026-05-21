@@ -1,22 +1,25 @@
 # Copy this template to .juex/juex.yaml in the project you want juex to run in.
 # The .juex directory is local runtime state and should not be committed.
 provider:
-  # id selects a small built-in provider preset. Current presets:
-  # openai, anthropic, openrouter, deepseek, qwen, dashscope, moonshot,
-  # kimi, minimax, volcengine, ark, openai-compatible.
+  # Known presets: openai, openai-codex, anthropic.
+  # Known presets fix the protocol and default base URL. Do not combine a
+  # known id with a different protocol; omit id for custom providers.
   # id: openai
-  # protocol selects the wire family. Omit to use the preset/default.
-  # Valid values: anthropic/messages, openai/responses, openai/chat,
-  # openai-compatible/chat.
+  #
+  # For OpenAI Codex OAuth, use:
+  # id: openai-codex
+  # model: gpt-5.5
+  #
+  # For an unknown or OpenAI-compatible provider, omit id and set protocol.
+  # Valid custom protocol values: anthropic/messages, openai/responses,
+  # openai/chat.
   # protocol: openai/chat
-  # auth selects where credentials come from. Omit for api_key. Use codex to
-  # read file-backed Codex login credentials from $CODEX_HOME/auth.json or
-  # ~/.codex/auth.json. This does not refresh tokens or read OS keyrings.
-  # auth: api_key
-  # codex_auth_file: ~/.codex/auth.json
-  # type is the legacy provider switch. Keep using openai or anthropic for
-  # old configs, or prefer id/protocol for new profiles.
-  type: openai
+  #
+  # A config layer with id or protocol starts a new provider profile. Repeat
+  # provider-specific values in that layer or set them with environment vars.
+  #
+  # Known providers usually leave base_url empty. Custom providers must set it.
+  id: openai
   base_url: ""
   api_key: ""
   model: ""

@@ -174,9 +174,7 @@ export interface FileContentResponse {
 export interface RuntimeStatusResponse {
   provider: {
     id?: string;
-    type?: string;
     protocol?: string;
-    auth?: string;
     model?: string;
     base_url?: string;
     capabilities: {
