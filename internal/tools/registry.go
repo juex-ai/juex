@@ -37,6 +37,7 @@ func (r *Registry) Register(t Tool) error {
 	if t.Handler == nil {
 		return fmt.Errorf("tools: %s: nil handler", t.Name)
 	}
+	t.Schema = normalizeInputSchema(t.Schema)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.tools[t.Name]; ok {

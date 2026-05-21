@@ -31,6 +31,61 @@ func TestRegistry_RegisterDuplicate(t *testing.T) {
 	}
 }
 
+func TestRegistry_NormalizesNullSchemaEntries(t *testing.T) {
+	r := NewRegistry()
+	err := r.Register(Tool{
+		Name: "x",
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": nil,
+			"default":              nil,
+			"properties": map[string]any{
+				"query":    nil,
+				"mode":     map[string]any{"enum": []any{"all", nil}},
+				"bad_enum": map[string]any{"enum": nil},
+			},
+			"patternProperties": map[string]any{"^x-": nil},
+		},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, ok := r.Get("x")
+	if !ok {
+		t.Fatal("expected registered tool")
+	}
+	if _, ok := tool.Schema["additionalProperties"]; ok {
+		t.Fatalf("additionalProperties null should be removed: %+v", tool.Schema)
+	}
+	if _, ok := tool.Schema["default"]; ok {
+		t.Fatalf("default null should be removed: %+v", tool.Schema)
+	}
+	props, ok := tool.Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %+v", tool.Schema["properties"])
+	}
+	if query, ok := props["query"].(map[string]any); !ok || len(query) != 0 {
+		t.Fatalf("null property schema should become empty object: %+v", props["query"])
+	}
+	badEnum, _ := props["bad_enum"].(map[string]any)
+	if _, ok := badEnum["enum"]; ok {
+		t.Fatalf("enum:null should be removed: %+v", badEnum)
+	}
+	mode, _ := props["mode"].(map[string]any)
+	enum, _ := mode["enum"].([]any)
+	if len(enum) != 2 || enum[1] != nil {
+		t.Fatalf("enum null values should be preserved: %+v", enum)
+	}
+	patternProps, ok := tool.Schema["patternProperties"].(map[string]any)
+	if !ok {
+		t.Fatalf("patternProperties = %+v", tool.Schema["patternProperties"])
+	}
+	if pattern, ok := patternProps["^x-"].(map[string]any); !ok || len(pattern) != 0 {
+		t.Fatalf("null pattern property schema should become empty object: %+v", patternProps["^x-"])
+	}
+}
+
 func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, "")

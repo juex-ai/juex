@@ -83,6 +83,17 @@ func runFakeServer() {
 					"description": "Tool with no schema",
 				})
 			}
+			if os.Getenv("JUEX_FAKE_MCP_NULL_SCHEMA_TOOL") == "1" {
+				tools = append(tools, map[string]any{
+					"name":        "nullschema",
+					"description": "Tool with null schema entries",
+					"inputSchema": map[string]any{
+						"type":                 "object",
+						"additionalProperties": nil,
+						"properties":           map[string]any{"query": nil},
+					},
+				})
+			}
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      responseID,
@@ -422,6 +433,44 @@ func TestMCPClient_ToolWithNoSchemaGetsDefault(t *testing.T) {
 	}
 	if tool.Schema == nil || tool.Schema["type"] != "object" {
 		t.Fatalf("schema = %+v", tool.Schema)
+	}
+}
+
+func TestMCPClient_ToolSchemaNullsAreNormalized(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cfg := Config{MCPServers: map[string]ServerSpec{
+		"fake": {
+			Command: os.Args[0],
+			Env: map[string]string{
+				"JUEX_FAKE_MCP":                  "1",
+				"JUEX_FAKE_MCP_NULL_SCHEMA_TOOL": "1",
+			},
+		},
+	}}
+	r := tools.NewRegistry()
+	clients, err := RegisterAll(ctx, cfg, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, c := range clients {
+			c.Close()
+		}
+	}()
+	tool, ok := r.Get("mcp__fake__nullschema")
+	if !ok {
+		t.Fatalf("expected mcp__fake__nullschema, have %+v", r.List())
+	}
+	if _, ok := tool.Schema["additionalProperties"]; ok {
+		t.Fatalf("schema should not retain null additionalProperties: %+v", tool.Schema)
+	}
+	props, ok := tool.Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %+v", tool.Schema["properties"])
+	}
+	if query, ok := props["query"].(map[string]any); !ok || len(query) != 0 {
+		t.Fatalf("null property schema should become empty object: %+v", props["query"])
 	}
 }
 
