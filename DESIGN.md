@@ -358,17 +358,17 @@ states default to open; successful results stay closed until the user expands.
             <PromptInputButton variant="outline" onClick={onInterrupt}>Stop</PromptInputButton>
             <PromptInputSubmit />
           </>
-          : <>
-            <PromptInputButton variant="outline" onClick={onCompact}>
-              <ArchiveIcon aria-hidden="true" />
-            </PromptInputButton>
-            <PromptInputSubmit />
-          </>}
+          : <PromptInputSubmit />}
       </div>
     </PromptInputFooter>
   </PromptInputBody>
 </PromptInput>
 ```
+
+The composer keeps local actions in the text surface: `/status` returns the
+current runtime/session snapshot, and `/compact` triggers manual context
+compaction. Do not add separate chrome for these command-only actions unless
+the command surface becomes insufficient.
 
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
 both natively. The composer is a warm paper well with a 14px radius, subtle

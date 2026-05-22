@@ -561,7 +561,10 @@ the full `conversation.jsonl` transcript, appends a compact boundary message
 with metadata, and assembles provider context as latest compact summary,
 retained recent tail, and messages after the compact marker. Manual compact and
 active-context inspection are available through `juex sessions compact`,
-`juex sessions context`, and matching Web API routes.
+`juex sessions context`, local `/compact` and `/status` slash commands, and
+matching Web API routes. Slash commands are parsed in `internal/app` so CLI and
+web inputs share one whitelist and result contract before any provider turn is
+started.
 
 ---
 

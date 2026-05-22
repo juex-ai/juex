@@ -743,7 +743,7 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 func TestReadCodexSSERejectsOversizedLine(t *testing.T) {
 	payload := "data: " + strings.Repeat("x", maxCodexSSELineBytes+1) + "\n\n"
 
-	if _, err := readCodexSSE(strings.NewReader(payload)); err == nil || !strings.Contains(err.Error(), "Codex SSE read") {
+	if _, err := readCodexSSE(strings.NewReader(payload)); err == nil || !strings.Contains(err.Error(), "codex SSE read") {
 		t.Fatalf("expected oversized SSE line error, got %v", err)
 	}
 }
