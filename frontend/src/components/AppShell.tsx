@@ -1,5 +1,12 @@
-import { Link, Outlet } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   SidebarProvider,
   SidebarInset,
@@ -7,11 +14,19 @@ import {
 } from "@/components/ui/sidebar";
 import { Sidebar } from "@/components/Sidebar";
 import { FileTreePanel } from "@/components/FileTreePanel";
+import { LogoMark } from "@/components/LogoMark";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FolderIcon, FolderOpenIcon, Wrench } from "lucide-react";
+import { ArrowLeft, FolderIcon, FolderOpenIcon, Wrench } from "lucide-react";
 import { getRuntimeStatus } from "@/api";
 import type { RuntimeStatusResponse } from "@/types";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Tooltip,
   TooltipContent,
@@ -19,10 +34,42 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
+const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
+
+type ShellTitleContextValue = {
+  setShellTitle: (title: string | null) => void;
+};
+
+const ShellTitleContext = createContext<ShellTitleContextValue | null>(null);
+
+export function useShellTitle(title: string | null) {
+  const context = useContext(ShellTitleContext);
+
+  useEffect(() => {
+    context?.setShellTitle(title);
+    return () => context?.setShellTitle(null);
+  }, [context, title]);
+}
+
 export function AppShell() {
-  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
+  const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
+  const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
+  const [shellTitle, setShellTitle] = useState<string | null>(null);
+  const [lastContentPath, setLastContentPath] = useState(
+    () => window.sessionStorage.getItem("juex:last-content-path") || "/",
+  );
   const [runtimeStatus, setRuntimeStatus] =
     useState<RuntimeStatusResponse | null>(null);
+
+  useEffect(() => {
+    if (location.pathname === "/runtime") return;
+    const next = `${location.pathname}${location.search}${location.hash}`;
+    setLastContentPath(next);
+    window.sessionStorage.setItem("juex:last-content-path", next);
+  }, [location.hash, location.pathname, location.search]);
 
   useEffect(() => {
     let live = true;
@@ -56,80 +103,145 @@ export function AppShell() {
           ? `MCP not started (${runtimeStatus.mcp.configured})`
           : "MCP 0 configured"
     : "";
+  const workspaceOpen = workspaceDocked ? workspaceDockOpen : workspaceSheetOpen;
+  const workspaceLabel = workspaceDocked
+    ? workspaceOpen
+      ? "Hide workspace"
+      : "Show workspace"
+    : "Open workspace";
+  const toggleWorkspace = () => {
+    if (workspaceDocked) {
+      setWorkspaceDockOpen((open) => !open);
+    } else {
+      setWorkspaceSheetOpen(true);
+    }
+  };
+  const shellContextValue = useMemo(() => ({ setShellTitle }), []);
+  const onRuntimePage = location.pathname === "/runtime";
 
   return (
-    <SidebarProvider className="h-svh min-h-0 overflow-hidden">
-      <Sidebar />
-      <SidebarInset className="min-h-0 flex flex-row">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden relative">
-          <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-            <div className="flex items-center gap-2">
-              <SidebarTrigger className="-ml-1" />
-              <span className="font-semibold">juex</span>
-              {runtimeStatus ? (
-                <div className="flex items-center gap-1">
-                  <Badge
-                    variant={mcpErrorCount > 0 ? "destructive" : "outline"}
-                    className="font-mono text-xs"
-                  >
-                    {mcpLabel}
-                  </Badge>
-                  <Badge variant="outline" className="font-mono text-xs">
-                    SKILLS {runtimeStatus.skills.count}
-                  </Badge>
-                </div>
-              ) : null}
-            </div>
-            <div className="flex items-center gap-1">
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className="text-muted-foreground hover:text-foreground"
+    <ShellTitleContext.Provider value={shellContextValue}>
+      <SidebarProvider className="h-svh min-h-0 overflow-hidden bg-background">
+        <Sidebar />
+        <SidebarInset className="min-h-0 min-w-0 flex flex-row">
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <header className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between border-b bg-card px-4 shadow-[var(--shadow-xs)]">
+              <div className="flex min-w-0 items-center gap-2">
+                <SidebarTrigger className="-ml-1" />
+                {shellTitle ? (
+                  <div className="flex min-w-0 items-center gap-2 text-primary">
+                    <LogoMark className="size-5 shrink-0 md:hidden" />
+                    <span className="truncate font-serif text-xl italic leading-none">
+                      {shellTitle}
+                    </span>
+                  </div>
+                ) : null}
+                {runtimeStatus ? (
+                  <div className="hidden min-w-0 items-center gap-1 lg:flex">
+                    <Badge
+                      variant={mcpErrorCount > 0 ? "destructive" : "outline"}
+                      className="max-w-[18rem] truncate font-mono text-[11px] lg:max-w-none"
                     >
-                      <Link to="/runtime" aria-label="Runtime details">
-                        <Wrench className="size-4" />
-                      </Link>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Runtime details</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-muted-foreground hover:text-foreground"
-                      onClick={() => setRightPanelOpen(!rightPanelOpen)}
-                      aria-label={rightPanelOpen ? "Hide workspace" : "Show workspace"}
-                    >
-                      {rightPanelOpen ? (
-                        <FolderOpenIcon className="size-4" />
+                      {mcpLabel}
+                    </Badge>
+                    <Badge variant="outline" className="font-mono text-[11px]">
+                      skills {runtimeStatus.skills.count}
+                    </Badge>
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {onRuntimePage ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-muted-foreground hover:text-foreground"
+                          aria-label="Back"
+                          onClick={() => navigate(lastContentPath || "/")}
+                        >
+                          <ArrowLeft className="size-4" />
+                        </Button>
                       ) : (
-                        <FolderIcon className="size-4" />
+                        <Button
+                          asChild
+                          variant="ghost"
+                          size="icon"
+                          className="text-muted-foreground hover:text-foreground"
+                        >
+                          <Link to="/runtime" aria-label="Runtime details">
+                            <Wrench className="size-4" />
+                          </Link>
+                        </Button>
                       )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {rightPanelOpen ? "Hide workspace" : "Show workspace"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {onRuntimePage ? "Back" : "Runtime details"}
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={toggleWorkspace}
+                        aria-label={workspaceLabel}
+                      >
+                        {workspaceOpen ? (
+                          <FolderOpenIcon className="size-4" />
+                        ) : (
+                          <FolderIcon className="size-4" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{workspaceLabel}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+            </header>
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <Outlet />
             </div>
-          </header>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <Outlet />
           </div>
-        </div>
-        {rightPanelOpen && (
-          <div className="flex h-full w-72 flex-shrink-0 flex-col overflow-hidden border-l bg-sidebar transition-all">
-            <FileTreePanel />
-          </div>
-        )}
-      </SidebarInset>
-    </SidebarProvider>
+          {workspaceDockOpen && (
+            <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] flex-shrink-0 flex-col overflow-hidden border-l bg-card transition-all xl:flex">
+              <FileTreePanel />
+            </div>
+          )}
+          <Sheet
+            open={!workspaceDocked && workspaceSheetOpen}
+            onOpenChange={setWorkspaceSheetOpen}
+          >
+            <SheetContent
+              className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 sm:!max-w-md xl:hidden"
+              side="right"
+            >
+              <SheetHeader className="sr-only">
+                <SheetTitle>Workspace</SheetTitle>
+                <SheetDescription>
+                  Browse files in the current workspace.
+                </SheetDescription>
+              </SheetHeader>
+              <FileTreePanel />
+            </SheetContent>
+          </Sheet>
+        </SidebarInset>
+      </SidebarProvider>
+    </ShellTitleContext.Provider>
+  );
+}
+
+function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      const media = window.matchMedia(query);
+      media.addEventListener("change", onStoreChange);
+      return () => media.removeEventListener("change", onStoreChange);
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
   );
 }

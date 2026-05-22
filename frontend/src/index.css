@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
 
 /* Tailwind v4 doesn't scan node_modules by default. streamdown ships JSX
    with utility classes (sticky, -mt-10, pointer-events-auto, etc.) that
@@ -13,161 +12,375 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Theme tokens — shadcn v4 / Tailwind v4 style.
-   prompt-kit's `init` step (below) will append more variables; this file
-   establishes the baseline.
-
-   We add juex-specific role colours alongside shadcn's defaults. */
+@theme inline {
+  --color-juex-forest-900: var(--juex-forest-900);
+  --color-juex-forest-800: var(--juex-forest-800);
+  --color-juex-forest-700: var(--juex-forest-700);
+  --color-juex-forest-600: var(--juex-forest-600);
+  --color-juex-forest-500: var(--juex-forest-500);
+  --color-juex-forest-400: var(--juex-forest-400);
+  --color-juex-forest-300: var(--juex-forest-300);
+  --color-juex-forest-200: var(--juex-forest-200);
+  --color-juex-forest-100: var(--juex-forest-100);
+  --color-juex-forest-50: var(--juex-forest-50);
+  --color-juex-gold-900: var(--juex-gold-900);
+  --color-juex-gold-800: var(--juex-gold-800);
+  --color-juex-gold-700: var(--juex-gold-700);
+  --color-juex-gold-600: var(--juex-gold-600);
+  --color-juex-gold-500: var(--juex-gold-500);
+  --color-juex-gold-400: var(--juex-gold-400);
+  --color-juex-gold-300: var(--juex-gold-300);
+  --color-juex-gold-200: var(--juex-gold-200);
+  --color-juex-gold-100: var(--juex-gold-100);
+  --color-juex-gold-50: var(--juex-gold-50);
+  --color-juex-cream-100: var(--juex-cream-100);
+  --color-juex-cream-50: var(--juex-cream-50);
+  --color-juex-ink-900: var(--juex-ink-900);
+  --color-juex-ink-600: var(--juex-ink-600);
+  --color-juex-ink-400: var(--juex-ink-400);
+  --color-juex-user: var(--juex-user);
+  --color-juex-assistant: var(--juex-assistant);
+  --color-juex-thinking: var(--juex-thinking);
+  --color-juex-tool: var(--juex-tool);
+  --color-juex-tool-bg: var(--juex-tool-bg);
+  --color-juex-error: var(--juex-error);
+  --color-juex-error-bg: var(--juex-error-bg);
+  --color-juex-done: var(--juex-done);
+  --color-juex-pending: var(--juex-pending);
+  --font-heading: var(--juex-font-serif);
+  --font-serif: var(--juex-font-serif);
+  --font-sans: var(--juex-font-sans);
+  --font-mono: var(--juex-font-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.45);
+  --radius-md: calc(var(--radius) * 0.72);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
 
 @layer base {
   :root {
-    --juex-user:        142 71% 35%;
-    --juex-assistant:   213 94% 45%;
-    --juex-thinking:    220 9%  46%;
-    --juex-tool:        262 83% 58%;
-    --juex-tool-bg:     262 100% 98%;
-    --juex-error:       0   72% 51%;
-    --juex-done:        142 71% 35%;
-    --juex-pending:     38  92% 50%;
+    --juex-forest-900: #03261e;
+    --juex-forest-800: #064032;
+    --juex-forest-700: #0b5340;
+    --juex-forest-600: #176650;
+    --juex-forest-500: #2b8467;
+    --juex-forest-400: #5ca58a;
+    --juex-forest-300: #9bc6b3;
+    --juex-forest-200: #cee4d8;
+    --juex-forest-100: #e6f0eb;
+    --juex-forest-50: #f1f6f3;
+    --juex-gold-900: #7a5a14;
+    --juex-gold-800: #b08527;
+    --juex-gold-700: #d5a13a;
+    --juex-gold-600: #e6b958;
+    --juex-gold-500: #efc97c;
+    --juex-gold-400: #f6d78e;
+    --juex-gold-300: #fae3aa;
+    --juex-gold-200: #fcecc4;
+    --juex-gold-100: #fdf3da;
+    --juex-gold-50: #fdf8eb;
+    --juex-cream-900: #2a2620;
+    --juex-cream-800: #403a31;
+    --juex-cream-700: #5c5346;
+    --juex-cream-600: #807665;
+    --juex-cream-500: #a89e8b;
+    --juex-cream-400: #c8bfac;
+    --juex-cream-300: #ddd3bf;
+    --juex-cream-200: #eae2cf;
+    --juex-cream-100: #f3ecdc;
+    --juex-cream-50: #fbf6ea;
+    --juex-ink-950: #161310;
+    --juex-ink-900: #1c1916;
+    --juex-ink-800: #2d2823;
+    --juex-ink-700: #4a423a;
+    --juex-ink-600: #6b5f54;
+    --juex-ink-500: #8a7d70;
+    --juex-ink-400: #b1a597;
+    --juex-ink-300: #d4cabb;
+    --juex-ink-200: #e6dfd2;
+    --juex-ink-100: #f0ebe0;
+    --juex-ink-50: #f7f3ea;
+
+    --juex-info: #2b6b8a;
+    --juex-info-bg: #e7f0f4;
+    --juex-success: var(--juex-forest-500);
+    --juex-success-bg: var(--juex-forest-100);
+    --juex-warn: #b8801f;
+    --juex-warn-bg: var(--juex-gold-100);
+    --juex-error: #b03a2e;
+    --juex-error-bg: #fbe9e6;
+    --juex-tool: #6e4ea3;
+    --juex-tool-bg: #f1ecf9;
+    --juex-thinking: var(--juex-ink-600);
+    --juex-user: var(--juex-forest-700);
+    --juex-assistant: var(--juex-info);
+    --juex-done: var(--juex-forest-500);
+    --juex-pending: var(--juex-gold-700);
+    --juex-code-bg: #fffaf0;
+    --juex-code-fg: var(--juex-ink-900);
+    --juex-code-muted: var(--juex-ink-600);
+    --juex-code-border: var(--juex-cream-200);
+    --juex-header-height: 52px;
+
+    --juex-font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, "Helvetica Neue", Arial, sans-serif;
+    --juex-font-serif: ui-serif, "Iowan Old Style", "New York", "Apple Garamond", Georgia, "Times New Roman", serif;
+    --juex-font-mono: ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+    --shadow-xs: 0 1px 1px rgba(6, 64, 50, 0.04);
+    --shadow-sm: 0 1px 2px rgba(6, 64, 50, 0.05), 0 1px 1px rgba(6, 64, 50, 0.03);
+    --shadow-md: 0 4px 10px -2px rgba(6, 64, 50, 0.08), 0 2px 4px -2px rgba(6, 64, 50, 0.04);
+    --shadow-lg: 0 12px 28px -8px rgba(6, 64, 50, 0.12), 0 4px 10px -4px rgba(6, 64, 50, 0.06);
+    --shadow-glow-gold: 0 0 0 4px rgba(246, 215, 142, 0.3);
+    --shadow-glow-forest: 0 0 0 4px rgba(11, 83, 64, 0.2);
+
+    --background: var(--juex-cream-50);
+    --foreground: var(--juex-ink-900);
+    --card: #ffffff;
+    --card-foreground: var(--juex-ink-900);
+    --popover: #ffffff;
+    --popover-foreground: var(--juex-ink-900);
+    --primary: var(--juex-forest-800);
+    --primary-foreground: var(--juex-gold-400);
+    --secondary: var(--juex-cream-100);
+    --secondary-foreground: var(--juex-forest-800);
+    --muted: var(--juex-cream-100);
+    --muted-foreground: var(--juex-ink-600);
+    --accent: var(--juex-gold-100);
+    --accent-foreground: var(--juex-forest-800);
+    --destructive: var(--juex-error);
+    --border: var(--juex-ink-200);
+    --input: var(--juex-ink-200);
+    --ring: var(--juex-forest-500);
+    --chart-1: var(--juex-forest-800);
+    --chart-2: var(--juex-gold-700);
+    --chart-3: var(--juex-info);
+    --chart-4: var(--juex-tool);
+    --chart-5: var(--juex-error);
+    --radius: 0.875rem;
+    --sidebar: var(--juex-cream-100);
+    --sidebar-foreground: var(--juex-ink-900);
+    --sidebar-primary: var(--juex-forest-800);
+    --sidebar-primary-foreground: var(--juex-gold-400);
+    --sidebar-accent: var(--juex-ink-100);
+    --sidebar-accent-foreground: var(--juex-forest-800);
+    --sidebar-border: var(--juex-ink-200);
+    --sidebar-ring: var(--juex-forest-500);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not(.light) {
+      --background: #061f19;
+      --foreground: var(--juex-cream-50);
+      --card: var(--juex-forest-800);
+      --card-foreground: var(--juex-cream-50);
+      --popover: var(--juex-forest-800);
+      --popover-foreground: var(--juex-cream-50);
+      --primary: var(--juex-gold-400);
+      --primary-foreground: var(--juex-forest-800);
+      --secondary: #0b5340;
+      --secondary-foreground: var(--juex-cream-50);
+      --muted: #0e4536;
+      --muted-foreground: var(--juex-forest-300);
+      --accent: #0e4536;
+      --accent-foreground: var(--juex-gold-400);
+      --destructive: #f09a92;
+      --border: rgba(246, 215, 142, 0.12);
+      --input: rgba(246, 215, 142, 0.16);
+      --ring: var(--juex-gold-400);
+      --sidebar: #04241c;
+      --sidebar-foreground: var(--juex-cream-50);
+      --sidebar-primary: var(--juex-gold-400);
+      --sidebar-primary-foreground: var(--juex-forest-800);
+      --sidebar-accent: #0e4536;
+      --sidebar-accent-foreground: var(--juex-gold-400);
+      --sidebar-border: rgba(246, 215, 142, 0.12);
+      --sidebar-ring: var(--juex-gold-400);
+      --juex-info-bg: rgba(67, 142, 178, 0.18);
+      --juex-success-bg: rgba(43, 132, 103, 0.2);
+      --juex-warn-bg: rgba(216, 162, 56, 0.18);
+      --juex-error-bg: rgba(176, 58, 46, 0.22);
+      --juex-tool: #cbb7ff;
+      --juex-tool-bg: rgba(110, 78, 163, 0.22);
+      --juex-thinking: var(--juex-forest-300);
+      --juex-user: var(--juex-gold-400);
+      --juex-assistant: var(--juex-cream-50);
+      --juex-done: var(--juex-forest-300);
+      --juex-pending: var(--juex-gold-400);
+      --juex-code-bg: #031b15;
+      --juex-code-fg: var(--juex-cream-50);
+      --juex-code-muted: var(--juex-forest-300);
+      --juex-code-border: rgba(250, 227, 170, 0.16);
+    }
   }
 
   .dark {
-    --juex-user:        142 71% 45%;
-    --juex-assistant:   213 94% 68%;
-    --juex-thinking:    220 9%  60%;
-    --juex-tool:        262 90% 75%;
-    --juex-tool-bg:     262 30% 12%;
-    --juex-error:       0   85% 65%;
-    --juex-done:        142 71% 55%;
-    --juex-pending:     38  92% 60%;
+    --background: #061f19;
+    --foreground: var(--juex-cream-50);
+    --card: var(--juex-forest-800);
+    --card-foreground: var(--juex-cream-50);
+    --popover: var(--juex-forest-800);
+    --popover-foreground: var(--juex-cream-50);
+    --primary: var(--juex-gold-400);
+    --primary-foreground: var(--juex-forest-800);
+    --secondary: #0b5340;
+    --secondary-foreground: var(--juex-cream-50);
+    --muted: #0e4536;
+    --muted-foreground: var(--juex-forest-300);
+    --accent: #0e4536;
+    --accent-foreground: var(--juex-gold-400);
+    --destructive: #f09a92;
+    --border: rgba(246, 215, 142, 0.12);
+    --input: rgba(246, 215, 142, 0.16);
+    --ring: var(--juex-gold-400);
+    --sidebar: #04241c;
+    --sidebar-foreground: var(--juex-cream-50);
+    --sidebar-primary: var(--juex-gold-400);
+    --sidebar-primary-foreground: var(--juex-forest-800);
+    --sidebar-accent: #0e4536;
+    --sidebar-accent-foreground: var(--juex-gold-400);
+    --sidebar-border: rgba(246, 215, 142, 0.12);
+    --sidebar-ring: var(--juex-gold-400);
+    --juex-info-bg: rgba(67, 142, 178, 0.18);
+    --juex-success-bg: rgba(43, 132, 103, 0.2);
+    --juex-warn-bg: rgba(216, 162, 56, 0.18);
+    --juex-error-bg: rgba(176, 58, 46, 0.22);
+    --juex-tool: #cbb7ff;
+    --juex-tool-bg: rgba(110, 78, 163, 0.22);
+    --juex-thinking: var(--juex-forest-300);
+    --juex-user: var(--juex-gold-400);
+    --juex-assistant: var(--juex-cream-50);
+    --juex-done: var(--juex-forest-300);
+    --juex-pending: var(--juex-gold-400);
+    --juex-code-bg: #031b15;
+    --juex-code-fg: var(--juex-cream-50);
+    --juex-code-muted: var(--juex-forest-300);
+    --juex-code-border: rgba(250, 227, 170, 0.16);
   }
+
   * {
     @apply border-border outline-ring/50;
   }
-  body {
-    @apply bg-background text-foreground;
-  }
+
   html {
-    @apply font-sans;
+    @apply bg-background font-sans text-foreground antialiased;
+    font-feature-settings: "ss01", "cv11";
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply min-h-svh bg-background text-foreground;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  button,
+  [role="button"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: default;
+  }
+
+  .juex-logo {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    flex: none;
+    background-color: currentColor;
+    vertical-align: middle;
+    -webkit-mask: url("/juex-logo.svg") center / contain no-repeat;
+    mask: url("/juex-logo.svg") center / contain no-repeat;
+  }
+
+  .juex-live-dot {
+    box-shadow: var(--shadow-glow-gold);
+    animation: juex-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes juex-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
   }
 }
 
-@theme inline {
-  --color-juex-user:      hsl(var(--juex-user));
-  --color-juex-assistant: hsl(var(--juex-assistant));
-  --color-juex-thinking:  hsl(var(--juex-thinking));
-  --color-juex-tool:      hsl(var(--juex-tool));
-  --color-juex-tool-bg:   hsl(var(--juex-tool-bg));
-  --color-juex-error:     hsl(var(--juex-error));
-  --color-juex-done:      hsl(var(--juex-done));
-  --color-juex-pending:   hsl(var(--juex-pending));
-  --font-heading:        var(--font-sans);
-  --font-sans:        'Geist Variable', sans-serif;
-  --color-sidebar-ring:        var(--sidebar-ring);
-  --color-sidebar-border:        var(--sidebar-border);
-  --color-sidebar-accent-foreground:        var(--sidebar-accent-foreground);
-  --color-sidebar-accent:        var(--sidebar-accent);
-  --color-sidebar-primary-foreground:        var(--sidebar-primary-foreground);
-  --color-sidebar-primary:        var(--sidebar-primary);
-  --color-sidebar-foreground:        var(--sidebar-foreground);
-  --color-sidebar:        var(--sidebar);
-  --color-chart-5:        var(--chart-5);
-  --color-chart-4:        var(--chart-4);
-  --color-chart-3:        var(--chart-3);
-  --color-chart-2:        var(--chart-2);
-  --color-chart-1:        var(--chart-1);
-  --color-ring:        var(--ring);
-  --color-input:        var(--input);
-  --color-border:        var(--border);
-  --color-destructive:        var(--destructive);
-  --color-accent-foreground:        var(--accent-foreground);
-  --color-accent:        var(--accent);
-  --color-muted-foreground:        var(--muted-foreground);
-  --color-muted:        var(--muted);
-  --color-secondary-foreground:        var(--secondary-foreground);
-  --color-secondary:        var(--secondary);
-  --color-primary-foreground:        var(--primary-foreground);
-  --color-primary:        var(--primary);
-  --color-popover-foreground:        var(--popover-foreground);
-  --color-popover:        var(--popover);
-  --color-card-foreground:        var(--card-foreground);
-  --color-card:        var(--card);
-  --color-foreground:        var(--foreground);
-  --color-background:        var(--background);
-  --radius-sm:        calc(var(--radius) * 0.6);
-  --radius-md:        calc(var(--radius) * 0.8);
-  --radius-lg:        var(--radius);
-  --radius-xl:        calc(var(--radius) * 1.4);
-  --radius-2xl:        calc(var(--radius) * 1.8);
-  --radius-3xl:        calc(var(--radius) * 2.2);
-  --radius-4xl:        calc(var(--radius) * 2.6);
-}
+@layer components {
+  .juex-code-block {
+    border-color: var(--juex-code-border);
+    background: var(--juex-code-bg);
+    color: var(--juex-code-fg);
+  }
 
-:root {
-  --background:        oklch(1 0 0);
-  --foreground:        oklch(0.145 0 0);
-  --card:        oklch(1 0 0);
-  --card-foreground:        oklch(0.145 0 0);
-  --popover:        oklch(1 0 0);
-  --popover-foreground:        oklch(0.145 0 0);
-  --primary:        oklch(0.205 0 0);
-  --primary-foreground:        oklch(0.985 0 0);
-  --secondary:        oklch(0.97 0 0);
-  --secondary-foreground:        oklch(0.205 0 0);
-  --muted:        oklch(0.97 0 0);
-  --muted-foreground:        oklch(0.556 0 0);
-  --accent:        oklch(0.97 0 0);
-  --accent-foreground:        oklch(0.205 0 0);
-  --destructive:        oklch(0.577 0.245 27.325);
-  --border:        oklch(0.922 0 0);
-  --input:        oklch(0.922 0 0);
-  --ring:        oklch(0.708 0 0);
-  --chart-1:        oklch(0.87 0 0);
-  --chart-2:        oklch(0.556 0 0);
-  --chart-3:        oklch(0.439 0 0);
-  --chart-4:        oklch(0.371 0 0);
-  --chart-5:        oklch(0.269 0 0);
-  --radius:        0.625rem;
-  --sidebar:        oklch(0.985 0 0);
-  --sidebar-foreground:        oklch(0.145 0 0);
-  --sidebar-primary:        oklch(0.205 0 0);
-  --sidebar-primary-foreground:        oklch(0.985 0 0);
-  --sidebar-accent:        oklch(0.97 0 0);
-  --sidebar-accent-foreground:        oklch(0.205 0 0);
-  --sidebar-border:        oklch(0.922 0 0);
-  --sidebar-ring:        oklch(0.708 0 0);
-}
+  .juex-code-block pre {
+    background: var(--juex-code-bg) !important;
+    color: var(--juex-code-fg) !important;
+  }
 
-.dark {
-  --background:        oklch(0.145 0 0);
-  --foreground:        oklch(0.985 0 0);
-  --card:        oklch(0.205 0 0);
-  --card-foreground:        oklch(0.985 0 0);
-  --popover:        oklch(0.205 0 0);
-  --popover-foreground:        oklch(0.985 0 0);
-  --primary:        oklch(0.922 0 0);
-  --primary-foreground:        oklch(0.205 0 0);
-  --secondary:        oklch(0.269 0 0);
-  --secondary-foreground:        oklch(0.985 0 0);
-  --muted:        oklch(0.269 0 0);
-  --muted-foreground:        oklch(0.708 0 0);
-  --accent:        oklch(0.269 0 0);
-  --accent-foreground:        oklch(0.985 0 0);
-  --destructive:        oklch(0.704 0.191 22.216);
-  --border:        oklch(1 0 0 / 10%);
-  --input:        oklch(1 0 0 / 15%);
-  --ring:        oklch(0.556 0 0);
-  --chart-1:        oklch(0.87 0 0);
-  --chart-2:        oklch(0.556 0 0);
-  --chart-3:        oklch(0.439 0 0);
-  --chart-4:        oklch(0.371 0 0);
-  --chart-5:        oklch(0.269 0 0);
-  --sidebar:        oklch(0.205 0 0);
-  --sidebar-foreground:        oklch(0.985 0 0);
-  --sidebar-primary:        oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground:        oklch(0.985 0 0);
-  --sidebar-accent:        oklch(0.269 0 0);
-  --sidebar-accent-foreground:        oklch(0.985 0 0);
-  --sidebar-border:        oklch(1 0 0 / 10%);
-  --sidebar-ring:        oklch(0.556 0 0);
+  .juex-markdown :not(pre) > code {
+    border: 1px solid var(--juex-code-border);
+    border-radius: 0.375rem;
+    background: var(--juex-code-bg);
+    color: var(--juex-code-fg);
+    padding: 0.125rem 0.3rem;
+  }
+
+  .juex-markdown [data-streamdown="code-block"] {
+    border-color: var(--juex-code-border);
+    background: var(--juex-code-bg);
+  }
+
+  .juex-markdown [data-streamdown="code-block-header"] {
+    color: var(--juex-code-muted);
+  }
+
+  .juex-markdown [data-streamdown="code-block-actions"] {
+    border-color: var(--juex-code-border);
+    background: color-mix(in srgb, var(--juex-code-bg) 86%, transparent);
+  }
+
+  .juex-markdown [data-streamdown="code-block-body"],
+  .juex-markdown [data-streamdown="code-block-body"] pre {
+    background: var(--juex-code-bg) !important;
+    color: var(--juex-code-fg) !important;
+  }
 }

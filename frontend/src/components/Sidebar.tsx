@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { Plus } from "lucide-react";
+import { LogoMark } from "@/components/LogoMark";
 import { Button } from "@/components/ui/button";
 import {
   Sidebar as ShadSidebar,
@@ -28,21 +29,25 @@ export function Sidebar() {
 
   return (
     <ShadSidebar collapsible="offcanvas">
-      <SidebarHeader>
+      <SidebarHeader className="gap-3 px-3 pb-2 pt-3">
+        <div className="flex items-center gap-2 px-1 text-primary">
+          <LogoMark className="size-7" />
+          <span className="font-serif text-2xl italic leading-none">juex</span>
+        </div>
         <Button
           onClick={handleNewChat}
-          className="w-full justify-start"
+          className="w-full justify-start gap-2"
           variant="default"
         >
-          <Plus className="mr-2 size-4" />
+          <Plus className="size-4" />
           New chat
         </Button>
       </SidebarHeader>
       <SidebarContent>
         <SidebarSessionList createdSession={createdSession} />
       </SidebarContent>
-      <SidebarFooter className="text-muted-foreground text-xs px-3 py-2">
-        juex serve
+      <SidebarFooter className="border-t border-sidebar-border px-4 py-3 font-mono text-[11px] text-muted-foreground">
+        <span>juex serve</span>
       </SidebarFooter>
     </ShadSidebar>
   );

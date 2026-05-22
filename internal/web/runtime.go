@@ -3,6 +3,8 @@ package web
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 )
 
 type runtimeStatusResponse struct {
+	WorkDir  string         `json:"work_dir"`
 	Provider providerStatus `json:"provider"`
 	MCP      mcpStatus      `json:"mcp"`
 	Skills   skillsStatus   `json:"skills"`
@@ -34,12 +37,19 @@ type mcpStatus struct {
 
 type mcpServerInfo struct {
 	Name      string   `json:"name"`
+	Source    string   `json:"source"`
 	Command   string   `json:"command"`
 	Args      []string `json:"args,omitempty"`
 	Status    string   `json:"status"`
 	Connected bool     `json:"connected"`
 	ToolCount int      `json:"tool_count"`
 	Error     string   `json:"error,omitempty"`
+}
+
+type mcpServerConfig struct {
+	Name   string
+	Source string
+	Spec   mcp.ServerSpec
 }
 
 type skillsStatus struct {
@@ -72,7 +82,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err := s.ensureMCPStarted(context.Background()); err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	mcpServers, err := s.configuredMCPServers()
+	mcpServers, err := s.configuredMCPServerConfigs()
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
@@ -87,20 +97,21 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	connectedCount := 0
 	errorCount := 0
 	servers := make([]mcpServerInfo, 0, len(mcpServers))
-	for name, spec := range mcpServers {
-		toolCount := connected[name]
-		_, managerConnected := managerTools[name]
+	for _, server := range mcpServers {
+		toolCount := connected[server.Name]
+		_, managerConnected := managerTools[server.Name]
 		status := "not_started"
-		errText := mcpErrors[name]
+		errText := mcpErrors[server.Name]
 		if toolCount > 0 || managerConnected {
 			status = "connected"
 		} else if errText != "" {
 			status = "error"
 		}
 		info := mcpServerInfo{
-			Name:      name,
-			Command:   spec.Command,
-			Args:      append([]string(nil), spec.Args...),
+			Name:      server.Name,
+			Source:    server.Source,
+			Command:   server.Spec.Command,
+			Args:      append([]string(nil), server.Spec.Args...),
 			Status:    status,
 			Connected: toolCount > 0 || managerConnected,
 			ToolCount: toolCount,
@@ -113,7 +124,6 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		}
 		servers = append(servers, info)
 	}
-	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
 
 	skillStatus, err := s.cachedSkillsStatus()
 	if err != nil {
@@ -121,6 +131,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	}
 
 	return runtimeStatusResponse{
+		WorkDir:  s.absoluteWorkDir(),
 		Provider: s.providerStatus(),
 		MCP: mcpStatus{
 			Configured: len(servers),
@@ -130,6 +141,22 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		},
 		Skills: skillStatus,
 	}, nil
+}
+
+func (s *Server) absoluteWorkDir() string {
+	workDir := s.opts.Cfg.WorkDir
+	if workDir == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return ""
+		}
+		workDir = cwd
+	}
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		return workDir
+	}
+	return abs
 }
 
 func (s *Server) providerStatus() providerStatus {
@@ -179,6 +206,9 @@ func (s *Server) cachedSkillsStatus() (skillsStatus, error) {
 			Path:        skill.Path,
 		})
 	}
+	sort.Slice(skillItems, func(i, j int) bool {
+		return runtimeSourceLess(skillItems[i].Source, skillItems[i].Name, skillItems[j].Source, skillItems[j].Name)
+	})
 	status := skillsStatus{
 		Count: len(skillItems),
 		Items: skillItems,
@@ -192,12 +222,30 @@ func cloneSkillsStatus(status skillsStatus) skillsStatus {
 	return status
 }
 
-func (s *Server) configuredMCPServers() (map[string]mcp.ServerSpec, error) {
-	configs, err := s.loadMCPConfigs()
-	if err != nil {
-		return nil, err
+func (s *Server) configuredMCPServerConfigs() ([]mcpServerConfig, error) {
+	serversByName := map[string]mcpServerConfig{}
+	for _, path := range s.opts.Cfg.MCPConfigPaths() {
+		cfg, err := mcp.LoadConfig(path)
+		if err != nil {
+			return nil, err
+		}
+		source := s.runtimeSourceForPath(path)
+		for name, spec := range cfg.MCPServers {
+			serversByName[name] = mcpServerConfig{
+				Name:   name,
+				Source: source,
+				Spec:   spec,
+			}
+		}
 	}
-	return mcp.MergeConfigs(configs).MCPServers, nil
+	servers := make([]mcpServerConfig, 0, len(serversByName))
+	for _, server := range serversByName {
+		servers = append(servers, server)
+	}
+	sort.Slice(servers, func(i, j int) bool {
+		return runtimeSourceLess(servers[i].Source, servers[i].Name, servers[j].Source, servers[j].Name)
+	})
+	return servers, nil
 }
 
 func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
@@ -212,6 +260,43 @@ func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
 		}
 	}
 	return configs, nil
+}
+
+func (s *Server) runtimeSourceForPath(path string) string {
+	cleanPath := filepath.Clean(path)
+	if s.opts.Cfg.WorkDir != "" {
+		projectPath := filepath.Join(s.opts.Cfg.WorkDir, ".agents", "mcp.json")
+		if cleanPath == filepath.Clean(projectPath) {
+			return "project"
+		}
+	}
+	if s.opts.Cfg.HomeAgentsDir != "" {
+		userPath := filepath.Join(s.opts.Cfg.HomeAgentsDir, "mcp.json")
+		if cleanPath == filepath.Clean(userPath) {
+			return "user"
+		}
+	}
+	return "runtime"
+}
+
+func runtimeSourceLess(leftSource, leftName, rightSource, rightName string) bool {
+	leftRank := runtimeSourceRank(leftSource)
+	rightRank := runtimeSourceRank(rightSource)
+	if leftRank != rightRank {
+		return leftRank < rightRank
+	}
+	return leftName < rightName
+}
+
+func runtimeSourceRank(source string) int {
+	switch source {
+	case "project":
+		return 0
+	case "user":
+		return 1
+	default:
+		return 2
+	}
 }
 
 func (s *Server) connectedMCPServers() map[string]int {

@@ -55,6 +55,9 @@ body`)
 	if got.Provider.ID != "openai" || got.Provider.Protocol != "openai/responses" || got.Provider.Model != "m" {
 		t.Fatalf("provider = %+v", got.Provider)
 	}
+	if got.WorkDir != work {
+		t.Fatalf("work_dir = %q, want %q", got.WorkDir, work)
+	}
 }
 
 func TestGetRuntimeStatus_IgnoresMissingMCPConfig(t *testing.T) {
@@ -76,6 +79,26 @@ func TestGetRuntimeStatus_IgnoresMissingMCPConfig(t *testing.T) {
 	}
 	if got.MCP.Configured != 0 || got.MCP.Connected != 0 {
 		t.Fatalf("mcp = %+v", got.MCP)
+	}
+}
+
+func TestRuntimeStatusReportsAbsoluteWorkDir(t *testing.T) {
+	srv := newTestServer(t)
+	parent := t.TempDir()
+	workName := "workspace"
+	work := filepath.Join(parent, workName)
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(parent)
+	srv.opts.Cfg.WorkDir = workName
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkDir != work {
+		t.Fatalf("work_dir = %q, want %q", got.WorkDir, work)
 	}
 }
 
@@ -119,6 +142,85 @@ func TestRuntimeStatus_CountsConnectedMCPServersFromActiveTools(t *testing.T) {
 	}
 	if got.MCP.Servers[1].Name != "beta" || got.MCP.Servers[1].Connected {
 		t.Fatalf("beta = %+v", got.MCP.Servers[1])
+	}
+}
+
+func TestRuntimeStatusOrdersProjectBeforeUserSources(t *testing.T) {
+	srv := newTestServer(t)
+	homeAgents := t.TempDir()
+	srv.opts.Cfg.HomeAgentsDir = homeAgents
+	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "mcp.json"), `{
+  "mcpServers": {
+    "shared": { "command": "user-shared" },
+    "zeta": { "command": "user-zeta" }
+  }
+}`)
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "alpha": { "command": "project-alpha" },
+    "shared": { "command": "project-shared" }
+  }
+}`)
+	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "skills", "zeta", "SKILL.md"), `---
+name: zeta
+description: user zeta
+---
+body`)
+	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "skills", "shared", "SKILL.md"), `---
+name: shared
+description: user shared
+---
+body`)
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "skills", "alpha", "SKILL.md"), `---
+name: alpha
+description: project alpha
+---
+body`)
+	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "skills", "shared", "SKILL.md"), `---
+name: shared
+description: project shared
+---
+body`)
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantServers := []struct {
+		name    string
+		source  string
+		command string
+	}{
+		{name: "alpha", source: "project", command: "project-alpha"},
+		{name: "shared", source: "project", command: "project-shared"},
+		{name: "zeta", source: "user", command: "user-zeta"},
+	}
+	if len(got.MCP.Servers) != len(wantServers) {
+		t.Fatalf("servers = %+v", got.MCP.Servers)
+	}
+	for i, want := range wantServers {
+		gotServer := got.MCP.Servers[i]
+		if gotServer.Name != want.name || gotServer.Source != want.source || gotServer.Command != want.command {
+			t.Fatalf("server[%d] = %+v, want %+v", i, gotServer, want)
+		}
+	}
+	wantSkills := []struct {
+		name        string
+		source      string
+		description string
+	}{
+		{name: "alpha", source: "project", description: "project alpha"},
+		{name: "shared", source: "project", description: "project shared"},
+		{name: "zeta", source: "user", description: "user zeta"},
+	}
+	if len(got.Skills.Items) != len(wantSkills) {
+		t.Fatalf("skills = %+v", got.Skills.Items)
+	}
+	for i, want := range wantSkills {
+		gotSkill := got.Skills.Items[i]
+		if gotSkill.Name != want.name || gotSkill.Source != want.source || gotSkill.Description != want.description {
+			t.Fatalf("skill[%d] = %+v, want %+v", i, gotSkill, want)
+		}
 	}
 }
 

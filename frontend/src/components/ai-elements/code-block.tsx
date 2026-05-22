@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { juexCodeThemes } from "@/lib/code-theme";
 import {
   Select,
   SelectContent,
@@ -38,6 +39,34 @@ const isUnderline = (fontStyle: number | undefined) =>
   // oxlint-disable-next-line eslint(no-bitwise)
   fontStyle && fontStyle & 4;
 
+type ShikiCSSProperties = CSSProperties & Record<`--${string}`, string>;
+
+const shikiStyleValue = (
+  value: string | undefined,
+  property: "backgroundColor" | "color"
+): ShikiCSSProperties => {
+  if (!value) {
+    return {};
+  }
+
+  const [base, ...customProperties] = value.split(";");
+  const style: ShikiCSSProperties = {};
+  if (base) {
+    style[property] = base;
+  }
+
+  for (const declaration of customProperties) {
+    const [name, ...rawValue] = declaration.split(":");
+    const variableName = name?.trim();
+    const variableValue = rawValue.join(":").trim();
+    if (variableName.startsWith("--") && variableValue) {
+      style[variableName as `--${string}`] = variableValue;
+    }
+  }
+
+  return style;
+};
+
 // Transform tokens to include pre-computed keys to avoid noArrayIndexKey lint
 interface KeyedToken {
   token: ThemedToken;
@@ -60,7 +89,7 @@ const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
 // Token rendering component
 const TokenSpan = ({ token }: { token: ThemedToken }) => (
   <span
-    className="dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)]"
+    className="dark:!bg-transparent dark:!text-[var(--shiki-dark,var(--juex-code-fg))]"
     style={
       {
         backgroundColor: token.bgColor,
@@ -157,7 +186,7 @@ const getHighlighter = (
 
   const highlighterPromise = createHighlighter({
     langs: [language],
-    themes: ["github-light", "github-dark"],
+    themes: juexCodeThemes,
   });
 
   highlighterCache.set(language, highlighterPromise);
@@ -213,8 +242,8 @@ export const highlightCode = (
       const result = highlighter.codeToTokens(code, {
         lang: langToUse,
         themes: {
-          dark: "github-dark",
-          light: "github-light",
+          dark: juexCodeThemes[1],
+          light: juexCodeThemes[0],
         },
       });
 
@@ -257,8 +286,8 @@ const CodeBlockBody = memo(
   }) => {
     const preStyle = useMemo(
       () => ({
-        backgroundColor: tokenized.bg,
-        color: tokenized.fg,
+        ...shikiStyleValue(tokenized.bg, "backgroundColor"),
+        ...shikiStyleValue(tokenized.fg, "color"),
       }),
       [tokenized.bg, tokenized.fg]
     );
@@ -271,7 +300,7 @@ const CodeBlockBody = memo(
     return (
       <pre
         className={cn(
-          "dark:!bg-[var(--shiki-dark-bg)] dark:!text-[var(--shiki-dark)] m-0 p-4 text-sm",
+          "m-0 p-4 text-sm dark:!bg-[var(--juex-code-bg)] dark:!text-[var(--juex-code-fg)]",
           className
         )}
         style={preStyle}
@@ -309,7 +338,7 @@ export const CodeBlockContainer = ({
 }: HTMLAttributes<HTMLDivElement> & { language: string }) => (
   <div
     className={cn(
-      "group relative w-full overflow-hidden rounded-md border bg-background text-foreground",
+      "juex-code-block group relative w-full overflow-hidden rounded-md border bg-[var(--juex-code-bg)] text-[var(--juex-code-fg)]",
       className
     )}
     data-language={language}
