@@ -172,6 +172,7 @@ export interface FileContentResponse {
 }
 
 export interface RuntimeStatusResponse {
+  work_dir: string;
   provider: {
     id?: string;
     protocol?: string;
@@ -199,6 +200,7 @@ export interface RuntimeStatusResponse {
 
 export interface MCPServerInfo {
   name: string;
+  source: string;
   command: string;
   args?: string[];
   status: "not_started" | "connected" | "error";

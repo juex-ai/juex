@@ -38,6 +38,7 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { StatusPill, type Status } from "@/components/StatusPill";
+import { useShellTitle } from "@/components/AppShell";
 import {
   messagesToGroups,
   toolState,
@@ -51,7 +52,7 @@ import {
   startTurn,
   subscribeEvents,
 } from "@/api";
-import { ArchiveIcon, RadioIcon } from "lucide-react";
+import { ArchiveIcon, RadioIcon, SquareIcon } from "lucide-react";
 import type {
   ActiveContextSnapshot,
   ContextUsage,
@@ -266,8 +267,10 @@ export function Session() {
     }
   }
 
+  useShellTitle(data ? data.preview || "(empty)" : null);
+
   if (!data) {
-    return <div className="text-muted-foreground p-8">Loading...</div>;
+    return <div className="p-8 text-muted-foreground">Loading...</div>;
   }
 
   const messages: ChatMessage[] = [...(data.messages ?? []), ...liveMessages];
@@ -281,38 +284,42 @@ export function Session() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex items-baseline gap-3 border-b px-6 py-3 text-sm">
-        <code className="font-mono text-xs">{data.id}</code>
-        <Badge variant="secondary">{data.turns} turns</Badge>
+      <header className="flex min-h-[var(--juex-header-height)] min-w-0 flex-wrap items-center gap-2 border-b bg-card px-4 py-3 text-sm shadow-[var(--shadow-xs)] md:flex-nowrap md:gap-3 md:px-6">
+        <code className="min-w-0 max-w-full truncate font-mono text-xs text-muted-foreground md:max-w-[18rem]">
+          {data.id}
+        </code>
+        <Badge variant="secondary" className="font-mono text-[11px]">
+          {data.turns} turns
+        </Badge>
         {data.model ? (
           <Badge variant="outline" className="font-mono text-xs">
             {data.model}
           </Badge>
         ) : null}
-        <span className="text-muted-foreground text-xs">
+        <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">
           last active {new Date(data.last_active_at).toLocaleString()}
         </span>
       </header>
       <Conversation className="min-h-0 flex-1">
-        <ConversationContent className="mx-auto w-full max-w-3xl">
+        <ConversationContent className="mx-auto w-full max-w-[760px]">
           {groups.map((group) => (
             <MessageGroupView key={group.key} group={group} />
           ))}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
-      <div className="border-t bg-background/95 px-4 py-3 backdrop-blur">
-        <div className="mx-auto w-full max-w-3xl">
+      <div className="border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
+        <div className="mx-auto w-full max-w-[760px]">
           <PromptInput
             onSubmit={async (msg) => {
               const text = msg.text?.trim();
               if (text) await handleSend(text);
             }}
           >
-            <PromptInputTextarea placeholder="Type a prompt..." />
-            <PromptInputFooter>
+            <PromptInputTextarea placeholder="Ask juex anything..." />
+            <PromptInputFooter className="flex-nowrap items-end gap-2">
               <TooltipProvider>
-                <PromptInputTools>
+                <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-1.5">
                   <StatusPill status={status} />
                   <ContextUsageLabel
                     usage={contextUsage}
@@ -320,29 +327,32 @@ export function Session() {
                   />
                   <TokenUsageLabel usage={tokenUsage} />
                 </PromptInputTools>
-                {busy ? (
-                  <>
-                    <PromptInputButton
-                      variant="outline"
-                      onClick={() => void handleInterrupt()}
-                    >
-                      Stop
-                    </PromptInputButton>
-                    <PromptInputSubmit />
-                  </>
-                ) : (
-                  <>
-                    <PromptInputButton
-                      variant="outline"
-                      tooltip="Compact context"
-                      disabled={isCompacting}
-                      onClick={() => void handleCompact()}
-                    >
-                      <ArchiveIcon className="size-4" aria-hidden="true" />
-                    </PromptInputButton>
-                    <PromptInputSubmit />
-                  </>
-                )}
+                <div className="flex shrink-0 items-center gap-1">
+                  {busy ? (
+                    <>
+                      <PromptInputButton
+                        variant="outline"
+                        onClick={() => void handleInterrupt()}
+                      >
+                        <SquareIcon className="size-3.5" aria-hidden="true" />
+                        Stop
+                      </PromptInputButton>
+                      <PromptInputSubmit />
+                    </>
+                  ) : (
+                    <>
+                      <PromptInputButton
+                        variant="outline"
+                        tooltip="Compact context"
+                        disabled={isCompacting}
+                        onClick={() => void handleCompact()}
+                      >
+                        <ArchiveIcon className="size-4" aria-hidden="true" />
+                      </PromptInputButton>
+                      <PromptInputSubmit />
+                    </>
+                  )}
+                </div>
               </TooltipProvider>
             </PromptInputFooter>
           </PromptInput>
@@ -632,7 +642,7 @@ function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="bg-muted text-muted-foreground inline-flex shrink-0 items-center rounded-full px-2.5 py-1 font-mono text-xs">
+        <span className="inline-flex shrink-0 items-center rounded-full border border-transparent bg-muted px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
           tokens {formatTokenCount(total)}
         </span>
       </TooltipTrigger>
@@ -653,7 +663,7 @@ function ContextUsageLabel({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="bg-muted text-muted-foreground inline-flex shrink-0 items-center rounded-full px-2.5 py-1 font-mono text-xs">
+        <span className="inline-flex shrink-0 items-center rounded-full border border-transparent bg-muted px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
           context {usage ? formatTokenCount(usage.total_tokens) : "-"}
         </span>
       </TooltipTrigger>
@@ -690,7 +700,7 @@ function ContextUsageTooltip({
         {formatTokenCount(usage.total_tokens)}/{formatTokenCount(windowTokens)} tokens (
         {formatPercent(percent)})
       </div>
-      <div className="text-background/75">estimated breakdown</div>
+      <div className="text-muted-foreground">estimated breakdown</div>
       <div className="space-y-0.5">
         {(usage.breakdown ?? []).map((part) => (
           <div key={part.key}>
@@ -715,7 +725,7 @@ function ActiveContextDebugLine({
   const count = snapshot?.messages?.length ?? 0;
   const tokens = snapshot?.estimated_tokens ?? 0;
   return (
-    <div className="text-background/75">
+    <div className="text-muted-foreground">
       debug: active provider context {count} messages,{" "}
       {formatTokenCount(tokens)} estimated tokens
     </div>
@@ -752,7 +762,7 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
     <Message from={isCompact ? "assistant" : group.role}>
       <div className="flex w-full flex-col gap-2">
         {showModel ? (
-          <span className="text-muted-foreground font-mono text-xs">
+          <span className="font-mono text-[11px] text-muted-foreground">
             {group.model}
           </span>
         ) : null}
@@ -815,7 +825,7 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
           );
         })}
         {group.pending && isEmpty ? (
-          <div className="text-muted-foreground animate-pulse text-sm">...</div>
+          <div className="animate-pulse text-sm text-muted-foreground">...</div>
         ) : null}
       </div>
     </Message>
@@ -825,7 +835,7 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
 function CompactMessage({ text }: { text: string }) {
   const summary = parseCompactText(text);
   return (
-    <MessageContent className="border border-amber-500/25 bg-amber-50 text-amber-950 dark:border-amber-400/25 dark:bg-amber-950/25 dark:text-amber-50">
+    <MessageContent className="border-juex-forest-300 bg-juex-forest-100 text-juex-forest-900 dark:border-juex-forest-300/25 dark:bg-juex-forest-400/10 dark:text-juex-cream-50">
       <div className="flex items-center gap-2 text-xs font-medium">
         <ArchiveIcon className="size-3.5" aria-hidden="true" />
         <span>Context compacted</span>
@@ -845,7 +855,7 @@ function parseCompactText(text: string): string {
 function MCPEventMessage({ text }: { text: string }) {
   const event = parseMCPEventText(text);
   return (
-    <MessageContent className="group-[.is-user]:border group-[.is-user]:border-teal-500/30 group-[.is-user]:bg-teal-50 group-[.is-user]:text-teal-950 group-[.is-user]:dark:border-teal-400/30 group-[.is-user]:dark:bg-teal-950/30 group-[.is-user]:dark:text-teal-50">
+    <MessageContent className="group-[.is-user]:border group-[.is-user]:border-juex-gold-300 group-[.is-user]:bg-juex-gold-100 group-[.is-user]:text-juex-gold-900 group-[.is-user]:dark:border-juex-gold-400/30 group-[.is-user]:dark:bg-juex-gold-400/10 group-[.is-user]:dark:text-juex-gold-400">
       <div className="flex items-center gap-2 text-xs font-medium">
         <RadioIcon className="size-3.5" aria-hidden="true" />
         <span className="font-mono">{event.label}</span>

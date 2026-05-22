@@ -48,7 +48,7 @@ export function SidebarSessionList({
     return () => {
       live = false;
     };
-  }, []);
+  }, [params.id]);
 
   useEffect(() => {
     if (!createdSession) return;
@@ -62,50 +62,63 @@ export function SidebarSessionList({
 
   if (loading) {
     return (
-      <div className="text-muted-foreground text-xs px-3 py-2">Loading…</div>
+      <div className="px-4 py-3 text-xs text-muted-foreground">Loading...</div>
     );
   }
   if (sessions.length === 0) {
     return (
-      <div className="text-muted-foreground text-xs px-3 py-2">
+      <div className="px-4 py-3 text-xs text-muted-foreground">
         No sessions yet.
       </div>
     );
   }
 
   return (
-    <nav className="flex flex-col gap-0.5 px-2 py-1">
-      {sessions.map((s) => (
-        <div
-          key={s.id}
-          className={cn(
-            "group/session flex items-center rounded-md pr-1 hover:bg-muted/60 transition-colors",
-            s.id === params.id && "bg-muted",
-          )}
-        >
-          <Link
-            to={`/sessions/${encodeURIComponent(s.id)}`}
-            className="min-w-0 flex-1 px-2 py-1.5 text-sm"
+    <nav className="flex flex-col gap-1 px-2 py-2">
+      {sessions.map((s) => {
+        const active = s.id === params.id;
+        return (
+          <div
+            key={s.id}
+            className={cn(
+              "group/session relative flex items-center rounded-[10px] pr-1 text-sidebar-foreground transition-colors",
+              "hover:bg-juex-gold-100/80 hover:text-juex-forest-900 dark:hover:bg-juex-forest-700 dark:hover:text-juex-gold-200",
+              active &&
+                "bg-juex-gold-100 text-juex-forest-900 shadow-[inset_0_0_0_1px_rgba(239,201,124,0.55)] before:absolute before:-left-2 before:top-2 before:bottom-2 before:w-[3px] before:rounded-full before:bg-juex-gold-500 hover:bg-juex-gold-200/80 dark:bg-juex-gold-400 dark:text-juex-forest-900 dark:hover:bg-juex-gold-300 dark:hover:text-juex-forest-900",
+            )}
           >
-            <div className="line-clamp-1">{s.preview || "(empty)"}</div>
-            <div className="text-muted-foreground mt-0.5 text-xs">
-              {humanAgo(s.last_active_at)}
-            </div>
-          </Link>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            title="Delete session"
-            aria-label="Delete session"
-            disabled={deletingID === s.id}
-            onClick={() => void handleDelete(s.id)}
-            className="opacity-0 group-hover/session:opacity-100 focus-visible:opacity-100"
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
-        </div>
-      ))}
+            <Link
+              to={`/sessions/${encodeURIComponent(s.id)}`}
+              className="min-w-0 flex-1 px-3 py-2 text-sm"
+            >
+              <div className="line-clamp-1">{s.preview || "(empty)"}</div>
+              <div
+                className={cn(
+                  "mt-0.5 font-mono text-[11px] text-muted-foreground",
+                  active && "text-juex-ink-600 dark:text-juex-forest-800",
+                )}
+              >
+                {humanAgo(s.last_active_at)}
+              </div>
+            </Link>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              title="Delete session"
+              aria-label="Delete session"
+              disabled={deletingID === s.id}
+              onClick={() => void handleDelete(s.id)}
+              className={cn(
+                "opacity-0 group-hover/session:opacity-100 focus-visible:opacity-100",
+                active && "text-juex-forest-900 hover:bg-juex-gold-300/60",
+              )}
+            >
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
+        );
+      })}
     </nav>
   );
 }

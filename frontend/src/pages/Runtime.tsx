@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { getRuntimeStatus } from "@/api";
 import type { RuntimeStatusResponse } from "@/types";
+import { useShellTitle } from "@/components/AppShell";
 
 export function Runtime() {
   const [data, setData] = useState<RuntimeStatusResponse | null>(null);
+  useShellTitle("Runtime");
 
   useEffect(() => {
     let live = true;
@@ -19,24 +21,47 @@ export function Runtime() {
   }, []);
 
   if (!data) {
-    return <div className="text-muted-foreground p-8">Loading...</div>;
+    return <div className="p-8 text-muted-foreground">Loading...</div>;
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 py-6">
+    <div className="min-h-0 flex-1 overflow-auto bg-background">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-5 md:px-6 md:py-6">
         <section className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="text-lg font-semibold">Provider</h1>
-            <Badge variant="secondary" className="font-mono text-xs">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-2xl italic leading-none text-primary">
+              Runtime
+            </h1>
+            <Badge variant="secondary" className="font-mono text-[11px]">
+              service
+            </Badge>
+          </div>
+          <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            <dl className="grid gap-0 text-sm sm:grid-cols-[9rem_minmax(0,1fr)]">
+              <dt className="border-b bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:border-b-0">
+                CWD
+              </dt>
+              <dd className="break-all px-3 py-2 font-mono text-xs">
+                {data.work_dir || "-"}
+              </dd>
+            </dl>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-2xl italic leading-none text-primary">
+              Provider
+            </h1>
+            <Badge variant="secondary" className="font-mono text-[11px]">
               {data.provider.protocol || data.provider.id || "-"}
             </Badge>
           </div>
-          <div className="overflow-hidden rounded-lg border">
-            <table className="w-full text-left text-sm">
+          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            <table className="w-full min-w-[34rem] text-left text-sm">
               <tbody>
                 <tr>
-                  <th className="bg-muted/60 text-muted-foreground w-36 px-3 py-2 font-medium">
+                  <th className="w-36 bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     ID
                   </th>
                   <td className="px-3 py-2 font-mono text-xs">
@@ -44,7 +69,7 @@ export function Runtime() {
                   </td>
                 </tr>
                 <tr className="border-t">
-                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
+                  <th className="bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     Model
                   </th>
                   <td className="px-3 py-2 font-mono text-xs">
@@ -52,7 +77,7 @@ export function Runtime() {
                   </td>
                 </tr>
                 <tr className="border-t">
-                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
+                  <th className="bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     Base URL
                   </th>
                   <td className="max-w-[42rem] truncate px-3 py-2 font-mono text-xs">
@@ -60,13 +85,13 @@ export function Runtime() {
                   </td>
                 </tr>
                 <tr className="border-t">
-                  <th className="bg-muted/60 text-muted-foreground px-3 py-2 font-medium">
+                  <th className="bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     Capabilities
                   </th>
                   <td className="px-3 py-2">
                     <div className="flex flex-wrap gap-2">
                       {providerCapabilities(data).map((cap) => (
-                        <Badge key={cap} variant="outline">
+                        <Badge key={cap} variant="outline" className="font-mono text-[11px]">
                           {cap}
                         </Badge>
                       ))}
@@ -79,20 +104,23 @@ export function Runtime() {
         </section>
 
         <section className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="text-lg font-semibold">MCP</h1>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-2xl italic leading-none text-primary">
+              MCP
+            </h1>
             <Badge
               variant={data.mcp.errors > 0 ? "destructive" : "secondary"}
-              className="font-mono text-xs"
+              className="font-mono text-[11px]"
             >
               {mcpSummaryLabel(data)}
             </Badge>
           </div>
-          <div className="overflow-hidden rounded-lg border">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-muted/60 text-muted-foreground">
+          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            <table className="w-full min-w-[56rem] text-left text-sm">
+              <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 font-medium">Server</th>
+                  <th className="px-3 py-2 font-medium">Source</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Tools</th>
                   <th className="px-3 py-2 font-medium">Command</th>
@@ -102,7 +130,7 @@ export function Runtime() {
               <tbody>
                 {data.mcp.servers.length === 0 ? (
                   <tr>
-                    <td className="text-muted-foreground px-3 py-3" colSpan={5}>
+                    <td className="text-muted-foreground px-3 py-3" colSpan={6}>
                       No MCP servers configured.
                     </td>
                   </tr>
@@ -111,7 +139,15 @@ export function Runtime() {
                     <tr key={server.name} className="border-t">
                       <td className="px-3 py-2 font-medium">{server.name}</td>
                       <td className="px-3 py-2">
-                        <Badge variant={mcpStatusVariant(server.status)}>
+                        <Badge variant="outline" className="font-mono text-[11px]">
+                          {server.source}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-2">
+                        <Badge
+                          variant={mcpStatusVariant(server.status)}
+                          className="font-mono text-[11px]"
+                        >
                           {mcpStatusLabel(server.status)}
                         </Badge>
                       </td>
@@ -133,15 +169,17 @@ export function Runtime() {
         </section>
 
         <section className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="text-lg font-semibold">Skills</h1>
-            <Badge variant="secondary" className="font-mono text-xs">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-2xl italic leading-none text-primary">
+              Skills
+            </h1>
+            <Badge variant="secondary" className="font-mono text-[11px]">
               {data.skills.count}
             </Badge>
           </div>
-          <div className="overflow-hidden rounded-lg border">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-muted/60 text-muted-foreground">
+          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            <table className="w-full min-w-[56rem] text-left text-sm">
+              <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Source</th>
@@ -161,7 +199,9 @@ export function Runtime() {
                     <tr key={skill.name} className="border-t">
                       <td className="px-3 py-2 font-medium">{skill.name}</td>
                       <td className="px-3 py-2">
-                        <Badge variant="outline">{skill.source}</Badge>
+                        <Badge variant="outline" className="font-mono text-[11px]">
+                          {skill.source}
+                        </Badge>
                       </td>
                       <td className="max-w-[24rem] px-3 py-2">
                         <span className="line-clamp-2">

@@ -11,17 +11,18 @@
 
 **Goals:**
 
-- Read like a modern AI tool — recognisably the same family as Claude.ai,
-  ChatGPT, Cursor.
+- Read like `juex`: calm, warm, event-aware, and operationally clear.
 - Make message structure obvious at a glance: who said what, what tools ran,
   what the agent was thinking.
 - Render rich content properly — markdown, code blocks with syntax
   highlighting, tables, lists.
 - Honour OS dark/light mode automatically.
+- Adapt from desktop to tablet/mobile without horizontal page overflow.
+- Use the Juex Design System: forest `#064032`, gold `#f6d78e`, warm paper,
+  system fonts, Lucide icons, and forest-tinted shadows.
 
 **Non-goals (v0.1):**
 
-- Mobile-responsive layouts (desktop / tablet only).
 - File attachments, voice input, image rendering inside messages.
 - Multi-cursor / real-time collaboration.
 - Token-by-token streaming (events arrive at block granularity).
@@ -39,12 +40,12 @@ SSE API; it does not render any HTML.
 | Build tool | **Vite** (latest) | Standard React app scaffolding, fast HMR. |
 | Language | **TypeScript** | Catches API-shape drift between client and server. |
 | UI runtime | **React** (latest from Vite template) | de facto for shadcn/ui and the wider ecosystem. |
-| Routing | **React Router v6** | small, well-known. |
+| Routing | **React Router v7** | small, well-known. |
 | Styling | **Tailwind CSS v4** | utility-first, great with shadcn/ui, no runtime CSS-in-JS. |
 | Base components | **shadcn/ui** | de facto modern aesthetic; copy-paste components, no runtime lock-in. |
 | AI-chat components | **AI Elements** (https://ai-sdk.dev/elements) | shadcn-style copy-paste components for chat UIs. Brings Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput. Copied into `src/components/ai-elements/`. Apache-2.0. |
 | Markdown / code | **streamdown** + **shiki** | streamdown renders message text and reasoning (markdown, GFM tables, KaTeX, mermaid, CJK); shiki highlights tool input/output JSON in the standalone `CodeBlock`. |
-| Icons | **lucide-react** | shadcn-default icon set. |
+| Icons | **lucide-react** | Lucide at 1.8 stroke, currentColor. |
 | Package manager | **pnpm** | fast, clean `node_modules` layout. |
 
 AI Elements is installed via `pnpm dlx ai-elements@latest add <component>`,
@@ -66,7 +67,12 @@ streamdown (Apache-2.0), shiki (MIT), lucide-react (ISC),
 
 **Bundle target:** keep the gzipped bundle under **500 KB**. Verify via
 `pnpm build`'s size reporter on every PR that changes `frontend/`. Current
-size is ~435 KB gzipped.
+size is checked by `pnpm build`.
+
+**Brand contract:** production code keeps the design system in
+`frontend/src/index.css` as CSS variables. Do not import webfonts; the
+system stacks are intentional. New UI should use existing shadcn / AI Elements
+components, then style them through the Juex tokens.
 
 ---
 
@@ -162,10 +168,10 @@ server. Edit React, see changes instantly.
 
 ## 5. Page layout
 
-Every page renders a fixed shell: a collapsible session sidebar on the left,
-the conversation column in the middle, and a collapsible workspace sidebar on
-the right. The middle column owns its own header and composer (when
-applicable).
+Every page renders a responsive shell: a collapsible session sidebar on the
+left, the conversation column in the middle, and a workspace browser that docks
+on wide screens and becomes a right-side drawer on narrower screens. The middle
+column owns its own header and composer (when applicable).
 
 ```
 ┌──────────────┬──────────────────────────────────┬──────────────┐
@@ -184,13 +190,27 @@ applicable).
 ```
 
 - Sidebar collapses to a hidden drawer (shadcn `Sheet`) below 768px.
-- Workspace sidebar is toggled from the header and opens file previews in a
-  right-side sheet.
-- Runtime status badges live beside the `juex` header label; the wrench icon
-  opens `/runtime` for MCP server and skill details.
-- Center column max-width is 880px; the rest is gutter so reading lines do
-  not get awkwardly wide.
+- Workspace docks as a right column at 1280px and wider. Below 1280px, the
+  same header button opens the workspace as a right-side `Sheet` so the
+  conversation column keeps its readable width.
+- File previews always open in a right-side sheet. On narrow screens the
+  preview sheet uses the viewport width and wraps long paths/content.
+- Runtime status badges live beside the shell title when there is room. The
+  shell title is the current session preview, truncated with ellipsis; with no
+  selected session the title area is blank.
+- Shell-aligned header strips use `--juex-header-height` so the app header,
+  workspace header, and session metadata header stay aligned.
+- The wrench icon opens `/runtime` for MCP server and skill details. On the
+  runtime page, the same slot becomes a back arrow that returns to the previous
+  non-runtime route.
+- Center column max-width is 760px; the rest is gutter so reading lines do
+  not get awkwardly wide. Gutters shrink from 24px to 16px below 768px.
 - Composer is sticky to the bottom of the center column.
+- Desktop columns are dense: left sidebar `16rem`, workspace `18rem`, center
+  content padded `24px`. The app is a product surface, not a marketing page.
+- Headers and metadata wrap or hide low-priority labels instead of forcing
+  horizontal scroll. Runtime tables scroll within their cards on small
+  screens; the page itself should not overflow horizontally.
 
 ---
 
@@ -198,37 +218,41 @@ applicable).
 
 ### 6.1 Sessions list (`/`)
 
-The sidebar is the session list itself. The right column shows an empty-state
-card prompting the user to pick a session or start a new one.
+The sidebar is the session list itself. The center column shows a warm paper
+empty state with the logo mark, the line `Aware, action`, and the normal prompt
+input so a first chat can start without using the sidebar.
 
 ### 6.2 Session detail (`/sessions/:id`)
 
-Same sidebar (highlighted entry for the current session). Right column:
-header strip + scrollable message list + sticky composer. The composer footer
-shows the live status, latest request context total, and current conversation
-token total.
+Same sidebar (highlighted entry for the current session). Center column:
+compact header strip + scrollable message list + sticky composer. The composer
+footer shows the live status, latest request context total, and current
+conversation token total.
 
-MCP channel events render as compact user-side event bubbles with a small
-radio icon, a monospace `<mcp_name>:<event_type>` label, and the event content
-as the message body.
+MCP channel events render as compact user-side event bubbles with a small radio
+icon, a monospace `<mcp_name>:<event_type>` label, and the event content as the
+message body. Event bubbles use the gold ramp, not blue or teal.
 
-Automatic context compaction renders as an assistant-side system bubble with
-an archive icon, a concise "Context compacted" label, and the persisted
-summary text. It is visually distinct from normal chat but stays in the same
-transcript flow so users can see when older context was summarized.
+Automatic context compaction renders as an assistant-side system bubble with an
+archive icon, a concise "Context compacted" label, and the persisted summary
+text. It uses the forest success ramp so it is distinct from normal chat but
+stays in the transcript flow.
 
 When the user clicks `+ new chat` in the sidebar, the client POSTs
 `/api/sessions` and immediately navigates to `/sessions/<new-id>`.
 
 ### 6.3 Runtime detail (`/runtime`)
 
-Shows the effective provider profile first, including protocol, auth source,
-model, base URL, and capability gates. Below that it shows the MCP
-configured/connected/error count, per-server status, tool counts, latest
-connection error, and the loaded skill list. `juex serve` starts MCP at server
-startup, so this page reports live process-level MCP state rather than waiting
-for a chat session to be opened. The page uses dense tables because this is
-operational metadata, not a conversational surface.
+Shows service runtime metadata first, including the absolute cwd used by the
+running `juex serve` process. Then it shows the effective provider profile,
+including protocol, auth source, model, base URL, and capability gates. Below
+that it shows the MCP configured/connected/error count, per-server status,
+source, tool counts, latest connection error, and the loaded skill list. MCP
+servers and skills list project-local sources before user-global sources.
+`juex serve` starts MCP at server startup, so this page reports live
+process-level MCP state rather than waiting for a chat session to be opened.
+The page uses dense tables because this is operational metadata, not a
+conversational surface.
 
 ---
 
@@ -236,58 +260,59 @@ operational metadata, not a conversational surface.
 
 ### 7.1 Sidebar
 
-shadcn `Sidebar` (or our own `<aside>` with Tailwind classes — sidebar
-component is in shadcn's "blocks" registry). Top contains a primary
-**+ New chat** button (shadcn `Button`, default variant). Below it, a
-scrollable list of sessions sorted by `last_active_at` desc. Each entry
-shows:
+shadcn `Sidebar` owns the offcanvas behaviour. Top contains the juex logo mark,
+the italic serif wordmark, and a primary **New chat** button. Below it, a
+scrollable list of sessions sorted by `last_active_at` desc. Each entry shows:
 
 - First line: truncated preview (max 1 line, ellipsis).
-- Second line: relative timestamp ("2m ago", "yesterday", "Mar 5").
+- Second line: relative timestamp (`2m ago`, `yesterday`, `Mar 5`) in mono.
 
-Active session has a subtle background tint (Tailwind `bg-muted`).
-Each row may expose a compact trash icon for deleting the session; destructive
-actions require a browser confirmation before calling the API.
+Active session uses a stronger gold tint and a narrow gold rail. Hover contrast
+must be visible in light mode. In dark mode, selected rows keep gold background
+with forest text even while hovered so the title remains readable. Each row may
+expose a compact trash icon for deleting the session; destructive actions
+require a browser confirmation before calling the API.
 
 ### 7.2 PageHeader
 
-A horizontal strip showing session id (truncated, copy-on-click), turn count,
-and last-active time. Uses shadcn `Badge` for the turn count.
+The global shell header shows the current conversation preview, not a generic
+brand label. A horizontal strip inside the session view still shows session id,
+turn count, model, and last-active time. Session ids, models, numbers, and
+units use mono with tabular numbers.
 
 ### 7.3 Conversation
 
 `<Conversation>` (AI Elements) wraps the scrollable transcript. It composes
 `use-stick-to-bottom` so the view follows new content unless the user has
-scrolled up; `<ConversationScrollButton>` reveals a "scroll to bottom"
-affordance whenever that happens. Inside, `<ConversationContent>` holds
-the message column at `max-w-3xl mx-auto` so long lines do not get
-awkwardly wide. The previous manual `scrollRequest` state is gone —
-stick-to-bottom handles initial-load and streaming-update scrolling.
+scrolled up; `<ConversationScrollButton>` reveals a scroll-to-bottom
+affordance whenever that happens. Inside, `<ConversationContent>` holds the
+message column at `max-width: 760px` with `24px` horizontal padding.
 
 ### 7.4 Message
 
-`<Message from={role}>` (AI Elements) is the unit per message. AI Elements
-encodes the user-vs-assistant layout through internal `is-user` /
-`is-assistant` group classes: user messages render as a right-aligned
-chat bubble, assistant messages as a left-aligned full-width block.
-Inside, we render reasoning / tool sub-units as siblings of
-`<MessageContent>`.
+`<Message from={role}>` (AI Elements) is the unit per message. User messages
+render as right-aligned forest bubbles with cream text and a tighter top-right
+corner. Assistant messages render as left-aligned paper bubbles with a warm
+border and a tighter top-left corner. Reasoning and tool sub-units render as
+siblings of `<MessageContent>`.
 
 ### 7.5 Text rendering
 
 `<MessageContent>` wraps `<MessageResponse>{text}</MessageResponse>`.
 `MessageResponse` uses streamdown internally to render markdown, GFM
 tables, syntax-highlighted code blocks, math (KaTeX), CJK breaks, and
-mermaid. We do not configure streamdown further; AI Elements' defaults
-are the design.
+mermaid. Markdown code blocks use the shared Juex code surface tokens and the
+same light/dark Shiki theme pair as tool-call JSON blocks so dark mode does not
+mix a foreign editor background into chat.
 
 ### 7.6 Reasoning
 
-`<Reasoning>` is collapsible. Trigger reads "Thinking…" with a chevron
-that rotates on open; body is the reasoning text rendered through
-streamdown. We pass `isStreaming={false}` because blocks arrive complete,
-not token-streamed. Redacted reasoning is rendered with trigger text
-`Thinking [redacted]` and body `[redacted by provider]`.
+`<Reasoning>` is collapsible. Trigger reads `Thinking...` with a chevron that
+rotates on open; body is the reasoning text rendered through streamdown. The
+block is transparent with a dashed warm border and muted ink text. We pass
+`isStreaming={false}` because blocks arrive complete, not token-streamed.
+Redacted reasoning is rendered with trigger text `Thinking [redacted]` and body
+`[redacted by provider]`.
 
 ### 7.7 Tool
 
@@ -304,42 +329,54 @@ into one display unit (see §13).
 | absent | present | false/absent | `output-available` (orphan) |
 | absent | present | true | `output-error` (orphan) |
 
-`<ToolHeader type={\`tool-${tool_name}\`}>` is the visible badge.
-`<ToolInput input={…}>` renders the parameter JSON via the standalone
-AI Elements `CodeBlock` (which uses shiki for highlighting). `<ToolOutput
-output={…}>` wraps the result; when the result is an error we pass
-`output={null}` and put the error string in `errorText` so it renders
-once and in the destructive theme. Tools in `input-available` and
-`output-error` states default to open; successful results stay closed
-until the user expands.
+`<ToolHeader type={\`tool-${tool_name}\`}>` is the visible label. The header
+uses the tool accent token, a small status dot, mono naming, and a compact
+status chip. `<ToolInput input={…}>` renders the parameter JSON via the
+standalone AI Elements `CodeBlock` (which uses shiki for highlighting). The
+parameters block must use high-contrast text in dark mode and share the same
+code surface tokens as markdown code blocks.
+`<ToolOutput output={…}>` wraps the result; when the result is an error we
+pass `output={null}` and put the error string in `errorText` so it renders once
+and in the destructive theme. Tools in `input-available` and `output-error`
+states default to open; successful results stay closed until the user expands.
 
 ### 7.8 Composer
 
 ```tsx
 <PromptInput onSubmit={({ text }) => handleSend(text)}>
   <PromptInputBody>
-    <PromptInputTextarea placeholder="Type a prompt..." />
+    <PromptInputTextarea placeholder="Ask juex anything..." />
     <PromptInputFooter>
       <PromptInputTools>
         <StatusPill status={status} />
         <ContextUsageLabel usage={contextUsage} />
         <TokenUsageLabel usage={tokenUsage} />
       </PromptInputTools>
-      {status.kind === "running" || status.kind === "tool" || status.kind === "pending"
-        ? <>
+      <div className="flex shrink-0 items-center gap-1">
+        {status.kind === "running" || status.kind === "tool" || status.kind === "pending"
+          ? <>
             <PromptInputButton variant="outline" onClick={onInterrupt}>Stop</PromptInputButton>
             <PromptInputSubmit />
           </>
-        : <PromptInputSubmit />}
+          : <>
+            <PromptInputButton variant="outline" onClick={onCompact}>
+              <ArchiveIcon aria-hidden="true" />
+            </PromptInputButton>
+            <PromptInputSubmit />
+          </>}
+      </div>
     </PromptInputFooter>
   </PromptInputBody>
 </PromptInput>
 ```
 
-Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>`
-handles both natively. While a turn is running, `Stop` cancels the current
-turn and `Send` queues the typed text as pending input for the next provider
-call.
+Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
+both natively. The composer is a warm paper well with a 14px radius, subtle
+forest shadow, and a forest focus ring. While a turn is running, `Stop`
+cancels the current turn and `Send` queues the typed text as pending input for
+the next provider call. The footer keeps status/context/token chips in a
+wrapping left group and keeps Compact/Send in a non-wrapping right action group
+so phone-width layouts do not push Send onto a second line.
 
 `ContextUsageLabel` is a compact `context <total>` chip for the latest
 successful provider request. The total uses provider-reported
@@ -355,64 +392,81 @@ shows the input/output split.
 
 | State | Visual |
 |---|---|
-| `idle` | gray dot, "idle" |
-| `running` | amber dot pulsing, "running…" |
-| `tool` | violet dot pulsing, "tool: read" |
-| `done` | green dot, "done" (1.5s flash before reverting to idle) |
-| `error` | red dot, "error" |
+| `idle` | ink dot, `idle` |
+| `running` | gold dot pulsing, `running...` |
+| `pending` | gold pill and pulsing dot, `pending <count>` |
+| `tool` | tool-accent dot pulsing, `tool: read` |
+| `done` | forest dot, `done` (1.5s flash before reverting to idle) |
+| `error` | red dot, `error` |
 
-Implemented as a Tailwind-classed `<span>`. The dot is a 7×7 rounded element
-with `animate-pulse` on `running` / `tool`.
+Implemented as a Tailwind-classed `<span>`. The dot is a 6px rounded element
+with the gold pulse animation on `running` / `pending` / `tool`.
 
 ---
 
 ## 8. Theme tokens
 
-shadcn ships a CSS-variable theme that flips on `.dark` (we toggle this on
-`<html>` based on `prefers-color-scheme`). We extend with role-coloured
-variables for the few places (avatars, status pill, tool block accents) that
-need them:
+The Juex Design System is token-first. `frontend/src/index.css` defines both
+the brand ramps and the shadcn variables that Tailwind consumes. The stable
+brand colors are:
+
+| Token | Value | Use |
+|---|---|---|
+| `--juex-forest-800` | `#064032` | primary, wordmark, user bubbles |
+| `--juex-gold-400` | `#f6d78e` | accent, live glow, text on forest |
+| `--juex-cream-50` | `#fbf6ea` | light page background |
+| `--juex-ink-900` | `#1c1916` | body text on light |
+
+Light mode is warm paper: cream page, white cards, ink text, forest primary,
+gold accent. Dark mode is the logo: deep forest page, forest cards, cream text,
+gold accent. Shadows are forest-tinted, never black.
+
+The role tokens map the design system into runtime states:
 
 ```css
 @layer base {
   :root {
-    --juex-user:        142 71% 35%;  /* hsl green */
-    --juex-assistant:   213 94% 45%;  /* hsl blue */
-    --juex-thinking:    220 9%  46%;
-    --juex-tool:        262 83% 58%;
-    --juex-error:       0   72% 51%;
-    --juex-done:        142 71% 35%;
-    --juex-pending:     38  92% 50%;
+    --juex-user:       var(--juex-forest-700);
+    --juex-assistant:  var(--juex-info);
+    --juex-thinking:   var(--juex-ink-600);
+    --juex-tool:       #6e4ea3;
+    --juex-tool-bg:    #f1ecf9;
+    --juex-error:      #b03a2e;
+    --juex-done:       var(--juex-forest-500);
+    --juex-pending:    var(--juex-gold-700);
   }
   .dark {
-    --juex-user:        142 71% 45%;
-    --juex-assistant:   213 94% 68%;
-    --juex-thinking:    220 9%  60%;
-    --juex-tool:        262 90% 75%;
-    --juex-error:       0   85% 65%;
-    --juex-done:        142 71% 55%;
-    --juex-pending:     38  92% 60%;
+    --juex-user:       var(--juex-gold-400);
+    --juex-assistant:  var(--juex-cream-50);
+    --juex-thinking:   var(--juex-forest-300);
+    --juex-tool:       #cbb7ff;
+    --juex-tool-bg:    rgba(110, 78, 163, 0.22);
+    --juex-error:      #f09a92;
+    --juex-done:       var(--juex-forest-300);
+    --juex-pending:    var(--juex-gold-400);
   }
 }
 ```
 
-Tailwind config exposes these as `text-juex-*` / `bg-juex-*` utilities via
-the `colors` extension.
+Tailwind exposes these as `text-juex-*` / `bg-juex-*` utilities through the
+`@theme inline` block. New color usage should prefer tokens over raw hex.
 
 ---
 
 ## 9. Typography
 
-Pico is gone; shadcn's defaults are our baseline.
+No downloaded fonts. The design system uses OS-native stacks so the web UI is
+fast, local, and device-friendly.
 
-- Body: **Geist** (Vercel's open-source font, OFL), bundled via
-  `@fontsource-variable/geist` as part of the shadcn `nova` preset. Falls
-  back to the system sans-serif stack.
-- Code: `font-mono` → system monospace (SF Mono, Menlo, Consolas).
-- 14px base, 1.5 line-height.
-- The Geist webfont adds ~60 KB to the initial bundle and is self-hosted
-  (no third-party CDN call at runtime). Trade-off accepted to match the
-  modern AI-tool aesthetic.
+- Body/UI: `ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter,
+  "Helvetica Neue", Arial, sans-serif`.
+- Display/empty states/wordmark: `ui-serif, "Iowan Old Style", "New York",
+  "Apple Garamond", Georgia, "Times New Roman", serif`, usually italic.
+- Code/ids/numbers: `ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Code",
+  "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace`.
+- Body is 15px / 1.55. Metadata is 11-12px mono. Labels are sentence case;
+  eyebrow labels are 11px uppercase with `0.14em` tracking.
+- Do not use negative letter spacing in compact product surfaces.
 
 ---
 
@@ -451,17 +505,19 @@ state value covers both the colour pill and the textual hint.
   built on Radix, which handles this).
 - Status pill conveys state both as text and as colour — colour is not the
   sole indicator.
-- shadcn defaults meet WCAG AA contrast in both light and dark modes; we
-  re-test when introducing new colour tokens.
+- Focus states use a visible 2px ring in `--ring`. Do not remove focus rings.
+- Juex tokens must meet WCAG AA contrast in both light and dark modes; re-test
+  when introducing new colour tokens.
 
 ---
 
 ## 12. Dark mode
 
-- A small `useDarkMode()` hook reads `matchMedia('(prefers-color-scheme: dark)')`
-  and toggles `<html class="dark">` accordingly.
+- CSS supports both `prefers-color-scheme: dark` and `.dark`.
 - No manual toggle button in v0.1.
 - New components are tested under both modes before landing.
+- Dark mode uses deep forest surfaces with low-alpha gold borders. Avoid pure
+  black, pure gray, and cold blue surfaces.
 
 ---
 

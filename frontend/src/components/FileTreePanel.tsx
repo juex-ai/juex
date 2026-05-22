@@ -74,11 +74,11 @@ export function FileTreePanel() {
   };
 
   return (
-    <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
-      <div className="flex h-12 shrink-0 items-center border-b p-3 text-sm font-medium">
+    <div className="flex h-full min-w-0 flex-col bg-card text-card-foreground">
+      <div className="flex h-[var(--juex-header-height)] shrink-0 items-center border-b px-4 pr-12 font-sans text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:pr-4">
         Workspace
       </div>
-      <ScrollArea className="flex-1 p-2">
+      <ScrollArea className="flex-1 p-3">
         {loading ? (
           <div className="animate-pulse p-2 text-sm text-muted-foreground">Loading...</div>
         ) : tree ? (
@@ -89,9 +89,12 @@ export function FileTreePanel() {
       </ScrollArea>
 
       <Sheet open={!!previewFile} onOpenChange={(open) => !open && setPreviewFile(null)}>
-        <SheetContent className="flex w-full flex-col gap-0 border-l p-0 sm:max-w-xl" side="right">
+        <SheetContent
+          className="flex !w-full !max-w-none flex-col gap-0 border-l bg-card p-0 sm:!max-w-xl"
+          side="right"
+        >
           <SheetHeader className="border-b p-4">
-            <SheetTitle className="break-all pr-8 font-mono text-sm">
+            <SheetTitle className="break-all pr-8 font-mono text-sm text-foreground">
               {previewFile?.path}
             </SheetTitle>
             <SheetDescription className="sr-only">
@@ -103,7 +106,7 @@ export function FileTreePanel() {
               </div>
             )}
           </SheetHeader>
-          <div className="flex-1 overflow-auto bg-muted/30 p-4">
+          <div className="flex-1 overflow-auto bg-muted/40 p-4">
             <pre className="whitespace-pre-wrap break-words font-mono text-xs">
               {previewFile?.content}
             </pre>
@@ -129,10 +132,10 @@ function TreeNode({
     return (
       <button
         type="button"
-        className="flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        className="flex w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-left font-mono text-[12.5px] hover:bg-muted hover:text-foreground"
         onClick={() => onFileClick(node.path)}
       >
-        <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+        <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate">{node.name}</span>
       </button>
     );
@@ -143,7 +146,7 @@ function TreeNode({
       <button
         type="button"
         className={cn(
-          "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+          "flex w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-left font-mono text-[12.5px] hover:bg-muted hover:text-foreground",
           depth === 0 && "font-medium",
         )}
         onClick={() => setExpanded(!expanded)}
@@ -155,14 +158,14 @@ function TreeNode({
           <ChevronRight className="size-3.5 shrink-0 opacity-50" />
         )}
         {expanded ? (
-          <FolderOpen className="size-4 shrink-0 text-amber-500" />
+          <FolderOpen className="size-3.5 shrink-0 text-juex-gold-700 dark:text-juex-gold-400" />
         ) : (
-          <Folder className="size-4 shrink-0 text-amber-500" />
+          <Folder className="size-3.5 shrink-0 text-juex-gold-700 dark:text-juex-gold-400" />
         )}
         <span className="truncate">{node.name}</span>
       </button>
       {expanded && (node.children || node.children_truncated) && (
-        <div className="ml-3 flex flex-col border-l border-sidebar-border pl-2">
+        <div className="ml-3 flex flex-col border-l border-border pl-2">
           {node.children?.map((child) => (
             <TreeNode key={child.path} node={child} depth={depth + 1} onFileClick={onFileClick} />
           ))}

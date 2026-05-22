@@ -42,10 +42,10 @@ import {
 import { cn } from "@/lib/utils";
 import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "./_local-types";
 import {
-  CornerDownLeftIcon,
   ImageIcon,
   Monitor,
   PlusIcon,
+  SendHorizontalIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react";
@@ -1225,7 +1225,7 @@ export const PromptInputSubmit = ({
 }: PromptInputSubmitProps) => {
   const isGenerating = status === "submitted" || status === "streaming";
 
-  let Icon = <CornerDownLeftIcon className="size-4" />;
+  let Icon = <SendHorizontalIcon className="size-4" />;
 
   if (status === "submitted") {
     Icon = <Spinner />;

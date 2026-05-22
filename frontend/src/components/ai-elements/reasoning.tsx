@@ -6,6 +6,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { juexCodeThemes } from "@/lib/code-theme";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -136,7 +137,10 @@ export const Reasoning = memo(
     return (
       <ReasoningContext.Provider value={contextValue}>
         <Collapsible
-          className={cn("not-prose mb-4", className)}
+          className={cn(
+            "not-prose mb-4 w-full max-w-full rounded-[12px] border border-dashed border-border bg-transparent px-3 py-2 text-juex-thinking sm:max-w-[78%]",
+            className
+          )}
           onOpenChange={handleOpenChange}
           open={isOpen}
           {...props}
@@ -176,7 +180,7 @@ export const ReasoningTrigger = memo(
     return (
       <CollapsibleTrigger
         className={cn(
-          "flex w-full items-center gap-2 text-muted-foreground text-sm transition-colors hover:text-foreground",
+          "flex w-full items-center gap-2 text-[13px] font-medium text-juex-thinking transition-colors hover:text-foreground",
           className
         )}
         {...props}
@@ -210,13 +214,19 @@ export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (
     <CollapsibleContent
       className={cn(
-        "mt-4 text-sm",
-        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-muted-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+        "mt-2 text-[12.5px] leading-[1.6]",
+        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-juex-thinking outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
         className
       )}
       {...props}
     >
-      <Streamdown plugins={streamdownPlugins}>{children}</Streamdown>
+      <Streamdown
+        className="juex-markdown"
+        plugins={streamdownPlugins}
+        shikiTheme={juexCodeThemes}
+      >
+        {children}
+      </Streamdown>
     </CollapsibleContent>
   )
 );
