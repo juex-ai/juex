@@ -148,7 +148,9 @@ func seedWebSession(t *testing.T, srv *Server, text string) *session.Session {
 	if err := sess.Append(llm.TextMessage(llm.RoleUser, text)); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sess.Close() })
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return sess
 }
 
