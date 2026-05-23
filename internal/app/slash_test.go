@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSlashCommand(t *testing.T) {
@@ -19,6 +20,7 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: " /status ", handled: true, name: SlashStatus},
 		{input: "/compact", handled: true, name: SlashCompact},
 		{input: "/status now", handled: true, wantErr: true},
+		{input: "/status\tnow", handled: true, wantErr: true},
 		{input: "/unknown", handled: true, wantErr: true},
 	}
 	for _, tc := range cases {
@@ -34,6 +36,30 @@ func TestParseSlashCommand(t *testing.T) {
 				t.Fatalf("name = %q, want %q", cmd.Name, tc.name)
 			}
 		})
+	}
+}
+
+func TestParseSlashCommandRejectsArgumentsExplicitly(t *testing.T) {
+	_, handled, err := ParseSlashCommand("/status verbose")
+	if !handled {
+		t.Fatal("handled = false, want true")
+	}
+	var argsErr *SlashCommandArgumentsError
+	if !errors.As(err, &argsErr) {
+		t.Fatalf("err = %T, want SlashCommandArgumentsError", err)
+	}
+	if argsErr.Name != SlashStatus || argsErr.Args != "verbose" {
+		t.Fatalf("argsErr = %+v", argsErr)
+	}
+}
+
+func TestStatusSnapshotNilApp(t *testing.T) {
+	var a *App
+	text := a.StatusSnapshot(time.Time{}).Text()
+	for _, want := range []string{"Juex status", "provider: not configured", "skills: 0", "pending input: idle"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
 	}
 }
 

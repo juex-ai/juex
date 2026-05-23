@@ -335,19 +335,14 @@ func (s *Server) handleSlashTurn(w http.ResponseWriter, r *http.Request, as *act
 		as.compacting = true
 		as.cancelMu.Unlock()
 
-		result, _, err := as.app.ExecuteSlashCommand(r.Context(), cmd.Name)
-		as.cancelMu.Lock()
-		as.compacting = false
-		as.cancelMu.Unlock()
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"command": result})
-		return
+		defer func() {
+			as.cancelMu.Lock()
+			as.compacting = false
+			as.cancelMu.Unlock()
+		}()
 	}
 
-	result, _, err := as.app.ExecuteSlashCommand(r.Context(), cmd.Name)
+	result, err := as.app.ExecuteParsedSlashCommand(r.Context(), cmd)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return

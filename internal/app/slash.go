@@ -36,6 +36,15 @@ func (e *UnknownSlashCommandError) Error() string {
 	return fmt.Sprintf("unknown slash command %q (available: %s)", e.Input, AvailableSlashCommandsText())
 }
 
+type SlashCommandArgumentsError struct {
+	Name string
+	Args string
+}
+
+func (e *SlashCommandArgumentsError) Error() string {
+	return fmt.Sprintf("slash command %s does not accept arguments: %q", e.Name, e.Args)
+}
+
 func SlashCommandNames() []string {
 	return append([]string(nil), slashCommandNames...)
 }
@@ -49,9 +58,15 @@ func ParseSlashCommand(input string) (SlashCommand, bool, error) {
 	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
 		return SlashCommand{}, false, nil
 	}
+	fields := strings.Fields(trimmed)
+	commandName := fields[0]
 	for _, name := range slashCommandNames {
-		if trimmed == name {
+		if commandName == name && len(fields) == 1 {
 			return SlashCommand{Name: name}, true, nil
+		}
+		if commandName == name {
+			args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
+			return SlashCommand{}, true, &SlashCommandArgumentsError{Name: name, Args: strings.TrimSpace(args)}
 		}
 	}
 	return SlashCommand{}, true, &UnknownSlashCommandError{Input: trimmed}
@@ -62,11 +77,11 @@ func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashComma
 	if err != nil || !handled {
 		return SlashCommandResult{}, handled, err
 	}
-	result, err := a.executeSlashCommand(ctx, cmd)
+	result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
 	return result, true, err
 }
 
-func (a *App) executeSlashCommand(ctx context.Context, cmd SlashCommand) (SlashCommandResult, error) {
+func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (SlashCommandResult, error) {
 	switch cmd.Name {
 	case SlashCompact:
 		compact, err := a.Compact(ctx, "manual", false)
@@ -110,6 +125,9 @@ type ProviderStatusSnapshot struct {
 }
 
 func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
+	if a == nil {
+		return StatusSnapshot{}
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -121,7 +139,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		tokenUsage   llm.Usage
 		contextUsage *llm.ContextUsage
 	)
-	if a != nil && a.Session != nil {
+	if a.Session != nil {
 		info := a.Session.Info(now)
 		sessionID = info.ID
 		sessionDir = info.Dir
@@ -135,12 +153,8 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		}
 	}
 	pending := runtime.PendingInputStatus{}
-	if a != nil && a.Engine != nil {
+	if a.Engine != nil {
 		pending = a.Engine.PendingInputStatus()
-	}
-	skillCount := 0
-	if a != nil {
-		skillCount = len(a.skills)
 	}
 	return StatusSnapshot{
 		SessionID:    sessionID,
@@ -150,7 +164,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		LastActiveAt: lastActiveAt,
 		Provider:     a.providerStatusSnapshot(),
 		MCP:          a.MCPStatus(),
-		SkillCount:   skillCount,
+		SkillCount:   len(a.skills),
 		TokenUsage:   tokenUsage,
 		TokenTotal:   tokenUsage.TotalTokens(),
 		ContextUsage: contextUsage,
