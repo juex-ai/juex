@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
@@ -45,7 +45,6 @@ import {
   type MessageGroup,
 } from "@/lib/display-units";
 import {
-  compactSession,
   getSession,
   getSessionContext,
   interrupt,
@@ -58,11 +57,19 @@ import type {
   ContextUsage,
   Message as ChatMessage,
   SessionShowResponse,
+  SlashCommandResponse,
   TokenUsage,
 } from "@/types";
 
+type InitialCommandState = {
+  commandInput?: string;
+  command?: SlashCommandResponse;
+} | null;
+
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [data, setData] = useState<SessionShowResponse | null>(null);
   const [liveMessages, setLiveMessages] = useState<ChatMessage[]>([]);
   const [liveTokenUsage, setLiveTokenUsage] = useState<TokenUsage | null>(null);
@@ -70,9 +77,9 @@ export function Session() {
     useState<ContextUsage | null>(null);
   const [activeContext, setActiveContext] =
     useState<ActiveContextSnapshot | null>(null);
-  const [isCompacting, setIsCompacting] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const doneTimerRef = useRef<number | null>(null);
+  const initialCommandRef = useRef<string | null>(null);
 
   // refresh is stable per id; both effects depend on it via [id].
   const refresh = useCallback(async () => {
@@ -119,6 +126,22 @@ export function Session() {
       cancelled = true;
     };
   }, [id]);
+
+  useEffect(() => {
+    if (!data) return;
+    const state = location.state as InitialCommandState;
+    if (!state?.command || !state.commandInput) return;
+    const key = `${id}:${state.commandInput}:${state.command.name}:${state.command.text}`;
+    if (initialCommandRef.current === key) return;
+    initialCommandRef.current = key;
+    if (state.command.name === "/compact" && state.command.compact?.message_id) {
+      void refresh();
+    } else {
+      appendCommandResult(state.commandInput, state.command.text);
+    }
+    markDoneSoon();
+    navigate(location.pathname, { replace: true, state: null });
+  }, [data, id, location.pathname, location.state, navigate, refresh]);
 
   // SSE subscription.
   useEffect(() => {
@@ -219,10 +242,23 @@ export function Session() {
   async function handleSend(prompt: string) {
     try {
       const turn = await startTurn(id, prompt);
+      if (turn.command) {
+        if (turn.command.name === "/compact") {
+          await refresh();
+          if (!turn.command.compact?.message_id) {
+            appendCommandResult(prompt, turn.command.text);
+          }
+        } else {
+          appendCommandResult(prompt, turn.command.text);
+        }
+        markDoneSoon();
+        return;
+      }
       if (turn.queued) {
         appendPendingInput(prompt, undefined);
         setStatus({ kind: "pending", count: turn.pending_count ?? 0 });
       } else {
+        if (!turn.turn_id) throw new Error("turn response missing turn_id");
         appendLiveTurn(turn.turn_id, prompt, undefined, "optimistic");
         setStatus({ kind: "running" });
       }
@@ -240,30 +276,6 @@ export function Session() {
       await interrupt(id);
     } catch (e) {
       console.error("interrupt failed", e);
-    }
-  }
-
-  async function handleCompact() {
-    if (!id) return;
-    setIsCompacting(true);
-    setStatus({ kind: "running" });
-    try {
-      await compactSession(id, "manual");
-      await refresh();
-      setStatus({ kind: "done" });
-      if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
-      doneTimerRef.current = window.setTimeout(
-        () => setStatus({ kind: "idle" }),
-        1500,
-      );
-    } catch (e) {
-      console.error("compactSession failed", e);
-      setStatus({
-        kind: "error",
-        detail: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setIsCompacting(false);
     }
   }
 
@@ -340,17 +352,7 @@ export function Session() {
                       <PromptInputSubmit />
                     </>
                   ) : (
-                    <>
-                      <PromptInputButton
-                        variant="outline"
-                        tooltip="Compact context"
-                        disabled={isCompacting}
-                        onClick={() => void handleCompact()}
-                      >
-                        <ArchiveIcon className="size-4" aria-hidden="true" />
-                      </PromptInputButton>
-                      <PromptInputSubmit />
-                    </>
+                    <PromptInputSubmit />
                   )}
                 </div>
               </TooltipProvider>
@@ -417,6 +419,31 @@ export function Session() {
         },
       ];
     });
+  }
+
+  function appendCommandResult(input: string, output: string) {
+    setLiveMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        kind: "slash_command",
+        blocks: [{ type: "text", text: input }],
+      },
+      {
+        role: "assistant",
+        kind: "slash_command",
+        blocks: [{ type: "text", text: output }],
+      },
+    ]);
+  }
+
+  function markDoneSoon() {
+    setStatus({ kind: "done" });
+    if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
+    doneTimerRef.current = window.setTimeout(
+      () => setStatus({ kind: "idle" }),
+      1500,
+    );
   }
 
   function applyAssistantResponse(e: { turn_id?: string; payload?: unknown }) {

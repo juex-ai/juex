@@ -153,6 +153,11 @@ execution is printed and the process exits with code 10.`,
 			start := time.Now()
 			out, err := a.Run(cmd.Context(), prompt)
 			if err != nil {
+				var slashErr *app.UnknownSlashCommandError
+				if errors.As(err, &slashErr) {
+					return emit(jsonOut, cmd.ErrOrStderr(), err,
+						"available slash commands: "+app.AvailableSlashCommandsText(), false)
+				}
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"see events.jsonl in the session dir for full lifecycle trace", true)
 			}

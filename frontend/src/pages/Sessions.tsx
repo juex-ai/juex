@@ -32,8 +32,12 @@ export function Sessions() {
               setError(null);
               try {
                 const session = await createSession();
-                await startTurn(session.id, text);
-                navigate(`/sessions/${encodeURIComponent(session.id)}`);
+                const turn = await startTurn(session.id, text);
+                navigate(`/sessions/${encodeURIComponent(session.id)}`, {
+                  state: turn.command
+                    ? { commandInput: text, command: turn.command }
+                    : undefined,
+                });
               } catch (e) {
                 const message =
                   e instanceof Error ? e.message : "Failed to start chat.";

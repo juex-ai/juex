@@ -40,6 +40,7 @@ Fill in provider settings, then run:
 | --- | --- |
 | `juex run "<prompt>"` | Run one prompt and exit. |
 | `juex repl` | Start an interactive CLI session. |
+| `/status`, `/compact` | Local slash commands accepted by `run`, `repl`, and the web composer. |
 | `juex run --resume=last "<prompt>"` | Continue the last session in this work directory. |
 | `juex sessions list` | List recorded sessions. |
 | `juex sessions show <id>` | Print session metadata and transcript. |

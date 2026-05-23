@@ -137,6 +137,137 @@ func TestPostSessionCompact(t *testing.T) {
 	}
 }
 
+func TestPostTurn_StatusSlashReturnsCommand(t *testing.T) {
+	prov := newPendingProvider()
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"/status"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Command struct {
+			Name string `json:"name"`
+			Text string `json:"text"`
+		} `json:"command"`
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Command.Name != "/status" || !strings.Contains(parsed.Command.Text, "Juex status") || parsed.TurnID != "" {
+		t.Fatalf("parsed = %+v", parsed)
+	}
+	prov.mu.Lock()
+	calls := prov.calls
+	prov.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", calls)
+	}
+}
+
+func TestPostTurn_UnknownSlashRejected(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"/bogus"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "available slash commands") {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestPostTurn_CompactSlashConflictsWhileRunning(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+	)
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	first, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Body.Close()
+	select {
+	case <-prov.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	compact, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"/compact"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compact.Body.Close()
+	if compact.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(compact.Body)
+		t.Fatalf("status = %d body = %s", compact.StatusCode, body)
+	}
+	close(prov.release)
+}
+
 func TestPostTurn_ConflictsWhileCompacting(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())

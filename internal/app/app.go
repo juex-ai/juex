@@ -65,6 +65,8 @@ type App struct {
 	cleanup []func() error
 	ctx     context.Context
 	cancel  context.CancelFunc
+	cfg     config.Config
+	skills  []skills.Skill
 	mcp     MCPStatus
 }
 
@@ -189,7 +191,15 @@ func New(opts Options) (*App, error) {
 	}
 
 	appCtx, appCancel := context.WithCancel(context.Background())
-	a := &App{Engine: eng, Bus: bus, Session: sess, ctx: appCtx, cancel: appCancel}
+	a := &App{
+		Engine:  eng,
+		Bus:     bus,
+		Session: sess,
+		ctx:     appCtx,
+		cancel:  appCancel,
+		cfg:     cfg,
+		skills:  skillLoader.All(),
+	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
 	a.cleanup = append(a.cleanup, sess.Close)
 	if opts.MCPManager != nil {
@@ -227,6 +237,12 @@ func New(opts Options) (*App, error) {
 
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
+	if result, handled, err := a.ExecuteSlashCommand(ctx, prompt); handled || err != nil {
+		if err != nil {
+			return "", err
+		}
+		return result.Text, nil
+	}
 	return a.Engine.Turn(ctx, prompt)
 }
 
@@ -355,7 +371,7 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
 		if line == "" {
 			continue
 		}
-		text, err := a.Engine.Turn(ctx, line)
+		text, err := a.Run(ctx, line)
 		if err != nil {
 			if _, writeErr := fmt.Fprintln(out, "error:", err); writeErr != nil {
 				return writeErr

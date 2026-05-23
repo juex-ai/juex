@@ -112,10 +112,33 @@ export interface DeleteSessionResponse {
 }
 
 export interface StartTurnResponse {
-  turn_id: string;
+  turn_id?: string;
   queued?: boolean;
   pending_count?: number;
   max_pending_inputs?: number;
+  command?: SlashCommandResponse;
+}
+
+export interface SlashCommandResponse {
+  name: string;
+  text: string;
+  compact?: CompactSessionResponse;
+  status?: SlashStatusResponse;
+}
+
+export interface SlashStatusResponse {
+  session_id?: string;
+  session_dir?: string;
+  work_dir?: string;
+  turns?: number;
+  last_active_at?: string;
+  provider?: Record<string, unknown>;
+  mcp?: Record<string, unknown>;
+  skill_count?: number;
+  token_usage?: TokenUsage;
+  token_total?: number;
+  context_usage?: ContextUsage;
+  pending_input?: Record<string, unknown>;
 }
 
 export type TurnState = "running" | "done" | "errored";

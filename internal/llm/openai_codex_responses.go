@@ -428,12 +428,12 @@ func readCodexSSE(r io.Reader) (codexWireResponse, error) {
 		}
 		switch ev.Type {
 		case "error":
-			return fmt.Errorf("Codex error: %s", firstNonEmpty(ev.Message, ev.Code, data))
+			return fmt.Errorf("codex error: %s", firstNonEmpty(ev.Message, ev.Code, data))
 		case "response.failed":
 			if ev.Response != nil && ev.Response.Error != nil {
 				return fmt.Errorf("%s", firstNonEmpty(ev.Response.Error.Message, ev.Response.Error.Code, ev.Response.Error.Type))
 			}
-			return fmt.Errorf("Codex response failed")
+			return fmt.Errorf("codex response failed")
 		case "response.output_item.done":
 			if ev.Item != nil {
 				items = append(items, *ev.Item)
@@ -457,17 +457,17 @@ func readCodexSSE(r io.Reader) (codexWireResponse, error) {
 		if strings.HasPrefix(line, "data:") {
 			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 			if len(dataLines) >= maxCodexSSEDataLines {
-				return codexWireResponse{}, fmt.Errorf("Codex SSE event has too many data lines")
+				return codexWireResponse{}, fmt.Errorf("codex SSE event has too many data lines")
 			}
 			dataBytes += len(data)
 			if dataBytes > maxCodexSSEEventBytes {
-				return codexWireResponse{}, fmt.Errorf("Codex SSE event data exceeds %d bytes", maxCodexSSEEventBytes)
+				return codexWireResponse{}, fmt.Errorf("codex SSE event data exceeds %d bytes", maxCodexSSEEventBytes)
 			}
 			dataLines = append(dataLines, data)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return codexWireResponse{}, fmt.Errorf("Codex SSE read: %w", err)
+		return codexWireResponse{}, fmt.Errorf("codex SSE read: %w", err)
 	}
 	if err := process(); err != nil {
 		return codexWireResponse{}, err

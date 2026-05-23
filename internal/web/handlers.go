@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -253,6 +254,21 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
+	slashCmd, isSlash, slashErr := app.ParseSlashCommand(req.Prompt)
+	if slashErr != nil {
+		writeJSON(w, http.StatusBadRequest, errorJSON{
+			Error:      "bad_request",
+			Message:    slashErr.Error(),
+			Suggestion: "available slash commands: " + app.AvailableSlashCommandsText(),
+			Retryable:  false,
+		})
+		return
+	}
+	if isSlash {
+		s.handleSlashTurn(w, r, as, slashCmd)
+		return
+	}
+
 	as.cancelMu.Lock()
 	if as.compacting {
 		as.cancelMu.Unlock()
@@ -306,6 +322,32 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	go s.runTurn(ctx, as, turnID, req.Prompt)
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"turn_id": turnID})
+}
+
+func (s *Server) handleSlashTurn(w http.ResponseWriter, r *http.Request, as *activeSession, cmd app.SlashCommand) {
+	if cmd.Name == app.SlashCompact {
+		as.cancelMu.Lock()
+		if as.cancel != nil || as.compacting {
+			as.cancelMu.Unlock()
+			writeErr(w, http.StatusConflict, "conflict", "session busy")
+			return
+		}
+		as.compacting = true
+		as.cancelMu.Unlock()
+
+		defer func() {
+			as.cancelMu.Lock()
+			as.compacting = false
+			as.cancelMu.Unlock()
+		}()
+	}
+
+	result, err := as.app.ExecuteParsedSlashCommand(r.Context(), cmd)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"command": result})
 }
 
 func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, turnID string) {
