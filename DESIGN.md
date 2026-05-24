@@ -372,8 +372,9 @@ the command surface becomes insufficient.
 
 Pending inputs render as a compact stack directly above the composer while a
 turn is already running. The stack is ordered oldest first, uses small numbered
-rows, and stays local to the live session view. When the runtime drains pending
-input, the drained rows leave the stack and appear in the conversation stream.
+rows labeled `Queued`, and stays local to the live session view. When the
+runtime drains pending input, the drained rows leave the stack and appear in the
+conversation stream.
 
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
 both natively. The composer is a warm paper well with a 14px radius, subtle

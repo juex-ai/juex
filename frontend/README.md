@@ -52,9 +52,11 @@ into `internal/web/dist/` for Go embedding.
 | `src/api.ts` | typed fetch helpers and SSE subscription |
 | `src/types.ts` | TypeScript mirror of Go API/session/message shapes |
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
+| `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
+| `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/pages/Runtime.tsx` | MCP and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |

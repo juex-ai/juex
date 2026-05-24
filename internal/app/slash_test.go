@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/runtime"
 )
 
 func TestParseSlashCommand(t *testing.T) {
@@ -56,7 +58,22 @@ func TestParseSlashCommandRejectsArgumentsExplicitly(t *testing.T) {
 func TestStatusSnapshotNilApp(t *testing.T) {
 	var a *App
 	text := a.StatusSnapshot(time.Time{}).Text()
-	for _, want := range []string{"Juex status", "provider: not configured", "skills: 0", "pending input: idle"} {
+	for _, want := range []string{"Juex status", "provider: not configured", "skills: 0", "turn: idle", "queued input: 0"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestStatusSnapshotTextSeparatesTurnAndQueue(t *testing.T) {
+	text := (StatusSnapshot{
+		PendingInput: runtime.PendingInputStatus{
+			TurnID:           "turn-1",
+			PendingCount:     2,
+			MaxPendingInputs: 5,
+		},
+	}).Text()
+	for _, want := range []string{"turn: running", "queued input: 2/5"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
 		}
