@@ -393,6 +393,8 @@ juex
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
 │   ├── show <id> [--format json|text]
+│   ├── context <id> [--format json|text]
+│   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
 ├── serve [--addr <host:port>] [--cors]
 ├── schema
@@ -441,6 +443,8 @@ Routes:
 | POST | `/api/sessions` | create session |
 | GET | `/api/sessions/<id>` | JSON transcript |
 | DELETE | `/api/sessions/<id>` | delete session and remove it from history |
+| GET | `/api/sessions/<id>/context` | active provider context for one session |
+| POST | `/api/sessions/<id>/compact` | append a manual compact summary marker |
 | POST | `/api/sessions/<id>/turns` | start a turn |
 | GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |

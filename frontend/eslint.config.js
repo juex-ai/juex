@@ -18,5 +18,22 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+      }],
+      // The app uses ordinary data-fetching effects, and copied shadcn /
+      // AI Elements modules intentionally colocate helpers with components.
+      'react-hooks/set-state-in-effect': 'off',
+      'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
+    files: ['src/components/ai-elements/**/*.tsx'],
+    rules: {
+      'react-hooks/refs': 'off',
+      'react-hooks/static-components': 'off',
+    },
   },
 ])

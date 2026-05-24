@@ -44,6 +44,8 @@ Fill in provider settings, then run:
 | `juex run --resume=last "<prompt>"` | Continue the last session in this work directory. |
 | `juex sessions list` | List recorded sessions. |
 | `juex sessions show <id>` | Print session metadata and transcript. |
+| `juex sessions context <id>` | Print the active provider context for a session. |
+| `juex sessions compact <id>` | Append a manual compact summary marker to a session. |
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
 | `juex serve` | Start the React web UI and JSON/SSE API. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |

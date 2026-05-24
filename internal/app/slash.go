@@ -225,11 +225,16 @@ func (s StatusSnapshot) Text() string {
 	} else {
 		lines = append(lines, "context: not measured yet")
 	}
-	pendingState := "idle"
+	turnState := "idle"
 	if s.PendingInput.TurnID != "" {
-		pendingState = "running"
+		turnState = "running"
 	}
-	lines = append(lines, fmt.Sprintf("pending input: %s (%d/%d)", pendingState, s.PendingInput.PendingCount, s.PendingInput.MaxPendingInputs))
+	lines = append(lines, "turn: "+turnState)
+	if s.PendingInput.MaxPendingInputs > 0 {
+		lines = append(lines, fmt.Sprintf("queued input: %d/%d", s.PendingInput.PendingCount, s.PendingInput.MaxPendingInputs))
+	} else {
+		lines = append(lines, fmt.Sprintf("queued input: %d", s.PendingInput.PendingCount))
+	}
 	return strings.Join(lines, "\n")
 }
 

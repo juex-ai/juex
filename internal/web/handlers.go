@@ -241,6 +241,14 @@ type turnRequest struct {
 	Prompt string `json:"prompt"`
 }
 
+type startTurnResponse struct {
+	TurnID           string                  `json:"turn_id,omitempty"`
+	Queued           bool                    `json:"queued,omitempty"`
+	PendingCount     int                     `json:"pending_count,omitempty"`
+	MaxPendingInputs int                     `json:"max_pending_inputs,omitempty"`
+	Command          *app.SlashCommandResult `json:"command,omitempty"`
+}
+
 func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id string) {
 	as, err := s.getActiveSession(r.Context(), id)
 	if err != nil {
@@ -296,11 +304,11 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"turn_id":            activeTurn,
-			"queued":             true,
-			"pending_count":      status.PendingCount,
-			"max_pending_inputs": status.MaxPendingInputs,
+		writeJSON(w, http.StatusAccepted, startTurnResponse{
+			TurnID:           activeTurn,
+			Queued:           true,
+			PendingCount:     status.PendingCount,
+			MaxPendingInputs: status.MaxPendingInputs,
 		})
 		return
 	}
@@ -321,7 +329,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 
 	go s.runTurn(ctx, as, turnID, req.Prompt)
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"turn_id": turnID})
+	writeJSON(w, http.StatusAccepted, startTurnResponse{TurnID: turnID})
 }
 
 func (s *Server) handleSlashTurn(w http.ResponseWriter, r *http.Request, as *activeSession, cmd app.SlashCommand) {
@@ -347,7 +355,14 @@ func (s *Server) handleSlashTurn(w http.ResponseWriter, r *http.Request, as *act
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"command": result})
+	writeJSON(w, http.StatusOK, startTurnResponse{Command: &result})
+}
+
+type turnStatusResponse struct {
+	State            string `json:"state"`
+	Error            string `json:"error,omitempty"`
+	PendingCount     *int   `json:"pending_count,omitempty"`
+	MaxPendingInputs *int   `json:"max_pending_inputs,omitempty"`
 }
 
 func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, turnID string) {
@@ -367,14 +382,11 @@ func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, tu
 		writeErr(w, http.StatusNotFound, "not_found", "turn not found: "+turnID)
 		return
 	}
-	resp := map[string]any{"state": state}
-	if errStr != "" {
-		resp["error"] = errStr
-	}
+	resp := turnStatusResponse{State: state, Error: errStr}
 	if state == "running" {
 		pending := as.app.Engine.PendingInputStatus()
-		resp["pending_count"] = pending.PendingCount
-		resp["max_pending_inputs"] = pending.MaxPendingInputs
+		resp.PendingCount = &pending.PendingCount
+		resp.MaxPendingInputs = &pending.MaxPendingInputs
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

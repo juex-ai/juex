@@ -44,6 +44,15 @@ import {
   toolState,
   type MessageGroup,
 } from "@/lib/display-units";
+import { QueuedInputStack } from "@/components/QueuedInputStack";
+import {
+  createQueuedInputState,
+  drainQueuedInputs as drainQueuedInputState,
+  dropQueuedInputs as dropQueuedInputState,
+  enqueueQueuedInput as enqueueQueuedInputState,
+  type QueuedInput,
+  type QueuedInputState,
+} from "@/lib/queued-inputs";
 import {
   getSession,
   getSessionContext,
@@ -66,12 +75,6 @@ type InitialCommandState = {
   command?: SlashCommandResponse;
 } | null;
 
-type QueuedInput = {
-  id: string;
-  input: string;
-  kind?: string;
-};
-
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
@@ -84,16 +87,19 @@ export function Session() {
   const [activeContext, setActiveContext] =
     useState<ActiveContextSnapshot | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [queuedInputs, setQueuedInputState] = useState<QueuedInput[]>([]);
+  const [queuedInputState, setQueuedInputState] = useState<QueuedInputState>(
+    () => createQueuedInputState(),
+  );
   const doneTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
-  const queuedInputsRef = useRef<QueuedInput[]>([]);
-  const queuedInputSeqRef = useRef(0);
+  const queuedInputStateRef = useRef<QueuedInputState>(
+    createQueuedInputState(),
+  );
 
   useEffect(() => {
-    queuedInputsRef.current = [];
-    queuedInputSeqRef.current = 0;
-    setQueuedInputState([]);
+    const next = createQueuedInputState();
+    queuedInputStateRef.current = next;
+    setQueuedInputState(next);
   }, [id]);
 
   // refresh is stable per id; both effects depend on it via [id].
@@ -256,6 +262,9 @@ export function Session() {
       unsub();
       if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
     };
+    // Queue helpers read from refs; resubscribing on every local queue change
+    // would reopen the EventSource during active turns.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, refresh]);
 
   async function handleSend(prompt: string) {
@@ -341,7 +350,7 @@ export function Session() {
       </Conversation>
       <div className="border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
         <div className="mx-auto w-full max-w-[760px]">
-          <QueuedInputStack items={queuedInputs} />
+          <QueuedInputStack items={queuedInputState.items} />
           <PromptInput
             onSubmit={async (msg) => {
               const text = msg.text?.trim();
@@ -422,56 +431,36 @@ export function Session() {
     kind: string | undefined,
     pendingCount: number,
   ) {
-    if (!input) return;
-    const current = queuedInputsRef.current;
-    if (pendingCount > 0) {
-      if (current.length > pendingCount) return;
-      if (current.length === pendingCount) {
-        const index = pendingCount - 1;
-        const existing = current[index];
-        if (existing?.input === input && existing.kind === kind) return;
-        const next = [...current];
-        next[index] = {
-          id: existing?.id ?? `queued-${queuedInputSeqRef.current++}`,
-          input,
-          kind,
-        };
-        setQueuedInputs(next);
-        return;
-      }
-    }
-    setQueuedInputs([
-      ...current,
-      {
-        id: `queued-${queuedInputSeqRef.current++}`,
+    setQueuedInputControllerState(
+      enqueueQueuedInputState(
+        queuedInputStateRef.current,
         input,
         kind,
-      },
-    ]);
+        pendingCount,
+      ),
+    );
   }
 
   function drainQueuedInputs(count: number, turnID: string | undefined) {
-    if (count <= 0) return;
-    const current = queuedInputsRef.current;
-    const drained = current.slice(0, count);
-    setQueuedInputs(current.slice(drained.length));
-    appendDrainedInputs(drained, turnID);
+    const result = drainQueuedInputState(queuedInputStateRef.current, count);
+    setQueuedInputControllerState(result.state);
+    appendDrainedInputs(result.drained, turnID);
   }
 
   function dropQueuedInputs(count: number) {
-    if (count <= 0) return;
-    const current = queuedInputsRef.current;
-    setQueuedInputs(current.slice(Math.min(count, current.length)));
+    setQueuedInputControllerState(
+      dropQueuedInputState(queuedInputStateRef.current, count),
+    );
   }
 
-  function setQueuedInputs(next: QueuedInput[]) {
-    queuedInputsRef.current = next;
+  function setQueuedInputControllerState(next: QueuedInputState) {
+    queuedInputStateRef.current = next;
     setQueuedInputState(next);
   }
 
   function clearQueuedInputs() {
-    if (queuedInputsRef.current.length === 0) return;
-    setQueuedInputs([]);
+    if (queuedInputStateRef.current.items.length === 0) return;
+    setQueuedInputControllerState(createQueuedInputState());
   }
 
   function appendDrainedInputs(items: QueuedInput[], turnID: string | undefined) {
@@ -744,32 +733,6 @@ function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
   return blocks;
 }
 
-function QueuedInputStack({ items }: { items: QueuedInput[] }) {
-  if (items.length === 0) return null;
-  return (
-    <div className="mb-2 flex flex-col gap-1.5" aria-live="polite">
-      {items.map((item, index) => (
-        <div
-          key={item.id}
-          className="flex min-w-0 items-start gap-2 rounded-lg border border-border/70 bg-card/90 px-3 py-2 text-left shadow-[var(--shadow-xs)]"
-        >
-          <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px] text-muted-foreground">
-            {index + 1}
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="font-mono text-[10px] uppercase text-muted-foreground">
-              queued
-            </div>
-            <div className="truncate text-sm leading-5 text-foreground">
-              {item.input}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
   const input = usage?.input_tokens ?? 0;
   const output = usage?.output_tokens ?? 0;
@@ -861,7 +824,7 @@ function ActiveContextDebugLine({
   const tokens = snapshot?.estimated_tokens ?? 0;
   return (
     <div className="text-muted-foreground">
-      debug: active provider context {count} messages,{" "}
+      active provider context {count} messages,{" "}
       {formatTokenCount(tokens)} estimated tokens
     </div>
   );
