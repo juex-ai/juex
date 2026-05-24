@@ -196,14 +196,14 @@ export function Session() {
             setStatus({ kind: "pending", count: eventPendingCount(e) });
             break;
           case "pending_input.drained":
-            drainQueuedInputs(eventCount(e), e.turn_id);
+            drainQueuedInputs(eventDeltaCount(e), e.turn_id);
             setStatus({ kind: "running" });
             break;
           case "pending_input.dropped":
-            dropQueuedInputs(eventCount(e));
+            dropQueuedInputs(eventDeltaCount(e));
             setStatus({
               kind: "error",
-              detail: `${eventCount(e)} pending input(s) dropped`,
+              detail: `${eventDeltaCount(e)} pending input(s) dropped`,
             });
             break;
           case "pending_input.rejected":
@@ -424,7 +424,22 @@ export function Session() {
   ) {
     if (!input) return;
     const current = queuedInputsRef.current;
-    if (pendingCount > 0 && current.length >= pendingCount) return;
+    if (pendingCount > 0) {
+      if (current.length > pendingCount) return;
+      if (current.length === pendingCount) {
+        const index = pendingCount - 1;
+        const existing = current[index];
+        if (existing?.input === input && existing.kind === kind) return;
+        const next = [...current];
+        next[index] = {
+          id: existing?.id ?? `queued-${queuedInputSeqRef.current++}`,
+          input,
+          kind,
+        };
+        setQueuedInputs(next);
+        return;
+      }
+    }
     setQueuedInputs([
       ...current,
       {
@@ -628,8 +643,10 @@ function eventPendingCount(e: { payload?: unknown }): number {
   return eventNumber(payload.pending_count) ?? eventNumber(payload.count) ?? 0;
 }
 
-function eventCount(e: { payload?: unknown }): number {
+function eventDeltaCount(e: { payload?: unknown }): number {
   if (!e.payload || typeof e.payload !== "object") return 0;
+  // Drained/dropped events use count for the affected item count; pending_count
+  // is the remaining queue size and is normally zero.
   return eventNumber((e.payload as Record<string, unknown>).count) ?? 0;
 }
 
