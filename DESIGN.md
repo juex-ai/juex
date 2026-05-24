@@ -370,12 +370,17 @@ current runtime/session snapshot, and `/compact` triggers manual context
 compaction. Do not add separate chrome for these command-only actions unless
 the command surface becomes insufficient.
 
+Pending inputs render as a compact stack directly above the composer while a
+turn is already running. The stack is ordered oldest first, uses small numbered
+rows, and stays local to the live session view. When the runtime drains pending
+input, the drained rows leave the stack and appear in the conversation stream.
+
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
 both natively. The composer is a warm paper well with a 14px radius, subtle
 forest shadow, and a forest focus ring. While a turn is running, `Stop`
 cancels the current turn and `Send` queues the typed text as pending input for
 the next provider call. The footer keeps status/context/token chips in a
-wrapping left group and keeps Compact/Send in a non-wrapping right action group
+wrapping left group and keeps Stop/Send in a non-wrapping right action group
 so phone-width layouts do not push Send onto a second line.
 
 `ContextUsageLabel` is a compact `context <total>` chip for the latest

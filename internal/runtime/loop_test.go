@@ -645,14 +645,22 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 }
 
 func TestTurn_ParallelToolCalls(t *testing.T) {
-	// Two slow-ish tool calls, both must run in parallel; otherwise the
-	// duration would be ~2x the per-call delay.
-	const callDelay = 60 * time.Millisecond
+	const toolCallCount = 3
+	started := make(chan struct{}, toolCallCount)
+	release := make(chan struct{})
 	reg := tools.NewRegistry()
 	reg.MustRegister(tools.Tool{
-		Name:    "slow",
-		Schema:  map[string]any{"type": "object"},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) { time.Sleep(callDelay); return "ok", nil },
+		Name:   "slow",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			started <- struct{}{}
+			select {
+			case <-release:
+				return "ok", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
 	})
 
 	prov := &mockProvider{script: []llm.Response{
@@ -672,17 +680,47 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
 	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb}
 
-	t0 := time.Now()
-	out, err := eng.Turn(context.Background(), "x")
-	elapsed := time.Since(t0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	releaseClosed := false
+	closeRelease := func() {
+		if !releaseClosed {
+			close(release)
+			releaseClosed = true
+		}
+	}
+	defer closeRelease()
+	type turnResult struct {
+		out string
+		err error
+	}
+	done := make(chan turnResult, 1)
+	go func() {
+		out, err := eng.Turn(ctx, "x")
+		done <- turnResult{out: out, err: err}
+	}()
+	for i := 0; i < toolCallCount; i++ {
+		select {
+		case <-started:
+		case result := <-done:
+			t.Fatalf("turn completed before all tool calls started: out=%q err=%v", result.out, result.err)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for parallel tool call %d/%d", i+1, toolCallCount)
+		}
+	}
+	closeRelease()
+	var result turnResult
+	select {
+	case result = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turn to complete after releasing tools")
+	}
+	out, err := result.out, result.err
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out != "all done" {
 		t.Fatalf("got %q", out)
-	}
-	if elapsed > 3*callDelay/2 {
-		t.Fatalf("expected parallel execution (~%v), got %v", callDelay, elapsed)
 	}
 	tr := eng.Session.History[2]
 	if len(tr.Blocks) != 3 {
