@@ -66,6 +66,12 @@ type InitialCommandState = {
   command?: SlashCommandResponse;
 } | null;
 
+type QueuedInput = {
+  id: string;
+  input: string;
+  kind?: string;
+};
+
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
@@ -78,8 +84,17 @@ export function Session() {
   const [activeContext, setActiveContext] =
     useState<ActiveContextSnapshot | null>(null);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [queuedInputs, setQueuedInputState] = useState<QueuedInput[]>([]);
   const doneTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
+  const queuedInputsRef = useRef<QueuedInput[]>([]);
+  const queuedInputSeqRef = useRef(0);
+
+  useEffect(() => {
+    queuedInputsRef.current = [];
+    queuedInputSeqRef.current = 0;
+    setQueuedInputState([]);
+  }, [id]);
 
   // refresh is stable per id; both effects depend on it via [id].
   const refresh = useCallback(async () => {
@@ -177,16 +192,18 @@ export function Session() {
             setStatus({ kind: "running" });
             break;
           case "pending_input.queued":
-            appendPendingInput(eventInput(e), eventKind(e));
+            enqueueQueuedInput(eventInput(e), eventKind(e), eventPendingCount(e));
             setStatus({ kind: "pending", count: eventPendingCount(e) });
             break;
           case "pending_input.drained":
+            drainQueuedInputs(eventCount(e), e.turn_id);
             setStatus({ kind: "running" });
             break;
           case "pending_input.dropped":
+            dropQueuedInputs(eventCount(e));
             setStatus({
               kind: "error",
-              detail: `${eventPendingCount(e)} pending input(s) dropped`,
+              detail: `${eventCount(e)} pending input(s) dropped`,
             });
             break;
           case "pending_input.rejected":
@@ -197,6 +214,7 @@ export function Session() {
             break;
           case "turn.completed":
             refresh().then(() => {
+              clearQueuedInputs();
               setStatus({ kind: "done" });
               if (doneTimerRef.current)
                 window.clearTimeout(doneTimerRef.current);
@@ -207,9 +225,10 @@ export function Session() {
             });
             break;
           case "turn.errored":
-            refresh().then(() =>
-              setStatus({ kind: "error", detail: eventErrorDetail(e) }),
-            );
+            refresh().then(() => {
+              clearQueuedInputs();
+              setStatus({ kind: "error", detail: eventErrorDetail(e) });
+            });
             break;
           case "context.compact.started":
             setStatus({ kind: "running" });
@@ -255,7 +274,7 @@ export function Session() {
         return;
       }
       if (turn.queued) {
-        appendPendingInput(prompt, undefined);
+        enqueueQueuedInput(prompt, undefined, turn.pending_count ?? 0);
         setStatus({ kind: "pending", count: turn.pending_count ?? 0 });
       } else {
         if (!turn.turn_id) throw new Error("turn response missing turn_id");
@@ -322,6 +341,7 @@ export function Session() {
       </Conversation>
       <div className="border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
         <div className="mx-auto w-full max-w-[760px]">
+          <QueuedInputStack items={queuedInputs} />
           <PromptInput
             onSubmit={async (msg) => {
               const text = msg.text?.trim();
@@ -397,26 +417,66 @@ export function Session() {
     });
   }
 
-  function appendPendingInput(input: string | undefined, kind: string | undefined) {
+  function enqueueQueuedInput(
+    input: string | undefined,
+    kind: string | undefined,
+    pendingCount: number,
+  ) {
     if (!input) return;
+    const current = queuedInputsRef.current;
+    if (pendingCount > 0 && current.length >= pendingCount) return;
+    setQueuedInputs([
+      ...current,
+      {
+        id: `queued-${queuedInputSeqRef.current++}`,
+        input,
+        kind,
+      },
+    ]);
+  }
+
+  function drainQueuedInputs(count: number, turnID: string | undefined) {
+    if (count <= 0) return;
+    const current = queuedInputsRef.current;
+    const drained = current.slice(0, count);
+    setQueuedInputs(current.slice(drained.length));
+    appendDrainedInputs(drained, turnID);
+  }
+
+  function dropQueuedInputs(count: number) {
+    if (count <= 0) return;
+    const current = queuedInputsRef.current;
+    setQueuedInputs(current.slice(Math.min(count, current.length)));
+  }
+
+  function setQueuedInputs(next: QueuedInput[]) {
+    queuedInputsRef.current = next;
+    setQueuedInputState(next);
+  }
+
+  function clearQueuedInputs() {
+    if (queuedInputsRef.current.length === 0) return;
+    setQueuedInputs([]);
+  }
+
+  function appendDrainedInputs(items: QueuedInput[], turnID: string | undefined) {
+    if (!items.length) return;
+    const additions: ChatMessage[] = items.map((item) => ({
+      role: "user",
+      turn_id: turnID,
+      kind: item.kind || "pending_input",
+      blocks: [{ type: "text", text: item.input }],
+    }));
     setLiveMessages((prev) => {
-      if (
-        prev.some(
-          (m) =>
-            m.role === "user" &&
-            m.kind === "pending_input" &&
-            messageText(m) === input,
-        )
-      ) {
-        return prev;
-      }
+      if (!turnID) return [...prev, ...additions];
+      const insertAt = prev.findIndex(
+        (m) => m.turn_id === turnID && m.role === "assistant" && m.pending,
+      );
+      if (insertAt < 0) return [...prev, ...additions];
       return [
-        ...prev,
-        {
-          role: "user",
-          kind: kind || "pending_input",
-          blocks: [{ type: "text", text: input }],
-        },
+        ...prev.slice(0, insertAt),
+        ...additions,
+        ...prev.slice(insertAt),
       ];
     });
   }
@@ -568,6 +628,11 @@ function eventPendingCount(e: { payload?: unknown }): number {
   return eventNumber(payload.pending_count) ?? eventNumber(payload.count) ?? 0;
 }
 
+function eventCount(e: { payload?: unknown }): number {
+  if (!e.payload || typeof e.payload !== "object") return 0;
+  return eventNumber((e.payload as Record<string, unknown>).count) ?? 0;
+}
+
 function eventTokenUsage(e: { payload?: unknown }): TokenUsage | undefined {
   if (!e.payload || typeof e.payload !== "object") return undefined;
   const payload = e.payload as Record<string, unknown>;
@@ -660,6 +725,32 @@ function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
     }
   }
   return blocks;
+}
+
+function QueuedInputStack({ items }: { items: QueuedInput[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="mb-2 flex flex-col gap-1.5" aria-live="polite">
+      {items.map((item, index) => (
+        <div
+          key={item.id}
+          className="flex min-w-0 items-start gap-2 rounded-lg border border-border/70 bg-card/90 px-3 py-2 text-left shadow-[var(--shadow-xs)]"
+        >
+          <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px] text-muted-foreground">
+            {index + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="font-mono text-[10px] uppercase text-muted-foreground">
+              queued
+            </div>
+            <div className="truncate text-sm leading-5 text-foreground">
+              {item.input}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
