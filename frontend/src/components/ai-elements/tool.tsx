@@ -22,7 +22,7 @@ export type ToolProps = ComponentProps<typeof Collapsible>;
 export const Tool = ({ className, ...props }: ToolProps) => (
   <Collapsible
     className={cn(
-      "group not-prose mb-4 w-full max-w-full overflow-hidden rounded-[12px] border bg-card shadow-[var(--shadow-xs)] sm:max-w-[88%]",
+      "group not-prose mb-4 w-full max-w-full overflow-hidden rounded-[12px] border border-juex-tool-border bg-juex-tool-surface shadow-[var(--shadow-xs)] sm:max-w-[88%]",
       className
     )}
     {...props}
@@ -59,7 +59,7 @@ export const getStatusBadge = (status: ToolPart["state"]) => (
       "gap-1.5 rounded-full font-mono text-[11px]",
       status === "output-error" || status === "output-denied"
         ? "border-juex-error/25 bg-juex-error-bg text-juex-error"
-        : "border-juex-tool/20 bg-juex-tool-bg text-juex-tool",
+        : "border-juex-tool/20 bg-juex-tool-bg text-juex-tool"
     )}
     variant="outline"
   >
@@ -82,7 +82,7 @@ export const ToolHeader = ({
   return (
     <CollapsibleTrigger
       className={cn(
-        "flex w-full items-center justify-between gap-4 border-b border-juex-tool/10 bg-juex-tool-bg px-3.5 py-2.5 text-juex-tool transition-colors hover:bg-juex-tool-bg/80",
+        "flex w-full items-center justify-between gap-4 border-b border-juex-tool-border bg-juex-tool-header px-3.5 py-2.5 text-juex-tool transition-colors hover:bg-juex-tool-header/80",
         className
       )}
       {...props}
@@ -94,7 +94,7 @@ export const ToolHeader = ({
         </span>
         {getStatusBadge(state)}
       </div>
-      <ChevronDownIcon className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" />
+      <ChevronDownIcon className="size-4 shrink-0 opacity-80 transition-transform group-hover:opacity-100 group-data-[state=open]:rotate-180" />
     </CollapsibleTrigger>
   );
 };
@@ -104,7 +104,7 @@ export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-4 p-4 text-popover-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-4 p-4 text-card-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
       className
     )}
     {...props}
@@ -117,11 +117,12 @@ export type ToolInputProps = ComponentProps<"div"> & {
 
 export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
   <div className={cn("space-y-2 overflow-hidden", className)} {...props}>
-    <h4 className="font-medium text-muted-foreground text-[11px] uppercase tracking-[0.14em] dark:text-juex-gold-300">
+    <h4 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground dark:text-juex-forest-200">
       Parameters
     </h4>
-    <div className="rounded-[10px] bg-muted/50 dark:bg-juex-forest-900/70">
+    <div className="rounded-[10px]">
       <CodeBlock
+        className="[&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
         code={JSON.stringify(input, null, 2)}
         language="json"
       />
@@ -145,13 +146,26 @@ export const ToolOutput = ({
   }
 
   let Output: ReactNode = null;
+  let outputIsCodeBlock = false;
   if (output != null) {
     if (typeof output === "object" && !isValidElement(output)) {
       Output = (
-        <CodeBlock code={JSON.stringify(output, null, 2)} language="json" />
+        <CodeBlock
+          className="rounded-[10px] [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
+          code={JSON.stringify(output, null, 2)}
+          language="json"
+        />
       );
+      outputIsCodeBlock = true;
     } else if (typeof output === "string") {
-      Output = <CodeBlock code={output} language="json" />;
+      Output = (
+        <CodeBlock
+          className="rounded-[10px] [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
+          code={output}
+          language="json"
+        />
+      );
+      outputIsCodeBlock = true;
     } else {
       Output = <div>{output as ReactNode}</div>;
     }
@@ -159,18 +173,22 @@ export const ToolOutput = ({
 
   return (
     <div className={cn("space-y-2", className)} {...props}>
-      <h4 className="font-medium text-muted-foreground text-[11px] uppercase tracking-[0.14em]">
+      <h4 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground dark:text-juex-forest-200">
         {errorText ? "Error" : "Result"}
       </h4>
       <div
         className={cn(
-          "overflow-x-auto rounded-[10px] text-xs [&_table]:w-full",
+          "rounded-[10px] text-xs [&_table]:w-full",
           errorText
-            ? "bg-destructive/10 text-destructive"
-            : "bg-muted/50 text-foreground"
+            ? "overflow-x-auto border border-destructive/25 bg-destructive/10 p-3 text-destructive"
+            : outputIsCodeBlock
+              ? "bg-transparent"
+              : "overflow-x-auto border border-juex-tool-border bg-juex-tool-header/45 p-3 text-card-foreground"
         )}
       >
-        {errorText && <div>{errorText}</div>}
+        {errorText && (
+          <div className="whitespace-pre-wrap break-words">{errorText}</div>
+        )}
         {Output}
       </div>
     </div>
