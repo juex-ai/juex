@@ -163,7 +163,6 @@ var providerPresets = map[string]ProviderProfile{
 			Tools:           true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
-			MaxOutputTokens: true,
 		},
 		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	},
