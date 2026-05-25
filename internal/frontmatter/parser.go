@@ -1,12 +1,13 @@
-// Package frontmatter parses a tiny subset of YAML frontmatter that v0.1
-// memory entries and skill files use.
+// Package frontmatter parses the frontmatter fields that memory entries and
+// skill files use.
 //
 // Supported:
 //   - leading `---` line, terminating `---` line
 //   - top-level `key: value` pairs (string values, optionally quoted)
+//   - indented nested maps/lists are ignored
 //
-// Anything more elaborate (lists, nested maps) lives in the body — v0.1 has
-// no need to parse it.
+// Anything more elaborate is allowed in frontmatter, but only top-level string
+// fields are exposed to callers.
 package frontmatter
 
 import (
@@ -110,6 +111,9 @@ func parseFields(raw string, into map[string]string) error {
 		line := lines[i]
 		trim := strings.TrimSpace(line)
 		if trim == "" || strings.HasPrefix(trim, "#") {
+			continue
+		}
+		if leadingWhitespace(line) > 0 {
 			continue
 		}
 		colon := strings.Index(trim, ":")

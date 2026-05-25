@@ -83,6 +83,20 @@ func TestParse_EmptyValue(t *testing.T) {
 	}
 }
 
+func TestParse_IgnoresNestedMetadata(t *testing.T) {
+	in := "---\nname: gws-gmail\ndescription: Gmail skill\nmetadata:\n  version: 0.22.5\n  openclaw:\n    requires:\n      bins:\n        - gws\n---\nbody"
+	p, err := Parse(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Fields["name"] != "gws-gmail" || p.Fields["description"] != "Gmail skill" {
+		t.Fatalf("fields = %+v", p.Fields)
+	}
+	if p.Body != "body" {
+		t.Fatalf("body = %q", p.Body)
+	}
+}
+
 func TestParse_BlockScalarValue(t *testing.T) {
 	in := "---\nname: taskline-management\ndescription: |\n  Use whenever the user wants to track agent work\n  inside a project.\nversion: 0.4.0\n---\nbody"
 	p, err := Parse(in)

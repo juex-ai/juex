@@ -190,10 +190,10 @@ provider, omit `provider.id` and set `provider.protocol: openai/chat`.
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
 OpenAI-compatible Chat through `openai-go`; `openai_responses.go` wraps the
-OpenAI Responses API. Both SDK clients use `WithMaxRetries(10)`; the SDKs
-apply exponential backoff for recoverable transport/API failures such as
-network errors and 5xx responses, while ordinary request errors are returned
-immediately.
+OpenAI Responses API. SDK-backed clients use `WithMaxRetries(10)`, and the
+raw HTTP `openai-codex/responses` adapter mirrors that retry boundary for
+recoverable transport/API failures such as network errors, 408/409/429, and
+5xx responses. Ordinary request errors are returned immediately.
 
 Capability gates decide which request features are sent. If a profile disables
 tools, tool specs and provider-facing tool history are omitted. If it disables

@@ -11,6 +11,12 @@ import (
 	"testing"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
 // The SDK clients accept option.WithBaseURL, so we point them at httptest
 // servers and assert on the wire payload + the way the canonical types come
 // back. This is end-to-end coverage of the provider adapter, but without
@@ -284,6 +290,16 @@ func TestProviders_RetryPolicy(t *testing.T) {
 				"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
 			}`,
 		},
+		{
+			name: "openai-codex",
+			provider: func(baseURL string) Provider {
+				return NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: baseURL, APIKey: "k", Model: "m"}, nil)
+			},
+			serverErr:          `{"error":{"message":"temporary server error","type":"server_error"}}`,
+			badReqErr:          `{"error":{"message":"bad request","type":"invalid_request_error"}}`,
+			successContentType: "text/event-stream",
+			successRes:         `data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}}` + "\n\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -332,6 +348,37 @@ func TestProviders_RetryPolicy(t *testing.T) {
 				t.Fatalf("attempts = %d, want 1", attempts)
 			}
 		})
+	}
+}
+
+func TestOpenAICodexResponses_RetriesTransportError(t *testing.T) {
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, fmt.Errorf("net/http: TLS handshake timeout")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}}` + "\n\n",
+			)),
+			Request: r,
+		}, nil
+	})}
+	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if resp.Message.FirstText() != "ok" {
+		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
 	}
 }
 
@@ -757,6 +804,32 @@ func TestReadCodexSSERejectsTooManyDataLines(t *testing.T) {
 
 	if _, err := readCodexSSE(strings.NewReader(payload.String())); err == nil || !strings.Contains(err.Error(), "too many data lines") {
 		t.Fatalf("expected too many data lines error, got %v", err)
+	}
+}
+
+func TestCodexRetryDelayCapsRetryAfter(t *testing.T) {
+	h := http.Header{"Retry-After": []string{"999999"}}
+
+	if got := codexRetryDelay(0, h); got != maxCodexRetryDelay {
+		t.Fatalf("delay = %v, want %v", got, maxCodexRetryDelay)
+	}
+}
+
+func TestCodexRetryDelayKeepsZeroRetryAfterFast(t *testing.T) {
+	h := http.Header{}
+	h.Set("retry-after-ms", "0")
+
+	if got := codexRetryDelay(0, h); got != 0 {
+		t.Fatalf("delay = %v, want 0", got)
+	}
+}
+
+func TestCodexRetryDelayCapsBackoffWithJitter(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		got := codexRetryDelay(100, nil)
+		if got <= 0 || got > maxCodexRetryDelay {
+			t.Fatalf("delay = %v, want within (0, %v]", got, maxCodexRetryDelay)
+		}
 	}
 }
 
