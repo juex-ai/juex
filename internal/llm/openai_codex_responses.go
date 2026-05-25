@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -18,6 +21,7 @@ const (
 	maxCodexSSELineBytes      = 1 << 20
 	maxCodexSSEEventBytes     = 4 << 20
 	maxCodexSSEDataLines      = 1024
+	maxCodexRetryDelay        = 60 * time.Second
 )
 
 type openAICodexResponsesProvider struct {
@@ -66,24 +70,48 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 	if err != nil {
 		return Response{}, fmt.Errorf("openai codex responses: encode request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAICodexResponsesURL(p.profile.BaseURL), bytes.NewReader(data))
-	if err != nil {
-		return Response{}, fmt.Errorf("openai codex responses: create request: %w", err)
+	url := openAICodexResponsesURL(p.profile.BaseURL)
+	for attempt := 0; ; attempt++ {
+		canRetry := attempt < providerMaxRetries
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+		if err != nil {
+			return Response{}, fmt.Errorf("openai codex responses: create request: %w", err)
+		}
+		p.setHeaders(req)
+		resp, err := p.client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil || !canRetry {
+				return Response{}, fmt.Errorf("openai codex responses: %w", err)
+			}
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+			if err := sleepCodexRetry(ctx, codexRetryDelay(attempt, nil)); err != nil {
+				return Response{}, fmt.Errorf("openai codex responses: %w", err)
+			}
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if isCodexRetryableStatus(resp.StatusCode) && canRetry {
+				delay := codexRetryDelay(attempt, resp.Header)
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+				resp.Body.Close()
+				if err := sleepCodexRetry(ctx, delay); err != nil {
+					return Response{}, fmt.Errorf("openai codex responses: %w", err)
+				}
+				continue
+			}
+			msg := codexHTTPError(resp)
+			resp.Body.Close()
+			return Response{}, fmt.Errorf("openai codex responses: POST %q: %s", req.URL.String(), msg)
+		}
+		wire, err := readCodexSSE(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return Response{}, fmt.Errorf("openai codex responses: %w", err)
+		}
+		return p.responseFromCodex(wire), nil
 	}
-	p.setHeaders(req)
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return Response{}, fmt.Errorf("openai codex responses: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Response{}, fmt.Errorf("openai codex responses: POST %q: %s", req.URL.String(), codexHTTPError(resp))
-	}
-	wire, err := readCodexSSE(resp.Body)
-	if err != nil {
-		return Response{}, fmt.Errorf("openai codex responses: %w", err)
-	}
-	return p.responseFromCodex(wire), nil
 }
 
 func (p *openAICodexResponsesProvider) setHeaders(req *http.Request) {
@@ -207,6 +235,78 @@ func openAICodexResponsesURL(baseURL string) string {
 		return normalized + "/responses"
 	default:
 		return normalized + "/codex/responses"
+	}
+}
+
+func isCodexRetryableStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusConflict, http.StatusTooManyRequests:
+		return true
+	default:
+		return status >= 500
+	}
+}
+
+func codexRetryDelay(attempt int, h http.Header) time.Duration {
+	if h != nil {
+		if raw := strings.TrimSpace(h.Get("retry-after-ms")); raw != "" {
+			if ms, err := strconv.Atoi(raw); err == nil && ms >= 0 {
+				return minCodexRetryDelay(time.Duration(ms) * time.Millisecond)
+			}
+		}
+		if raw := strings.TrimSpace(h.Get("Retry-After")); raw != "" {
+			if secs, err := strconv.Atoi(raw); err == nil && secs >= 0 {
+				return minCodexRetryDelay(time.Duration(secs) * time.Second)
+			}
+			if when, err := http.ParseTime(raw); err == nil {
+				delay := time.Until(when)
+				if delay > 0 {
+					return minCodexRetryDelay(delay)
+				}
+				return 0
+			}
+		}
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt > 8 {
+		return withCodexRetryJitter(maxCodexRetryDelay)
+	}
+	delay := time.Duration(1<<attempt) * 200 * time.Millisecond
+	return withCodexRetryJitter(minCodexRetryDelay(delay))
+}
+
+func minCodexRetryDelay(delay time.Duration) time.Duration {
+	if delay > maxCodexRetryDelay {
+		return maxCodexRetryDelay
+	}
+	return delay
+}
+
+func withCodexRetryJitter(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
+	jitterRange := delay / 5
+	if jitterRange <= 0 {
+		return delay
+	}
+	jitter := time.Duration(rand.Int63n(int64(jitterRange)))
+	return minCodexRetryDelay(delay + jitter)
+}
+
+func sleepCodexRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
