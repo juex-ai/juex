@@ -425,7 +425,9 @@ brand colors are:
 
 Light mode is warm paper: cream page, white cards, ink text, forest primary,
 gold accent. Dark mode is the logo: deep forest page, forest cards, cream text,
-gold accent. Shadows are forest-tinted, never black.
+gold accent. Conversation role surfaces use role tokens instead of `primary`
+directly so gold remains an accent, not the default user-message fill. Shadows
+are forest-tinted, never black.
 
 The role tokens map the design system into runtime states:
 
@@ -440,13 +442,21 @@ The role tokens map the design system into runtime states:
     --juex-error:      #b03a2e;
     --juex-done:       var(--juex-forest-500);
     --juex-pending:    var(--juex-gold-700);
+    --juex-user-foreground: var(--juex-cream-50);
+    --juex-tool-border: #ded1ef;
+    --juex-tool-header: #f3eefb;
+    --juex-tool-surface: #fbf8ff;
   }
   .dark {
-    --juex-user:       var(--juex-gold-400);
+    --juex-user:       #105c48;
+    --juex-user-foreground: var(--juex-cream-50);
     --juex-assistant:  var(--juex-cream-50);
     --juex-thinking:   var(--juex-forest-300);
-    --juex-tool:       #cbb7ff;
-    --juex-tool-bg:    rgba(110, 78, 163, 0.22);
+    --juex-tool:       #d8c8ff;
+    --juex-tool-bg:    rgba(216, 200, 255, 0.11);
+    --juex-tool-border: rgba(250, 227, 170, 0.14);
+    --juex-tool-header: #0d3a2f;
+    --juex-tool-surface: #073126;
     --juex-error:      #f09a92;
     --juex-done:       var(--juex-forest-300);
     --juex-pending:    var(--juex-gold-400);
@@ -456,6 +466,10 @@ The role tokens map the design system into runtime states:
 
 Tailwind exposes these as `text-juex-*` / `bg-juex-*` utilities through the
 `@theme inline` block. New color usage should prefer tokens over raw hex.
+Dark code and tool result surfaces should stay on raised forest tones, not pure
+black, so they remain part of the same page rather than a foreign editor pane.
+Shiki token colours must honour both `.dark` and `prefers-color-scheme: dark`
+because the app has no manual theme toggle in v0.1.
 
 ---
 
