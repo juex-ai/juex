@@ -709,6 +709,63 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponses_ReplaysReasoningWithEmptySummary(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
+			"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai",
+		Protocol: "openai/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "k",
+		Model:    "gpt-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Complete(context.Background(), "",
+		[]Message{
+			TextMessage(RoleUser, "first"),
+			{Role: RoleAssistant, Blocks: []Block{
+				{Type: BlockReasoning, Signature: "rs_prev", Content: "enc_prev", Redacted: true},
+				{Type: BlockText, Text: "first answer"},
+			}},
+			TextMessage(RoleUser, "second"),
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	input, _ := capturedBody["input"].([]any)
+	for _, item := range input {
+		obj, _ := item.(map[string]any)
+		if obj["type"] != "reasoning" {
+			continue
+		}
+		if _, ok := obj["summary"]; !ok {
+			t.Fatalf("reasoning replay omitted required summary field: %+v", obj)
+		}
+		summary, ok := obj["summary"].([]any)
+		if !ok || len(summary) != 0 {
+			t.Fatalf("reasoning summary = %#v, want empty array", obj["summary"])
+		}
+		return
+	}
+	t.Fatalf("reasoning replay item not found in input: %+v", input)
+}
+
 func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	var capturedBody map[string]any
 	var capturedAuth, capturedAccount, capturedOriginator, capturedBeta, capturedAccept string
