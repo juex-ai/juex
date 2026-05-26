@@ -174,7 +174,10 @@ func toOpenAIResponseInput(history []Message, profile ProviderProfile) responses
 				}
 				out = appendResponseTextMessage(out, m.Role, textParts)
 				textParts = nil
-				reasoning := responses.ResponseReasoningItemParam{ID: b.Signature}
+				reasoning := responses.ResponseReasoningItemParam{
+					ID:      b.Signature,
+					Summary: []responses.ResponseReasoningItemSummaryParam{},
+				}
 				if b.Text != "" {
 					reasoning.Summary = []responses.ResponseReasoningItemSummaryParam{{Text: b.Text}}
 				}
