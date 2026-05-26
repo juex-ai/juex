@@ -51,7 +51,6 @@ __pycache__
 
 # superpowers
 .superpowers
-.claude/
 
 # build outputs
 bin/
@@ -64,3 +63,5 @@ internal/web/dist
 # juex runtime state (per-project session/memory artefacts)
 .juex/
 .config/
+
+.understand-anything/
