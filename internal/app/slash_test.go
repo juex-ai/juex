@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 )
 
@@ -23,7 +24,8 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: "/compact", handled: true, name: SlashCompact},
 		{input: "/status now", handled: true, wantErr: true},
 		{input: "/status\tnow", handled: true, wantErr: true},
-		{input: "/unknown", handled: true, wantErr: true},
+		{input: "/unknown", handled: false},
+		{input: "/foo bar", handled: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
@@ -99,18 +101,23 @@ func TestApp_RunStatusSlashSkipsProvider(t *testing.T) {
 	}
 }
 
-func TestApp_RunUnknownSlashSkipsProvider(t *testing.T) {
-	a, prov := newStubApp(t)
-	_, err := a.Run(context.Background(), "/bogus")
-	if err == nil {
-		t.Fatal("expected unknown slash error")
+func TestApp_RunUnknownSlashReachesProvider(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "handled slash-like prompt"),
+		StopReason: llm.StopEndTurn,
+	})
+	out, err := a.Run(context.Background(), "/bogus")
+	if err != nil {
+		t.Fatal(err)
 	}
-	var slashErr *UnknownSlashCommandError
-	if !errors.As(err, &slashErr) {
-		t.Fatalf("err = %T, want UnknownSlashCommandError", err)
+	if out != "handled slash-like prompt" {
+		t.Fatalf("out = %q", out)
 	}
-	if prov.calls != 0 {
-		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
+	}
+	if len(a.Session.History) < 1 || a.Session.History[0].FirstText() != "/bogus" {
+		t.Fatalf("history first message = %+v", a.Session.History)
 	}
 }
 
