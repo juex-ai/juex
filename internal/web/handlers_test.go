@@ -189,7 +189,7 @@ func TestPostTurn_StatusSlashReturnsCommand(t *testing.T) {
 	}
 }
 
-func TestPostTurn_UnknownSlashRejected(t *testing.T) {
+func TestPostTurn_UnknownSlashStartsAgentTurn(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -210,14 +210,57 @@ func TestPostTurn_UnknownSlashRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
+	if resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "available slash commands") {
-		t.Fatalf("body = %s", body)
+	var turn struct {
+		TurnID string `json:"turn_id"`
 	}
+	if err := json.NewDecoder(resp.Body).Decode(&turn); err != nil {
+		t.Fatal(err)
+	}
+	if turn.TurnID == "" {
+		t.Fatal("missing turn id")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct {
+			Messages []struct {
+				Role   string `json:"role"`
+				Blocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"blocks"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
+			show.Body.Close()
+			t.Fatal(err)
+		}
+		show.Body.Close()
+		var sawUser, sawAssistant bool
+		for _, msg := range parsed.Messages {
+			for _, block := range msg.Blocks {
+				if msg.Role == "user" && block.Type == "text" && block.Text == "/bogus" {
+					sawUser = true
+				}
+				if msg.Role == "assistant" && block.Type == "text" && block.Text == "ack" {
+					sawAssistant = true
+				}
+			}
+		}
+		if sawUser && sawAssistant {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for unknown slash prompt to be handled as a normal turn")
 }
 
 func TestPostTurn_CompactSlashConflictsWhileRunning(t *testing.T) {

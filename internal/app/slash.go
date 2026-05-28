@@ -69,7 +69,7 @@ func ParseSlashCommand(input string) (SlashCommand, bool, error) {
 			return SlashCommand{}, true, &SlashCommandArgumentsError{Name: name, Args: strings.TrimSpace(args)}
 		}
 	}
-	return SlashCommand{}, true, &UnknownSlashCommandError{Input: trimmed}
+	return SlashCommand{}, false, nil
 }
 
 func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashCommandResult, bool, error) {
