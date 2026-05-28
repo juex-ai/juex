@@ -230,6 +230,11 @@ func TestPostTurn_UnknownSlashStartsAgentTurn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if show.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(show.Body)
+			show.Body.Close()
+			t.Fatalf("status = %d body = %s", show.StatusCode, body)
+		}
 		var parsed struct {
 			Messages []struct {
 				Role   string `json:"role"`
