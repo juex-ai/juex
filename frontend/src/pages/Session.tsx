@@ -1297,13 +1297,7 @@ function CopyTextButton({
   }, [copySignal]);
 
   async function copyText() {
-    if (
-      !text ||
-      typeof navigator === "undefined" ||
-      !navigator.clipboard?.writeText
-    ) {
-      return;
-    }
+    if (!text) return;
     try {
       await writeClipboardText(text);
       setCopySignal((current) => current + 1);

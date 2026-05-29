@@ -35,38 +35,49 @@ test("writeClipboardText uses the native Clipboard API when available", async ()
 });
 
 test("installClipboardWriteFallback provides writeText when Clipboard API is unavailable", async () => {
-  let execCommandName = "";
-  let textareaValue = "";
-  const textarea = {
-    value: "",
-    style: {} as Record<string, string>,
-    setAttribute() {},
-    focus() {},
-    select() {},
-  };
+  const copyDoc = createCopyDocument();
   defineGlobal("navigator", {});
-  defineGlobal("document", {
-    body: {
-      appendChild(node: typeof textarea) {
-        textareaValue = node.value;
-      },
-      removeChild() {},
-    },
-    createElement(tagName: string) {
-      assert.equal(tagName, "textarea");
-      return textarea;
-    },
-    execCommand(command: string) {
-      execCommandName = command;
-      return true;
-    },
-  });
+  defineGlobal("document", copyDoc.document);
 
   installClipboardWriteFallback();
   await navigator.clipboard.writeText("fallback copy");
 
-  assert.equal(textareaValue, "fallback copy");
-  assert.equal(execCommandName, "copy");
+  assert.equal(copyDoc.textareaValue(), "fallback copy");
+  assert.equal(copyDoc.execCommandName(), "copy");
+  assert.equal(copyDoc.restoredFocus(), true);
+});
+
+test("installClipboardWriteFallback preserves existing clipboard properties", async () => {
+  const copyDoc = createCopyDocument();
+  defineGlobal("navigator", {
+    clipboard: {
+      readText: async () => "existing read",
+    },
+  });
+  defineGlobal("document", copyDoc.document);
+
+  installClipboardWriteFallback();
+  await navigator.clipboard.writeText("preserved clipboard");
+
+  assert.equal(await navigator.clipboard.readText(), "existing read");
+  assert.equal(copyDoc.textareaValue(), "preserved clipboard");
+});
+
+test("writeClipboardText falls back when native Clipboard API rejects", async () => {
+  const copyDoc = createCopyDocument();
+  defineGlobal("navigator", {
+    clipboard: {
+      writeText: async () => {
+        throw new Error("denied");
+      },
+    },
+  });
+  defineGlobal("document", copyDoc.document);
+
+  await writeClipboardText("fallback after rejection");
+
+  assert.equal(copyDoc.textareaValue(), "fallback after rejection");
+  assert.equal(copyDoc.execCommandName(), "copy");
 });
 
 function defineGlobal(name: "navigator" | "document", value: unknown) {
@@ -85,4 +96,44 @@ function restoreGlobal(
     return;
   }
   delete (globalThis as Record<string, unknown>)[name];
+}
+
+function createCopyDocument() {
+  let execCommandName = "";
+  let textareaValue = "";
+  let restoredFocus = false;
+  const activeElement = {
+    focus() {
+      restoredFocus = true;
+    },
+  };
+  const textarea = {
+    value: "",
+    style: {} as Record<string, string>,
+    setAttribute() {},
+    focus() {},
+    select() {},
+  };
+  return {
+    document: {
+      activeElement,
+      body: {
+        appendChild(node: typeof textarea) {
+          textareaValue = node.value;
+        },
+        removeChild() {},
+      },
+      createElement(tagName: string) {
+        assert.equal(tagName, "textarea");
+        return textarea;
+      },
+      execCommand(command: string) {
+        execCommandName = command;
+        return true;
+      },
+    },
+    execCommandName: () => execCommandName,
+    restoredFocus: () => restoredFocus,
+    textareaValue: () => textareaValue,
+  };
 }
