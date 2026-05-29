@@ -471,13 +471,13 @@ func (s *Server) beginCompactTurn(w http.ResponseWriter, as *activeSession) (str
 
 func (s *Server) finishCompactTurn(as *activeSession, compactTurnID string) {
 	nextTurnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))
-	msg, _, promoted := as.app.Engine.PromotePendingInputTurn(compactTurnID, nextTurnID)
 	as.cancelMu.Lock()
+	defer as.cancelMu.Unlock()
 	as.compacting = false
+	msg, _, promoted := as.app.Engine.PromotePendingInputTurn(compactTurnID, nextTurnID)
 	if promoted {
 		s.startTurnMessageLocked(as, nextTurnID, msg)
 	}
-	as.cancelMu.Unlock()
 }
 
 func (s *Server) enqueuePendingInput(w http.ResponseWriter, r *http.Request, as *activeSession, prompt string) {

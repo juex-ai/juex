@@ -185,6 +185,7 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 		}, false
 	}
 	msg := e.pendingInput[0]
+	e.pendingInput[0] = llm.Message{}
 	e.pendingInput = e.pendingInput[1:]
 	e.activeTurnID = nextTurnID
 	return msg, PendingInputStatus{
