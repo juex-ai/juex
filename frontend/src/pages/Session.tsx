@@ -49,6 +49,7 @@ import {
   composerSubmitAction,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
+import { writeClipboardText } from "@/lib/clipboard";
 import { compactSummaryText, messageGroupCopyText } from "@/lib/message-copy";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
@@ -1296,15 +1297,9 @@ function CopyTextButton({
   }, [copySignal]);
 
   async function copyText() {
-    if (
-      !text ||
-      typeof navigator === "undefined" ||
-      !navigator.clipboard?.writeText
-    ) {
-      return;
-    }
+    if (!text) return;
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboardText(text);
       setCopySignal((current) => current + 1);
     } catch (error) {
       console.error("copy text failed", error);
