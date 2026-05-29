@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,8 @@ import {
 } from "@/components/ai-elements/conversation";
 import {
   Message,
+  MessageAction,
+  MessageActions,
   MessageContent,
   MessageResponse,
 } from "@/components/ai-elements/message";
@@ -47,9 +49,11 @@ import {
   composerSubmitAction,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
+import { compactSummaryText, messageGroupCopyText } from "@/lib/message-copy";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
+import { Separator } from "@/components/ui/separator";
 import {
   createQueuedInputState,
   drainQueuedInputs as drainQueuedInputState,
@@ -67,8 +71,9 @@ import {
   subscribeEvents,
 } from "@/api";
 import {
-  ArchiveIcon,
+  CheckIcon,
   ChevronDownIcon,
+  CopyIcon,
   RadioIcon,
   SendHorizontalIcon,
   SquareIcon,
@@ -110,6 +115,9 @@ export function Session() {
   const [turnActive, setTurnActive] = useState(false);
   const [draft, setDraft] = useState("");
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  const [compactCommandInputs, setCompactCommandInputs] = useState<
+    Record<string, string>
+  >({});
   const [queuedInputState, setQueuedInputState] = useState<QueuedInputState>(
     () => createQueuedInputState(),
   );
@@ -127,6 +135,7 @@ export function Session() {
     setTurnActive(false);
     setDraft("");
     setComposerHint(null);
+    setCompactCommandInputs({});
   }, [id]);
 
   // refresh is stable per id; both effects depend on it via [id].
@@ -183,7 +192,9 @@ export function Session() {
     if (initialCommandRef.current === key) return;
     initialCommandRef.current = key;
     if (state.command.name === "/compact" && state.command.compact?.message_id) {
-      void refresh();
+      const messageID = state.command.compact.message_id;
+      const commandInput = state.commandInput;
+      void refresh().then(() => rememberCompactCommand(messageID, commandInput));
     } else {
       appendCommandResult(state.commandInput, state.command.text);
     }
@@ -323,7 +334,9 @@ export function Session() {
         }
         if (turn.command.name === "/compact") {
           await refresh();
-          if (!turn.command.compact?.message_id) {
+          if (turn.command.compact?.message_id) {
+            rememberCompactCommand(turn.command.compact.message_id, prompt);
+          } else {
             appendCommandResult(prompt, turn.command.text);
           }
         } else {
@@ -417,7 +430,13 @@ export function Session() {
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full max-w-[760px]">
           {groups.map((group) => (
-            <MessageGroupView key={group.key} group={group} />
+            <MessageGroupView
+              key={group.key}
+              group={group}
+              compactCommand={
+                group.id ? compactCommandInputs[group.id] : undefined
+              }
+            />
           ))}
         </ConversationContent>
         <ConversationScrollButton />
@@ -562,6 +581,11 @@ export function Session() {
       () => setComposerHint(null),
       1800,
     );
+  }
+
+  function rememberCompactCommand(messageID: string | undefined, input: string) {
+    if (!messageID) return;
+    setCompactCommandInputs((prev) => ({ ...prev, [messageID]: input }));
   }
 
   function appendDrainedInputs(items: QueuedInput[], turnID: string | undefined) {
@@ -1051,22 +1075,42 @@ function trimFixed(value: number): string {
   return value.toFixed(1).replace(/\.0$/, "");
 }
 
-function MessageGroupView({ group }: { group: MessageGroup }) {
+function MessageGroupView({
+  group,
+  compactCommand,
+}: {
+  group: MessageGroup;
+  compactCommand?: string;
+}) {
   // Per-message model (stamped at generation time). Falls back to nothing
   // for older messages that pre-date the persistence change; the header
   // already shows the current session-level model in that case.
   const showModel = group.role === "assistant" && !!group.model;
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
   const isCompact = group.kind === "compact";
+  const copyText = messageGroupCopyText(group);
+  const canCopyMessage =
+    !isCompact && (group.role === "user" || group.role === "system") && copyText;
 
   if (isMCPEvent) {
     return <MCPEventGroup group={group} />;
   }
 
+  if (isCompact) {
+    const textUnit = group.units.find((unit) => unit.kind === "text");
+    const text = textUnit?.kind === "text" ? textUnit.block.text : "";
+    return (
+      <>
+        {compactCommand ? <SlashCommandMessage text={compactCommand} /> : null}
+        <CompactMessage text={text} />
+      </>
+    );
+  }
+
   const isEmpty = group.units.length === 0;
 
   return (
-    <Message from={isCompact ? "assistant" : group.role}>
+    <Message from={group.role}>
       <div className="flex w-full flex-col gap-2">
         {showModel ? (
           <span className="font-mono text-[11px] text-muted-foreground">
@@ -1131,6 +1175,25 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
         {group.pending && isEmpty ? (
           <div className="animate-pulse text-sm text-muted-foreground">...</div>
         ) : null}
+        {canCopyMessage ? (
+          <MessageCopyAction
+            text={copyText}
+            align={group.role === "user" ? "end" : "start"}
+          />
+        ) : null}
+      </div>
+    </Message>
+  );
+}
+
+function SlashCommandMessage({ text }: { text: string }) {
+  return (
+    <Message from="user">
+      <div className="flex w-full flex-col gap-2">
+        <MessageContent>
+          <MessageResponse>{text}</MessageResponse>
+        </MessageContent>
+        <MessageCopyAction text={text} align="end" />
       </div>
     </Message>
   );
@@ -1154,23 +1217,110 @@ function MCPEventGroup({ group }: { group: MessageGroup }) {
 }
 
 function CompactMessage({ text }: { text: string }) {
-  const summary = parseCompactText(text);
+  const summary = compactSummaryText(text);
   return (
-    <MessageContent className="border-juex-forest-300 bg-juex-forest-100 text-juex-forest-900 dark:border-juex-forest-300/25 dark:bg-juex-forest-400/10 dark:text-juex-cream-50">
-      <div className="flex items-center gap-2 text-xs font-medium">
-        <ArchiveIcon className="size-3.5" aria-hidden="true" />
-        <span>Context compacted</span>
-      </div>
-      <MessageResponse>{summary}</MessageResponse>
-    </MessageContent>
+    <div className="flex w-full items-center gap-3 px-2 py-3">
+      <Separator className="flex-1" />
+      <CopyTextButton
+        text={summary}
+        className="h-7 rounded-full border border-border bg-background px-3 font-mono text-[11px] text-muted-foreground shadow-[var(--shadow-xs)] hover:text-foreground"
+        copiedTooltip="Copied to clipboard"
+        idleTooltip="Copy compacted context"
+        size="sm"
+      >
+        Context compacted
+      </CopyTextButton>
+      <Separator className="flex-1" />
+    </div>
   );
 }
 
-function parseCompactText(text: string): string {
-  const marker = "Summary of earlier conversation:";
-  const markerIndex = text.indexOf(marker);
-  if (markerIndex < 0) return text;
-  return text.slice(markerIndex + marker.length).trim();
+function MessageCopyAction({
+  text,
+  align,
+}: {
+  text: string;
+  align: "start" | "end";
+}) {
+  return (
+    <MessageActions
+      className={cn(
+        "opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100",
+        align === "end" ? "justify-end pr-1" : "justify-start pl-1",
+      )}
+    >
+      <CopyTextButton
+        text={text}
+        className="size-6 text-muted-foreground hover:text-foreground"
+        copiedTooltip="Copied to clipboard"
+        idleTooltip="Copy message"
+        label="Copy message"
+        size="icon-xs"
+      />
+    </MessageActions>
+  );
+}
+
+function CopyTextButton({
+  text,
+  className,
+  idleTooltip,
+  copiedTooltip,
+  label,
+  size = "icon-sm",
+  children,
+}: {
+  text: string;
+  className?: string;
+  idleTooltip: string;
+  copiedTooltip: string;
+  label?: string;
+  size?:
+    | "default"
+    | "xs"
+    | "sm"
+    | "lg"
+    | "icon"
+    | "icon-xs"
+    | "icon-sm"
+    | "icon-lg";
+  children?: ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyText() {
+    if (
+      !text ||
+      typeof navigator === "undefined" ||
+      !navigator.clipboard?.writeText
+    ) {
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  return (
+    <MessageAction
+      className={className}
+      label={label ?? idleTooltip}
+      onClick={() => void copyText()}
+      size={size}
+      tooltip={copied ? copiedTooltip : idleTooltip}
+      variant="ghost"
+    >
+      {children ?? (
+        <>
+          {copied ? (
+            <CheckIcon className="size-3.5" aria-hidden="true" />
+          ) : (
+            <CopyIcon className="size-3.5" aria-hidden="true" />
+          )}
+        </>
+      )}
+    </MessageAction>
+  );
 }
 
 function MCPEventMessage({ text }: { text: string }) {

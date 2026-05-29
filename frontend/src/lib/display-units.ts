@@ -20,6 +20,7 @@ export type DisplayUnit =
 
 export type MessageGroup = {
   key: string;
+  id?: string;
   role: Role;
   kind?: string;
   pending: boolean;
@@ -82,7 +83,8 @@ export function messagesToGroups(
     // here and is silently suppressed.
     if (units.length === 0 && !pending) continue;
     groups.push({
-      key: `${msg.turn_id ?? "msg"}-${i}`,
+      key: msg.id ?? `${msg.turn_id ?? "msg"}-${i}`,
+      id: msg.id,
       role: msg.role,
       kind: msg.kind,
       pending,

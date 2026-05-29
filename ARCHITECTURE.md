@@ -585,6 +585,8 @@ active-context inspection are available through `juex sessions compact`,
 matching Web API routes. Slash commands are parsed in `internal/app` so CLI and
 web inputs share one whitelist and result contract before any provider turn is
 started.
+Successful compaction records summary-call token usage and updates the session
+context usage snapshot to the estimated active context after the compact marker.
 
 ---
 
