@@ -104,7 +104,6 @@ juex/
 │   │       ├── AppShell.tsx
 │   │       ├── Sidebar.tsx
 │   │       ├── SidebarSessionList.tsx
-│   │       ├── StatusPill.tsx
 │   │       ├── ai-elements/        # AI Elements primitives (copied via shadcn CLI)
 │   │       │   ├── _local-types.ts
 │   │       │   ├── conversation.tsx
@@ -185,7 +184,7 @@ column owns its own header and composer (when applicable).
 │              │ ┌──────────────────────────────┐ │              │
 │              │ │ textarea                     │ │              │
 │              │ └──────────────────────────────┘ │              │
-│              │ ● idle  context 61.5k  tokens 42│              │
+│              │ context 61.5k  tokens 42    send│              │
 └──────────────┴──────────────────────────────────┴──────────────┘
 ```
 
@@ -226,8 +225,8 @@ input so a first chat can start without using the sidebar.
 
 Same sidebar (highlighted entry for the current session). Center column:
 compact header strip + scrollable message list + sticky composer. The composer
-footer shows the live status, latest request context total, and current
-conversation token total.
+footer shows transient composer feedback, latest request context total, and
+current conversation token total.
 
 MCP channel events render as centered external-event bubbles with a small radio
 icon, a monospace `<mcp_name>:<event_type>` label, and a one-line content
@@ -353,17 +352,19 @@ states default to open; successful results stay closed until the user expands.
     <PromptInputTextarea placeholder="Ask juex anything..." />
     <PromptInputFooter>
       <PromptInputTools>
-        <StatusPill status={status} />
+        {composerHint ? <ComposerFeedback tone="hint">{composerHint}</ComposerFeedback> : null}
+        {status.kind === "error"
+          ? <ComposerFeedback tone="error">{status.detail}</ComposerFeedback>
+          : null}
         <ContextUsageLabel usage={contextUsage} />
         <TokenUsageLabel usage={tokenUsage} />
       </PromptInputTools>
       <div className="flex shrink-0 items-center gap-1">
-        {status.kind === "running" || status.kind === "tool" || status.kind === "pending"
-          ? <>
-            <PromptInputButton variant="outline" onClick={onInterrupt}>Stop</PromptInputButton>
-            <PromptInputSubmit />
-          </>
-          : <PromptInputSubmit />}
+        <ComposerSubmitButton
+          action={submitAction}
+          onEmpty={() => showComposerHint("Enter a message to send")}
+          onStop={onInterrupt}
+        />
       </div>
     </PromptInputFooter>
   </PromptInputBody>
@@ -383,11 +384,13 @@ conversation stream.
 
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
 both natively. The composer is a warm paper well with a 14px radius, subtle
-forest shadow, and a forest focus ring. While a turn is running, `Stop`
-cancels the current turn and `Send` queues the typed text as pending input for
-the next provider call. The footer keeps status/context/token chips in a
-wrapping left group and keeps Stop/Send in a non-wrapping right action group
-so phone-width layouts do not push Send onto a second line.
+forest shadow, and a forest focus ring. The submit button is the state control:
+empty + idle appears disabled and clicks show a short input hint; empty +
+running switches to a square stop icon; text + idle submits and clears the
+input; text + running submits to the pending-input queue for the next provider
+call. The footer keeps feedback/context/token chips in a wrapping left group
+and keeps the single submit button in a non-wrapping right action group so
+phone-width layouts do not push the action onto a second line.
 
 `ContextUsageLabel` is a compact `context <total>` chip for the latest
 successful provider request. The total uses provider-reported
@@ -399,19 +402,19 @@ tools, memory files, skills, messages, and response. `TokenUsageLabel` is a
 compact `tokens <total>` chip for cumulative conversation usage; its tooltip
 shows the input/output split.
 
-### 7.9 StatusPill
+### 7.9 Composer Submit States
 
 | State | Visual |
 |---|---|
-| `idle` | ink dot, `idle` |
-| `running` | gold dot pulsing, `running...` |
-| `pending` | gold pill and pulsing dot, `pending <count>` |
-| `tool` | tool-accent dot pulsing, `tool: read` |
-| `done` | forest dot, `done` (1.5s flash before reverting to idle) |
-| `error` | red dot, `error` |
+| empty + idle | send icon, disabled treatment, click shows input hint |
+| empty + running | square stop icon |
+| text + idle | send icon, submits immediately |
+| text + running | send icon, queues pending input |
+| error | compact error text in the left feedback group |
 
-Implemented as a Tailwind-classed `<span>`. The dot is a 6px rounded element
-with the gold pulse animation on `running` / `pending` / `tool`.
+The visual state is derived from a local draft string plus whether the active
+turn is still running. Do not reintroduce a separate idle/running status chip
+or a second Stop button in the composer footer.
 
 ---
 
@@ -499,26 +502,20 @@ fast, local, and device-friendly.
 
 The transcript is fetched as JSON from `/api/sessions/:id` and rendered with
 React state. On `turn.completed` / `turn.errored` the SSE listener calls a
-`refetch()` that swaps the messages array atomically. Status pill is driven
-directly by SSE events:
+`refetch()` that swaps the messages array atomically. The composer keeps a
+local `turnActive` flag so the submit button can switch between send, queue,
+and stop behavior:
 
 | Event | Effect |
 |---|---|
-| `turn.started` | status → `running` |
-| `tool.requested` | status → `tool: <name>` |
-| `tool.completed`, `tool.errored` | status → `running` |
-| `pending_input.queued` | status → `pending <count>` |
-| `pending_input.drained` | status → `running` |
-| `pending_input.rejected`, `pending_input.dropped` | status → `error` |
-| `turn.completed` | refetch, then `done` for 1.5s, then `idle` |
-| `turn.errored` | refetch, status → `error` |
+| `turn.started`, `llm.*`, `tool.*` | `turnActive` → true |
+| `pending_input.queued`, `pending_input.drained` | update queue stack; `turnActive` stays true |
+| `pending_input.rejected`, `pending_input.dropped` | show compact error feedback |
+| `turn.completed` | refetch, clear queue stack, `turnActive` → false |
+| `turn.errored` | refetch, clear queue stack, `turnActive` → false, show error feedback |
 
 We never inject HTML over SSE. JSON is the source of truth; SSE is the
 notification channel.
-
-`StatusPill` derives its label from the discriminated `Status` union
-(`idle | running | tool {name} | done | error {detail}`), so a single
-state value covers both the colour pill and the textual hint.
 
 ---
 
