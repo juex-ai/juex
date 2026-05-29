@@ -1286,7 +1286,14 @@ function CopyTextButton({
     | "icon-lg";
   children?: ReactNode;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copySignal, setCopySignal] = useState(0);
+  const copied = copySignal > 0;
+
+  useEffect(() => {
+    if (!copySignal) return;
+    const reset = window.setTimeout(() => setCopySignal(0), 1800);
+    return () => window.clearTimeout(reset);
+  }, [copySignal]);
 
   async function copyText() {
     if (
@@ -1296,9 +1303,12 @@ function CopyTextButton({
     ) {
       return;
     }
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopySignal((current) => current + 1);
+    } catch (error) {
+      console.error("copy text failed", error);
+    }
   }
 
   return (
