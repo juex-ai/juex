@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  COMPACT_COPIED_TOOLTIP,
+  copyButtonTooltip,
   compactSummaryText,
+  messageGroupCanCopy,
   messageGroupCopyText,
 } from "../../frontend/src/lib/message-copy.ts";
 
@@ -27,4 +30,54 @@ test("messageGroupCopyText joins copyable text blocks", () => {
     }),
     "first\n\nsecond",
   );
+});
+
+test("messageGroupCanCopy allows assistant text messages", () => {
+  assert.equal(
+    messageGroupCanCopy({
+      key: "a1",
+      role: "assistant",
+      pending: false,
+      units: [{ kind: "text", block: { type: "text", text: "answer" } }],
+    }),
+    true,
+  );
+});
+
+test("messageGroupCanCopy skips compact markers", () => {
+  assert.equal(
+    messageGroupCanCopy({
+      key: "c1",
+      role: "system",
+      kind: "compact",
+      pending: false,
+      units: [{ kind: "text", block: { type: "text", text: "summary" } }],
+    }),
+    false,
+  );
+});
+
+test("copyButtonTooltip supports copied-only compact feedback", () => {
+  const args = {
+    mode: "copied-only" as const,
+    copiedTooltip: COMPACT_COPIED_TOOLTIP,
+    idleTooltip: "Copy compacted context",
+  };
+
+  assert.equal(copyButtonTooltip({ ...args, copied: false }), undefined);
+  assert.equal(
+    copyButtonTooltip({ ...args, copied: true }),
+    "compacted content copied",
+  );
+});
+
+test("copyButtonTooltip can disable message copy tooltips", () => {
+  const args = {
+    mode: "none" as const,
+    copiedTooltip: "Copied to clipboard",
+    idleTooltip: "Copy message",
+  };
+
+  assert.equal(copyButtonTooltip({ ...args, copied: false }), undefined);
+  assert.equal(copyButtonTooltip({ ...args, copied: true }), undefined);
 });

@@ -80,11 +80,13 @@ export const MessageActions = ({
 
 export type MessageActionProps = ComponentProps<typeof Button> & {
   tooltip?: string;
+  tooltipOpen?: boolean;
   label?: string;
 };
 
 export const MessageAction = ({
   tooltip,
+  tooltipOpen,
   children,
   label,
   variant = "ghost",
@@ -101,7 +103,7 @@ export const MessageAction = ({
   if (tooltip) {
     return (
       <TooltipProvider>
-        <Tooltip>
+        <Tooltip open={tooltipOpen}>
           <TooltipTrigger asChild>{button}</TooltipTrigger>
           <TooltipContent>
             <p>{tooltip}</p>
