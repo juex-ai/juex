@@ -7,6 +7,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
+import { formatToolPayload } from "@/lib/tool-payload";
 import type { DynamicToolUIPart, ToolUIPart } from "./_local-types";
 import {
   ChevronDownIcon,
@@ -123,7 +124,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
     <div className="rounded-[10px]">
       <CodeBlock
         className="[&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
-        code={JSON.stringify(input, null, 2)}
+        code={formatToolPayload(input)}
         language="json"
       />
     </div>
@@ -152,7 +153,7 @@ export const ToolOutput = ({
       Output = (
         <CodeBlock
           className="rounded-[10px] [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
-          code={JSON.stringify(output, null, 2)}
+          code={formatToolPayload(output, "null")}
           language="json"
         />
       );
