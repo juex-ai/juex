@@ -14,7 +14,7 @@ export type StatusOutput = {
 const TITLE = "Juex status";
 const TITLE_ICON = "📊";
 
-const ROW_ICONS: Record<string, string> = {
+const ROW_ICONS: Record<string, string> = Object.assign(Object.create(null), {
   session: "💬",
   "session kind": "📌",
   workdir: "📁",
@@ -25,9 +25,10 @@ const ROW_ICONS: Record<string, string> = {
   context: "🧠",
   turn: "⚙️",
   "queued input": "📥",
-};
+});
 
-export function formatStatusOutput(text: string): StatusOutput | null {
+export function formatStatusOutput(text: unknown): StatusOutput | null {
+  if (typeof text !== "string" || !text) return null;
   const lines = text
     .split(/\r?\n/)
     .map((line) => line.trim())

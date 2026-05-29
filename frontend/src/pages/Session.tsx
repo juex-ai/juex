@@ -1352,9 +1352,9 @@ function StatusCommandMessage({ status }: { status: StatusOutput }) {
         <span>{status.title}</span>
       </div>
       <div className="grid gap-2">
-        {status.rows.map((row) => (
+        {status.rows.map((row, index) => (
           <div
-            key={row.raw}
+            key={`${row.raw}-${index}`}
             className="grid grid-cols-[1.35rem_minmax(0,1fr)] items-start gap-2"
             data-juex-status-row
           >

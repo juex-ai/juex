@@ -41,3 +41,15 @@ test("formatStatusOutput splits status text into scan-friendly rows", () => {
 test("formatStatusOutput leaves non-status slash output alone", () => {
   assert.equal(formatStatusOutput("No eligible context to compact."), null);
 });
+
+test("formatStatusOutput ignores malformed runtime input", () => {
+  assert.equal(formatStatusOutput(null), null);
+  assert.equal(formatStatusOutput(""), null);
+});
+
+test("formatStatusOutput uses the fallback icon for prototype labels", () => {
+  const status = formatStatusOutput("Juex status\nconstructor: safe");
+
+  assert.equal(status?.rows[0]?.icon, "✨");
+  assert.equal(status?.rows[0]?.value, "safe");
+});
