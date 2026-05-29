@@ -780,6 +780,52 @@ func TestTurn_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "cancel_me", ToolName: "slow", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	toolStarted := make(chan struct{}, 1)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "slow",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			signal(toolStarted)
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(ctx, "hi")
+		done <- err
+	}()
+	waitSignal(t, toolStarted, "tool start")
+	cancel()
+	err := <-done
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if len(eng.Session.History) != 3 {
+		t.Fatalf("history len = %d, want user, assistant tool_use, user tool_result; history=%+v", len(eng.Session.History), eng.Session.History)
+	}
+	result := eng.Session.History[2]
+	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
+		t.Fatalf("tool result message wrong: %+v", result)
+	}
+	block := result.Blocks[0]
+	if block.Type != llm.BlockToolResult || block.ToolUseID != "cancel_me" || !block.IsError {
+		t.Fatalf("tool result block wrong: %+v", block)
+	}
+	if !strings.Contains(block.Content, "context canceled") {
+		t.Fatalf("tool result content = %q, want context canceled", block.Content)
+	}
+}
+
 func TestTurn_UnknownToolName(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{

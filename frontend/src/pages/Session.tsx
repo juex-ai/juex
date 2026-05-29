@@ -32,19 +32,21 @@ import {
 } from "@/components/ai-elements/tool";
 import {
   PromptInput,
-  PromptInputButton,
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
-import { StatusPill, type Status } from "@/components/StatusPill";
 import { useShellTitle } from "@/components/AppShell";
 import {
   messagesToGroups,
   toolState,
   type MessageGroup,
 } from "@/lib/display-units";
+import {
+  composerSubmitAction,
+  type ComposerSubmitAction,
+} from "@/lib/composer-submit";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
@@ -68,6 +70,7 @@ import {
   ArchiveIcon,
   ChevronDownIcon,
   RadioIcon,
+  SendHorizontalIcon,
   SquareIcon,
 } from "lucide-react";
 import type {
@@ -84,6 +87,14 @@ type InitialCommandState = {
   command?: SlashCommandResponse;
 } | null;
 
+type SessionStatus =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "pending"; count: number }
+  | { kind: "tool"; name: string }
+  | { kind: "done" }
+  | { kind: "error"; detail?: string };
+
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
@@ -95,11 +106,15 @@ export function Session() {
     useState<ContextUsage | null>(null);
   const [activeContext, setActiveContext] =
     useState<ActiveContextSnapshot | null>(null);
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [status, setStatus] = useState<SessionStatus>({ kind: "idle" });
+  const [turnActive, setTurnActive] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [composerHint, setComposerHint] = useState<string | null>(null);
   const [queuedInputState, setQueuedInputState] = useState<QueuedInputState>(
     () => createQueuedInputState(),
   );
   const doneTimerRef = useRef<number | null>(null);
+  const composerHintTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
   const queuedInputStateRef = useRef<QueuedInputState>(
     createQueuedInputState(),
@@ -109,6 +124,9 @@ export function Session() {
     const next = createQueuedInputState();
     queuedInputStateRef.current = next;
     setQueuedInputState(next);
+    setTurnActive(false);
+    setDraft("");
+    setComposerHint(null);
   }, [id]);
 
   // refresh is stable per id; both effects depend on it via [id].
@@ -181,37 +199,45 @@ export function Session() {
         switch (e.type) {
           case "turn.started":
             appendLiveTurn(e.turn_id, eventInput(e), eventKind(e), "event");
+            setTurnActive(true);
             setStatus({ kind: "running" });
             break;
           case "llm.requested":
+            setTurnActive(true);
             setStatus({ kind: "running" });
             break;
           case "llm.responded":
             applyAssistantResponse(e);
             applyTokenUsage(e);
             applyContextUsage(e);
+            setTurnActive(true);
             setStatus({ kind: "running" });
             break;
           case "tool.requested": {
             const name =
               eventString(e, "name") ?? eventString(e, "tool_name") ?? "?";
+            setTurnActive(true);
             setStatus({ kind: "tool", name });
             break;
           }
           case "tool.completed":
             appendToolResult(e, false);
+            setTurnActive(true);
             setStatus({ kind: "running" });
             break;
           case "tool.errored":
             appendToolResult(e, true);
+            setTurnActive(true);
             setStatus({ kind: "running" });
             break;
           case "pending_input.queued":
             enqueueQueuedInput(eventInput(e), eventKind(e), eventPendingCount(e));
+            setTurnActive(true);
             setStatus({ kind: "pending", count: eventPendingCount(e) });
             break;
           case "pending_input.drained":
             drainQueuedInputs(eventDeltaCount(e), e.turn_id);
+            setTurnActive(true);
             setStatus({ kind: "running" });
             break;
           case "pending_input.dropped":
@@ -222,6 +248,7 @@ export function Session() {
             });
             break;
           case "pending_input.rejected":
+            setTurnActive(true);
             setStatus({
               kind: "error",
               detail: "pending input queue full",
@@ -230,6 +257,7 @@ export function Session() {
           case "turn.completed":
             refresh().then(() => {
               clearQueuedInputs();
+              setTurnActive(false);
               setStatus({ kind: "done" });
               if (doneTimerRef.current)
                 window.clearTimeout(doneTimerRef.current);
@@ -242,6 +270,7 @@ export function Session() {
           case "turn.errored":
             refresh().then(() => {
               clearQueuedInputs();
+              setTurnActive(false);
               setStatus({ kind: "error", detail: eventErrorDetail(e) });
             });
             break;
@@ -270,6 +299,8 @@ export function Session() {
     return () => {
       unsub();
       if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
+      if (composerHintTimerRef.current)
+        window.clearTimeout(composerHintTimerRef.current);
     };
     // Queue helpers read from refs; resubscribing on every local queue change
     // would reopen the EventSource during active turns.
@@ -303,10 +334,12 @@ export function Session() {
       }
       if (turn.queued) {
         enqueueQueuedInput(prompt, undefined, turn.pending_count ?? 0);
+        setTurnActive(true);
         setStatus({ kind: "pending", count: turn.pending_count ?? 0 });
       } else {
         if (!turn.turn_id) throw new Error("turn response missing turn_id");
         appendLiveTurn(turn.turn_id, prompt, undefined, "optimistic");
+        setTurnActive(true);
         setStatus({ kind: "running" });
       }
     } catch (e) {
@@ -351,11 +384,9 @@ export function Session() {
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
   const contextUsage = liveContextUsage ?? data.context_usage;
-  const busy =
-    status.kind === "running" ||
-    status.kind === "pending" ||
-    status.kind === "tool";
+  const busy = turnActive;
   const canSend = data.kind === "primary" && data.active;
+  const submitAction = composerSubmitAction({ busy, text: draft });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -398,14 +429,34 @@ export function Session() {
             <PromptInput
               onSubmit={async (msg) => {
                 const text = msg.text?.trim();
-                if (text) await handleSend(text);
+                if (!text) {
+                  showComposerHint("Enter a message to send");
+                  return;
+                }
+                await handleSend(text);
+                setDraft("");
               }}
             >
-              <PromptInputTextarea placeholder="Ask juex anything..." />
+              <PromptInputTextarea
+                onChange={(event) => {
+                  setDraft(event.currentTarget.value);
+                  if (composerHint) setComposerHint(null);
+                }}
+                placeholder="Ask juex anything..."
+              />
               <PromptInputFooter className="flex-nowrap items-end gap-2">
                 <TooltipProvider>
                   <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-1.5">
-                    <StatusPill status={status} />
+                    {composerHint ? (
+                      <ComposerFeedback tone="hint">
+                        {composerHint}
+                      </ComposerFeedback>
+                    ) : null}
+                    {status.kind === "error" ? (
+                      <ComposerFeedback tone="error">
+                        {status.detail ?? "Something went wrong"}
+                      </ComposerFeedback>
+                    ) : null}
                     <ContextUsageLabel
                       usage={contextUsage}
                       activeContext={activeContext}
@@ -413,20 +464,11 @@ export function Session() {
                     <TokenUsageLabel usage={tokenUsage} />
                   </PromptInputTools>
                   <div className="flex shrink-0 items-center gap-1">
-                    {busy ? (
-                      <>
-                        <PromptInputButton
-                          variant="outline"
-                          onClick={() => void handleInterrupt()}
-                        >
-                          <SquareIcon className="size-3.5" aria-hidden="true" />
-                          Stop
-                        </PromptInputButton>
-                        <PromptInputSubmit />
-                      </>
-                    ) : (
-                      <PromptInputSubmit />
-                    )}
+                    <ComposerSubmitButton
+                      action={submitAction}
+                      onEmpty={() => showComposerHint("Enter a message to send")}
+                      onStop={() => void handleInterrupt()}
+                    />
                   </div>
                 </TooltipProvider>
               </PromptInputFooter>
@@ -508,6 +550,17 @@ export function Session() {
   function clearQueuedInputs() {
     if (queuedInputStateRef.current.items.length === 0) return;
     setQueuedInputControllerState(createQueuedInputState());
+  }
+
+  function showComposerHint(message: string) {
+    setComposerHint(message);
+    if (composerHintTimerRef.current) {
+      window.clearTimeout(composerHintTimerRef.current);
+    }
+    composerHintTimerRef.current = window.setTimeout(
+      () => setComposerHint(null),
+      1800,
+    );
   }
 
   function appendDrainedInputs(items: QueuedInput[], turnID: string | undefined) {
@@ -794,6 +847,87 @@ function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
       <TooltipContent>
         {formatTokenCount(input)} in / {formatTokenCount(output)} out
       </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ComposerFeedback({
+  children,
+  tone,
+}: {
+  children: string;
+  tone: "hint" | "error";
+}) {
+  return (
+    <span
+      className={cn(
+        "min-w-0 truncate font-mono text-[11px]",
+        tone === "error" ? "text-juex-error" : "text-muted-foreground",
+      )}
+      title={children}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ComposerSubmitButton({
+  action,
+  onEmpty,
+  onStop,
+}: {
+  action: ComposerSubmitAction;
+  onEmpty: () => void;
+  onStop: () => void;
+}) {
+  const isEmpty = action === "empty";
+  const isStop = action === "stop";
+  const tooltip =
+    action === "empty"
+      ? "Enter a message to send"
+      : action === "stop"
+        ? "Stop current turn"
+        : action === "queue"
+          ? "Queue message"
+          : "Send message";
+  const ariaLabel =
+    action === "empty"
+      ? "Enter a message before sending"
+      : action === "stop"
+        ? "Stop current turn"
+        : action === "queue"
+          ? "Queue message"
+          : "Send message";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <PromptInputSubmit
+          aria-disabled={isEmpty}
+          aria-label={ariaLabel}
+          className={cn(isEmpty && "cursor-not-allowed opacity-50")}
+          onClick={(event) => {
+            if (isEmpty) {
+              event.preventDefault();
+              onEmpty();
+              return;
+            }
+            if (isStop) {
+              event.preventDefault();
+              onStop();
+            }
+          }}
+          type={isEmpty || isStop ? "button" : "submit"}
+          variant={isStop ? "outline" : "default"}
+        >
+          {isStop ? (
+            <SquareIcon className="size-4" aria-hidden="true" />
+          ) : (
+            <SendHorizontalIcon className="size-4" aria-hidden="true" />
+          )}
+        </PromptInputSubmit>
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>
   );
 }
