@@ -440,8 +440,20 @@ func TestPostTurn_CompactSlashConflictsWhileRunning(t *testing.T) {
 	close(prov.release)
 }
 
-func TestPostTurn_ConflictsWhileCompacting(t *testing.T) {
-	srv := newTestServer(t)
+func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "compact summary"), StopReason: llm.StopEndTurn},
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "after compact"), StopReason: llm.StopEndTurn},
+	)
+	var releaseOnce sync.Once
+	releaseProvider := func() { releaseOnce.Do(func() { close(prov.release) }) }
+	defer releaseProvider()
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -454,26 +466,98 @@ func TestPostTurn_ConflictsWhileCompacting(t *testing.T) {
 		t.Fatal(err)
 	}
 	created.Body.Close()
-
 	v, ok := srv.sessions.Load(c.ID)
 	if !ok {
 		t.Fatal("created session not active")
 	}
 	as := v.(*activeSession)
-	as.cancelMu.Lock()
-	as.compacting = true
-	as.cancelMu.Unlock()
+	if err := as.app.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old context ", 200))); err != nil {
+		t.Fatal(err)
+	}
+
+	compactDone := make(chan *http.Response, 1)
+	go func() {
+		resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+			strings.NewReader(`{"prompt":"/compact"}`))
+		if err != nil {
+			t.Errorf("compact post: %v", err)
+			return
+		}
+		compactDone <- resp
+	}()
+	select {
+	case <-prov.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start compaction")
+	}
 
 	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
-		strings.NewReader(`{"prompt":"hi"}`))
+		strings.NewReader(`{"prompt":"after please"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusConflict {
+	if resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+		resp.Body.Close()
+		releaseProvider()
+		t.Fatalf("queued status = %d body = %s", resp.StatusCode, body)
 	}
+	var queued struct {
+		TurnID       string `json:"turn_id"`
+		Queued       bool   `json:"queued"`
+		PendingCount int    `json:"pending_count"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if !queued.Queued || queued.TurnID == "" || queued.PendingCount != 1 {
+		t.Fatalf("queued response = %+v", queued)
+	}
+
+	releaseProvider()
+	select {
+	case compact := <-compactDone:
+		if compact.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(compact.Body)
+			compact.Body.Close()
+			t.Fatalf("compact status = %d body = %s", compact.StatusCode, body)
+		}
+		compact.Body.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("compact request did not finish")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct {
+			Messages []struct {
+				Role   string `json:"role"`
+				Blocks []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"blocks"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
+			show.Body.Close()
+			t.Fatal(err)
+		}
+		show.Body.Close()
+		if transcriptContains(parsed.Messages, "after please") && transcriptContains(parsed.Messages, "after compact") {
+			secondHistory := prov.history(1)
+			if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "after please" {
+				t.Fatalf("second provider history = %+v", secondHistory)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for compact queued turn")
 }
 
 type pendingProvider struct {
