@@ -51,6 +51,7 @@ into `internal/web/dist/` for Go embedding.
 | --- | --- |
 | `src/api.ts` | typed fetch helpers and SSE subscription |
 | `src/types.ts` | TypeScript mirror of Go API/session/message shapes |
+| `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |

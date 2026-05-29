@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { juexCodeThemes } from "@/lib/code-theme";
+import { writeClipboardText } from "@/lib/clipboard";
 import {
   Select,
   SelectContent,
@@ -497,14 +498,9 @@ export const CodeBlockCopyButton = ({
   const { code } = useContext(CodeBlockContext);
 
   const copyToClipboard = useCallback(async () => {
-    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
-      onError?.(new Error("Clipboard API not available"));
-      return;
-    }
-
     try {
       if (!isCopied) {
-        await navigator.clipboard.writeText(code);
+        await writeClipboardText(code);
         setIsCopied(true);
         onCopy?.();
         timeoutRef.current = window.setTimeout(

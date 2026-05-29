@@ -243,6 +243,9 @@ User and system message bubbles expose a copy action on hover/focus. The action
 sits under the bubble, uses a copy icon, copies the whole message text, and
 temporarily changes its tooltip to `Copied to clipboard`.
 
+Copy controls use the Clipboard API when available and fall back to a temporary
+textarea copy path so local HTTP access over LAN or NetBird still works.
+
 When the user clicks `+ new chat` in the sidebar, the client POSTs
 `/api/sessions` and immediately navigates to `/sessions/<new-id>`.
 
