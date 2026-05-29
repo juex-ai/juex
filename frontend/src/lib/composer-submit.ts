@@ -18,8 +18,8 @@ export function composerSubmitAction({
 }): ComposerSubmitAction {
   const hasText = text.trim().length > 0;
   if (!hasText) {
-    if (compactActive) return "compacting";
     if (turnActive) return "stop";
+    if (compactActive) return "compacting";
     return "empty";
   }
   return turnActive || compactActive ? "queue" : "send";

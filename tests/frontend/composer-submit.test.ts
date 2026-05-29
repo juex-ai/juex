@@ -22,6 +22,10 @@ test("composerSubmitAction stops the active turn when empty and busy", () => {
     composerSubmitAction({ turnActive: true, compactActive: false, text: "" }),
     "stop",
   );
+  assert.equal(
+    composerSubmitAction({ turnActive: true, compactActive: true, text: "" }),
+    "stop",
+  );
 });
 
 test("composerSubmitAction blocks empty compact submissions", () => {
