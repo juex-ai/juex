@@ -26,6 +26,8 @@ type Info struct {
 	ID           string            `json:"id"`
 	Alias        string            `json:"alias,omitempty"`
 	Dir          string            `json:"dir"`
+	Kind         string            `json:"kind"`
+	Active       bool              `json:"active"`
 	StartedAt    time.Time         `json:"started_at"`
 	LastActiveAt time.Time         `json:"last_active_at"`
 	Turns        int               `json:"turns"`
@@ -86,10 +88,15 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 	if err != nil {
 		return Info{}, nil, err
 	}
+	kind, err := LoadKind(dir)
+	if err != nil {
+		return Info{}, nil, err
+	}
 	info := Info{
 		ID:           id,
 		Alias:        alias,
 		Dir:          dir,
+		Kind:         kind,
 		LastActiveAt: st.ModTime(),
 		StartedAt:    parseStartedAt(id, st.ModTime()),
 	}

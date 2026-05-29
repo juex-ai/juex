@@ -40,6 +40,18 @@ func TestBus_WildcardAll(t *testing.T) {
 	}
 }
 
+func TestBus_Unsubscribe(t *testing.T) {
+	b := NewBus()
+	var got int32
+	unsubscribe := b.Subscribe("*", func(e Event) { atomic.AddInt32(&got, 1) })
+	b.Emit(Event{Type: "turn.started"})
+	unsubscribe()
+	b.Emit(Event{Type: "turn.completed"})
+	if got != 1 {
+		t.Fatalf("want 1, got %d", got)
+	}
+}
+
 func TestBus_AutoFillsIDAndTimestamp(t *testing.T) {
 	b := NewBus()
 	var captured Event

@@ -253,6 +253,95 @@ func TestRunCmd_StatusSlashJSON(t *testing.T) {
 	}
 }
 
+func TestRunCmd_StatusSlashJSONIncludesActivePrimary(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	var stderr bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&stderr)
+	dir := t.TempDir()
+	configPath := dir + "/.juex/juex.yaml"
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	root.SetArgs([]string{"-C", dir, "run", "--json", "/status"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("execute err = %v stderr=%s", err, stderr.String())
+	}
+	body := out.String()
+	for _, want := range []string{`"session_kind": "primary"`, `"active": true`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("status json missing %q in:\n%s", want, body)
+		}
+	}
+}
+
+func TestRunCmd_SideStatusDoesNotChangeActive(t *testing.T) {
+	dir := t.TempDir()
+	configPath := dir + "/.juex/juex.yaml"
+	if err := writeJuexConfigFile(configPath, "openai", "https://example.invalid", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var primaryOut bytes.Buffer
+	root.SetOut(&primaryOut)
+	root.SetErr(&primaryOut)
+	root.SetArgs([]string{"-C", dir, "run", "--json", "/status"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	root2 := newRootCmd()
+	var sideOut bytes.Buffer
+	root2.SetOut(&sideOut)
+	root2.SetErr(&sideOut)
+	root2.SetArgs([]string{"-C", dir, "run", "--json", "--side", "/status"})
+	if err := root2.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	body := sideOut.String()
+	for _, want := range []string{`"session_kind": "side"`, `"active": false`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("side status json missing %q in:\n%s", want, body)
+		}
+	}
+
+	root3 := newRootCmd()
+	var resumedOut bytes.Buffer
+	root3.SetOut(&resumedOut)
+	root3.SetErr(&resumedOut)
+	root3.SetArgs([]string{"-C", dir, "run", "--json", "/status"})
+	if err := root3.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resumedOut.String(), `"active": true`) ||
+		!strings.Contains(resumedOut.String(), `"session_kind": "primary"`) {
+		t.Fatalf("default run should still attach active primary:\n%s", resumedOut.String())
+	}
+}
+
+func TestRunCmd_NewAndSideAreMutuallyExclusive(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--new", "--side", "x"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*usageError); !ok {
+		t.Fatalf("got %T", err)
+	}
+}
+
 func TestRunCmd_MissingConfigFileExits3(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer

@@ -50,13 +50,22 @@ type Options struct {
 	// ResumeDir, if non-empty, is the absolute path of an existing
 	// session directory to load instead of creating a new one. The
 	// session ID and on-disk files are reused; new messages append.
-	ResumeDir string
-	Alias     string
+	ResumeDir   string
+	Alias       string
+	SessionMode SessionMode
 	// LazySession delays creating the on-disk session directory until the
 	// first message or event is appended. Used by the web UI so abandoned
 	// empty chats do not leave local files behind.
 	LazySession bool
 }
+
+type SessionMode string
+
+const (
+	SessionModeAttachActive SessionMode = "attach_active"
+	SessionModeNewPrimary   SessionMode = "new_primary"
+	SessionModeNewSide      SessionMode = "new_side"
+)
 
 type App struct {
 	Engine  *runtime.Engine
@@ -68,6 +77,9 @@ type App struct {
 	cfg     config.Config
 	skills  []skills.Skill
 	mcp     MCPStatus
+
+	sessionLock        *session.Lock
+	sessionUnsubscribe func()
 }
 
 type MCPStatus struct {
@@ -150,24 +162,24 @@ func New(opts Options) (*App, error) {
 		mergedMCP = mcp.MergeConfigs(mcpConfigs)
 	}
 
-	var sess *session.Session
-	var err error
-	if opts.ResumeDir != "" {
-		sess, err = session.LoadWithOptions(opts.ResumeDir, session.Options{
-			Alias:       opts.Alias,
-			HistoryPath: cfg.HistoryPath(),
-		})
-	} else {
-		sess, err = session.NewWithOptions(cfg.SessionsDir(), session.Options{
-			Alias:       opts.Alias,
-			HistoryPath: cfg.HistoryPath(),
-			Lazy:        opts.LazySession,
-		})
-	}
+	sess, err := openSessionForOptions(cfg, opts)
 	if err != nil {
 		return nil, err
 	}
-	sess.SubscribeBus(bus)
+	lockMode := string(normalizeSessionMode(opts.SessionMode))
+	if opts.ResumeDir != "" {
+		lockMode = "resume"
+	}
+	sessLock, err := session.AcquireSessionLock(sess.Dir, lockMode)
+	if err != nil {
+		sess.Close()
+		return nil, err
+	}
+	closeSessionResources := func() {
+		_ = sessLock.Close()
+		_ = sess.Close()
+	}
+	sessionUnsubscribe := sess.SubscribeBus(bus)
 
 	var globalAgents string
 	if cfg.HomeAgentsDir != "" {
@@ -192,30 +204,41 @@ func New(opts Options) (*App, error) {
 
 	appCtx, appCancel := context.WithCancel(context.Background())
 	a := &App{
-		Engine:  eng,
-		Bus:     bus,
-		Session: sess,
-		ctx:     appCtx,
-		cancel:  appCancel,
-		cfg:     cfg,
-		skills:  skillLoader.All(),
+		Engine:             eng,
+		Bus:                bus,
+		Session:            sess,
+		ctx:                appCtx,
+		cancel:             appCancel,
+		cfg:                cfg,
+		skills:             skillLoader.All(),
+		sessionLock:        sessLock,
+		sessionUnsubscribe: sessionUnsubscribe,
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	a.cleanup = append(a.cleanup, sess.Close)
+	a.cleanup = append(a.cleanup, func() error {
+		if a.sessionUnsubscribe != nil {
+			a.sessionUnsubscribe()
+			a.sessionUnsubscribe = nil
+		}
+		return nil
+	}, sessLock.Close, sess.Close)
 	if opts.MCPManager != nil {
 		if err := opts.MCPManager.RegisterTools(reg); err != nil {
-			sess.Close()
+			closeSessionResources()
 			return nil, err
 		}
 		a.mcp = buildMCPStatus(nil, opts.MCPManager.ToolCounts(), opts.MCPManager.StartupErrors())
 	} else if len(mcpConfigs) > 0 {
-		mgr, err := mcp.NewManagerLayeredSoft(context.Background(), mcpConfigs, mcp.ConnectOptions{
-			OnNotification: func(n mcp.Notification) {
+		connectOpts := mcp.ConnectOptions{}
+		if sess.Kind == session.KindPrimary {
+			connectOpts.EnableClaudeChannel = true
+			connectOpts.OnNotification = func(n mcp.Notification) {
 				_ = a.handleMCPNotification(a.ctx, n)
-			},
-		})
+			}
+		}
+		mgr, err := mcp.NewManagerLayeredSoft(context.Background(), mcpConfigs, connectOpts)
 		if err != nil {
-			sess.Close()
+			closeSessionResources()
 			return nil, err
 		}
 		startupErrors := mgr.StartupErrors()
@@ -226,13 +249,192 @@ func New(opts Options) (*App, error) {
 			if closeErr := mgr.Close(); closeErr != nil {
 				err = errors.Join(err, closeErr)
 			}
-			sess.Close()
+			closeSessionResources()
 			return nil, err
 		}
 		a.mcp = buildMCPStatus(mergedMCP.MCPServers, mgr.ToolCounts(), startupErrors)
 		a.cleanup = append(a.cleanup, mgr.Close)
 	}
 	return a, nil
+}
+
+func openSessionForOptions(cfg config.Config, opts Options) (*session.Session, error) {
+	if opts.ResumeDir != "" {
+		kind, err := session.LoadKind(opts.ResumeDir)
+		if err != nil {
+			return nil, err
+		}
+		active := kind == session.KindPrimary
+		sess, err := session.LoadWithOptions(opts.ResumeDir, session.Options{
+			Alias:        opts.Alias,
+			Active:       active,
+			RecordActive: active,
+			HistoryPath:  cfg.HistoryPath(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if active {
+			if err := session.SetActive(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
+				sess.Close()
+				return nil, err
+			}
+		}
+		return sess, nil
+	}
+
+	switch normalizeSessionMode(opts.SessionMode) {
+	case SessionModeNewPrimary:
+		return newPrimarySession(cfg, opts)
+	case SessionModeNewSide:
+		return newSideSession(cfg, opts)
+	default:
+		return attachActiveSession(cfg, opts)
+	}
+}
+
+func normalizeSessionMode(mode SessionMode) SessionMode {
+	switch mode {
+	case SessionModeNewPrimary, SessionModeNewSide:
+		return mode
+	default:
+		return SessionModeAttachActive
+	}
+}
+
+func attachActiveSession(cfg config.Config, opts Options) (*session.Session, error) {
+	h, err := session.LoadHistory(cfg.HistoryPath())
+	if err != nil {
+		return nil, err
+	}
+	if h.Active != nil && h.Active.ID != "" {
+		dir := infoDir(cfg.SessionsDir(), *h.Active)
+		if hasConversation(dir) {
+			return session.LoadWithOptions(dir, session.Options{
+				Alias:        opts.Alias,
+				Active:       true,
+				RecordActive: true,
+				HistoryPath:  cfg.HistoryPath(),
+			})
+		}
+	}
+	for _, info := range h.Sessions {
+		if info.Kind != session.KindPrimary {
+			continue
+		}
+		dir := infoDir(cfg.SessionsDir(), info)
+		if !hasConversation(dir) {
+			continue
+		}
+		if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
+			return nil, err
+		}
+		return session.LoadWithOptions(dir, session.Options{
+			Alias:        opts.Alias,
+			Active:       true,
+			RecordActive: true,
+			HistoryPath:  cfg.HistoryPath(),
+		})
+	}
+	return newPrimarySession(cfg, opts)
+}
+
+func newPrimarySession(cfg config.Config, opts Options) (*session.Session, error) {
+	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
+		Alias:        opts.Alias,
+		Kind:         session.KindPrimary,
+		Active:       true,
+		RecordActive: true,
+		HistoryPath:  cfg.HistoryPath(),
+		Lazy:         opts.LazySession,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := session.SetActive(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
+		sess.Close()
+		return nil, err
+	}
+	return sess, nil
+}
+
+func newSideSession(cfg config.Config, opts Options) (*session.Session, error) {
+	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
+		Alias:          opts.Alias,
+		Kind:           session.KindSide,
+		NoRecordActive: true,
+		HistoryPath:    cfg.HistoryPath(),
+		Lazy:           opts.LazySession,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := session.RecordSession(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
+		sess.Close()
+		return nil, err
+	}
+	return sess, nil
+}
+
+func infoDir(sessionsRoot string, info session.Info) string {
+	if info.ID != "" {
+		return filepath.Join(sessionsRoot, info.ID)
+	}
+	return info.Dir
+}
+
+func hasConversation(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
+		return false
+	}
+	return true
+}
+
+func (a *App) SwitchToNewPrimarySession() error {
+	if a == nil || a.Session == nil {
+		return fmt.Errorf("app: nil session")
+	}
+	if a.Session.Kind == session.KindSide {
+		return fmt.Errorf("side sessions cannot switch workspace active session")
+	}
+	sess, err := newPrimarySession(a.cfg, Options{})
+	if err != nil {
+		return err
+	}
+	sessLock, err := session.AcquireSessionLock(sess.Dir, string(SessionModeNewPrimary))
+	if err != nil {
+		_ = sess.Close()
+		return err
+	}
+	a.replaceSession(sess, sessLock)
+	return nil
+}
+
+func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
+	if a.sessionUnsubscribe != nil {
+		a.sessionUnsubscribe()
+		a.sessionUnsubscribe = nil
+	}
+	oldLock := a.sessionLock
+	oldSession := a.Session
+
+	a.Session = sess
+	a.sessionLock = sessLock
+	if a.Engine != nil {
+		a.Engine.Session = sess
+	}
+	a.sessionUnsubscribe = sess.SubscribeBus(a.Bus)
+	a.cleanup = append(a.cleanup, sessLock.Close, sess.Close)
+
+	if oldLock != nil {
+		_ = oldLock.Close()
+	}
+	if oldSession != nil {
+		_ = oldSession.Close()
+	}
 }
 
 // Run drives a single turn synchronously.

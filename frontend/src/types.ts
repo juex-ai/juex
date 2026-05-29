@@ -87,6 +87,8 @@ export interface ContextUsage {
 export interface SessionInfo {
   id: string;
   dir: string;
+  kind: "primary" | "side";
+  active: boolean;
   started_at: string;        // RFC3339
   last_active_at: string;    // RFC3339
   turns: number;
@@ -129,6 +131,8 @@ export interface SlashCommandResponse {
 export interface SlashStatusResponse {
   session_id?: string;
   session_dir?: string;
+  session_kind?: "primary" | "side";
+  active?: boolean;
   work_dir?: string;
   turns?: number;
   last_active_at?: string;

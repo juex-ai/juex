@@ -12,10 +12,11 @@ import (
 
 const (
 	SlashCompact = "/compact"
+	SlashNew     = "/new"
 	SlashStatus  = "/status"
 )
 
-var slashCommandNames = []string{SlashCompact, SlashStatus}
+var slashCommandNames = []string{SlashCompact, SlashNew, SlashStatus}
 
 type SlashCommand struct {
 	Name string `json:"name"`
@@ -97,6 +98,13 @@ func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (
 	case SlashStatus:
 		status := a.StatusSnapshot(time.Now().UTC())
 		return SlashCommandResult{Name: cmd.Name, Text: status.Text(), Status: &status}, nil
+	case SlashNew:
+		if err := a.SwitchToNewPrimarySession(); err != nil {
+			return SlashCommandResult{}, err
+		}
+		status := a.StatusSnapshot(time.Now().UTC())
+		text := fmt.Sprintf("New primary session: %s", status.SessionID)
+		return SlashCommandResult{Name: cmd.Name, Text: text, Status: &status}, nil
 	default:
 		return SlashCommandResult{}, &UnknownSlashCommandError{Input: cmd.Name}
 	}
@@ -105,6 +113,8 @@ func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (
 type StatusSnapshot struct {
 	SessionID    string                     `json:"session_id"`
 	SessionDir   string                     `json:"session_dir,omitempty"`
+	SessionKind  string                     `json:"session_kind,omitempty"`
+	Active       bool                       `json:"active"`
 	WorkDir      string                     `json:"work_dir"`
 	Turns        int                        `json:"turns"`
 	LastActiveAt time.Time                  `json:"last_active_at"`
@@ -136,6 +146,8 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		sessionDir   string
 		turns        int
 		lastActiveAt time.Time
+		sessionKind  string
+		active       bool
 		tokenUsage   llm.Usage
 		contextUsage *llm.ContextUsage
 	)
@@ -143,6 +155,8 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		info := a.Session.Info(now)
 		sessionID = info.ID
 		sessionDir = info.Dir
+		sessionKind = info.Kind
+		active = info.Active
 		turns = info.Turns
 		lastActiveAt = info.LastActiveAt
 		tokenUsage = info.TokenUsage
@@ -159,6 +173,8 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 	return StatusSnapshot{
 		SessionID:    sessionID,
 		SessionDir:   sessionDir,
+		SessionKind:  sessionKind,
+		Active:       active,
 		WorkDir:      a.workDir(),
 		Turns:        turns,
 		LastActiveAt: lastActiveAt,
@@ -212,6 +228,13 @@ func (s StatusSnapshot) Text() string {
 	lines = append(lines, "Juex status")
 	if s.SessionID != "" {
 		lines = append(lines, fmt.Sprintf("session: %s (%d turns)", s.SessionID, s.Turns))
+	}
+	if s.SessionKind != "" {
+		state := "inactive"
+		if s.Active {
+			state = "active"
+		}
+		lines = append(lines, fmt.Sprintf("session kind: %s (%s)", s.SessionKind, state))
 	}
 	if s.WorkDir != "" {
 		lines = append(lines, "workdir: "+s.WorkDir)

@@ -30,6 +30,7 @@ func newSessionsCmd(flags *persistentFlags) *cobra.Command {
 	cmd.AddCommand(newSessionsShowCmd(flags))
 	cmd.AddCommand(newSessionsContextCmd(flags))
 	cmd.AddCommand(newSessionsCompactCmd(flags))
+	cmd.AddCommand(newSessionsActivateCmd(flags))
 	cmd.AddCommand(newSessionsDeleteCmd(flags))
 	return cmd
 }
@@ -52,6 +53,10 @@ func newSessionsListCmd(flags *persistentFlags) *cobra.Command {
 				return err
 			}
 			infos, err := session.List(cfg.SessionsDir())
+			if err != nil {
+				return err
+			}
+			infos, err = markActiveSessionInfos(infos, cfg.HistoryPath())
 			if err != nil {
 				return err
 			}
@@ -83,11 +88,34 @@ func renderSessionsTable(cmd *cobra.Command, infos []session.Info) {
 		return
 	}
 	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "%-32s  %-16s  %-20s  %-5s  %s\n", "ID", "ALIAS", "LAST_ACTIVE", "TURNS", "PREVIEW")
+	fmt.Fprintf(w, "%-32s  %-8s  %-6s  %-16s  %-20s  %-5s  %s\n", "ID", "KIND", "ACTIVE", "ALIAS", "LAST_ACTIVE", "TURNS", "PREVIEW")
 	for _, s := range infos {
-		fmt.Fprintf(w, "%-32s  %-16s  %-20s  %5d  %s\n",
-			s.ID, truncateRunes(s.Alias, 16), s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
+		active := ""
+		if s.Active {
+			active = "yes"
+		}
+		fmt.Fprintf(w, "%-32s  %-8s  %-6s  %-16s  %-20s  %5d  %s\n",
+			s.ID, s.Kind, active, truncateRunes(s.Alias, 16), s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
 	}
+}
+
+func markActiveSessionInfos(infos []session.Info, historyPath string) ([]session.Info, error) {
+	h, err := session.LoadHistory(historyPath)
+	if err != nil {
+		return nil, err
+	}
+	activeID := ""
+	if h.Active != nil {
+		activeID = h.Active.ID
+	}
+	out := append([]session.Info(nil), infos...)
+	for i := range out {
+		if out[i].Kind == "" {
+			out[i].Kind = session.KindPrimary
+		}
+		out[i].Active = activeID != "" && out[i].ID == activeID
+	}
+	return out, nil
 }
 
 type sessionsShowOutput struct {
@@ -139,6 +167,8 @@ func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message
 	w := cmd.OutOrStdout()
 	fmt.Fprintf(w, "id:             %s\n", info.ID)
 	fmt.Fprintf(w, "alias:          %s\n", info.Alias)
+	fmt.Fprintf(w, "kind:           %s\n", info.Kind)
+	fmt.Fprintf(w, "active:         %t\n", info.Active)
 	fmt.Fprintf(w, "started_at:     %s\n", info.StartedAt.Format(time.RFC3339))
 	fmt.Fprintf(w, "last_active_at: %s\n", info.LastActiveAt.Format(time.RFC3339))
 	fmt.Fprintf(w, "turns:          %d\n\n", info.Turns)
@@ -161,6 +191,53 @@ func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message
 			}
 		}
 	}
+}
+
+func newSessionsActivateCmd(flags *persistentFlags) *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "activate <id>",
+		Short: "Make a primary session the active workspace session",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return &usageError{msg: "juex sessions activate: <id> required"}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadConfig(flags)
+			if err != nil {
+				return err
+			}
+			id := args[0]
+			dir := filepath.Join(cfg.SessionsDir(), id)
+			info, _, err := session.LoadInfo(dir)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return &notFoundError{msg: "session not found: " + id}
+				}
+				return err
+			}
+			if info.Kind != session.KindPrimary {
+				return &usageError{msg: "side sessions cannot become active: " + id}
+			}
+			if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
+				return err
+			}
+			info.Active = true
+			switch format {
+			case "json", "":
+				cmdPrintln(cmd, mustJSON(info))
+			case "text":
+				fmt.Fprintf(cmd.OutOrStdout(), "active session: %s\n", info.ID)
+			default:
+				return &usageError{msg: "unknown --format value: " + format}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "json", "json|text")
+	return cmd
 }
 
 func newSessionsContextCmd(flags *persistentFlags) *cobra.Command {

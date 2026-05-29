@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
@@ -59,6 +60,7 @@ import {
   getSession,
   getSessionContext,
   interrupt,
+  activateSession,
   startTurn,
   subscribeEvents,
 } from "@/api";
@@ -278,6 +280,16 @@ export function Session() {
     try {
       const turn = await startTurn(id, prompt);
       if (turn.command) {
+        if (turn.command.name === "/new" && turn.command.status?.session_id) {
+          window.dispatchEvent(new Event("juex:sessions-changed"));
+          navigate(
+            `/sessions/${encodeURIComponent(turn.command.status.session_id)}`,
+            {
+              state: { commandInput: prompt, command: turn.command },
+            },
+          );
+          return;
+        }
         if (turn.command.name === "/compact") {
           await refresh();
           if (!turn.command.compact?.message_id) {
@@ -314,6 +326,21 @@ export function Session() {
     }
   }
 
+  async function handleActivate() {
+    try {
+      await activateSession(id);
+      await refresh();
+      window.dispatchEvent(new Event("juex:sessions-changed"));
+      setStatus({ kind: "idle" });
+    } catch (e) {
+      console.error("activateSession failed", e);
+      setStatus({
+        kind: "error",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   useShellTitle(data ? data.preview || "(empty)" : null);
 
   if (!data) {
@@ -328,6 +355,7 @@ export function Session() {
     status.kind === "running" ||
     status.kind === "pending" ||
     status.kind === "tool";
+  const canSend = data.kind === "primary" && data.active;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -338,6 +366,14 @@ export function Session() {
         <Badge variant="secondary" className="font-mono text-[11px]">
           {data.turns} turns
         </Badge>
+        <Badge variant="outline" className="font-mono text-xs">
+          {data.kind}
+        </Badge>
+        {data.active ? (
+          <Badge variant="secondary" className="font-mono text-[11px]">
+            active
+          </Badge>
+        ) : null}
         {data.model ? (
           <Badge variant="outline" className="font-mono text-xs">
             {data.model}
@@ -358,42 +394,46 @@ export function Session() {
       <div className="border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
         <div className="mx-auto w-full max-w-[760px]">
           <QueuedInputStack items={queuedInputState.items} />
-          <PromptInput
-            onSubmit={async (msg) => {
-              const text = msg.text?.trim();
-              if (text) await handleSend(text);
-            }}
-          >
-            <PromptInputTextarea placeholder="Ask juex anything..." />
-            <PromptInputFooter className="flex-nowrap items-end gap-2">
-              <TooltipProvider>
-                <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-1.5">
-                  <StatusPill status={status} />
-                  <ContextUsageLabel
-                    usage={contextUsage}
-                    activeContext={activeContext}
-                  />
-                  <TokenUsageLabel usage={tokenUsage} />
-                </PromptInputTools>
-                <div className="flex shrink-0 items-center gap-1">
-                  {busy ? (
-                    <>
-                      <PromptInputButton
-                        variant="outline"
-                        onClick={() => void handleInterrupt()}
-                      >
-                        <SquareIcon className="size-3.5" aria-hidden="true" />
-                        Stop
-                      </PromptInputButton>
+          {canSend ? (
+            <PromptInput
+              onSubmit={async (msg) => {
+                const text = msg.text?.trim();
+                if (text) await handleSend(text);
+              }}
+            >
+              <PromptInputTextarea placeholder="Ask juex anything..." />
+              <PromptInputFooter className="flex-nowrap items-end gap-2">
+                <TooltipProvider>
+                  <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-1.5">
+                    <StatusPill status={status} />
+                    <ContextUsageLabel
+                      usage={contextUsage}
+                      activeContext={activeContext}
+                    />
+                    <TokenUsageLabel usage={tokenUsage} />
+                  </PromptInputTools>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {busy ? (
+                      <>
+                        <PromptInputButton
+                          variant="outline"
+                          onClick={() => void handleInterrupt()}
+                        >
+                          <SquareIcon className="size-3.5" aria-hidden="true" />
+                          Stop
+                        </PromptInputButton>
+                        <PromptInputSubmit />
+                      </>
+                    ) : (
                       <PromptInputSubmit />
-                    </>
-                  ) : (
-                    <PromptInputSubmit />
-                  )}
-                </div>
-              </TooltipProvider>
-            </PromptInputFooter>
-          </PromptInput>
+                    )}
+                  </div>
+                </TooltipProvider>
+              </PromptInputFooter>
+            </PromptInput>
+          ) : (
+            <ReadOnlySessionBar data={data} onActivate={handleActivate} />
+          )}
         </div>
       </div>
     </div>
@@ -755,6 +795,28 @@ function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
         {formatTokenCount(input)} in / {formatTokenCount(output)} out
       </TooltipContent>
     </Tooltip>
+  );
+}
+
+function ReadOnlySessionBar({
+  data,
+  onActivate,
+}: {
+  data: SessionShowResponse;
+  onActivate: () => void;
+}) {
+  const isInactivePrimary = data.kind === "primary" && !data.active;
+  return (
+    <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm">
+      <div className="min-w-0 text-muted-foreground">
+        {isInactivePrimary ? "Inactive primary session" : "Side session"}
+      </div>
+      {isInactivePrimary ? (
+        <Button type="button" variant="secondary" size="sm" onClick={onActivate}>
+          Activate
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

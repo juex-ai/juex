@@ -8,6 +8,7 @@ import (
 
 func newREPLCmd(flags *persistentFlags) *cobra.Command {
 	var rf resumeFlags
+	var newSession bool
 	cmd := &cobra.Command{
 		Use:   "repl",
 		Short: "Interactive REPL: read a prompt from stdin, print the answer, repeat",
@@ -21,13 +22,21 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if newSession && (rf.Resume != "" || rf.Session != "") {
+				return &usageError{msg: "pass --new or --resume/--session, not both"}
+			}
+			mode := app.SessionModeAttachActive
+			if newSession {
+				mode = app.SessionModeNewPrimary
+			}
 			a, err := app.New(app.Options{
-				Config:    cfg,
-				Verbose:   flags.verbose,
-				WorkDir:   cfg.WorkDir,
-				Stderr:    cmd.ErrOrStderr(),
-				ResumeDir: resumeDir,
-				Alias:     rf.Alias,
+				Config:      cfg,
+				Verbose:     flags.verbose,
+				WorkDir:     cfg.WorkDir,
+				Stderr:      cmd.ErrOrStderr(),
+				ResumeDir:   resumeDir,
+				Alias:       rf.Alias,
+				SessionMode: mode,
 			})
 			if err != nil {
 				return err
@@ -37,7 +46,8 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			return a.REPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
-	cmd.Flags().StringVar(&rf.Resume, "resume", "", "resume a past session by id, alias, or 'last'; omit value for interactive picker")
+	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
+	cmd.Flags().StringVar(&rf.Resume, "resume", "", "deprecated: resume a past session by id, alias, or 'last'; use sessions activate")
 	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
 	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")

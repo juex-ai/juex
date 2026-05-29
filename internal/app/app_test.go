@@ -48,6 +48,92 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return a, prov
 }
 
+func TestApp_DefaultAttachesActivePrimary(t *testing.T) {
+	dir := t.TempDir()
+	first, err := New(Options{
+		Config: config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: &stubProvider{replies: []llm.Response{{
+			Message:    llm.TextMessage(llm.RoleAssistant, "first"),
+			StopReason: llm.StopEndTurn,
+		}}},
+		WorkDir: dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Run(context.Background(), "remember me"); err != nil {
+		t.Fatal(err)
+	}
+	firstID := first.Session.ID
+	if first.Session.Kind != session.KindPrimary {
+		t.Fatalf("kind = %q, want primary", first.Session.Kind)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := New(Options{
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: &stubProvider{replies: []llm.Response{}},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if second.Session.ID != firstID {
+		t.Fatalf("session id = %s, want active %s", second.Session.ID, firstID)
+	}
+	if len(second.Session.History) != 2 {
+		t.Fatalf("history len = %d, want resumed user+assistant", len(second.Session.History))
+	}
+}
+
+func TestApp_NewSideDoesNotChangeActive(t *testing.T) {
+	dir := t.TempDir()
+	primary, err := New(Options{
+		Config:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider:    &stubProvider{replies: []llm.Response{}},
+		WorkDir:     dir,
+		SessionMode: SessionModeNewPrimary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primaryID := primary.Session.ID
+	if err := primary.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	side, err := New(Options{
+		Config:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider:    &stubProvider{replies: []llm.Response{}},
+		WorkDir:     dir,
+		SessionMode: SessionModeNewSide,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sideID := side.Session.ID
+	if side.Session.Kind != session.KindSide {
+		t.Fatalf("side kind = %q, want side", side.Session.Kind)
+	}
+	if err := side.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := session.LoadHistory(filepath.Join(dir, ".juex", "history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.ID != primaryID {
+		t.Fatalf("active = %+v, want primary %s", h.Active, primaryID)
+	}
+	if h.Active.ID == sideID {
+		t.Fatalf("side session became active: %+v", h.Active)
+	}
+}
+
 func TestApp_RunSingleTurn(t *testing.T) {
 	a, _ := newStubApp(t, llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "hello back"),
@@ -350,11 +436,11 @@ func TestApp_WritesSessionHistoryWithAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Last == nil {
-		t.Fatal("history last is nil")
+	if h.Active == nil {
+		t.Fatal("history active is nil")
 	}
-	if h.Last.ID != a.Session.ID || h.Last.Alias != "daily" {
-		t.Fatalf("last = %+v, want id %s alias daily", h.Last, a.Session.ID)
+	if h.Active.ID != a.Session.ID || h.Active.Alias != "daily" {
+		t.Fatalf("active = %+v, want id %s alias daily", h.Active, a.Session.ID)
 	}
 	if len(h.Sessions) != 1 || h.Sessions[0].ID != a.Session.ID {
 		t.Fatalf("sessions = %+v", h.Sessions)

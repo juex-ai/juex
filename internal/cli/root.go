@@ -3,12 +3,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 // Exit code conventions (principle 6 from the agent-CLI guide). Stable
@@ -32,6 +34,11 @@ func Execute() int {
 	err := cmd.Execute()
 	if err == nil {
 		return ExitSuccess
+	}
+	var lockErr *session.LockError
+	if errors.As(err, &lockErr) {
+		fmt.Fprintln(os.Stderr, "Error:", err.Error())
+		return ExitConflict
 	}
 	switch err.(type) {
 	case *dryRunOK:

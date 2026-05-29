@@ -33,20 +33,27 @@ type Session struct {
 	ID           string
 	Dir          string
 	Alias        string
+	Kind         string
+	Active       bool
 	History      []llm.Message
 	TokenUsage   llm.Usage
 	ContextUsage *llm.ContextUsage
 
-	mu          sync.Mutex
-	convFD      *os.File
-	eventFD     *os.File
-	historyPath string
+	mu           sync.Mutex
+	convFD       *os.File
+	eventFD      *os.File
+	historyPath  string
+	recordActive bool
 }
 
 type Options struct {
-	Alias       string
-	HistoryPath string
-	Lazy        bool
+	Alias          string
+	Kind           string
+	Active         bool
+	RecordActive   bool
+	NoRecordActive bool
+	HistoryPath    string
+	Lazy           bool
 }
 
 // New creates a new session under rootDir. rootDir is created if missing.
@@ -57,21 +64,24 @@ func New(rootDir string) (*Session, error) {
 func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 	id := newID()
 	dir := filepath.Join(rootDir, id)
+	kind := NormalizeKind(opts.Kind)
+	recordActive := shouldRecordActive(opts, kind)
 	if opts.Lazy {
 		return &Session{
-			ID:          id,
-			Dir:         dir,
-			Alias:       opts.Alias,
-			historyPath: opts.HistoryPath,
+			ID:           id,
+			Dir:          dir,
+			Alias:        opts.Alias,
+			Kind:         kind,
+			Active:       opts.Active,
+			historyPath:  opts.HistoryPath,
+			recordActive: recordActive,
 		}, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	if opts.Alias != "" {
-		if err := SetAlias(dir, opts.Alias); err != nil {
-			return nil, err
-		}
+	if err := saveMetadata(dir, metadata{Alias: opts.Alias, Kind: kind}); err != nil {
+		return nil, err
 	}
 	convFD, err := os.OpenFile(filepath.Join(dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -83,12 +93,15 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		return nil, err
 	}
 	return &Session{
-		ID:          id,
-		Dir:         dir,
-		Alias:       opts.Alias,
-		convFD:      convFD,
-		eventFD:     eventFD,
-		historyPath: opts.HistoryPath,
+		ID:           id,
+		Dir:          dir,
+		Alias:        opts.Alias,
+		Kind:         kind,
+		Active:       opts.Active,
+		convFD:       convFD,
+		eventFD:      eventFD,
+		historyPath:  opts.HistoryPath,
+		recordActive: recordActive,
 	}, nil
 }
 
@@ -111,7 +124,10 @@ func (s *Session) Append(m llm.Message) error {
 	if !ok {
 		return nil
 	}
-	return RecordHistory(historyPath, info)
+	if s.recordActive && info.Kind == KindPrimary {
+		return SetActive(historyPath, info)
+	}
+	return RecordSession(historyPath, info)
 }
 
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself
@@ -153,15 +169,23 @@ func Load(dir string) (*Session, error) {
 
 func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	id := filepath.Base(dir)
-	alias, err := LoadAlias(dir)
+	meta, err := loadMetadata(dir)
 	if err != nil {
 		return nil, err
 	}
+	alias := meta.Alias
+	kind := meta.Kind
 	if opts.Alias != "" {
-		if err := SetAlias(dir, opts.Alias); err != nil {
+		alias = opts.Alias
+	}
+	if opts.Kind != "" {
+		kind = NormalizeKind(opts.Kind)
+	}
+	recordActive := shouldRecordActive(opts, kind)
+	if opts.Alias != "" || opts.Kind != "" {
+		if err := saveMetadata(dir, metadata{Alias: alias, Kind: kind}); err != nil {
 			return nil, err
 		}
-		alias = opts.Alias
 	}
 	convPath := filepath.Join(dir, conversationFile)
 	data, err := os.ReadFile(convPath)
@@ -194,19 +218,36 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		ID:           id,
 		Dir:          dir,
 		Alias:        alias,
+		Kind:         kind,
+		Active:       opts.Active,
 		History:      history,
 		TokenUsage:   tokenUsage,
 		ContextUsage: contextUsage,
 		convFD:       convFD,
 		eventFD:      eventFD,
 		historyPath:  opts.HistoryPath,
+		recordActive: recordActive,
 	}, nil
 }
 
+func shouldRecordActive(opts Options, kind string) bool {
+	if opts.RecordActive {
+		return true
+	}
+	if opts.NoRecordActive {
+		return false
+	}
+	return opts.HistoryPath != "" && NormalizeKind(kind) == KindPrimary
+}
+
 // SubscribeBus wires every event emitted on bus through to AppendEvent so the
-// runtime doesn't have to remember to do it manually.
-func (s *Session) SubscribeBus(bus *events.Bus) {
-	bus.Subscribe("*", func(e events.Event) {
+// runtime doesn't have to remember to do it manually. The returned function
+// removes the subscription.
+func (s *Session) SubscribeBus(bus *events.Bus) func() {
+	if bus == nil {
+		return func() {}
+	}
+	return bus.Subscribe("*", func(e events.Event) {
 		_ = s.AppendEvent(e)
 	})
 }
@@ -252,10 +293,8 @@ func (s *Session) ensureFilesLocked() error {
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
 		return err
 	}
-	if s.Alias != "" {
-		if err := SetAlias(s.Dir, s.Alias); err != nil {
-			return err
-		}
+	if err := saveMetadata(s.Dir, metadata{Alias: s.Alias, Kind: s.Kind}); err != nil {
+		return err
 	}
 	if s.convFD == nil {
 		convFD, err := os.OpenFile(filepath.Join(s.Dir, conversationFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -334,6 +373,8 @@ func (s *Session) infoLocked(now time.Time) Info {
 		ID:        s.ID,
 		Alias:     s.Alias,
 		Dir:       s.Dir,
+		Kind:      s.Kind,
+		Active:    s.Active,
 		StartedAt: parseStartedAt(s.ID, now),
 	}
 	if st, err := os.Stat(filepath.Join(s.Dir, conversationFile)); err == nil {

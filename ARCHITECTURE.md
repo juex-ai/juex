@@ -304,6 +304,8 @@ name).
 type Session struct {
     ID      string
     Alias   string
+    Kind    string                // "primary" or "side"
+    Active  bool
     Dir     string                // <WorkDir>/.juex/sessions/<id>/
     History []llm.Message
     TokenUsage llm.Usage
@@ -318,19 +320,28 @@ type Info struct {
 
 Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
 `AppendEvent(e)` writes to `events.jsonl`. `session.Load(dir)` re-hydrates
-an existing session in place (used by `--resume`). The latest `token_usage` and
+an existing session in place. The latest `token_usage` and
 `context_usage` are restored from `llm.responded` events and exposed through
 session `Info`, not through individual messages.
 
-New web sessions are lazy: `POST /api/sessions` allocates an in-memory
-session ID and only creates `.juex/sessions/<id>/` when the first message or
-event is appended. The CLI keeps eager persistence for `run` and `repl`.
+Each work directory has one active primary session recorded in
+`<WorkDir>/.juex/history.json` as `{active, sessions}`. `run`, `repl`, and
+`serve` attach to that active primary by default; `--new` and `/new` create a
+new primary and switch active. Side sessions are durable and listed, but never
+become active and are not valid Web turn targets.
+App lifetimes acquire `.juex/sessions/<id>/session.lock` so two processes do
+not append to the same session concurrently.
+
+New web sessions are lazy for transcript files: `POST /api/sessions` allocates
+an in-memory primary session, records it as active, and only creates
+`conversation.jsonl` when the first message is appended. The CLI keeps eager
+persistence for `run` and `repl`.
 
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. Both are read-only.
-`<WorkDir>/.juex/history.json` stores a compact `{sessions, last}` index for
-resume-by-alias and resume-last lookups.
+`<WorkDir>/.juex/history.json` reads legacy `{sessions, last}` files by
+migrating `last` to `active`; subsequent writes omit `last`.
 
 ### 3.6 App + Runtime
 
@@ -345,6 +356,7 @@ type Options struct {
     MCPManager *mcp.Manager // optional process-scoped MCP owner
     DisableMCP bool         // skip config loading when caller handles MCP
     ResumeDir string       // load existing session dir instead of creating one
+    SessionMode SessionMode // attach active, new primary, or new side
 }
 type App struct { Engine; Bus; Session; ... }
 func New(opts Options) (*App, error)
@@ -388,11 +400,12 @@ interrupts or rollback.
 
 ```
 juex
-├── run "<prompt>" [flags]   (--resume[=last|alias|id] | --session <id>) [--alias <name>]
-├── repl [flags]             (--resume[=last|alias|id] | --session <id>) [--alias <name>]
+├── run "<prompt>" [flags]   [--new | --side] [--alias <name>]
+├── repl [flags]             [--new] [--alias <name>]
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
 │   ├── show <id> [--format json|text]
+│   ├── activate <id> [--format json|text]
 │   ├── context <id> [--format json|text]
 │   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
@@ -431,6 +444,8 @@ connected SSE clients. Slow clients are dropped after a 5s buffer-full timeout.
 The server merges active in-memory sessions into `GET /api/sessions` and
 `GET /api/sessions/<id>` so a newly created empty chat is visible in the web
 UI without forcing an immediate disk write.
+Only the active primary session accepts `POST /turns`; inactive primary
+sessions must be activated first, and side sessions are read-only in the Web UI.
 
 Routes:
 
@@ -440,9 +455,10 @@ Routes:
 | GET | `/sessions/<id>` | React SPA session route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/sessions` | JSON list |
-| POST | `/api/sessions` | create session |
+| POST | `/api/sessions` | create active primary session |
 | GET | `/api/sessions/<id>` | JSON transcript |
 | DELETE | `/api/sessions/<id>` | delete session and remove it from history |
+| POST | `/api/sessions/<id>/activate` | make a primary session active |
 | GET | `/api/sessions/<id>/context` | active provider context for one session |
 | POST | `/api/sessions/<id>/compact` | append a manual compact summary marker |
 | POST | `/api/sessions/<id>/turns` | start a turn |
@@ -591,11 +607,13 @@ Resources split between user-global and work-local:
 │   └── skills/<name>/SKILL.md   # project skills (project overrides user)
 └── .juex/
     ├── juex.yaml                # local runtime provider config
-    ├── history.json             # session index + last session object
+    ├── history.json             # session index + active primary object
     ├── memory/                  # work-local memory entries
     │   ├── MEMORY.md
     │   └── *.md
     └── sessions/<id>/           # work-local conversation history
+        ├── session.json         # alias + kind metadata
+        ├── session.lock         # held while an app owns the session
         ├── conversation.jsonl
         └── events.jsonl
 ```
@@ -625,10 +643,10 @@ forward calls into the shared manager; closing a session does not close MCP.
 Claude channel notifications are formatted as
 `<mcp_name>:<event_type>:<event_content>` and run through the normal Agent
 turn loop as `mcp_event` user messages. For `run` and `repl`, notifications
-target the command's only app. For `serve`, notifications target
-`<WorkDir>/.juex/history.json.last`: the last session that wrote conversation
-messages. Opening, focusing, or streaming a web session does not change that
-target.
+target the command's only primary app. For `serve`, notifications target
+`<WorkDir>/.juex/history.json.active`: the active primary session. Side
+sessions do not declare the `experimental["claude/channel"]` initialize
+capability and do not become notification targets.
 
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.

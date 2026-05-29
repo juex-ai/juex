@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 // seedSession writes a session dir under <work>/.juex/sessions/<id>/.
@@ -64,6 +65,50 @@ func TestSessionsList_JSONShape(t *testing.T) {
 	}
 }
 
+func TestSessionsList_MarksActiveAndKind(t *testing.T) {
+	work := t.TempDir()
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	primaryDir := seedSession(t, work, "20260506T103500-primary1", body)
+	sideDir := seedSession(t, work, "20260506T113500-side0001", body)
+	if err := session.SetKind(sideDir, session.KindSide); err != nil {
+		t.Fatal(err)
+	}
+	primary, _, err := session.LoadInfo(primaryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side, _, err := session.LoadInfo(sideDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyPath := filepath.Join(work, ".juex", "history.json")
+	if err := session.SetActive(historyPath, primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.RecordSession(historyPath, side); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "list"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	bodyOut := out.String()
+	for _, want := range []string{
+		`"kind": "primary"`,
+		`"kind": "side"`,
+		`"active": true`,
+	} {
+		if !strings.Contains(bodyOut, want) {
+			t.Fatalf("list output missing %q in:\n%s", want, bodyOut)
+		}
+	}
+}
+
 func TestSessionsList_EmptyReturnsEmptyArray(t *testing.T) {
 	work := t.TempDir()
 	root := newRootCmd()
@@ -76,6 +121,49 @@ func TestSessionsList_EmptyReturnsEmptyArray(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"sessions":`) {
 		t.Errorf("missing sessions key: %s", out.String())
+	}
+}
+
+func TestSessionsActivate_PrimaryOnly(t *testing.T) {
+	work := t.TempDir()
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	firstDir := seedSession(t, work, "20260506T103500-first001", body)
+	secondDir := seedSession(t, work, "20260506T113500-second01", body)
+	sideDir := seedSession(t, work, "20260506T123500-side0001", body)
+	if err := session.SetKind(sideDir, session.KindSide); err != nil {
+		t.Fatal(err)
+	}
+	first, _, err := session.LoadInfo(firstDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(filepath.Join(work, ".juex", "history.json"), first); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "activate", filepath.Base(secondDir)})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"active": true`) || !strings.Contains(out.String(), filepath.Base(secondDir)) {
+		t.Fatalf("activate output = %s", out.String())
+	}
+
+	root2 := newRootCmd()
+	var out2 bytes.Buffer
+	root2.SetOut(&out2)
+	root2.SetErr(&out2)
+	root2.SetArgs([]string{"-C", work, "sessions", "activate", filepath.Base(sideDir)})
+	err = root2.Execute()
+	if err == nil {
+		t.Fatal("expected side activation error")
+	}
+	if _, ok := err.(*usageError); !ok {
+		t.Fatalf("got %T: %v", err, err)
 	}
 }
 

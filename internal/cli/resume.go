@@ -82,12 +82,12 @@ func resolveSessionSelector(selector, sessionsRoot, historyPath string) (string,
 		if err != nil {
 			return "", err
 		}
-		if h.Last == nil || h.Last.ID == "" {
-			return "", &notFoundError{msg: "no last session to resume"}
+		if h.Active == nil || h.Active.ID == "" {
+			return "", &notFoundError{msg: "no active session to resume"}
 		}
-		dir := infoDir(sessionsRoot, *h.Last)
+		dir := infoDir(sessionsRoot, *h.Active)
 		if _, ok := existingSessionDir(filepath.Dir(dir), filepath.Base(dir)); !ok {
-			return "", &notFoundError{msg: "session not found: " + h.Last.ID}
+			return "", &notFoundError{msg: "session not found: " + h.Active.ID}
 		}
 		return dir, nil
 	}

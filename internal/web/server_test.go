@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 type stubProvider struct{}
@@ -51,5 +53,82 @@ func TestServer_HealthzReturnsOK(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "ok\n" {
 		t.Errorf("body = %q", body)
+	}
+}
+
+func TestRunEnsuresActivePrimarySession(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Addr = "127.0.0.1:0"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+
+	var h session.History
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for h.Active == nil {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatal("server did not create an active primary session")
+		case <-tick.C:
+			var err error
+			h, err = session.LoadHistory(srv.opts.Cfg.HistoryPath())
+			if err != nil {
+				cancel()
+				t.Fatal(err)
+			}
+		}
+	}
+	if h.Active.Kind != session.KindPrimary || !h.Active.Active {
+		cancel()
+		t.Fatalf("active session = %+v, want active primary", h.Active)
+	}
+	if _, ok := srv.sessions.Load(h.Active.ID); !ok {
+		cancel()
+		t.Fatalf("session %q not open in server", h.Active.ID)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("server returned error after cancel: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not stop after context cancellation")
+	}
+}
+
+func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
+	srv := NewServer(Options{
+		Cfg: config.Config{WorkDir: t.TempDir()},
+	})
+	srv.opts.Addr = "127.0.0.1:0"
+	t.Cleanup(srv.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("server returned before cancel: %v", err)
+		}
+		t.Fatal("server returned before cancel")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("server returned error after cancel: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not stop after context cancellation")
 	}
 }
