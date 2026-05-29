@@ -142,6 +142,16 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 		TailStartMessageID: selection.TailStartMessageID,
 		FirstKeptMessageID: selection.FirstKeptMessageID,
 	}
+	contextUsage := llm.ContextUsage{
+		Model:         model,
+		ContextWindow: contextWindow,
+		InputTokens:   tokensAfter,
+		TotalTokens:   tokensAfter,
+		Breakdown: []llm.ContextUsagePart{
+			{Key: "active_context", Label: "active context after compaction", Tokens: tokensAfter},
+		},
+	}
+	e.Session.RecordResponseUsage(resp.Usage, &contextUsage)
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: map[string]any{
 		"message_id":            result.MessageID,
 		"reason":                result.Reason,

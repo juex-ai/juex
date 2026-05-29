@@ -234,10 +234,14 @@ preview in the header. They are collapsed by default; the chevron control
 expands the bubble to show the full event body. Event bubbles use the gold ramp,
 not blue or teal.
 
-Automatic context compaction renders as an assistant-side system bubble with an
-archive icon, a concise "Context compacted" label, and the persisted summary
-text. It uses the forest success ramp so it is distinct from normal chat but
-stays in the transcript flow.
+Context compaction renders as a centered transcript divider: horizontal rules
+with a compact `Context compacted` button between them. Clicking the label
+copies the persisted compact summary to the clipboard and temporarily changes
+the tooltip to `Copied to clipboard`. The summary itself is not shown inline.
+
+User and system message bubbles expose a copy action on hover/focus. The action
+sits under the bubble, uses a copy icon, copies the whole message text, and
+temporarily changes its tooltip to `Copied to clipboard`.
 
 When the user clicks `+ new chat` in the sidebar, the client POSTs
 `/api/sessions` and immediately navigates to `/sessions/<new-id>`.
@@ -525,8 +529,8 @@ notification channel.
   new turns without interrupting the user's input.
 - Every interactive element is keyboard reachable (shadcn primitives are
   built on Radix, which handles this).
-- Status pill conveys state both as text and as colour — colour is not the
-  sole indicator.
+- Transient state controls convey their meaning through icons, labels, and
+  tooltips — colour is not the sole indicator.
 - Focus states use a visible 2px ring in `--ring`. Do not remove focus rings.
 - Juex tokens must meet WCAG AA contrast in both light and dark modes; re-test
   when introducing new colour tokens.

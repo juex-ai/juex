@@ -247,6 +247,39 @@ func TestCompact_ReturnsAppendedMessageIDAndMetadata(t *testing.T) {
 	}
 }
 
+func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message:    llm.TextMessage(llm.RoleAssistant, "summary"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
+		},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 1000
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.Compact(context.Background(), "turn-1", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := eng.Session.Info(time.Now())
+	if info.TokenUsage.InputTokens != 11 || info.TokenUsage.OutputTokens != 3 {
+		t.Fatalf("token usage = %+v", info.TokenUsage)
+	}
+	if info.ContextUsage == nil {
+		t.Fatal("context usage is nil")
+	}
+	if info.ContextUsage.TotalTokens != result.TokensAfter {
+		t.Fatalf("context total = %d, want compact tokens_after %d", info.ContextUsage.TotalTokens, result.TokensAfter)
+	}
+	if info.ContextUsage.ContextWindow != 1000 {
+		t.Fatalf("context window = %d", info.ContextUsage.ContextWindow)
+	}
+}
+
 func TestTurn_PlainResponse(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{
