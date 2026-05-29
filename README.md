@@ -38,12 +38,14 @@ Fill in provider settings, then run:
 
 | Command | Purpose |
 | --- | --- |
-| `juex run "<prompt>"` | Run one prompt and exit. |
-| `juex repl` | Start an interactive CLI session. |
-| `/status`, `/compact` | Local slash commands accepted by `run`, `repl`, and the web composer. |
-| `juex run --resume=last "<prompt>"` | Continue the last session in this work directory. |
+| `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
+| `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
+| `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |
+| `juex repl` | Start an interactive CLI session attached to the active primary session. |
+| `/new`, `/status`, `/compact` | Local slash commands accepted by `run`, `repl`, and the web composer. |
 | `juex sessions list` | List recorded sessions. |
 | `juex sessions show <id>` | Print session metadata and transcript. |
+| `juex sessions activate <id>` | Make a primary session the active workspace session. |
 | `juex sessions context <id>` | Print the active provider context for a session. |
 | `juex sessions compact <id>` | Append a manual compact summary marker to a session. |
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
@@ -60,6 +62,7 @@ Juex keeps runtime state in the current work directory:
 ├── history.json
 ├── memory/
 └── sessions/<id>/
+    ├── session.json
     ├── conversation.jsonl
     └── events.jsonl
 ```

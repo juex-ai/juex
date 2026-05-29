@@ -37,16 +37,21 @@ export function SidebarSessionList({
 
   useEffect(() => {
     let live = true;
-    listSessions()
-      .then((r) => {
-        if (live) setSessions(r.sessions);
-      })
-      .catch((e) => console.error("listSessions failed", e))
-      .finally(() => {
-        if (live) setLoading(false);
-      });
+    const refreshSessions = () => {
+      listSessions()
+        .then((r) => {
+          if (live) setSessions(r.sessions);
+        })
+        .catch((e) => console.error("listSessions failed", e))
+        .finally(() => {
+          if (live) setLoading(false);
+        });
+    };
+    refreshSessions();
+    window.addEventListener("juex:sessions-changed", refreshSessions);
     return () => {
       live = false;
+      window.removeEventListener("juex:sessions-changed", refreshSessions);
     };
   }, [params.id]);
 
@@ -76,14 +81,14 @@ export function SidebarSessionList({
   return (
     <nav className="flex flex-col gap-1 px-2 py-2">
       {sessions.map((s) => {
-        const active = s.id === params.id;
+        const selected = s.id === params.id;
         return (
           <div
             key={s.id}
             className={cn(
               "group/session relative flex items-center rounded-[10px] pr-1 text-sidebar-foreground transition-colors",
               "hover:bg-juex-gold-100/80 hover:text-juex-forest-900 dark:hover:bg-juex-forest-700 dark:hover:text-juex-gold-200",
-              active &&
+              selected &&
                 "bg-juex-gold-100 text-juex-forest-900 shadow-[inset_0_0_0_1px_rgba(239,201,124,0.55)] before:absolute before:-left-2 before:top-2 before:bottom-2 before:w-[3px] before:rounded-full before:bg-juex-gold-500 hover:bg-juex-gold-200/80 dark:bg-juex-gold-400 dark:text-juex-forest-900 dark:hover:bg-juex-gold-300 dark:hover:text-juex-forest-900",
             )}
           >
@@ -94,11 +99,19 @@ export function SidebarSessionList({
               <div className="line-clamp-1">{s.preview || "(empty)"}</div>
               <div
                 className={cn(
-                  "mt-0.5 font-mono text-[11px] text-muted-foreground",
-                  active && "text-juex-ink-600 dark:text-juex-forest-800",
+                  "mt-1 flex min-w-0 flex-wrap items-center gap-1 font-mono text-[11px] text-muted-foreground",
+                  selected && "text-juex-ink-600 dark:text-juex-forest-800",
                 )}
               >
-                {humanAgo(s.last_active_at)}
+                <span>{humanAgo(s.last_active_at)}</span>
+                <span className="rounded border border-current/20 px-1">
+                  {s.kind === "side" ? "side" : "primary"}
+                </span>
+                {s.active ? (
+                  <span className="rounded bg-juex-gold-300/70 px-1 text-juex-forest-900">
+                    active
+                  </span>
+                ) : null}
               </div>
             </Link>
             <Button
@@ -111,7 +124,7 @@ export function SidebarSessionList({
               onClick={() => void handleDelete(s.id)}
               className={cn(
                 "opacity-0 group-hover/session:opacity-100 focus-visible:opacity-100",
-                active && "text-juex-forest-900 hover:bg-juex-gold-300/60",
+                selected && "text-juex-forest-900 hover:bg-juex-gold-300/60",
               )}
             >
               <Trash2 className="size-3.5" />

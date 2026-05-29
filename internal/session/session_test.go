@@ -33,6 +33,53 @@ func TestSession_AppendsToConversationJSONL(t *testing.T) {
 	}
 }
 
+func TestSession_NewWithOptionsPersistsKind(t *testing.T) {
+	root := t.TempDir()
+	s, err := NewWithOptions(root, Options{Kind: KindSide})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.Kind != KindSide {
+		t.Fatalf("session kind = %q, want side", s.Kind)
+	}
+
+	loaded, err := Load(s.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loaded.Close()
+	if loaded.Kind != KindSide {
+		t.Fatalf("loaded kind = %q, want side", loaded.Kind)
+	}
+}
+
+func TestAcquireSessionLockConflictsUntilClosed(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260529T120000-locktest")
+	first, err := AcquireSessionLock(dir, "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = AcquireSessionLock(dir, "repl")
+	if err == nil {
+		t.Fatal("expected lock conflict")
+	}
+	if _, ok := err.(*LockError); !ok {
+		t.Fatalf("err = %T %v, want *LockError", err, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := AcquireSessionLock(dir, "repl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSession_AppendNormalizesNilBlocks(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

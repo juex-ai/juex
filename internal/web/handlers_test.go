@@ -15,6 +15,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 // seedSession writes a minimal conversation.jsonl under
@@ -60,6 +61,69 @@ func TestGetSessionsList_ReturnsSeededSession(t *testing.T) {
 	}
 	if parsed.Sessions[0].Preview != "hi" {
 		t.Errorf("preview = %q", parsed.Sessions[0].Preview)
+	}
+}
+
+func TestGetSessionsList_ReturnsKindAndActive(t *testing.T) {
+	srv := newTestServer(t)
+	primaryID := "20260507T101010-primary1"
+	sideID := "20260507T111010-side0001"
+	seedSession(t, srv.opts.Cfg.WorkDir, primaryID,
+		`{"role":"user","blocks":[{"type":"text","text":"primary"}]}`+"\n")
+	seedSession(t, srv.opts.Cfg.WorkDir, sideID,
+		`{"role":"user","blocks":[{"type":"text","text":"side"}]}`+"\n")
+	sideDir := filepath.Join(srv.opts.Cfg.SessionsDir(), sideID)
+	if err := session.SetKind(sideDir, session.KindSide); err != nil {
+		t.Fatal(err)
+	}
+	primary, _, err := session.LoadInfo(filepath.Join(srv.opts.Cfg.SessionsDir(), primaryID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	side, _, err := session.LoadInfo(sideDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.RecordSession(srv.opts.Cfg.HistoryPath(), side); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Sessions []struct {
+			ID     string `json:"id"`
+			Kind   string `json:"kind"`
+			Active bool   `json:"active"`
+		} `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]struct {
+		Kind   string
+		Active bool
+	}{}
+	for _, info := range parsed.Sessions {
+		byID[info.ID] = struct {
+			Kind   string
+			Active bool
+		}{Kind: info.Kind, Active: info.Active}
+	}
+	if byID[primaryID].Kind != session.KindPrimary || !byID[primaryID].Active {
+		t.Fatalf("primary info = %+v", byID[primaryID])
+	}
+	if byID[sideID].Kind != session.KindSide || byID[sideID].Active {
+		t.Fatalf("side info = %+v", byID[sideID])
 	}
 }
 
@@ -186,6 +250,66 @@ func TestPostTurn_StatusSlashReturnsCommand(t *testing.T) {
 	prov.mu.Unlock()
 	if calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", calls)
+	}
+}
+
+func TestPostTurn_NewSlashCreatesActivePrimary(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
+		strings.NewReader(`{"prompt":"/new"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Command struct {
+			Name   string `json:"name"`
+			Text   string `json:"text"`
+			Status struct {
+				SessionID   string `json:"session_id"`
+				SessionKind string `json:"session_kind"`
+				Active      bool   `json:"active"`
+			} `json:"status"`
+		} `json:"command"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Command.Name != "/new" || parsed.Command.Status.SessionID == "" || parsed.Command.Status.SessionID == c.ID {
+		t.Fatalf("command = %+v, old id = %s", parsed.Command, c.ID)
+	}
+	if parsed.Command.Status.SessionKind != session.KindPrimary || !parsed.Command.Status.Active {
+		t.Fatalf("status = %+v, want active primary", parsed.Command.Status)
+	}
+	if _, ok := srv.sessions.Load(c.ID); ok {
+		t.Fatalf("old session %s still registered", c.ID)
+	}
+	if _, ok := srv.sessions.Load(parsed.Command.Status.SessionID); !ok {
+		t.Fatalf("new session %s not registered", parsed.Command.Status.SessionID)
+	}
+	h, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.ID != parsed.Command.Status.SessionID {
+		t.Fatalf("history active = %+v, want %s", h.Active, parsed.Command.Status.SessionID)
 	}
 }
 
@@ -635,6 +759,8 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	var parsed struct {
 		ID           string `json:"id"`
 		Dir          string `json:"dir"`
+		Kind         string `json:"kind"`
+		Active       bool   `json:"active"`
 		LastActiveAt string `json:"last_active_at"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -642,6 +768,16 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	}
 	if parsed.ID == "" || parsed.Dir == "" || parsed.LastActiveAt == "" {
 		t.Errorf("got %+v", parsed)
+	}
+	if parsed.Kind != session.KindPrimary || !parsed.Active {
+		t.Fatalf("created session kind/active = %q/%v, want primary active", parsed.Kind, parsed.Active)
+	}
+	h, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.ID != parsed.ID {
+		t.Fatalf("history active = %+v, want created session", h.Active)
 	}
 	if _, err := os.Stat(filepath.Join(parsed.Dir, "conversation.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("conversation stat err = %v, want not exist before first message", err)
@@ -674,6 +810,62 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	}
 	if shown.ID != parsed.ID || len(shown.Messages) != 0 {
 		t.Fatalf("show = %+v", shown)
+	}
+}
+
+func TestPostSessionActivate_PrimaryOnly(t *testing.T) {
+	srv := newTestServer(t)
+	firstID := "20260507T101010-first01"
+	secondID := "20260507T111010-second1"
+	sideID := "20260507T121010-side001"
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, firstID, body)
+	seedSession(t, srv.opts.Cfg.WorkDir, secondID, body)
+	seedSession(t, srv.opts.Cfg.WorkDir, sideID, body)
+	sideDir := filepath.Join(srv.opts.Cfg.SessionsDir(), sideID)
+	if err := session.SetKind(sideDir, session.KindSide); err != nil {
+		t.Fatal(err)
+	}
+	first, _, err := session.LoadInfo(filepath.Join(srv.opts.Cfg.SessionsDir(), firstID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), first); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+secondID+"/activate", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var activated struct {
+		ID     string `json:"id"`
+		Active bool   `json:"active"`
+		Kind   string `json:"kind"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&activated); err != nil {
+		t.Fatal(err)
+	}
+	if activated.ID != secondID || activated.Kind != session.KindPrimary || !activated.Active {
+		t.Fatalf("activated = %+v", activated)
+	}
+
+	sideResp, err := http.Post(ts.URL+"/api/sessions/"+sideID+"/activate", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sideResp.Body.Close()
+	if sideResp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(sideResp.Body)
+		t.Fatalf("side status = %d body = %s", sideResp.StatusCode, body)
 	}
 }
 
@@ -797,6 +989,44 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("timed out waiting for ack to be persisted")
+}
+
+func TestPostTurn_RequiresActivePrimary(t *testing.T) {
+	srv := newTestServer(t)
+	activeID := "20260507T101010-active1"
+	inactiveID := "20260507T111010-inactive"
+	sideID := "20260507T121010-side001"
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, activeID, body)
+	seedSession(t, srv.opts.Cfg.WorkDir, inactiveID, body)
+	seedSession(t, srv.opts.Cfg.WorkDir, sideID, body)
+	sideDir := filepath.Join(srv.opts.Cfg.SessionsDir(), sideID)
+	if err := session.SetKind(sideDir, session.KindSide); err != nil {
+		t.Fatal(err)
+	}
+	activeInfo, _, err := session.LoadInfo(filepath.Join(srv.opts.Cfg.SessionsDir(), activeID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(srv.opts.Cfg.HistoryPath(), activeInfo); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	for _, id := range []string{inactiveID, sideID} {
+		resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/turns", "application/json",
+			strings.NewReader(`{"prompt":"hi"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("%s status = %d body = %s", id, resp.StatusCode, body)
+		}
+	}
 }
 
 func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {

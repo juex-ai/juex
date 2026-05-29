@@ -267,7 +267,8 @@ the italic serif wordmark, and a primary **New chat** button. Below it, a
 scrollable list of sessions sorted by `last_active_at` desc. Each entry shows:
 
 - First line: truncated preview (max 1 line, ellipsis).
-- Second line: relative timestamp (`2m ago`, `yesterday`, `Mar 5`) in mono.
+- Second line: relative timestamp (`2m ago`, `yesterday`, `Mar 5`) in mono,
+  plus compact `primary` / `side` and `active` badges when applicable.
 
 Active session uses a stronger gold tint and a narrow gold rail. Hover contrast
 must be visible in light mode. In dark mode, selected rows keep gold background
@@ -279,8 +280,8 @@ require a browser confirmation before calling the API.
 
 The global shell header shows the current conversation preview, not a generic
 brand label. A horizontal strip inside the session view still shows session id,
-turn count, model, and last-active time. Session ids, models, numbers, and
-units use mono with tabular numbers.
+turn count, kind, active state, model, and last-active time. Session ids,
+models, numbers, and units use mono with tabular numbers.
 
 ### 7.3 Conversation
 
@@ -553,6 +554,8 @@ state value covers both the colour pill and the textual hint.
 export interface SessionInfo {
   id: string;
   dir: string;
+  kind: "primary" | "side";
+  active: boolean;
   started_at: string;
   last_active_at: string;
   turns: number;

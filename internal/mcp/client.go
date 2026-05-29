@@ -96,7 +96,8 @@ type Notification struct {
 }
 
 type ConnectOptions struct {
-	OnNotification func(Notification)
+	OnNotification      func(Notification)
+	EnableClaudeChannel bool
 }
 
 // ServerError marks an MCP setup failure with the server name that produced
@@ -168,9 +169,15 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 	}
 	go c.readLoop(stdout)
 
+	capabilities := map[string]any{}
+	if opts.EnableClaudeChannel {
+		capabilities["experimental"] = map[string]any{
+			"claude/channel": map[string]any{},
+		}
+	}
 	if _, err := c.call(ctx, "initialize", map[string]any{
 		"protocolVersion": protocolVersion,
-		"capabilities":    map[string]any{},
+		"capabilities":    capabilities,
 		"clientInfo":      map[string]any{"name": clientName, "version": clientVersion},
 	}); err != nil {
 		c.Close()

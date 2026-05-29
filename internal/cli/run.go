@@ -15,16 +15,19 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 // runResult is the JSON shape emitted on success when --json is set.
 type runResult struct {
-	Text       string    `json:"text"`
-	SessionID  string    `json:"session_id"`
-	SessionDir string    `json:"session_dir"`
-	DurationMs int64     `json:"duration_ms"`
-	TokenUsage llm.Usage `json:"token_usage"`
-	TokenTotal int       `json:"token_total"`
+	Text        string    `json:"text"`
+	SessionID   string    `json:"session_id"`
+	SessionDir  string    `json:"session_dir"`
+	SessionKind string    `json:"session_kind"`
+	Active      bool      `json:"active"`
+	DurationMs  int64     `json:"duration_ms"`
+	TokenUsage  llm.Usage `json:"token_usage"`
+	TokenTotal  int       `json:"token_total"`
 }
 
 // errorJSON mirrors principle 9 (errors as guides):
@@ -77,9 +80,11 @@ func (noopProvider) Complete(ctx context.Context, sys string, h []llm.Message, t
 
 func newRunCmd(flags *persistentFlags) *cobra.Command {
 	var (
-		jsonOut bool
-		dryRun  bool
-		rf      resumeFlags
+		jsonOut     bool
+		dryRun      bool
+		newSession  bool
+		sideSession bool
+		rf          resumeFlags
 	)
 	cmd := &cobra.Command{
 		Use:   "run [flags] <prompt>",
@@ -125,6 +130,14 @@ execution is printed and the process exits with code 10.`,
 			}
 
 			prompt := strings.Join(args, " ")
+			if newSession && sideSession {
+				return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new or --side, not both"},
+					"use --new for a new primary session or --side for a side session", false)
+			}
+			if (newSession || sideSession) && (rf.Resume != "" || rf.Session != "") {
+				return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new/--side or --resume/--session, not both"},
+					"use 'juex sessions activate <id>' before the default run path", false)
+			}
 
 			if dryRun {
 				return runDryRun(cmd, flags, cfg, prompt, jsonOut)
@@ -136,13 +149,21 @@ execution is printed and the process exits with code 10.`,
 					"see 'juex sessions list' for valid ids", false)
 			}
 
+			mode := app.SessionModeAttachActive
+			if newSession {
+				mode = app.SessionModeNewPrimary
+			}
+			if sideSession {
+				mode = app.SessionModeNewSide
+			}
 			a, err := app.New(app.Options{
-				Config:    cfg,
-				Verbose:   flags.verbose,
-				WorkDir:   cfg.WorkDir,
-				Stderr:    cmd.ErrOrStderr(),
-				ResumeDir: resumeDir,
-				Alias:     rf.Alias,
+				Config:      cfg,
+				Verbose:     flags.verbose,
+				WorkDir:     cfg.WorkDir,
+				Stderr:      cmd.ErrOrStderr(),
+				ResumeDir:   resumeDir,
+				Alias:       rf.Alias,
+				SessionMode: mode,
 			})
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
@@ -164,13 +185,16 @@ execution is printed and the process exits with code 10.`,
 			usage := a.TokenUsage()
 
 			if jsonOut {
+				info := a.Session.Info(time.Now().UTC())
 				cmdPrintln(cmd, mustJSON(runResult{
-					Text:       out,
-					SessionID:  a.Session.ID,
-					SessionDir: a.Session.Dir,
-					DurationMs: time.Since(start).Milliseconds(),
-					TokenUsage: usage,
-					TokenTotal: usage.TotalTokens(),
+					Text:        out,
+					SessionID:   a.Session.ID,
+					SessionDir:  a.Session.Dir,
+					SessionKind: info.Kind,
+					Active:      info.Active,
+					DurationMs:  time.Since(start).Milliseconds(),
+					TokenUsage:  usage,
+					TokenTotal:  usage.TotalTokens(),
 				}))
 			} else {
 				cmdPrintln(cmd, out)
@@ -181,7 +205,9 @@ execution is printed and the process exits with code 10.`,
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a JSON result on stdout (and JSON errors on stderr)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would execute (provider, model, prompt size, tool list); skip the LLM call; exit 10")
-	cmd.Flags().StringVar(&rf.Resume, "resume", "", "resume a past session by id, alias, or 'last'; omit value for interactive picker")
+	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
+	cmd.Flags().BoolVar(&sideSession, "side", false, "create a side session without changing the active primary")
+	cmd.Flags().StringVar(&rf.Resume, "resume", "", "deprecated: resume a past session by id, alias, or 'last'; use sessions activate")
 	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
 	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
@@ -276,6 +302,10 @@ func emit(jsonOut bool, stderr io.Writer, err error, suggestion string, retryabl
 }
 
 func errorType(err error) string {
+	var lockErr *session.LockError
+	if errors.As(err, &lockErr) {
+		return "conflict"
+	}
 	switch err.(type) {
 	case *usageError:
 		return "usage_error"

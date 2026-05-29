@@ -58,11 +58,30 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	infos = s.mergeActiveSessionInfos(infos)
+	infos = s.markActiveInfos(infos)
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": infos})
 }
 
+type createSessionRequest struct {
+	Kind string `json:"kind"`
+}
+
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
-	as, err := s.openSession(r.Context(), "")
+	var req createSessionRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body")
+			return
+		}
+	}
+	mode := app.SessionModeNewPrimary
+	if req.Kind == session.KindSide {
+		mode = app.SessionModeNewSide
+	} else if req.Kind != "" && req.Kind != session.KindPrimary {
+		writeErr(w, http.StatusBadRequest, "bad_request", "kind must be primary or side")
+		return
+	}
+	as, err := s.openSession(r.Context(), "", mode)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
@@ -101,6 +120,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
 		info, msgs := as.app.Session.Snapshot(time.Now().UTC())
+		info = s.markActiveInfo(info)
 		if msgs == nil {
 			msgs = []llm.Message{}
 		}
@@ -124,6 +144,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	if msgs == nil {
 		msgs = []llm.Message{}
 	}
+	info = s.markActiveInfo(info)
 	writeJSON(w, http.StatusOK, sessionShowResponse{
 		Info:     info,
 		Messages: messagesForSessionResponse(msgs),
@@ -149,6 +170,29 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": id})
+}
+
+func (s *Server) handleActivateSession(w http.ResponseWriter, r *http.Request, id string) {
+	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	info, _, err := session.LoadInfo(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	if info.Kind != session.KindPrimary {
+		writeErr(w, http.StatusBadRequest, "bad_request", "side sessions cannot become active")
+		return
+	}
+	if err := session.SetActive(s.opts.Cfg.HistoryPath(), info); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	info.Active = true
+	writeJSON(w, http.StatusOK, info)
 }
 
 type compactRequest struct {
@@ -236,6 +280,60 @@ func (s *Server) mergeActiveSessionInfos(persisted []session.Info) []session.Inf
 	return infos
 }
 
+func (s *Server) markActiveInfos(infos []session.Info) []session.Info {
+	activeID := s.activeSessionID()
+	for i := range infos {
+		if infos[i].Kind == "" {
+			infos[i].Kind = session.KindPrimary
+		}
+		infos[i].Active = activeID != "" && infos[i].ID == activeID
+	}
+	return infos
+}
+
+func (s *Server) markActiveInfo(info session.Info) session.Info {
+	if info.Kind == "" {
+		info.Kind = session.KindPrimary
+	}
+	info.Active = s.activeSessionID() != "" && info.ID == s.activeSessionID()
+	return info
+}
+
+func (s *Server) activeSessionID() string {
+	h, err := session.LoadHistory(s.opts.Cfg.HistoryPath())
+	if err != nil || h.Active == nil {
+		return ""
+	}
+	return h.Active.ID
+}
+
+func (s *Server) webTurnAllowed(id string) (session.Info, bool, string) {
+	info, err := s.sessionInfo(id)
+	if err != nil {
+		return session.Info{}, false, ""
+	}
+	if info.Kind == session.KindSide {
+		return info, false, "side session cannot be continued from web"
+	}
+	if !info.Active {
+		return info, false, "activate this primary session before continuing"
+	}
+	return info, true, ""
+}
+
+func (s *Server) sessionInfo(id string) (session.Info, error) {
+	if v, ok := s.sessions.Load(id); ok {
+		as := v.(*activeSession)
+		info, _ := as.app.Session.Snapshot(time.Now().UTC())
+		return s.markActiveInfo(info), nil
+	}
+	info, _, err := session.LoadInfo(filepath.Join(s.opts.Cfg.SessionsDir(), id))
+	if err != nil {
+		return session.Info{}, err
+	}
+	return s.markActiveInfo(info), nil
+}
+
 // turnRequest is the wire shape for POST /turns.
 type turnRequest struct {
 	Prompt string `json:"prompt"`
@@ -250,6 +348,14 @@ type startTurnResponse struct {
 }
 
 func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id string) {
+	if _, ok, msg := s.webTurnAllowed(id); !ok {
+		if msg == "" {
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		} else {
+			writeErr(w, http.StatusConflict, "conflict", msg)
+		}
+		return
+	}
 	as, err := s.getActiveSession(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
@@ -333,7 +439,7 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (s *Server) handleSlashTurn(w http.ResponseWriter, r *http.Request, as *activeSession, cmd app.SlashCommand) {
-	if cmd.Name == app.SlashCompact {
+	if cmd.Name == app.SlashCompact || cmd.Name == app.SlashNew {
 		as.cancelMu.Lock()
 		if as.cancel != nil || as.compacting {
 			as.cancelMu.Unlock()
@@ -350,10 +456,19 @@ func (s *Server) handleSlashTurn(w http.ResponseWriter, r *http.Request, as *act
 		}()
 	}
 
+	oldID := as.app.Session.ID
 	result, err := as.app.ExecuteParsedSlashCommand(r.Context(), cmd)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
+	}
+	if cmd.Name == app.SlashNew && as.app.Session.ID != oldID {
+		s.sessions.Delete(oldID)
+		as.StartedAt = time.Now()
+		as.turnsMu.Lock()
+		as.turns = map[string]*turnState{}
+		as.turnsMu.Unlock()
+		s.sessions.Store(as.app.Session.ID, as)
 	}
 	writeJSON(w, http.StatusOK, startTurnResponse{Command: &result})
 }

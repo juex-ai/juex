@@ -68,6 +68,39 @@ func writeEvents(t *testing.T, dir string, evs []events.Event) {
 	}
 }
 
+func TestLoadInfo_DefaultsKindToPrimary(t *testing.T) {
+	root := t.TempDir()
+	dir := makeSession(t, root, "20260506T103500-primary1",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "primary")},
+		time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC))
+
+	info, _, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Kind != KindPrimary {
+		t.Fatalf("kind = %q, want primary", info.Kind)
+	}
+}
+
+func TestSetKindAndLoadInfo(t *testing.T) {
+	root := t.TempDir()
+	dir := makeSession(t, root, "20260506T103500-side0001",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "side")},
+		time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC))
+
+	if err := SetKind(dir, KindSide); err != nil {
+		t.Fatal(err)
+	}
+	info, _, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Kind != KindSide {
+		t.Fatalf("kind = %q, want side", info.Kind)
+	}
+}
+
 func TestList_SortsByLastActiveDesc(t *testing.T) {
 	root := t.TempDir()
 	older := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)

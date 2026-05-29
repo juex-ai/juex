@@ -120,6 +120,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleSessionShow(w, r, id)
 	case rest == "" && r.Method == http.MethodDelete:
 		s.handleDeleteSession(w, r, id)
+	case rest == "activate" && r.Method == http.MethodPost:
+		s.handleActivateSession(w, r, id)
 	case strings.HasPrefix(rest, "turns/") && r.Method == http.MethodGet:
 		s.handleTurnStatus(w, r, id, strings.TrimPrefix(rest, "turns/"))
 	case rest == "turns" && r.Method == http.MethodPost:
@@ -146,6 +148,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	if err := s.ensureMCPStarted(ctx); err != nil {
 		return err
+	}
+	if s.hasSessionProvider() {
+		if err := s.ensureActivePrimarySession(ctx); err != nil {
+			return err
+		}
 	}
 	srv := &http.Server{
 		Addr:              s.opts.Addr,
@@ -232,7 +239,7 @@ func validLoopback(addr string) bool {
 // session collapse to a single *app.App. The fresh-create path
 // (resumeDir == "") doesn't need the re-check: app.New allocates a new
 // id every call, so concurrent fresh creates produce distinct sessions.
-func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSession, error) {
+func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.SessionMode) (*activeSession, error) {
 	if err := s.ensureMCPStarted(ctx); err != nil {
 		return nil, err
 	}
@@ -245,16 +252,17 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 		}
 	}
 	a, err := app.New(app.Options{
-		Config:     s.opts.Cfg,
-		Provider:   s.opts.Provider,
-		Verbose:    s.opts.Verbose,
-		Stderr:     s.stderr(),
-		WorkDir:    s.opts.Cfg.WorkDir,
-		MCPManager: s.mcpManagerSnapshot(),
-		DisableMCP: true,
-		ResumeDir:  resumeDir,
-		// A fresh web session should not write history until the first
-		// message; MCP notifications target history.last instead.
+		Config:      s.opts.Cfg,
+		Provider:    s.opts.Provider,
+		Verbose:     s.opts.Verbose,
+		Stderr:      s.stderr(),
+		WorkDir:     s.opts.Cfg.WorkDir,
+		MCPManager:  s.mcpManagerSnapshot(),
+		DisableMCP:  true,
+		ResumeDir:   resumeDir,
+		SessionMode: mode,
+		// A fresh web session should not write transcript files until
+		// the first message; history.active is recorded immediately.
 		LazySession: resumeDir == "",
 	})
 	if err != nil {
@@ -271,6 +279,29 @@ func (s *Server) openSession(ctx context.Context, resumeDir string) (*activeSess
 	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
 	s.sessions.Store(a.Session.ID, as)
 	return as, nil
+}
+
+func (s *Server) ensureActivePrimarySession(ctx context.Context) error {
+	id, ok, err := s.activePrimarySessionID()
+	if err != nil {
+		return err
+	}
+	if ok {
+		if _, exists := s.sessions.Load(id); exists {
+			return nil
+		}
+		if _, err := s.getActiveSession(ctx, id); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	_, err = s.openSession(ctx, "", app.SessionModeAttachActive)
+	return err
+}
+
+func (s *Server) hasSessionProvider() bool {
+	return s.opts.Provider != nil || s.opts.Cfg.ProviderID != "" || s.opts.Cfg.ProviderProtocol != ""
 }
 
 func (s *Server) ensureMCPStarted(ctx context.Context) error {
@@ -307,7 +338,8 @@ func (s *Server) ensureMCPStarted(ctx context.Context) error {
 		}
 	}
 	mgr, err := mcp.NewManagerLayeredSoft(ctx, mcpConfigs, mcp.ConnectOptions{
-		OnNotification: handleNotification,
+		OnNotification:      handleNotification,
+		EnableClaudeChannel: true,
 	})
 	if err != nil {
 		s.recordMCPError(err)
@@ -368,12 +400,12 @@ func (s *Server) isClosed() bool {
 }
 
 func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
-	id, ok, err := s.lastWrittenSessionID()
+	id, ok, err := s.activePrimarySessionID()
 	if err != nil {
 		return err
 	}
 	if !ok {
-		s.logVerbose("juex serve: MCP notification dropped: no last session")
+		s.logVerbose("juex serve: MCP notification dropped: no active primary session")
 		return nil
 	}
 	as, err := s.getActiveSession(ctx, id)
@@ -383,15 +415,15 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 	return as.app.HandleMCPNotification(ctx, n)
 }
 
-func (s *Server) lastWrittenSessionID() (string, bool, error) {
+func (s *Server) activePrimarySessionID() (string, bool, error) {
 	h, err := session.LoadHistory(s.opts.Cfg.HistoryPath())
 	if err != nil {
 		return "", false, err
 	}
-	if h.Last == nil || h.Last.ID == "" {
+	if h.Active == nil || h.Active.ID == "" || h.Active.Kind != session.KindPrimary {
 		return "", false, nil
 	}
-	return h.Last.ID, true, nil
+	return h.Active.ID, true, nil
 }
 
 func (s *Server) stderr() io.Writer {
@@ -453,5 +485,5 @@ func (s *Server) getActiveSession(ctx context.Context, id string) (*activeSessio
 	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
 		return nil, err
 	}
-	return s.openSession(ctx, dir)
+	return s.openSession(ctx, dir, app.SessionModeAttachActive)
 }

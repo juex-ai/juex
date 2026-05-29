@@ -46,6 +46,14 @@ func runFakeServer() {
 		}
 		switch method {
 		case "initialize":
+			if errMsg := validateFakeInitializeCapabilities(req); errMsg != "" {
+				enc.Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      responseID,
+					"error":   map[string]any{"code": -32602, "message": errMsg},
+				})
+				continue
+			}
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      responseID,
@@ -155,6 +163,20 @@ func runFakeServer() {
 	}
 }
 
+func validateFakeInitializeCapabilities(req map[string]any) string {
+	params, _ := req["params"].(map[string]any)
+	caps, _ := params["capabilities"].(map[string]any)
+	experimental, _ := caps["experimental"].(map[string]any)
+	_, hasChannel := experimental["claude/channel"]
+	if os.Getenv("JUEX_FAKE_MCP_REQUIRE_CHANNEL") == "1" && !hasChannel {
+		return "missing claude/channel capability"
+	}
+	if os.Getenv("JUEX_FAKE_MCP_FORBID_CHANNEL") == "1" && hasChannel {
+		return "unexpected claude/channel capability"
+	}
+	return ""
+}
+
 func fakeResponseID(idVal any) any {
 	if os.Getenv("JUEX_FAKE_MCP_STRING_IDS") != "1" {
 		return idVal
@@ -165,6 +187,35 @@ func fakeResponseID(idVal any) any {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+func TestMCPClient_ClaudeChannelCapabilityIsOptIn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	primary, err := ConnectWithOptions(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":                 "1",
+			"JUEX_FAKE_MCP_REQUIRE_CHANNEL": "1",
+		},
+	}, ConnectOptions{EnableClaudeChannel: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary.Close()
+
+	side, err := ConnectWithOptions(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":                "1",
+			"JUEX_FAKE_MCP_FORBID_CHANNEL": "1",
+		},
+	}, ConnectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	side.Close()
 }
 
 func TestMCPClient_RoundTrip(t *testing.T) {
@@ -241,6 +292,7 @@ func TestMCPClient_ClaudeChannelNotification(t *testing.T) {
 			"JUEX_FAKE_MCP_NOTIFY_CHANNEL": "1",
 		},
 	}, ConnectOptions{
+		EnableClaudeChannel: true,
 		OnNotification: func(n Notification) {
 			got <- n
 		},

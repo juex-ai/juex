@@ -12,20 +12,81 @@ import (
 
 const metadataFile = "session.json"
 
+const (
+	KindPrimary = "primary"
+	KindSide    = "side"
+)
+
 type metadata struct {
 	Alias string `json:"alias,omitempty"`
+	Kind  string `json:"kind,omitempty"`
 }
 
 type History struct {
 	Sessions []Info `json:"sessions"`
-	Last     *Info  `json:"last"`
+	Active   *Info  `json:"active,omitempty"`
+	Last     *Info  `json:"last,omitempty"`
 }
 
 func SetAlias(dir, alias string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(metadata{Alias: alias}, "", "  ")
+	m, err := loadMetadata(dir)
+	if err != nil {
+		return err
+	}
+	m.Alias = alias
+	return saveMetadata(dir, m)
+}
+
+func SetKind(dir, kind string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	m, err := loadMetadata(dir)
+	if err != nil {
+		return err
+	}
+	m.Kind = NormalizeKind(kind)
+	return saveMetadata(dir, m)
+}
+
+func LoadAlias(dir string) (string, error) {
+	m, err := loadMetadata(dir)
+	if err != nil {
+		return "", err
+	}
+	return m.Alias, nil
+}
+
+func LoadKind(dir string) (string, error) {
+	m, err := loadMetadata(dir)
+	if err != nil {
+		return "", err
+	}
+	return m.Kind, nil
+}
+
+func loadMetadata(dir string) (metadata, error) {
+	data, err := os.ReadFile(filepath.Join(dir, metadataFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return metadata{Kind: KindPrimary}, nil
+		}
+		return metadata{}, err
+	}
+	var m metadata
+	if err := json.Unmarshal(data, &m); err != nil {
+		return metadata{}, err
+	}
+	m.Kind = NormalizeKind(m.Kind)
+	return m, nil
+}
+
+func saveMetadata(dir string, m metadata) error {
+	m.Kind = NormalizeKind(m.Kind)
+	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -33,19 +94,15 @@ func SetAlias(dir, alias string) error {
 	return atomicWriteFile(filepath.Join(dir, metadataFile), data, 0o644)
 }
 
-func LoadAlias(dir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(dir, metadataFile))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", err
+func NormalizeKind(kind string) string {
+	switch kind {
+	case KindSide:
+		return KindSide
+	case KindPrimary, "":
+		return KindPrimary
+	default:
+		return KindPrimary
 	}
-	var m metadata
-	if err := json.Unmarshal(data, &m); err != nil {
-		return "", err
-	}
-	return m.Alias, nil
 }
 
 func LoadHistory(path string) (History, error) {
@@ -63,10 +120,20 @@ func LoadHistory(path string) (History, error) {
 	if h.Sessions == nil {
 		h.Sessions = []Info{}
 	}
-	return h, nil
+	return normalizeHistory(h), nil
 }
 
 func RecordHistory(path string, info Info) error {
+	if err := RecordSession(path, info); err != nil {
+		return err
+	}
+	if NormalizeKind(info.Kind) == KindSide {
+		return nil
+	}
+	return SetActive(path, info)
+}
+
+func RecordSession(path string, info Info) error {
 	if path == "" {
 		return nil
 	}
@@ -75,25 +142,35 @@ func RecordHistory(path string, info Info) error {
 		if err != nil {
 			return err
 		}
-		replaced := false
-		for i := range h.Sessions {
-			if h.Sessions[i].ID == info.ID {
-				h.Sessions[i] = info
-				replaced = true
-				break
-			}
+		info = normalizeInfo(info)
+		upsertHistorySession(&h, info)
+		if h.Active != nil && h.Active.ID == info.ID && info.Kind == KindPrimary {
+			active := info
+			active.Active = true
+			h.Active = &active
 		}
-		if !replaced {
-			h.Sessions = append(h.Sessions, info)
-		}
-		infoCopy := info
-		h.Last = &infoCopy
-		data, err := json.MarshalIndent(h, "", "  ")
+		return writeHistory(path, h)
+	})
+}
+
+func SetActive(path string, info Info) error {
+	if path == "" {
+		return nil
+	}
+	info = normalizeInfo(info)
+	if info.Kind != KindPrimary {
+		return fmt.Errorf("session: cannot activate %s session %s", info.Kind, info.ID)
+	}
+	return withHistoryLock(path, func() error {
+		h, err := LoadHistory(path)
 		if err != nil {
 			return err
 		}
-		data = append(data, '\n')
-		return atomicWriteFile(path, data, 0o644)
+		upsertHistorySession(&h, info)
+		active := info
+		active.Active = true
+		h.Active = &active
+		return writeHistory(path, h)
 	})
 }
 
@@ -129,7 +206,7 @@ func RemoveHistory(path, id string) error {
 			return err
 		}
 		kept := h.Sessions[:0]
-		removedLast := h.Last != nil && h.Last.ID == id
+		removedActive := h.Active != nil && h.Active.ID == id
 		for _, info := range h.Sessions {
 			if info.ID == id {
 				continue
@@ -137,19 +214,79 @@ func RemoveHistory(path, id string) error {
 			kept = append(kept, info)
 		}
 		h.Sessions = kept
-		if removedLast {
-			h.Last = newestHistorySession(h.Sessions)
+		if removedActive {
+			h.Active = newestHistoryPrimary(h.Sessions)
 		}
 		if len(h.Sessions) == 0 {
-			h.Last = nil
+			h.Active = nil
 		}
-		data, err := json.MarshalIndent(h, "", "  ")
-		if err != nil {
-			return err
-		}
-		data = append(data, '\n')
-		return atomicWriteFile(path, data, 0o644)
+		return writeHistory(path, h)
 	})
+}
+
+func upsertHistorySession(h *History, info Info) {
+	replaced := false
+	for i := range h.Sessions {
+		if h.Sessions[i].ID == info.ID {
+			h.Sessions[i] = info
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		h.Sessions = append(h.Sessions, info)
+	}
+}
+
+func writeHistory(path string, h History) error {
+	h.Last = nil
+	h = normalizeHistory(h)
+	payload := struct {
+		Active   *Info  `json:"active,omitempty"`
+		Sessions []Info `json:"sessions"`
+	}{
+		Active:   h.Active,
+		Sessions: h.Sessions,
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return atomicWriteFile(path, data, 0o644)
+}
+
+func normalizeHistory(h History) History {
+	if h.Sessions == nil {
+		h.Sessions = []Info{}
+	}
+	for i := range h.Sessions {
+		h.Sessions[i] = normalizeInfo(h.Sessions[i])
+	}
+	if h.Active == nil && h.Last != nil {
+		active := normalizeInfo(*h.Last)
+		active.Kind = KindPrimary
+		h.Active = &active
+	}
+	if h.Active != nil {
+		active := normalizeInfo(*h.Active)
+		active.Kind = KindPrimary
+		active.Active = true
+		h.Active = &active
+	}
+	activeID := ""
+	if h.Active != nil {
+		activeID = h.Active.ID
+	}
+	for i := range h.Sessions {
+		h.Sessions[i].Active = activeID != "" && h.Sessions[i].ID == activeID
+	}
+	return h
+}
+
+func normalizeInfo(info Info) Info {
+	info.Kind = NormalizeKind(info.Kind)
+	return info
 }
 
 func newestHistorySession(infos []Info) *Info {
@@ -166,6 +303,21 @@ func newestHistorySession(infos []Info) *Info {
 	return &candidates[0]
 }
 
+func newestHistoryPrimary(infos []Info) *Info {
+	var primary []Info
+	for _, info := range infos {
+		info = normalizeInfo(info)
+		if info.Kind == KindPrimary {
+			primary = append(primary, info)
+		}
+	}
+	active := newestHistorySession(primary)
+	if active != nil {
+		active.Active = true
+	}
+	return active
+}
+
 func sessionDir(root, id string) (string, bool) {
 	if root == "" || id == "" || id == "." || id == ".." {
 		return "", false
@@ -178,6 +330,9 @@ func sessionDir(root, id string) (string, bool) {
 
 func withHistoryLock(path string, fn func() error) error {
 	lockPath := path + ".lock"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)

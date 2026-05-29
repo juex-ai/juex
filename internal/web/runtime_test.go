@@ -290,7 +290,7 @@ func TestOpenSessionKeepsServeUsableWhenMCPStartupFails(t *testing.T) {
 }`)
 	srv.recordMCPError(&mcp.ServerError{Server: "alpha", Op: "connect", Err: errors.New("old failure")})
 
-	if _, err := srv.openSession(context.Background(), ""); err != nil {
+	if _, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary); err != nil {
 		t.Fatalf("openSession returned error: %v", err)
 	}
 	got, err := srv.runtimeStatus()

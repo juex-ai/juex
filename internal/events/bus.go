@@ -23,23 +23,37 @@ type Event struct {
 type Handler func(Event)
 
 type subscription struct {
+	id      uint64
 	pattern string
 	fn      Handler
 }
 
 type Bus struct {
-	mu   sync.RWMutex
-	subs []subscription
+	mu     sync.RWMutex
+	nextID uint64
+	subs   []subscription
 }
 
 func NewBus() *Bus { return &Bus{} }
 
 // Subscribe registers fn for events whose Type matches pattern (path.Match
 // semantics). A pattern of "*" matches everything.
-func (b *Bus) Subscribe(pattern string, fn Handler) {
+func (b *Bus) Subscribe(pattern string, fn Handler) func() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.subs = append(b.subs, subscription{pattern: pattern, fn: fn})
+	b.nextID++
+	id := b.nextID
+	b.subs = append(b.subs, subscription{id: id, pattern: pattern, fn: fn})
+	return func() {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		for i := range b.subs {
+			if b.subs[i].id == id {
+				b.subs = append(b.subs[:i], b.subs[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 // Emit dispatches e synchronously to all matching subscribers.
