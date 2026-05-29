@@ -229,9 +229,11 @@ compact header strip + scrollable message list + sticky composer. The composer
 footer shows the live status, latest request context total, and current
 conversation token total.
 
-MCP channel events render as compact user-side event bubbles with a small radio
-icon, a monospace `<mcp_name>:<event_type>` label, and the event content as the
-message body. Event bubbles use the gold ramp, not blue or teal.
+MCP channel events render as centered external-event bubbles with a small radio
+icon, a monospace `<mcp_name>:<event_type>` label, and a one-line content
+preview in the header. They are collapsed by default; the chevron control
+expands the bubble to show the full event body. Event bubbles use the gold ramp,
+not blue or teal.
 
 Automatic context compaction renders as an assistant-side system bubble with an
 archive icon, a concise "Context compacted" label, and the persisted summary
@@ -294,7 +296,9 @@ message column at `max-width: 760px` with `24px` horizontal padding.
 render as right-aligned forest bubbles with cream text and a tighter top-right
 corner. Assistant messages render as left-aligned paper bubbles with a warm
 border and a tighter top-left corner. Reasoning and tool sub-units render as
-siblings of `<MessageContent>`.
+siblings of `<MessageContent>`. MCP external events bypass the normal user
+message wrapper and render in a centered transcript lane so they do not read as
+human-authored messages.
 
 ### 7.5 Text rendering
 
