@@ -433,14 +433,15 @@ export function Session() {
                   showComposerHint("Enter a message to send");
                   return;
                 }
-                await handleSend(text);
                 setDraft("");
+                await handleSend(text);
               }}
             >
               <PromptInputTextarea
                 onChange={(event) => {
                   setDraft(event.currentTarget.value);
                   if (composerHint) setComposerHint(null);
+                  if (status.kind === "error") setStatus({ kind: "idle" });
                 }}
                 placeholder="Ask juex anything..."
               />
