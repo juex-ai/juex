@@ -44,6 +44,8 @@ import {
   toolState,
   type MessageGroup,
 } from "@/lib/display-units";
+import { formatMCPEventForDisplay } from "@/lib/mcp-events";
+import { cn } from "@/lib/utils";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import {
   createQueuedInputState,
@@ -60,7 +62,12 @@ import {
   startTurn,
   subscribeEvents,
 } from "@/api";
-import { ArchiveIcon, RadioIcon, SquareIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  ChevronDownIcon,
+  RadioIcon,
+  SquareIcon,
+} from "lucide-react";
 import type {
   ActiveContextSnapshot,
   ContextUsage,
@@ -848,13 +855,18 @@ function trimFixed(value: number): string {
 }
 
 function MessageGroupView({ group }: { group: MessageGroup }) {
-  const isEmpty = group.units.length === 0;
   // Per-message model (stamped at generation time). Falls back to nothing
   // for older messages that pre-date the persistence change; the header
   // already shows the current session-level model in that case.
   const showModel = group.role === "assistant" && !!group.model;
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
   const isCompact = group.kind === "compact";
+
+  if (isMCPEvent) {
+    return <MCPEventGroup group={group} />;
+  }
+
+  const isEmpty = group.units.length === 0;
 
   return (
     <Message from={isCompact ? "assistant" : group.role}>
@@ -868,9 +880,6 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
           if (unit.kind === "text") {
             if (isCompact) {
               return <CompactMessage key={i} text={unit.block.text} />;
-            }
-            if (isMCPEvent) {
-              return <MCPEventMessage key={i} text={unit.block.text} />;
             }
             return (
               <MessageContent key={i}>
@@ -930,6 +939,23 @@ function MessageGroupView({ group }: { group: MessageGroup }) {
   );
 }
 
+function MCPEventGroup({ group }: { group: MessageGroup }) {
+  const isEmpty = group.units.length === 0;
+  return (
+    <div className="flex w-full justify-center px-2 py-0.5">
+      <div className="flex w-full max-w-[min(34rem,100%)] flex-col gap-2">
+        {group.units.map((unit, i) => {
+          if (unit.kind !== "text") return null;
+          return <MCPEventMessage key={i} text={unit.block.text} />;
+        })}
+        {group.pending && isEmpty ? (
+          <div className="text-center text-sm text-muted-foreground">...</div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function CompactMessage({ text }: { text: string }) {
   const summary = parseCompactText(text);
   return (
@@ -951,26 +977,56 @@ function parseCompactText(text: string): string {
 }
 
 function MCPEventMessage({ text }: { text: string }) {
-  const event = parseMCPEventText(text);
-  return (
-    <MessageContent className="group-[.is-user]:border group-[.is-user]:border-juex-gold-300 group-[.is-user]:bg-juex-gold-100 group-[.is-user]:text-juex-gold-900 group-[.is-user]:dark:border-juex-gold-400/30 group-[.is-user]:dark:bg-juex-gold-400/10 group-[.is-user]:dark:text-juex-gold-400">
-      <div className="flex items-center gap-2 text-xs font-medium">
-        <RadioIcon className="size-3.5" aria-hidden="true" />
-        <span className="font-mono">{event.label}</span>
-      </div>
-      <MessageResponse>{event.content}</MessageResponse>
-    </MessageContent>
-  );
-}
+  const [expanded, setExpanded] = useState(false);
+  const event = formatMCPEventForDisplay(text);
+  const toggleLabel = expanded ? "Collapse MCP event" : "Expand MCP event";
 
-function parseMCPEventText(text: string): { label: string; content: string } {
-  const first = text.indexOf(":");
-  const second = first >= 0 ? text.indexOf(":", first + 1) : -1;
-  if (first < 0 || second < 0) {
-    return { label: "mcp:event", content: text };
-  }
-  return {
-    label: `${text.slice(0, first)}:${text.slice(first + 1, second)}`,
-    content: text.slice(second + 1),
-  };
+  return (
+    <div
+      className="w-full overflow-hidden rounded-lg border border-juex-gold-300 bg-juex-gold-50/95 text-juex-gold-900 shadow-[var(--shadow-xs)] dark:border-juex-gold-400/25 dark:bg-juex-gold-400/10 dark:text-juex-gold-400"
+      data-mcp-event-message
+    >
+      <div className="flex min-w-0 items-center gap-2 px-3 py-2 text-xs">
+        <RadioIcon className="size-3.5 shrink-0" aria-hidden="true" />
+        <span
+          className="min-w-0 max-w-[48%] shrink-0 truncate font-mono font-semibold sm:max-w-[18rem]"
+          data-mcp-event-label
+        >
+          {event.label}
+        </span>
+        <span
+          className="size-1 shrink-0 rounded-full bg-current opacity-45"
+          aria-hidden="true"
+        />
+        <span
+          className="min-w-0 flex-1 truncate text-[12px] text-juex-ink-600 dark:text-juex-cream-100/75"
+          data-mcp-event-preview
+        >
+          {event.preview}
+        </span>
+        <button
+          type="button"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-current opacity-80 transition hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10"
+          aria-expanded={expanded}
+          aria-label={toggleLabel}
+          title={toggleLabel}
+          data-mcp-event-toggle
+          onClick={() => setExpanded((value) => !value)}
+        >
+          <ChevronDownIcon
+            className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+      {expanded ? (
+        <div
+          className="border-t border-juex-gold-300/75 px-3 py-3 text-[13px] leading-6 text-juex-ink-900 dark:border-juex-gold-400/20 dark:text-juex-cream-50"
+          data-mcp-event-body
+        >
+          <MessageResponse className="break-words">{event.content}</MessageResponse>
+        </div>
+      ) : null}
+    </div>
+  );
 }
