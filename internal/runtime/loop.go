@@ -165,6 +165,35 @@ func (e *Engine) PendingInputStatus() PendingInputStatus {
 	}
 }
 
+// PromotePendingInputTurn turns the first queued input from a reserved
+// non-provider phase into the user message for a real provider turn.
+func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.Message, PendingInputStatus, bool) {
+	if e == nil || nextTurnID == "" {
+		return llm.Message{}, PendingInputStatus{}, false
+	}
+	max := e.effectiveMaxPendingInputs()
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	if e.activeTurnID != currentTurnID || len(e.pendingInput) == 0 {
+		if e.activeTurnID == currentTurnID {
+			e.activeTurnID = ""
+		}
+		return llm.Message{}, PendingInputStatus{
+			TurnID:           e.activeTurnID,
+			PendingCount:     len(e.pendingInput),
+			MaxPendingInputs: max,
+		}, false
+	}
+	msg := e.pendingInput[0]
+	e.pendingInput = e.pendingInput[1:]
+	e.activeTurnID = nextTurnID
+	return msg, PendingInputStatus{
+		TurnID:           nextTurnID,
+		PendingCount:     len(e.pendingInput),
+		MaxPendingInputs: max,
+	}, true
+}
+
 // TurnMessage drives one already-constructed user message to completion.
 // It exists for system-originated user turns, such as MCP channel events,
 // that need app metadata while still reaching the provider as normal text.

@@ -49,6 +49,14 @@ import {
   composerSubmitAction,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
+import {
+  isCompactCommandInput,
+  isLocalCompactMessage,
+  LOCAL_COMPACT_COMMAND_ID,
+  LOCAL_COMPACT_PENDING_ID,
+  LOCAL_COMPACT_PENDING_KIND,
+  PENDING_COMPACT_LABEL,
+} from "@/lib/compact-ui";
 import { writeClipboardText } from "@/lib/clipboard";
 import { compactSummaryText, messageGroupCopyText } from "@/lib/message-copy";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
@@ -114,6 +122,7 @@ export function Session() {
     useState<ActiveContextSnapshot | null>(null);
   const [status, setStatus] = useState<SessionStatus>({ kind: "idle" });
   const [turnActive, setTurnActive] = useState(false);
+  const [compactActive, setCompactActive] = useState(false);
   const [draft, setDraft] = useState("");
   const [composerHint, setComposerHint] = useState<string | null>(null);
   const [compactCommandInputs, setCompactCommandInputs] = useState<
@@ -125,6 +134,7 @@ export function Session() {
   const doneTimerRef = useRef<number | null>(null);
   const composerHintTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
+  const turnActiveRef = useRef(false);
   const queuedInputStateRef = useRef<QueuedInputState>(
     createQueuedInputState(),
   );
@@ -133,18 +143,19 @@ export function Session() {
     const next = createQueuedInputState();
     queuedInputStateRef.current = next;
     setQueuedInputState(next);
-    setTurnActive(false);
+    setTurnActiveControllerState(false);
+    setCompactActiveControllerState(false);
     setDraft("");
     setComposerHint(null);
     setCompactCommandInputs({});
   }, [id]);
 
   // refresh is stable per id; both effects depend on it via [id].
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { preserveLiveMessages?: boolean }) => {
     try {
       const r = await getSession(id);
       setData(r);
-      setLiveMessages([]);
+      if (!opts?.preserveLiveMessages) setLiveMessages([]);
       setLiveTokenUsage(null);
       setLiveContextUsage(null);
       try {
@@ -210,46 +221,47 @@ export function Session() {
       onEvent: (e) => {
         switch (e.type) {
           case "turn.started":
+            consumeQueuedInput(eventInput(e), eventKind(e));
             appendLiveTurn(e.turn_id, eventInput(e), eventKind(e), "event");
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "running" });
             break;
           case "llm.requested":
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "running" });
             break;
           case "llm.responded":
             applyAssistantResponse(e);
             applyTokenUsage(e);
             applyContextUsage(e);
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "running" });
             break;
           case "tool.requested": {
             const name =
               eventString(e, "name") ?? eventString(e, "tool_name") ?? "?";
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "tool", name });
             break;
           }
           case "tool.completed":
             appendToolResult(e, false);
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "running" });
             break;
           case "tool.errored":
             appendToolResult(e, true);
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "running" });
             break;
           case "pending_input.queued":
             enqueueQueuedInput(eventInput(e), eventKind(e), eventPendingCount(e));
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "pending", count: eventPendingCount(e) });
             break;
           case "pending_input.drained":
             drainQueuedInputs(eventDeltaCount(e), e.turn_id);
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({ kind: "running" });
             break;
           case "pending_input.dropped":
@@ -260,7 +272,7 @@ export function Session() {
             });
             break;
           case "pending_input.rejected":
-            setTurnActive(true);
+            setTurnActiveControllerState(true);
             setStatus({
               kind: "error",
               detail: "pending input queue full",
@@ -269,7 +281,7 @@ export function Session() {
           case "turn.completed":
             refresh().then(() => {
               clearQueuedInputs();
-              setTurnActive(false);
+              setTurnActiveControllerState(false);
               setStatus({ kind: "done" });
               if (doneTimerRef.current)
                 window.clearTimeout(doneTimerRef.current);
@@ -282,28 +294,33 @@ export function Session() {
           case "turn.errored":
             refresh().then(() => {
               clearQueuedInputs();
-              setTurnActive(false);
+              setTurnActiveControllerState(false);
               setStatus({ kind: "error", detail: eventErrorDetail(e) });
             });
             break;
           case "context.compact.started":
+            setCompactActiveControllerState(true);
+            appendPendingCompact();
             setStatus({ kind: "running" });
             break;
           case "context.compact.completed":
-            refresh().then(() => {
-              setStatus({ kind: "done" });
-              if (doneTimerRef.current)
-                window.clearTimeout(doneTimerRef.current);
-              doneTimerRef.current = window.setTimeout(
-                () => setStatus({ kind: "idle" }),
-                1500,
-              );
+            refresh({ preserveLiveMessages: true }).then(() => {
+              clearLocalCompactMessages();
+              setCompactActiveControllerState(false);
+              if (
+                !turnActiveRef.current &&
+                queuedInputStateRef.current.items.length === 0
+              ) {
+                markDoneSoon();
+              }
             });
             break;
           case "context.compact.errored":
-            refresh().then(() =>
-              setStatus({ kind: "error", detail: eventErrorDetail(e) }),
-            );
+            refresh({ preserveLiveMessages: true }).then(() => {
+              clearLocalCompactMessages();
+              setCompactActiveControllerState(false);
+              setStatus({ kind: "error", detail: eventErrorDetail(e) });
+            });
             break;
         }
       },
@@ -320,6 +337,12 @@ export function Session() {
   }, [id, refresh]);
 
   async function handleSend(prompt: string) {
+    const compactCommand = isCompactCommandInput(prompt);
+    if (compactCommand) {
+      appendPendingCompact(prompt);
+      setCompactActiveControllerState(true);
+      setStatus({ kind: "running" });
+    }
     try {
       const turn = await startTurn(id, prompt);
       if (turn.command) {
@@ -334,12 +357,21 @@ export function Session() {
           return;
         }
         if (turn.command.name === "/compact") {
-          await refresh();
+          await refresh({ preserveLiveMessages: true });
+          clearLocalCompactMessages();
+          setCompactActiveControllerState(false);
           if (turn.command.compact?.message_id) {
             rememberCompactCommand(turn.command.compact.message_id, prompt);
           } else {
             appendCommandResult(prompt, turn.command.text);
           }
+          if (
+            !turnActiveRef.current &&
+            queuedInputStateRef.current.items.length === 0
+          ) {
+            markDoneSoon();
+          }
+          return;
         } else {
           appendCommandResult(prompt, turn.command.text);
         }
@@ -348,16 +380,20 @@ export function Session() {
       }
       if (turn.queued) {
         enqueueQueuedInput(prompt, undefined, turn.pending_count ?? 0);
-        setTurnActive(true);
+        setTurnActiveControllerState(true);
         setStatus({ kind: "pending", count: turn.pending_count ?? 0 });
       } else {
         if (!turn.turn_id) throw new Error("turn response missing turn_id");
         appendLiveTurn(turn.turn_id, prompt, undefined, "optimistic");
-        setTurnActive(true);
+        setTurnActiveControllerState(true);
         setStatus({ kind: "running" });
       }
     } catch (e) {
       console.error("startTurn failed", e);
+      if (compactCommand) {
+        clearLocalCompactMessages();
+        setCompactActiveControllerState(false);
+      }
       setStatus({
         kind: "error",
         detail: e instanceof Error ? e.message : String(e),
@@ -398,7 +434,7 @@ export function Session() {
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
   const contextUsage = liveContextUsage ?? data.context_usage;
-  const busy = turnActive;
+  const busy = turnActive || compactActive;
   const canSend = data.kind === "primary" && data.active;
   const submitAction = composerSubmitAction({ busy, text: draft });
 
@@ -501,6 +537,66 @@ export function Session() {
       </div>
     </div>
   );
+
+  function setTurnActiveControllerState(next: boolean) {
+    turnActiveRef.current = next;
+    setTurnActive(next);
+  }
+
+  function setCompactActiveControllerState(next: boolean) {
+    setCompactActive(next);
+  }
+
+  function appendPendingCompact(commandInput?: string) {
+    setLiveMessages((prev) => {
+      let next = prev;
+      if (
+        commandInput &&
+        !next.some((m) => m.id === LOCAL_COMPACT_COMMAND_ID)
+      ) {
+        next = [
+          ...next,
+          {
+            id: LOCAL_COMPACT_COMMAND_ID,
+            role: "user",
+            kind: "slash_command",
+            blocks: [{ type: "text", text: commandInput }],
+          },
+        ];
+      }
+      if (next.some((m) => m.id === LOCAL_COMPACT_PENDING_ID)) return next;
+      return [
+        ...next,
+        {
+          id: LOCAL_COMPACT_PENDING_ID,
+          role: "user",
+          kind: LOCAL_COMPACT_PENDING_KIND,
+          pending: true,
+          blocks: [{ type: "text", text: PENDING_COMPACT_LABEL }],
+        },
+      ];
+    });
+  }
+
+  function clearLocalCompactMessages() {
+    setLiveMessages((prev) => prev.filter((m) => !isLocalCompactMessage(m)));
+  }
+
+  function consumeQueuedInput(input: string | undefined, kind: string | undefined) {
+    if (!input) return;
+    const current = queuedInputStateRef.current;
+    const index = current.items.findIndex(
+      (item) => item.input === input && item.kind === kind,
+    );
+    if (index < 0) return;
+    setQueuedInputControllerState({
+      ...current,
+      items: [
+        ...current.items.slice(0, index),
+        ...current.items.slice(index + 1),
+      ],
+    });
+  }
 
   function appendLiveTurn(
     turnID: string | undefined,
@@ -749,7 +845,7 @@ function eventInput(e: { payload?: unknown }): string | undefined {
 }
 
 function eventKind(e: { payload?: unknown }): string | undefined {
-  return eventString(e, "kind");
+  return eventString(e, "kind") || undefined;
 }
 
 function eventPendingCount(e: { payload?: unknown }): number {
@@ -1089,9 +1185,13 @@ function MessageGroupView({
   const showModel = group.role === "assistant" && !!group.model;
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
   const isCompact = group.kind === "compact";
+  const isPendingCompact = group.kind === LOCAL_COMPACT_PENDING_KIND;
   const copyText = messageGroupCopyText(group);
   const canCopyMessage =
-    !isCompact && (group.role === "user" || group.role === "system") && copyText;
+    !isCompact &&
+    !isPendingCompact &&
+    (group.role === "user" || group.role === "system") &&
+    copyText;
 
   if (isMCPEvent) {
     return <MCPEventGroup group={group} />;
@@ -1106,6 +1206,10 @@ function MessageGroupView({
         <CompactMessage text={text} />
       </>
     );
+  }
+
+  if (isPendingCompact) {
+    return <CompactMessage text={PENDING_COMPACT_LABEL} state="pending" />;
   }
 
   const isEmpty = group.units.length === 0;
@@ -1217,7 +1321,24 @@ function MCPEventGroup({ group }: { group: MessageGroup }) {
   );
 }
 
-function CompactMessage({ text }: { text: string }) {
+function CompactMessage({
+  text,
+  state = "complete",
+}: {
+  text: string;
+  state?: "complete" | "pending";
+}) {
+  if (state === "pending") {
+    return (
+      <div className="flex w-full items-center gap-3 px-2 py-3">
+        <Separator className="flex-1 opacity-60" />
+        <span className="rounded-full border border-border/70 bg-background/70 px-3 py-1 font-mono text-[11px] text-muted-foreground/70 shadow-[var(--shadow-xs)]">
+          {text}
+        </span>
+        <Separator className="flex-1 opacity-60" />
+      </div>
+    );
+  }
   const summary = compactSummaryText(text);
   return (
     <div className="flex w-full items-center gap-3 px-2 py-3">
