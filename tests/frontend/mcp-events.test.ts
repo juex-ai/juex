@@ -20,11 +20,26 @@ test("parseMCPEventText keeps the raw text under a fallback label", () => {
   });
 });
 
+test("parseMCPEventText keeps raw text when label segments are empty", () => {
+  assert.deepEqual(parseMCPEventText(":pm_update:{\"id\":\"42\"}"), {
+    label: "mcp:event",
+    content: ":pm_update:{\"id\":\"42\"}",
+  });
+  assert.deepEqual(parseMCPEventText("eigenflux::{\"id\":\"42\"}"), {
+    label: "mcp:event",
+    content: "eigenflux::{\"id\":\"42\"}",
+  });
+});
+
 test("oneLinePreview collapses multiline event content into one row", () => {
   assert.equal(
     oneLinePreview("first line\n\n  second\tline  "),
     "first line second line",
   );
+});
+
+test("oneLinePreview truncates long content", () => {
+  assert.equal(oneLinePreview("a".repeat(150)), `${"a".repeat(120)}...`);
 });
 
 test("formatMCPEventForDisplay returns a collapsed preview", () => {

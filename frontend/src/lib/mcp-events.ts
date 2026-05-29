@@ -26,14 +26,19 @@ export function parseMCPEventText(text: string): {
 
   const source = text.slice(0, first).trim();
   const eventType = text.slice(first + 1, second).trim();
-  const label = source && eventType ? `${source}:${eventType}` : FALLBACK_LABEL;
+  if (!source || !eventType) {
+    return { label: FALLBACK_LABEL, content: text };
+  }
 
   return {
-    label,
+    label: `${source}:${eventType}`,
     content: text.slice(second + 1),
   };
 }
 
-export function oneLinePreview(text: string): string {
-  return text.replace(/\s+/g, " ").trim() || "empty event";
+export function oneLinePreview(text: string, maxLength = 120): string {
+  const singleLine = text.replace(/\s+/g, " ").trim();
+  if (!singleLine) return "empty event";
+  if (singleLine.length <= maxLength) return singleLine;
+  return `${singleLine.slice(0, maxLength)}...`;
 }
