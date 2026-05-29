@@ -1418,16 +1418,13 @@ function CopyTextButton({
 }) {
   const [copySignal, setCopySignal] = useState(0);
   const copied = copySignal > 0;
-  const copiedOnlyTooltip = tooltipMode === "copied-only";
-  const tooltip = copiedOnlyTooltip
-    ? copiedTooltip
-    : copyButtonTooltip({
-        copied,
-        mode: tooltipMode,
-        idleTooltip,
-        copiedTooltip,
-      });
-  const tooltipOpen = copiedOnlyTooltip ? copied : undefined;
+  const tooltip = copyButtonTooltip({
+    copied,
+    mode: tooltipMode,
+    idleTooltip,
+    copiedTooltip,
+  });
+  const tooltipOpen = tooltipMode === "copied-only" ? copied : undefined;
 
   useEffect(() => {
     if (!copySignal) return;

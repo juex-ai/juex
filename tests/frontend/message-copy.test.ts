@@ -64,7 +64,10 @@ test("copyButtonTooltip supports copied-only compact feedback", () => {
     idleTooltip: "Copy compacted context",
   };
 
-  assert.equal(copyButtonTooltip({ ...args, copied: false }), undefined);
+  assert.equal(
+    copyButtonTooltip({ ...args, copied: false }),
+    COMPACT_COPIED_TOOLTIP,
+  );
   assert.equal(
     copyButtonTooltip({ ...args, copied: true }),
     "compacted content copied",

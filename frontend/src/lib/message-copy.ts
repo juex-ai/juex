@@ -42,6 +42,6 @@ export function copyButtonTooltip({
   copiedTooltip: string;
 }): string | undefined {
   if (mode === "none") return undefined;
-  if (mode === "copied-only") return copied ? copiedTooltip : undefined;
+  if (mode === "copied-only") return copiedTooltip;
   return copied ? copiedTooltip : idleTooltip;
 }
