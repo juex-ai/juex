@@ -46,6 +46,7 @@ import {
   type MessageGroup,
 } from "@/lib/display-units";
 import {
+  COMPACTING_SUBMIT_HINT,
   composerSubmitAction,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
@@ -441,9 +442,12 @@ export function Session() {
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
   const contextUsage = liveContextUsage ?? data.context_usage;
-  const busy = turnActive || compactActive;
   const canSend = data.kind === "primary" && data.active;
-  const submitAction = composerSubmitAction({ busy, text: draft });
+  const submitAction = composerSubmitAction({
+    turnActive,
+    compactActive,
+    text: draft,
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -530,6 +534,9 @@ export function Session() {
                   <div className="flex shrink-0 items-center gap-1">
                     <ComposerSubmitButton
                       action={submitAction}
+                      onCompacting={() =>
+                        showComposerHint(COMPACTING_SUBMIT_HINT)
+                      }
                       onEmpty={() => showComposerHint("Enter a message to send")}
                       onStop={() => void handleInterrupt()}
                     />
@@ -1002,18 +1009,23 @@ function ComposerFeedback({
 
 function ComposerSubmitButton({
   action,
+  onCompacting,
   onEmpty,
   onStop,
 }: {
   action: ComposerSubmitAction;
+  onCompacting: () => void;
   onEmpty: () => void;
   onStop: () => void;
 }) {
   const isEmpty = action === "empty";
+  const isCompacting = action === "compacting";
   const isStop = action === "stop";
   const tooltip =
     action === "empty"
       ? "Enter a message to send"
+      : action === "compacting"
+        ? COMPACTING_SUBMIT_HINT
       : action === "stop"
         ? "Stop current turn"
         : action === "queue"
@@ -1022,6 +1034,8 @@ function ComposerSubmitButton({
   const ariaLabel =
     action === "empty"
       ? "Enter a message before sending"
+      : action === "compacting"
+        ? COMPACTING_SUBMIT_HINT
       : action === "stop"
         ? "Stop current turn"
         : action === "queue"
@@ -1032,13 +1046,20 @@ function ComposerSubmitButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <PromptInputSubmit
-          aria-disabled={isEmpty}
+          aria-disabled={isEmpty || isCompacting}
           aria-label={ariaLabel}
-          className={cn(isEmpty && "cursor-not-allowed opacity-50")}
+          className={cn(
+            (isEmpty || isCompacting) && "cursor-not-allowed opacity-50",
+          )}
           onClick={(event) => {
             if (isEmpty) {
               event.preventDefault();
               onEmpty();
+              return;
+            }
+            if (isCompacting) {
+              event.preventDefault();
+              onCompacting();
               return;
             }
             if (isStop) {
@@ -1046,7 +1067,7 @@ function ComposerSubmitButton({
               onStop();
             }
           }}
-          type={isEmpty || isStop ? "button" : "submit"}
+          type={isEmpty || isCompacting || isStop ? "button" : "submit"}
           variant={isStop ? "outline" : "default"}
         >
           {isStop ? (
