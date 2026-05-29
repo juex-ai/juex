@@ -58,7 +58,14 @@ import {
   PENDING_COMPACT_LABEL,
 } from "@/lib/compact-ui";
 import { writeClipboardText } from "@/lib/clipboard";
-import { compactSummaryText, messageGroupCopyText } from "@/lib/message-copy";
+import {
+  COMPACT_COPIED_TOOLTIP,
+  compactSummaryText,
+  copyButtonTooltip,
+  messageGroupCanCopy,
+  messageGroupCopyText,
+  type CopyTooltipMode,
+} from "@/lib/message-copy";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
@@ -1187,11 +1194,7 @@ function MessageGroupView({
   const isCompact = group.kind === "compact";
   const isPendingCompact = group.kind === LOCAL_COMPACT_PENDING_KIND;
   const copyText = messageGroupCopyText(group);
-  const canCopyMessage =
-    !isCompact &&
-    !isPendingCompact &&
-    (group.role === "user" || group.role === "system") &&
-    copyText;
+  const canCopyMessage = !isPendingCompact && messageGroupCanCopy(group);
 
   if (isMCPEvent) {
     return <MCPEventGroup group={group} />;
@@ -1346,9 +1349,11 @@ function CompactMessage({
       <CopyTextButton
         text={summary}
         className="h-7 rounded-full border border-border bg-background px-3 font-mono text-[11px] text-muted-foreground shadow-[var(--shadow-xs)] hover:text-foreground"
-        copiedTooltip="Copied to clipboard"
+        copiedTooltip={COMPACT_COPIED_TOOLTIP}
         idleTooltip="Copy compacted context"
+        label="Copy compacted context"
         size="sm"
+        tooltipMode="copied-only"
       >
         Context compacted
       </CopyTextButton>
@@ -1378,6 +1383,7 @@ function MessageCopyAction({
         idleTooltip="Copy message"
         label="Copy message"
         size="icon-xs"
+        tooltipMode="none"
       />
     </MessageActions>
   );
@@ -1390,6 +1396,7 @@ function CopyTextButton({
   copiedTooltip,
   label,
   size = "icon-sm",
+  tooltipMode = "always",
   children,
 }: {
   text: string;
@@ -1406,10 +1413,18 @@ function CopyTextButton({
     | "icon-xs"
     | "icon-sm"
     | "icon-lg";
+  tooltipMode?: CopyTooltipMode;
   children?: ReactNode;
 }) {
   const [copySignal, setCopySignal] = useState(0);
   const copied = copySignal > 0;
+  const tooltip = copyButtonTooltip({
+    copied,
+    mode: tooltipMode,
+    idleTooltip,
+    copiedTooltip,
+  });
+  const tooltipOpen = tooltipMode === "copied-only" ? copied : undefined;
 
   useEffect(() => {
     if (!copySignal) return;
@@ -1433,7 +1448,8 @@ function CopyTextButton({
       label={label ?? idleTooltip}
       onClick={() => void copyText()}
       size={size}
-      tooltip={copied ? copiedTooltip : idleTooltip}
+      tooltip={tooltip}
+      tooltipOpen={tooltipOpen}
       variant="ghost"
     >
       {children ?? (
