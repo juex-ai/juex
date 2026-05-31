@@ -124,12 +124,15 @@ func editTool() Tool {
 			oldStr, _ := in["old"].(string)
 			newStr, _ := in["new"].(string)
 			replaceAll, _ := in["replace_all"].(bool)
-			expected, expectedSet := toInt(in["expected_replacements"])
-			if _, ok := in["expected_replacements"]; ok {
-				expectedSet = true
-				if expected <= 0 {
+			var expected int
+			var expectedSet bool
+			if val, ok := in["expected_replacements"]; ok && val != nil {
+				var parsed bool
+				expected, parsed = toInt(val)
+				if !parsed || expected <= 0 {
 					return "", fmt.Errorf("edit: expected_replacements must be a positive integer")
 				}
+				expectedSet = true
 			}
 			if path == "" || oldStr == "" {
 				return "", fmt.Errorf("edit: path and old required")

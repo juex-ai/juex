@@ -197,6 +197,33 @@ func TestBuiltins_EditExpectedReplacementsMismatchPreservesFile(t *testing.T) {
 	}
 }
 
+func TestBuiltins_EditExpectedReplacementsNullIsIgnored(t *testing.T) {
+	r := NewRegistry()
+	RegisterBuiltins(r, "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.txt")
+	if err := os.WriteFile(path, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.Call(context.Background(), "edit", map[string]any{
+		"path":                  path,
+		"old":                   "world",
+		"new":                   "Juex",
+		"expected_replacements": nil,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello Juex" {
+		t.Fatalf("after edit: %q", string(data))
+	}
+}
+
 func TestBuiltins_Bash(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()
