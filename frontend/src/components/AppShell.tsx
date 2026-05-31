@@ -208,7 +208,7 @@ export function AppShell() {
           </div>
           {workspaceDockOpen && (
             <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] flex-shrink-0 flex-col overflow-hidden border-l bg-card transition-all xl:flex">
-              <FileTreePanel />
+              <FileTreePanel active={workspaceDocked} />
             </div>
           )}
           <Sheet
@@ -225,7 +225,7 @@ export function AppShell() {
                   Browse files in the current workspace.
                 </SheetDescription>
               </SheetHeader>
-              <FileTreePanel />
+              <FileTreePanel active={!workspaceDocked && workspaceSheetOpen} />
             </SheetContent>
           </Sheet>
         </SidebarInset>
