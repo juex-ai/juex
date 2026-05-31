@@ -294,6 +294,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			"stop_reason": resp.StopReason,
 			"usage":       resp.Usage,
 			"token_usage": totalUsage,
+			"blocks":      msg.Blocks,
 			"text":        responseText(resp.Message),
 			"thinking":    responseThinking(resp.Message),
 			"tool_calls":  responseToolCalls(resp.Message),

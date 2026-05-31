@@ -266,7 +266,9 @@ func (b *Bus) Emit(e Event)                              // synchronous fan-out
 
 Standard event types: `turn.started/completed/errored`,
 `llm.requested/responded`, `tool.requested/completed/errored`,
-`memory.read/written`.
+`memory.read/written`. `llm.responded` includes the assistant message's
+ordered `blocks` plus summary fields (`text`, `thinking`, `tool_calls`) for
+older consumers.
 
 ### 3.4 Memory
 

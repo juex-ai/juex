@@ -65,11 +65,15 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		vp.spin.start("thinking")
 	case "llm.responded":
 		vp.spin.halt()
-		if think, _ := p["thinking"].(string); think != "" {
-			vp.printIndentedBlock("thinking", think, true)
-		}
-		if text, _ := p["text"].(string); text != "" {
-			vp.printIndentedBlock("assistant", text, false)
+		if blocks, ok := responseBlocksFromPayload(p["blocks"]); ok {
+			vp.printResponseBlocks(blocks)
+		} else {
+			if think, _ := p["thinking"].(string); think != "" {
+				vp.printIndentedBlock("thinking", think, true)
+			}
+			if text, _ := p["text"].(string); text != "" {
+				vp.printIndentedBlock("assistant", text, false)
+			}
 		}
 		if usage, ok := usageFrom(p["token_usage"]); ok {
 			vp.printlnDim("  " + FormatTokenUsage(usage))
@@ -110,6 +114,44 @@ func (vp *verbosePrinter) handle(e events.Event) {
 	case "turn.errored":
 		errMsg, _ := p["error"].(string)
 		vp.printlnRed("✗ " + errMsg)
+	}
+}
+
+func responseBlocksFromPayload(v any) ([]llm.Block, bool) {
+	switch blocks := v.(type) {
+	case []llm.Block:
+		return blocks, true
+	case []any:
+		buf, err := json.Marshal(blocks)
+		if err != nil {
+			return nil, false
+		}
+		var decoded []llm.Block
+		if err := json.Unmarshal(buf, &decoded); err != nil {
+			return nil, false
+		}
+		return decoded, true
+	case nil:
+		return nil, false
+	default:
+		return nil, false
+	}
+}
+
+func (vp *verbosePrinter) printResponseBlocks(blocks []llm.Block) {
+	for _, block := range blocks {
+		switch block.Type {
+		case llm.BlockReasoning:
+			text := block.Text
+			if block.Redacted {
+				text = "[redacted]"
+			} else if text == "" {
+				text = block.Content
+			}
+			vp.printIndentedBlock("thinking", text, true)
+		case llm.BlockText:
+			vp.printIndentedBlock("assistant", block.Text, false)
+		}
 	}
 }
 

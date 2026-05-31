@@ -2,10 +2,12 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 )
 
 // emitAll feeds a sequence of events through a verbosePrinter and returns
@@ -110,6 +112,61 @@ func TestVerbose_MultilineThinkingAndText(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestVerbose_PrintsResponseBlocksInOrder(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "llm.requested", Payload: map[string]any{}},
+		{Type: "llm.responded", Payload: map[string]any{
+			"blocks": []llm.Block{
+				{Type: llm.BlockText, Text: "lead"},
+				{Type: llm.BlockReasoning, Text: "think"},
+				{Type: llm.BlockText, Text: "tail"},
+			},
+		}},
+	})
+
+	lead := strings.Index(out, "assistant: lead")
+	think := strings.Index(out, "thinking: think")
+	tail := strings.Index(out, "assistant: tail")
+	if lead < 0 || think < 0 || tail < 0 {
+		t.Fatalf("missing ordered block output in:\n%s", out)
+	}
+	if lead >= think || think >= tail {
+		t.Fatalf("blocks printed out of order:\n%s", out)
+	}
+}
+
+func TestVerbose_PrintsJSONDecodedResponseBlocksInOrder(t *testing.T) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"blocks": [
+			{"type": "text", "text": "lead"},
+			{"type": "reasoning", "text": "think"},
+			{"type": "text", "text": "tail"}
+		],
+		"text": "legacy fallback",
+		"thinking": "legacy thinking"
+	}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	out := emitAll([]events.Event{
+		{Type: "llm.requested", Payload: map[string]any{}},
+		{Type: "llm.responded", Payload: payload},
+	})
+
+	lead := strings.Index(out, "assistant: lead")
+	think := strings.Index(out, "thinking: think")
+	tail := strings.Index(out, "assistant: tail")
+	if lead < 0 || think < 0 || tail < 0 {
+		t.Fatalf("missing ordered block output in:\n%s", out)
+	}
+	if lead >= think || think >= tail {
+		t.Fatalf("JSON-decoded blocks printed out of order:\n%s", out)
+	}
+	if strings.Contains(out, "legacy fallback") || strings.Contains(out, "legacy thinking") {
+		t.Fatalf("used legacy fallback despite decoded blocks:\n%s", out)
 	}
 }
 
