@@ -133,6 +133,70 @@ func TestBuiltins_EditAmbiguous(t *testing.T) {
 	}
 }
 
+func TestBuiltins_EditReplaceAll(t *testing.T) {
+	r := NewRegistry()
+	RegisterBuiltins(r, "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.txt")
+	if err := os.WriteFile(path, []byte("alpha beta alpha alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := r.Call(context.Background(), "edit", map[string]any{
+		"path":        path,
+		"old":         "alpha",
+		"new":         "omega",
+		"replace_all": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "3 replacements") {
+		t.Fatalf("edit output: %s", out)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "omega beta omega omega" {
+		t.Fatalf("after edit: %q", string(data))
+	}
+}
+
+func TestBuiltins_EditExpectedReplacementsMismatchPreservesFile(t *testing.T) {
+	r := NewRegistry()
+	RegisterBuiltins(r, "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.txt")
+	original := "one two one"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.Call(context.Background(), "edit", map[string]any{
+		"path":                  path,
+		"old":                   "one",
+		"new":                   "three",
+		"replace_all":           true,
+		"expected_replacements": 3,
+	})
+	if err == nil {
+		t.Fatal("expected replacement count error")
+	}
+	if !strings.Contains(err.Error(), "expected 3 replacements, found 2") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != original {
+		t.Fatalf("file changed after failed edit: %q", string(data))
+	}
+}
+
 func TestBuiltins_Bash(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()

@@ -231,7 +231,7 @@ with the standard `read` builtin against the path printed there.
 |---|---|
 | `read` | read file (offset/limit) |
 | `write` | overwrite file |
-| `edit` | old -> new in-place replace |
+| `edit` | old -> new in-place replace; unique by default, optional replace_all / expected_replacements |
 | `bash` | run shell (timeout, cwd; defaults to WorkDir) |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
 | `memory_write` | persist a memory entry |
