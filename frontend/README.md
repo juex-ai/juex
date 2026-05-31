@@ -56,14 +56,18 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/composer-submit.ts` | pure composer submit-state transitions |
 | `src/lib/compact-ui.ts` | optimistic `/compact` UI labels and local message helpers |
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
+| `src/lib/history-sessions.ts` | pure history-list title, badge, and read-only route helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
+| `src/lib/route-state.ts` | pure route matching helpers for shell state |
+| `src/lib/session-access.ts` | pure rules for writable versus read-only session views |
 | `src/lib/workspace-refresh.ts` | pure helper for refreshing workspace tree and open file preview data |
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
+| `src/pages/History.tsx` | session history list and read-only session entry point |
 | `src/pages/Runtime.tsx` | MCP and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |

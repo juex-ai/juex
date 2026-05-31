@@ -98,12 +98,11 @@ juex/
 │   │   │   └── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
 │   │   ├── pages/
 │   │   │   ├── Sessions.tsx        # /
-│   │   │   ├── Session.tsx         # /sessions/:id
+│   │   │   ├── Session.tsx         # /sessions/:id and read-only /history/sessions/:id
+│   │   │   ├── History.tsx         # /history
 │   │   │   └── Runtime.tsx         # /runtime
 │   │   └── components/
 │   │       ├── AppShell.tsx
-│   │       ├── Sidebar.tsx
-│   │       ├── SidebarSessionList.tsx
 │   │       ├── ai-elements/        # AI Elements primitives (copied via shadcn CLI)
 │   │       │   ├── _local-types.ts
 │   │       │   ├── conversation.tsx
@@ -167,46 +166,49 @@ server. Edit React, see changes instantly.
 
 ## 5. Page layout
 
-Every page renders a responsive shell: a collapsible session sidebar on the
-left, the conversation column in the middle, and a workspace browser that docks
-on wide screens and becomes a right-side drawer on narrower screens. The middle
-column owns its own header and composer (when applicable).
+Every page renders a responsive shell: the main content column fills the center
+and a workspace browser docks on wide screens or becomes a right-side drawer on
+narrower screens. Session history is not a persistent navigation surface; it is
+opened from the global header as the `/history` page. The middle column owns
+its own header and composer (when applicable).
 
 ```
-┌──────────────┬──────────────────────────────────┬──────────────┐
-│ + new chat   │ ← page header (id / meta)        │ workspace    │
-├──────────────┼──────────────────────────────────┼──────────────┤
-│ session A    │                                  │ file tree    │
-│ session B    │  message list                    │              │
-│ session C    │  (scrollable)                    │              │
-│ session D    │                                  │              │
-│ ...          ├──────────────────────────────────┤              │
-│              │ ┌──────────────────────────────┐ │              │
-│              │ │ textarea                     │ │              │
-│              │ └──────────────────────────────┘ │              │
-│              │ context 61.5k  tokens 42    send│              │
-└──────────────┴──────────────────────────────────┴──────────────┘
+┌──────────────────────────────────────┬──────────────┐
+│ global header: juex, history/runtime │ workspace    │
+├──────────────────────────────────────┼──────────────┤
+│ ← page header (id / meta)            │ file tree    │
+│                                      │              │
+│ message list                         │              │
+│ (scrollable)                         │              │
+│                                      │              │
+├──────────────────────────────────────┤              │
+│ ┌──────────────────────────────────┐ │              │
+│ │ textarea                         │ │              │
+│ └──────────────────────────────────┘ │              │
+│ context 61.5k  tokens 42       send │              │
+└──────────────────────────────────────┴──────────────┘
 ```
 
-- Sidebar collapses to a hidden drawer (shadcn `Sheet`) below 768px.
 - Workspace docks as a right column at 1280px and wider. Below 1280px, the
   same header button opens the workspace as a right-side `Sheet` so the
   conversation column keeps its readable width.
 - File previews always open in a right-side sheet. On narrow screens the
   preview sheet uses the viewport width and wraps long paths/content.
 - Runtime status badges live beside the shell title when there is room. The
-  shell title is the current session preview, truncated with ellipsis; with no
-  selected session the title area is blank.
+  shell title is the current page or session preview, truncated with ellipsis;
+  with no selected session the title area is blank.
 - Shell-aligned header strips use `--juex-header-height` so the app header,
   workspace header, and session metadata header stay aligned.
+- The history icon opens `/history`; each row opens a read-only session viewer
+  under `/history/sessions/:id`.
 - The wrench icon opens `/runtime` for MCP server and skill details. On the
   runtime page, the same slot becomes a back arrow that returns to the previous
   non-runtime route.
 - Center column max-width is 760px; the rest is gutter so reading lines do
   not get awkwardly wide. Gutters shrink from 24px to 16px below 768px.
 - Composer is sticky to the bottom of the center column.
-- Desktop columns are dense: left sidebar `16rem`, workspace `18rem`, center
-  content padded `24px`. The app is a product surface, not a marketing page.
+- Desktop columns are dense: workspace `18rem`, center content padded `24px`.
+  The app is a product surface, not a marketing page.
 - Headers and metadata wrap or hide low-priority labels instead of forcing
   horizontal scroll. Runtime tables scroll within their cards on small
   screens; the page itself should not overflow horizontally.
@@ -217,14 +219,16 @@ column owns its own header and composer (when applicable).
 
 ### 6.1 Sessions list (`/`)
 
-The sidebar is the session list itself. The center column shows a warm paper
-empty state with the logo mark, the line `Aware, action`, and the normal prompt
-input so a first chat can start without using the sidebar.
+The center column shows a warm paper empty state with the logo mark, the line
+`Aware, action`, and the normal prompt input. Submitting creates a new active
+primary session and navigates to `/sessions/<new-id>`.
 
 ### 6.2 Session detail (`/sessions/:id`)
 
-Same sidebar (highlighted entry for the current session). Center column:
-compact header strip + scrollable message list + sticky composer. The composer
+Center column: compact header strip + scrollable message list + sticky
+composer. The composer is shown only for the active primary session outside
+history mode. Inactive primary sessions, side sessions, and all history-mode
+session views are read-only and never show an activate control. The composer
 footer shows transient composer feedback, latest request context total, and
 current conversation token total.
 
@@ -246,10 +250,16 @@ temporarily changes its tooltip to `Copied to clipboard`.
 Copy controls use the Clipboard API when available and fall back to a temporary
 textarea copy path so local HTTP access over LAN or NetBird still works.
 
-When the user clicks `+ new chat` in the sidebar, the client POSTs
-`/api/sessions` and immediately navigates to `/sessions/<new-id>`.
+### 6.3 History (`/history`, `/history/sessions/:id`)
 
-### 6.3 Runtime detail (`/runtime`)
+The global history button opens `/history`, a dense list of recorded sessions
+sorted by the server. Rows show the preview, relative last-active time, kind,
+active state, and turn count. Clicking a row opens
+`/history/sessions/<id>`, which reuses the normal transcript renderer but
+passes history mode so no composer, live event subscription, or activate action
+is available. The history page owns deletion and a compact `New chat` button.
+
+### 6.4 Runtime detail (`/runtime`)
 
 Shows service runtime metadata first, including the absolute cwd used by the
 running `juex serve` process. Then it shows the effective provider profile,
@@ -266,26 +276,21 @@ conversational surface.
 
 ## 7. Components
 
-### 7.1 Sidebar
+### 7.1 History list
 
-shadcn `Sidebar` owns the offcanvas behaviour. Top contains the juex logo mark,
-the italic serif wordmark, and a primary **New chat** button. Below it, a
-scrollable list of sessions sorted by `last_active_at` desc. Each entry shows:
+The history list is a full page, not a sidebar. Each row shows:
 
 - First line: truncated preview (max 1 line, ellipsis).
 - Second line: relative timestamp (`2m ago`, `yesterday`, `Mar 5`) in mono,
-  plus compact `primary` / `side` and `active` badges when applicable.
-
-Active session uses a stronger gold tint and a narrow gold rail. Hover contrast
-must be visible in light mode. In dark mode, selected rows keep gold background
-with forest text even while hovered so the title remains readable. Each row may
-expose a compact trash icon for deleting the session; destructive actions
-require a browser confirmation before calling the API.
+  plus compact `primary` / `side`, `active`, and turn-count badges.
+- A compact trash icon for deleting the session. Destructive actions require a
+  browser confirmation before calling the API.
 
 ### 7.2 PageHeader
 
-The global shell header shows the current conversation preview, not a generic
-brand label. A horizontal strip inside the session view still shows session id,
+The global shell header shows the juex wordmark, the current page or
+conversation preview, and icon buttons for history, runtime details, and
+workspace. A horizontal strip inside the session view still shows session id,
 turn count, kind, active state, model, and last-active time. Session ids,
 models, numbers, and units use mono with tabular numbers.
 

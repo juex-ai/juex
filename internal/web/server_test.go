@@ -65,14 +65,18 @@ func TestRunEnsuresActivePrimarySession(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 
 	var h session.History
+	var open bool
 	deadline := time.After(2 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
-	for h.Active == nil {
+	for h.Active == nil || !open {
 		select {
 		case <-deadline:
 			cancel()
-			t.Fatal("server did not create an active primary session")
+			if h.Active == nil {
+				t.Fatal("server did not create an active primary session")
+			}
+			t.Fatalf("session %q not open in server", h.Active.ID)
 		case <-tick.C:
 			var err error
 			h, err = session.LoadHistory(srv.opts.Cfg.HistoryPath())
@@ -80,15 +84,14 @@ func TestRunEnsuresActivePrimarySession(t *testing.T) {
 				cancel()
 				t.Fatal(err)
 			}
+			if h.Active != nil {
+				_, open = srv.sessions.Load(h.Active.ID)
+			}
 		}
 	}
 	if h.Active.Kind != session.KindPrimary || !h.Active.Active {
 		cancel()
 		t.Fatalf("active session = %+v, want active primary", h.Active)
-	}
-	if _, ok := srv.sessions.Load(h.Active.ID); !ok {
-		cancel()
-		t.Fatalf("session %q not open in server", h.Active.ID)
 	}
 
 	cancel()
