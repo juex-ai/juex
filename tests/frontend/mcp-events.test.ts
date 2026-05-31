@@ -47,5 +47,15 @@ test("formatMCPEventForDisplay returns a collapsed preview", () => {
     label: "server:changed",
     content: "line 1\nline 2",
     preview: "line 1 line 2",
+    copyText: "line 1\nline 2",
+  });
+});
+
+test("formatMCPEventForDisplay keeps full content as copy text", () => {
+  assert.deepEqual(formatMCPEventForDisplay("server:changed:line 1\n\nline 2"), {
+    label: "server:changed",
+    content: "line 1\n\nline 2",
+    preview: "line 1 line 2",
+    copyText: "line 1\n\nline 2",
   });
 });

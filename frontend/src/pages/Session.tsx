@@ -1585,6 +1585,16 @@ function MCPEventMessage({ text }: { text: string }) {
         >
           {event.preview}
         </span>
+        <span data-mcp-event-copy>
+          <CopyTextButton
+            text={event.copyText}
+            className="size-7 text-current opacity-80 hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:text-current hover:opacity-100 focus-visible:ring-ring dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10"
+            copiedTooltip="Copied to clipboard"
+            idleTooltip="Copy event content"
+            label="Copy event content"
+            size="icon-sm"
+          />
+        </span>
         <button
           type="button"
           className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-current opacity-80 transition hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10"
