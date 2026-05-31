@@ -62,3 +62,32 @@ test("applyToolRequestedToMessages updates an existing tool block without duplic
     timeout_seconds: 45,
   });
 });
+
+test("applyToolRequestedToMessages appends to a completed assistant message", () => {
+  const messages: Message[] = [
+    { role: "user", turn_id: "t1", blocks: [{ type: "text", text: "run it" }] },
+    {
+      role: "assistant",
+      turn_id: "t1",
+      pending: false,
+      blocks: [{ type: "text", text: "I'll run it." }],
+    },
+  ];
+
+  const next = applyToolRequestedToMessages(messages, {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "bash",
+    input: { cmd: "sleep 10" },
+    timeoutSeconds: 30,
+  });
+
+  assert.equal(next.length, 2);
+  assert.deepEqual(next[1].blocks?.[1], {
+    type: "tool_use",
+    tool_use_id: "tool-1",
+    tool_name: "bash",
+    input: { cmd: "sleep 10" },
+    timeout_seconds: 30,
+  });
+});

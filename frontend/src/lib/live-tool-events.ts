@@ -14,33 +14,29 @@ export function applyToolRequestedToMessages(
 ): Message[] {
   if (!update.turnID || !update.toolUseID) return messages;
   const block = toolUseBlockFromUpdate(update);
-  let changed = false;
-  const next = messages.map((message) => {
-    if (message.turn_id !== update.turnID || message.role !== "assistant") {
-      return message;
-    }
-    const blocks = message.blocks ?? [];
-    const existingIndex = blocks.findIndex(
-      (candidate) =>
-        candidate.type === "tool_use" &&
-        candidate.tool_use_id === update.toolUseID,
-    );
-    if (existingIndex >= 0) {
-      changed = true;
-      return {
-        ...message,
-        blocks: blocks.map((candidate, index) =>
-          index === existingIndex ? { ...candidate, ...block } : candidate,
-        ),
-      };
-    }
-    if (message.pending) {
-      changed = true;
+  const targetIndex = toolUpdateTargetIndex(messages, update);
+  if (targetIndex >= 0) {
+    return messages.map((message, index) => {
+      if (index !== targetIndex) {
+        return message;
+      }
+      const blocks = message.blocks ?? [];
+      const existingIndex = blocks.findIndex(
+        (candidate) =>
+          candidate.type === "tool_use" &&
+          candidate.tool_use_id === update.toolUseID,
+      );
+      if (existingIndex >= 0) {
+        return {
+          ...message,
+          blocks: blocks.map((candidate, blockIndex) =>
+            blockIndex === existingIndex ? { ...candidate, ...block } : candidate,
+          ),
+        };
+      }
       return { ...message, blocks: [...blocks, block] };
-    }
-    return message;
-  });
-  if (changed) return next;
+    });
+  }
   return [
     ...messages,
     {
@@ -50,6 +46,33 @@ export function applyToolRequestedToMessages(
       blocks: [block],
     },
   ];
+}
+
+function toolUpdateTargetIndex(
+  messages: Message[],
+  update: ToolRequestedUpdate,
+): number {
+  let sameTurnAssistant = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.turn_id !== update.turnID || message.role !== "assistant") {
+      continue;
+    }
+    const blocks = message.blocks ?? [];
+    if (sameTurnAssistant < 0) {
+      sameTurnAssistant = index;
+    }
+    if (
+      blocks.some(
+        (candidate) =>
+          candidate.type === "tool_use" &&
+          candidate.tool_use_id === update.toolUseID,
+      )
+    ) {
+      return index;
+    }
+  }
+  return sameTurnAssistant;
 }
 
 function toolUseBlockFromUpdate(update: ToolRequestedUpdate): ToolUseBlock {
