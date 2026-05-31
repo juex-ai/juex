@@ -41,3 +41,29 @@ test("formatToolResultText caps total characters", () => {
   assert.equal(formatted.truncated, true);
   assert.equal(formatted.omittedChars, 3);
 });
+
+test("formatToolResultText does not falsely truncate trailing newlines", () => {
+  const formatted = formatToolResultText("alpha\nbeta\n", {
+    maxChars: 1000,
+    maxLines: 2,
+  });
+
+  assert.equal(formatted.text, "alpha\nbeta\n");
+  assert.equal(formatted.truncated, false);
+  assert.equal(formatted.omittedLines, 0);
+});
+
+test("formatToolResultText counts omitted chars after line truncation", () => {
+  const formatted = formatToolResultText("alpha\nbeta\ngamma\ndelta", {
+    maxChars: 20,
+    maxLines: 2,
+  });
+
+  assert.equal(
+    formatted.text,
+    "alpha\nbeta\n[tool result truncated: 2 more lines, 12 more characters]"
+  );
+  assert.equal(formatted.truncated, true);
+  assert.equal(formatted.omittedLines, 2);
+  assert.equal(formatted.omittedChars, 12);
+});

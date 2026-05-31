@@ -22,21 +22,25 @@ export function formatToolResultText(
   let text = content;
   let omittedChars = 0;
   let omittedLines = 0;
+  const charTruncated = content.length > maxChars;
 
-  if (text.length > maxChars) {
-    omittedChars = text.length - maxChars;
+  if (charTruncated) {
     text = text.slice(0, maxChars);
   }
 
-  const lines = text.split(/\r\n|\r|\n/);
-  if (lines.length > maxLines) {
-    omittedLines = lines.length - maxLines;
+  const { lines, contentLineCount } = splitResultLines(text);
+  if (contentLineCount > maxLines) {
+    omittedLines = contentLineCount - maxLines;
     text = lines.slice(0, maxLines).join("\n");
   }
 
-  const truncated = omittedChars > 0 || omittedLines > 0;
+  const truncated = charTruncated || omittedLines > 0;
   if (!truncated) {
     return { text, truncated, omittedChars, omittedLines };
+  }
+
+  if (charTruncated) {
+    omittedChars = content.length - text.length;
   }
 
   const reasons = [
@@ -58,6 +62,20 @@ function positiveLimit(value: number | undefined, fallback: number): number {
     return fallback;
   }
   return Math.floor(value);
+}
+
+function splitResultLines(text: string): {
+  lines: string[];
+  contentLineCount: number;
+} {
+  const lines = text.split(/\r\n|\r|\n/);
+  const hasTrailingNewline =
+    text.endsWith("\n") || text.endsWith("\r");
+  const contentLineCount =
+    hasTrailingNewline && lines.length > 1 && lines[lines.length - 1] === ""
+      ? lines.length - 1
+      : lines.length;
+  return { lines, contentLineCount };
 }
 
 function pluralize(count: number, word: string): string {
