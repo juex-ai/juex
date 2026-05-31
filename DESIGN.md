@@ -398,7 +398,9 @@ states default to open; successful results stay closed until the user expands.
 The composer keeps local actions in the text surface: `/status` returns the
 current runtime/session snapshot, and `/compact` triggers manual context
 compaction. Do not add separate chrome for these command-only actions unless
-the command surface becomes insufficient.
+the command surface becomes insufficient. Slash-command output is ordinary
+message text; explicit newlines in that text stay visible in the message
+renderer.
 
 Pending inputs render as a compact stack directly above the composer while a
 turn is already running. The stack is ordered oldest first, uses small numbered

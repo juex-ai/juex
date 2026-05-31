@@ -12,6 +12,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { juexCodeThemes } from "@/lib/code-theme";
+import { messageResponseClassName } from "@/lib/message-rendering";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { code } from "@streamdown/code";
@@ -329,10 +330,7 @@ const streamdownPlugins = { cjk, code, math, mermaid };
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
-      className={cn(
-        "juex-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_code]:font-mono [&_pre]:rounded-[10px]",
-        className
-      )}
+      className={messageResponseClassName(className)}
       plugins={streamdownPlugins}
       shikiTheme={juexCodeThemes}
       {...props}
