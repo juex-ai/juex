@@ -2,6 +2,7 @@ export type MCPEventDisplay = {
   label: string;
   content: string;
   preview: string;
+  copyText: string;
 };
 
 const FALLBACK_LABEL = "mcp:event";
@@ -11,6 +12,7 @@ export function formatMCPEventForDisplay(text: string): MCPEventDisplay {
   return {
     ...event,
     preview: oneLinePreview(event.content),
+    copyText: event.content,
   };
 }
 

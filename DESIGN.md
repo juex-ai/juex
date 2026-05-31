@@ -235,8 +235,9 @@ current conversation token total.
 MCP channel events render as centered external-event bubbles with a small radio
 icon, a monospace `<mcp_name>:<event_type>` label, and a one-line content
 preview in the header. They are collapsed by default; the chevron control
-expands the bubble to show the full event body. Event bubbles use the gold ramp,
-not blue or teal.
+expands the bubble to show the full event body. A copy icon before the chevron
+copies the full event content, not the folded preview or label. Event bubbles
+use the gold ramp, not blue or teal.
 
 Context compaction renders as a centered transcript divider: horizontal rules
 with a compact `Context compacted` button between them. Clicking the label
