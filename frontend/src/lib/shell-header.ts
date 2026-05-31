@@ -33,10 +33,14 @@ export function formatShellUpdatedAt(
   }).format(date);
 }
 
-export function shellMCPBadge(status: ShellMCPSummary): ShellMCPBadge {
-  const configured = Math.max(0, status.configured);
-  const connected = Math.max(0, status.connected);
-  const errors = Math.max(0, status.errors);
+export function shellMCPBadge(
+  status?: ShellMCPSummary | null,
+): ShellMCPBadge | null {
+  if (!status) return null;
+
+  const configured = Math.max(0, status.configured ?? 0);
+  const connected = Math.max(0, status.connected ?? 0);
+  const errors = Math.max(0, status.errors ?? 0);
   const label = `MCP ${configured}`;
 
   if (configured === 0) {

@@ -63,8 +63,11 @@ export function useShellTitle(
 
   useEffect(() => {
     context?.setShellHeader({ title, updatedAt });
-    return () => context?.setShellHeader({ title: null, updatedAt: null });
   }, [context, title, updatedAt]);
+
+  useEffect(() => {
+    return () => context?.setShellHeader({ title: null, updatedAt: null });
+  }, [context]);
 }
 
 export function AppShell() {
@@ -109,7 +112,7 @@ export function AppShell() {
 
   const shellTitle = shellHeader.title;
   const shellUpdatedAt = formatShellUpdatedAt(shellHeader.updatedAt);
-  const mcpBadge = runtimeStatus ? shellMCPBadge(runtimeStatus.mcp) : null;
+  const mcpBadge = shellMCPBadge(runtimeStatus?.mcp);
   const workspaceOpen = workspaceDocked ? workspaceDockOpen : workspaceSheetOpen;
   const workspaceLabel = workspaceDocked
     ? workspaceOpen
@@ -163,7 +166,7 @@ export function AppShell() {
                     variant="outline"
                     className="font-mono text-[11px]"
                   >
-                    skills {runtimeStatus.skills.count}
+                    skills {runtimeStatus.skills?.count ?? 0}
                   </Badge>
                   <Badge
                     variant="outline"

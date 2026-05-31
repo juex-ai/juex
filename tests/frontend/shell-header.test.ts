@@ -16,6 +16,7 @@ test("formatShellUpdatedAt uses local date and 24-hour time without a prefix", (
 });
 
 test("shellMCPBadge summarizes configured MCP servers with status dots", () => {
+  assert.equal(shellMCPBadge(null), null);
   assert.deepEqual(shellMCPBadge({ configured: 0, connected: 0, errors: 0 }), {
     label: "MCP 0",
     tone: "none",
