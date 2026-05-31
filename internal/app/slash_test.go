@@ -86,6 +86,15 @@ func TestStatusSnapshotTextSeparatesTurnAndQueue(t *testing.T) {
 	}
 }
 
+func TestStatusSnapshotTextIncludesEmojiLabels(t *testing.T) {
+	text := (StatusSnapshot{}).Text()
+	for _, want := range []string{"📊 Juex status", "🤖 provider:", "⚙️ turn:", "📥 queued input:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestApp_RunStatusSlashSkipsProvider(t *testing.T) {
 	a, prov := newStubApp(t)
 	out, err := a.Run(context.Background(), "/status")

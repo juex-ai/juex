@@ -68,10 +68,6 @@ import {
   type CopyTooltipMode,
 } from "@/lib/message-copy";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
-import {
-  formatStatusOutput,
-  type StatusOutput,
-} from "@/lib/status-output";
 import { cn } from "@/lib/utils";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
@@ -1255,16 +1251,13 @@ function MessageGroupView({
             if (isCompact) {
               return <CompactMessage key={i} text={unit.block.text} />;
             }
-            const statusOutput =
-              group.kind === "slash_command" && group.role === "assistant"
-                ? formatStatusOutput(unit.block.text)
-                : null;
-            if (statusOutput) {
-              return <StatusCommandMessage key={i} status={statusOutput} />;
-            }
             return (
               <MessageContent key={i}>
-                <MessageResponse>{unit.block.text}</MessageResponse>
+                {group.kind === "slash_command" && group.role === "assistant" ? (
+                  <PlainTextResponse text={unit.block.text} />
+                ) : (
+                  <MessageResponse>{unit.block.text}</MessageResponse>
+                )}
               </MessageContent>
             );
           }
@@ -1339,44 +1332,8 @@ function SlashCommandMessage({ text }: { text: string }) {
   );
 }
 
-function StatusCommandMessage({ status }: { status: StatusOutput }) {
-  return (
-    <MessageContent
-      className="w-full max-w-[min(34rem,96%)] gap-3"
-      data-juex-status-output
-    >
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        <span aria-hidden="true" className="text-base leading-none">
-          {status.titleIcon}
-        </span>
-        <span>{status.title}</span>
-      </div>
-      <div className="grid gap-2">
-        {status.rows.map((row, index) => (
-          <div
-            key={`${row.raw}-${index}`}
-            className="grid grid-cols-[1.35rem_minmax(0,1fr)] items-start gap-2"
-            data-juex-status-row
-          >
-            <span
-              aria-hidden="true"
-              className="mt-0.5 text-center text-sm leading-none"
-            >
-              {row.icon}
-            </span>
-            <div className="min-w-0">
-              {row.label ? (
-                <span className="mr-2 text-xs font-medium uppercase text-muted-foreground">
-                  {row.label}:{" "}
-                </span>
-              ) : null}
-              <span className="break-words text-sm leading-6">{row.value}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </MessageContent>
-  );
+function PlainTextResponse({ text }: { text: string }) {
+  return <div className="whitespace-pre-wrap break-words">{text}</div>;
 }
 
 function MCPEventGroup({ group }: { group: MessageGroup }) {

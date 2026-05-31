@@ -225,38 +225,38 @@ func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {
 
 func (s StatusSnapshot) Text() string {
 	var lines []string
-	lines = append(lines, "Juex status")
+	lines = append(lines, "📊 Juex status")
 	if s.SessionID != "" {
-		lines = append(lines, fmt.Sprintf("session: %s (%d turns)", s.SessionID, s.Turns))
+		lines = append(lines, fmt.Sprintf("💬 session: %s (%d turns)", s.SessionID, s.Turns))
 	}
 	if s.SessionKind != "" {
 		state := "inactive"
 		if s.Active {
 			state = "active"
 		}
-		lines = append(lines, fmt.Sprintf("session kind: %s (%s)", s.SessionKind, state))
+		lines = append(lines, fmt.Sprintf("📌 session kind: %s (%s)", s.SessionKind, state))
 	}
 	if s.WorkDir != "" {
-		lines = append(lines, "workdir: "+s.WorkDir)
+		lines = append(lines, "📁 workdir: "+s.WorkDir)
 	}
-	lines = append(lines, "provider: "+formatProviderSnapshot(s.Provider))
-	lines = append(lines, fmt.Sprintf("mcp: %d/%d connected, %d errors", s.MCP.Connected, s.MCP.Configured, s.MCP.Errors))
-	lines = append(lines, fmt.Sprintf("skills: %d", s.SkillCount))
-	lines = append(lines, FormatTokenUsage(s.TokenUsage))
+	lines = append(lines, "🤖 provider: "+formatProviderSnapshot(s.Provider))
+	lines = append(lines, fmt.Sprintf("🔌 mcp: %d/%d connected, %d errors", s.MCP.Connected, s.MCP.Configured, s.MCP.Errors))
+	lines = append(lines, fmt.Sprintf("🧩 skills: %d", s.SkillCount))
+	lines = append(lines, "🔢 "+FormatTokenUsage(s.TokenUsage))
 	if s.ContextUsage != nil {
-		lines = append(lines, fmt.Sprintf("context: %d/%d tokens (%s)", s.ContextUsage.TotalTokens, s.ContextUsage.ContextWindow, s.ContextUsage.Model))
+		lines = append(lines, fmt.Sprintf("🧠 context: %d/%d tokens (%s)", s.ContextUsage.TotalTokens, s.ContextUsage.ContextWindow, s.ContextUsage.Model))
 	} else {
-		lines = append(lines, "context: not measured yet")
+		lines = append(lines, "🧠 context: not measured yet")
 	}
 	turnState := "idle"
 	if s.PendingInput.TurnID != "" {
 		turnState = "running"
 	}
-	lines = append(lines, "turn: "+turnState)
+	lines = append(lines, "⚙️ turn: "+turnState)
 	if s.PendingInput.MaxPendingInputs > 0 {
-		lines = append(lines, fmt.Sprintf("queued input: %d/%d", s.PendingInput.PendingCount, s.PendingInput.MaxPendingInputs))
+		lines = append(lines, fmt.Sprintf("📥 queued input: %d/%d", s.PendingInput.PendingCount, s.PendingInput.MaxPendingInputs))
 	} else {
-		lines = append(lines, fmt.Sprintf("queued input: %d", s.PendingInput.PendingCount))
+		lines = append(lines, fmt.Sprintf("📥 queued input: %d", s.PendingInput.PendingCount))
 	}
 	return strings.Join(lines, "\n")
 }

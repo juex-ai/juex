@@ -246,7 +246,7 @@ func TestRunCmd_StatusSlashJSON(t *testing.T) {
 		t.Fatalf("execute err = %v stderr=%s", err, stderr.String())
 	}
 	body := out.String()
-	for _, want := range []string{`"text": "Juex status`, `"token_total": 0`, `"session_id":`} {
+	for _, want := range []string{`"text": "📊 Juex status`, `"token_total": 0`, `"session_id":`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("status json missing %q in:\n%s", want, body)
 		}
