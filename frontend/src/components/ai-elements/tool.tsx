@@ -9,7 +9,11 @@ import {
 import { cn } from "@/lib/utils";
 import { formatToolPayload } from "@/lib/tool-payload";
 import { formatToolResultText } from "@/lib/tool-result-output";
-import { toolStatusLabel, toolTimeoutLabel } from "@/lib/tool-display";
+import {
+  toolDisplayName,
+  toolStatusLabel,
+  toolTimeoutLabel,
+} from "@/lib/tool-display";
 import type { DynamicToolUIPart, ToolUIPart } from "./_local-types";
 import {
   ChevronDownIcon,
@@ -71,8 +75,7 @@ export const ToolHeader = ({
   toolName,
   ...props
 }: ToolHeaderProps) => {
-  const derivedName =
-    type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
+  const derivedName = toolDisplayName(type, toolName);
   const timeoutLabel =
     state === "input-available" || state === "input-streaming"
       ? toolTimeoutLabel(timeoutSeconds)
@@ -89,7 +92,7 @@ export const ToolHeader = ({
       <div className="flex min-w-0 items-center gap-2">
         <span className="size-1.5 shrink-0 rounded-full bg-current" />
         <span className="truncate font-mono text-[12.5px] font-semibold">
-          {title ?? `tool-${derivedName}`}
+          {title ?? derivedName}
         </span>
         {getStatusBadge(state)}
         {timeoutLabel ? (
