@@ -107,13 +107,15 @@ func writeTool() Tool {
 func editTool() Tool {
 	return Tool{
 		Name:        "edit",
-		Description: "Replace exactly one occurrence of `old` with `new` in the file at `path`. Errors if `old` is not found or is ambiguous.",
+		Description: "Replace `old` with `new` in the file at `path`. By default `old` must appear exactly once; set replace_all to replace every occurrence and optionally expected_replacements to require an exact count.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{"type": "string"},
-				"old":  map[string]any{"type": "string"},
-				"new":  map[string]any{"type": "string"},
+				"path":                  map[string]any{"type": "string"},
+				"old":                   map[string]any{"type": "string"},
+				"new":                   map[string]any{"type": "string"},
+				"replace_all":           map[string]any{"type": "boolean", "description": "Replace every occurrence of old instead of requiring a unique match"},
+				"expected_replacements": map[string]any{"type": "integer", "description": "If set, require exactly this many replacements before writing"},
 			},
 			"required": []string{"path", "old", "new"},
 		},
@@ -121,8 +123,22 @@ func editTool() Tool {
 			path, _ := in["path"].(string)
 			oldStr, _ := in["old"].(string)
 			newStr, _ := in["new"].(string)
+			replaceAll, _ := in["replace_all"].(bool)
+			var expected int
+			var expectedSet bool
+			if val, ok := in["expected_replacements"]; ok && val != nil {
+				var parsed bool
+				expected, parsed = toInt(val)
+				if !parsed || expected <= 0 {
+					return "", fmt.Errorf("edit: expected_replacements must be a positive integer")
+				}
+				expectedSet = true
+			}
 			if path == "" || oldStr == "" {
 				return "", fmt.Errorf("edit: path and old required")
+			}
+			if expectedSet && expected != 1 && !replaceAll {
+				return "", fmt.Errorf("edit: expected_replacements greater than 1 requires replace_all")
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -130,18 +146,30 @@ func editTool() Tool {
 			}
 			content := string(data)
 			count := strings.Count(content, oldStr)
+			replacements := 1
 			switch count {
 			case 0:
 				return "", fmt.Errorf("edit: %s: old string not found", path)
 			case 1:
 				content = strings.Replace(content, oldStr, newStr, 1)
 			default:
-				return "", fmt.Errorf("edit: %s: old string occurs %d times; need a unique match", path, count)
+				if !replaceAll {
+					return "", fmt.Errorf("edit: %s: old string occurs %d times; need a unique match", path, count)
+				}
+				replacements = count
+				content = strings.ReplaceAll(content, oldStr, newStr)
+			}
+			if expectedSet && count != expected {
+				return "", fmt.Errorf("edit: %s: expected %d replacements, found %d", path, expected, count)
 			}
 			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("edited %s", path), nil
+			replacementLabel := "replacement"
+			if replacements != 1 {
+				replacementLabel = "replacements"
+			}
+			return fmt.Sprintf("edited %s (%d %s)", path, replacements, replacementLabel), nil
 		},
 	}
 }
