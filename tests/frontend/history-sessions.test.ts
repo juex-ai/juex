@@ -7,10 +7,10 @@ import {
   historySessionTitle,
 } from "../../frontend/src/lib/history-sessions.ts";
 
-test("historySessionHref routes sessions through the read-only history viewer", () => {
+test("historySessionHref routes sessions through the canonical session view", () => {
   assert.equal(
     historySessionHref("primary/session 1"),
-    "/history/sessions/primary%2Fsession%201",
+    "/sessions/primary%2Fsession%201",
   );
 });
 

@@ -120,18 +120,13 @@ type SessionStatus =
 
 type SessionRouteSnapshot = {
   id: string;
-  historyMode: boolean;
 };
 
-function isLatestRoute(
-  latest: SessionRouteSnapshot,
-  id: string,
-  historyMode: boolean,
-): boolean {
-  return latest.id === id && latest.historyMode === historyMode;
+function isLatestRoute(latest: SessionRouteSnapshot, id: string): boolean {
+  return latest.id === id;
 }
 
-export function Session({ historyMode = false }: { historyMode?: boolean }) {
+export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
@@ -160,11 +155,11 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
   const queuedInputStateRef = useRef<QueuedInputState>(
     createQueuedInputState(),
   );
-  const latestRouteRef = useRef({ id, historyMode });
+  const latestRouteRef = useRef({ id });
 
   useEffect(() => {
-    latestRouteRef.current = { id, historyMode };
-  }, [historyMode, id]);
+    latestRouteRef.current = { id };
+  }, [id]);
 
   useEffect(() => {
     const next = createQueuedInputState();
@@ -182,102 +177,62 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
     opts?: { preserveLiveMessages?: boolean },
   ) => {
     const requestId = id;
-    const requestHistoryMode = historyMode;
     try {
       const r = await getSession(requestId);
-      if (
-        !isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
-      ) {
+      if (!isLatestRoute(latestRouteRef.current, requestId)) {
         return;
       }
       setData(r);
       if (!opts?.preserveLiveMessages) setLiveMessages([]);
       setLiveTokenUsage(null);
       setLiveContextUsage(null);
-      if (requestHistoryMode) {
-        setActiveContext(null);
-      } else {
-        try {
-          const context = await getSessionContext(requestId);
-          if (
-            !isLatestRoute(
-              latestRouteRef.current,
-              requestId,
-              requestHistoryMode,
-            )
-          ) {
-            return;
-          }
-          setActiveContext(context);
-        } catch (contextError) {
-          if (
-            isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
-          ) {
-            console.error("getSessionContext failed", contextError);
-            setActiveContext(null);
-          }
+      try {
+        const context = await getSessionContext(requestId);
+        if (!isLatestRoute(latestRouteRef.current, requestId)) {
+          return;
+        }
+        setActiveContext(context);
+      } catch (contextError) {
+        if (isLatestRoute(latestRouteRef.current, requestId)) {
+          console.error("getSessionContext failed", contextError);
+          setActiveContext(null);
         }
       }
     } catch (e) {
-      if (isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)) {
+      if (isLatestRoute(latestRouteRef.current, requestId)) {
         console.error("getSession failed", e);
       }
     }
-  }, [historyMode, id]);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
     const requestId = id;
-    const requestHistoryMode = historyMode;
     let cancelled = false;
     (async () => {
       try {
         const r = await getSession(requestId);
-        if (
-          cancelled ||
-          !isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
-        ) {
+        if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
           return;
         }
         setData(r);
         setLiveMessages([]);
         setLiveTokenUsage(null);
         setLiveContextUsage(null);
-        if (requestHistoryMode) {
-          setActiveContext(null);
-        } else {
-          try {
-            const context = await getSessionContext(requestId);
-            if (
-              cancelled ||
-              !isLatestRoute(
-                latestRouteRef.current,
-                requestId,
-                requestHistoryMode,
-              )
-            ) {
-              return;
-            }
-            setActiveContext(context);
-          } catch (contextError) {
-            if (
-              !cancelled &&
-              isLatestRoute(
-                latestRouteRef.current,
-                requestId,
-                requestHistoryMode,
-              )
-            ) {
-              console.error("getSessionContext failed", contextError);
-              setActiveContext(null);
-            }
+        try {
+          const context = await getSessionContext(requestId);
+          if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
+            return;
+          }
+          setActiveContext(context);
+        } catch (contextError) {
+          if (!cancelled && isLatestRoute(latestRouteRef.current, requestId)) {
+            console.error("getSessionContext failed", contextError);
+            setActiveContext(null);
           }
         }
       } catch (e) {
-        if (
-          !cancelled &&
-          isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
-        ) {
+        if (!cancelled && isLatestRoute(latestRouteRef.current, requestId)) {
           console.error("getSession failed", e);
         }
       }
@@ -285,10 +240,9 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, [historyMode, id]);
+  }, [id]);
 
   useEffect(() => {
-    if (historyMode) return;
     if (!data) return;
     const state = location.state as InitialCommandState;
     if (!state?.command || !state.commandInput) return;
@@ -306,7 +260,6 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
     navigate(location.pathname, { replace: true, state: null });
   }, [
     data,
-    historyMode,
     id,
     location.pathname,
     location.state,
@@ -316,8 +269,7 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
 
   // SSE subscription.
   useEffect(() => {
-    if (historyMode) return;
-    if (!id) return;
+    if (!id || !data || !sessionCanSend(data)) return;
     const unsub = subscribeEvents(id, {
       onEvent: (e) => {
         switch (e.type) {
@@ -444,10 +396,9 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
     // Queue helpers read from refs; resubscribing on every local queue change
     // would reopen the EventSource during active turns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyMode, id, refresh]);
+  }, [data, id, refresh]);
 
   async function handleSend(prompt: string) {
-    if (historyMode) return;
     const compactCommand = isCompactCommandInput(prompt);
     if (compactCommand) {
       appendPendingCompact(prompt);
@@ -513,7 +464,6 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
   }
 
   async function handleInterrupt() {
-    if (historyMode) return;
     try {
       await interrupt(id);
     } catch (e) {
@@ -531,7 +481,7 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
   const contextUsage = liveContextUsage ?? data.context_usage;
-  const canSend = sessionCanSend(data, { historyMode });
+  const canSend = sessionCanSend(data);
   const submitAction = composerSubmitAction({
     turnActive,
     compactActive,
@@ -634,7 +584,7 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
               </PromptInputFooter>
             </PromptInput>
           ) : (
-            <ReadOnlySessionBar data={data} historyMode={historyMode} />
+            <ReadOnlySessionBar data={data} />
           )}
         </div>
       </div>
@@ -1159,17 +1109,11 @@ function ComposerSubmitButton({
   );
 }
 
-function ReadOnlySessionBar({
-  data,
-  historyMode,
-}: {
-  data: SessionShowResponse;
-  historyMode: boolean;
-}) {
+function ReadOnlySessionBar({ data }: { data: SessionShowResponse }) {
   return (
     <div className="flex min-h-[52px] flex-wrap items-center gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm">
       <div className="min-w-0 text-muted-foreground">
-        {sessionReadOnlyMessage(data, { historyMode })}
+        {sessionReadOnlyMessage(data)}
       </div>
     </div>
   );
