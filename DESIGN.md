@@ -253,6 +253,9 @@ Tool cards use lifecycle labels rather than transport labels: `running` while a
 tool_use has no result, `success` when a result arrives, and `failed` for error
 results. Running cards show the runtime timeout seconds in the header so long
 calls have an explicit wait boundary.
+Tool result text preserves the tool's line breaks instead of rendering as
+markdown paragraphs; long result bodies are capped inside a scrollable code
+surface so the transcript stays readable.
 
 Copy controls use the Clipboard API when available and fall back to a temporary
 textarea copy path so local HTTP access over LAN or NetBird still works.
