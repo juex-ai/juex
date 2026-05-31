@@ -7,17 +7,17 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import {
-  SidebarProvider,
-  SidebarInset,
-  SidebarTrigger,
-} from "@/components/ui/sidebar";
-import { Sidebar } from "@/components/Sidebar";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { LogoMark } from "@/components/LogoMark";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, FolderIcon, FolderOpenIcon, Wrench } from "lucide-react";
+import {
+  ArrowLeft,
+  FolderIcon,
+  FolderOpenIcon,
+  HistoryIcon,
+  Wrench,
+} from "lucide-react";
 import { getRuntimeStatus } from "@/api";
 import type { RuntimeStatusResponse } from "@/types";
 import {
@@ -33,6 +33,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
 
@@ -118,118 +119,142 @@ export function AppShell() {
   };
   const shellContextValue = useMemo(() => ({ setShellTitle }), []);
   const onRuntimePage = location.pathname === "/runtime";
+  const onHistoryPage = location.pathname.startsWith("/history");
 
   return (
     <ShellTitleContext.Provider value={shellContextValue}>
-      <SidebarProvider className="h-svh min-h-0 overflow-hidden bg-background">
-        <Sidebar />
-        <SidebarInset className="min-h-0 min-w-0 flex flex-row">
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-            <header className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between border-b bg-card px-4 shadow-[var(--shadow-xs)]">
-              <div className="flex min-w-0 items-center gap-2">
-                <SidebarTrigger className="-ml-1" />
-                {shellTitle ? (
-                  <div className="flex min-w-0 items-center gap-2 text-primary">
-                    <LogoMark className="size-5 shrink-0 md:hidden" />
-                    <span className="truncate font-serif text-xl italic leading-none">
-                      {shellTitle}
-                    </span>
-                  </div>
-                ) : null}
-                {runtimeStatus ? (
-                  <div className="hidden min-w-0 items-center gap-1 lg:flex">
-                    <Badge
-                      variant={mcpErrorCount > 0 ? "destructive" : "outline"}
-                      className="max-w-[18rem] truncate font-mono text-[11px] lg:max-w-none"
-                    >
-                      {mcpLabel}
-                    </Badge>
-                    <Badge variant="outline" className="font-mono text-[11px]">
-                      skills {runtimeStatus.skills.count}
-                    </Badge>
-                  </div>
-                ) : null}
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      {onRuntimePage ? (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="text-muted-foreground hover:text-foreground"
-                          aria-label="Back"
-                          onClick={() => navigate(lastContentPath || "/")}
-                        >
-                          <ArrowLeft className="size-4" />
-                        </Button>
-                      ) : (
-                        <Button
-                          asChild
-                          variant="ghost"
-                          size="icon"
-                          className="text-muted-foreground hover:text-foreground"
-                        >
-                          <Link to="/runtime" aria-label="Runtime details">
-                            <Wrench className="size-4" />
-                          </Link>
-                        </Button>
+      <div className="flex h-svh min-h-0 overflow-hidden bg-background">
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between border-b bg-card px-4 shadow-[var(--shadow-xs)]">
+            <div className="flex min-w-0 items-center gap-3">
+              <Link
+                to="/"
+                className="flex shrink-0 items-center gap-2 text-primary transition-colors hover:text-primary/85"
+                aria-label="New chat"
+              >
+                <LogoMark className="size-6" />
+                <span className="hidden font-serif text-2xl italic leading-none sm:inline">
+                  juex
+                </span>
+              </Link>
+              {shellTitle ? (
+                <div className="min-w-0 border-l pl-3 text-primary">
+                  <span className="block truncate font-serif text-xl italic leading-none">
+                    {shellTitle}
+                  </span>
+                </div>
+              ) : null}
+              {runtimeStatus ? (
+                <div className="hidden min-w-0 items-center gap-1 lg:flex">
+                  <Badge
+                    variant={mcpErrorCount > 0 ? "destructive" : "outline"}
+                    className="max-w-[18rem] truncate font-mono text-[11px] lg:max-w-none"
+                  >
+                    {mcpLabel}
+                  </Badge>
+                  <Badge variant="outline" className="font-mono text-[11px]">
+                    skills {runtimeStatus.skills.count}
+                  </Badge>
+                </div>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "text-muted-foreground hover:text-foreground",
+                        onHistoryPage && "bg-muted text-foreground",
                       )}
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {onRuntimePage ? "Back" : "Runtime details"}
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
+                    >
+                      <Link to="/history" aria-label="History">
+                        <HistoryIcon className="size-4" />
+                      </Link>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>History</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {onRuntimePage ? (
                       <Button
                         variant="ghost"
                         size="icon"
                         className="text-muted-foreground hover:text-foreground"
-                        onClick={toggleWorkspace}
-                        aria-label={workspaceLabel}
+                        aria-label="Back"
+                        onClick={() => navigate(lastContentPath || "/")}
                       >
-                        {workspaceOpen ? (
-                          <FolderOpenIcon className="size-4" />
-                        ) : (
-                          <FolderIcon className="size-4" />
-                        )}
+                        <ArrowLeft className="size-4" />
                       </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{workspaceLabel}</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
-            </header>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <Outlet />
+                    ) : (
+                      <Button
+                        asChild
+                        variant="ghost"
+                        size="icon"
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <Link to="/runtime" aria-label="Runtime details">
+                          <Wrench className="size-4" />
+                        </Link>
+                      </Button>
+                    )}
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {onRuntimePage ? "Back" : "Runtime details"}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={toggleWorkspace}
+                      aria-label={workspaceLabel}
+                    >
+                      {workspaceOpen ? (
+                        <FolderOpenIcon className="size-4" />
+                      ) : (
+                        <FolderIcon className="size-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{workspaceLabel}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </div>
+          </header>
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <Outlet />
           </div>
-          {workspaceDockOpen && (
-            <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] flex-shrink-0 flex-col overflow-hidden border-l bg-card transition-all xl:flex">
-              <FileTreePanel active={workspaceDocked} />
-            </div>
-          )}
-          <Sheet
-            open={!workspaceDocked && workspaceSheetOpen}
-            onOpenChange={setWorkspaceSheetOpen}
+        </div>
+        {workspaceDockOpen && (
+          <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] flex-shrink-0 flex-col overflow-hidden border-l bg-card transition-all xl:flex">
+            <FileTreePanel active={workspaceDocked} />
+          </div>
+        )}
+        <Sheet
+          open={!workspaceDocked && workspaceSheetOpen}
+          onOpenChange={setWorkspaceSheetOpen}
+        >
+          <SheetContent
+            className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 sm:!max-w-md xl:hidden"
+            side="right"
           >
-            <SheetContent
-              className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 sm:!max-w-md xl:hidden"
-              side="right"
-            >
-              <SheetHeader className="sr-only">
-                <SheetTitle>Workspace</SheetTitle>
-                <SheetDescription>
-                  Browse files in the current workspace.
-                </SheetDescription>
-              </SheetHeader>
-              <FileTreePanel active={!workspaceDocked && workspaceSheetOpen} />
-            </SheetContent>
-          </Sheet>
-        </SidebarInset>
-      </SidebarProvider>
+            <SheetHeader className="sr-only">
+              <SheetTitle>Workspace</SheetTitle>
+              <SheetDescription>
+                Browse files in the current workspace.
+              </SheetDescription>
+            </SheetHeader>
+            <FileTreePanel active={!workspaceDocked && workspaceSheetOpen} />
+          </SheetContent>
+        </Sheet>
+      </div>
     </ShellTitleContext.Provider>
   );
 }

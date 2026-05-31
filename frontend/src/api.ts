@@ -48,14 +48,6 @@ export async function createSession(): Promise<CreateSessionResponse> {
   );
 }
 
-export async function activateSession(id: string): Promise<CreateSessionResponse> {
-  return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/activate`, {
-      method: "POST",
-    }),
-  );
-}
-
 export async function getSession(id: string): Promise<SessionShowResponse> {
   return jsonOrThrow(
     await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}`),

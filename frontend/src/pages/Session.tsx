@@ -1,7 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
@@ -84,10 +83,10 @@ import {
   getSession,
   getSessionContext,
   interrupt,
-  activateSession,
   startTurn,
   subscribeEvents,
 } from "@/api";
+import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -118,7 +117,7 @@ type SessionStatus =
   | { kind: "done" }
   | { kind: "error"; detail?: string };
 
-export function Session() {
+export function Session({ historyMode = false }: { historyMode?: boolean }) {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
@@ -159,7 +158,7 @@ export function Session() {
     setCompactCommandInputs({});
   }, [id]);
 
-  // refresh is stable per id; both effects depend on it via [id].
+  // refresh is stable per route mode and session id.
   const refresh = useCallback(async (opts?: { preserveLiveMessages?: boolean }) => {
     try {
       const r = await getSession(id);
@@ -167,16 +166,20 @@ export function Session() {
       if (!opts?.preserveLiveMessages) setLiveMessages([]);
       setLiveTokenUsage(null);
       setLiveContextUsage(null);
-      try {
-        setActiveContext(await getSessionContext(id));
-      } catch (contextError) {
-        console.error("getSessionContext failed", contextError);
+      if (historyMode) {
         setActiveContext(null);
+      } else {
+        try {
+          setActiveContext(await getSessionContext(id));
+        } catch (contextError) {
+          console.error("getSessionContext failed", contextError);
+          setActiveContext(null);
+        }
       }
     } catch (e) {
       console.error("getSession failed", e);
     }
-  }, [id]);
+  }, [historyMode, id]);
 
   useEffect(() => {
     if (!id) return;
@@ -189,11 +192,15 @@ export function Session() {
           setLiveMessages([]);
           setLiveTokenUsage(null);
           setLiveContextUsage(null);
-          try {
-            setActiveContext(await getSessionContext(id));
-          } catch (contextError) {
-            console.error("getSessionContext failed", contextError);
+          if (historyMode) {
             setActiveContext(null);
+          } else {
+            try {
+              setActiveContext(await getSessionContext(id));
+            } catch (contextError) {
+              console.error("getSessionContext failed", contextError);
+              setActiveContext(null);
+            }
           }
         }
       } catch (e) {
@@ -203,9 +210,10 @@ export function Session() {
     return () => {
       cancelled = true;
     };
-  }, [id]);
+  }, [historyMode, id]);
 
   useEffect(() => {
+    if (historyMode) return;
     if (!data) return;
     const state = location.state as InitialCommandState;
     if (!state?.command || !state.commandInput) return;
@@ -221,10 +229,19 @@ export function Session() {
     }
     markDoneSoon();
     navigate(location.pathname, { replace: true, state: null });
-  }, [data, id, location.pathname, location.state, navigate, refresh]);
+  }, [
+    data,
+    historyMode,
+    id,
+    location.pathname,
+    location.state,
+    navigate,
+    refresh,
+  ]);
 
   // SSE subscription.
   useEffect(() => {
+    if (historyMode) return;
     if (!id) return;
     const unsub = subscribeEvents(id, {
       onEvent: (e) => {
@@ -343,9 +360,10 @@ export function Session() {
     // Queue helpers read from refs; resubscribing on every local queue change
     // would reopen the EventSource during active turns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, refresh]);
+  }, [historyMode, id, refresh]);
 
   async function handleSend(prompt: string) {
+    if (historyMode) return;
     const compactCommand = isCompactCommandInput(prompt);
     if (compactCommand) {
       appendPendingCompact(prompt);
@@ -411,25 +429,11 @@ export function Session() {
   }
 
   async function handleInterrupt() {
+    if (historyMode) return;
     try {
       await interrupt(id);
     } catch (e) {
       console.error("interrupt failed", e);
-    }
-  }
-
-  async function handleActivate() {
-    try {
-      await activateSession(id);
-      await refresh();
-      window.dispatchEvent(new Event("juex:sessions-changed"));
-      setStatus({ kind: "idle" });
-    } catch (e) {
-      console.error("activateSession failed", e);
-      setStatus({
-        kind: "error",
-        detail: e instanceof Error ? e.message : String(e),
-      });
     }
   }
 
@@ -443,7 +447,7 @@ export function Session() {
   const groups = messagesToGroups(messages);
   const tokenUsage = liveTokenUsage ?? data.token_usage;
   const contextUsage = liveContextUsage ?? data.context_usage;
-  const canSend = data.kind === "primary" && data.active;
+  const canSend = sessionCanSend(data, { historyMode });
   const submitAction = composerSubmitAction({
     turnActive,
     compactActive,
@@ -546,7 +550,7 @@ export function Session() {
               </PromptInputFooter>
             </PromptInput>
           ) : (
-            <ReadOnlySessionBar data={data} onActivate={handleActivate} />
+            <ReadOnlySessionBar data={data} historyMode={historyMode} />
           )}
         </div>
       </div>
@@ -1056,22 +1060,16 @@ function ComposerSubmitButton({
 
 function ReadOnlySessionBar({
   data,
-  onActivate,
+  historyMode,
 }: {
   data: SessionShowResponse;
-  onActivate: () => void;
+  historyMode: boolean;
 }) {
-  const isInactivePrimary = data.kind === "primary" && !data.active;
   return (
-    <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm">
+    <div className="flex min-h-[52px] flex-wrap items-center gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm">
       <div className="min-w-0 text-muted-foreground">
-        {isInactivePrimary ? "Inactive primary session" : "Side session"}
+        {sessionReadOnlyMessage(data, { historyMode })}
       </div>
-      {isInactivePrimary ? (
-        <Button type="button" variant="secondary" size="sm" onClick={onActivate}>
-          Activate
-        </Button>
-      ) : null}
     </div>
   );
 }
