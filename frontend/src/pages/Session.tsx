@@ -45,6 +45,7 @@ import {
   toolState,
   type MessageGroup,
 } from "@/lib/display-units";
+import { assistantBlocksFromEventPayload } from "@/lib/assistant-blocks";
 import {
   COMPACTING_SUBMIT_HINT,
   composerSubmitAction,
@@ -748,7 +749,7 @@ export function Session() {
 
   function applyAssistantResponse(e: { turn_id?: string; payload?: unknown }) {
     if (!e.turn_id) return;
-    const blocks = assistantBlocks(e.payload);
+    const blocks = assistantBlocksFromEventPayload(e.payload);
     const model = eventString(e, "model");
     setLiveMessages((prev) => {
       let found = false;
@@ -938,35 +939,6 @@ function eventString(e: { payload?: unknown }, key: string): string | undefined 
     return (e.payload as Record<string, string>)[key];
   }
   return undefined;
-}
-
-function assistantBlocks(payload: unknown): ChatMessage["blocks"] {
-  const blocks: NonNullable<ChatMessage["blocks"]> = [];
-  if (!payload || typeof payload !== "object") return blocks;
-  const record = payload as Record<string, unknown>;
-
-  if (typeof record.thinking === "string" && record.thinking) {
-    blocks.push({ type: "reasoning", text: record.thinking });
-  }
-  if (typeof record.text === "string" && record.text) {
-    blocks.push({ type: "text", text: record.text });
-  }
-  if (Array.isArray(record.tool_calls)) {
-    for (const call of record.tool_calls) {
-      if (!call || typeof call !== "object") continue;
-      const c = call as Record<string, unknown>;
-      blocks.push({
-        type: "tool_use",
-        tool_use_id: typeof c.tool_use_id === "string" ? c.tool_use_id : "",
-        tool_name: typeof c.name === "string" ? c.name : "?",
-        input:
-          c.input && typeof c.input === "object"
-            ? (c.input as Record<string, unknown>)
-            : undefined,
-      });
-    }
-  }
-  return blocks;
 }
 
 function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
@@ -1253,11 +1225,7 @@ function MessageGroupView({
             }
             return (
               <MessageContent key={i}>
-                {group.kind === "slash_command" && group.role === "assistant" ? (
-                  <PlainTextResponse text={unit.block.text} />
-                ) : (
-                  <MessageResponse>{unit.block.text}</MessageResponse>
-                )}
+                <MessageResponse>{unit.block.text}</MessageResponse>
               </MessageContent>
             );
           }
@@ -1330,10 +1298,6 @@ function SlashCommandMessage({ text }: { text: string }) {
       </div>
     </Message>
   );
-}
-
-function PlainTextResponse({ text }: { text: string }) {
-  return <div className="whitespace-pre-wrap break-words">{text}</div>;
 }
 
 function MCPEventGroup({ group }: { group: MessageGroup }) {

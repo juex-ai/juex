@@ -312,6 +312,55 @@ func TestTurn_PlainResponse(t *testing.T) {
 	}
 }
 
+func TestTurn_LLMRespondedCarriesOrderedBlocks(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockReasoning, Text: "think first"},
+			{Type: llm.BlockText, Text: "I will inspect it."},
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "echo", Input: map[string]any{"value": "x"}},
+			{Type: llm.BlockText, Text: "Then I will continue."},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "echo",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "echoed", nil
+		},
+	})
+
+	var got []llm.Block
+	bus.Subscribe("llm.responded", func(e events.Event) {
+		if got != nil {
+			return
+		}
+		p := e.Payload.(map[string]any)
+		blocks, ok := p["blocks"].([]llm.Block)
+		if !ok {
+			t.Fatalf("llm.responded blocks = %T, want []llm.Block", p["blocks"])
+		}
+		got = blocks
+	})
+
+	if _, err := eng.Turn(context.Background(), "inspect"); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("blocks len = %d, want 4: %+v", len(got), got)
+	}
+	wantTypes := []llm.BlockType{llm.BlockReasoning, llm.BlockText, llm.BlockToolUse, llm.BlockText}
+	for i, want := range wantTypes {
+		if got[i].Type != want {
+			t.Fatalf("block %d type = %s, want %s; blocks=%+v", i, got[i].Type, want, got)
+		}
+	}
+	if got[2].ToolName != "echo" || got[3].Text != "Then I will continue." {
+		t.Fatalf("ordered block fields not preserved: %+v", got)
+	}
+}
+
 func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
 	msg := llm.TextMessage(llm.RoleAssistant, "hello user")
 	msg.Model = "mock:model"
