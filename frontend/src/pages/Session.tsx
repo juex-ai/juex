@@ -1364,11 +1364,7 @@ function MessageGroupView({
                 {unit.use ? <ToolInput input={unit.use.input} /> : null}
                 {unit.result ? (
                   <ToolOutput
-                    output={
-                      unit.result.is_error ? null : (
-                        <MessageResponse>{unit.result.content}</MessageResponse>
-                      )
-                    }
+                    output={unit.result.is_error ? null : unit.result.content}
                     errorText={unit.result.is_error ? unit.result.content : undefined}
                   />
                 ) : null}

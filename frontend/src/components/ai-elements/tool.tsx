@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { formatToolPayload } from "@/lib/tool-payload";
+import { formatToolResultText } from "@/lib/tool-result-output";
 import { toolStatusLabel, toolTimeoutLabel } from "@/lib/tool-display";
 import type { DynamicToolUIPart, ToolUIPart } from "./_local-types";
 import {
@@ -147,7 +148,7 @@ export const ToolOutput = ({
   errorText,
   ...props
 }: ToolOutputProps) => {
-  if (!(output || errorText)) {
+  if (output == null && !errorText) {
     return null;
   }
 
@@ -157,18 +158,19 @@ export const ToolOutput = ({
     if (typeof output === "object" && !isValidElement(output)) {
       Output = (
         <CodeBlock
-          className="rounded-[10px] [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
+          className="rounded-[10px] [&>div]:max-h-80 [&>div]:overflow-auto [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
           code={formatToolPayload(output, "null")}
           language="json"
         />
       );
       outputIsCodeBlock = true;
     } else if (typeof output === "string") {
+      const formatted = formatToolResultText(output);
       Output = (
         <CodeBlock
-          className="rounded-[10px] [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
-          code={output}
-          language="json"
+          className="rounded-[10px] [&>div]:max-h-80 [&>div]:overflow-auto [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
+          code={formatted.text}
+          language="log"
         />
       );
       outputIsCodeBlock = true;
