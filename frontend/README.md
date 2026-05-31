@@ -58,6 +58,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
+| `src/lib/workspace-refresh.ts` | pure helper for refreshing workspace tree and open file preview data |
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |

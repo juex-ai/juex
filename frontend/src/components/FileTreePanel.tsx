@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFileTree, getFileContent } from "@/api";
 import type { FileContentResponse, FileNode } from "@/types";
 import {
@@ -7,8 +7,11 @@ import {
   File as FileIcon,
   ChevronRight,
   ChevronDown,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { loadWorkspaceSnapshot } from "@/lib/workspace-refresh";
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -17,38 +20,74 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
-export function FileTreePanel() {
+const WORKSPACE_REFRESH_INTERVAL_MS = 5_000;
+
+export function FileTreePanel({ active = true }: { active?: boolean }) {
   const [tree, setTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewFile, setPreviewFile] = useState<FileContentResponse | null>(null);
+  const treeRef = useRef<FileNode | null>(null);
+  const refreshAbortRef = useRef<AbortController | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
+  const refreshWorkspace = useCallback(() => {
+    if (!active) return;
+    refreshAbortRef.current?.abort();
     const controller = new AbortController();
-    let live = true;
-    getFileTree(controller.signal)
-      .then((next) => {
-        if (!live) return;
-        setTree(next);
+    refreshAbortRef.current = controller;
+    setRefreshing(true);
+    if (!treeRef.current) setLoading(true);
+    loadWorkspaceSnapshot({
+      loadTree: getFileTree,
+      loadContent: getFileContent,
+      previewPath: previewFile?.path,
+      signal: controller.signal,
+    })
+      .then((snapshot) => {
+        if (refreshAbortRef.current !== controller) return;
+        treeRef.current = snapshot.tree;
+        setTree(snapshot.tree);
+        if (snapshot.previewFile) setPreviewFile(snapshot.previewFile);
         setError(null);
       })
       .catch((e) => {
         if (isAbortError(e)) return;
-        if (!live) return;
+        if (refreshAbortRef.current !== controller) return;
         console.error(e);
         setError("Failed to load directory.");
       })
       .finally(() => {
-        if (live) setLoading(false);
+        if (refreshAbortRef.current !== controller) return;
+        refreshAbortRef.current = null;
+        setLoading(false);
+        setRefreshing(false);
       });
+  }, [active, previewFile?.path]);
+
+  useEffect(() => {
+    if (!active) return;
+    refreshWorkspace();
+    const interval = window.setInterval(refreshWorkspace, WORKSPACE_REFRESH_INTERVAL_MS);
     return () => {
-      live = false;
-      controller.abort();
+      window.clearInterval(interval);
+      refreshAbortRef.current?.abort();
+      refreshAbortRef.current = null;
       previewAbortRef.current?.abort();
     };
-  }, []);
+  }, [active, refreshWorkspace]);
+
+  const handleRefreshClick = () => {
+    refreshWorkspace();
+  };
 
   const handleFileClick = async (path: string) => {
     previewAbortRef.current?.abort();
@@ -75,8 +114,26 @@ export function FileTreePanel() {
 
   return (
     <div className="flex h-full min-w-0 flex-col bg-card text-card-foreground">
-      <div className="flex h-[var(--juex-header-height)] shrink-0 items-center border-b px-4 pr-12 font-sans text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:pr-4">
-        Workspace
+      <div className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between gap-2 border-b px-4 pr-12 font-sans text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:pr-4">
+        <span>Workspace</span>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7 text-muted-foreground hover:text-foreground"
+                onClick={handleRefreshClick}
+                disabled={refreshing}
+                aria-label="Refresh workspace"
+              >
+                <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Refresh workspace</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
       <ScrollArea className="flex-1 p-3">
         {loading ? (
