@@ -53,6 +53,7 @@ test("messageGroupCopyText skips redacted reasoning internals", () => {
           type: "tool_use" as const,
           tool_use_id: "tu1",
           tool_name: "read",
+          input: {},
         },
         result: null,
       },
