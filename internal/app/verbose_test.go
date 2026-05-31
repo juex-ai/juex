@@ -132,7 +132,7 @@ func TestVerbose_PrintsResponseBlocksInOrder(t *testing.T) {
 	if lead < 0 || think < 0 || tail < 0 {
 		t.Fatalf("missing ordered block output in:\n%s", out)
 	}
-	if !(lead < think && think < tail) {
+	if lead >= think || think >= tail {
 		t.Fatalf("blocks printed out of order:\n%s", out)
 	}
 }
