@@ -53,3 +53,18 @@ test("loadWorkspaceSnapshot keeps tree refresh when open preview fails", async (
     truncated: false,
   });
 });
+
+test("loadWorkspaceSnapshot rethrows aborted preview refreshes", async () => {
+  const abortError = new DOMException("The user aborted a request.", "AbortError");
+
+  await assert.rejects(
+    loadWorkspaceSnapshot({
+      previewPath: "notes.txt",
+      loadTree: async () => root([]),
+      loadContent: async () => {
+        throw abortError;
+      },
+    }),
+    abortError,
+  );
+});

@@ -44,7 +44,6 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
     refreshAbortRef.current?.abort();
     const controller = new AbortController();
     refreshAbortRef.current = controller;
-    let live = true;
     setRefreshing(true);
     if (!treeRef.current) setLoading(true);
     loadWorkspaceSnapshot({
@@ -54,7 +53,7 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
       signal: controller.signal,
     })
       .then((snapshot) => {
-        if (!live) return;
+        if (refreshAbortRef.current !== controller) return;
         treeRef.current = snapshot.tree;
         setTree(snapshot.tree);
         if (snapshot.previewFile) setPreviewFile(snapshot.previewFile);
@@ -62,28 +61,23 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
       })
       .catch((e) => {
         if (isAbortError(e)) return;
-        if (!live) return;
+        if (refreshAbortRef.current !== controller) return;
         console.error(e);
         setError("Failed to load directory.");
       })
       .finally(() => {
-        if (!live) return;
         if (refreshAbortRef.current !== controller) return;
         refreshAbortRef.current = null;
         setLoading(false);
         setRefreshing(false);
       });
-    return () => {
-      live = false;
-    };
   }, [active, previewFile?.path]);
 
   useEffect(() => {
     if (!active) return;
-    const finishRefresh = refreshWorkspace();
+    refreshWorkspace();
     const interval = window.setInterval(refreshWorkspace, WORKSPACE_REFRESH_INTERVAL_MS);
     return () => {
-      finishRefresh?.();
       window.clearInterval(interval);
       refreshAbortRef.current?.abort();
       refreshAbortRef.current = null;

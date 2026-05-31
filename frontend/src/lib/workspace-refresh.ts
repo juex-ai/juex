@@ -27,9 +27,10 @@ export async function loadWorkspaceSnapshot({
     return { tree: await treePromise };
   }
 
-  const previewPromise = loadContent(previewPath, signal).catch((error) =>
-    fileContentError(previewPath, error),
-  );
+  const previewPromise = loadContent(previewPath, signal).catch((error) => {
+    if (isAbortError(error)) throw error;
+    return fileContentError(previewPath, error);
+  });
   const [tree, previewFile] = await Promise.all([treePromise, previewPromise]);
   return { tree, previewFile };
 }
@@ -37,4 +38,8 @@ export async function loadWorkspaceSnapshot({
 function fileContentError(path: string, error: unknown): FileContentResponse {
   const content = error instanceof Error ? error.message : "Failed to load file content.";
   return { path, content, size: 0, truncated: false };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
 }
