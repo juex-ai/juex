@@ -117,6 +117,19 @@ type SessionStatus =
   | { kind: "done" }
   | { kind: "error"; detail?: string };
 
+type SessionRouteSnapshot = {
+  id: string;
+  historyMode: boolean;
+};
+
+function isLatestRoute(
+  latest: SessionRouteSnapshot,
+  id: string,
+  historyMode: boolean,
+): boolean {
+  return latest.id === id && latest.historyMode === historyMode;
+}
+
 export function Session({ historyMode = false }: { historyMode?: boolean }) {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
@@ -146,6 +159,11 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
   const queuedInputStateRef = useRef<QueuedInputState>(
     createQueuedInputState(),
   );
+  const latestRouteRef = useRef({ id, historyMode });
+
+  useEffect(() => {
+    latestRouteRef.current = { id, historyMode };
+  }, [historyMode, id]);
 
   useEffect(() => {
     const next = createQueuedInputState();
@@ -159,52 +177,108 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
   }, [id]);
 
   // refresh is stable per route mode and session id.
-  const refresh = useCallback(async (opts?: { preserveLiveMessages?: boolean }) => {
+  const refresh = useCallback(async (
+    opts?: { preserveLiveMessages?: boolean },
+  ) => {
+    const requestId = id;
+    const requestHistoryMode = historyMode;
     try {
-      const r = await getSession(id);
+      const r = await getSession(requestId);
+      if (
+        !isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
+      ) {
+        return;
+      }
       setData(r);
       if (!opts?.preserveLiveMessages) setLiveMessages([]);
       setLiveTokenUsage(null);
       setLiveContextUsage(null);
-      if (historyMode) {
+      if (requestHistoryMode) {
         setActiveContext(null);
       } else {
         try {
-          setActiveContext(await getSessionContext(id));
+          const context = await getSessionContext(requestId);
+          if (
+            !isLatestRoute(
+              latestRouteRef.current,
+              requestId,
+              requestHistoryMode,
+            )
+          ) {
+            return;
+          }
+          setActiveContext(context);
         } catch (contextError) {
-          console.error("getSessionContext failed", contextError);
-          setActiveContext(null);
+          if (
+            isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
+          ) {
+            console.error("getSessionContext failed", contextError);
+            setActiveContext(null);
+          }
         }
       }
     } catch (e) {
-      console.error("getSession failed", e);
+      if (isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)) {
+        console.error("getSession failed", e);
+      }
     }
   }, [historyMode, id]);
 
   useEffect(() => {
     if (!id) return;
+    const requestId = id;
+    const requestHistoryMode = historyMode;
     let cancelled = false;
     (async () => {
       try {
-        const r = await getSession(id);
-        if (!cancelled) {
-          setData(r);
-          setLiveMessages([]);
-          setLiveTokenUsage(null);
-          setLiveContextUsage(null);
-          if (historyMode) {
-            setActiveContext(null);
-          } else {
-            try {
-              setActiveContext(await getSessionContext(id));
-            } catch (contextError) {
+        const r = await getSession(requestId);
+        if (
+          cancelled ||
+          !isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
+        ) {
+          return;
+        }
+        setData(r);
+        setLiveMessages([]);
+        setLiveTokenUsage(null);
+        setLiveContextUsage(null);
+        if (requestHistoryMode) {
+          setActiveContext(null);
+        } else {
+          try {
+            const context = await getSessionContext(requestId);
+            if (
+              cancelled ||
+              !isLatestRoute(
+                latestRouteRef.current,
+                requestId,
+                requestHistoryMode,
+              )
+            ) {
+              return;
+            }
+            setActiveContext(context);
+          } catch (contextError) {
+            if (
+              !cancelled &&
+              isLatestRoute(
+                latestRouteRef.current,
+                requestId,
+                requestHistoryMode,
+              )
+            ) {
               console.error("getSessionContext failed", contextError);
               setActiveContext(null);
             }
           }
         }
       } catch (e) {
-        if (!cancelled) console.error("getSession failed", e);
+        if (
+          !cancelled &&
+          isLatestRoute(latestRouteRef.current, requestId, requestHistoryMode)
+        ) {
+          console.error("getSession failed", e);
+        }
       }
     })();
     return () => {

@@ -33,6 +33,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { isHistoryPath } from "@/lib/route-state";
 import { cn } from "@/lib/utils";
 
 const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
@@ -119,7 +120,7 @@ export function AppShell() {
   };
   const shellContextValue = useMemo(() => ({ setShellTitle }), []);
   const onRuntimePage = location.pathname === "/runtime";
-  const onHistoryPage = location.pathname.startsWith("/history");
+  const onHistoryPage = isHistoryPath(location.pathname);
 
   return (
     <ShellTitleContext.Provider value={shellContextValue}>
