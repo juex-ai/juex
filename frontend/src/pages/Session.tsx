@@ -1253,7 +1253,11 @@ function MessageGroupView({
             }
             return (
               <MessageContent key={i}>
-                <MessageResponse>{unit.block.text}</MessageResponse>
+                {group.kind === "slash_command" && group.role === "assistant" ? (
+                  <PlainTextResponse text={unit.block.text} />
+                ) : (
+                  <MessageResponse>{unit.block.text}</MessageResponse>
+                )}
               </MessageContent>
             );
           }
@@ -1326,6 +1330,10 @@ function SlashCommandMessage({ text }: { text: string }) {
       </div>
     </Message>
   );
+}
+
+function PlainTextResponse({ text }: { text: string }) {
+  return <div className="whitespace-pre-wrap break-words">{text}</div>;
 }
 
 function MCPEventGroup({ group }: { group: MessageGroup }) {
