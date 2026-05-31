@@ -11,6 +11,8 @@ test("toolDisplayName removes transport prefixes from visible titles", () => {
   assert.equal(toolDisplayName("tool-bash"), "bash");
   assert.equal(toolDisplayName("tool-tool"), "tool");
   assert.equal(toolDisplayName("dynamic-tool", "edit"), "edit");
+  assert.equal(toolDisplayName(null), "tool");
+  assert.equal(toolDisplayName("dynamic-tool", null), "tool");
 });
 
 test("toolStatusLabel maps tool states to user-facing lifecycle labels", () => {
