@@ -7,7 +7,7 @@ type HistorySessionSummary = {
 };
 
 export function historySessionHref(id: string): string {
-  return `/history/sessions/${encodeURIComponent(id)}`;
+  return `/sessions/${encodeURIComponent(id)}`;
 }
 
 export function historySessionTitle(

@@ -3,22 +3,11 @@ type SessionAccessSummary = {
   active: boolean;
 };
 
-type SessionAccessOptions = {
-  historyMode: boolean;
-};
-
-export function sessionCanSend(
-  session: SessionAccessSummary,
-  options: SessionAccessOptions,
-): boolean {
-  return !options.historyMode && session.kind === "primary" && session.active;
+export function sessionCanSend(session: SessionAccessSummary): boolean {
+  return session.kind === "primary" && session.active;
 }
 
-export function sessionReadOnlyMessage(
-  session: SessionAccessSummary,
-  options: SessionAccessOptions,
-): string {
-  if (options.historyMode) return "History view is read-only";
+export function sessionReadOnlyMessage(session: SessionAccessSummary): string {
   if (session.kind === "primary" && !session.active) {
     return "Inactive primary session";
   }

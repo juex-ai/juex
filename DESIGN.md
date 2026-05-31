@@ -98,7 +98,7 @@ juex/
 │   │   │   └── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
 │   │   ├── pages/
 │   │   │   ├── Sessions.tsx        # /
-│   │   │   ├── Session.tsx         # /sessions/:id and read-only /history/sessions/:id
+│   │   │   ├── Session.tsx         # /sessions/:id; send access follows kind + active state
 │   │   │   ├── History.tsx         # /history
 │   │   │   └── Runtime.tsx         # /runtime
 │   │   └── components/
@@ -199,8 +199,9 @@ its own header and composer (when applicable).
   with no selected session the title area is blank.
 - Shell-aligned header strips use `--juex-header-height` so the app header,
   workspace header, and session metadata header stay aligned.
-- The history icon opens `/history`; each row opens a read-only session viewer
-  under `/history/sessions/:id`.
+- The history icon opens `/history`; each row opens the canonical session route
+  under `/sessions/:id`. The session page decides whether the composer is
+  available from the session kind and active state.
 - The wrench icon opens `/runtime` for MCP server and skill details. On the
   runtime page, the same slot becomes a back arrow that returns to the previous
   non-runtime route.
@@ -226,11 +227,10 @@ primary session and navigates to `/sessions/<new-id>`.
 ### 6.2 Session detail (`/sessions/:id`)
 
 Center column: compact header strip + scrollable message list + sticky
-composer. The composer is shown only for the active primary session outside
-history mode. Inactive primary sessions, side sessions, and all history-mode
-session views are read-only and never show an activate control. The composer
-footer shows transient composer feedback, latest request context total, and
-current conversation token total.
+composer. The composer is shown only for the active primary session. Inactive
+primary sessions and side sessions are read-only and never show an activate
+control. The composer footer shows transient composer feedback, latest request
+context total, and current conversation token total.
 
 MCP channel events render as centered external-event bubbles with a small radio
 icon, a monospace `<mcp_name>:<event_type>` label, and a one-line content
@@ -261,14 +261,15 @@ surface so the transcript stays readable.
 Copy controls use the Clipboard API when available and fall back to a temporary
 textarea copy path so local HTTP access over LAN or NetBird still works.
 
-### 6.3 History (`/history`, `/history/sessions/:id`)
+### 6.3 History (`/history`)
 
 The global history button opens `/history`, a dense list of recorded sessions
 sorted by the server. Rows show the preview, relative last-active time, kind,
-active state, and turn count. Clicking a row opens
-`/history/sessions/<id>`, which reuses the normal transcript renderer but
-passes history mode so no composer, live event subscription, or activate action
-is available. The history page owns deletion and a compact `New chat` button.
+active state, and turn count. Clicking a row opens `/sessions/<id>` so the
+session URL is the same regardless of entry point. Active primary sessions keep
+the composer; inactive primary and side sessions are read-only. The legacy
+`/history/sessions/:id` route redirects to `/sessions/:id`. The history page
+owns deletion and a compact `New chat` button.
 
 ### 6.4 Runtime detail (`/runtime`)
 
