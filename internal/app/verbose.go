@@ -121,6 +121,16 @@ func responseBlocksFromPayload(v any) ([]llm.Block, bool) {
 	switch blocks := v.(type) {
 	case []llm.Block:
 		return blocks, true
+	case []any:
+		buf, err := json.Marshal(blocks)
+		if err != nil {
+			return nil, false
+		}
+		var decoded []llm.Block
+		if err := json.Unmarshal(buf, &decoded); err != nil {
+			return nil, false
+		}
+		return decoded, true
 	case nil:
 		return nil, false
 	default:

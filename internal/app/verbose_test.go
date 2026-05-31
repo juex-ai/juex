@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -134,6 +135,38 @@ func TestVerbose_PrintsResponseBlocksInOrder(t *testing.T) {
 	}
 	if lead >= think || think >= tail {
 		t.Fatalf("blocks printed out of order:\n%s", out)
+	}
+}
+
+func TestVerbose_PrintsJSONDecodedResponseBlocksInOrder(t *testing.T) {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"blocks": [
+			{"type": "text", "text": "lead"},
+			{"type": "reasoning", "text": "think"},
+			{"type": "text", "text": "tail"}
+		],
+		"text": "legacy fallback",
+		"thinking": "legacy thinking"
+	}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	out := emitAll([]events.Event{
+		{Type: "llm.requested", Payload: map[string]any{}},
+		{Type: "llm.responded", Payload: payload},
+	})
+
+	lead := strings.Index(out, "assistant: lead")
+	think := strings.Index(out, "thinking: think")
+	tail := strings.Index(out, "assistant: tail")
+	if lead < 0 || think < 0 || tail < 0 {
+		t.Fatalf("missing ordered block output in:\n%s", out)
+	}
+	if lead >= think || think >= tail {
+		t.Fatalf("JSON-decoded blocks printed out of order:\n%s", out)
+	}
+	if strings.Contains(out, "legacy fallback") || strings.Contains(out, "legacy thinking") {
+		t.Fatalf("used legacy fallback despite decoded blocks:\n%s", out)
 	}
 }
 
