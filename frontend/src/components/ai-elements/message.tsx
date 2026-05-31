@@ -330,7 +330,7 @@ export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
-        "juex-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_code]:font-mono [&_pre]:rounded-[10px]",
+        "juex-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_code]:font-mono [&_li]:whitespace-pre-wrap [&_p]:whitespace-pre-wrap [&_pre]:rounded-[10px]",
         className
       )}
       plugins={streamdownPlugins}
