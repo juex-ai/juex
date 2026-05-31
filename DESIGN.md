@@ -246,6 +246,8 @@ the tooltip to `Copied to clipboard`. The summary itself is not shown inline.
 User and system message bubbles expose a copy action on hover/focus. The action
 sits under the bubble, uses a copy icon, copies the whole message text, and
 temporarily changes its tooltip to `Copied to clipboard`.
+Copyable text is limited to content visibly represented in the transcript;
+provider-redacted reasoning content is never copied from hidden block fields.
 
 Tool cards use lifecycle labels rather than transport labels: `running` while a
 tool_use has no result, `success` when a result arrives, and `failed` for error
