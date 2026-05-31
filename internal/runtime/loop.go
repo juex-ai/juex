@@ -279,6 +279,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		if msg.Model == "" && e.Provider != nil {
 			msg.Model = e.Provider.Name()
 		}
+		msg.Blocks = annotateToolTimeouts(msg.Blocks)
 		var contextUsage *llm.ContextUsage
 		if !resp.Usage.IsZero() {
 			snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, promptSections, tools, requestHistory)
@@ -329,22 +330,33 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			go func(idx int, call llm.Block) {
 				defer wg.Done()
 				e.emit(events.Event{Type: "tool.requested", TurnID: turnID, Payload: map[string]any{
-					"name": call.ToolName, "input": call.Input, "tool_use_id": call.ToolUseID,
+					"name":            call.ToolName,
+					"input":           call.Input,
+					"tool_use_id":     call.ToolUseID,
+					"timeout_seconds": call.TimeoutSeconds,
 				}})
-				out, err := e.Tools.Call(turnCtx, call.ToolName, call.Input)
+				out, info, err := e.Tools.CallWithInfo(turnCtx, call.ToolName, call.Input)
 				block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID}
 				if err != nil {
 					block.Content = err.Error()
 					block.IsError = true
-					e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: map[string]any{
-						"name": call.ToolName, "error": err.Error(),
-					}})
+					payload := map[string]any{
+						"name":            call.ToolName,
+						"tool_use_id":     call.ToolUseID,
+						"error":           err.Error(),
+						"timeout_seconds": info.TimeoutSeconds,
+					}
+					if info.TimedOut {
+						payload["timed_out"] = true
+					}
+					e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: payload})
 				} else {
 					block.Content = out
 					e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: map[string]any{
-						"name":        call.ToolName,
-						"tool_use_id": call.ToolUseID,
-						"len":         len(out),
+						"name":            call.ToolName,
+						"tool_use_id":     call.ToolUseID,
+						"timeout_seconds": info.TimeoutSeconds,
+						"len":             len(out),
 						// Truncated preview so events.jsonl stays readable
 						// for tools that return many KB.
 						"preview": truncate(out, 200),
@@ -505,10 +517,24 @@ func responseToolCalls(m llm.Message) []map[string]any {
 	for _, b := range m.Blocks {
 		if b.Type == llm.BlockToolUse {
 			out = append(out, map[string]any{
-				"tool_use_id": b.ToolUseID,
-				"name":        b.ToolName,
-				"input":       b.Input,
+				"tool_use_id":     b.ToolUseID,
+				"name":            b.ToolName,
+				"input":           b.Input,
+				"timeout_seconds": b.TimeoutSeconds,
 			})
+		}
+	}
+	return out
+}
+
+func annotateToolTimeouts(blocks []llm.Block) []llm.Block {
+	if len(blocks) == 0 {
+		return blocks
+	}
+	out := append([]llm.Block(nil), blocks...)
+	for i := range out {
+		if out[i].Type == llm.BlockToolUse {
+			out[i].TimeoutSeconds = tools.CallTimeoutSeconds(out[i].Input)
 		}
 	}
 	return out

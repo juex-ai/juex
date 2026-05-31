@@ -45,6 +45,7 @@ import {
   type MessageGroup,
 } from "@/lib/display-units";
 import { assistantBlocksFromEventPayload } from "@/lib/assistant-blocks";
+import { applyToolRequestedToMessages } from "@/lib/live-tool-events";
 import {
   COMPACTING_SUBMIT_HINT,
   composerSubmitAction,
@@ -340,6 +341,15 @@ export function Session({ historyMode = false }: { historyMode?: boolean }) {
           case "tool.requested": {
             const name =
               eventString(e, "name") ?? eventString(e, "tool_name") ?? "?";
+            setLiveMessages((prev) =>
+              applyToolRequestedToMessages(prev, {
+                turnID: e.turn_id,
+                toolUseID: eventString(e, "tool_use_id"),
+                toolName: name,
+                input: eventRecord(e, "input"),
+                timeoutSeconds: eventNumberFromPayload(e, "timeout_seconds"),
+              }),
+            );
             setTurnActiveControllerState(true);
             setStatus({ kind: "tool", name });
             break;
@@ -1007,6 +1017,11 @@ function eventNumber(value: unknown): number | undefined {
     : undefined;
 }
 
+function eventNumberFromPayload(e: { payload?: unknown }, key: string): number | undefined {
+  if (!e.payload || typeof e.payload !== "object") return undefined;
+  return eventNumber((e.payload as Record<string, unknown>)[key]);
+}
+
 function eventString(e: { payload?: unknown }, key: string): string | undefined {
   if (
     e.payload &&
@@ -1017,6 +1032,18 @@ function eventString(e: { payload?: unknown }, key: string): string | undefined 
     return (e.payload as Record<string, string>)[key];
   }
   return undefined;
+}
+
+function eventRecord(
+  e: { payload?: unknown },
+  key: string,
+): Record<string, unknown> | undefined {
+  if (!e.payload || typeof e.payload !== "object") return undefined;
+  const value = (e.payload as Record<string, unknown>)[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
 }
 
 function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
@@ -1328,7 +1355,11 @@ function MessageGroupView({
               key={i}
               defaultOpen={state === "output-error" || state === "input-available"}
             >
-              <ToolHeader type={`tool-${toolName}`} state={state} />
+              <ToolHeader
+                type={`tool-${toolName}`}
+                state={state}
+                timeoutSeconds={unit.use?.timeout_seconds}
+              />
               <ToolContent>
                 {unit.use ? <ToolInput input={unit.use.input} /> : null}
                 {unit.result ? (

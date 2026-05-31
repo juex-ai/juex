@@ -27,6 +27,7 @@ export interface ToolUseBlock extends BlockBase {
   tool_use_id: string;
   tool_name: string;
   input?: Record<string, unknown>;
+  timeout_seconds?: number;
 }
 
 export interface ToolResultBlock extends BlockBase {

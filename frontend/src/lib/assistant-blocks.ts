@@ -29,6 +29,8 @@ export function assistantBlocksFromEventPayload(payload: unknown): Block[] {
         tool_name: typeof call.name === "string" ? call.name : "?",
       };
       if (isRecord(call.input)) block.input = call.input;
+      const timeoutSeconds = numberValue(call.timeout_seconds);
+      if (timeoutSeconds !== undefined) block.timeout_seconds = timeoutSeconds;
       blocks.push(block);
     }
   }
@@ -76,6 +78,8 @@ function toolUseBlockFromRecord(value: Record<string, unknown>): ToolUseBlock {
           : "?",
   };
   if (isRecord(value.input)) block.input = value.input;
+  const timeoutSeconds = numberValue(value.timeout_seconds);
+  if (timeoutSeconds !== undefined) block.timeout_seconds = timeoutSeconds;
   return block;
 }
 
@@ -97,4 +101,10 @@ function toolResultBlockFromRecord(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }

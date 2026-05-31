@@ -57,10 +57,12 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/compact-ui.ts` | optimistic `/compact` UI labels and local message helpers |
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and read-only route helpers |
+| `src/lib/live-tool-events.ts` | pure live transcript updates for tool.requested events |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
 | `src/lib/route-state.ts` | pure route matching helpers for shell state |
+| `src/lib/tool-display.ts` | pure tool lifecycle labels and timeout display helpers |
 | `src/lib/session-access.ts` | pure rules for writable versus read-only session views |
 | `src/lib/workspace-refresh.ts` | pure helper for refreshing workspace tree and open file preview data |
 | `src/pages/` | route-level views |

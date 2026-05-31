@@ -183,9 +183,14 @@ func bashTool(defaultCwd string) Tool {
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"cmd":     map[string]any{"type": "string"},
-				"cwd":     map[string]any{"type": "string"},
-				"timeout": map[string]any{"type": "integer", "description": "Seconds, default 60"},
+				"cmd": map[string]any{"type": "string"},
+				"cwd": map[string]any{"type": "string"},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "Seconds to allow this command to run. Defaults to 60 and is capped at 300.",
+					"minimum":     1,
+					"maximum":     MaxTimeoutSeconds,
+				},
 			},
 			"required": []string{"cmd"},
 		},
@@ -210,6 +215,9 @@ func bashTool(defaultCwd string) Tool {
 			}
 			out, err := ec.CombinedOutput()
 			if err != nil {
+				if c.Err() != nil {
+					return string(out), c.Err()
+				}
 				return fmt.Sprintf("exit error: %s\n%s", err.Error(), string(out)), nil
 			}
 			return string(out), nil

@@ -4,11 +4,18 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+)
+
+const (
+	DefaultTimeoutSeconds = 60
+	MaxTimeoutSeconds     = 300
 )
 
 type Handler func(ctx context.Context, input map[string]any) (string, error)
@@ -18,6 +25,11 @@ type Tool struct {
 	Description string
 	Schema      map[string]any
 	Handler     Handler
+}
+
+type CallInfo struct {
+	TimeoutSeconds int  `json:"timeout_seconds"`
+	TimedOut       bool `json:"timed_out,omitempty"`
 }
 
 type Registry struct {
@@ -81,7 +93,7 @@ func (r *Registry) Specs() []llm.ToolSpec {
 		out = append(out, llm.ToolSpec{
 			Name:        t.Name,
 			Description: t.Description,
-			Schema:      t.Schema,
+			Schema:      schemaWithReservedTimeout(t.Schema),
 		})
 	}
 	return out
@@ -90,9 +102,51 @@ func (r *Registry) Specs() []llm.ToolSpec {
 // Call dispatches to the handler. The output is whatever string the handler
 // returned; an error is converted to an error string by the caller.
 func (r *Registry) Call(ctx context.Context, name string, input map[string]any) (string, error) {
+	out, _, err := r.CallWithInfo(ctx, name, input)
+	return out, err
+}
+
+func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[string]any) (string, CallInfo, error) {
+	timeoutSeconds := CallTimeoutSeconds(input)
+	info := CallInfo{TimeoutSeconds: timeoutSeconds}
 	t, ok := r.Get(name)
 	if !ok {
-		return "", fmt.Errorf("tools: unknown tool %q", name)
+		return "", info, fmt.Errorf("tools: unknown tool %q", name)
 	}
-	return t.Handler(ctx, input)
+	callInput := cloneCallInput(input)
+	if schemaDeclaresProperty(t.Schema, "timeout") {
+		callInput["timeout"] = timeoutSeconds
+	} else {
+		delete(callInput, "timeout")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	out, err := t.Handler(callCtx, callInput)
+	if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		info.TimedOut = true
+		return out, info, fmt.Errorf("tools: %s timed out after %ds", name, timeoutSeconds)
+	}
+	return out, info, err
+}
+
+func CallTimeoutSeconds(input map[string]any) int {
+	timeoutSeconds, ok := toInt(input["timeout"])
+	if !ok || timeoutSeconds <= 0 {
+		return DefaultTimeoutSeconds
+	}
+	if timeoutSeconds > MaxTimeoutSeconds {
+		return MaxTimeoutSeconds
+	}
+	return timeoutSeconds
+}
+
+func cloneCallInput(input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(input))
+	for k, v := range input {
+		out[k] = v
+	}
+	return out
 }

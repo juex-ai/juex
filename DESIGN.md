@@ -247,6 +247,11 @@ User and system message bubbles expose a copy action on hover/focus. The action
 sits under the bubble, uses a copy icon, copies the whole message text, and
 temporarily changes its tooltip to `Copied to clipboard`.
 
+Tool cards use lifecycle labels rather than transport labels: `running` while a
+tool_use has no result, `success` when a result arrives, and `failed` for error
+results. Running cards show the runtime timeout seconds in the header so long
+calls have an explicit wait boundary.
+
 Copy controls use the Clipboard API when available and fall back to a temporary
 textarea copy path so local HTTP access over LAN or NetBird still works.
 
