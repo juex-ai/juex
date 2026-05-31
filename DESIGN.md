@@ -169,14 +169,14 @@ server. Edit React, see changes instantly.
 Every page renders a responsive shell: the main content column fills the center
 and a workspace browser docks on wide screens or becomes a right-side drawer on
 narrower screens. Session history is not a persistent navigation surface; it is
-opened from the global header as the `/history` page. The middle column owns
-its own header and composer (when applicable).
+opened from the global header as the `/history` page. Session metadata stays
+in the global header, and the middle column owns the composer when applicable.
 
 ```
 ┌──────────────────────────────────────┬──────────────┐
-│ global header: juex, history/runtime │ workspace    │
+│ global header: title, runtime, tools │ workspace    │
 ├──────────────────────────────────────┼──────────────┤
-│ ← page header (id / meta)            │ file tree    │
+│                                      │ file tree    │
 │                                      │              │
 │ message list                         │              │
 │ (scrollable)                         │              │
@@ -194,11 +194,18 @@ its own header and composer (when applicable).
   conversation column keeps its readable width.
 - File previews always open in a right-side sheet. On narrow screens the
   preview sheet uses the viewport width and wraps long paths/content.
-- Runtime status badges live beside the shell title when there is room. The
-  shell title is the current page or session preview, truncated with ellipsis;
-  with no selected session the title area is blank.
-- Shell-aligned header strips use `--juex-header-height` so the app header,
-  workspace header, and session metadata header stay aligned.
+- Runtime status badges live on the right side of the shell header when there
+  is room. Session pages add the most recent activity timestamp beside the
+  skills badge, formatted in the browser time zone with 24-hour time and no
+  label; the timestamp hides on narrower screens.
+- The MCP badge is compact: `MCP <count>` plus a status dot. No configured
+  servers uses a muted dot, all configured servers connected uses green, and
+  any startup/connection problem uses red.
+- The shell title is the current page or session preview, truncated with
+  ellipsis. It owns the remaining header space so runtime badges and action
+  buttons do not overlap long titles.
+- Shell-aligned header strips use `--juex-header-height` so the app header and
+  workspace header stay aligned.
 - The history icon opens `/history`; each row opens the canonical session route
   under `/sessions/:id`. The session page decides whether the composer is
   available from the session kind and active state.
