@@ -240,6 +240,11 @@ with the standard `read` builtin against the path printed there.
 
 `tools.RegisterBuiltins(reg, workDir)` injects `workDir` so `bash` and `grep`
 fall back to it when the model does not pass an explicit `cwd` / `path`.
+All LLM-facing tool schemas include an optional `timeout` field in seconds.
+The registry applies a per-call timeout context, caps it at 300 seconds, and
+strips the reserved field before invoking tools that do not declare their own
+`timeout` input. Tool timeouts are returned as ordinary error tool results so
+the agent can recover in the next model round.
 
 MCP servers are optional runtime extensions. Startup is attempted per
 configured server: servers that connect successfully register

@@ -41,8 +41,12 @@ type Block struct {
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	ToolName  string         `json:"tool_name,omitempty"`
 	Input     map[string]any `json:"input,omitempty"`
-	Content   string         `json:"content,omitempty"`
-	IsError   bool           `json:"is_error,omitempty"`
+	// TimeoutSeconds records the runtime timeout applied to a tool_use block.
+	// Provider adapters ignore it when replaying history; UI surfaces use it
+	// to explain how long an in-flight tool may run.
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	Content        string `json:"content,omitempty"`
+	IsError        bool   `json:"is_error,omitempty"`
 	// Signature is provider-specific opaque metadata that some providers
 	// require alongside reasoning content (Anthropic thinking blocks ship a
 	// signature that must be echoed back unchanged).

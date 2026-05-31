@@ -908,6 +908,64 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 	}
 }
 
+func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "slow_1", ToolName: "slow", Input: map[string]any{"timeout": 1}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.MaxDur = 3 * time.Second
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "slow",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	})
+
+	var requestedPayload, erroredPayload map[string]any
+	bus.Subscribe("tool.requested", func(e events.Event) {
+		requestedPayload, _ = e.Payload.(map[string]any)
+	})
+	bus.Subscribe("tool.errored", func(e events.Event) {
+		erroredPayload, _ = e.Payload.(map[string]any)
+	})
+
+	out, err := eng.Turn(context.Background(), "run slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "recovered" {
+		t.Fatalf("out = %q, want recovered", out)
+	}
+	result := eng.Session.History[2]
+	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
+		t.Fatalf("tool result message wrong: %+v", result)
+	}
+	block := result.Blocks[0]
+	if block.Type != llm.BlockToolResult || !block.IsError {
+		t.Fatalf("tool result block = %+v, want error result", block)
+	}
+	if !strings.Contains(block.Content, "timed out after 1s") {
+		t.Fatalf("tool result content = %q, want timeout detail", block.Content)
+	}
+	if got := requestedPayload["timeout_seconds"]; got != 1 {
+		t.Fatalf("requested timeout_seconds = %v, want 1", got)
+	}
+	if got := requestedPayload["tool_use_id"]; got != "slow_1" {
+		t.Fatalf("requested tool_use_id = %v, want slow_1", got)
+	}
+	if got := erroredPayload["timeout_seconds"]; got != 1 {
+		t.Fatalf("errored timeout_seconds = %v, want 1", got)
+	}
+	if got := erroredPayload["timed_out"]; got != true {
+		t.Fatalf("errored timed_out = %v, want true", got)
+	}
+}
+
 func TestTurn_UnknownToolName(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{

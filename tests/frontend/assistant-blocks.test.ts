@@ -16,6 +16,7 @@ test("assistantBlocksFromEventPayload prefers ordered canonical blocks", () => {
         tool_use_id: "tu1",
         tool_name: "read",
         input: { path: "README.md" },
+        timeout_seconds: 60,
       },
       { type: "reasoning", text: "reason after tool" },
       { type: "text", text: "tail text" },
@@ -29,6 +30,7 @@ test("assistantBlocksFromEventPayload prefers ordered canonical blocks", () => {
       tool_use_id: "tu1",
       tool_name: "read",
       input: { path: "README.md" },
+      timeout_seconds: 60,
     },
     { type: "reasoning", text: "reason after tool" },
     { type: "text", text: "tail text" },
@@ -39,7 +41,9 @@ test("assistantBlocksFromEventPayload keeps legacy llm.responded payloads workin
   const blocks = assistantBlocksFromEventPayload({
     thinking: "legacy thinking",
     text: "legacy answer",
-    tool_calls: [{ tool_use_id: "tu1", name: "read", input: { path: "x" } }],
+    tool_calls: [
+      { tool_use_id: "tu1", name: "read", input: { path: "x" }, timeout_seconds: 30 },
+    ],
   });
 
   assert.deepEqual(blocks, [
@@ -50,6 +54,7 @@ test("assistantBlocksFromEventPayload keeps legacy llm.responded payloads workin
       tool_use_id: "tu1",
       tool_name: "read",
       input: { path: "x" },
+      timeout_seconds: 30,
     },
   ]);
 });

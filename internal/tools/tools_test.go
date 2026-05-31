@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // skipIfWindows guards bash-dependent tests on platforms without a default
@@ -83,6 +84,81 @@ func TestRegistry_NormalizesNullSchemaEntries(t *testing.T) {
 	}
 	if pattern, ok := patternProps["^x-"].(map[string]any); !ok || len(pattern) != 0 {
 		t.Fatalf("null pattern property schema should become empty object: %+v", patternProps["^x-"])
+	}
+}
+
+func TestRegistry_SpecsExposeReservedTimeout(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(Tool{
+		Name: "slow",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"value": map[string]any{"type": "string"}},
+			"required":   []string{"value"},
+		},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) { return "ok", nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	specs := r.Specs()
+	if len(specs) != 1 {
+		t.Fatalf("spec count = %d", len(specs))
+	}
+	props, ok := specs[0].Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %+v", specs[0].Schema["properties"])
+	}
+	timeout, ok := props["timeout"].(map[string]any)
+	if !ok {
+		t.Fatalf("timeout property missing from schema: %+v", props)
+	}
+	if timeout["type"] != "integer" {
+		t.Fatalf("timeout schema = %+v, want integer", timeout)
+	}
+	if _, required := timeout["required"]; required {
+		t.Fatalf("timeout property should not be required: %+v", timeout)
+	}
+}
+
+func TestRegistry_CallWithInfoAppliesTimeoutAndStripsReservedInput(t *testing.T) {
+	r := NewRegistry()
+	seen := make(chan map[string]any, 1)
+	if err := r.Register(Tool{
+		Name:   "slow",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			seen <- in
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	out, info, err := r.CallWithInfo(context.Background(), "slow", map[string]any{"timeout": 1, "value": "x"})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if out != "" {
+		t.Fatalf("out = %q, want empty", out)
+	}
+	if !info.TimedOut || info.TimeoutSeconds != 1 {
+		t.Fatalf("info = %+v, want timed out after 1s", info)
+	}
+	if !strings.Contains(err.Error(), "timed out after 1s") {
+		t.Fatalf("err = %v, want timed out after 1s", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("timeout took too long: %s", elapsed)
+	}
+	input := <-seen
+	if _, ok := input["timeout"]; ok {
+		t.Fatalf("reserved timeout leaked to handler: %+v", input)
+	}
+	if input["value"] != "x" {
+		t.Fatalf("handler input = %+v", input)
 	}
 }
 
@@ -279,12 +355,18 @@ func TestBuiltins_BashTimeout(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()
 	RegisterBuiltins(r, "")
-	out, err := r.Call(context.Background(), "bash", map[string]any{"cmd": "sleep 5", "timeout": 1})
-	if err != nil {
-		t.Fatal(err)
+	out, info, err := r.CallWithInfo(context.Background(), "bash", map[string]any{"cmd": "sleep 5", "timeout": 1})
+	if err == nil {
+		t.Fatal("expected timeout error")
 	}
-	if !strings.Contains(out, "exit error") {
-		t.Fatalf("expected timeout exit error, got %q", out)
+	if out != "" {
+		t.Fatalf("timeout output = %q, want empty", out)
+	}
+	if !info.TimedOut || info.TimeoutSeconds != 1 {
+		t.Fatalf("info = %+v, want timed out after 1s", info)
+	}
+	if !strings.Contains(err.Error(), "timed out after 1s") {
+		t.Fatalf("expected timeout error, got %v", err)
 	}
 }
 

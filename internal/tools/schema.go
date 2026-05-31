@@ -11,6 +11,33 @@ func normalizeInputSchema(schema map[string]any) map[string]any {
 	return normalized
 }
 
+func schemaWithReservedTimeout(schema map[string]any) map[string]any {
+	out := normalizeInputSchema(schema)
+	props, ok := out["properties"].(map[string]any)
+	if !ok {
+		props = map[string]any{}
+		out["properties"] = props
+	}
+	if _, ok := props["timeout"]; !ok {
+		props["timeout"] = map[string]any{
+			"type":        "integer",
+			"description": "Seconds to allow this tool call to run. Defaults to 60 and is capped at 300.",
+			"minimum":     1,
+			"maximum":     MaxTimeoutSeconds,
+		}
+	}
+	return out
+}
+
+func schemaDeclaresProperty(schema map[string]any, name string) bool {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = props[name]
+	return ok
+}
+
 func normalizeSchemaValue(value any, key, parentKey string) any {
 	switch v := value.(type) {
 	case nil:

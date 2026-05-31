@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { formatToolPayload } from "@/lib/tool-payload";
+import { toolStatusLabel, toolTimeoutLabel } from "@/lib/tool-display";
 import type { DynamicToolUIPart, ToolUIPart } from "./_local-types";
 import {
   ChevronDownIcon,
@@ -35,6 +36,7 @@ export type ToolPart = ToolUIPart | DynamicToolUIPart;
 export type ToolHeaderProps = {
   title?: string;
   className?: string;
+  timeoutSeconds?: number;
 } & (
   | { type: ToolUIPart["type"]; state: ToolUIPart["state"]; toolName?: never }
   | {
@@ -43,16 +45,6 @@ export type ToolHeaderProps = {
       toolName: string;
     }
 );
-
-const statusLabels: Record<ToolPart["state"], string> = {
-  "approval-requested": "approval",
-  "approval-responded": "responded",
-  "input-available": "running",
-  "input-streaming": "pending",
-  "output-available": "output",
-  "output-denied": "denied",
-  "output-error": "error",
-};
 
 export const getStatusBadge = (status: ToolPart["state"]) => (
   <Badge
@@ -65,7 +57,7 @@ export const getStatusBadge = (status: ToolPart["state"]) => (
     variant="outline"
   >
     <CircleIcon className="size-2.5 fill-current" />
-    {statusLabels[status]}
+    {toolStatusLabel(status)}
   </Badge>
 );
 
@@ -74,11 +66,16 @@ export const ToolHeader = ({
   title,
   type,
   state,
+  timeoutSeconds,
   toolName,
   ...props
 }: ToolHeaderProps) => {
   const derivedName =
     type === "dynamic-tool" ? toolName : type.split("-").slice(1).join("-");
+  const timeoutLabel =
+    state === "input-available" || state === "input-streaming"
+      ? toolTimeoutLabel(timeoutSeconds)
+      : undefined;
 
   return (
     <CollapsibleTrigger
@@ -94,6 +91,14 @@ export const ToolHeader = ({
           {title ?? `tool-${derivedName}`}
         </span>
         {getStatusBadge(state)}
+        {timeoutLabel ? (
+          <Badge
+            className="rounded-full border-juex-tool/15 bg-background/70 font-mono text-[11px] text-muted-foreground"
+            variant="outline"
+          >
+            {timeoutLabel}
+          </Badge>
+        ) : null}
       </div>
       <ChevronDownIcon className="size-4 shrink-0 opacity-80 transition-transform group-hover:opacity-100 group-data-[state=open]:rotate-180" />
     </CollapsibleTrigger>
