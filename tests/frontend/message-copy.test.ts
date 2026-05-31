@@ -32,6 +32,59 @@ test("messageGroupCopyText joins copyable text blocks", () => {
   );
 });
 
+test("messageGroupCopyText skips redacted reasoning internals", () => {
+  const group = {
+    key: "a-redacted",
+    role: "assistant" as const,
+    pending: false,
+    units: [
+      {
+        kind: "reasoning" as const,
+        block: {
+          type: "reasoning" as const,
+          text: "**Clarifying user request**",
+          content: "encrypted hidden reasoning",
+          redacted: true,
+        },
+      },
+      {
+        kind: "tool" as const,
+        use: {
+          type: "tool_use" as const,
+          tool_use_id: "tu1",
+          tool_name: "read",
+        },
+        result: null,
+      },
+    ],
+  };
+
+  assert.equal(messageGroupCopyText(group), "");
+  assert.equal(messageGroupCanCopy(group), false);
+});
+
+test("messageGroupCopyText keeps visible text next to redacted reasoning", () => {
+  assert.equal(
+    messageGroupCopyText({
+      key: "a-mixed",
+      role: "assistant",
+      pending: false,
+      units: [
+        {
+          kind: "reasoning",
+          block: {
+            type: "reasoning",
+            text: "hidden reasoning",
+            redacted: true,
+          },
+        },
+        { kind: "text", block: { type: "text", text: "visible answer" } },
+      ],
+    }),
+    "visible answer",
+  );
+});
+
 test("messageGroupCanCopy allows assistant text messages", () => {
   assert.equal(
     messageGroupCanCopy({
