@@ -34,23 +34,37 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { isHistoryPath } from "@/lib/route-state";
+import {
+  formatShellUpdatedAt,
+  shellMCPBadge,
+  shellUpdatedAtClassName,
+  type ShellMCPTone,
+} from "@/lib/shell-header";
 import { cn } from "@/lib/utils";
 
 const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
 
 type ShellTitleContextValue = {
-  setShellTitle: (title: string | null) => void;
+  setShellHeader: (header: ShellHeaderState) => void;
+};
+
+type ShellHeaderState = {
+  title: string | null;
+  updatedAt?: string | null;
 };
 
 const ShellTitleContext = createContext<ShellTitleContextValue | null>(null);
 
-export function useShellTitle(title: string | null) {
+export function useShellTitle(
+  title: string | null,
+  updatedAt: string | null = null,
+) {
   const context = useContext(ShellTitleContext);
 
   useEffect(() => {
-    context?.setShellTitle(title);
-    return () => context?.setShellTitle(null);
-  }, [context, title]);
+    context?.setShellHeader({ title, updatedAt });
+    return () => context?.setShellHeader({ title: null, updatedAt: null });
+  }, [context, title, updatedAt]);
 }
 
 export function AppShell() {
@@ -59,7 +73,10 @@ export function AppShell() {
   const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
-  const [shellTitle, setShellTitle] = useState<string | null>(null);
+  const [shellHeader, setShellHeader] = useState<ShellHeaderState>({
+    title: null,
+    updatedAt: null,
+  });
   const [lastContentPath, setLastContentPath] = useState(
     () => window.sessionStorage.getItem("juex:last-content-path") || "/",
   );
@@ -90,21 +107,9 @@ export function AppShell() {
     };
   }, []);
 
-  const mcpErrorCount = runtimeStatus?.mcp.errors ?? 0;
-  const mcpConnectedLabel = runtimeStatus
-    ? `MCP ${runtimeStatus.mcp.connected}/${runtimeStatus.mcp.configured} connected`
-    : "";
-  const mcpLabel = runtimeStatus
-    ? mcpErrorCount > 0
-      ? `${mcpConnectedLabel}, ${mcpErrorCount} ${
-          mcpErrorCount === 1 ? "error" : "errors"
-        }`
-      : runtimeStatus.mcp.connected > 0
-        ? mcpConnectedLabel
-        : runtimeStatus.mcp.configured > 0
-          ? `MCP not started (${runtimeStatus.mcp.configured})`
-          : "MCP 0 configured"
-    : "";
+  const shellTitle = shellHeader.title;
+  const shellUpdatedAt = formatShellUpdatedAt(shellHeader.updatedAt);
+  const mcpBadge = runtimeStatus ? shellMCPBadge(runtimeStatus.mcp) : null;
   const workspaceOpen = workspaceDocked ? workspaceDockOpen : workspaceSheetOpen;
   const workspaceLabel = workspaceDocked
     ? workspaceOpen
@@ -118,7 +123,7 @@ export function AppShell() {
       setWorkspaceSheetOpen(true);
     }
   };
-  const shellContextValue = useMemo(() => ({ setShellTitle }), []);
+  const shellContextValue = useMemo(() => ({ setShellHeader }), []);
   const onRuntimePage = location.pathname === "/runtime";
   const onHistoryPage = isHistoryPath(location.pathname);
 
@@ -126,40 +131,57 @@ export function AppShell() {
     <ShellTitleContext.Provider value={shellContextValue}>
       <div className="flex h-svh min-h-0 overflow-hidden bg-background">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between border-b bg-card px-4 shadow-[var(--shadow-xs)]">
-            <div className="flex min-w-0 items-center gap-3">
-              <Link
-                to="/"
-                className="flex shrink-0 items-center gap-2 text-primary transition-colors hover:text-primary/85"
-                aria-label="New chat"
-              >
-                <LogoMark className="size-6" />
-                <span className="hidden font-serif text-2xl italic leading-none sm:inline">
-                  juex
-                </span>
-              </Link>
+          <header className="flex h-[var(--juex-header-height)] shrink-0 items-center gap-2 border-b bg-card px-4 shadow-[var(--shadow-xs)]">
+            <Link
+              to="/"
+              className="flex shrink-0 items-center gap-2 text-primary transition-colors hover:text-primary/85"
+              aria-label="New chat"
+            >
+              <LogoMark className="size-6" />
+              <span className="hidden font-serif text-2xl italic leading-tight sm:inline">
+                juex
+              </span>
+            </Link>
+            <div className="min-w-0 flex-1">
               {shellTitle ? (
                 <div className="min-w-0 border-l pl-3 text-primary">
-                  <span className="block truncate font-serif text-xl italic leading-none">
+                  <span className="block truncate pb-0.5 font-serif text-xl italic leading-tight">
                     {shellTitle}
                   </span>
                 </div>
               ) : null}
-              {runtimeStatus ? (
-                <div className="hidden min-w-0 items-center gap-1 lg:flex">
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              {runtimeStatus && mcpBadge ? (
+                <div className="hidden shrink-0 items-center gap-1 sm:flex">
+                  {shellUpdatedAt ? (
+                    <span className={shellUpdatedAtClassName()}>
+                      {shellUpdatedAt}
+                    </span>
+                  ) : null}
                   <Badge
-                    variant={mcpErrorCount > 0 ? "destructive" : "outline"}
-                    className="max-w-[18rem] truncate font-mono text-[11px] lg:max-w-none"
+                    variant="outline"
+                    className="font-mono text-[11px]"
                   >
-                    {mcpLabel}
-                  </Badge>
-                  <Badge variant="outline" className="font-mono text-[11px]">
                     skills {runtimeStatus.skills.count}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="gap-1.5 font-mono text-[11px]"
+                    title={mcpBadge.title}
+                    aria-label={mcpBadge.title}
+                  >
+                    {mcpBadge.label}
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "size-1.5 rounded-full",
+                        mcpToneDotClassName(mcpBadge.tone),
+                      )}
+                    />
                   </Badge>
                 </div>
               ) : null}
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -258,6 +280,12 @@ export function AppShell() {
       </div>
     </ShellTitleContext.Provider>
   );
+}
+
+function mcpToneDotClassName(tone: ShellMCPTone) {
+  if (tone === "ok") return "bg-emerald-500";
+  if (tone === "error") return "bg-destructive";
+  return "bg-muted-foreground/45";
 }
 
 function useMediaQuery(query: string): boolean {

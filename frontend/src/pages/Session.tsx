@@ -1,6 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
   TooltipContent,
@@ -471,7 +470,10 @@ export function Session() {
     }
   }
 
-  useShellTitle(data ? data.preview || "(empty)" : null);
+  useShellTitle(
+    data ? data.preview || "(empty)" : null,
+    data?.last_active_at ?? null,
+  );
 
   if (!data) {
     return <div className="p-8 text-muted-foreground">Loading...</div>;
@@ -490,30 +492,6 @@ export function Session() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex min-h-[var(--juex-header-height)] min-w-0 flex-wrap items-center gap-2 border-b bg-card px-4 py-3 text-sm shadow-[var(--shadow-xs)] md:flex-nowrap md:gap-3 md:px-6">
-        <code className="min-w-0 max-w-full truncate font-mono text-xs text-muted-foreground md:max-w-[18rem]">
-          {data.id}
-        </code>
-        <Badge variant="secondary" className="font-mono text-[11px]">
-          {data.turns} turns
-        </Badge>
-        <Badge variant="outline" className="font-mono text-xs">
-          {data.kind}
-        </Badge>
-        {data.active ? (
-          <Badge variant="secondary" className="font-mono text-[11px]">
-            active
-          </Badge>
-        ) : null}
-        {data.model ? (
-          <Badge variant="outline" className="font-mono text-xs">
-            {data.model}
-          </Badge>
-        ) : null}
-        <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">
-          last active {new Date(data.last_active_at).toLocaleString()}
-        </span>
-      </header>
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full max-w-[760px]">
           {groups.map((group) => (
