@@ -396,7 +396,7 @@ export function Session() {
     // Queue helpers read from refs; resubscribing on every local queue change
     // would reopen the EventSource during active turns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, id, refresh]);
+  }, [data?.kind, data?.active, id, refresh]);
 
   async function handleSend(prompt: string) {
     const compactCommand = isCompactCommandInput(prompt);
