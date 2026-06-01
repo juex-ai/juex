@@ -37,6 +37,7 @@ func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 
 	waitForMCPEventInSession(t, last.Dir, "alpha:message:hello from mcp")
+	waitForSessionTextInSession(t, last.Dir, llm.RoleAssistant, "ack")
 	assertNoMCPEventInSession(t, older.Dir)
 
 	cancel()
@@ -156,20 +157,34 @@ func seedWebSession(t *testing.T, srv *Server, text string) *session.Session {
 
 func waitForMCPEventInSession(t *testing.T, dir, want string) {
 	t.Helper()
+	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
+		return msg.Kind == llm.MessageKindMCPEvent && strings.Contains(msg.FirstText(), want)
+	}, "MCP event "+want)
+}
+
+func waitForSessionTextInSession(t *testing.T, dir string, role llm.Role, want string) {
+	t.Helper()
+	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
+		return msg.Role == role && strings.Contains(msg.FirstText(), want)
+	}, string(role)+" message "+want)
+}
+
+func waitForSessionMessage(t *testing.T, dir string, match func(llm.Message) bool, label string) {
+	t.Helper()
 	deadline := time.After(5 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("timed out waiting for MCP event %q in %s", want, dir)
+			t.Fatalf("timed out waiting for %s in %s", label, dir)
 		case <-tick.C:
 			_, msgs, err := session.LoadInfo(dir)
 			if err != nil {
 				continue
 			}
 			for _, msg := range msgs {
-				if msg.Kind == llm.MessageKindMCPEvent && strings.Contains(msg.FirstText(), want) {
+				if match(msg) {
 					return
 				}
 			}
