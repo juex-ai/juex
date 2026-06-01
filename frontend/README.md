@@ -57,6 +57,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/compact-ui.ts` | optimistic `/compact` UI labels and local message helpers |
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
+| `src/lib/home-route.ts` | pure helper for choosing the web root redirect target |
 | `src/lib/live-tool-events.ts` | pure live transcript updates for tool.requested events |
 | `src/lib/loading-state.ts` | pure loading-state display text helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |

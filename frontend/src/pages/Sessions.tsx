@@ -1,7 +1,7 @@
 import { LogoMark } from "@/components/LogoMark";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createSession, startTurn } from "@/api";
+import { createSession, listSessions, startTurn } from "@/api";
 import {
   PromptInput,
   PromptInputFooter,
@@ -9,12 +9,40 @@ import {
   PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
+import { homeActiveSessionHref } from "@/lib/home-route";
 
 export function Sessions() {
   const navigate = useNavigate();
+  const [checkingSession, setCheckingSession] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useShellTitle(null);
+
+  useEffect(() => {
+    let live = true;
+    listSessions()
+      .then(({ sessions }) => {
+        if (!live) return;
+        const href = homeActiveSessionHref(sessions);
+        if (href) {
+          navigate(href, { replace: true });
+        } else {
+          setCheckingSession(false);
+        }
+      })
+      .catch((e) => {
+        if (!live) return;
+        console.error("listSessions failed", e);
+        setCheckingSession(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [navigate]);
+
+  if (checkingSession) {
+    return null;
+  }
 
   return (
     <div className="flex flex-1 items-center justify-center px-4 py-8 text-muted-foreground sm:p-8">
