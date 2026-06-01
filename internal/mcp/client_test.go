@@ -511,7 +511,7 @@ func TestPrepareConfig_ExpandsWorkDirAndInjectsEnv(t *testing.T) {
 
 	got := PrepareConfig(cfg, "workspace")
 	alpha := got.MCPServers["alpha"]
-	if alpha.Command != filepath.Join(workDir, "bin", "server") {
+	if alpha.Command != workDir+"/bin/server" {
 		t.Fatalf("command = %q", alpha.Command)
 	}
 	wantArgs := []string{"--workdir", workDir, "--juex-workdir", workDir, "--literal", "${OTHER}"}

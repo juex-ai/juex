@@ -165,7 +165,7 @@ func TestRuntimeStatusExpandsMCPWorkDirVariables(t *testing.T) {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
 	server := got.MCP.Servers[0]
-	if server.Command != filepath.Join(work, "bin", "server") {
+	if server.Command != work+"/bin/server" {
 		t.Fatalf("command = %q", server.Command)
 	}
 	wantArgs := []string{"--workdir", work, "--juex-workdir", work}
