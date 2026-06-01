@@ -136,6 +136,26 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	sample := make([]byte, 512)
+	n, err := f.Read(sample)
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	if mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath); ok {
+		writeJSON(w, http.StatusOK, FileContent{
+			Path:      file.relPath,
+			Kind:      "image",
+			MediaType: mediaType,
+			Size:      file.info.Size(),
+		})
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+
 	buf, err := io.ReadAll(io.LimitReader(f, maxFilePreviewBytes+1))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -144,15 +164,6 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 	truncated := len(buf) > maxFilePreviewBytes
 	if truncated {
 		buf = buf[:maxFilePreviewBytes]
-	}
-	if mediaType, ok := imagePreviewMediaType(buf, file.relPath); ok {
-		writeJSON(w, http.StatusOK, FileContent{
-			Path:      file.relPath,
-			Kind:      "image",
-			MediaType: mediaType,
-			Size:      file.info.Size(),
-		})
-		return
 	}
 	if isBinary(buf) {
 		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "binary file preview is not supported")
