@@ -38,6 +38,7 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
+import { LoadingState } from "@/components/LoadingState";
 import {
   messagesToGroups,
   toolState,
@@ -476,7 +477,7 @@ export function Session() {
   );
 
   if (!data) {
-    return <div className="p-8 text-muted-foreground">Loading...</div>;
+    return <LoadingState label="Loading conversation" />;
   }
 
   const messages: ChatMessage[] = [...(data.messages ?? []), ...liveMessages];

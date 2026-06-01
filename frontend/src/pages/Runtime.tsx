@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { getRuntimeStatus } from "@/api";
 import type { RuntimeStatusResponse } from "@/types";
 import { useShellTitle } from "@/components/AppShell";
+import { LoadingState } from "@/components/LoadingState";
 
 export function Runtime() {
   const [data, setData] = useState<RuntimeStatusResponse | null>(null);
@@ -21,7 +22,7 @@ export function Runtime() {
   }, []);
 
   if (!data) {
-    return <div className="p-8 text-muted-foreground">Loading...</div>;
+    return <LoadingState label="Loading runtime" />;
   }
 
   return (

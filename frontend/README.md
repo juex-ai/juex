@@ -58,6 +58,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
 | `src/lib/live-tool-events.ts` | pure live transcript updates for tool.requested events |
+| `src/lib/loading-state.ts` | pure loading-state display text helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
@@ -69,6 +70,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
+| `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
 | `src/pages/Runtime.tsx` | MCP and skills detail view for `/runtime` |

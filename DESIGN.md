@@ -321,7 +321,15 @@ scrolled up; `<ConversationScrollButton>` reveals a scroll-to-bottom
 affordance whenever that happens. Inside, `<ConversationContent>` holds the
 message column at `max-width: 760px` with `24px` horizontal padding.
 
-### 7.4 Message
+### 7.4 Loading state
+
+Full-page waits use `<LoadingState>` rather than loose `Loading...` text. It
+centers the status inside the available content area, uses the Juex logo mark
+as the anchor, and adds a small circular motion cue that does not change layout
+size. Copy stays short and descriptive, such as `Loading conversation` or
+`Loading runtime`.
+
+### 7.5 Message
 
 `<Message from={role}>` (AI Elements) is the unit per message. User messages
 render as right-aligned forest bubbles with cream text and a tighter top-right
@@ -331,7 +339,7 @@ siblings of `<MessageContent>`. MCP external events bypass the normal user
 message wrapper and render in a centered transcript lane so they do not read as
 human-authored messages.
 
-### 7.5 Text rendering
+### 7.6 Text rendering
 
 `<MessageContent>` wraps `<MessageResponse>{text}</MessageResponse>`.
 `MessageResponse` uses streamdown internally to render markdown, GFM
@@ -340,7 +348,7 @@ mermaid. Markdown code blocks use the shared Juex code surface tokens and the
 same light/dark Shiki theme pair as tool-call JSON blocks so dark mode does not
 mix a foreign editor background into chat.
 
-### 7.6 Reasoning
+### 7.7 Reasoning
 
 `<Reasoning>` is collapsible. Trigger reads `Thinking...` with a chevron that
 rotates on open; body is the reasoning text rendered through streamdown. The
@@ -349,7 +357,7 @@ block is transparent with a dashed warm border and muted ink text. We pass
 Redacted reasoning is rendered with trigger text `Thinking [redacted]` and body
 `[redacted by provider]`.
 
-### 7.7 Tool
+### 7.8 Tool
 
 `<Tool>` is a single collapsible card that represents a `tool_use` +
 `tool_result` pair. The render layer in `pages/Session.tsx` calls
@@ -364,18 +372,20 @@ into one display unit (see §13).
 | absent | present | false/absent | `output-available` (orphan) |
 | absent | present | true | `output-error` (orphan) |
 
-`<ToolHeader type={\`tool-${tool_name}\`}>` is the visible label. The header
-uses the tool accent token, a small status dot, mono naming, and a compact
-status chip. `<ToolInput input={…}>` renders the parameter JSON via the
-standalone AI Elements `CodeBlock` (which uses shiki for highlighting). The
-parameters block must use high-contrast text in dark mode and share the same
-code surface tokens as markdown code blocks.
+`<ToolHeader>` displays the derived tool name without a transport prefix. The
+render layer may pass `type={\`tool-${tool_name}\`}` for compatibility, but
+`src/lib/tool-display.ts` strips `tool-` and falls back to `tool` for missing
+names. The header uses the tool accent token, a small status dot, mono naming,
+and a compact status chip. `<ToolInput input={…}>` renders the parameter JSON
+via the standalone AI Elements `CodeBlock` (which uses shiki for
+highlighting). The parameters block must use high-contrast text in dark mode
+and share the same code surface tokens as markdown code blocks.
 `<ToolOutput output={…}>` wraps the result; when the result is an error we
 pass `output={null}` and put the error string in `errorText` so it renders once
 and in the destructive theme. Tools in `input-available` and `output-error`
 states default to open; successful results stay closed until the user expands.
 
-### 7.8 Composer
+### 7.9 Composer
 
 ```tsx
 <PromptInput onSubmit={({ text }) => handleSend(text)}>
@@ -435,7 +445,7 @@ tools, memory files, skills, messages, and response. `TokenUsageLabel` is a
 compact `tokens <total>` chip for cumulative conversation usage; its tooltip
 shows the input/output split.
 
-### 7.9 Composer Submit States
+### 7.10 Composer Submit States
 
 | State | Visual |
 |---|---|
