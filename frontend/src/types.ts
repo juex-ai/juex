@@ -195,6 +195,8 @@ export interface FileNode {
 export interface FileContentResponse {
   path: string;
   content: string;
+  kind?: "text" | "image";
+  media_type?: string;
   size: number;
   truncated: boolean;
 }

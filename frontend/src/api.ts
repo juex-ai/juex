@@ -159,6 +159,10 @@ export async function getFileContent(
   );
 }
 
+export function getFileRawURL(path: string): string {
+  return `${BASE}/api/files/raw?path=${encodeURIComponent(path)}`;
+}
+
 export async function getRuntimeStatus(): Promise<RuntimeStatusResponse> {
   return jsonOrThrow(await fetch(`${BASE}/api/runtime`));
 }

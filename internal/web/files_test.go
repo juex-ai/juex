@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,6 +111,100 @@ func TestFilesContentReturnsPreview(t *testing.T) {
 	}
 }
 
+func TestFilesContentReturnsImageMetadata(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files/content?path=screenshots%2Fpreview.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	var got FileContent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "screenshots/preview.png" || got.Kind != "image" || got.MediaType != "image/png" {
+		t.Fatalf("content metadata = %+v", got)
+	}
+	if got.Content != "" || got.Truncated {
+		t.Fatalf("image metadata should not include text content or truncation: %+v", got)
+	}
+}
+
+func TestFilesRawServesImage(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files/raw?path=screenshots%2Fpreview.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, tinyPNG) {
+		t.Fatalf("image body = %x, want %x", body, tinyPNG)
+	}
+}
+
+func TestFilesRawRejectsEscapesAndNonImages(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	outside := filepath.Join(t.TempDir(), "secret.png")
+	mustWriteBytes(t, outside, tinyPNG)
+	mustWriteFile(t, filepath.Join(work, "notes.txt"), "hello")
+	mustWriteFile(t, filepath.Join(work, "binary.dat"), string([]byte{0, 1, 2}))
+	if err := os.Symlink(outside, filepath.Join(work, "secret-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	cases := []struct {
+		name string
+		path string
+		want int
+	}{
+		{name: "parent traversal", path: "../secret.png", want: http.StatusForbidden},
+		{name: "absolute path", path: "/etc/passwd", want: http.StatusForbidden},
+		{name: "outside symlink", path: "secret-link", want: http.StatusForbidden},
+		{name: "binary", path: "binary.dat", want: http.StatusUnsupportedMediaType},
+		{name: "text", path: "notes.txt", want: http.StatusUnsupportedMediaType},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + "/api/files/raw?path=" + tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.want)
+			}
+		})
+	}
+}
+
 func TestFilesContentRejectsEscapesAndBinary(t *testing.T) {
 	srv := newTestServer(t)
 	work := srv.opts.Cfg.WorkDir
@@ -171,12 +267,19 @@ func TestFilesContentTruncatesLargeFiles(t *testing.T) {
 	}
 }
 
+var tinyPNG = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x00}
+
 func mustWriteFile(t *testing.T, path, body string) {
+	t.Helper()
+	mustWriteBytes(t, path, []byte(body))
+}
+
+func mustWriteBytes(t *testing.T, path string, body []byte) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

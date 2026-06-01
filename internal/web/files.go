@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ type FileNode struct {
 type FileContent struct {
 	Path      string `json:"path"`
 	Content   string `json:"content"`
+	Kind      string `json:"kind"`
+	MediaType string `json:"media_type,omitempty"`
 	Size      int64  `json:"size"`
 	Truncated bool   `json:"truncated"`
 }
@@ -120,65 +123,38 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	root := s.opts.Cfg.WorkDir
-	if root == "" {
-		root = "."
-	}
-	root, err := filepath.Abs(root)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
-		root = resolvedRoot
-	}
-
-	reqPath := r.URL.Query().Get("path")
-	if reqPath == "" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "missing path parameter")
+	file, reqErr := s.resolveFileRequest(r)
+	if reqErr != nil {
+		reqErr.write(w)
 		return
 	}
 
-	relPath, absPath, err := resolveWorkPath(root, reqPath)
-	if err != nil {
-		writeErr(w, http.StatusForbidden, "forbidden", "path outside work directory")
-		return
-	}
-
-	resolved, err := filepath.EvalSymlinks(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			writeErr(w, http.StatusNotFound, "not_found", "file not found")
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	if _, err := relativeInside(root, resolved); err != nil {
-		writeErr(w, http.StatusForbidden, "forbidden", "path outside work directory")
-		return
-	}
-
-	info, err := os.Stat(resolved)
-	if err != nil {
-		if os.IsNotExist(err) {
-			writeErr(w, http.StatusNotFound, "not_found", "file not found")
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	if info.IsDir() {
-		writeErr(w, http.StatusBadRequest, "bad_request", "path is a directory")
-		return
-	}
-
-	f, err := os.Open(resolved)
+	f, err := os.Open(file.resolvedPath)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
 	defer f.Close()
+
+	sample := make([]byte, 512)
+	n, err := f.Read(sample)
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	if mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath); ok {
+		writeJSON(w, http.StatusOK, FileContent{
+			Path:      file.relPath,
+			Kind:      "image",
+			MediaType: mediaType,
+			Size:      file.info.Size(),
+		})
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
 
 	buf, err := io.ReadAll(io.LimitReader(f, maxFilePreviewBytes+1))
 	if err != nil {
@@ -195,11 +171,116 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, FileContent{
-		Path:      relPath,
+		Path:      file.relPath,
 		Content:   string(buf),
-		Size:      info.Size(),
+		Kind:      "text",
+		Size:      file.info.Size(),
 		Truncated: truncated,
 	})
+}
+
+func (s *Server) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return
+	}
+
+	file, reqErr := s.resolveFileRequest(r)
+	if reqErr != nil {
+		reqErr.write(w)
+		return
+	}
+
+	f, err := os.Open(file.resolvedPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	defer f.Close()
+
+	sample := make([]byte, 512)
+	n, err := f.Read(sample)
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath)
+	if !ok {
+		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "raw preview is only supported for images")
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
+}
+
+type resolvedFileRequest struct {
+	relPath      string
+	resolvedPath string
+	info         os.FileInfo
+}
+
+type fileRequestError struct {
+	status  int
+	code    string
+	message string
+}
+
+func (e fileRequestError) write(w http.ResponseWriter) {
+	writeErr(w, e.status, e.code, e.message)
+}
+
+func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *fileRequestError) {
+	root := s.opts.Cfg.WorkDir
+	if root == "" {
+		root = "."
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusInternalServerError, code: "general_error", message: err.Error()}
+	}
+	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolvedRoot
+	}
+
+	reqPath := r.URL.Query().Get("path")
+	if reqPath == "" {
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "missing path parameter"}
+	}
+
+	relPath, absPath, err := resolveWorkPath(root, reqPath)
+	if err != nil {
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusForbidden, code: "forbidden", message: "path outside work directory"}
+	}
+
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return resolvedFileRequest{}, &fileRequestError{status: http.StatusNotFound, code: "not_found", message: "file not found"}
+		}
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusInternalServerError, code: "general_error", message: err.Error()}
+	}
+	if _, err := relativeInside(root, resolved); err != nil {
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusForbidden, code: "forbidden", message: "path outside work directory"}
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return resolvedFileRequest{}, &fileRequestError{status: http.StatusNotFound, code: "not_found", message: "file not found"}
+		}
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusInternalServerError, code: "general_error", message: err.Error()}
+	}
+	if info.IsDir() {
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "path is a directory"}
+	}
+
+	return resolvedFileRequest{relPath: relPath, resolvedPath: resolved, info: info}, nil
 }
 
 func resolveWorkPath(root, reqPath string) (string, string, error) {
@@ -225,6 +306,34 @@ func relativeInside(root, path string) (string, error) {
 		return "", errors.New("path escapes root")
 	}
 	return rel, nil
+}
+
+func imagePreviewMediaType(data []byte, path string) (string, bool) {
+	detected := mediaTypeBase(http.DetectContentType(data))
+	if isSupportedImagePreviewType(detected) {
+		return detected, true
+	}
+	extType := mediaTypeBase(mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
+	if isSupportedImagePreviewType(extType) {
+		return extType, true
+	}
+	return "", false
+}
+
+func mediaTypeBase(value string) string {
+	if i := strings.Index(value, ";"); i >= 0 {
+		value = value[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func isSupportedImagePreviewType(mediaType string) bool {
+	switch mediaType {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp":
+		return true
+	default:
+		return false
+	}
 }
 
 func isBinary(data []byte) bool {
