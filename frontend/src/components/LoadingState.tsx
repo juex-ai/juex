@@ -18,7 +18,6 @@ export function LoadingState({ label, className }: LoadingStateProps) {
       )}
       role="status"
       aria-live="polite"
-      aria-label={text}
     >
       <div className="flex flex-col items-center gap-3">
         <div className="relative flex size-16 items-center justify-center text-primary">
