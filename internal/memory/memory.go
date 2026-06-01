@@ -267,22 +267,20 @@ func (s *Store) RegisterTools(reg *tools.Registry) error {
 	})
 }
 
-// LoadAgentsMD walks the AGENTS.md hierarchy from highest precedence (cwd) up
-// to the user-global home, returning concatenated content with file headers.
-//
-// chain example: project root -> /home/user/.agents
-// We stop at the first directory that has neither AGENTS.md nor an upper.
+// LoadAgentsMD returns concatenated AGENTS.md content with file headers.
+// The global file is loaded first, followed by workspace directories in
+// caller-provided order.
 func LoadAgentsMD(globalPath string, dirs []string) string {
 	var parts []string
+	if globalPath != "" {
+		if data, err := os.ReadFile(globalPath); err == nil && len(data) > 0 {
+			parts = append(parts, fmt.Sprintf("# AGENTS.md (%s)\n\n%s", globalPath, string(data)))
+		}
+	}
 	for _, d := range dirs {
 		path := filepath.Join(d, "AGENTS.md")
 		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 			parts = append(parts, fmt.Sprintf("# AGENTS.md (%s)\n\n%s", path, string(data)))
-		}
-	}
-	if globalPath != "" {
-		if data, err := os.ReadFile(globalPath); err == nil && len(data) > 0 {
-			parts = append(parts, fmt.Sprintf("# AGENTS.md (%s)\n\n%s", globalPath, string(data)))
 		}
 	}
 	return strings.Join(parts, "\n\n---\n\n")

@@ -413,6 +413,47 @@ func TestApp_SessionWritesIntoWorkDirJuex(t *testing.T) {
 	}
 }
 
+func TestAppPromptLoadsGlobalAgentsBeforeWorkspaceAgents(t *testing.T) {
+	work := t.TempDir()
+	homeAgents := t.TempDir()
+	projectAgents := filepath.Join(work, ".agents")
+	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeAgents, "AGENTS.md"), []byte("global agent rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectAgents, "AGENTS.md"), []byte("workspace agent rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			HomeAgentsDir: homeAgents,
+			WorkDir:       work,
+		},
+		Provider: &stubProvider{},
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	got := a.Engine.Prompt.Build()
+	globalPos := strings.Index(got, "global agent rule")
+	workspacePos := strings.Index(got, "workspace agent rule")
+	if globalPos < 0 || workspacePos < 0 {
+		t.Fatalf("prompt missing AGENTS.md content:\n%s", got)
+	}
+	if globalPos > workspacePos {
+		t.Fatalf("global AGENTS.md should load before workspace AGENTS.md:\n%s", got)
+	}
+}
+
 func TestApp_WritesSessionHistoryWithAlias(t *testing.T) {
 	dir := t.TempDir()
 	prov := &stubProvider{replies: []llm.Response{

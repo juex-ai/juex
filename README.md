@@ -67,8 +67,10 @@ Juex keeps runtime state in the current work directory:
     └── events.jsonl
 ```
 
-Project configuration for agents, MCP servers, and skills lives under
-`.agents/`. Runtime state lives under `.juex/` so it can stay uncommitted.
+User-global agent configuration lives under `~/.agents/`. Juex loads
+`~/.agents/AGENTS.md` before work-local AGENTS.md files, then loads project
+configuration for agents, MCP servers, and skills from `.agents/`. Runtime state
+lives under `.juex/` so it can stay uncommitted.
 
 ## Development
 
