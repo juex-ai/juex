@@ -155,6 +155,7 @@ func New(opts Options) (*App, error) {
 			if err != nil {
 				return nil, err
 			}
+			mcpCfg = mcp.PrepareConfig(mcpCfg, cfg.WorkDir)
 			if len(mcpCfg.MCPServers) > 0 {
 				mcpConfigs = append(mcpConfigs, mcpCfg)
 			}
