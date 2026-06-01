@@ -6,6 +6,7 @@ import {
   historySessionHref,
   historySessionTitle,
 } from "../../frontend/src/lib/history-sessions.ts";
+import { sessionPreviewTitle } from "../../frontend/src/lib/session-title.ts";
 
 test("historySessionHref routes sessions through the canonical session view", () => {
   assert.equal(
@@ -18,6 +19,11 @@ test("historySessionTitle falls back for empty previews", () => {
   assert.equal(historySessionTitle({ preview: "" }), "New Session");
   assert.equal(historySessionTitle({ preview: "   " }), "New Session");
   assert.equal(historySessionTitle({ preview: "status check" }), "status check");
+});
+
+test("sessionPreviewTitle handles missing preview values", () => {
+  assert.equal(sessionPreviewTitle(null), "New Session");
+  assert.equal(sessionPreviewTitle(undefined), "New Session");
 });
 
 test("historySessionBadges keeps kind and active state as metadata only", () => {
