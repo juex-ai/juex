@@ -15,7 +15,8 @@ test("historySessionHref routes sessions through the canonical session view", ()
 });
 
 test("historySessionTitle falls back for empty previews", () => {
-  assert.equal(historySessionTitle({ preview: "" }), "(empty)");
+  assert.equal(historySessionTitle({ preview: "" }), "New Session");
+  assert.equal(historySessionTitle({ preview: "   " }), "New Session");
   assert.equal(historySessionTitle({ preview: "status check" }), "status check");
 });
 

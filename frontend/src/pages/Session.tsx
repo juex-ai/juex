@@ -68,6 +68,7 @@ import {
   messageGroupCopyText,
   type CopyTooltipMode,
 } from "@/lib/message-copy";
+import { sessionPreviewTitle } from "@/lib/session-title";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
@@ -472,7 +473,7 @@ export function Session() {
   }
 
   useShellTitle(
-    data ? data.preview || "(empty)" : null,
+    data ? sessionPreviewTitle(data.preview) : null,
     data?.last_active_at ?? null,
   );
 
