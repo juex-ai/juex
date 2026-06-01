@@ -63,6 +63,7 @@ import { writeClipboardText } from "@/lib/clipboard";
 import {
   COMPACT_COPIED_TOOLTIP,
   compactSummaryText,
+  copyButtonDefaultTooltipMode,
   copyButtonTooltip,
   messageGroupCanCopy,
   messageGroupCopyText,
@@ -1412,7 +1413,7 @@ function CopyTextButton({
   copiedTooltip,
   label,
   size = "icon-sm",
-  tooltipMode = "always",
+  tooltipMode,
   children,
 }: {
   text: string;
@@ -1434,13 +1435,16 @@ function CopyTextButton({
 }) {
   const [copySignal, setCopySignal] = useState(0);
   const copied = copySignal > 0;
+  const effectiveTooltipMode =
+    tooltipMode ??
+    copyButtonDefaultTooltipMode({ hasVisibleLabel: Boolean(children) });
   const tooltip = copyButtonTooltip({
     copied,
-    mode: tooltipMode,
+    mode: effectiveTooltipMode,
     idleTooltip,
     copiedTooltip,
   });
-  const tooltipOpen = tooltipMode === "copied-only" ? copied : undefined;
+  const tooltipOpen = effectiveTooltipMode === "copied-only" ? copied : undefined;
 
   useEffect(() => {
     if (!copySignal) return;

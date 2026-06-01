@@ -4,6 +4,14 @@ export const COMPACT_COPIED_TOOLTIP = "compacted content copied";
 
 export type CopyTooltipMode = "always" | "copied-only" | "none";
 
+export function copyButtonDefaultTooltipMode({
+  hasVisibleLabel,
+}: {
+  hasVisibleLabel: boolean;
+}): CopyTooltipMode {
+  return hasVisibleLabel ? "always" : "none";
+}
+
 export function compactSummaryText(text: string): string {
   const marker = "Summary of earlier conversation:";
   const markerIndex = text.indexOf(marker);

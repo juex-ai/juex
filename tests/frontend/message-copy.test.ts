@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   COMPACT_COPIED_TOOLTIP,
+  copyButtonDefaultTooltipMode,
   copyButtonTooltip,
   compactSummaryText,
   messageGroupCanCopy,
@@ -137,4 +138,24 @@ test("copyButtonTooltip can disable message copy tooltips", () => {
 
   assert.equal(copyButtonTooltip({ ...args, copied: false }), undefined);
   assert.equal(copyButtonTooltip({ ...args, copied: true }), undefined);
+});
+
+test("copyButtonDefaultTooltipMode disables icon-only copy tooltips", () => {
+  const mode = copyButtonDefaultTooltipMode({ hasVisibleLabel: false });
+  const args = {
+    mode,
+    copiedTooltip: "Copied to clipboard",
+    idleTooltip: "Copy event content",
+  };
+
+  assert.equal(mode, "none");
+  assert.equal(copyButtonTooltip({ ...args, copied: false }), undefined);
+  assert.equal(copyButtonTooltip({ ...args, copied: true }), undefined);
+});
+
+test("copyButtonDefaultTooltipMode keeps tooltip for visible-label controls", () => {
+  assert.equal(
+    copyButtonDefaultTooltipMode({ hasVisibleLabel: true }),
+    "always",
+  );
 });
