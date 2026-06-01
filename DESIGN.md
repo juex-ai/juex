@@ -240,6 +240,12 @@ primary sessions and side sessions are read-only and never show an activate
 control. The composer footer shows transient composer feedback, latest request
 context total, and current conversation token total.
 
+Long transcripts load as a bounded window, not a full conversation dump. When
+older messages are available, a compact `Load older messages` control appears
+at the top of the transcript and prepends the previous message window. Sessions
+with compaction start at the latest compact divider when that tail fits the
+default window, so old pre-compact context stays out of the first render.
+
 MCP channel events render as centered external-event bubbles with a small radio
 icon, a monospace `<mcp_name>:<event_type>` label, and a one-line content
 preview in the header. They are collapsed by default; the chevron control
@@ -545,10 +551,12 @@ fast, local, and device-friendly.
 ## 10. Live updates
 
 The transcript is fetched as JSON from `/api/sessions/:id` and rendered with
-React state. On `turn.completed` / `turn.errored` the SSE listener calls a
-`refetch()` that swaps the messages array atomically. The composer keeps a
-local `turnActive` flag so the submit button can switch between send, queue,
-and stop behavior:
+React state. The first fetch uses the server's default message window; clicking
+`Load older messages` fetches `/api/sessions/:id?before=<oldest_message_id>`
+and prepends the returned page. On `turn.completed` / `turn.errored` the SSE
+listener calls a `refetch()` that swaps the active window atomically. The
+composer keeps a local `turnActive` flag so the submit button can switch
+between send, queue, and stop behavior:
 
 | Event | Effect |
 |---|---|

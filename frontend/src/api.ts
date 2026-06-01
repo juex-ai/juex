@@ -48,9 +48,21 @@ export async function createSession(): Promise<CreateSessionResponse> {
   );
 }
 
-export async function getSession(id: string): Promise<SessionShowResponse> {
+export interface SessionMessagePageOptions {
+  before?: string;
+  limit?: number;
+}
+
+export async function getSession(
+  id: string,
+  opts: SessionMessagePageOptions = {},
+): Promise<SessionShowResponse> {
+  const params = new URLSearchParams();
+  if (opts.before) params.set("before", opts.before);
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  const query = params.size ? `?${params.toString()}` : "";
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}`),
+    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}${query}`),
   );
 }
 

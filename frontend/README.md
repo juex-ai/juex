@@ -49,8 +49,8 @@ into `internal/web/dist/` for Go embedding.
 
 | Path | Purpose |
 | --- | --- |
-| `src/api.ts` | typed fetch helpers, workspace file preview URLs, and SSE subscription |
-| `src/types.ts` | TypeScript mirror of Go API/session/message shapes |
+| `src/api.ts` | typed fetch helpers, session message pagination, workspace file preview URLs, and SSE subscription |
+| `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including transcript paging metadata |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
 | `src/lib/composer-submit.ts` | pure composer submit-state transitions |
@@ -64,6 +64,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
 | `src/lib/route-state.ts` | pure route matching helpers for shell state |
+| `src/lib/session-messages.ts` | pure helpers for merging paged transcript windows |
 | `src/lib/session-title.ts` | pure session preview display-title fallback helper |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |
 | `src/lib/tool-display.ts` | pure tool title, lifecycle label, and timeout display helpers |

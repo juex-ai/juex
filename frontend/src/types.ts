@@ -101,6 +101,8 @@ export interface SessionInfo {
 export interface SessionShowResponse extends SessionInfo {
   messages: Message[];
   model?: string;
+  has_more_before?: boolean;
+  oldest_message_id?: string;
 }
 
 export interface SessionsListResponse {

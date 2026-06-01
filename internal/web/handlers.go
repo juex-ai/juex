@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,8 +106,26 @@ func sessionPathID(p string) (id, rest string) {
 
 type sessionShowResponse struct {
 	session.Info
-	Messages []llm.Message `json:"messages"`
-	Model    string        `json:"model,omitempty"`
+	Messages        []llm.Message `json:"messages"`
+	Model           string        `json:"model,omitempty"`
+	HasMoreBefore   bool          `json:"has_more_before"`
+	OldestMessageID string        `json:"oldest_message_id,omitempty"`
+}
+
+const (
+	defaultSessionMessageLimit = 80
+	maxSessionMessageLimit     = 200
+)
+
+type sessionMessageWindow struct {
+	Before string
+	Limit  int
+}
+
+type sessionMessagePage struct {
+	Messages        []llm.Message
+	HasMoreBefore   bool
+	OldestMessageID string
 }
 
 func messagesForSessionResponse(msgs []llm.Message) []llm.Message {
@@ -117,17 +136,26 @@ func messagesForSessionResponse(msgs []llm.Message) []llm.Message {
 }
 
 func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id string) {
+	window, err := parseSessionMessageWindow(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
 		info, msgs := as.app.Session.Snapshot(time.Now().UTC())
 		info = s.markActiveInfo(info)
-		if msgs == nil {
-			msgs = []llm.Message{}
+		page, err := selectSessionMessagePage(msgs, window)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
 		}
 		writeJSON(w, http.StatusOK, sessionShowResponse{
-			Info:     info,
-			Messages: messagesForSessionResponse(msgs),
-			Model:    s.opts.Cfg.Model,
+			Info:            info,
+			Messages:        messagesForSessionResponse(page.Messages),
+			Model:           s.opts.Cfg.Model,
+			HasMoreBefore:   page.HasMoreBefore,
+			OldestMessageID: page.OldestMessageID,
 		})
 		return
 	}
@@ -141,15 +169,90 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	if msgs == nil {
-		msgs = []llm.Message{}
+	page, err := selectSessionMessagePage(msgs, window)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
 	}
 	info = s.markActiveInfo(info)
 	writeJSON(w, http.StatusOK, sessionShowResponse{
-		Info:     info,
-		Messages: messagesForSessionResponse(msgs),
-		Model:    s.opts.Cfg.Model,
+		Info:            info,
+		Messages:        messagesForSessionResponse(page.Messages),
+		Model:           s.opts.Cfg.Model,
+		HasMoreBefore:   page.HasMoreBefore,
+		OldestMessageID: page.OldestMessageID,
 	})
+}
+
+func parseSessionMessageWindow(r *http.Request) (sessionMessageWindow, error) {
+	q := r.URL.Query()
+	window := sessionMessageWindow{Limit: defaultSessionMessageLimit}
+	if raw := strings.TrimSpace(q.Get("limit")); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 {
+			return sessionMessageWindow{}, fmt.Errorf("limit must be a positive integer")
+		}
+		if limit > maxSessionMessageLimit {
+			limit = maxSessionMessageLimit
+		}
+		window.Limit = limit
+	}
+	window.Before = strings.TrimSpace(q.Get("before"))
+	return window, nil
+}
+
+func selectSessionMessagePage(msgs []llm.Message, window sessionMessageWindow) (sessionMessagePage, error) {
+	if msgs == nil {
+		msgs = []llm.Message{}
+	}
+	start := 0
+	end := len(msgs)
+	if window.Before != "" {
+		index := sessionMessageIndex(msgs, window.Before)
+		if index < 0 {
+			return sessionMessagePage{}, fmt.Errorf("before message not found: %s", window.Before)
+		}
+		end = index
+	} else if compactIndex := latestCompactMessageIndex(msgs); compactIndex >= 0 {
+		start = compactIndex
+	}
+	if window.Limit > 0 && end-start > window.Limit {
+		start = end - window.Limit
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	pageMessages := msgs[start:end]
+	oldestID := ""
+	if len(pageMessages) > 0 {
+		oldestID = pageMessages[0].ID
+	}
+	return sessionMessagePage{
+		Messages:        pageMessages,
+		HasMoreBefore:   start > 0,
+		OldestMessageID: oldestID,
+	}, nil
+}
+
+func latestCompactMessageIndex(msgs []llm.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Kind == llm.MessageKindCompact {
+			return i
+		}
+	}
+	return -1
+}
+
+func sessionMessageIndex(msgs []llm.Message, id string) int {
+	for i, msg := range msgs {
+		if msg.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id string) {

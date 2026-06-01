@@ -450,7 +450,11 @@ connected SSE clients. Slow clients are dropped after a 5s buffer-full timeout.
 
 The server merges active in-memory sessions into `GET /api/sessions` and
 `GET /api/sessions/<id>` so a newly created empty chat is visible in the web
-UI without forcing an immediate disk write.
+UI without forcing an immediate disk write. Session transcript responses are
+windowed by default: `GET /api/sessions/<id>` returns the latest compact marker
+and following messages when one exists, otherwise a bounded recent message
+window. Clients can request older windows with `before=<message_id>` and can
+lower or raise the window with `limit`, capped by the server.
 Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
 
@@ -463,7 +467,7 @@ Routes:
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/sessions` | JSON list |
 | POST | `/api/sessions` | create active primary session |
-| GET | `/api/sessions/<id>` | JSON transcript |
+| GET | `/api/sessions/<id>` | JSON transcript window (`?before=&limit=` for older pages) |
 | DELETE | `/api/sessions/<id>` | delete session and remove it from history |
 | POST | `/api/sessions/<id>/activate` | make a primary session active |
 | GET | `/api/sessions/<id>/context` | active provider context for one session |
