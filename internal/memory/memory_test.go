@@ -276,6 +276,35 @@ func TestLoadAgentsMD_FullThreeLayer(t *testing.T) {
 	}
 }
 
+func TestLoadAgentsMD_GlobalComesBeforeWorkspaceAgents(t *testing.T) {
+	homeDir := t.TempDir()
+	root := t.TempDir()
+	subAgents := filepath.Join(root, ".agents")
+	if err := os.MkdirAll(subAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeDir, "AGENTS.md"), []byte("global rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project root rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subAgents, "AGENTS.md"), []byte("project agents rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := LoadAgentsMD(filepath.Join(homeDir, "AGENTS.md"), []string{root, subAgents})
+	globalPos := strings.Index(out, "global rule")
+	rootPos := strings.Index(out, "project root rule")
+	agentsPos := strings.Index(out, "project agents rule")
+	if globalPos < 0 || rootPos < 0 || agentsPos < 0 {
+		t.Fatalf("missing expected rule in:\n%s", out)
+	}
+	if globalPos >= rootPos || rootPos >= agentsPos {
+		t.Fatalf("AGENTS.md order = global:%d root:%d .agents:%d\n%s", globalPos, rootPos, agentsPos, out)
+	}
+}
+
 func TestLoadAgentsMD_EmptyFileSkipped(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(""), 0o644); err != nil {
@@ -284,6 +313,17 @@ func TestLoadAgentsMD_EmptyFileSkipped(t *testing.T) {
 	out := LoadAgentsMD("", []string{root})
 	if out != "" {
 		t.Fatalf("empty file should yield empty output, got %q", out)
+	}
+}
+
+func TestLoadAgentsMD_WhitespaceOnlyFileSkipped(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(" \n\t "), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := LoadAgentsMD("", []string{root})
+	if out != "" {
+		t.Fatalf("whitespace-only file should yield empty output, got %q", out)
 	}
 }
 

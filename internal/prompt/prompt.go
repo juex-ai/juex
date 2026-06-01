@@ -25,7 +25,7 @@ import (
 
 type Builder struct {
 	GlobalAgentsMDPath string   // optional; e.g. ~/.agents/AGENTS.md
-	AgentsMDDirs       []string // ordered: lowest precedence first (user dirs first, project root last)
+	AgentsMDDirs       []string // loaded after global AGENTS.md, in caller-provided order
 	Memory             *memory.Store
 	Skills             *skills.Loader
 	Now                func() time.Time

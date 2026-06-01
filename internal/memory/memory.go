@@ -267,25 +267,31 @@ func (s *Store) RegisterTools(reg *tools.Registry) error {
 	})
 }
 
-// LoadAgentsMD walks the AGENTS.md hierarchy from highest precedence (cwd) up
-// to the user-global home, returning concatenated content with file headers.
-//
-// chain example: project root -> /home/user/.agents
-// We stop at the first directory that has neither AGENTS.md nor an upper.
+// LoadAgentsMD returns concatenated AGENTS.md content with file headers.
+// The global file is loaded first, followed by workspace directories in
+// caller-provided order.
 func LoadAgentsMD(globalPath string, dirs []string) string {
 	var parts []string
+	parts = appendAgentsMD(parts, globalPath)
 	for _, d := range dirs {
-		path := filepath.Join(d, "AGENTS.md")
-		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
-			parts = append(parts, fmt.Sprintf("# AGENTS.md (%s)\n\n%s", path, string(data)))
-		}
-	}
-	if globalPath != "" {
-		if data, err := os.ReadFile(globalPath); err == nil && len(data) > 0 {
-			parts = append(parts, fmt.Sprintf("# AGENTS.md (%s)\n\n%s", globalPath, string(data)))
-		}
+		parts = appendAgentsMD(parts, filepath.Join(d, "AGENTS.md"))
 	}
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+func appendAgentsMD(parts []string, path string) []string {
+	if path == "" {
+		return parts
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return parts
+	}
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return parts
+	}
+	return append(parts, fmt.Sprintf("# AGENTS.md (%s)\n\n%s", path, content))
 }
 
 func getStr(in map[string]any, k string) string {
