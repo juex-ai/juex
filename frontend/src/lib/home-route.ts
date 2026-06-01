@@ -7,9 +7,9 @@ type HomeRouteSession = {
 };
 
 export function homeActiveSessionHref(
-  sessions: readonly HomeRouteSession[],
+  sessions?: readonly HomeRouteSession[] | null,
 ): string | null {
-  const active = sessions.find((session) => (
+  const active = sessions?.find((session) => (
     session.kind === "primary" && session.active
   ));
   return active ? historySessionHref(active.id) : null;

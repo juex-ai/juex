@@ -23,3 +23,8 @@ test("homeActiveSessionHref stays on home when no active primary exists", () => 
   );
   assert.equal(homeActiveSessionHref([]), null);
 });
+
+test("homeActiveSessionHref handles missing session lists", () => {
+  assert.equal(homeActiveSessionHref(null), null);
+  assert.equal(homeActiveSessionHref(undefined), null);
+});
