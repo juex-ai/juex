@@ -44,6 +44,46 @@ func TestRunCmd_DryRunLoadsMCPAtStartup(t *testing.T) {
 	assertPathExists(t, marker)
 }
 
+func TestRunCmd_DryRunExpandsMCPWorkDirForDifferentCWDs(t *testing.T) {
+	for _, name := range []string{"one", "two"} {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		configFile := filepath.Join(dir, "juex.yaml")
+		if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+			t.Fatal(err)
+		}
+		marker := filepath.Join(dir, "mcp-started")
+		writeCLIFakeMCPConfigWithWorkDirExpansion(t, dir, marker)
+
+		root := newRootCmd()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
+		err := root.Execute()
+		if _, ok := err.(*dryRunOK); !ok {
+			t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+		}
+		body, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(body)
+		for _, want := range []string{
+			"workdir=" + dir,
+			"juex_workdir=" + dir,
+			"workspace=" + dir,
+			"args=--workdir|" + dir + "|--juex-workdir|" + dir,
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("marker missing %q:\n%s", want, got)
+			}
+		}
+	}
+}
+
 func TestRunCmd_DryRunReportsMCPStartupErrors(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "juex.yaml")
@@ -244,6 +284,28 @@ func writeCLIFakeMCPConfig(t *testing.T, workDir, marker string) {
 	mustWriteCLITestFile(t, filepath.Join(workDir, ".agents", "mcp.json"), string(body))
 }
 
+func writeCLIFakeMCPConfigWithWorkDirExpansion(t *testing.T, workDir, marker string) {
+	t.Helper()
+	body, err := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"alpha": map[string]any{
+				"command": os.Args[0],
+				"args":    []string{"--workdir", "${WORKDIR}", "--juex-workdir", "$JUEX_WORKDIR"},
+				"env": map[string]string{
+					"JUEX_CLI_FAKE_MCP":               "1",
+					"JUEX_CLI_FAKE_MCP_MARKER":        marker,
+					"JUEX_CLI_FAKE_MCP_MARKER_DETAIL": "1",
+					"WORKSPACE":                       "${WORKDIR}",
+				},
+			},
+		},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLITestFile(t, filepath.Join(workDir, ".agents", "mcp.json"), string(body))
+}
+
 func mustWriteCLITestFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -256,7 +318,16 @@ func mustWriteCLITestFile(t *testing.T, path, body string) {
 
 func writeMarkerFromEnv(envName string) {
 	if path := os.Getenv(envName); path != "" {
-		_ = os.WriteFile(path, []byte("started\n"), 0o644)
+		body := "started\n"
+		if os.Getenv("JUEX_CLI_FAKE_MCP_MARKER_DETAIL") == "1" {
+			body = strings.Join([]string{
+				"workdir=" + os.Getenv("WORKDIR"),
+				"juex_workdir=" + os.Getenv("JUEX_WORKDIR"),
+				"workspace=" + os.Getenv("WORKSPACE"),
+				"args=" + strings.Join(os.Args[1:], "|"),
+			}, "\n") + "\n"
+		}
+		_ = os.WriteFile(path, []byte(body), 0o644)
 	}
 }
 

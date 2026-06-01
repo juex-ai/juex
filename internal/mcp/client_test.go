@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -136,11 +137,21 @@ func runFakeServer() {
 			// "envcheck" tool: returns the value of the JUEX_FAKE_MCP_TAG env var,
 			// proving the spec.Env propagates to the subprocess.
 			if name == "envcheck" {
+				text := "tag=" + os.Getenv("JUEX_FAKE_MCP_TAG")
+				if os.Getenv("JUEX_FAKE_MCP_ENV_DETAIL") == "1" {
+					text = strings.Join([]string{
+						text,
+						"workdir=" + os.Getenv("WORKDIR"),
+						"juex_workdir=" + os.Getenv("JUEX_WORKDIR"),
+						"workspace=" + os.Getenv("WORKSPACE"),
+						"args=" + strings.Join(os.Args[1:], "|"),
+					}, "\n")
+				}
 				enc.Encode(map[string]any{
 					"jsonrpc": "2.0",
 					"id":      responseID,
 					"result": map[string]any{
-						"content": []map[string]any{{"type": "text", "text": "tag=" + os.Getenv("JUEX_FAKE_MCP_TAG")}},
+						"content": []map[string]any{{"type": "text", "text": text}},
 					},
 				})
 				continue
@@ -472,6 +483,102 @@ func TestMCPClient_EnvVarReachesServer(t *testing.T) {
 	}
 	if out != "tag=from-spec-env" {
 		t.Fatalf("env not propagated, got %q", out)
+	}
+}
+
+func TestPrepareConfig_ExpandsWorkDirAndInjectsEnv(t *testing.T) {
+	parent := t.TempDir()
+	workDir := filepath.Join(parent, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(parent)
+
+	cfg := Config{MCPServers: map[string]ServerSpec{
+		"alpha": {
+			Command: "${WORKDIR}/bin/server",
+			Args:    []string{"--workdir", "$WORKDIR", "--juex-workdir", "${JUEX_WORKDIR}", "--literal", "${OTHER}"},
+			Env: map[string]string{
+				"WORKSPACE": "${WORKDIR}",
+				"WORKDIR":   "custom:$WORKDIR",
+				"OTHER":     "${OTHER}",
+			},
+		},
+		"beta": {
+			Command: "server",
+		},
+	}}
+
+	got := PrepareConfig(cfg, "workspace")
+	alpha := got.MCPServers["alpha"]
+	if alpha.Command != workDir+"/bin/server" {
+		t.Fatalf("command = %q", alpha.Command)
+	}
+	wantArgs := []string{"--workdir", workDir, "--juex-workdir", workDir, "--literal", "${OTHER}"}
+	if strings.Join(alpha.Args, "\n") != strings.Join(wantArgs, "\n") {
+		t.Fatalf("args = %#v, want %#v", alpha.Args, wantArgs)
+	}
+	if alpha.Env["WORKSPACE"] != workDir {
+		t.Fatalf("WORKSPACE = %q, want %q", alpha.Env["WORKSPACE"], workDir)
+	}
+	if alpha.Env["JUEX_WORKDIR"] != workDir {
+		t.Fatalf("JUEX_WORKDIR = %q, want %q", alpha.Env["JUEX_WORKDIR"], workDir)
+	}
+	if alpha.Env["WORKDIR"] != "custom:"+workDir {
+		t.Fatalf("WORKDIR override = %q", alpha.Env["WORKDIR"])
+	}
+	if alpha.Env["OTHER"] != "${OTHER}" {
+		t.Fatalf("unknown env variable should remain literal, got %q", alpha.Env["OTHER"])
+	}
+	if got.MCPServers["beta"].Env["WORKDIR"] != workDir || got.MCPServers["beta"].Env["JUEX_WORKDIR"] != workDir {
+		t.Fatalf("beta env = %+v", got.MCPServers["beta"].Env)
+	}
+	if cfg.MCPServers["alpha"].Command != "${WORKDIR}/bin/server" || cfg.MCPServers["alpha"].Env["WORKDIR"] != "custom:$WORKDIR" {
+		t.Fatalf("PrepareConfig mutated input: %+v", cfg.MCPServers["alpha"])
+	}
+}
+
+func TestMCPClient_WorkDirExpansionReachesServer(t *testing.T) {
+	for _, workDir := range []string{t.TempDir(), t.TempDir()} {
+		workDir, err := filepath.Abs(workDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		t.Cleanup(cancel)
+
+		cfg := PrepareConfig(Config{MCPServers: map[string]ServerSpec{
+			"fake": {
+				Command: os.Args[0],
+				Args:    []string{"--workdir", "${WORKDIR}", "--juex-workdir", "$JUEX_WORKDIR"},
+				Env: map[string]string{
+					"JUEX_FAKE_MCP":            "1",
+					"JUEX_FAKE_MCP_ENV_DETAIL": "1",
+					"JUEX_FAKE_MCP_TAG":        "${JUEX_WORKDIR}",
+					"WORKSPACE":                "${WORKDIR}",
+				},
+			},
+		}}, workDir)
+		client, err := Connect(ctx, "fake", cfg.MCPServers["fake"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		out, err := client.CallTool(ctx, "envcheck", map[string]any{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{
+			"tag=" + workDir,
+			"workdir=" + workDir,
+			"juex_workdir=" + workDir,
+			"workspace=" + workDir,
+			"args=--workdir|" + workDir + "|--juex-workdir|" + workDir,
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("envcheck output missing %q:\n%s", want, out)
+			}
+		}
 	}
 }
 

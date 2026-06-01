@@ -672,6 +672,13 @@ name with later-wins precedence. App passes `[user, project]` so a project
 `mcp.json` overrides any user-level server with the same name; the user
 server is not started in that case.
 
+Before MCP subprocess startup, Juex prepares each loaded server config for the
+active work directory. It injects `WORKDIR` and `JUEX_WORKDIR` into every MCP
+server environment, using the absolute runtime `<WorkDir>` value. The same
+variables are expanded in MCP `command`, `args`, and `env` values using
+`${WORKDIR}`, `$WORKDIR`, `${JUEX_WORKDIR}`, or `$JUEX_WORKDIR`. Explicit
+server `env` entries still win over injected defaults after expansion.
+
 ---
 
 ## 8. Skills (minimal)

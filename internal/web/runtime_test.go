@@ -145,6 +145,35 @@ func TestRuntimeStatus_CountsConnectedMCPServersFromActiveTools(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusExpandsMCPWorkDirVariables(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "alpha": {
+      "command": "${WORKDIR}/bin/server",
+      "args": ["--workdir", "${WORKDIR}", "--juex-workdir", "$JUEX_WORKDIR"]
+    }
+  }
+}`)
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCP.Servers) != 1 {
+		t.Fatalf("servers = %+v", got.MCP.Servers)
+	}
+	server := got.MCP.Servers[0]
+	if server.Command != work+"/bin/server" {
+		t.Fatalf("command = %q", server.Command)
+	}
+	wantArgs := []string{"--workdir", work, "--juex-workdir", work}
+	if strings.Join(server.Args, "\n") != strings.Join(wantArgs, "\n") {
+		t.Fatalf("args = %#v, want %#v", server.Args, wantArgs)
+	}
+}
+
 func TestRuntimeStatusOrdersProjectBeforeUserSources(t *testing.T) {
 	srv := newTestServer(t)
 	homeAgents := t.TempDir()
