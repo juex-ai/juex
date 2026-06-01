@@ -52,6 +52,9 @@ body`)
 	if got.Skills.Count != 1 || got.Skills.Items[0].Name != "review" {
 		t.Fatalf("skills = %+v", got.Skills)
 	}
+	if got.SystemPrompt.Count == 0 || len(got.SystemPrompt.Items) != got.SystemPrompt.Count {
+		t.Fatalf("system prompt = %+v", got.SystemPrompt)
+	}
 	if got.Provider.ID != "openai" || got.Provider.Protocol != "openai/responses" || got.Provider.Model != "m" {
 		t.Fatalf("provider = %+v", got.Provider)
 	}
@@ -171,6 +174,47 @@ func TestRuntimeStatusExpandsMCPWorkDirVariables(t *testing.T) {
 	wantArgs := []string{"--workdir", work, "--juex-workdir", work}
 	if strings.Join(server.Args, "\n") != strings.Join(wantArgs, "\n") {
 		t.Fatalf("args = %#v, want %#v", server.Args, wantArgs)
+	}
+}
+
+func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	homeAgents := t.TempDir()
+	srv.opts.Cfg.HomeAgentsDir = homeAgents
+	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "AGENTS.md"), "global runtime rule")
+	mustWriteRuntimeFile(t, filepath.Join(work, "AGENTS.md"), "workspace root rule")
+	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "AGENTS.md"), "workspace agents rule")
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SystemPrompt.Count != 4 {
+		t.Fatalf("system prompt = %+v", got.SystemPrompt)
+	}
+	want := []struct {
+		label  string
+		source string
+		path   string
+		text   string
+	}{
+		{label: "Global AGENTS.md", source: "user", path: filepath.Join(homeAgents, "AGENTS.md"), text: "global runtime rule"},
+		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(work, "AGENTS.md"), text: "workspace root rule"},
+		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(work, ".agents", "AGENTS.md"), text: "workspace agents rule"},
+		{label: "Operating Context", source: "runtime", path: "", text: "Operating Context"},
+	}
+	for i, w := range want {
+		gotEntry := got.SystemPrompt.Items[i]
+		if gotEntry.Label != w.label || gotEntry.Source != w.source || gotEntry.Path != w.path || !strings.Contains(gotEntry.Text, w.text) || gotEntry.Tokens <= 0 {
+			t.Fatalf("entry[%d] = %+v, want label=%q source=%q path=%q text containing %q with tokens", i, gotEntry, w.label, w.source, w.path, w.text)
+		}
+	}
+}
+
+func TestRuntimePromptTokenEstimateCountsRunes(t *testing.T) {
+	if got := estimateRuntimePromptTokens("你好世界"); got != 1 {
+		t.Fatalf("tokens = %d, want 1", got)
 	}
 }
 

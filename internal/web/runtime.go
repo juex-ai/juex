@@ -7,17 +7,21 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/memory"
+	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
 type runtimeStatusResponse struct {
-	WorkDir  string         `json:"work_dir"`
-	Provider providerStatus `json:"provider"`
-	MCP      mcpStatus      `json:"mcp"`
-	Skills   skillsStatus   `json:"skills"`
+	WorkDir      string             `json:"work_dir"`
+	Provider     providerStatus     `json:"provider"`
+	SystemPrompt systemPromptStatus `json:"system_prompt"`
+	MCP          mcpStatus          `json:"mcp"`
+	Skills       skillsStatus       `json:"skills"`
 }
 
 type providerStatus struct {
@@ -26,6 +30,20 @@ type providerStatus struct {
 	Model        string                   `json:"model,omitempty"`
 	BaseURL      string                   `json:"base_url,omitempty"`
 	Capabilities llm.ProviderCapabilities `json:"capabilities"`
+}
+
+type systemPromptStatus struct {
+	Count int                 `json:"count"`
+	Items []systemPromptEntry `json:"items"`
+}
+
+type systemPromptEntry struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Source string `json:"source"`
+	Path   string `json:"path,omitempty"`
+	Tokens int    `json:"tokens"`
+	Text   string `json:"text"`
 }
 
 type mcpStatus struct {
@@ -129,10 +147,15 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
+	systemPrompt, err := s.systemPromptStatus()
+	if err != nil {
+		return runtimeStatusResponse{}, err
+	}
 
 	return runtimeStatusResponse{
-		WorkDir:  s.absoluteWorkDir(),
-		Provider: s.providerStatus(),
+		WorkDir:      s.absoluteWorkDir(),
+		Provider:     s.providerStatus(),
+		SystemPrompt: systemPrompt,
 		MCP: mcpStatus{
 			Configured: len(servers),
 			Connected:  connectedCount,
@@ -141,6 +164,64 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 		},
 		Skills: skillStatus,
 	}, nil
+}
+
+func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
+	_, skillLoader, err := s.cachedRuntimeSkills()
+	if err != nil {
+		return systemPromptStatus{}, err
+	}
+	var globalAgents string
+	if s.opts.Cfg.HomeAgentsDir != "" {
+		globalAgents = filepath.Join(s.opts.Cfg.HomeAgentsDir, "AGENTS.md")
+	}
+	var memStore *memory.Store
+	if memoryDir := s.opts.Cfg.MemoryDir(); memoryDir != "" {
+		memStore = memory.NewStore(memoryDir)
+	}
+	builder := &prompt.Builder{
+		GlobalAgentsMDPath: globalAgents,
+		AgentsMDDirs:       s.opts.Cfg.AgentsMDDirs(),
+		Memory:             memStore,
+		Skills:             skillLoader,
+	}
+	sections := builder.Sections()
+	items := make([]systemPromptEntry, 0, len(sections))
+	for _, section := range sections {
+		items = append(items, systemPromptEntry{
+			Key:    section.Key,
+			Label:  runtimePromptLabel(section),
+			Source: runtimePromptSource(section),
+			Path:   section.Path,
+			Tokens: estimateRuntimePromptTokens(section.Text),
+			Text:   section.Text,
+		})
+	}
+	return systemPromptStatus{
+		Count: len(items),
+		Items: items,
+	}, nil
+}
+
+func runtimePromptLabel(section prompt.Section) string {
+	if section.Label != "" {
+		return section.Label
+	}
+	return section.Key
+}
+
+func runtimePromptSource(section prompt.Section) string {
+	if section.Source != "" {
+		return section.Source
+	}
+	return "runtime"
+}
+
+func estimateRuntimePromptTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	return (utf8.RuneCountInString(text) + 3) / 4
 }
 
 func (s *Server) absoluteWorkDir() string {
@@ -185,15 +266,20 @@ func (s *Server) providerStatus() providerStatus {
 }
 
 func (s *Server) cachedSkillsStatus() (skillsStatus, error) {
+	status, _, err := s.cachedRuntimeSkills()
+	return status, err
+}
+
+func (s *Server) cachedRuntimeSkills() (skillsStatus, *skills.Loader, error) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
-	if s.runtimeSkills != nil {
-		return cloneSkillsStatus(*s.runtimeSkills), nil
+	if s.runtimeSkills != nil && s.runtimeSkillLoader != nil {
+		return cloneSkillsStatus(*s.runtimeSkills), s.runtimeSkillLoader, nil
 	}
 
 	skillLoader := skills.NewLoader(s.opts.Cfg.SkillDirs()...)
 	if err := skillLoader.Load(); err != nil {
-		return skillsStatus{}, err
+		return skillsStatus{}, nil, err
 	}
 	loadedSkills := skillLoader.All()
 	skillItems := make([]skillInfo, 0, len(loadedSkills))
@@ -214,7 +300,8 @@ func (s *Server) cachedSkillsStatus() (skillsStatus, error) {
 		Items: skillItems,
 	}
 	s.runtimeSkills = &status
-	return cloneSkillsStatus(status), nil
+	s.runtimeSkillLoader = skillLoader
+	return cloneSkillsStatus(status), skillLoader, nil
 }
 
 func cloneSkillsStatus(status skillsStatus) skillsStatus {

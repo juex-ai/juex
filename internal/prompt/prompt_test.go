@@ -144,6 +144,52 @@ func TestBuilder_OnlyProjectAgentsMD(t *testing.T) {
 	mustContain(t, got, "only-project-rule")
 }
 
+func TestBuilder_SectionsIncludeInspectableAgentsEntries(t *testing.T) {
+	home := t.TempDir()
+	globalAgents := filepath.Join(home, "AGENTS.md")
+	if err := os.WriteFile(globalAgents, []byte("global rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("project root rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectAgents := filepath.Join(root, ".agents")
+	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectAgents, "AGENTS.md"), []byte("project agents rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &Builder{
+		GlobalAgentsMDPath: globalAgents,
+		AgentsMDDirs:       []string{root, projectAgents},
+		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
+	}
+	sections := b.Sections()
+	if len(sections) != 4 {
+		t.Fatalf("sections = %+v", sections)
+	}
+	want := []struct {
+		label  string
+		source string
+		path   string
+		text   string
+	}{
+		{label: "Global AGENTS.md", source: "user", path: globalAgents, text: "global rule"},
+		{label: "Workspace AGENTS.md", source: "project", path: filepath.Join(root, "AGENTS.md"), text: "project root rule"},
+		{label: ".agents/AGENTS.md", source: "project", path: filepath.Join(projectAgents, "AGENTS.md"), text: "project agents rule"},
+		{label: "Operating Context", source: "runtime", path: "", text: "2026-05-01T12:30:45Z"},
+	}
+	for i, w := range want {
+		got := sections[i]
+		if got.Label != w.label || got.Source != w.source || got.Path != w.path || !strings.Contains(got.Text, w.text) {
+			t.Fatalf("section[%d] = %+v, want label=%q source=%q path=%q text containing %q", i, got, w.label, w.source, w.path, w.text)
+		}
+	}
+}
+
 func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 	b := &Builder{
 		AgentsMDDirs: []string{t.TempDir()},

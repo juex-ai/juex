@@ -288,10 +288,12 @@ owns deletion and a compact `New chat` button.
 ### 6.4 Runtime detail (`/runtime`)
 
 Shows service runtime metadata first, including the absolute cwd used by the
-running `juex serve` process. Then it shows the effective provider profile,
-including protocol, auth source, model, base URL, and capability gates. Below
-that it shows the MCP configured/connected/error count, per-server status,
-source, tool counts, latest connection error, and the loaded skill list. MCP
+running `juex serve` process. Then it shows the effective system prompt as
+default-collapsed rows with each row's label, source/path, approximate token
+count, and full text on expansion. The provider profile follows, including
+protocol, auth source, model, base URL, and capability gates. Below that it
+shows the MCP configured/connected/error count, per-server status, source,
+tool counts, latest connection error, and the loaded skill list. MCP
 servers and skills list project-local sources before user-global sources.
 `juex serve` starts MCP at server startup, so this page reports live
 process-level MCP state rather than waiting for a chat session to be opened.
