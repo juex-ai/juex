@@ -218,6 +218,10 @@ export interface RuntimeStatusResponse {
       max_output_tokens: boolean;
     };
   };
+  system_prompt: {
+    count: number;
+    items: SystemPromptEntry[];
+  };
   mcp: {
     configured: number;
     connected: number;
@@ -228,6 +232,15 @@ export interface RuntimeStatusResponse {
     count: number;
     items: SkillInfo[];
   };
+}
+
+export interface SystemPromptEntry {
+  key: string;
+  label: string;
+  source: string;
+  path?: string;
+  tokens: number;
+  text: string;
 }
 
 export interface MCPServerInfo {

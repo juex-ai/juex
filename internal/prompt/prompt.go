@@ -15,6 +15,7 @@ package prompt
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -32,8 +33,11 @@ type Builder struct {
 }
 
 type Section struct {
-	Key  string
-	Text string
+	Key    string
+	Label  string
+	Source string
+	Path   string
+	Text   string
 }
 
 // Build composes the prompt. Empty or unavailable sources are skipped
@@ -44,23 +48,29 @@ func (b *Builder) Build() string {
 
 func (b *Builder) Sections() []Section {
 	var sections []Section
-	if agents := memory.LoadAgentsMD(b.GlobalAgentsMDPath, b.AgentsMDDirs); agents != "" {
-		sections = append(sections, Section{Key: "agents", Text: agents})
+	for _, agents := range memory.LoadAgentsMDFiles(b.GlobalAgentsMDPath, b.AgentsMDDirs) {
+		sections = append(sections, Section{
+			Key:    "agents",
+			Label:  b.agentsSectionLabel(agents.Path),
+			Source: b.agentsSectionSource(agents.Path),
+			Path:   agents.Path,
+			Text:   agents.Text,
+		})
 	}
 
 	if b.Skills != nil {
 		if s := b.Skills.PromptSection(); s != "" {
-			sections = append(sections, Section{Key: "skills", Text: s})
+			sections = append(sections, Section{Key: "skills", Label: "Available Skills", Source: "runtime", Text: s})
 		}
 	}
 
 	if b.Memory != nil {
 		if mem, _ := b.Memory.PromptSection(); mem != "" {
-			sections = append(sections, Section{Key: "memory_files", Text: mem})
+			sections = append(sections, Section{Key: "memory_files", Label: "Memory", Source: "runtime", Text: mem})
 		}
 	}
 
-	sections = append(sections, Section{Key: "operating_context", Text: b.operatingContext()})
+	sections = append(sections, Section{Key: "operating_context", Label: "Operating Context", Source: "runtime", Text: b.operatingContext()})
 	return sections
 }
 
@@ -85,4 +95,25 @@ func (b *Builder) operatingContext() string {
 		cwd, runtime.GOOS, runtime.GOARCH,
 		now().UTC().Format(time.RFC3339),
 	)
+}
+
+func (b *Builder) agentsSectionLabel(path string) string {
+	if sameCleanPath(path, b.GlobalAgentsMDPath) {
+		return "Global AGENTS.md"
+	}
+	if filepath.Base(filepath.Dir(path)) == ".agents" {
+		return ".agents/AGENTS.md"
+	}
+	return "Workspace AGENTS.md"
+}
+
+func (b *Builder) agentsSectionSource(path string) string {
+	if sameCleanPath(path, b.GlobalAgentsMDPath) {
+		return "user"
+	}
+	return "project"
+}
+
+func sameCleanPath(a, b string) bool {
+	return a != "" && b != "" && filepath.Clean(a) == filepath.Clean(b)
 }

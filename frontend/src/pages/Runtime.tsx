@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { getRuntimeStatus } from "@/api";
-import type { RuntimeStatusResponse } from "@/types";
+import type { RuntimeStatusResponse, SystemPromptEntry } from "@/types";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 
@@ -46,6 +46,31 @@ export function Runtime() {
                 {data.work_dir || "-"}
               </dd>
             </dl>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-2xl italic leading-none text-primary">
+              System Prompt
+            </h1>
+            <Badge variant="secondary" className="font-mono text-[11px]">
+              {data.system_prompt.count}
+            </Badge>
+          </div>
+          <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            {data.system_prompt.items.length === 0 ? (
+              <div className="text-muted-foreground px-3 py-3 text-sm">
+                No system prompt entries.
+              </div>
+            ) : (
+              data.system_prompt.items.map((entry, index) => (
+                <SystemPromptEntryRow
+                  key={`${entry.key}:${entry.path || index}`}
+                  entry={entry}
+                />
+              ))
+            )}
           </div>
         </section>
 
@@ -224,6 +249,42 @@ export function Runtime() {
   );
 }
 
+function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
+  return (
+    <details className="group border-t first:border-t-0">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 px-3 py-3 marker:hidden">
+        <div className="min-w-0 space-y-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="font-medium">{entry.label}</span>
+            <Badge variant="outline" className="font-mono text-[11px]">
+              {entry.source}
+            </Badge>
+          </div>
+          <div className="text-muted-foreground break-all font-mono text-xs">
+            {entry.path || entry.key}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge variant="secondary" className="font-mono text-[11px]">
+            ~{formatTokenCount(entry.tokens)} tokens
+          </Badge>
+          <span
+            aria-hidden="true"
+            className="text-muted-foreground text-xs transition-transform group-open:rotate-90"
+          >
+            &gt;
+          </span>
+        </div>
+      </summary>
+      <div className="border-t bg-muted/30 px-3 py-3">
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 font-mono text-xs leading-relaxed">
+          {entry.text}
+        </pre>
+      </div>
+    </details>
+  );
+}
+
 function mcpStatusLabel(status: string): string {
   if (status === "connected") return "connected";
   if (status === "error") return "error";
@@ -254,4 +315,13 @@ function mcpStatusVariant(status: string): "secondary" | "outline" | "destructiv
   if (status === "connected") return "secondary";
   if (status === "error") return "destructive";
   return "outline";
+}
+
+function formatTokenCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0";
+  if (value < 1000) return String(value);
+  if (value < 1_000_000) {
+    return `${Math.round(value / 100) / 10}k`;
+  }
+  return `${Math.round(value / 100_000) / 10}m`;
 }

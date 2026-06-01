@@ -36,6 +36,11 @@ type Entry struct {
 	UpdatedAt   time.Time
 }
 
+type AgentsMDFile struct {
+	Path string
+	Text string
+}
+
 // Store is a Layer-2 memory store backed by `<dir>/<name>.md` files.
 type Store struct {
 	dir string
@@ -271,27 +276,39 @@ func (s *Store) RegisterTools(reg *tools.Registry) error {
 // The global file is loaded first, followed by workspace directories in
 // caller-provided order.
 func LoadAgentsMD(globalPath string, dirs []string) string {
-	var parts []string
-	parts = appendAgentsMD(parts, globalPath)
-	for _, d := range dirs {
-		parts = appendAgentsMD(parts, filepath.Join(d, "AGENTS.md"))
+	files := LoadAgentsMDFiles(globalPath, dirs)
+	parts := make([]string, 0, len(files))
+	for _, file := range files {
+		parts = append(parts, file.Text)
 	}
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-func appendAgentsMD(parts []string, path string) []string {
+func LoadAgentsMDFiles(globalPath string, dirs []string) []AgentsMDFile {
+	var files []AgentsMDFile
+	files = appendAgentsMDFile(files, globalPath)
+	for _, d := range dirs {
+		files = appendAgentsMDFile(files, filepath.Join(d, "AGENTS.md"))
+	}
+	return files
+}
+
+func appendAgentsMDFile(files []AgentsMDFile, path string) []AgentsMDFile {
 	if path == "" {
-		return parts
+		return files
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return parts
+		return files
 	}
 	content := strings.TrimSpace(string(data))
 	if content == "" {
-		return parts
+		return files
 	}
-	return append(parts, fmt.Sprintf("# AGENTS.md (%s)\n\n%s", path, content))
+	return append(files, AgentsMDFile{
+		Path: path,
+		Text: fmt.Sprintf("# AGENTS.md (%s)\n\n%s", path, content),
+	})
 }
 
 func getStr(in map[string]any, k string) string {
