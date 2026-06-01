@@ -229,7 +229,7 @@ func (s *Server) configuredMCPServerConfigs() ([]mcpServerConfig, error) {
 		if err != nil {
 			return nil, err
 		}
-		cfg = mcp.PrepareConfig(cfg, s.opts.Cfg.WorkDir)
+		cfg = mcp.PrepareConfig(cfg, s.absoluteWorkDir())
 		source := s.runtimeSourceForPath(path)
 		for name, spec := range cfg.MCPServers {
 			serversByName[name] = mcpServerConfig{
@@ -256,7 +256,7 @@ func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		cfg = mcp.PrepareConfig(cfg, s.opts.Cfg.WorkDir)
+		cfg = mcp.PrepareConfig(cfg, s.absoluteWorkDir())
 		if len(cfg.MCPServers) > 0 {
 			configs = append(configs, cfg)
 		}
