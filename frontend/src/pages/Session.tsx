@@ -6,6 +6,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import {
   Conversation,
   ConversationContent,
@@ -93,7 +94,9 @@ import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
 import {
   CheckIcon,
   ChevronDownIcon,
+  ChevronUpIcon,
   CopyIcon,
+  LoaderCircleIcon,
   RadioIcon,
   SendHorizontalIcon,
   SquareIcon,
@@ -144,6 +147,10 @@ export function Session() {
   const [compactActive, setCompactActive] = useState(false);
   const [draft, setDraft] = useState("");
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const [olderMessagesError, setOlderMessagesError] = useState<string | null>(
+    null,
+  );
   const [compactCommandInputs, setCompactCommandInputs] = useState<
     Record<string, string>
   >({});
@@ -171,6 +178,8 @@ export function Session() {
     setCompactActiveControllerState(false);
     setDraft("");
     setComposerHint(null);
+    setLoadingOlderMessages(false);
+    setOlderMessagesError(null);
     setCompactCommandInputs({});
   }, [id]);
 
@@ -185,6 +194,7 @@ export function Session() {
         return;
       }
       setData(r);
+      setOlderMessagesError(null);
       if (!opts?.preserveLiveMessages) setLiveMessages([]);
       setLiveTokenUsage(null);
       setLiveContextUsage(null);
@@ -218,6 +228,7 @@ export function Session() {
           return;
         }
         setData(r);
+        setOlderMessagesError(null);
         setLiveMessages([]);
         setLiveTokenUsage(null);
         setLiveContextUsage(null);
@@ -497,6 +508,16 @@ export function Session() {
     <div className="flex min-h-0 flex-1 flex-col">
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full max-w-[760px]">
+          {data.has_more_before ||
+          loadingOlderMessages ||
+          olderMessagesError ? (
+            <LoadOlderMessagesControl
+              disabled={loadingOlderMessages || !data.oldest_message_id}
+              error={olderMessagesError}
+              loading={loadingOlderMessages}
+              onLoad={() => void handleLoadOlderMessages()}
+            />
+          ) : null}
           {groups.map((group) => (
             <MessageGroupView
               key={group.key}
@@ -571,6 +592,31 @@ export function Session() {
       </div>
     </div>
   );
+
+  async function handleLoadOlderMessages() {
+    if (!data?.oldest_message_id || loadingOlderMessages) return;
+    const requestId = id;
+    const before = data.oldest_message_id;
+    setLoadingOlderMessages(true);
+    setOlderMessagesError(null);
+    try {
+      const page = await getSession(requestId, { before });
+      if (!isLatestRoute(latestRouteRef.current, requestId)) {
+        return;
+      }
+      setData((prev) => mergeOlderSessionPage(prev, page));
+    } catch (error) {
+      if (isLatestRoute(latestRouteRef.current, requestId)) {
+        setOlderMessagesError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    } finally {
+      if (isLatestRoute(latestRouteRef.current, requestId)) {
+        setLoadingOlderMessages(false);
+      }
+    }
+  }
 
   function setTurnActiveControllerState(next: boolean) {
     turnActiveRef.current = next;
@@ -834,6 +880,63 @@ export function Session() {
       ];
     });
   }
+}
+
+function mergeOlderSessionPage(
+  current: SessionShowResponse | null,
+  older: SessionShowResponse,
+): SessionShowResponse {
+  if (!current) return older;
+  const currentMessages = current.messages ?? [];
+  const currentIDs = new Set(
+    currentMessages.flatMap((message) => (message.id ? [message.id] : [])),
+  );
+  const olderMessages = (older.messages ?? []).filter(
+    (message) => !message.id || !currentIDs.has(message.id),
+  );
+  return {
+    ...current,
+    ...older,
+    messages: [...olderMessages, ...currentMessages],
+    has_more_before: older.has_more_before,
+    oldest_message_id: older.oldest_message_id,
+  };
+}
+
+function LoadOlderMessagesControl({
+  disabled,
+  error,
+  loading,
+  onLoad,
+}: {
+  disabled: boolean;
+  error: string | null;
+  loading: boolean;
+  onLoad: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2 py-1">
+      <Button
+        className="h-8 rounded-full px-3 font-mono text-[11px]"
+        disabled={disabled}
+        onClick={onLoad}
+        type="button"
+        variant="outline"
+      >
+        {loading ? (
+          <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden="true" />
+        ) : (
+          <ChevronUpIcon className="size-3.5" aria-hidden="true" />
+        )}
+        Load older messages
+      </Button>
+      {error ? (
+        <div className="max-w-full truncate font-mono text-[11px] text-juex-error">
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function findPendingTurnForInput(

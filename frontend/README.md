@@ -49,8 +49,8 @@ into `internal/web/dist/` for Go embedding.
 
 | Path | Purpose |
 | --- | --- |
-| `src/api.ts` | typed fetch helpers, workspace file preview URLs, and SSE subscription |
-| `src/types.ts` | TypeScript mirror of Go API/session/message shapes |
+| `src/api.ts` | typed fetch helpers, session message pagination, workspace file preview URLs, and SSE subscription |
+| `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including transcript paging metadata |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
 | `src/lib/composer-submit.ts` | pure composer submit-state transitions |

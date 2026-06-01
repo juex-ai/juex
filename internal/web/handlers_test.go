@@ -163,6 +163,141 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	}
 }
 
+func TestGetSessionShow_LimitsRecentTranscript(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-window1"
+	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"one"}]}` + "\n" +
+		`{"id":"m2","role":"assistant","blocks":[{"type":"text","text":"two"}]}` + "\n" +
+		`{"id":"m3","role":"user","blocks":[{"type":"text","text":"three"}]}` + "\n" +
+		`{"id":"m4","role":"assistant","blocks":[{"type":"text","text":"four"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "?limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Messages      []sessionIDMessage `json:"messages"`
+		HasMoreBefore bool               `json:"has_more_before"`
+		OldestID      string             `json:"oldest_message_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDs(parsed.Messages); strings.Join(got, ",") != "m3,m4" {
+		t.Fatalf("messages = %v, want m3,m4", got)
+	}
+	if !parsed.HasMoreBefore || parsed.OldestID != "m3" {
+		t.Fatalf("pagination = has_more:%v oldest:%q, want true/m3", parsed.HasMoreBefore, parsed.OldestID)
+	}
+}
+
+func TestGetSessionShow_DefaultsToLatestCompactWindow(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-compact1"
+	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"old user"}]}` + "\n" +
+		`{"id":"m2","role":"assistant","blocks":[{"type":"text","text":"old assistant"}]}` + "\n" +
+		`{"id":"m3","role":"user","kind":"compact","blocks":[{"type":"text","text":"old summary"}]}` + "\n" +
+		`{"id":"m4","role":"user","blocks":[{"type":"text","text":"new user"}]}` + "\n" +
+		`{"id":"m5","role":"assistant","blocks":[{"type":"text","text":"new assistant"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Messages      []sessionIDMessage `json:"messages"`
+		HasMoreBefore bool               `json:"has_more_before"`
+		OldestID      string             `json:"oldest_message_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDs(parsed.Messages); strings.Join(got, ",") != "m3,m4,m5" {
+		t.Fatalf("messages = %v, want m3,m4,m5", got)
+	}
+	if parsed.Messages[0].Kind != "compact" {
+		t.Fatalf("first visible kind = %q, want compact", parsed.Messages[0].Kind)
+	}
+	if !parsed.HasMoreBefore || parsed.OldestID != "m3" {
+		t.Fatalf("pagination = has_more:%v oldest:%q, want true/m3", parsed.HasMoreBefore, parsed.OldestID)
+	}
+}
+
+func TestGetSessionShow_LoadsMessagesBeforeCursor(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-before1"
+	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"one"}]}` + "\n" +
+		`{"id":"m2","role":"assistant","blocks":[{"type":"text","text":"two"}]}` + "\n" +
+		`{"id":"m3","role":"user","blocks":[{"type":"text","text":"three"}]}` + "\n" +
+		`{"id":"m4","role":"assistant","blocks":[{"type":"text","text":"four"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "?before=m4&limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Messages      []sessionIDMessage `json:"messages"`
+		HasMoreBefore bool               `json:"has_more_before"`
+		OldestID      string             `json:"oldest_message_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDs(parsed.Messages); strings.Join(got, ",") != "m2,m3" {
+		t.Fatalf("messages = %v, want m2,m3", got)
+	}
+	if !parsed.HasMoreBefore || parsed.OldestID != "m2" {
+		t.Fatalf("pagination = has_more:%v oldest:%q, want true/m2", parsed.HasMoreBefore, parsed.OldestID)
+	}
+}
+
+func TestGetSessionShow_RejectsUnknownBeforeCursor(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-before2"
+	seedSession(t, srv.opts.Cfg.WorkDir, id,
+		`{"id":"m1","role":"user","blocks":[{"type":"text","text":"one"}]}`+"\n")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "?before=missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
 func TestGetSessionShow_NotFound(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
@@ -176,6 +311,19 @@ func TestGetSessionShow_NotFound(t *testing.T) {
 	if resp.StatusCode != 404 {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
+}
+
+type sessionIDMessage struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+}
+
+func messageIDs(messages []sessionIDMessage) []string {
+	ids := make([]string, 0, len(messages))
+	for _, message := range messages {
+		ids = append(ids, message.ID)
+	}
+	return ids
 }
 
 func TestPostSessionCompact(t *testing.T) {
