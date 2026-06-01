@@ -212,6 +212,12 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	}
 }
 
+func TestRuntimePromptTokenEstimateCountsRunes(t *testing.T) {
+	if got := estimateRuntimePromptTokens("你好世界"); got != 1 {
+		t.Fatalf("tokens = %d, want 1", got)
+	}
+}
+
 func TestRuntimeStatusOrdersProjectBeforeUserSources(t *testing.T) {
 	srv := newTestServer(t)
 	homeAgents := t.TempDir()

@@ -4,6 +4,7 @@ import { getRuntimeStatus } from "@/api";
 import type { RuntimeStatusResponse, SystemPromptEntry } from "@/types";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
+import { formatRuntimeTokenCount } from "@/lib/runtime-display";
 
 export function Runtime() {
   const [data, setData] = useState<RuntimeStatusResponse | null>(null);
@@ -24,6 +25,9 @@ export function Runtime() {
   if (!data) {
     return <LoadingState label="Loading runtime" />;
   }
+
+  const systemPrompt = data.system_prompt ?? { count: 0, items: [] };
+  const systemPromptItems = systemPrompt.items ?? [];
 
   return (
     <div className="min-h-0 flex-1 overflow-auto bg-background">
@@ -55,16 +59,16 @@ export function Runtime() {
               System Prompt
             </h1>
             <Badge variant="secondary" className="font-mono text-[11px]">
-              {data.system_prompt.count}
+              {systemPrompt.count}
             </Badge>
           </div>
           <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
-            {data.system_prompt.items.length === 0 ? (
+            {systemPromptItems.length === 0 ? (
               <div className="text-muted-foreground px-3 py-3 text-sm">
                 No system prompt entries.
               </div>
             ) : (
-              data.system_prompt.items.map((entry, index) => (
+              systemPromptItems.map((entry, index) => (
                 <SystemPromptEntryRow
                   key={`${entry.key}:${entry.path || index}`}
                   entry={entry}
@@ -266,7 +270,7 @@ function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <Badge variant="secondary" className="font-mono text-[11px]">
-            ~{formatTokenCount(entry.tokens)} tokens
+            ~{formatRuntimeTokenCount(entry.tokens)} tokens
           </Badge>
           <span
             aria-hidden="true"
@@ -315,13 +319,4 @@ function mcpStatusVariant(status: string): "secondary" | "outline" | "destructiv
   if (status === "connected") return "secondary";
   if (status === "error") return "destructive";
   return "outline";
-}
-
-function formatTokenCount(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "0";
-  if (value < 1000) return String(value);
-  if (value < 1_000_000) {
-    return `${Math.round(value / 100) / 10}k`;
-  }
-  return `${Math.round(value / 100_000) / 10}m`;
 }

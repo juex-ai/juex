@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -166,8 +167,8 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 }
 
 func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
-	skillLoader := skills.NewLoader(s.opts.Cfg.SkillDirs()...)
-	if err := skillLoader.Load(); err != nil {
+	_, skillLoader, err := s.cachedRuntimeSkills()
+	if err != nil {
 		return systemPromptStatus{}, err
 	}
 	var globalAgents string
@@ -220,7 +221,7 @@ func estimateRuntimePromptTokens(text string) int {
 	if text == "" {
 		return 0
 	}
-	return (len(text) + 3) / 4
+	return (utf8.RuneCountInString(text) + 3) / 4
 }
 
 func (s *Server) absoluteWorkDir() string {
@@ -265,15 +266,20 @@ func (s *Server) providerStatus() providerStatus {
 }
 
 func (s *Server) cachedSkillsStatus() (skillsStatus, error) {
+	status, _, err := s.cachedRuntimeSkills()
+	return status, err
+}
+
+func (s *Server) cachedRuntimeSkills() (skillsStatus, *skills.Loader, error) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
-	if s.runtimeSkills != nil {
-		return cloneSkillsStatus(*s.runtimeSkills), nil
+	if s.runtimeSkills != nil && s.runtimeSkillLoader != nil {
+		return cloneSkillsStatus(*s.runtimeSkills), s.runtimeSkillLoader, nil
 	}
 
 	skillLoader := skills.NewLoader(s.opts.Cfg.SkillDirs()...)
 	if err := skillLoader.Load(); err != nil {
-		return skillsStatus{}, err
+		return skillsStatus{}, nil, err
 	}
 	loadedSkills := skillLoader.All()
 	skillItems := make([]skillInfo, 0, len(loadedSkills))
@@ -294,7 +300,8 @@ func (s *Server) cachedSkillsStatus() (skillsStatus, error) {
 		Items: skillItems,
 	}
 	s.runtimeSkills = &status
-	return cloneSkillsStatus(status), nil
+	s.runtimeSkillLoader = skillLoader
+	return cloneSkillsStatus(status), skillLoader, nil
 }
 
 func cloneSkillsStatus(status skillsStatus) skillsStatus {

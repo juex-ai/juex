@@ -218,7 +218,7 @@ export interface RuntimeStatusResponse {
       max_output_tokens: boolean;
     };
   };
-  system_prompt: {
+  system_prompt?: {
     count: number;
     items: SystemPromptEntry[];
   };

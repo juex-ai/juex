@@ -115,5 +115,13 @@ func (b *Builder) agentsSectionSource(path string) string {
 }
 
 func sameCleanPath(a, b string) bool {
-	return a != "" && b != "" && filepath.Clean(a) == filepath.Clean(b)
+	if a == "" || b == "" {
+		return false
+	}
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		return filepath.Clean(absA) == filepath.Clean(absB)
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }

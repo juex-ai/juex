@@ -19,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/skills"
 )
 
 // Options configures a Server. Provider is optional; if unset, the
@@ -42,9 +43,10 @@ type Server struct {
 	closeMu  sync.Mutex
 	closed   bool
 
-	runtimeMu     sync.Mutex
-	runtimeSkills *skillsStatus
-	runtimeMCPErr map[string]string
+	runtimeMu          sync.Mutex
+	runtimeSkills      *skillsStatus
+	runtimeSkillLoader *skills.Loader
+	runtimeMCPErr      map[string]string
 
 	mcpMu      sync.Mutex
 	mcpStarted bool
