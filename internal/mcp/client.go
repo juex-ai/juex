@@ -316,10 +316,11 @@ func (c *Client) Close() error {
 		return nil
 	}
 	if c.in != nil {
-		c.in.Close()
+		_ = c.in.Close()
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
+		_ = c.cmd.Wait()
 	}
 	return nil
 }

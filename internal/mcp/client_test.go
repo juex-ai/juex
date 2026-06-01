@@ -255,6 +255,26 @@ func TestMCPClient_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestMCPClient_CloseWaitsForSubprocess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := Connect(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env:     map[string]string{"JUEX_FAKE_MCP": "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if client.cmd.ProcessState == nil {
+		t.Fatalf("Close returned before subprocess exited; state=%v", client.cmd.ProcessState)
+	}
+}
+
 func TestMCPClient_AcceptsStringResponseIDs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

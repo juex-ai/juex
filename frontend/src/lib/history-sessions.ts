@@ -1,3 +1,5 @@
+import { sessionPreviewTitle } from "./session-title.ts";
+
 type HistorySessionSummary = {
   id: string;
   preview: string;
@@ -13,7 +15,7 @@ export function historySessionHref(id: string): string {
 export function historySessionTitle(
   session: Pick<HistorySessionSummary, "preview">,
 ): string {
-  return session.preview.trim() || "(empty)";
+  return sessionPreviewTitle(session.preview);
 }
 
 export function historySessionBadges(

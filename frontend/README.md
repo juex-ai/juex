@@ -63,6 +63,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
 | `src/lib/route-state.ts` | pure route matching helpers for shell state |
+| `src/lib/session-title.ts` | pure session preview display-title fallback helper |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |
 | `src/lib/tool-display.ts` | pure tool title, lifecycle label, and timeout display helpers |
 | `src/lib/session-access.ts` | pure rules for writable versus read-only session views based on kind and active state |
