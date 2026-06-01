@@ -193,7 +193,8 @@ in the global header, and the middle column owns the composer when applicable.
   same header button opens the workspace as a right-side `Sheet` so the
   conversation column keeps its readable width.
 - File previews always open in a right-side sheet. On narrow screens the
-  preview sheet uses the viewport width and wraps long paths/content.
+  preview sheet uses the viewport width. Text previews wrap long paths/content;
+  image previews fit inside the sheet without cropping.
 - Runtime status badges live on the right side of the shell header when there
   is room. Session pages add the most recent activity timestamp beside the
   skills badge, formatted in the browser time zone with 24-hour time and no

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getFileTree, getFileContent } from "@/api";
+import { getFileTree, getFileContent, getFileRawURL } from "@/api";
 import type { FileContentResponse, FileNode } from "@/types";
 import {
   Folder,
@@ -164,9 +164,19 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
             )}
           </SheetHeader>
           <div className="flex-1 overflow-auto bg-muted/40 p-4">
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-              {previewFile?.content}
-            </pre>
+            {previewFile?.kind === "image" ? (
+              <div className="flex min-h-full items-center justify-center">
+                <img
+                  src={getFileRawURL(previewFile.path)}
+                  alt={`Preview of ${previewFile.path}`}
+                  className="max-h-full max-w-full rounded-md object-contain shadow-[var(--shadow-sm)]"
+                />
+              </div>
+            ) : (
+              <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                {previewFile?.content}
+              </pre>
+            )}
           </div>
         </SheetContent>
       </Sheet>
