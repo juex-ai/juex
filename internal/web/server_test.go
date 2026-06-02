@@ -125,6 +125,20 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
+	h, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.Kind != session.KindPrimary || !h.Active.Active {
+		cancel()
+		t.Fatalf("active session = %+v, want active primary", h.Active)
+	}
+	if _, ok := srv.sessions.Load(h.Active.ID); ok {
+		cancel()
+		t.Fatalf("server opened runtime app for %s without provider config", h.Active.ID)
+	}
+
 	cancel()
 	select {
 	case err := <-errCh:

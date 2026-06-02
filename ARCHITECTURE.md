@@ -374,9 +374,10 @@ func (a *App) Close() error
 ```
 
 `run` and `repl` create an app-local MCP manager because each command owns one
-runtime process and one active app. `serve` creates a process-scoped MCP manager
-at server startup, then each session app registers proxy tool handlers against
-that shared manager instead of starting its own MCP subprocesses.
+runtime process and one active app. `serve` first ensures `history.active` has
+an active primary session record, then creates a process-scoped MCP manager at
+server startup. Each session app registers proxy tool handlers against that
+shared manager instead of starting its own MCP subprocesses.
 
 ```go
 // internal/runtime/loop.go
@@ -442,10 +443,11 @@ func (s *Server) Handler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no auth)
-and loads project MCP servers before accepting requests. Each session gets its
-own `*app.App`; events flow to a per-session broadcaster that fans out to
-connected SSE clients. Slow clients are dropped after a 5s buffer-full timeout.
+`juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no auth),
+ensures an active primary session exists, and loads project MCP servers before
+accepting requests. Each session gets its own `*app.App`; events flow to a
+per-session broadcaster that fans out to connected SSE clients. Slow clients
+are dropped after a 5s buffer-full timeout.
 `make web` builds the React SPA in `frontend/`, copies the bundle to
 `internal/web/dist`, and the Go binary embeds that directory with `go:embed`.
 

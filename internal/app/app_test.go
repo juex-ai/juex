@@ -89,6 +89,30 @@ func TestApp_DefaultAttachesActivePrimary(t *testing.T) {
 	}
 }
 
+func TestApp_DefaultCreatesActivePrimaryWhenHistoryIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(Options{
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: &stubProvider{replies: []llm.Response{}},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	if a.Session.Kind != session.KindPrimary || !a.Session.Active {
+		t.Fatalf("session kind/active = %q/%v, want active primary", a.Session.Kind, a.Session.Active)
+	}
+	h, err := session.LoadHistory(filepath.Join(dir, ".juex", "history.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.ID != a.Session.ID {
+		t.Fatalf("history active = %+v, want %s", h.Active, a.Session.ID)
+	}
+}
+
 func TestApp_NewSideDoesNotChangeActive(t *testing.T) {
 	dir := t.TempDir()
 	primary, err := New(Options{

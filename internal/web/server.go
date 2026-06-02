@@ -149,13 +149,14 @@ func (s *Server) Run(ctx context.Context) error {
 	if !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex serve: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
+	if err := s.ensureActivePrimarySessionRecord(); err != nil {
+		return err
+	}
 	if err := s.ensureMCPStarted(ctx); err != nil {
 		return err
 	}
-	if s.hasSessionProvider() {
-		if err := s.ensureActivePrimarySession(ctx); err != nil {
-			return err
-		}
+	if err := s.ensureActivePrimarySession(ctx); err != nil {
+		return err
 	}
 	srv := &http.Server{
 		Addr:              s.opts.Addr,
@@ -285,26 +286,68 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 }
 
 func (s *Server) ensureActivePrimarySession(ctx context.Context) error {
+	if err := s.ensureActivePrimarySessionRecord(); err != nil {
+		return err
+	}
 	id, ok, err := s.activePrimarySessionID()
 	if err != nil {
 		return err
 	}
-	if ok {
-		if _, exists := s.sessions.Load(id); exists {
-			return nil
-		}
-		if _, err := s.getActiveSession(ctx, id); err == nil {
-			return nil
-		} else if !os.IsNotExist(err) {
-			return err
-		}
+	if !ok || !s.hasSessionProvider() {
+		return nil
 	}
-	_, err = s.openSession(ctx, "", app.SessionModeAttachActive)
+	if _, exists := s.sessions.Load(id); exists {
+		return nil
+	}
+	_, err = s.getActiveSession(ctx, id)
 	return err
+}
+
+func (s *Server) ensureActivePrimarySessionRecord() error {
+	if id, ok, err := s.activePrimarySessionID(); err != nil {
+		return err
+	} else if ok && hasConversation(filepath.Join(s.opts.Cfg.SessionsDir(), id)) {
+		return nil
+	}
+
+	infos, err := session.List(s.opts.Cfg.SessionsDir())
+	if err != nil {
+		return err
+	}
+	for _, info := range infos {
+		if info.Kind != session.KindPrimary {
+			continue
+		}
+		return session.SetActive(s.opts.Cfg.HistoryPath(), info)
+	}
+	return s.createActivePrimarySessionRecord()
 }
 
 func (s *Server) hasSessionProvider() bool {
 	return s.opts.Provider != nil || s.opts.Cfg.ProviderID != "" || s.opts.Cfg.ProviderProtocol != ""
+}
+
+func (s *Server) createActivePrimarySessionRecord() error {
+	sess, err := session.NewWithOptions(s.opts.Cfg.SessionsDir(), session.Options{
+		Kind:        session.KindPrimary,
+		Active:      true,
+		HistoryPath: s.opts.Cfg.HistoryPath(),
+	})
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+	return session.SetActive(s.opts.Cfg.HistoryPath(), sess.Info(time.Now().UTC()))
+}
+
+func hasConversation(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
+		return false
+	}
+	return true
 }
 
 func (s *Server) ensureMCPStarted(ctx context.Context) error {
