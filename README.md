@@ -17,7 +17,9 @@ Build the binary:
 mise exec -- make build
 ```
 
-Create runtime config in the work directory where you want the agent to run:
+Create runtime config in the work directory where you want the agent to run,
+or put shared provider settings in `~/.juex/juex.yaml` and override them per
+workspace:
 
 ```bash
 mkdir -p .juex
@@ -70,7 +72,8 @@ Juex keeps runtime state in the current work directory:
 User-global agent configuration lives under `~/.agents/`. Juex loads
 `~/.agents/AGENTS.md` before work-local AGENTS.md files, then loads project
 configuration for agents, MCP servers, and skills from `.agents/`. Runtime state
-lives under `.juex/` so it can stay uncommitted.
+lives under `.juex/` so it can stay uncommitted. User-global provider fallback
+configuration lives at `~/.juex/juex.yaml`.
 
 ## Development
 

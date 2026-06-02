@@ -126,7 +126,7 @@ execution is printed and the process exits with code 10.`,
 			cfg, err := loadConfig(flags)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"set provider.id or provider.protocol plus provider.api_key / provider.model in .juex/juex.yaml (copy from juex.yaml)", false)
+					"set top-level model and providers[] entries in .juex/juex.yaml (copy from juex.yaml.example)", false)
 			}
 
 			prompt := strings.Join(args, " ")
@@ -167,7 +167,7 @@ execution is printed and the process exits with code 10.`,
 			})
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"check provider.id/provider.protocol plus provider.api_key / provider.model in .juex/juex.yaml", false)
+					"check top-level model plus providers[].id/providers[].protocol/providers[].api_key in .juex/juex.yaml", false)
 			}
 			defer a.Close()
 
@@ -250,7 +250,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		profile, err := cfg.ProviderProfile()
 		if err != nil {
 			return emit(jsonOut, cmd.ErrOrStderr(), err,
-				"check provider.id / provider.protocol in .juex/juex.yaml", false)
+				"check top-level model and providers[] entries in .juex/juex.yaml", false)
 		}
 		providerID = profile.ID
 		protocol = string(profile.Protocol)

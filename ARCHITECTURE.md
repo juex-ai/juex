@@ -181,11 +181,12 @@ and explicit capability gates. Public custom protocol families are
 `anthropic/messages`, `openai/responses`, and `openai/chat`. The
 `openai-codex/responses` protocol is reserved for the `openai-codex` preset,
 which targets the ChatGPT Codex backend. Presets exist only for `openai`,
-`openai-codex`, and `anthropic`; unknown custom profiles must set
-`provider.protocol` explicitly. Known presets own their protocol: `openai`
+`openai-codex`, and `anthropic`; unknown custom provider entries must set
+`providers[].protocol` explicitly. Known presets own their protocol: `openai`
 uses `openai/responses`, `openai-codex` uses `openai-codex/responses`, and
 `anthropic` uses `anthropic/messages`. To use an OpenAI-compatible Chat
-provider, omit `provider.id` and set `provider.protocol: openai/chat`.
+provider, define a custom `providers[].id`, set `providers[].protocol:
+openai/chat`, and point the top-level `model` at that provider/model pair.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
@@ -520,27 +521,33 @@ Routes:
 
 ## 5. Configuration
 
-Runtime config lives in `<WorkDir>/.juex/juex.yaml`; the repository root
-ships `juex.yaml.example` as a copyable template:
+Runtime config is resolved from user-global and work-local YAML files. The
+user-global fallback is `~/.juex/juex.yaml`; the work-local config is
+`<WorkDir>/.juex/juex.yaml`, except when `WorkDir` itself is a `.juex`
+directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
+`juex.yaml.example` as a copyable template:
 
 ```yaml
-provider:
-  id: openai
-  base_url: ""
-  api_key: ""
-  model: ""
-  context_window: 256000
-  headers: {}
-  query: {}
-  capabilities:
-    tools: true
-    streaming: false
-    reasoning_effort: true
-    reasoning_replay: true
-    max_output_tokens: true
-  compat:
-    reasoning_replay_fields:
-      - reasoning_content
+model: openai/gpt-4.1
+providers:
+  - id: openai
+    base_url: ""
+    api_key: ""
+    headers: {}
+    query: {}
+    capabilities:
+      tools: true
+      streaming: false
+      reasoning_effort: true
+      reasoning_replay: true
+      max_output_tokens: true
+    compat:
+      reasoning_replay_fields:
+        - reasoning_content
+    models:
+      - id: gpt-4.1
+        context_window: 256000
+        thinking_effort: ""
 compaction:
   enabled: true
   reserve_tokens: 16384
@@ -552,17 +559,22 @@ compaction:
 
 | Field | Description |
 |---|---|
-| `provider.id` | optional known preset id: `openai`, `openai-codex`, or `anthropic` |
-| `provider.protocol` | required for custom providers; public values are `anthropic/messages`, `openai/responses`, and `openai/chat` |
-| `provider.base_url` | full base URL for custom providers; known presets use their provider default unless overridden for testing |
-| `provider.api_key` | API key |
-| `provider.model` | model name |
-| `provider.thinking_effort` | optional reasoning depth for thinking models |
-| `provider.context_window` | optional provider context window in tokens; defaults to `256000` |
-| `provider.headers` | optional static HTTP headers for this provider profile |
-| `provider.query` | optional static query params for this provider profile |
-| `provider.capabilities` | optional gates for tools, streaming, reasoning effort/replay, and max output tokens |
-| `provider.compat.reasoning_replay_fields` | OpenAI-compatible raw assistant fields to replay when reasoning replay is enabled |
+| `model` | active model reference in `provider_id/model_id` form |
+| `providers[].id` | required provider id; known presets are `openai`, `openai-codex`, and `anthropic` |
+| `providers[].protocol` | required for custom providers; public values are `anthropic/messages`, `openai/responses`, and `openai/chat` |
+| `providers[].base_url` | full base URL for custom providers; known presets use their provider default unless overridden for testing |
+| `providers[].api_key` | API key |
+| `providers[].headers` | optional static HTTP headers for this provider profile |
+| `providers[].query` | optional static query params for this provider profile |
+| `providers[].capabilities` | optional provider-level gates for tools, streaming, reasoning effort/replay, and max output tokens |
+| `providers[].compat.reasoning_replay_fields` | OpenAI-compatible raw assistant fields to replay when reasoning replay is enabled |
+| `providers[].models[].id` | model name sent to the provider |
+| `providers[].models[].thinking_effort` | optional reasoning depth for thinking models |
+| `providers[].models[].context_window` | optional model context window in tokens; defaults to `256000` |
+| `providers[].models[].headers` | optional model-level HTTP header overrides |
+| `providers[].models[].query` | optional model-level query parameter overrides |
+| `providers[].models[].capabilities` | optional model-level capability overrides |
+| `providers[].models[].compat.reasoning_replay_fields` | optional model-level compatibility overrides |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
@@ -570,18 +582,20 @@ compaction:
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
 
-Resolution order (later wins): `defaults` < `<WorkDir>/.juex/juex.yaml`
-< `--config <path>` (if supplied) < `os.Environ`. `.env` is no longer read by
-default. Environment overrides include `PROVIDER_API_ID`,
-`PROVIDER_API_PROTOCOL`, `PROVIDER_API_BASE`, `PROVIDER_API_KEY`,
-`PROVIDER_API_MODEL`, `PROVIDER_THINKING_EFFORT`, and `PROVIDER_CONTEXT_WINDOW`.
-Each config layer that specifies `provider.id` or `provider.protocol` starts a
-new provider profile, so earlier `provider.base_url`, `provider.api_key`,
-`provider.model`, and capability settings do not carry across provider
-boundaries. Repeat provider-specific values in the same layer as the selector
-or supply them through environment overrides.
-Codex auth is not configurable. When `provider.id: openai-codex` is selected
-and `provider.api_key` is empty, Juex loads the Codex CLI/app auth cache from
+Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
+`<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
+`.juex` directory) < `--config <path>` (if supplied) < `os.Environ`. `.env` is
+no longer read by default. Provider definitions merge by `providers[].id` and
+`providers[].models[].id`, so a workspace config can set only `model:
+provider_id/model_id` or override a few fields while inheriting missing values
+from `~/.juex/juex.yaml`. The legacy top-level `provider:` block is not
+supported.
+
+Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
+`PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_API_MODEL`,
+`PROVIDER_THINKING_EFFORT`, and `PROVIDER_CONTEXT_WINDOW`.
+Codex auth is not configurable. When provider id `openai-codex` is selected and
+`providers[].api_key` is empty, Juex loads the Codex CLI/app auth cache from
 `$CODEX_HOME/auth.json` or `~/.codex/auth.json`. API-key Codex logins use the
 cached `OPENAI_API_KEY`; ChatGPT logins use the cached access token and add
 `ChatGPT-Account-ID` / `X-OpenAI-Fedramp` headers when those claims are present.

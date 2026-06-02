@@ -1,49 +1,52 @@
-# Copy this template to .juex/juex.yaml in the project you want juex to run in.
-# The .juex directory is local runtime state and should not be committed.
-provider:
-  # Known presets: openai, openai-codex, anthropic.
-  # Known presets fix the protocol and default base URL. Do not combine a
-  # known id with a different protocol; omit id for custom providers.
-  # id: openai
-  #
-  # For OpenAI Codex OAuth, use:
-  # id: openai-codex
-  # model: gpt-5.5
-  #
-  # For an unknown or OpenAI-compatible provider, omit id and set protocol.
-  # Valid custom protocol values: anthropic/messages, openai/responses,
-  # openai/chat.
-  # protocol: openai/chat
-  #
-  # A config layer with id or protocol starts a new provider profile. Repeat
-  # provider-specific values in that layer or set them with environment vars.
-  #
-  # Known providers usually leave base_url empty. Custom providers must set it.
-  id: openai
-  base_url: ""
-  api_key: ""
-  model: ""
-  # Optional: control reasoning depth for thinking models.
-  # Valid values: "low", "medium", "high". Omit to use the provider default.
-  # thinking_effort: ""
-  # Optional: provider context window in tokens. Defaults to 256000.
-  # context_window: 256000
-  # Optional provider-specific HTTP headers and query parameters.
-  # headers:
-  #   X-Provider-Feature: "1"
-  # query:
-  #   beta: "1"
-  # Optional capability gates. Unsupported features are not sent.
-  # capabilities:
-  #   tools: true
-  #   streaming: false
-  #   reasoning_effort: true
-  #   reasoning_replay: true
-  #   max_output_tokens: true
-  # Optional provider compatibility knobs.
-  # compat:
-  #   reasoning_replay_fields:
-  #     - reasoning_content
+# Copy this template to .juex/juex.yaml in a workspace, or to
+# ~/.juex/juex.yaml for user-global provider fallback settings.
+# The workspace .juex directory is local runtime state and should not be
+# committed.
+
+# Active model, in provider_id/model_id form.
+model: openai/gpt-4.1
+
+providers:
+  # Known preset provider ids: openai, openai-codex, anthropic.
+  # Known presets fix the protocol and default base URL. Custom providers must
+  # use their own id and set protocol explicitly.
+  - id: openai
+    # Valid custom protocol values: anthropic/messages, openai/responses,
+    # openai/chat. Leave empty for known presets.
+    # protocol: openai/chat
+    #
+    # Known providers usually leave base_url empty. Custom providers must set it.
+    base_url: ""
+    api_key: ""
+    # Optional provider-specific HTTP headers and query parameters.
+    # headers:
+    #   X-Provider-Feature: "1"
+    # query:
+    #   beta: "1"
+    # Optional capability gates. Unsupported features are not sent.
+    # capabilities:
+    #   tools: true
+    #   streaming: false
+    #   reasoning_effort: true
+    #   reasoning_replay: true
+    #   max_output_tokens: true
+    # Optional provider compatibility knobs.
+    # compat:
+    #   reasoning_replay_fields:
+    #     - reasoning_content
+    models:
+      - id: gpt-4.1
+        # Optional: control reasoning depth for thinking models.
+        # Valid values: "low", "medium", "high". Omit to use the provider default.
+        # thinking_effort: ""
+        # Optional: model context window in tokens. Defaults to 256000.
+        # context_window: 256000
+
+  # For OpenAI Codex OAuth, switch the top-level model to
+  # openai-codex/gpt-5.5 and use:
+  # - id: openai-codex
+  #   models:
+  #     - id: gpt-5.5
 
 compaction:
   enabled: true

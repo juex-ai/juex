@@ -452,8 +452,13 @@ func writeJuexConfigFile(path, id, base, key, model string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := "provider:\n  id: " + id + "\n  base_url: " + base +
-		"\n  api_key: " + key + "\n  model: " + model + "\n"
+	body := "model: " + id + "/" + model + "\n" +
+		"providers:\n" +
+		"  - id: " + id + "\n" +
+		"    base_url: " + base + "\n" +
+		"    api_key: " + key + "\n" +
+		"    models:\n" +
+		"      - id: " + model + "\n"
 	return os.WriteFile(path, []byte(body), 0o644)
 }
 
