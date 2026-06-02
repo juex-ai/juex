@@ -52,6 +52,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/api.ts` | typed fetch helpers, session message pagination, workspace file preview URLs, and SSE subscription |
 | `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including transcript paging metadata |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
+| `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
 | `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
 | `src/lib/composer-submit.ts` | pure composer submit-state transitions |
 | `src/lib/compact-ui.ts` | optimistic `/compact` UI labels and local message helpers |
