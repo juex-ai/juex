@@ -1,24 +1,46 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import {
+  sessionConversationScrollOptions,
+  type SessionConversationScrollPhase,
+} from "@/lib/conversation-scroll";
 import { cn } from "@/lib/utils";
 import type { UIMessage, UIMessagePart } from "./_local-types";
 import { ArrowDownIcon, DownloadIcon } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
-export const Conversation = ({ className, ...props }: ConversationProps) => (
-  <StickToBottom
-    className={cn("relative flex-1 overflow-y-hidden", className)}
-    initial="smooth"
-    resize="smooth"
-    role="log"
-    {...props}
-  />
-);
+export const Conversation = ({ className, ...props }: ConversationProps) => {
+  const [scrollPhase, setScrollPhase] =
+    useState<SessionConversationScrollPhase>("hydrate");
+  const scrollOptions = sessionConversationScrollOptions(scrollPhase);
+
+  useEffect(() => {
+    let firstFrame = 0;
+    let secondFrame = 0;
+    firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => setScrollPhase("live"));
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, []);
+
+  return (
+    <StickToBottom
+      className={cn("relative flex-1 overflow-y-hidden", className)}
+      initial={scrollOptions.initial}
+      resize={scrollOptions.resize}
+      role="log"
+      {...props}
+    />
+  );
+};
 
 export type ConversationContentProps = ComponentProps<
   typeof StickToBottom.Content
