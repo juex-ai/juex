@@ -174,6 +174,7 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 	case err := <-errCh:
+		s.Close()
 		return err
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -286,9 +287,6 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 }
 
 func (s *Server) ensureActivePrimarySession(ctx context.Context) error {
-	if err := s.ensureActivePrimarySessionRecord(); err != nil {
-		return err
-	}
 	id, ok, err := s.activePrimarySessionID()
 	if err != nil {
 		return err
@@ -316,6 +314,9 @@ func (s *Server) ensureActivePrimarySessionRecord() error {
 	}
 	for _, info := range infos {
 		if info.Kind != session.KindPrimary {
+			continue
+		}
+		if !hasConversation(filepath.Join(s.opts.Cfg.SessionsDir(), info.ID)) {
 			continue
 		}
 		return session.SetActive(s.opts.Cfg.HistoryPath(), info)

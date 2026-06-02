@@ -32,23 +32,13 @@ func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
 	last := seedWebSession(t, srv, "last")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
 
 	waitForMCPEventInSession(t, last.Dir, "alpha:message:hello from mcp")
 	waitForSessionTextInSession(t, last.Dir, llm.RoleAssistant, "ack")
 	assertNoMCPEventInSession(t, older.Dir)
-
-	cancel()
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("server returned error after cancel: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("server did not stop after context cancellation")
-	}
 }
 
 func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
@@ -58,23 +48,13 @@ func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
 	mustWriteWebFakeMCPConfig(t, work, true)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
 
 	active := waitForActivePrimary(t, srv)
 	waitForMCPEventInSession(t, active.Dir, "alpha:message:hello from mcp")
 	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
-
-	cancel()
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("server returned error after cancel: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("server did not stop after context cancellation")
-	}
 }
 
 func runWebFakeMCPServer() {

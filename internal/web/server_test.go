@@ -63,6 +63,7 @@ func TestRunEnsuresActivePrimarySession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
 
 	var h session.History
 	var open bool
@@ -72,7 +73,6 @@ func TestRunEnsuresActivePrimarySession(t *testing.T) {
 	for h.Active == nil || !open {
 		select {
 		case <-deadline:
-			cancel()
 			if h.Active == nil {
 				t.Fatal("server did not create an active primary session")
 			}
@@ -81,8 +81,7 @@ func TestRunEnsuresActivePrimarySession(t *testing.T) {
 			var err error
 			h, err = session.LoadHistory(srv.opts.Cfg.HistoryPath())
 			if err != nil {
-				cancel()
-				t.Fatal(err)
+				continue
 			}
 			if h.Active != nil {
 				_, open = srv.sessions.Load(h.Active.ID)
@@ -90,18 +89,7 @@ func TestRunEnsuresActivePrimarySession(t *testing.T) {
 		}
 	}
 	if h.Active.Kind != session.KindPrimary || !h.Active.Active {
-		cancel()
 		t.Fatalf("active session = %+v, want active primary", h.Active)
-	}
-
-	cancel()
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("server returned error after cancel: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("server did not stop after context cancellation")
 	}
 }
 
@@ -115,6 +103,7 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
 
 	select {
 	case err := <-errCh:
@@ -127,25 +116,25 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 
 	h, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
 	if err != nil {
-		cancel()
 		t.Fatal(err)
 	}
 	if h.Active == nil || h.Active.Kind != session.KindPrimary || !h.Active.Active {
-		cancel()
 		t.Fatalf("active session = %+v, want active primary", h.Active)
 	}
 	if _, ok := srv.sessions.Load(h.Active.ID); ok {
-		cancel()
 		t.Fatalf("server opened runtime app for %s without provider config", h.Active.ID)
 	}
+}
 
+func stopRunServer(t *testing.T, cancel context.CancelFunc, errCh <-chan error) {
+	t.Helper()
 	cancel()
 	select {
 	case err := <-errCh:
 		if err != nil {
-			t.Fatalf("server returned error after cancel: %v", err)
+			t.Errorf("server returned error after cancel: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("server did not stop after context cancellation")
+		t.Errorf("server did not stop after context cancellation")
 	}
 }
