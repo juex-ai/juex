@@ -38,6 +38,7 @@ const (
 	defaultMaxIters        = 25
 	defaultMaxDur          = 5 * time.Minute
 	DefaultMaxPendingInput = 16
+	maxToolErrorOutput     = 32 * 1024
 )
 
 type Engine struct {
@@ -547,6 +548,13 @@ func annotateToolTimeouts(blocks []llm.Block) []llm.Block {
 func toolErrorContent(out string, err error) string {
 	if out == "" {
 		return err.Error()
+	}
+	if len(out) > maxToolErrorOutput {
+		limit := maxToolErrorOutput
+		for limit > 0 && (out[limit]&0xC0) == 0x80 {
+			limit--
+		}
+		out = out[:limit] + "\n... (remaining output truncated) ..."
 	}
 	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + err.Error()
 }

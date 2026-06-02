@@ -246,8 +246,8 @@ The registry applies a per-call timeout context, caps it at 300 seconds, and
 strips the reserved field before invoking tools that do not declare their own
 `timeout` input. Tool timeouts are returned as ordinary error tool results so
 the agent can recover in the next model round. When a timed-out tool captured
-stdout or stderr before failing, that output is preserved in the error tool
-result before the timeout detail.
+stdout or stderr before failing, a bounded copy of that output is preserved in
+the error tool result before the timeout detail.
 
 MCP servers are optional runtime extensions. Startup is attempted per
 configured server: servers that connect successfully register

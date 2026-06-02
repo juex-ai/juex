@@ -975,6 +975,20 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	}
 }
 
+func TestToolErrorContentTruncatesLargeOutput(t *testing.T) {
+	out := strings.Repeat("x", 40*1024)
+	got := toolErrorContent(out, errors.New("tools: bash timed out after 1s"))
+	if len(got) >= len(out) {
+		t.Fatalf("tool error content len = %d, want less than unbounded output len %d", len(got), len(out))
+	}
+	if !strings.Contains(got, "... (remaining output truncated) ...") {
+		t.Fatalf("tool error content = %q, want truncation marker", got)
+	}
+	if !strings.Contains(got, "[tool error]\ntools: bash timed out after 1s") {
+		t.Fatalf("tool error content = %q, want timeout detail", got)
+	}
+}
+
 func TestTurn_UnknownToolName(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
