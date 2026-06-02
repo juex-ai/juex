@@ -42,7 +42,14 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(configPath, []byte("provider:\n  id: openai\n  base_url: https://example\n  api_key: k\n  model: m\n"), 0o644); err != nil {
+	configBody := "model: openai/m\n" +
+		"providers:\n" +
+		"  - id: openai\n" +
+		"    base_url: https://example\n" +
+		"    api_key: k\n" +
+		"    models:\n" +
+		"      - id: m\n"
+	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -50,6 +57,12 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 		"--cwd", work,
 		"--config", configPath,
 		"run", "--dry-run", "--json", "x")
+	home := t.TempDir()
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
+	)
 	// Use Output() so stdout (the JSON plan) is not contaminated by stderr
 	// (uv's "Installed N packages" log on first run).
 	out, err := cmd.Output()

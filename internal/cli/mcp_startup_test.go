@@ -17,6 +17,24 @@ func TestMain(m *testing.M) {
 		runCLIFakeMCPServer()
 		return
 	}
+	home, err := os.MkdirTemp("", "juex-cli-test-home-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	_ = os.Setenv("USERPROFILE", home)
+	_ = os.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
+	for _, key := range []string{
+		"PROVIDER_API_ID",
+		"PROVIDER_API_PROTOCOL",
+		"PROVIDER_API_BASE",
+		"PROVIDER_API_KEY",
+		"PROVIDER_API_MODEL",
+		"PROVIDER_THINKING_EFFORT",
+		"PROVIDER_CONTEXT_WINDOW",
+	} {
+		_ = os.Unsetenv(key)
+	}
 	os.Exit(m.Run())
 }
 

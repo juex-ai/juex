@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"gopkg.in/yaml.v3"
@@ -35,20 +36,33 @@ type Config struct {
 	Compaction           CompactionConfig
 
 	HomeAgentsDir string // ~/.agents (user-global)
+	HomeJuexDir   string // ~/.juex (user-global runtime config)
 	WorkDir       string // explicit; defaults to os.Getwd()
+
+	modelRef        string
+	providerConfigs map[string]providerConfig
 }
 
 type fileConfig struct {
-	Provider   providerConfig   `yaml:"provider"`
+	Model      string           `yaml:"model"`
+	Providers  []providerConfig `yaml:"providers"`
 	Compaction compactionConfig `yaml:"compaction"`
 }
 
 type providerConfig struct {
+	ID           string                     `yaml:"id"`
+	Protocol     string                     `yaml:"protocol"`
+	BaseURL      string                     `yaml:"base_url"`
+	APIKey       string                     `yaml:"api_key"`
+	Headers      map[string]string          `yaml:"headers"`
+	Query        map[string]string          `yaml:"query"`
+	Capabilities providerCapabilitiesConfig `yaml:"capabilities"`
+	Compat       providerCompatConfig       `yaml:"compat"`
+	Models       []providerModelConfig      `yaml:"models"`
+}
+
+type providerModelConfig struct {
 	ID             string                     `yaml:"id"`
-	Protocol       string                     `yaml:"protocol"`
-	BaseURL        string                     `yaml:"base_url"`
-	APIKey         string                     `yaml:"api_key"`
-	Model          string                     `yaml:"model"`
 	ThinkingEffort string                     `yaml:"thinking_effort"`
 	ContextWindow  int                        `yaml:"context_window"`
 	Headers        map[string]string          `yaml:"headers"`
@@ -91,9 +105,12 @@ const DefaultContextWindow = 256000
 
 var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
-// Load resolves config from <WorkDir>/.juex/juex.yaml and OS env vars.
+// Load resolves config from ~/.juex/juex.yaml, the work-local juex.yaml, and
+// OS env vars.
 //
-// Priority (later wins): defaults < <WorkDir>/.juex/juex.yaml < os.Environ.
+// Priority (later wins): defaults < ~/.juex/juex.yaml <
+// <WorkDir>/.juex/juex.yaml (or <WorkDir>/juex.yaml when WorkDir is .juex) <
+// os.Environ.
 func Load() (Config, error) {
 	return LoadForWorkDir("")
 }
@@ -104,7 +121,11 @@ func LoadForWorkDir(workDir string) (Config, error) {
 }
 
 func loadForWorkDir(workDir string, resolveAuth bool) (Config, error) {
-	cfg := Config{ContextWindow: DefaultContextWindow, Compaction: DefaultCompactionConfig()}
+	cfg := Config{
+		ContextWindow:   DefaultContextWindow,
+		Compaction:      DefaultCompactionConfig(),
+		providerConfigs: map[string]providerConfig{},
+	}
 
 	if workDir == "" {
 		cwd, err := os.Getwd()
@@ -116,9 +137,17 @@ func loadForWorkDir(workDir string, resolveAuth bool) (Config, error) {
 	cfg.WorkDir = workDir
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")
+		cfg.HomeJuexDir = filepath.Join(home, ".juex")
+	}
+
+	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true); err != nil {
+		return cfg, err
 	}
 
 	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true); err != nil {
+		return cfg, err
+	}
+	if err := resolveSelectedProvider(&cfg); err != nil {
 		return cfg, err
 	}
 	applyOSEnv(&cfg)
@@ -159,6 +188,9 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	}
 	err = applyYAMLFile(&cfg, path, false)
 	if err != nil {
+		return cfg, err
+	}
+	if err := resolveSelectedProvider(&cfg); err != nil {
 		return cfg, err
 	}
 	applyOSEnv(&cfg)
@@ -251,7 +283,18 @@ func (c Config) RuntimeConfigPath() string {
 	if c.WorkDir == "" {
 		return ""
 	}
+	if filepath.Base(filepath.Clean(c.WorkDir)) == ".juex" {
+		return filepath.Join(c.WorkDir, "juex.yaml")
+	}
 	return filepath.Join(c.JuexDir(), "juex.yaml")
+}
+
+// HomeRuntimeConfigPath returns the user-global runtime config path.
+func (c Config) HomeRuntimeConfigPath() string {
+	if c.HomeJuexDir == "" {
+		return ""
+	}
+	return filepath.Join(c.HomeJuexDir, "juex.yaml")
 }
 
 // AgentsMDDirs returns directories that may contain AGENTS.md (project root
@@ -294,7 +337,12 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 	if err := dec.Decode(&fc); err != nil {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
-	applyProviderConfig(cfg, fc.Provider)
+	if strings.TrimSpace(fc.Model) != "" {
+		cfg.modelRef = strings.TrimSpace(fc.Model)
+	}
+	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
+		return fmt.Errorf("config: parse %s: %w", path, err)
+	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	return nil
 }
@@ -310,32 +358,177 @@ func DefaultCompactionConfig() CompactionConfig {
 	}
 }
 
-func applyProviderConfig(cfg *Config, p providerConfig) {
-	if providerSelectorSpecified(p.ID, p.Protocol) {
-		resetProviderConfig(cfg)
+func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
+	if len(providers) == 0 {
+		return nil
 	}
-	applyProviderSelectorConfig(cfg, p.ID, p.Protocol)
-	if p.BaseURL != "" {
-		cfg.BaseURL = p.BaseURL
+	if cfg.providerConfigs == nil {
+		cfg.providerConfigs = map[string]providerConfig{}
 	}
-	if p.APIKey != "" {
-		cfg.APIKey = p.APIKey
+	for _, p := range providers {
+		id := strings.TrimSpace(p.ID)
+		if id == "" {
+			return fmt.Errorf("provider id is required")
+		}
+		p.ID = id
+		for _, model := range p.Models {
+			if strings.TrimSpace(model.ID) == "" {
+				return fmt.Errorf("provider %q model id is required", id)
+			}
+		}
+		existing := cfg.providerConfigs[id]
+		cfg.providerConfigs[id] = mergeProviderConfig(existing, p)
 	}
-	if p.Model != "" {
-		cfg.Model = p.Model
+	return nil
+}
+
+func mergeProviderConfig(base, override providerConfig) providerConfig {
+	if strings.TrimSpace(override.ID) != "" {
+		base.ID = strings.TrimSpace(override.ID)
 	}
-	if p.ThinkingEffort != "" {
-		cfg.ThinkingEffort = p.ThinkingEffort
+	if strings.TrimSpace(override.Protocol) != "" {
+		base.Protocol = strings.TrimSpace(override.Protocol)
 	}
-	if p.ContextWindow > 0 {
-		cfg.ContextWindow = p.ContextWindow
+	if override.BaseURL != "" {
+		base.BaseURL = override.BaseURL
 	}
+	if override.APIKey != "" {
+		base.APIKey = override.APIKey
+	}
+	base.Headers = mergeStringMap(base.Headers, override.Headers)
+	base.Query = mergeStringMap(base.Query, override.Query)
+	base.Capabilities = mergeProviderCapabilitiesConfig(base.Capabilities, override.Capabilities)
+	if len(override.Compat.ReasoningReplayFields) > 0 {
+		base.Compat.ReasoningReplayFields = append([]string(nil), override.Compat.ReasoningReplayFields...)
+	}
+	base.Models = mergeProviderModelConfigs(base.Models, override.Models)
+	return base
+}
+
+func mergeProviderModelConfigs(base, overrides []providerModelConfig) []providerModelConfig {
+	if len(overrides) == 0 {
+		return base
+	}
+	out := append([]providerModelConfig(nil), base...)
+	for _, override := range overrides {
+		id := strings.TrimSpace(override.ID)
+		if id == "" {
+			continue
+		}
+		override.ID = id
+		idx := -1
+		for i := range out {
+			if out[i].ID == id {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
+			out = append(out, override)
+			continue
+		}
+		out[idx] = mergeProviderModelConfig(out[idx], override)
+	}
+	return out
+}
+
+func mergeProviderModelConfig(base, override providerModelConfig) providerModelConfig {
+	if strings.TrimSpace(override.ID) != "" {
+		base.ID = strings.TrimSpace(override.ID)
+	}
+	if override.ThinkingEffort != "" {
+		base.ThinkingEffort = override.ThinkingEffort
+	}
+	if override.ContextWindow > 0 {
+		base.ContextWindow = override.ContextWindow
+	}
+	base.Headers = mergeStringMap(base.Headers, override.Headers)
+	base.Query = mergeStringMap(base.Query, override.Query)
+	base.Capabilities = mergeProviderCapabilitiesConfig(base.Capabilities, override.Capabilities)
+	if len(override.Compat.ReasoningReplayFields) > 0 {
+		base.Compat.ReasoningReplayFields = append([]string(nil), override.Compat.ReasoningReplayFields...)
+	}
+	return base
+}
+
+func mergeProviderCapabilitiesConfig(base, override providerCapabilitiesConfig) providerCapabilitiesConfig {
+	if override.Tools != nil {
+		base.Tools = override.Tools
+	}
+	if override.Streaming != nil {
+		base.Streaming = override.Streaming
+	}
+	if override.ReasoningEffort != nil {
+		base.ReasoningEffort = override.ReasoningEffort
+	}
+	if override.ReasoningReplay != nil {
+		base.ReasoningReplay = override.ReasoningReplay
+	}
+	if override.MaxOutputTokens != nil {
+		base.MaxOutputTokens = override.MaxOutputTokens
+	}
+	return base
+}
+
+func resolveSelectedProvider(cfg *Config) error {
+	ref := strings.TrimSpace(cfg.modelRef)
+	if ref == "" {
+		return nil
+	}
+	providerID, modelID, err := parseModelRef(ref)
+	if err != nil {
+		return err
+	}
+	p, ok := cfg.providerConfigs[providerID]
+	if !ok {
+		return fmt.Errorf("config: model %q references unknown provider %q", ref, providerID)
+	}
+	model, ok := providerModelByID(p.Models, modelID)
+	if !ok {
+		return fmt.Errorf("config: model %q references unknown model %q for provider %q", ref, modelID, providerID)
+	}
+	resetProviderConfig(cfg)
+	cfg.ProviderID = p.ID
+	cfg.ProviderProtocol = p.Protocol
+	cfg.BaseURL = p.BaseURL
+	cfg.APIKey = p.APIKey
+	cfg.Model = model.ID
 	cfg.ProviderHeaders = mergeStringMap(cfg.ProviderHeaders, p.Headers)
 	cfg.ProviderQuery = mergeStringMap(cfg.ProviderQuery, p.Query)
 	applyProviderCapabilitiesConfig(&cfg.ProviderCapabilities, p.Capabilities)
 	if len(p.Compat.ReasoningReplayFields) > 0 {
 		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
 	}
+	if model.ThinkingEffort != "" {
+		cfg.ThinkingEffort = model.ThinkingEffort
+	}
+	if model.ContextWindow > 0 {
+		cfg.ContextWindow = model.ContextWindow
+	}
+	cfg.ProviderHeaders = mergeStringMap(cfg.ProviderHeaders, model.Headers)
+	cfg.ProviderQuery = mergeStringMap(cfg.ProviderQuery, model.Query)
+	applyProviderCapabilitiesConfig(&cfg.ProviderCapabilities, model.Capabilities)
+	if len(model.Compat.ReasoningReplayFields) > 0 {
+		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), model.Compat.ReasoningReplayFields...)
+	}
+	return nil
+}
+
+func parseModelRef(ref string) (string, string, error) {
+	parts := strings.Split(ref, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("config: model must be provider_id/model, got %q", ref)
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+}
+
+func providerModelByID(models []providerModelConfig, id string) (providerModelConfig, bool) {
+	for _, model := range models {
+		if model.ID == id {
+			return model, true
+		}
+	}
+	return providerModelConfig{}, false
 }
 
 func providerSelectorSpecified(id, protocol string) bool {

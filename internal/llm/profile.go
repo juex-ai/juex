@@ -105,13 +105,13 @@ func baseProfile(cfg Config) (ProviderProfile, error) {
 					return ProviderProfile{}, err
 				}
 				if proto != profile.Protocol {
-					return ProviderProfile{}, fmt.Errorf("llm: provider id %q uses fixed protocol %q; omit provider.protocol or remove provider.id for a custom provider", id, profile.Protocol)
+					return ProviderProfile{}, fmt.Errorf("llm: provider id %q uses fixed protocol %q; omit providers[].protocol or use a custom providers[].id", id, profile.Protocol)
 				}
 			}
 			return profile, nil
 		}
 		if rawProtocol == "" {
-			return ProviderProfile{}, fmt.Errorf("llm: unknown provider id %q requires provider.protocol", id)
+			return ProviderProfile{}, fmt.Errorf("llm: unknown provider id %q requires providers[].protocol", id)
 		}
 		return customProfileForProtocol(id, rawProtocol)
 	}
