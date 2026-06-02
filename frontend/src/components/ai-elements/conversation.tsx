@@ -14,7 +14,12 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
-export const Conversation = ({ className, ...props }: ConversationProps) => {
+export const Conversation = ({
+  className,
+  initial: _initial,
+  resize: _resize,
+  ...props
+}: ConversationProps) => {
   const [scrollPhase, setScrollPhase] =
     useState<SessionConversationScrollPhase>("hydrate");
   const scrollOptions = sessionConversationScrollOptions(scrollPhase);
@@ -22,12 +27,12 @@ export const Conversation = ({ className, ...props }: ConversationProps) => {
   useEffect(() => {
     let firstFrame = 0;
     let secondFrame = 0;
-    firstFrame = window.requestAnimationFrame(() => {
-      secondFrame = window.requestAnimationFrame(() => setScrollPhase("live"));
+    firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => setScrollPhase("live"));
     });
     return () => {
-      window.cancelAnimationFrame(firstFrame);
-      window.cancelAnimationFrame(secondFrame);
+      cancelAnimationFrame(firstFrame);
+      cancelAnimationFrame(secondFrame);
     };
   }, []);
 
