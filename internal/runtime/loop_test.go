@@ -922,7 +922,7 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
 			<-ctx.Done()
-			return "", ctx.Err()
+			return "partial stdout\npartial stderr\n", ctx.Err()
 		},
 	})
 
@@ -952,6 +952,9 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	if !strings.Contains(block.Content, "timed out after 1s") {
 		t.Fatalf("tool result content = %q, want timeout detail", block.Content)
 	}
+	if !strings.Contains(block.Content, "partial stdout") || !strings.Contains(block.Content, "partial stderr") {
+		t.Fatalf("tool result content = %q, want captured output", block.Content)
+	}
 	if got := requestedPayload["timeout_seconds"]; got != 1 {
 		t.Fatalf("requested timeout_seconds = %v, want 1", got)
 	}
@@ -963,6 +966,12 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	}
 	if got := erroredPayload["timed_out"]; got != true {
 		t.Fatalf("errored timed_out = %v, want true", got)
+	}
+	if got := erroredPayload["len"]; got != len("partial stdout\npartial stderr\n") {
+		t.Fatalf("errored len = %v, want captured output length", got)
+	}
+	if got := erroredPayload["preview"]; got != "partial stdout\npartial stderr\n" {
+		t.Fatalf("errored preview = %v, want captured output preview", got)
 	}
 }
 
