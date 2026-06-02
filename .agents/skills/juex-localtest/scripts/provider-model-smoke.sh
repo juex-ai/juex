@@ -93,6 +93,11 @@ if [[ ! -x "$juex_bin" ]]; then
   exit 2
 fi
 
+if ! command -v ruby >/dev/null 2>&1; then
+  echo "ruby is required to run this script" >&2
+  exit 2
+fi
+
 if [[ ! -f "$config_path" ]]; then
   echo "provider config not found: $config_path" >&2
   exit 2
