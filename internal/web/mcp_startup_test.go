@@ -32,23 +32,29 @@ func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
 	last := seedWebSession(t, srv, "last")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
 
 	waitForMCPEventInSession(t, last.Dir, "alpha:message:hello from mcp")
 	waitForSessionTextInSession(t, last.Dir, llm.RoleAssistant, "ack")
 	assertNoMCPEventInSession(t, older.Dir)
+}
 
-	cancel()
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("server returned error after cancel: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("server did not stop after context cancellation")
-	}
+func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Addr = "127.0.0.1:0"
+	work := srv.opts.Cfg.WorkDir
+	mustWriteWebFakeMCPConfig(t, work, true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
+
+	active := waitForActivePrimary(t, srv)
+	waitForMCPEventInSession(t, active.Dir, "alpha:message:hello from mcp")
+	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
 }
 
 func runWebFakeMCPServer() {
@@ -153,6 +159,25 @@ func seedWebSession(t *testing.T, srv *Server, text string) *session.Session {
 		t.Fatal(err)
 	}
 	return sess
+}
+
+func waitForActivePrimary(t *testing.T, srv *Server) session.Info {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for active primary session")
+		case <-tick.C:
+			h, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
+			if err != nil || h.Active == nil || h.Active.Kind != session.KindPrimary {
+				continue
+			}
+			return *h.Active
+		}
+	}
 }
 
 func waitForMCPEventInSession(t *testing.T, dir, want string) {
