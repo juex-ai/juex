@@ -257,6 +257,92 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAI_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{
+		Protocol: string(ProtocolOpenAIChat),
+		BaseURL:  srv.URL,
+		APIKey:   "k",
+		Model:    "m",
+	}, nil)
+	schema := map[string]any{"type": "object"}
+
+	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
+		{Name: "list_agents", Description: "list agents", Schema: schema},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if _, mutated := schema["properties"]; mutated {
+		t.Fatalf("input schema was mutated: %+v", schema)
+	}
+	tools, _ := capturedBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v", capturedBody["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	fn, _ := tool["function"].(map[string]any)
+	params, _ := fn["parameters"].(map[string]any)
+	assertEmptyProperties(t, params)
+}
+
+func TestOpenAI_ReplaysNoArgumentToolUseAsEmptyObject(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{
+		Protocol: string(ProtocolOpenAIChat),
+		BaseURL:  srv.URL,
+		APIKey:   "k",
+		Model:    "m",
+	}, nil)
+	history := []Message{
+		TextMessage(RoleUser, "check status"),
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "call_1",
+			ToolName:  "mcp__chanwire__chanwire_status",
+		}}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", Content: "ok"}}},
+		TextMessage(RoleUser, "hello"),
+	}
+
+	if _, err := p.Complete(context.Background(), "", history, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	msgs, _ := capturedBody["messages"].([]any)
+	for _, raw := range msgs {
+		msg, _ := raw.(map[string]any)
+		if msg["role"] != "assistant" {
+			continue
+		}
+		calls, _ := msg["tool_calls"].([]any)
+		if len(calls) != 1 {
+			t.Fatalf("tool_calls = %+v", msg["tool_calls"])
+		}
+		call, _ := calls[0].(map[string]any)
+		fn, _ := call["function"].(map[string]any)
+		if fn["arguments"] != "{}" {
+			t.Fatalf("arguments = %q, want {}", fn["arguments"])
+		}
+		return
+	}
+	t.Fatalf("assistant tool call message not found: %+v", msgs)
+}
+
 func TestProviders_RetryPolicy(t *testing.T) {
 	cases := []struct {
 		name               string
@@ -709,6 +795,44 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponses_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
+			"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai",
+		Protocol: "openai/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "k",
+		Model:    "gpt-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
+		{Name: "list_agents", Description: "list agents", Schema: map[string]any{"type": "object"}},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	tools, _ := capturedBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v", capturedBody["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	params, _ := tool["parameters"].(map[string]any)
+	assertEmptyProperties(t, params)
+}
+
 func TestOpenAIResponses_ReplaysReasoningWithEmptySummary(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -842,6 +966,40 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
+}
+
+func TestOpenAICodexResponses_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
+		{Name: "list_agents", Description: "list agents", Schema: map[string]any{"type": "object"}},
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	tools, _ := capturedBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v", capturedBody["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	params, _ := tool["parameters"].(map[string]any)
+	assertEmptyProperties(t, params)
 }
 
 func TestReadCodexSSERejectsOversizedLine(t *testing.T) {
@@ -1030,5 +1188,28 @@ func TestIsContextOverflowError(t *testing.T) {
 	}
 	if IsContextOverflowError(fmt.Errorf("rate limit exceeded")) {
 		t.Fatal("rate limit should not be classified as context overflow")
+	}
+}
+
+func assertEmptyProperties(t *testing.T, schema map[string]any) {
+	t.Helper()
+	if schema["type"] != "object" {
+		t.Fatalf("schema type = %v, want object in %+v", schema["type"], schema)
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok || props == nil {
+		t.Fatalf("properties should be an empty object, got %+v in schema %+v", schema["properties"], schema)
+	}
+	if len(props) != 0 {
+		t.Fatalf("properties = %+v, want empty object", props)
+	}
+}
+
+func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
+	if got := toolCallArguments(nil); got != "{}" {
+		t.Fatalf("nil arguments = %q, want {}", got)
+	}
+	if got := toolCallArguments(map[string]any{"path": "x"}); got != `{"path":"x"}` {
+		t.Fatalf("map arguments = %q", got)
 	}
 }

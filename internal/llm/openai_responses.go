@@ -159,8 +159,7 @@ func toOpenAIResponseInput(history []Message, profile ProviderProfile) responses
 				}
 				out = appendResponseTextMessage(out, m.Role, textParts)
 				textParts = nil
-				argBytes, _ := json.Marshal(b.Input)
-				out = append(out, responses.ResponseInputItemParamOfFunctionCall(string(argBytes), b.ToolUseID, b.ToolName))
+				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.Input), b.ToolUseID, b.ToolName))
 			case BlockToolResult:
 				if !profile.Capabilities.Tools {
 					continue
@@ -223,7 +222,7 @@ func toOpenAIResponseTools(tools []ToolSpec) []responses.ToolUnionParam {
 			OfFunction: &responses.FunctionToolParam{
 				Name:        t.Name,
 				Description: param.NewOpt(t.Description),
-				Parameters:  t.Schema,
+				Parameters:  normalizedFunctionParameters(t.Schema),
 				Strict:      param.NewOpt(false),
 			},
 		})

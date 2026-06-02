@@ -28,6 +28,34 @@ mise exec -- <command>
 There is no local service startup step for the current suite. Web tests use
 `httptest`, and live integration tests drive the runtime directly.
 
+## Live Provider/Model Sweep
+
+When the user asks to "test all provider/model" or a provider compatibility
+change needs live coverage, build the current binary and run the smoke script:
+
+```bash
+mise exec -- make build
+bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --juex ./dist/juex
+```
+
+The script reads the provider/model matrix from `~/.juex/juex.yaml`, but it
+only prints provider and model ids. For each model it creates an isolated temp
+workdir, copies only that provider/model into a temp config, and runs Juex with
+a temp `HOME` so global MCP servers and skills are not loaded. The temp config
+contains credentials; it is deleted after success unless `--keep` is passed.
+Each case runs a three-turn session: a setup turn, a `read` tool-call turn that
+must return a unique smoke token, and a short reasoning prompt. The result line
+reports whether a `tool_use` block was recorded and whether reasoning/thinking
+blocks were exposed by that provider.
+
+Useful options:
+
+```bash
+bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --only ark/deepseek-v4-pro
+bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --work-root /tmp/juex-provider-smoke --keep
+bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --timeout 360
+```
+
 ## Failure Handling
 
 - If build fails → fix compilation errors first, do not proceed to tests

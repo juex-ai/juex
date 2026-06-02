@@ -175,12 +175,11 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					if !profile.Capabilities.Tools {
 						continue
 					}
-					argBytes, _ := json.Marshal(b.Input)
 					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
 						ID: b.ToolUseID,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      b.ToolName,
-							Arguments: string(argBytes),
+							Arguments: toolCallArguments(b.Input),
 						},
 					})
 				}
@@ -218,11 +217,36 @@ func toOpenAITools(tools []ToolSpec) []openai.ChatCompletionToolParam {
 			Function: shared.FunctionDefinitionParam{
 				Name:        t.Name,
 				Description: param.NewOpt(t.Description),
-				Parameters:  shared.FunctionParameters(t.Schema),
+				Parameters:  shared.FunctionParameters(normalizedFunctionParameters(t.Schema)),
 			},
 		})
 	}
 	return out
+}
+
+func normalizedFunctionParameters(schema map[string]any) map[string]any {
+	out := make(map[string]any, len(schema)+2)
+	for k, v := range schema {
+		out[k] = v
+	}
+	if out["type"] == nil || out["type"] == "" {
+		out["type"] = "object"
+	}
+	if out["properties"] == nil {
+		out["properties"] = map[string]any{}
+	}
+	return out
+}
+
+func toolCallArguments(input map[string]any) string {
+	if input == nil {
+		return "{}"
+	}
+	argBytes, err := json.Marshal(input)
+	if err != nil {
+		return "{}"
+	}
+	return string(argBytes)
 }
 
 // extractReasoningContent pulls a reasoning/thinking string out of a raw
