@@ -24,6 +24,31 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_ModelIDCanContainSlash(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: local-proxy/meta-llama/Llama-3-8b-chat
+providers:
+  - id: local-proxy
+    protocol: openai/chat
+    base_url: https://local.example
+    api_key: sk-local
+    models:
+      - id: meta-llama/Llama-3-8b-chat
+        context_window: 32000
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "local-proxy" || cfg.Model != "meta-llama/Llama-3-8b-chat" || cfg.ContextWindow != 32000 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
 func TestLoadFromFile_RejectsLegacyProviderConfig(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

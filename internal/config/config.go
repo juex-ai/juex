@@ -515,7 +515,7 @@ func resolveSelectedProvider(cfg *Config) error {
 }
 
 func parseModelRef(ref string) (string, string, error) {
-	parts := strings.Split(ref, "/")
+	parts := strings.SplitN(ref, "/", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
 		return "", "", fmt.Errorf("config: model must be provider_id/model, got %q", ref)
 	}
