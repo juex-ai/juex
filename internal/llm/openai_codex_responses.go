@@ -352,12 +352,11 @@ func toCodexResponseInput(history []Message, profile ProviderProfile) []any {
 				}
 				out = appendCodexTextMessage(out, m.Role, textParts)
 				textParts = nil
-				argBytes, _ := json.Marshal(b.Input)
 				out = append(out, map[string]any{
 					"type":      "function_call",
 					"call_id":   b.ToolUseID,
 					"name":      b.ToolName,
-					"arguments": string(argBytes),
+					"arguments": toolCallArguments(b.Input),
 				})
 			case BlockToolResult:
 				if !profile.Capabilities.Tools {
@@ -437,7 +436,7 @@ func toCodexResponseTools(tools []ToolSpec) []codexResponseTool {
 			Type:        "function",
 			Name:        t.Name,
 			Description: t.Description,
-			Parameters:  t.Schema,
+			Parameters:  normalizedFunctionParameters(t.Schema),
 			Strict:      false,
 		})
 	}
