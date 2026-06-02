@@ -355,12 +355,15 @@ func TestBuiltins_BashTimeout(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()
 	RegisterBuiltins(r, "")
-	out, info, err := r.CallWithInfo(context.Background(), "bash", map[string]any{"cmd": "sleep 5", "timeout": 1})
+	out, info, err := r.CallWithInfo(context.Background(), "bash", map[string]any{
+		"cmd":     "printf 'before timeout stdout\\n'; printf 'before timeout stderr\\n' >&2; sleep 5",
+		"timeout": 1,
+	})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-	if out != "" {
-		t.Fatalf("timeout output = %q, want empty", out)
+	if !strings.Contains(out, "before timeout stdout") || !strings.Contains(out, "before timeout stderr") {
+		t.Fatalf("timeout output = %q, want captured stdout/stderr", out)
 	}
 	if !info.TimedOut || info.TimeoutSeconds != 1 {
 		t.Fatalf("info = %+v, want timed out after 1s", info)

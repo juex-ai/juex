@@ -38,6 +38,7 @@ const (
 	defaultMaxIters        = 25
 	defaultMaxDur          = 5 * time.Minute
 	DefaultMaxPendingInput = 16
+	maxToolErrorOutput     = 32 * 1024
 )
 
 type Engine struct {
@@ -338,13 +339,17 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 				out, info, err := e.Tools.CallWithInfo(turnCtx, call.ToolName, call.Input)
 				block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID}
 				if err != nil {
-					block.Content = err.Error()
+					block.Content = toolErrorContent(out, err)
 					block.IsError = true
 					payload := map[string]any{
 						"name":            call.ToolName,
 						"tool_use_id":     call.ToolUseID,
 						"error":           err.Error(),
 						"timeout_seconds": info.TimeoutSeconds,
+					}
+					if out != "" {
+						payload["len"] = len(out)
+						payload["preview"] = truncate(out, 200)
 					}
 					if info.TimedOut {
 						payload["timed_out"] = true
@@ -538,6 +543,20 @@ func annotateToolTimeouts(blocks []llm.Block) []llm.Block {
 		}
 	}
 	return out
+}
+
+func toolErrorContent(out string, err error) string {
+	if out == "" {
+		return err.Error()
+	}
+	if len(out) > maxToolErrorOutput {
+		limit := maxToolErrorOutput
+		for limit > 0 && (out[limit]&0xC0) == 0x80 {
+			limit--
+		}
+		out = out[:limit] + "\n... (remaining output truncated) ..."
+	}
+	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + err.Error()
 }
 
 func truncate(s string, n int) string {
