@@ -4,9 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -55,6 +60,96 @@ func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
 	active := waitForActivePrimary(t, srv)
 	waitForMCPEventInSession(t, active.Dir, "alpha:message:hello from mcp")
 	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
+}
+
+func TestRunServesHTTPBeforeDrainingStartupMCPNotifications(t *testing.T) {
+	provider := newBlockingWebProvider()
+	srv := newTestServer(t)
+	srv.opts.Addr = freeLoopbackAddr(t)
+	srv.opts.Provider = provider
+	work := srv.opts.Cfg.WorkDir
+	mustWriteWebFakeMCPConfig(t, work, true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	defer func() {
+		close(provider.release)
+		stopRunServer(t, cancel, errCh)
+	}()
+
+	waitForHTTPStatus(t, "http://"+srv.opts.Addr+"/healthz", http.StatusOK)
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup MCP notification did not reach provider")
+	}
+}
+
+type blockingWebProvider struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingWebProvider() *blockingWebProvider {
+	return &blockingWebProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (p *blockingWebProvider) Name() string { return "blocking-web" }
+
+func (p *blockingWebProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-ctx.Done():
+		return llm.Response{}, ctx.Err()
+	case <-p.release:
+	}
+	return llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "startup handled"),
+		StopReason: llm.StopEndTurn,
+		Usage:      llm.Usage{InputTokens: 1, OutputTokens: 1},
+	}, nil
+}
+
+func freeLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().String()
+}
+
+func waitForHTTPStatus(t *testing.T, url string, want int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	var lastErr error
+	for {
+		resp, err := client.Get(url)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode == want {
+				return
+			}
+			lastErr = fmt.Errorf("status %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("%s did not return %d: %v", url, want, lastErr)
+		case <-tick.C:
+		}
+	}
 }
 
 func runWebFakeMCPServer() {
