@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -152,39 +153,78 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.ensureActivePrimarySessionRecord(); err != nil {
 		return err
 	}
-	if err := s.ensureMCPStarted(ctx); err != nil {
-		return err
-	}
-	if err := s.ensureActivePrimarySession(ctx); err != nil {
-		return err
-	}
 	srv := &http.Server{
 		Addr:              s.opts.Addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	ln, err := net.Listen("tcp", s.opts.Addr)
+	if err != nil {
+		return err
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		err := srv.ListenAndServe()
+		err := srv.Serve(ln)
 		if !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
-		close(errCh)
+	}()
+	startupCtx, cancelStartup := context.WithCancel(ctx)
+	defer cancelStartup()
+	startupErrCh := make(chan error, 1)
+	startupDone := make(chan struct{})
+	go func() {
+		defer close(startupDone)
+		// Keep MCP/session warmup behind the listener so startup notifications cannot hide the web UI.
+		if err := s.ensureMCPStarted(startupCtx); err != nil {
+			startupErrCh <- err
+			return
+		}
+		if err := s.ensureActivePrimarySession(startupCtx); err != nil {
+			startupErrCh <- err
+		}
 	}()
 	select {
 	case <-ctx.Done():
 	case err := <-errCh:
+		cancelStartup()
 		s.Close()
+		waitForStartup(startupDone, 10*time.Second)
 		return err
+	case err := <-startupErrCh:
+		if ctx.Err() == nil {
+			cancelStartup()
+			s.Close()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+			waitForStartup(startupDone, 10*time.Second)
+			return err
+		}
 	}
+	cancelStartup()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	s.Close()
-	return srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(shutdownCtx)
+	waitForStartup(startupDone, 10*time.Second)
+	return err
+}
+
+func waitForStartup(done <-chan struct{}, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
 }
 
 // Close cancels running turns and releases every active session.
 func (s *Server) Close() {
+	s.createMu.Lock()
+	defer s.createMu.Unlock()
+
 	s.closeMu.Lock()
 	if s.closed {
 		s.closeMu.Unlock()
@@ -250,6 +290,9 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
+	if s.isClosed() {
+		return nil, context.Canceled
+	}
 	if resumeDir != "" {
 		id := filepath.Base(resumeDir)
 		if v, ok := s.sessions.Load(id); ok {
