@@ -170,6 +170,52 @@ func TestTurn_CompactionFailureDoesNotAppendMarker(t *testing.T) {
 	}
 }
 
+func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
+	prov := &mockProviderWithErrors{
+		errs: []error{fmt.Errorf("openai codex responses: codex SSE read: context deadline exceeded")},
+		responses: []llm.Response{
+			{Message: llm.TextMessage(llm.RoleAssistant, "handled event"), StopReason: llm.StopEndTurn},
+		},
+	}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var compactErr string
+	bus.Subscribe("context.compact.errored", func(e events.Event) {
+		payload, _ := e.Payload.(map[string]any)
+		compactErr, _ = payload["error"].(string)
+	})
+
+	msg := llm.TextMessage(llm.RoleUser, "local:message:notify")
+	msg.Kind = llm.MessageKindMCPEvent
+	out, err := eng.TurnMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "handled event" {
+		t.Fatalf("out = %q, want handled event", out)
+	}
+	if !strings.Contains(compactErr, "codex SSE read") {
+		t.Fatalf("compact error event = %q, want original failure", compactErr)
+	}
+	if prov.called != 2 {
+		t.Fatalf("provider calls = %d, want compact attempt plus event turn", prov.called)
+	}
+	if len(eng.Session.History) != 3 {
+		t.Fatalf("history len = %d, want old message, mcp event, assistant", len(eng.Session.History))
+	}
+	if got := eng.Session.History[1]; got.Kind != llm.MessageKindMCPEvent || got.FirstText() != "local:message:notify" {
+		t.Fatalf("mcp event not preserved: %+v", got)
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			t.Fatalf("unexpected compact marker after failed auto compact: %+v", msg)
+		}
+	}
+}
+
 func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
 	prov := &mockProviderWithErrors{
 		errs: []error{fmt.Errorf("context_length_exceeded")},

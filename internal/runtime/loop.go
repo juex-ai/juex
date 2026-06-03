@@ -235,7 +235,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	tools := e.Tools.Specs()
 
 	if err := e.maybeCompact(turnCtx, turnID, systemPrompt, tools, userMsg); err != nil {
-		return "", e.failTurn(turnID, err)
+		if !canContinueAfterAutoCompactError(userMsg, turnCtx) {
+			return "", e.failTurn(turnID, err)
+		}
 	}
 
 	if err := e.Session.Append(userMsg); err != nil {
@@ -543,6 +545,10 @@ func annotateToolTimeouts(blocks []llm.Block) []llm.Block {
 		}
 	}
 	return out
+}
+
+func canContinueAfterAutoCompactError(msg llm.Message, ctx context.Context) bool {
+	return msg.Kind == llm.MessageKindMCPEvent && ctx.Err() == nil
 }
 
 func toolErrorContent(out string, err error) string {

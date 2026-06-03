@@ -617,6 +617,9 @@ web inputs share one whitelist and result contract before any provider turn is
 started.
 Successful compaction records summary-call token usage and updates the session
 context usage snapshot to the estimated active context after the compact marker.
+If proactive automatic compaction fails before an MCP notification turn, the
+runtime keeps the `context.compact.errored` event but still appends and handles
+the notification; ordinary user turns keep failing loudly on compaction errors.
 
 ---
 
