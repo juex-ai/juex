@@ -306,8 +306,9 @@ func renderActiveContextText(cmd *cobra.Command, snap runtime.ActiveContextSnaps
 
 func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
 	var (
-		format string
-		reason string
+		format       string
+		reason       string
+		instructions string
 	)
 	cmd := &cobra.Command{
 		Use:   "compact <id>",
@@ -323,7 +324,7 @@ func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := compactSession(cmd.Context(), cfg, args[0], reason, nil)
+			result, err := compactSession(cmd.Context(), cfg, args[0], reason, instructions, nil)
 			if err != nil {
 				if os.IsNotExist(err) {
 					return &notFoundError{msg: "session not found: " + args[0]}
@@ -343,10 +344,11 @@ func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&format, "format", "json", "json|text")
 	cmd.Flags().StringVar(&reason, "reason", "manual", "reason stored in compaction metadata")
+	cmd.Flags().StringVar(&instructions, "instructions", "", "focus instructions for the compaction summary")
 	return cmd
 }
 
-func compactSession(ctx context.Context, cfg config.Config, id, reason string, provider llm.Provider) (runtime.CompactionResult, error) {
+func compactSession(ctx context.Context, cfg config.Config, id, reason, instructions string, provider llm.Provider) (runtime.CompactionResult, error) {
 	if reason == "" {
 		reason = "manual"
 	}
@@ -361,7 +363,7 @@ func compactSession(ctx context.Context, cfg config.Config, id, reason string, p
 		return runtime.CompactionResult{}, err
 	}
 	defer a.Close()
-	return a.Compact(ctx, reason, false)
+	return a.CompactWithInstructions(ctx, reason, false, instructions)
 }
 
 func renderCompactResultText(cmd *cobra.Command, result runtime.CompactionResult) {

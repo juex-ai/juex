@@ -82,6 +82,9 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		params.MaxCompletionTokens = openai.Int(int64(opts.MaxOutputTokens))
 	}
+	if opts.CachePolicy.StablePrefixKey != "" {
+		params.PromptCacheKey = openai.String(opts.CachePolicy.StablePrefixKey)
+	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
@@ -122,8 +125,9 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 		Message:    out,
 		StopReason: mapOpenAIStop(string(choice.FinishReason)),
 		Usage: Usage{
-			InputTokens:  int(completion.Usage.PromptTokens),
-			OutputTokens: int(completion.Usage.CompletionTokens),
+			InputTokens:       int(completion.Usage.PromptTokens),
+			OutputTokens:      int(completion.Usage.CompletionTokens),
+			CachedInputTokens: int(completion.Usage.PromptTokensDetails.CachedTokens),
 		},
 	}, nil
 }

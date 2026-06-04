@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -149,6 +150,155 @@ func TestTurn_CompactionKeepsRecentTailInProviderContext(t *testing.T) {
 	}
 	if !strings.Contains(messagesText(second), "recent question") || !strings.Contains(messagesText(second), "latest") {
 		t.Fatalf("active context missing retained tail or latest: %+v", second)
+	}
+}
+
+func TestTurn_ExternalizesLargeUserInputBeforeProviderRequest(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction.UserInputInlineMaxBytes = 64
+	eng.Compaction.UserInputPreviewHeadBytes = 12
+	eng.Compaction.UserInputPreviewTailBytes = 12
+
+	input := "head-visible\n" + strings.Repeat("SECRET-MIDDLE ", 80) + "\ntail-visible"
+	out, err := eng.Turn(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "answer" {
+		t.Fatalf("out = %q", out)
+	}
+	providerText := messagesText(prov.histories[0])
+	if strings.Contains(providerText, "SECRET-MIDDLE SECRET-MIDDLE") {
+		t.Fatalf("provider received unbounded user input:\n%s", providerText)
+	}
+	for _, want := range []string{"User input stored outside context.", "head-visible", "tail-visible", "sha256:", "path:"} {
+		if !strings.Contains(providerText, want) {
+			t.Fatalf("provider text missing %q:\n%s", want, providerText)
+		}
+	}
+	block := eng.Session.History[0].Blocks[0]
+	if block.Artifact == nil || block.Artifact.SourceKind != "user_input" || !block.Artifact.Truncated {
+		t.Fatalf("artifact metadata missing: %+v", block)
+	}
+	data, err := os.ReadFile(block.Artifact.StoredPath)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if string(data) != input {
+		t.Fatalf("artifact content length = %d, want original %d", len(data), len(input))
+	}
+}
+
+func TestTurn_ExternalizesLargeToolResultBeforeNextProviderRequest(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "call_big", ToolName: "big"},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction.ToolResultInlineMaxBytes = 64
+	eng.Compaction.ToolResultPreviewHeadBytes = 10
+	eng.Compaction.ToolResultPreviewTailBytes = 10
+	if err := eng.Tools.Register(tools.Tool{
+		Name:        "big",
+		Description: "return a big result",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "tool-head\n" + strings.Repeat("TOOL-SECRET ", 80) + "\ntool-tail", nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := eng.Turn(context.Background(), "run tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q", out)
+	}
+	providerText := messagesText(prov.histories[1])
+	if strings.Contains(providerText, "TOOL-SECRET TOOL-SECRET") {
+		t.Fatalf("provider received unbounded tool output:\n%s", providerText)
+	}
+	for _, want := range []string{"Tool output stored outside context.", "tool-head", "tool-tail", "tool_use_id: call_big", "path:"} {
+		if !strings.Contains(providerText, want) {
+			t.Fatalf("provider text missing %q:\n%s", want, providerText)
+		}
+	}
+	result := eng.Session.History[len(eng.Session.History)-2]
+	block := result.Blocks[0]
+	if block.Artifact == nil || block.Artifact.SourceKind != "tool_result" || block.Artifact.ToolUseID != "call_big" {
+		t.Fatalf("artifact metadata missing: %+v", block)
+	}
+	data, err := os.ReadFile(block.Artifact.StoredPath)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if !strings.Contains(string(data), "TOOL-SECRET") {
+		t.Fatalf("artifact lost original tool output")
+	}
+}
+
+func TestTurn_ProjectsLegacyLargeHistoryBeforeProviderRequest(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 10000
+	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction.UserInputInlineMaxBytes = 64
+	eng.Compaction.UserInputPreviewHeadBytes = 10
+	eng.Compaction.UserInputPreviewTailBytes = 10
+	legacy := "old-head\n" + strings.Repeat("LEGACY-SECRET ", 80) + "\nold-tail"
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, legacy)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err != nil {
+		t.Fatal(err)
+	}
+	providerText := messagesText(prov.histories[0])
+	if strings.Contains(providerText, "LEGACY-SECRET LEGACY-SECRET") {
+		t.Fatalf("provider received unbounded legacy input:\n%s", providerText)
+	}
+	if !strings.Contains(providerText, "User input stored outside context.") || !strings.Contains(providerText, "old-head") || !strings.Contains(providerText, "old-tail") {
+		t.Fatalf("legacy projection missing:\n%s", providerText)
+	}
+}
+
+func TestTurn_AutoCompactionCircuitBreakerStopsRepeatedSummaryAttempts(t *testing.T) {
+	prov := &mockProviderWithErrors{
+		errs: []error{
+			fmt.Errorf("summary failed 1"),
+			fmt.Errorf("summary failed 2"),
+			fmt.Errorf("summary failed 3"),
+		},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	eng.Compaction = config.DefaultCompactionConfig()
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := eng.Turn(context.Background(), "latest"); err == nil {
+			t.Fatalf("turn %d: expected compaction error", i+1)
+		}
+	}
+	before := prov.called
+	_, err := eng.Turn(context.Background(), "latest")
+	if err == nil || !strings.Contains(err.Error(), "auto compaction paused after 3 consecutive failures") {
+		t.Fatalf("err = %v", err)
+	}
+	if prov.called != before {
+		t.Fatalf("provider calls after circuit breaker = %d, want %d", prov.called, before)
 	}
 }
 

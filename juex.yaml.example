@@ -55,3 +55,10 @@ compaction:
   tail_turns: 2
   summary_max_tokens: 2048
   tool_result_max_chars: 2000
+  user_input_inline_max_bytes: 65536
+  user_input_preview_head_bytes: 8192
+  user_input_preview_tail_bytes: 8192
+  tool_result_inline_max_bytes: 32768
+  tool_result_preview_head_bytes: 8192
+  tool_result_preview_tail_bytes: 8192
+  max_auto_failures: 3

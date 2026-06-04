@@ -75,9 +75,10 @@ Target:
 - Third turn should show a higher cached ratio than the second turn for providers
   that expose prompt-cache metrics.
 
-Juex currently records `Usage.InputTokens` and `Usage.OutputTokens`, but does
-not yet persist provider-specific cached-token details. Until that plumbing is
-implemented, the live score table marks cache ratio as `not captured`.
+Juex records provider-reported cached input tokens in `Usage.CachedInputTokens`
+and `ContextUsage.CachedInputTokens` when the provider exposes them. The live
+script reports the latest cached/input ratio from `events.jsonl`; older runs
+that predate this plumbing remain marked as `not captured`.
 
 ## Running The Evaluation
 
@@ -135,13 +136,12 @@ Observed compaction metadata:
 | `ark/deepseek-v4-pro` | 35,130 -> 6,729 | 1,327 |
 | `clip-local/gpt-5.5` | 34,803 -> 7,026 | 2,772 |
 
-The evaluation validates the current summary quality for objective fact recall,
-but it also exposes a V2 requirement: a successful pre-turn compact does not
-shrink the incoming user message. With large pasted input, provider-reported
-input tokens can still exceed the configured 32k Juex test window by a wide
-margin. V2 therefore needs an entry budgeter for large user inputs as well as
-tool results, and Juex should eventually record provider cached-token details
-instead of only total input/output tokens.
+The evaluation validates the previous summary quality for objective fact recall,
+but it also exposed the V2 requirement that a successful pre-turn compact does
+not shrink the incoming user message. Juex now externalizes oversized user input
+and tool results before provider calls, then records provider cached-token
+details when available. Re-run the live matrix after context-projection changes
+to refresh the score table and cache ratios.
 
 ## Future Automated Regression
 
@@ -151,7 +151,8 @@ Add a non-live quick test with a fake provider that:
 - Seeds enough history to trigger auto-compaction.
 - Verifies compaction request tokens stay bounded.
 - Verifies the active context contains the compact marker plus recent tail.
-- Verifies oversized tool results are externalized once that feature exists.
+- Verifies oversized user inputs and tool results are externalized before
+  provider requests.
 
 This quick test should run in normal `make test`. Live model scoring remains an
 operator-triggered evaluation because it uses credentials and has variable cost.

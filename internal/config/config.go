@@ -84,21 +84,35 @@ type providerCompatConfig struct {
 }
 
 type CompactionConfig struct {
-	Enabled            bool
-	ReserveTokens      int
-	KeepRecentTokens   int
-	TailTurns          int
-	SummaryMaxTokens   int
-	ToolResultMaxChars int
+	Enabled                    bool
+	ReserveTokens              int
+	KeepRecentTokens           int
+	TailTurns                  int
+	SummaryMaxTokens           int
+	ToolResultMaxChars         int
+	UserInputInlineMaxBytes    int
+	UserInputPreviewHeadBytes  int
+	UserInputPreviewTailBytes  int
+	ToolResultInlineMaxBytes   int
+	ToolResultPreviewHeadBytes int
+	ToolResultPreviewTailBytes int
+	MaxAutoFailures            int
 }
 
 type compactionConfig struct {
-	Enabled            *bool `yaml:"enabled"`
-	ReserveTokens      int   `yaml:"reserve_tokens"`
-	KeepRecentTokens   int   `yaml:"keep_recent_tokens"`
-	TailTurns          int   `yaml:"tail_turns"`
-	SummaryMaxTokens   int   `yaml:"summary_max_tokens"`
-	ToolResultMaxChars int   `yaml:"tool_result_max_chars"`
+	Enabled                    *bool `yaml:"enabled"`
+	ReserveTokens              int   `yaml:"reserve_tokens"`
+	KeepRecentTokens           int   `yaml:"keep_recent_tokens"`
+	TailTurns                  int   `yaml:"tail_turns"`
+	SummaryMaxTokens           int   `yaml:"summary_max_tokens"`
+	ToolResultMaxChars         int   `yaml:"tool_result_max_chars"`
+	UserInputInlineMaxBytes    int   `yaml:"user_input_inline_max_bytes"`
+	UserInputPreviewHeadBytes  int   `yaml:"user_input_preview_head_bytes"`
+	UserInputPreviewTailBytes  int   `yaml:"user_input_preview_tail_bytes"`
+	ToolResultInlineMaxBytes   int   `yaml:"tool_result_inline_max_bytes"`
+	ToolResultPreviewHeadBytes int   `yaml:"tool_result_preview_head_bytes"`
+	ToolResultPreviewTailBytes int   `yaml:"tool_result_preview_tail_bytes"`
+	MaxAutoFailures            int   `yaml:"max_auto_failures"`
 }
 
 const DefaultContextWindow = 256000
@@ -349,12 +363,19 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 
 func DefaultCompactionConfig() CompactionConfig {
 	return CompactionConfig{
-		Enabled:            true,
-		ReserveTokens:      16384,
-		KeepRecentTokens:   20000,
-		TailTurns:          2,
-		SummaryMaxTokens:   2048,
-		ToolResultMaxChars: 2000,
+		Enabled:                    true,
+		ReserveTokens:              16384,
+		KeepRecentTokens:           20000,
+		TailTurns:                  2,
+		SummaryMaxTokens:           2048,
+		ToolResultMaxChars:         2000,
+		UserInputInlineMaxBytes:    65536,
+		UserInputPreviewHeadBytes:  8192,
+		UserInputPreviewTailBytes:  8192,
+		ToolResultInlineMaxBytes:   32768,
+		ToolResultPreviewHeadBytes: 8192,
+		ToolResultPreviewTailBytes: 8192,
+		MaxAutoFailures:            3,
 	}
 }
 
@@ -575,6 +596,27 @@ func applyCompactionConfig(cfg *Config, c compactionConfig) {
 	}
 	if c.ToolResultMaxChars > 0 {
 		cfg.Compaction.ToolResultMaxChars = c.ToolResultMaxChars
+	}
+	if c.UserInputInlineMaxBytes > 0 {
+		cfg.Compaction.UserInputInlineMaxBytes = c.UserInputInlineMaxBytes
+	}
+	if c.UserInputPreviewHeadBytes > 0 {
+		cfg.Compaction.UserInputPreviewHeadBytes = c.UserInputPreviewHeadBytes
+	}
+	if c.UserInputPreviewTailBytes > 0 {
+		cfg.Compaction.UserInputPreviewTailBytes = c.UserInputPreviewTailBytes
+	}
+	if c.ToolResultInlineMaxBytes > 0 {
+		cfg.Compaction.ToolResultInlineMaxBytes = c.ToolResultInlineMaxBytes
+	}
+	if c.ToolResultPreviewHeadBytes > 0 {
+		cfg.Compaction.ToolResultPreviewHeadBytes = c.ToolResultPreviewHeadBytes
+	}
+	if c.ToolResultPreviewTailBytes > 0 {
+		cfg.Compaction.ToolResultPreviewTailBytes = c.ToolResultPreviewTailBytes
+	}
+	if c.MaxAutoFailures > 0 {
+		cfg.Compaction.MaxAutoFailures = c.MaxAutoFailures
 	}
 }
 

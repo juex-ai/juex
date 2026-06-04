@@ -20,6 +20,7 @@ var slashCommandNames = []string{SlashCompact, SlashNew, SlashStatus}
 
 type SlashCommand struct {
 	Name string `json:"name"`
+	Args string `json:"args,omitempty"`
 }
 
 type SlashCommandResult struct {
@@ -65,6 +66,10 @@ func ParseSlashCommand(input string) (SlashCommand, bool, error) {
 		if commandName == name && len(fields) == 1 {
 			return SlashCommand{Name: name}, true, nil
 		}
+		if commandName == SlashCompact && name == SlashCompact {
+			args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
+			return SlashCommand{Name: name, Args: args}, true, nil
+		}
 		if commandName == name {
 			args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
 			return SlashCommand{}, true, &SlashCommandArgumentsError{Name: name, Args: strings.TrimSpace(args)}
@@ -85,7 +90,7 @@ func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashComma
 func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (SlashCommandResult, error) {
 	switch cmd.Name {
 	case SlashCompact:
-		compact, err := a.Compact(ctx, "manual", false)
+		compact, err := a.CompactWithInstructions(ctx, "manual", false, cmd.Args)
 		if err != nil {
 			return SlashCommandResult{}, err
 		}

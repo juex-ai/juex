@@ -12,7 +12,7 @@ import (
 // summary prompts can fit on paper but still time out before streaming.
 const maxCompactionSummaryRequestTokens = 16000
 
-func buildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, policy compactionPolicy) (string, []llm.Message) {
+func buildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, policy compactionPolicy, instructions string) (string, []llm.Message) {
 	sys := strings.TrimSpace(base + "\n\n" + `You are preparing a compact summary for continuing this conversation.
 
 Return only a structured summary with these exact headings:
@@ -27,6 +27,9 @@ Relevant Files
 Tool Failures
 
 Preserve exact file paths, commands, error strings, identifiers, decisions, and current next steps. If a previous summary is provided, update it: keep still-correct information, add new progress, remove stale information, and refresh next steps. Do not answer the latest user request. Do not call tools.`)
+	if focus := strings.TrimSpace(instructions); focus != "" {
+		sys += "\n\nCompact Instructions:\n" + focus
+	}
 
 	omitted := 0
 	maxChars := policy.ToolResultMaxChars

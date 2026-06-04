@@ -299,7 +299,8 @@ func (s *Server) handleActivateSession(w http.ResponseWriter, r *http.Request, i
 }
 
 type compactRequest struct {
-	Reason string `json:"reason"`
+	Reason       string `json:"reason"`
+	Instructions string `json:"instructions"`
 }
 
 func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id string) {
@@ -323,7 +324,7 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 	if !ok {
 		return
 	}
-	result, err := as.app.Compact(r.Context(), req.Reason, false)
+	result, err := as.app.CompactWithInstructions(r.Context(), req.Reason, false, req.Instructions)
 	s.finishCompactTurn(as, compactTurnID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())

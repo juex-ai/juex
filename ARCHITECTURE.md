@@ -559,6 +559,13 @@ compaction:
   tail_turns: 2
   summary_max_tokens: 2048
   tool_result_max_chars: 2000
+  user_input_inline_max_bytes: 65536
+  user_input_preview_head_bytes: 8192
+  user_input_preview_tail_bytes: 8192
+  tool_result_inline_max_bytes: 32768
+  tool_result_preview_head_bytes: 8192
+  tool_result_preview_tail_bytes: 8192
+  max_auto_failures: 3
 ```
 
 | Field | Description |
@@ -585,6 +592,13 @@ compaction:
 | `compaction.tail_turns` | minimum recent user turns retained verbatim |
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
+| `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `.juex/artifacts/user-inputs/` and replaced by a stable preview before provider calls |
+| `compaction.user_input_preview_head_bytes` | leading bytes kept inline for externalized user input |
+| `compaction.user_input_preview_tail_bytes` | trailing bytes kept inline for externalized user input |
+| `compaction.tool_result_inline_max_bytes` | tool output larger than this is stored under `.juex/artifacts/tool-results/` and replaced by a stable preview before provider calls |
+| `compaction.tool_result_preview_head_bytes` | leading bytes kept inline for externalized tool output |
+| `compaction.tool_result_preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
+| `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
 
 Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
@@ -607,19 +621,31 @@ Juex does not start the interactive Codex login flow, refresh expired tokens, or
 read OS keyring credentials.
 
 Compaction is controlled by the `compaction` config section. The runtime keeps
-the full `conversation.jsonl` transcript, appends a compact boundary message
-with metadata, and assembles provider context as latest compact summary,
-retained recent tail, and messages after the compact marker. Manual compact and
-active-context inspection are available through `juex sessions compact`,
-`juex sessions context`, local `/compact` and `/status` slash commands, and
-matching Web API routes. Slash commands are parsed in `internal/app` so CLI and
-web inputs share one whitelist and result contract before any provider turn is
-started.
+the full recoverable content either in `conversation.jsonl` or in
+`.juex/artifacts/`, appends compact boundary messages with metadata, and
+assembles provider context as latest compact summary, retained recent tail, and
+messages after the compact marker. Large user inputs and tool results are
+materialized to `.juex/artifacts/user-inputs/<session-id>/` and
+`.juex/artifacts/tool-results/<session-id>/`; provider-visible messages keep a
+stable replacement with path, byte count, SHA-256, and head/tail preview.
+Manual compact and active-context inspection are available through
+`juex sessions compact --instructions`, `juex sessions context`, local
+`/compact [instructions]` and `/status` slash commands, and matching Web API
+routes. Slash commands are parsed in `internal/app` so CLI and web inputs share
+one whitelist and result contract before any provider turn is started.
 Successful compaction records summary-call token usage and updates the session
 context usage snapshot to the estimated active context after the compact marker.
-If proactive automatic compaction fails before an MCP notification turn, the
-runtime keeps the `context.compact.errored` event but still appends and handles
-the notification; ordinary user turns keep failing loudly on compaction errors.
+OpenAI-compatible providers receive a stable `prompt_cache_key` per session
+when called through `CompleteWithOptions`; Anthropic providers add ephemeral
+`cache_control` breakpoints to stable system/tool sections. Provider-reported
+cached input tokens are carried in `Usage.CachedInputTokens`,
+`ContextUsage.CachedInputTokens`, and `llm.responded` events. If proactive
+automatic compaction repeatedly fails, the session emits
+`context.compact.skipped` after `max_auto_failures` and asks the operator to
+run a focused manual compact or start fresh. If proactive automatic
+compaction fails before an MCP notification turn, the runtime keeps the
+`context.compact.errored` event but still appends and handles the notification;
+ordinary user turns keep failing loudly on compaction errors.
 
 ---
 

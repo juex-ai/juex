@@ -69,6 +69,26 @@ score_answer() {
   printf "%s" "$score"
 }
 
+cache_ratio_from_events() {
+  local events=$1
+  local line
+  line=$(grep '"context_usage"' "$events" | grep '"cached_input_tokens"' | tail -1 || true)
+  if [ -z "$line" ]; then
+    printf "not captured"
+    return
+  fi
+  local cached input
+  cached=$(printf "%s" "$line" | sed -E 's/.*"cached_input_tokens":([0-9]+).*/\1/')
+  input=$(printf "%s" "$line" | sed -E 's/.*"input_tokens":([0-9]+).*/\1/')
+  if [ -z "$cached" ] || [ -z "$input" ] || [ "$input" = "0" ]; then
+    printf "not captured"
+    return
+  fi
+  awk -v cached="$cached" -v input="$input" 'BEGIN {
+    printf "%s/%s (%.1f%%)", cached, input, (cached / input) * 100
+  }'
+}
+
 for model in "${MODELS[@]}"; do
   safe_model=${model//\//__}
   provider_id=${model%%/*}
@@ -158,6 +178,11 @@ EOF
       break
     fi
   done < <(find "$work/.juex/sessions" -type f -name conversation.jsonl -print 2>/dev/null)
+  cache_ratio="not captured"
+  events_for_scorecard=$(find "$work/.juex/sessions" -type f -name events.jsonl -print -quit 2>/dev/null || true)
+  if [ -n "$events_for_scorecard" ]; then
+    cache_ratio=$(cache_ratio_from_events "$events_for_scorecard")
+  fi
 
   {
     echo "# Compaction Eval Scorecard"
@@ -171,7 +196,7 @@ EOF
     echo "- Context window: ${PROVIDER_CONTEXT_WINDOW}"
     echo "- Score: ${score}/52"
     echo "- Compacted: ${compacted}"
-    echo "- Cache ratio: not captured"
+    echo "- Cache ratio: ${cache_ratio}"
   } > "$out_dir/scorecard.md"
 
   while IFS= read -r conversation; do

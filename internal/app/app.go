@@ -450,12 +450,16 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 }
 
 func (a *App) Compact(ctx context.Context, reason string, auto bool) (runtime.CompactionResult, error) {
+	return a.CompactWithInstructions(ctx, reason, auto, "")
+}
+
+func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
 	if a == nil || a.Engine == nil {
 		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
 	}
 	sections := a.Engine.Prompt.Sections()
 	systemPrompt := prompt.JoinSections(sections)
-	return a.Engine.Compact(ctx, "session-compact", systemPrompt, reason, auto)
+	return a.Engine.CompactWithInstructions(ctx, "session-compact", systemPrompt, reason, auto, instructions)
 }
 
 func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) error {

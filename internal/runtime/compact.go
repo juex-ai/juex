@@ -34,18 +34,38 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 	if estimated < policy.TriggerTokens {
 		return nil
 	}
+	if e.autoCompactFailures >= policy.MaxAutoFailures {
+		err := fmt.Errorf("auto compaction paused after %d consecutive failures; run /compact with focus instructions or start a new session", policy.MaxAutoFailures)
+		e.emit(events.Event{Type: "context.compact.skipped", TurnID: turnID, Payload: map[string]any{
+			"reason":               "failure_circuit_breaker",
+			"auto":                 true,
+			"consecutive_failures": e.autoCompactFailures,
+			"max_auto_failures":    policy.MaxAutoFailures,
+			"error":                err.Error(),
+		}})
+		return err
+	}
 
-	_, err := e.compactLocked(ctx, turnID, systemPrompt, "auto", true)
+	_, err := e.compactLocked(ctx, turnID, systemPrompt, "auto", true, "")
+	if err != nil {
+		e.autoCompactFailures++
+		return err
+	}
+	e.autoCompactFailures = 0
 	return err
 }
 
 func (e *Engine) Compact(ctx context.Context, turnID, systemPrompt, reason string, auto bool) (CompactionResult, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.compactLocked(ctx, turnID, systemPrompt, reason, auto)
+	return e.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, "")
 }
 
-func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason string, auto bool) (CompactionResult, error) {
+func (e *Engine) CompactWithInstructions(ctx context.Context, turnID, systemPrompt, reason string, auto bool, instructions string) (CompactionResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.compactLocked(ctx, turnID, systemPrompt, reason, auto, instructions)
+}
+
+func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason string, auto bool, instructions string) (CompactionResult, error) {
 	policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
@@ -71,10 +91,11 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 		"tail_turns":         policy.TailTurns,
 	}})
 
-	summarySystem, summaryHistory := buildCompactionSummaryRequest(systemPrompt, selection.PreviousSummary, selection.SummaryInput, policy)
+	summarySystem, summaryHistory := buildCompactionSummaryRequest(systemPrompt, selection.PreviousSummary, selection.SummaryInput, policy, instructions)
 	resp, err := llm.CompleteWithOptions(ctx, e.Provider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
 		Purpose:         "compaction",
 		MaxOutputTokens: policy.SummaryMaxTokens,
+		CachePolicy:     e.cachePolicyLocked(),
 	})
 	if err != nil {
 		compactErr := fmt.Errorf("compact context: %w", err)
@@ -127,6 +148,9 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 			"error":  err.Error(),
 		}})
 		return CompactionResult{}, err
+	}
+	if auto {
+		e.autoCompactFailures = 0
 	}
 	if len(e.Session.History) > 0 {
 		msg = e.Session.History[len(e.Session.History)-1]

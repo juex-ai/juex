@@ -54,6 +54,22 @@ type Block struct {
 	// Redacted, if non-empty, marks the block as a provider-redacted
 	// variant whose Content is the encrypted payload to round-trip.
 	Redacted bool `json:"redacted,omitempty"`
+	// Artifact records full content that was moved out of provider context
+	// while preserving a stable provider-visible preview in Text or Content.
+	Artifact *ContextArtifactProjection `json:"artifact,omitempty"`
+}
+
+type ContextArtifactProjection struct {
+	SourceKind    string `json:"source_kind"`
+	MessageID     string `json:"message_id,omitempty"`
+	ToolUseID     string `json:"tool_use_id,omitempty"`
+	ToolName      string `json:"tool_name,omitempty"`
+	OriginalBytes int    `json:"original_bytes"`
+	StoredPath    string `json:"stored_path"`
+	SHA256        string `json:"sha256"`
+	HeadBytes     int    `json:"head_bytes"`
+	TailBytes     int    `json:"tail_bytes"`
+	Truncated     bool   `json:"truncated"`
 }
 
 type Message struct {
@@ -116,8 +132,9 @@ type ToolSpec struct {
 }
 
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens       int `json:"input_tokens"`
+	OutputTokens      int `json:"output_tokens"`
+	CachedInputTokens int `json:"cached_input_tokens,omitempty"`
 }
 
 type ContextUsagePart struct {
@@ -127,12 +144,13 @@ type ContextUsagePart struct {
 }
 
 type ContextUsage struct {
-	Model         string             `json:"model,omitempty"`
-	ContextWindow int                `json:"context_window,omitempty"`
-	InputTokens   int                `json:"input_tokens"`
-	OutputTokens  int                `json:"output_tokens"`
-	TotalTokens   int                `json:"total_tokens"`
-	Breakdown     []ContextUsagePart `json:"breakdown,omitempty"`
+	Model             string             `json:"model,omitempty"`
+	ContextWindow     int                `json:"context_window,omitempty"`
+	InputTokens       int                `json:"input_tokens"`
+	OutputTokens      int                `json:"output_tokens"`
+	CachedInputTokens int                `json:"cached_input_tokens,omitempty"`
+	TotalTokens       int                `json:"total_tokens"`
+	Breakdown         []ContextUsagePart `json:"breakdown,omitempty"`
 }
 
 func (u Usage) TotalTokens() int {
@@ -149,6 +167,7 @@ func (u *Usage) Add(v Usage) {
 	}
 	u.InputTokens += v.InputTokens
 	u.OutputTokens += v.OutputTokens
+	u.CachedInputTokens += v.CachedInputTokens
 }
 
 type StopReason string
