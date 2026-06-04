@@ -43,3 +43,40 @@ func TestContextUsageSnapshotFallsBackToEstimatedInputWhenProviderOmitsInput(t *
 		t.Fatalf("total tokens = %d, want estimated input + output %d", got.TotalTokens, estimatedInput+13)
 	}
 }
+
+func TestContextUsageSnapshotDoesNotDoubleCountCompactAndArtifactMessages(t *testing.T) {
+	compact := llm.TextMessage(llm.RoleUser, strings.Repeat("compact summary ", 20))
+	compact.Kind = llm.MessageKindCompact
+	artifactText := "User input stored outside context.\npath: /tmp/input.txt\n\nPreview:\nhead\n...\ntail"
+	artifact := llm.TextMessage(llm.RoleUser, artifactText)
+	artifact.Blocks[0].Artifact = &llm.ContextArtifactProjection{
+		SourceKind:    "user_input",
+		MessageID:     "msg_artifact",
+		OriginalBytes: 1000,
+		StoredPath:    "/tmp/input.txt",
+		SHA256:        strings.Repeat("a", 64),
+		HeadBytes:     4,
+		TailBytes:     4,
+		Truncated:     true,
+	}
+	ordinary := llm.TextMessage(llm.RoleUser, strings.Repeat("ordinary ", 20))
+	history := []llm.Message{compact, artifact, ordinary}
+
+	got := contextUsageSnapshot("mock", 64000, llm.Usage{}, nil, nil, history)
+	parts := contextPartsByKey(got.Breakdown)
+
+	if parts["compact_summary"].Tokens != estimateMessageTokens([]llm.Message{compact}) {
+		t.Fatalf("compact summary tokens = %d", parts["compact_summary"].Tokens)
+	}
+	if parts["context_artifacts"].Tokens != estimateCharsAsTokens(len(artifactText)) {
+		t.Fatalf("artifact tokens = %d", parts["context_artifacts"].Tokens)
+	}
+	artifactEnvelope := artifact
+	artifactEnvelope.Blocks = nil
+	if want := estimateMessageTokens([]llm.Message{artifactEnvelope, ordinary}); parts["messages"].Tokens != want {
+		t.Fatalf("ordinary message tokens = %d, want %d", parts["messages"].Tokens, want)
+	}
+	if all := estimateMessageTokens(history); parts["messages"].Tokens >= all {
+		t.Fatalf("messages tokens = %d should be less than all-history tokens %d", parts["messages"].Tokens, all)
+	}
+}

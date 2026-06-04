@@ -149,9 +149,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 		}})
 		return CompactionResult{}, err
 	}
-	if auto {
-		e.autoCompactFailures = 0
-	}
+	e.autoCompactFailures = 0
 	if len(e.Session.History) > 0 {
 		msg = e.Session.History[len(e.Session.History)-1]
 	}

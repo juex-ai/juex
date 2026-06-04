@@ -302,6 +302,30 @@ func TestTurn_AutoCompactionCircuitBreakerStopsRepeatedSummaryAttempts(t *testin
 	}
 }
 
+func TestCompactWithInstructionsResetsAutoCompactionFailures(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "manual summary"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	eng.Compaction = config.DefaultCompactionConfig()
+	eng.autoCompactFailures = 3
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.CompactWithInstructions(context.Background(), "manual-compact", "system", "manual", false, "focus on failure recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID == "" {
+		t.Fatalf("manual compact did not append a compact message: %+v", result)
+	}
+	if eng.autoCompactFailures != 0 {
+		t.Fatalf("autoCompactFailures = %d, want reset after manual compact", eng.autoCompactFailures)
+	}
+}
+
 func TestTurn_CompactionFailureDoesNotAppendMarker(t *testing.T) {
 	prov := &mockProviderWithErrors{errs: []error{fmt.Errorf("summary failed")}}
 	eng, _ := newEngine(t, prov, false)

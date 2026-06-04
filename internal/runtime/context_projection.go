@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -30,14 +31,22 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 		msg.ID = "msg-" + newID()
 	}
 	var stats projectionStats
+	var clonedBlocks []llm.Block
 	for i := range msg.Blocks {
-		block := &msg.Blocks[i]
+		block := msg.Blocks[i]
 		if block.Artifact != nil {
+			if clonedBlocks != nil {
+				clonedBlocks = append(clonedBlocks, block)
+			}
 			continue
 		}
 		switch {
 		case msg.Kind != llm.MessageKindCompact && msg.Role == llm.RoleUser && block.Type == llm.BlockText && len(block.Text) > policy.UserInputInlineMaxBytes:
-			artifact, text, err := e.writeProjectedArtifact("user_input", msg.ID, *block, block.Text, policy.UserInputPreviewHeadBytes, policy.UserInputPreviewTailBytes)
+			if clonedBlocks == nil {
+				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
+				copy(clonedBlocks, msg.Blocks[:i])
+			}
+			artifact, text, err := e.writeProjectedArtifact("user_input", msg.ID, block, block.Text, policy.UserInputPreviewHeadBytes, policy.UserInputPreviewTailBytes)
 			if err != nil {
 				return msg, stats, err
 			}
@@ -46,7 +55,11 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 			stats.UserInputsExternalized++
 			stats.BytesExternalized += artifact.OriginalBytes
 		case block.Type == llm.BlockToolResult && len(block.Content) > policy.ToolResultInlineMaxBytes:
-			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, *block, block.Content, policy.ToolResultPreviewHeadBytes, policy.ToolResultPreviewTailBytes)
+			if clonedBlocks == nil {
+				clonedBlocks = make([]llm.Block, i, len(msg.Blocks))
+				copy(clonedBlocks, msg.Blocks[:i])
+			}
+			artifact, text, err := e.writeProjectedArtifact("tool_result", msg.ID, block, block.Content, policy.ToolResultPreviewHeadBytes, policy.ToolResultPreviewTailBytes)
 			if err != nil {
 				return msg, stats, err
 			}
@@ -55,6 +68,12 @@ func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) 
 			stats.ToolResultsExternalized++
 			stats.BytesExternalized += artifact.OriginalBytes
 		}
+		if clonedBlocks != nil {
+			clonedBlocks = append(clonedBlocks, block)
+		}
+	}
+	if clonedBlocks != nil {
+		msg.Blocks = clonedBlocks
 	}
 	return msg, stats, nil
 }
@@ -144,6 +163,7 @@ func previewParts(content string, headBytes, tailBytes int) (string, string) {
 	if headBytes > len(content) {
 		headBytes = len(content)
 	}
+	headBytes = utf8BoundaryEnd(content, headBytes)
 	remaining := len(content) - headBytes
 	if tailBytes > remaining {
 		tailBytes = remaining
@@ -151,9 +171,38 @@ func previewParts(content string, headBytes, tailBytes int) (string, string) {
 	head := content[:headBytes]
 	tail := ""
 	if tailBytes > 0 {
-		tail = content[len(content)-tailBytes:]
+		tailStart := utf8BoundaryStart(content, len(content)-tailBytes)
+		if tailStart < len(content) {
+			tail = content[tailStart:]
+		}
 	}
 	return head, tail
+}
+
+func utf8BoundaryEnd(s string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n >= len(s) {
+		return len(s)
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return n
+}
+
+func utf8BoundaryStart(s string, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	if n >= len(s) {
+		return len(s)
+	}
+	for n < len(s) && !utf8.RuneStart(s[n]) {
+		n++
+	}
+	return n
 }
 
 func providerVisibleArtifactText(artifact llm.ContextArtifactProjection, head, tail string) string {

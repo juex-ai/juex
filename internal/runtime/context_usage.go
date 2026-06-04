@@ -26,7 +26,7 @@ func contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sect
 		{Key: "skills", Label: "Skills", Tokens: estimateSectionTokens(sections, "skills")},
 		{Key: "compact_summary", Label: "Compact summary", Tokens: estimateCompactSummaryTokens(history)},
 		{Key: "context_artifacts", Label: "Context artifact references", Tokens: estimateContextArtifactTokens(history)},
-		{Key: "messages", Label: "Messages", Tokens: estimateMessageTokens(history)},
+		{Key: "messages", Label: "Messages", Tokens: estimateOrdinaryMessageTokens(history)},
 		{Key: contextUsageResponseKey, Label: "Response", Tokens: usage.OutputTokens},
 	}
 	if usage.InputTokens <= 0 {
@@ -75,6 +75,25 @@ func estimateContextArtifactTokens(history []llm.Message) int {
 		}
 	}
 	return estimateCharsAsTokens(chars)
+}
+
+func estimateOrdinaryMessageTokens(history []llm.Message) int {
+	ordinary := make([]llm.Message, 0, len(history))
+	for _, msg := range history {
+		if msg.Kind == llm.MessageKindCompact {
+			continue
+		}
+		cloned := msg
+		cloned.Blocks = nil
+		for _, block := range msg.Blocks {
+			if block.Artifact != nil {
+				continue
+			}
+			cloned.Blocks = append(cloned.Blocks, block)
+		}
+		ordinary = append(ordinary, cloned)
+	}
+	return estimateMessageTokens(ordinary)
 }
 
 func splitContextTools(tools []llm.ToolSpec) ([]llm.ToolSpec, []llm.ToolSpec) {
