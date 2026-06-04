@@ -11,6 +11,29 @@ task state after repeated compaction.
 The V2 design keeps the V1 append-only transcript model, but adds a
 cache-aware projection layer before provider calls.
 
+## Current Implementation Status
+
+Implemented:
+
+- Oversized user inputs and tool results are materialized to `.juex/artifacts/`
+  and replaced by stable provider-visible previews before provider requests.
+- Restored legacy history is projected before provider calls, even when the
+  original `conversation.jsonl` row predates artifact metadata.
+- `/compact [instructions]`, `juex sessions compact --instructions`, and the
+  Web compact API can pass focus instructions into the summary prompt.
+- OpenAI-compatible providers send a stable per-session prompt cache key where
+  the adapter supports it; Anthropic providers set ephemeral `cache_control`
+  breakpoints on stable prompt sections. Provider-reported cached input tokens
+  are recorded in usage/context events.
+- Automatic compaction has a consecutive-failure circuit breaker.
+
+Still future work:
+
+- Provider-native Responses compaction items.
+- Deferred MCP tool definition loading.
+- Live scorecard refresh against the full provider matrix after each major
+  context-management change.
+
 ## Non-Goals
 
 - Do not delete or rewrite original transcript rows.
@@ -175,14 +198,15 @@ type CompleteOptions struct {
 
 Provider mapping:
 
-- `openai/responses` and `openai-codex/responses`: set
-  `prompt_cache_key` when supported, set `prompt_cache_retention` when
-  configured, and record `usage.input_tokens_details.cached_tokens`.
+- `openai/chat`, `openai/responses`, and `openai-codex/responses`: set
+  `prompt_cache_key` when supported, set `prompt_cache_retention` where the
+  protocol exposes it, and record provider cached-token details.
 - `anthropic/messages`: place `cache_control` breakpoints at stable section
-  boundaries in the order tools, system, messages. Longer TTL breakpoints must
-  precede shorter TTL breakpoints.
-- `openai/chat` and unknown compatible providers: no-op until the provider
-  exposes equivalent fields, but keep the same runtime metrics shape.
+  boundaries. The current adapter marks the system prompt and the last tool
+  definition when a cache policy is present, and records
+  `usage.cache_read_input_tokens`.
+- Unknown compatible providers: no-op until the provider exposes equivalent
+  fields, but keep the same runtime metrics shape.
 
 Recommended prompt order:
 

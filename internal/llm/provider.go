@@ -16,6 +16,12 @@ type Provider interface {
 type CompleteOptions struct {
 	Purpose         string
 	MaxOutputTokens int
+	CachePolicy     CachePolicy
+}
+
+type CachePolicy struct {
+	StablePrefixKey string
+	Retention       string
 }
 
 type ProviderWithOptions interface {

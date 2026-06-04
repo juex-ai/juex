@@ -7,6 +7,7 @@ export type BlockType = "text" | "reasoning" | "tool_use" | "tool_result";
 
 export interface BlockBase {
   type: BlockType;
+  artifact?: ContextArtifactProjection;
 }
 
 export interface TextBlock extends BlockBase {
@@ -68,6 +69,7 @@ export interface CompactionMetadata {
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
+  cached_input_tokens?: number;
 }
 
 export interface ContextUsagePart {
@@ -81,8 +83,22 @@ export interface ContextUsage {
   context_window?: number;
   input_tokens: number;
   output_tokens: number;
+  cached_input_tokens?: number;
   total_tokens: number;
   breakdown?: ContextUsagePart[];
+}
+
+export interface ContextArtifactProjection {
+  source_kind: "user_input" | "tool_result" | string;
+  message_id?: string;
+  tool_use_id?: string;
+  tool_name?: string;
+  original_bytes: number;
+  stored_path: string;
+  sha256: string;
+  head_bytes: number;
+  tail_bytes: number;
+  truncated: boolean;
 }
 
 export interface SessionInfo {

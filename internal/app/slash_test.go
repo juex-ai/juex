@@ -20,11 +20,13 @@ func TestParseSlashCommand(t *testing.T) {
 		input   string
 		handled bool
 		name    string
+		args    string
 		wantErr bool
 	}{
 		{input: "hello", handled: false},
 		{input: " /status ", handled: true, name: SlashStatus},
 		{input: "/compact", handled: true, name: SlashCompact},
+		{input: "/compact focus on API changes", handled: true, name: SlashCompact, args: "focus on API changes"},
 		{input: "/new", handled: true, name: SlashNew},
 		{input: "/status now", handled: true, wantErr: true},
 		{input: "/status\tnow", handled: true, wantErr: true},
@@ -42,6 +44,9 @@ func TestParseSlashCommand(t *testing.T) {
 			}
 			if cmd.Name != tc.name {
 				t.Fatalf("name = %q, want %q", cmd.Name, tc.name)
+			}
+			if cmd.Args != tc.args {
+				t.Fatalf("args = %q, want %q", cmd.Args, tc.args)
 			}
 		})
 	}

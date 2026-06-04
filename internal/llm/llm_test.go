@@ -23,12 +23,16 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 // hitting the real Anthropic / OpenAI APIs.
 
 func writeAnthropicTextStream(w http.ResponseWriter, model, text, stopReason string, inputTokens, outputTokens int) {
+	writeAnthropicTextStreamWithCache(w, model, text, stopReason, inputTokens, outputTokens, 0)
+}
+
+func writeAnthropicTextStreamWithCache(w http.ResponseWriter, model, text, stopReason string, inputTokens, outputTokens, cacheReadTokens int) {
 	if stopReason == "" {
 		stopReason = "end_turn"
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	fmt.Fprint(w, "event: message_start\n")
-	fmt.Fprintf(w, `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[],"stop_reason":null,"usage":{"input_tokens":%d,"output_tokens":0}}}`+"\n\n", model, inputTokens)
+	fmt.Fprintf(w, `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[],"stop_reason":null,"usage":{"input_tokens":%d,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":%d}}}`+"\n\n", model, inputTokens, cacheReadTokens)
 	fmt.Fprint(w, "event: content_block_start\n")
 	fmt.Fprint(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`+"\n\n")
 	fmt.Fprint(w, "event: content_block_delta\n")
@@ -163,6 +167,49 @@ func TestAnthropic_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	}
 	if len(props) != 0 {
 		t.Fatalf("properties = %+v, want empty object", props)
+	}
+}
+
+func TestAnthropic_CompleteOptionsAddsCacheControlAndRecordsCacheReadTokens(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		writeAnthropicTextStreamWithCache(w, "claude-test", "ok", "end_turn", 100, 5, 64)
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := CompleteWithOptions(context.Background(), p, "system text", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
+		{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}},
+	}, CompleteOptions{CachePolicy: CachePolicy{StablePrefixKey: "juex-cache-key", Retention: "1h"}})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+
+	sysBlocks, _ := capturedBody["system"].([]any)
+	if len(sysBlocks) != 1 {
+		t.Fatalf("system = %+v", capturedBody["system"])
+	}
+	sysBlock, _ := sysBlocks[0].(map[string]any)
+	cacheControl, _ := sysBlock["cache_control"].(map[string]any)
+	if cacheControl["type"] != "ephemeral" || cacheControl["ttl"] != "1h" {
+		t.Fatalf("system cache_control = %+v", cacheControl)
+	}
+	tools, _ := capturedBody["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("tools = %+v", capturedBody["tools"])
+	}
+	tool, _ := tools[0].(map[string]any)
+	cacheControl, _ = tool["cache_control"].(map[string]any)
+	if cacheControl["type"] != "ephemeral" || cacheControl["ttl"] != "1h" {
+		t.Fatalf("tool cache_control = %+v", cacheControl)
+	}
+	if resp.Usage.CachedInputTokens != 64 {
+		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
 	}
 }
 
@@ -656,6 +703,38 @@ func TestOpenAI_CompleteOptionsUsesOneMaxTokenField(t *testing.T) {
 	}
 }
 
+func TestOpenAI_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedTokens(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"chatcmpl_1","object":"chat.completion","model":"gpt-test",
+			"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],
+			"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":80}}
+		}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai-chat-test", Protocol: "openai/chat", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := CompleteWithOptions(context.Background(), p, "sys", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		CachePolicy: CachePolicy{StablePrefixKey: "juex-cache-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capturedBody["prompt_cache_key"] != "juex-cache-key" {
+		t.Fatalf("prompt_cache_key = %+v", capturedBody["prompt_cache_key"])
+	}
+	if resp.Usage.CachedInputTokens != 80 {
+		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	}
+}
+
 func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -833,6 +912,38 @@ func TestOpenAIResponses_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	assertEmptyProperties(t, params)
 }
 
+func TestOpenAIResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedTokens(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
+			"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"usage":{"input_tokens":120,"output_tokens":6,"total_tokens":126,"input_tokens_details":{"cached_tokens":96}}
+		}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai", Protocol: "openai/responses", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := CompleteWithOptions(context.Background(), p, "sys", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		CachePolicy: CachePolicy{StablePrefixKey: "juex-cache-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capturedBody["prompt_cache_key"] != "juex-cache-key" {
+		t.Fatalf("prompt_cache_key = %+v", capturedBody["prompt_cache_key"])
+	}
+	if resp.Usage.CachedInputTokens != 96 {
+		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	}
+}
+
 func TestOpenAIResponses_ReplaysReasoningWithEmptySummary(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1000,6 +1111,34 @@ func TestOpenAICodexResponses_ToolWithoutPropertiesUsesEmptyObject(t *testing.T)
 	tool, _ := tools[0].(map[string]any)
 	params, _ := tool["parameters"].(map[string]any)
 	assertEmptyProperties(t, params)
+}
+
+func TestOpenAICodexResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedTokens(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":140,"output_tokens":7,"total_tokens":147,"input_tokens_details":{"cached_tokens":112}}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai-codex", Protocol: "openai-codex/responses", BaseURL: srv.URL, APIKey: "codex-token", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := CompleteWithOptions(context.Background(), p, "sys", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		CachePolicy: CachePolicy{StablePrefixKey: "juex-cache-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capturedBody["prompt_cache_key"] != "juex-cache-key" {
+		t.Fatalf("prompt_cache_key = %+v", capturedBody["prompt_cache_key"])
+	}
+	if resp.Usage.CachedInputTokens != 112 {
+		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	}
 }
 
 func TestReadCodexSSERejectsOversizedLine(t *testing.T) {

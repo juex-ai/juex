@@ -340,7 +340,7 @@ func TestSessionsCompact(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}
 
-	result, err := compactSession(context.Background(), cfg, id, "manual", prov)
+	result, err := compactSession(context.Background(), cfg, id, "manual", "focus on API changes", prov)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,15 +354,20 @@ func TestSessionsCompact(t *testing.T) {
 	if !strings.Contains(string(data), `"kind":"compact"`) || !strings.Contains(string(data), `summary`) || !strings.Contains(string(data), `"compaction"`) {
 		t.Fatalf("conversation not compacted:\n%s", data)
 	}
+	if len(prov.systems) != 1 || !strings.Contains(prov.systems[0], "Compact Instructions:\nfocus on API changes") {
+		t.Fatalf("summary prompt missing compact instructions: %q", prov.systems)
+	}
 }
 
 type sessionsCompactProvider struct {
 	response llm.Response
+	systems  []string
 }
 
 func (p *sessionsCompactProvider) Name() string { return "mock" }
 
 func (p *sessionsCompactProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	p.systems = append(p.systems, sys)
 	return p.response, nil
 }
 

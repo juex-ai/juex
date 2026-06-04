@@ -84,8 +84,9 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		MaxTokens: maxTokens,
 		Messages:  toAnthropicMessages(history, p.profile),
 	}
+	cachePrompt := opts.CachePolicy.StablePrefixKey != ""
 	if p.profile.Capabilities.Tools {
-		params.Tools = toAnthropicTools(tools)
+		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
 	}
 	if budgetTokens > 0 {
 		params.Thinking = anthropic.ThinkingConfigParamUnion{
@@ -95,7 +96,11 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		}
 	}
 	if sys != "" {
-		params.System = []anthropic.TextBlockParam{{Text: sys}}
+		systemBlock := anthropic.TextBlockParam{Text: sys}
+		if cachePrompt {
+			systemBlock.CacheControl = anthropicCacheControl(opts.CachePolicy.Retention)
+		}
+		params.System = []anthropic.TextBlockParam{systemBlock}
 	}
 
 	if !p.profile.Capabilities.Streaming {
@@ -157,8 +162,9 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 		Message:    out,
 		StopReason: mapAnthropicStop(string(msg.StopReason)),
 		Usage: Usage{
-			InputTokens:  int(msg.Usage.InputTokens),
-			OutputTokens: int(msg.Usage.OutputTokens),
+			InputTokens:       int(msg.Usage.InputTokens),
+			OutputTokens:      int(msg.Usage.OutputTokens),
+			CachedInputTokens: int(msg.Usage.CacheReadInputTokens),
 		},
 	}
 }
@@ -202,9 +208,9 @@ func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic
 	return out
 }
 
-func toAnthropicTools(tools []ToolSpec) []anthropic.ToolUnionParam {
+func toAnthropicTools(tools []ToolSpec, cachePrompt bool, cacheRetention string) []anthropic.ToolUnionParam {
 	out := make([]anthropic.ToolUnionParam, 0, len(tools))
-	for _, t := range tools {
+	for i, t := range tools {
 		schema := anthropic.ToolInputSchemaParam{Properties: map[string]any{}}
 		if props, ok := t.Schema["properties"]; ok {
 			schema.Properties = props
@@ -223,9 +229,23 @@ func toAnthropicTools(tools []ToolSpec) []anthropic.ToolUnionParam {
 			InputSchema: schema,
 			Description: param.NewOpt(t.Description),
 		}
+		if cachePrompt && i == len(tools)-1 {
+			tool.CacheControl = anthropicCacheControl(cacheRetention)
+		}
 		out = append(out, anthropic.ToolUnionParam{OfTool: &tool})
 	}
 	return out
+}
+
+func anthropicCacheControl(retention string) anthropic.CacheControlEphemeralParam {
+	cc := anthropic.NewCacheControlEphemeralParam()
+	switch retention {
+	case "1h", "24h":
+		cc.TTL = anthropic.CacheControlEphemeralTTLTTL1h
+	case "5m":
+		cc.TTL = anthropic.CacheControlEphemeralTTLTTL5m
+	}
+	return cc
 }
 
 func mapAnthropicStop(s string) StopReason {

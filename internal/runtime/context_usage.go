@@ -24,19 +24,22 @@ func contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sect
 		{Key: "mcp_tools", Label: "MCP tools", Tokens: estimateToolTokens(mcpTools)},
 		{Key: "memory_files", Label: "Memory files", Tokens: estimateSectionTokens(sections, "memory_files")},
 		{Key: "skills", Label: "Skills", Tokens: estimateSectionTokens(sections, "skills")},
-		{Key: "messages", Label: "Messages", Tokens: estimateMessageTokens(history)},
+		{Key: "compact_summary", Label: "Compact summary", Tokens: estimateCompactSummaryTokens(history)},
+		{Key: "context_artifacts", Label: "Context artifact references", Tokens: estimateContextArtifactTokens(history)},
+		{Key: "messages", Label: "Messages", Tokens: estimateOrdinaryMessageTokens(history)},
 		{Key: contextUsageResponseKey, Label: "Response", Tokens: usage.OutputTokens},
 	}
 	if usage.InputTokens <= 0 {
 		usage.InputTokens = estimatedInputTokens(breakdown)
 	}
 	return llm.ContextUsage{
-		Model:         model,
-		ContextWindow: contextWindow,
-		InputTokens:   usage.InputTokens,
-		OutputTokens:  usage.OutputTokens,
-		TotalTokens:   usage.TotalTokens(),
-		Breakdown:     breakdown,
+		Model:             model,
+		ContextWindow:     contextWindow,
+		InputTokens:       usage.InputTokens,
+		OutputTokens:      usage.OutputTokens,
+		CachedInputTokens: usage.CachedInputTokens,
+		TotalTokens:       usage.TotalTokens(),
+		Breakdown:         breakdown,
 	}
 }
 
@@ -49,6 +52,48 @@ func estimatedInputTokens(parts []llm.ContextUsagePart) int {
 		total += part.Tokens
 	}
 	return total
+}
+
+func estimateCompactSummaryTokens(history []llm.Message) int {
+	var compact []llm.Message
+	for _, msg := range history {
+		if msg.Kind == llm.MessageKindCompact {
+			compact = append(compact, msg)
+		}
+	}
+	return estimateMessageTokens(compact)
+}
+
+func estimateContextArtifactTokens(history []llm.Message) int {
+	var chars int
+	for _, msg := range history {
+		for _, block := range msg.Blocks {
+			if block.Artifact == nil {
+				continue
+			}
+			chars += len(block.Text) + len(block.Content)
+		}
+	}
+	return estimateCharsAsTokens(chars)
+}
+
+func estimateOrdinaryMessageTokens(history []llm.Message) int {
+	ordinary := make([]llm.Message, 0, len(history))
+	for _, msg := range history {
+		if msg.Kind == llm.MessageKindCompact {
+			continue
+		}
+		cloned := msg
+		cloned.Blocks = nil
+		for _, block := range msg.Blocks {
+			if block.Artifact != nil {
+				continue
+			}
+			cloned.Blocks = append(cloned.Blocks, block)
+		}
+		ordinary = append(ordinary, cloned)
+	}
+	return estimateMessageTokens(ordinary)
 }
 
 func splitContextTools(tools []llm.ToolSpec) ([]llm.ToolSpec, []llm.ToolSpec) {

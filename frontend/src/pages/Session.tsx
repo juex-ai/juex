@@ -1230,6 +1230,12 @@ function ContextUsageTooltip({
         {formatTokenCount(usage.total_tokens)}/{formatTokenCount(windowTokens)} tokens (
         {formatPercent(percent)})
       </div>
+      {usage.cached_input_tokens ? (
+        <div>
+          cached input: {formatTokenCount(usage.cached_input_tokens)} tokens (
+          {formatPercent((usage.cached_input_tokens / Math.max(usage.input_tokens, 1)) * 100)})
+        </div>
+      ) : null}
       <div className="text-muted-foreground">estimated breakdown</div>
       <div className="space-y-0.5">
         {(usage.breakdown ?? []).map((part) => (

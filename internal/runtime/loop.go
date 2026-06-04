@@ -66,6 +66,8 @@ type Engine struct {
 	pendingMu    sync.Mutex
 	activeTurnID string
 	pendingInput []llm.Message
+
+	autoCompactFailures int
 }
 
 var (
@@ -233,6 +235,13 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	promptSections := e.Prompt.Sections()
 	systemPrompt := prompt.JoinSections(promptSections)
 	tools := e.Tools.Specs()
+	policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
+	projectedUserMsg, projection, err := e.projectMessageLocked(userMsg, policy)
+	if err != nil {
+		return "", e.failTurn(turnID, err)
+	}
+	userMsg = projectedUserMsg
+	e.emitProjectionApplied(turnID, projection)
 
 	if err := e.maybeCompact(turnCtx, turnID, systemPrompt, tools, userMsg); err != nil {
 		if !canContinueAfterAutoCompactError(turnCtx, userMsg) {
@@ -267,10 +276,18 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}})
 
 		requestHistory := e.activeContextLocked().Messages
-		resp, err := e.Provider.Complete(turnCtx, systemPrompt, requestHistory, tools)
+		requestHistory, projection, err = e.projectMessagesForProviderLocked(requestHistory, policy)
+		if err != nil {
+			return "", e.failTurn(turnID, err)
+		}
+		e.emitProjectionApplied(turnID, projection)
+		resp, err := llm.CompleteWithOptions(turnCtx, e.Provider, systemPrompt, requestHistory, tools, llm.CompleteOptions{
+			Purpose:     "turn",
+			CachePolicy: e.cachePolicyLocked(),
+		})
 		if err != nil {
 			if llm.IsContextOverflowError(err) && !retriedOverflow {
-				if _, compactErr := e.compactLocked(turnCtx, turnID, systemPrompt, "overflow_retry", true); compactErr != nil {
+				if _, compactErr := e.compactLocked(turnCtx, turnID, systemPrompt, "overflow_retry", true, ""); compactErr != nil {
 					return "", e.failTurn(turnID, fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr))
 				}
 				retriedOverflow = true
@@ -339,7 +356,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 					"timeout_seconds": call.TimeoutSeconds,
 				}})
 				out, info, err := e.Tools.CallWithInfo(turnCtx, call.ToolName, call.Input)
-				block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID}
+				block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
 				if err != nil {
 					block.Content = toolErrorContent(out, err)
 					block.IsError = true
@@ -375,6 +392,12 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		wg.Wait()
 
 		toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
+		projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
+		if err != nil {
+			return "", e.failTurn(turnID, err)
+		}
+		toolResultMsg = projectedToolResultMsg
+		e.emitProjectionApplied(turnID, projection)
 		if err := e.Session.Append(toolResultMsg); err != nil {
 			return "", e.failTurn(turnID, fmt.Errorf("session append tool result: %w", err))
 		}
@@ -422,6 +445,13 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 		return nil
 	}
 	for _, msg := range pending {
+		policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
+		projected, projection, err := e.projectMessageLocked(msg, policy)
+		if err != nil {
+			return fmt.Errorf("project pending input: %w", err)
+		}
+		msg = projected
+		e.emitProjectionApplied(turnID, projection)
 		if err := e.Session.Append(msg); err != nil {
 			return fmt.Errorf("session append pending input: %w", err)
 		}
@@ -432,6 +462,13 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 		"max_pending_inputs": max,
 	}})
 	return nil
+}
+
+func (e *Engine) cachePolicyLocked() llm.CachePolicy {
+	if e == nil || e.Session == nil || e.Session.ID == "" {
+		return llm.CachePolicy{}
+	}
+	return llm.CachePolicy{StablePrefixKey: "juex:" + e.Session.ID}
 }
 
 func (e *Engine) finishActiveTurnIfNoPending(turnID string) bool {

@@ -156,6 +156,12 @@ func (p *openAICodexResponsesProvider) codexRequestBody(sys string, history []Me
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		body.MaxOutputTokens = opts.MaxOutputTokens
 	}
+	if opts.CachePolicy.StablePrefixKey != "" {
+		body.PromptCacheKey = opts.CachePolicy.StablePrefixKey
+	}
+	if opts.CachePolicy.Retention != "" {
+		body.PromptCacheRetention = opts.CachePolicy.Retention
+	}
 	if p.profile.Capabilities.ReasoningEffort && p.profile.ThinkingEffort != "" {
 		body.Reasoning = &codexReasoningParam{
 			Effort:  p.profile.ThinkingEffort,
@@ -216,8 +222,9 @@ func (p *openAICodexResponsesProvider) responseFromCodex(resp codexWireResponse)
 		Message:    out,
 		StopReason: stop,
 		Usage: Usage{
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
+			InputTokens:       resp.Usage.InputTokens,
+			OutputTokens:      resp.Usage.OutputTokens,
+			CachedInputTokens: resp.Usage.InputTokensDetails.CachedTokens,
 		},
 	}
 }
@@ -311,18 +318,20 @@ func sleepCodexRetry(ctx context.Context, delay time.Duration) error {
 }
 
 type codexResponsesRequest struct {
-	Model             string               `json:"model"`
-	Store             bool                 `json:"store"`
-	Stream            bool                 `json:"stream"`
-	Instructions      string               `json:"instructions,omitempty"`
-	Input             []any                `json:"input"`
-	Include           []string             `json:"include,omitempty"`
-	Tools             []codexResponseTool  `json:"tools,omitempty"`
-	ToolChoice        string               `json:"tool_choice,omitempty"`
-	ParallelToolCalls bool                 `json:"parallel_tool_calls"`
-	Reasoning         *codexReasoningParam `json:"reasoning,omitempty"`
-	Text              map[string]string    `json:"text,omitempty"`
-	MaxOutputTokens   int                  `json:"max_output_tokens,omitempty"`
+	Model                string               `json:"model"`
+	Store                bool                 `json:"store"`
+	Stream               bool                 `json:"stream"`
+	Instructions         string               `json:"instructions,omitempty"`
+	Input                []any                `json:"input"`
+	Include              []string             `json:"include,omitempty"`
+	Tools                []codexResponseTool  `json:"tools,omitempty"`
+	ToolChoice           string               `json:"tool_choice,omitempty"`
+	ParallelToolCalls    bool                 `json:"parallel_tool_calls"`
+	Reasoning            *codexReasoningParam `json:"reasoning,omitempty"`
+	Text                 map[string]string    `json:"text,omitempty"`
+	MaxOutputTokens      int                  `json:"max_output_tokens,omitempty"`
+	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention string               `json:"prompt_cache_retention,omitempty"`
 }
 
 type codexReasoningParam struct {
@@ -486,9 +495,14 @@ type codexWireContent struct {
 }
 
 type codexWireUsage struct {
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
-	TotalTokens  int `json:"total_tokens,omitempty"`
+	InputTokens        int                   `json:"input_tokens,omitempty"`
+	OutputTokens       int                   `json:"output_tokens,omitempty"`
+	TotalTokens        int                   `json:"total_tokens,omitempty"`
+	InputTokensDetails codexWireTokenDetails `json:"input_tokens_details,omitempty"`
+}
+
+type codexWireTokenDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
 }
 
 type codexIncomplete struct {

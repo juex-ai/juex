@@ -80,6 +80,9 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 	if p.profile.Capabilities.ReasoningReplay {
 		params.Include = []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent}
 	}
+	if opts.CachePolicy.StablePrefixKey != "" {
+		params.PromptCacheKey = param.NewOpt(opts.CachePolicy.StablePrefixKey)
+	}
 
 	resp, err := p.client.Responses.New(ctx, params)
 	if err != nil {
@@ -139,8 +142,9 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 		Message:    out,
 		StopReason: stop,
 		Usage: Usage{
-			InputTokens:  int(resp.Usage.InputTokens),
-			OutputTokens: int(resp.Usage.OutputTokens),
+			InputTokens:       int(resp.Usage.InputTokens),
+			OutputTokens:      int(resp.Usage.OutputTokens),
+			CachedInputTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
 		},
 	}
 }

@@ -14,7 +14,7 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 	input := []llm.Message{
 		{ID: "tool-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "tu1", Content: strings.Repeat("x", 50)}}},
 	}
-	sys, hist := buildCompactionSummaryRequest("base", prev, input, compactionPolicy{ToolResultMaxChars: 10})
+	sys, hist := buildCompactionSummaryRequest("base", prev, input, compactionPolicy{ToolResultMaxChars: 10}, "")
 	if !strings.Contains(sys, "Goal") || !strings.Contains(sys, "Tool Failures") {
 		t.Fatalf("system prompt missing required headings: %s", sys)
 	}
@@ -31,7 +31,7 @@ func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
-	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionPolicy{ToolResultMaxChars: 10})
+	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionPolicy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
 	if !strings.Contains(body, "text: tttttttttt ...(truncated, total 50 bytes)") {
 		t.Fatalf("text was not truncated:\n%s", body)
@@ -57,7 +57,7 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 		SummaryMaxTokens:   100,
 	}
 
-	sys, hist := buildCompactionSummaryRequest("base", llm.Message{}, input, policy)
+	sys, hist := buildCompactionSummaryRequest("base", llm.Message{}, input, policy, "")
 
 	limit := policy.TriggerTokens - policy.SummaryMaxTokens
 	if got := estimateContextTokens(sys, nil, hist); got > limit {
