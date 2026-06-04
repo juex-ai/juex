@@ -99,4 +99,5 @@ copies it into `internal/web/dist`, and embeds it into `dist/juex`.
 | `DESIGN.md` | Web UI design guide. |
 | `frontend/README.md` | Frontend-specific development notes. |
 | `docs/AGENT_CLI_AUDIT.md` | CLI audit against agent-oriented CLI principles. |
+| `docs/compaction/` | Context compaction research, V2 design, and live evaluation notes. |
 | `docs/superpowers/` | Historical specs and implementation plans. |
