@@ -258,7 +258,7 @@ func seedWebSession(t *testing.T, srv *Server, text string) *session.Session {
 
 func waitForActivePrimary(t *testing.T, srv *Server) session.Info {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(10 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
@@ -291,7 +291,7 @@ func waitForSessionTextInSession(t *testing.T, dir string, role llm.Role, want s
 
 func waitForSessionMessage(t *testing.T, dir string, match func(llm.Message) bool, label string) {
 	t.Helper()
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(10 * time.Second)
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {

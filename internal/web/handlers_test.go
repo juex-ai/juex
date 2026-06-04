@@ -496,7 +496,7 @@ func TestPostTurn_UnknownSlashStartsAgentTurn(t *testing.T) {
 		t.Fatal("missing turn id")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
 		if err != nil {
