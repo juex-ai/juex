@@ -561,6 +561,38 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 	}
 }
 
+func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
+	prov := &budgetedCompactionProvider{compactionLimit: 800}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 1200
+	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction.ReserveTokens = 300
+	eng.Compaction.SummaryMaxTokens = 100
+	eng.Compaction.ToolResultMaxChars = 2000
+	for i := 0; i < 80; i++ {
+		if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 2000)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, err := eng.Turn(context.Background(), "latest question")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "answered after bounded compact" {
+		t.Fatalf("out = %q", out)
+	}
+	if prov.compactionTokens > prov.compactionLimit {
+		t.Fatalf("compaction request tokens = %d, want <= %d", prov.compactionTokens, prov.compactionLimit)
+	}
+	if !strings.Contains(prov.compactionBody, "messages omitted") {
+		t.Fatalf("compaction body did not record omitted transcript:\n%s", prov.compactionBody)
+	}
+	if strings.Contains(prov.compactionBody, "message-00") {
+		t.Fatalf("oldest transcript should be omitted when over budget:\n%s", prov.compactionBody)
+	}
+}
+
 func TestTurn_DoesNotCompactBelowThreshold(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
@@ -580,6 +612,32 @@ func TestTurn_DoesNotCompactBelowThreshold(t *testing.T) {
 	if len(prov.histories[0]) != 2 {
 		t.Fatalf("history len = %d, want previous + next", len(prov.histories[0]))
 	}
+}
+
+type budgetedCompactionProvider struct {
+	compactionLimit  int
+	compactionTokens int
+	compactionBody   string
+}
+
+func (p *budgetedCompactionProvider) Name() string { return "budgeted" }
+
+func (p *budgetedCompactionProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "answered after bounded compact"), StopReason: llm.StopEndTurn}, nil
+}
+
+func (p *budgetedCompactionProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	if opts.Purpose != "compaction" {
+		return p.Complete(ctx, sys, history, tools)
+	}
+	p.compactionTokens = estimateContextTokens(sys, nil, history)
+	if len(history) > 0 {
+		p.compactionBody = history[0].FirstText()
+	}
+	if p.compactionTokens > p.compactionLimit {
+		return llm.Response{}, fmt.Errorf("context_length_exceeded: compaction request has %d tokens", p.compactionTokens)
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "bounded summary"), StopReason: llm.StopEndTurn}, nil
 }
 
 func TestTurn_PersistsEmptyAssistantResponse(t *testing.T) {
