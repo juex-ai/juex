@@ -502,6 +502,14 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 	if err != nil {
 		return err
 	}
+	s.createMu.Lock()
+	if s.isClosed() {
+		s.createMu.Unlock()
+		return context.Canceled
+	}
+	as.turnWG.Add(1)
+	s.createMu.Unlock()
+	defer as.turnWG.Done()
 	return as.app.HandleMCPNotification(ctx, n)
 }
 
