@@ -17,6 +17,12 @@ const (
 	KindSide    = "side"
 )
 
+var (
+	historyLockTimeout    = 35 * time.Second
+	historyLockStaleAfter = 30 * time.Second
+	historyLockPoll       = 10 * time.Millisecond
+)
+
 type metadata struct {
 	Alias string `json:"alias,omitempty"`
 	Kind  string `json:"kind,omitempty"`
@@ -333,7 +339,7 @@ func withHistoryLock(path string, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(historyLockTimeout)
 	for {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 		if err == nil {
@@ -344,14 +350,14 @@ func withHistoryLock(path string, fn func() error) error {
 		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrPermission) {
 			return err
 		}
-		if st, statErr := os.Stat(lockPath); statErr == nil && time.Since(st.ModTime()) > 30*time.Second {
+		if st, statErr := os.Stat(lockPath); statErr == nil && time.Since(st.ModTime()) > historyLockStaleAfter {
 			_ = os.Remove(lockPath)
 			continue
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("session: timed out waiting for history lock %s", lockPath)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(historyLockPoll)
 	}
 }
 
