@@ -1352,3 +1352,20 @@ func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
 		t.Fatalf("map arguments = %q", got)
 	}
 }
+
+func TestParseToolArguments(t *testing.T) {
+	input := parseToolArguments(`{"path":"x","content":"hello"}`)
+	if input["path"] != "x" || input["content"] != "hello" {
+		t.Fatalf("input = %+v, want parsed object", input)
+	}
+
+	doubleEncoded := parseToolArguments(`"{\"path\":\"x\",\"content\":\"hello\"}"`)
+	if doubleEncoded["path"] != "x" || doubleEncoded["content"] != "hello" {
+		t.Fatalf("doubleEncoded = %+v, want parsed object", doubleEncoded)
+	}
+
+	raw := parseToolArguments(`{"path":`)
+	if raw["_raw_arguments"] != `{"path":` {
+		t.Fatalf("raw = %+v, want preserved raw arguments", raw)
+	}
+}

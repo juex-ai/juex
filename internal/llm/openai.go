@@ -107,17 +107,11 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 		out.Blocks = append(out.Blocks, Block{Type: BlockText, Text: choice.Message.Content})
 	}
 	for _, tc := range choice.Message.ToolCalls {
-		var input map[string]any
-		if tc.Function.Arguments != "" {
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
-				input = map[string]any{"_raw_arguments": tc.Function.Arguments}
-			}
-		}
 		out.Blocks = append(out.Blocks, Block{
 			Type:      BlockToolUse,
 			ToolUseID: tc.ID,
 			ToolName:  tc.Function.Name,
-			Input:     input,
+			Input:     parseToolArguments(tc.Function.Arguments),
 		})
 	}
 
@@ -251,6 +245,25 @@ func toolCallArguments(input map[string]any) string {
 		return "{}"
 	}
 	return string(argBytes)
+}
+
+func parseToolArguments(raw string) map[string]any {
+	if raw == "" {
+		return nil
+	}
+	rawBytes := []byte(raw)
+	var input map[string]any
+	if err := json.Unmarshal(rawBytes, &input); err == nil {
+		return input
+	}
+	var encoded string
+	if err := json.Unmarshal(rawBytes, &encoded); err == nil {
+		if err := json.Unmarshal([]byte(encoded), &input); err == nil {
+			return input
+		}
+		return map[string]any{"_raw_arguments": encoded}
+	}
+	return map[string]any{"_raw_arguments": raw}
 }
 
 // extractReasoningContent pulls a reasoning/thinking string out of a raw
