@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/session"
 )
@@ -83,6 +85,31 @@ func TestRunServesHTTPBeforeDrainingStartupMCPNotifications(t *testing.T) {
 	case <-provider.started:
 	case <-time.After(15 * time.Second):
 		t.Fatal("startup MCP notification did not reach provider")
+	}
+}
+
+func TestOpenSessionWaitsForInFlightMCPStartup(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	marker := filepath.Join(t.TempDir(), "tools-list-started")
+	mustWriteWebFakeMCPConfigEnv(t, work, false, map[string]string{
+		"JUEX_WEB_FAKE_MCP_LIST_DELAY_MS": "150",
+		"JUEX_WEB_FAKE_MCP_LIST_MARKER":   marker,
+	})
+
+	startErrCh := make(chan error, 1)
+	go func() { startErrCh <- srv.ensureMCPStarted(context.Background()) }()
+	waitForFile(t, marker)
+
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := as.app.Engine.Tools.Get("mcp__alpha__echo"); !ok {
+		t.Fatalf("session tools missing mcp__alpha__echo: %+v", as.app.Engine.Tools.List())
+	}
+	if err := <-startErrCh; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -178,6 +205,15 @@ func runWebFakeMCPServer() {
 				},
 			})
 		case "tools/list":
+			if marker := os.Getenv("JUEX_WEB_FAKE_MCP_LIST_MARKER"); marker != "" {
+				_ = os.WriteFile(marker, []byte("started"), 0o644)
+			}
+			if delay := os.Getenv("JUEX_WEB_FAKE_MCP_LIST_DELAY_MS"); delay != "" {
+				ms, _ := strconv.Atoi(delay)
+				if ms > 0 {
+					time.Sleep(time.Duration(ms) * time.Millisecond)
+				}
+			}
 			_ = enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      idVal,
@@ -221,9 +257,17 @@ func runWebFakeMCPServer() {
 
 func mustWriteWebFakeMCPConfig(t *testing.T, workDir string, notify bool) {
 	t.Helper()
+	mustWriteWebFakeMCPConfigEnv(t, workDir, notify, nil)
+}
+
+func mustWriteWebFakeMCPConfigEnv(t *testing.T, workDir string, notify bool, extraEnv map[string]string) {
+	t.Helper()
 	env := map[string]string{"JUEX_WEB_FAKE_MCP": "1"}
 	if notify {
 		env["JUEX_WEB_FAKE_MCP_NOTIFY"] = "1"
+	}
+	for k, v := range extraEnv {
+		env[k] = v
 	}
 	body, err := json.MarshalIndent(map[string]any{
 		"mcpServers": map[string]any{
@@ -237,6 +281,23 @@ func mustWriteWebFakeMCPConfig(t *testing.T, workDir string, notify bool) {
 		t.Fatal(err)
 	}
 	mustWriteRuntimeFile(t, filepath.Join(workDir, ".agents", "mcp.json"), string(body))
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", path)
+		case <-tick.C:
+		}
+	}
 }
 
 func seedWebSession(t *testing.T, srv *Server, text string) *session.Session {

@@ -49,9 +49,11 @@ type Server struct {
 	runtimeSkillLoader *skills.Loader
 	runtimeMCPErr      map[string]string
 
-	mcpMu      sync.Mutex
-	mcpStarted bool
-	mcpManager *mcp.Manager
+	mcpMu       sync.Mutex
+	mcpStarted  bool
+	mcpStarting chan struct{}
+	mcpStartErr error
+	mcpManager  *mcp.Manager
 }
 
 // activeSession wraps an app.App with the bookkeeping the web server
@@ -394,20 +396,47 @@ func hasConversation(dir string) bool {
 	return true
 }
 
-func (s *Server) ensureMCPStarted(ctx context.Context) error {
+func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 	s.mcpMu.Lock()
 	if s.mcpStarted {
+		starting := s.mcpStarting
 		s.mcpMu.Unlock()
-		return nil
+		if starting == nil {
+			return nil
+		}
+		select {
+		case <-starting:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		s.mcpMu.Lock()
+		defer s.mcpMu.Unlock()
+		return s.mcpStartErr
 	}
 	s.mcpStarted = true
+	s.mcpStartErr = nil
+	starting := make(chan struct{})
+	s.mcpStarting = starting
 	s.mcpMu.Unlock()
+	startupFinished := false
+	finishStartup := func(startErr error) {
+		s.mcpMu.Lock()
+		if startErr != nil {
+			s.mcpStarted = false
+		}
+		s.mcpStartErr = startErr
+		s.mcpStarting = nil
+		s.mcpMu.Unlock()
+		close(starting)
+	}
+	defer func() {
+		if !startupFinished {
+			finishStartup(err)
+		}
+	}()
 
 	mcpConfigs, err := s.loadMCPConfigs()
 	if err != nil {
-		s.mcpMu.Lock()
-		s.mcpStarted = false
-		s.mcpMu.Unlock()
 		return err
 	}
 	if len(mcpConfigs) == 0 {
@@ -449,6 +478,8 @@ func (s *Server) ensureMCPStarted(ctx context.Context) error {
 	s.mcpManager = mgr
 	s.mcpMu.Unlock()
 	ready.Store(true)
+	finishStartup(nil)
+	startupFinished = true
 	queuedMu.Lock()
 	pending := append([]mcp.Notification(nil), queued...)
 	queued = nil
