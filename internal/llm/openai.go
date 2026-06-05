@@ -251,12 +251,13 @@ func parseToolArguments(raw string) map[string]any {
 	if raw == "" {
 		return nil
 	}
+	rawBytes := []byte(raw)
 	var input map[string]any
-	if err := json.Unmarshal([]byte(raw), &input); err == nil {
+	if err := json.Unmarshal(rawBytes, &input); err == nil {
 		return input
 	}
 	var encoded string
-	if err := json.Unmarshal([]byte(raw), &encoded); err == nil {
+	if err := json.Unmarshal(rawBytes, &encoded); err == nil {
 		if err := json.Unmarshal([]byte(encoded), &input); err == nil {
 			return input
 		}
