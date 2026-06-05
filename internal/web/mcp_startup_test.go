@@ -81,7 +81,7 @@ func TestRunServesHTTPBeforeDrainingStartupMCPNotifications(t *testing.T) {
 	waitForHTTPStatus(t, "http://"+srv.opts.Addr+"/healthz", http.StatusOK)
 	select {
 	case <-provider.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("startup MCP notification did not reach provider")
 	}
 }

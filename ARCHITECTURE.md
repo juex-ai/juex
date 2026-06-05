@@ -247,7 +247,9 @@ strips the reserved field before invoking tools that do not declare their own
 `timeout` input. Tool timeouts are returned as ordinary error tool results so
 the agent can recover in the next model round. When a timed-out tool captured
 stdout or stderr before failing, a bounded copy of that output is preserved in
-the error tool result before the timeout detail.
+the error tool result before the timeout detail. On Unix, `bash` runs in its
+own process group so a timeout terminates descendant processes that still hold
+stdout or stderr pipes open.
 
 MCP servers are optional runtime extensions. Startup is attempted per
 configured server: servers that connect successfully register

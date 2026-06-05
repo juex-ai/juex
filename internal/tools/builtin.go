@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // RegisterBuiltins adds the builtin tool set: read / write / edit / bash / grep.
@@ -203,21 +202,16 @@ func bashTool(defaultCwd string) Tool {
 			if cwd == "" {
 				cwd = defaultCwd
 			}
-			timeoutSec, _ := toInt(in["timeout"])
-			if timeoutSec <= 0 {
-				timeoutSec = 60
-			}
-			c, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
-			defer cancel()
-			ec := exec.CommandContext(c, "bash", "-c", cmd)
+			ec := exec.CommandContext(ctx, "bash", "-c", cmd)
+			configureCommandForContext(ec)
 			if cwd != "" {
 				ec.Dir = cwd
 			}
 			out, err := ec.CombinedOutput()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return string(out), ctxErr
+			}
 			if err != nil {
-				if c.Err() != nil {
-					return string(out), c.Err()
-				}
 				return fmt.Sprintf("exit error: %s\n%s", err.Error(), string(out)), nil
 			}
 			return string(out), nil

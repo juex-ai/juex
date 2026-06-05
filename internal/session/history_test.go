@@ -67,6 +67,45 @@ func TestRecordHistoryConcurrentKeepsAllSessions(t *testing.T) {
 	}
 }
 
+func TestWithHistoryLockRemovesStaleLock(t *testing.T) {
+	oldTimeout := historyLockTimeout
+	oldStaleAfter := historyLockStaleAfter
+	oldPoll := historyLockPoll
+	historyLockTimeout = 500 * time.Millisecond
+	historyLockStaleAfter = 20 * time.Millisecond
+	historyLockPoll = 5 * time.Millisecond
+	t.Cleanup(func() {
+		historyLockTimeout = oldTimeout
+		historyLockStaleAfter = oldStaleAfter
+		historyLockPoll = oldPoll
+	})
+
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	lockPath := historyPath + ".lock"
+	if err := os.WriteFile(lockPath, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+
+	var called bool
+	if err := withHistoryLock(historyPath, func() error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("lock callback was not called")
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("lock file stat after callback = %v, want not exist", err)
+	}
+}
+
 func TestRecordHistoryUpsertsAndSetsActive(t *testing.T) {
 	root := t.TempDir()
 	historyPath := filepath.Join(root, "history.json")
