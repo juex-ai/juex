@@ -342,7 +342,10 @@ Each work directory has one active primary session recorded in
 new primary and switch active. Side sessions are durable and listed, but never
 become active and are not valid Web turn targets.
 App lifetimes acquire `.juex/sessions/<id>/session.lock` so two processes do
-not append to the same session concurrently.
+not append to the same session concurrently. Startup serializes lock cleanup
+with a short-lived guard file. If a leftover lock names a PID that is no longer
+running, or an unreadable lock is old enough to rule out an in-progress write,
+startup removes that stale lock and retries the atomic acquire.
 
 New web sessions are lazy for transcript files: `POST /api/sessions` allocates
 an in-memory primary session, records it as active, and only creates
