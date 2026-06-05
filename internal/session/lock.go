@@ -9,6 +9,9 @@ import (
 )
 
 const sessionLockFile = "session.lock"
+const sessionLockGuardFile = "session.lock.guard"
+
+const unreadableLockStaleAfter = 5 * time.Second
 
 type Lock struct {
 	path string
@@ -43,44 +46,103 @@ func AcquireSessionLock(dir, mode string) (*Lock, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, sessionLockFile)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	guard, err := acquireLockGuard(filepath.Join(dir, sessionLockGuardFile))
 	if err != nil {
-		if os.IsExist(err) {
-			return nil, &LockError{Path: path, Holder: readLockInfo(path)}
+		return nil, err
+	}
+	defer func() { _ = guard.Close() }()
+
+	path := filepath.Join(dir, sessionLockFile)
+	for attempt := 0; attempt < 2; attempt++ {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			if os.IsExist(err) {
+				if attempt == 0 {
+					cleared, clearErr := clearDeadProcessLock(path)
+					if clearErr != nil {
+						return nil, clearErr
+					}
+					if cleared {
+						continue
+					}
+				}
+				return nil, &LockError{Path: path, Holder: readLockInfo(path)}
+			}
+			return nil, err
 		}
-		return nil, err
+		info := LockInfo{
+			PID:       os.Getpid(),
+			Mode:      mode,
+			SessionID: filepath.Base(dir),
+			StartedAt: time.Now().UTC(),
+		}
+		enc := json.NewEncoder(f)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(info); err != nil {
+			f.Close()
+			_ = os.Remove(path)
+			return nil, err
+		}
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return nil, err
+		}
+		return &Lock{path: path}, nil
 	}
-	info := LockInfo{
-		PID:       os.Getpid(),
-		Mode:      mode,
-		SessionID: filepath.Base(dir),
-		StartedAt: time.Now().UTC(),
+	return nil, &LockError{Path: path, Holder: readLockInfo(path)}
+}
+
+func clearDeadProcessLock(path string) (bool, error) {
+	info, ok := readLockInfoFile(path)
+	if !ok || info.PID <= 0 {
+		return clearUnreadableLockIfStale(path)
 	}
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(info); err != nil {
-		f.Close()
-		_ = os.Remove(path)
-		return nil, err
+	alive, err := processExists(info.PID)
+	if err != nil || alive {
+		return false, nil
 	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
-		return nil, err
+	return removeLockFile(path)
+}
+
+func clearUnreadableLockIfStale(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
 	}
-	return &Lock{path: path}, nil
+	if time.Since(info.ModTime()) <= unreadableLockStaleAfter {
+		return false, nil
+	}
+	return removeLockFile(path)
+}
+
+func removeLockFile(path string) (bool, error) {
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func readLockInfo(path string) LockInfo {
+	info, _ := readLockInfoFile(path)
+	return info
+}
+
+func readLockInfoFile(path string) (LockInfo, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return LockInfo{}
+		return LockInfo{}, false
 	}
 	var info LockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return LockInfo{}
+		return LockInfo{}, false
 	}
-	return info
+	return info, true
 }
 
 func (l *Lock) Close() error {

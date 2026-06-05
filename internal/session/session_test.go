@@ -3,10 +3,13 @@ package session
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
@@ -78,6 +81,173 @@ func TestAcquireSessionLockConflictsUntilClosed(t *testing.T) {
 	if err := second.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAcquireSessionLockRemovesDeadPIDLock(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260529T120000-stalelock")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, sessionLockFile)
+	stale := LockInfo{
+		PID:       definitelyDeadPID(),
+		Mode:      "serve",
+		SessionID: filepath.Base(dir),
+		StartedAt: time.Now().Add(-time.Hour).UTC(),
+	}
+	data, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := AcquireSessionLock(dir, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lock.Close(); err != nil {
+			t.Fatalf("close lock: %v", err)
+		}
+	})
+
+	info := readLockInfo(path)
+	if info.PID != os.Getpid() || info.Mode != "resume" || info.SessionID != filepath.Base(dir) {
+		t.Fatalf("lock info = %+v, want current process resume lock", info)
+	}
+}
+
+func TestAcquireSessionLockStaleCleanupHasSingleWinner(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260529T120000-stalerace")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := LockInfo{
+		PID:       definitelyDeadPID(),
+		Mode:      "serve",
+		SessionID: filepath.Base(dir),
+		StartedAt: time.Now().Add(-time.Hour).UTC(),
+	}
+	data, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, sessionLockFile), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 16
+	type result struct {
+		lock *Lock
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan result, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			lock, err := AcquireSessionLock(dir, "resume")
+			results <- result{lock: lock, err: err}
+		}()
+	}
+	close(start)
+
+	successes := 0
+	conflicts := 0
+	timeout := time.After(5 * time.Second)
+	for i := 0; i < workers; i++ {
+		select {
+		case res := <-results:
+			if res.err == nil {
+				successes++
+				lock := res.lock
+				t.Cleanup(func() {
+					if err := lock.Close(); err != nil {
+						t.Fatalf("close lock: %v", err)
+					}
+				})
+				continue
+			}
+			var lockErr *LockError
+			if errors.As(res.err, &lockErr) {
+				conflicts++
+				continue
+			}
+			t.Fatalf("AcquireSessionLock err = %T %v, want nil or *LockError", res.err, res.err)
+		case <-timeout:
+			t.Fatal("timed out waiting for concurrent lock attempts")
+		}
+	}
+	if successes != 1 || conflicts != workers-1 {
+		t.Fatalf("successes=%d conflicts=%d, want 1 success and %d conflicts", successes, conflicts, workers-1)
+	}
+}
+
+func TestAcquireSessionLockRemovesOldUnreadableLock(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260529T120000-badlock")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, sessionLockFile)
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-unreadableLockStaleAfter - time.Second)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := AcquireSessionLock(dir, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lock.Close(); err != nil {
+			t.Fatalf("close lock: %v", err)
+		}
+	})
+
+	info := readLockInfo(path)
+	if info.PID != os.Getpid() || info.Mode != "resume" || info.SessionID != filepath.Base(dir) {
+		t.Fatalf("lock info = %+v, want current process resume lock", info)
+	}
+}
+
+func TestAcquireSessionLockKeepsFreshUnreadableLock(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260529T120000-freshbadlock")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, sessionLockFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := AcquireSessionLock(dir, "resume")
+	if err == nil {
+		t.Fatal("expected lock conflict")
+	}
+	var lockErr *LockError
+	if !errors.As(err, &lockErr) {
+		t.Fatalf("err = %T %v, want *LockError", err, err)
+	}
+}
+
+func definitelyDeadPID() int {
+	pid := os.Getpid() + 1_000_000
+	for i := 0; i < 1000; i++ {
+		candidate := pid + i
+		alive, err := processExists(candidate)
+		if err != nil || !alive {
+			return candidate
+		}
+	}
+	return pid
 }
 
 func TestSession_AppendNormalizesNilBlocks(t *testing.T) {
