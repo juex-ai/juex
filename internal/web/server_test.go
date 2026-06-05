@@ -105,20 +105,23 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("server returned before cancel: %v", err)
+	var h session.History
+	deadline := time.After(5 * time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for h.Active == nil {
+		select {
+		case <-deadline:
+			t.Fatalf("active session = %+v, want active primary", h.Active)
+		case <-tick.C:
+			var err error
+			h, err = session.LoadHistory(srv.opts.Cfg.HistoryPath())
+			if err != nil {
+				continue
+			}
 		}
-		t.Fatal("server returned before cancel")
-	case <-time.After(100 * time.Millisecond):
 	}
-
-	h, err := session.LoadHistory(srv.opts.Cfg.HistoryPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.Active == nil || h.Active.Kind != session.KindPrimary || !h.Active.Active {
+	if h.Active.Kind != session.KindPrimary || !h.Active.Active {
 		t.Fatalf("active session = %+v, want active primary", h.Active)
 	}
 	if _, ok := srv.sessions.Load(h.Active.ID); ok {

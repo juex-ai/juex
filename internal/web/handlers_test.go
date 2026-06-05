@@ -1146,8 +1146,10 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 		t.Errorf("missing turn_id")
 	}
 
-	// Wait briefly for the goroutine to finish (stub provider returns immediately).
-	deadline := time.Now().Add(2 * time.Second)
+	// Wait for the goroutine to finish. Windows race builds can take a few
+	// seconds to schedule the turn even though the stub provider returns
+	// immediately.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
 		if err == nil {
