@@ -299,7 +299,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		if msg.Model == "" && e.Provider != nil {
 			msg.Model = e.Provider.Name()
 		}
-		msg.Blocks = annotateToolTimeouts(msg.Blocks)
+		msg.Blocks = prepareToolInputs(msg.Blocks)
 		var contextUsage *llm.ContextUsage
 		if !resp.Usage.IsZero() {
 			snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, promptSections, tools, requestHistory)
@@ -316,9 +316,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			"usage":       resp.Usage,
 			"token_usage": totalUsage,
 			"blocks":      msg.Blocks,
-			"text":        responseText(resp.Message),
-			"thinking":    responseThinking(resp.Message),
-			"tool_calls":  responseToolCalls(resp.Message),
+			"text":        responseText(msg),
+			"thinking":    responseThinking(msg),
+			"tool_calls":  responseToolCalls(msg),
 			"model":       msg.Model,
 		}
 		if contextUsage != nil {
@@ -571,13 +571,14 @@ func responseToolCalls(m llm.Message) []map[string]any {
 	return out
 }
 
-func annotateToolTimeouts(blocks []llm.Block) []llm.Block {
+func prepareToolInputs(blocks []llm.Block) []llm.Block {
 	if len(blocks) == 0 {
 		return blocks
 	}
 	out := append([]llm.Block(nil), blocks...)
 	for i := range out {
 		if out[i].Type == llm.BlockToolUse {
+			out[i].Input = tools.NormalizeCallInput(out[i].Input)
 			out[i].TimeoutSeconds = tools.CallTimeoutSeconds(out[i].Input)
 		}
 	}
