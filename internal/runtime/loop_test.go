@@ -1303,6 +1303,83 @@ func TestTurn_BuiltinBashTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 	}
 }
 
+func TestTurn_BuiltinBashRawArgumentsNormalizeAndContinue(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("bash tool requires bash; skipping on windows")
+	}
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "bash_raw", ToolName: "bash", Input: map[string]any{
+				"_raw_arguments": `{"cmd":"printf raw-ok","timeout":2}`,
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, true)
+
+	var requestedPayload map[string]any
+	bus.Subscribe("tool.requested", func(e events.Event) {
+		requestedPayload, _ = e.Payload.(map[string]any)
+	})
+	var respondedPayload map[string]any
+	bus.Subscribe("llm.responded", func(e events.Event) {
+		if respondedPayload == nil {
+			respondedPayload, _ = e.Payload.(map[string]any)
+		}
+	})
+
+	out, err := eng.Turn(context.Background(), "run bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "recovered" {
+		t.Fatalf("out = %q, want recovered", out)
+	}
+	assistant := eng.Session.History[1]
+	if assistant.Role != llm.RoleAssistant || len(assistant.Blocks) != 1 {
+		t.Fatalf("assistant message wrong: %+v", assistant)
+	}
+	input := assistant.Blocks[0].Input
+	if input["cmd"] != "printf raw-ok" || input["timeout"] != 2.0 {
+		t.Fatalf("assistant tool input = %+v, want normalized command and timeout", input)
+	}
+	if _, ok := input["_raw_arguments"]; ok {
+		t.Fatalf("assistant tool input kept raw arguments: %+v", input)
+	}
+	if assistant.Blocks[0].TimeoutSeconds != 2 {
+		t.Fatalf("assistant timeout = %d, want 2", assistant.Blocks[0].TimeoutSeconds)
+	}
+	respondedCalls, ok := respondedPayload["tool_calls"].([]map[string]any)
+	if !ok || len(respondedCalls) != 1 {
+		t.Fatalf("responded tool_calls = %+v, want one tool call", respondedPayload["tool_calls"])
+	}
+	respondedInput, _ := respondedCalls[0]["input"].(map[string]any)
+	if respondedInput["cmd"] != "printf raw-ok" {
+		t.Fatalf("responded tool input = %+v, want normalized command", respondedInput)
+	}
+	if got := respondedCalls[0]["timeout_seconds"]; got != 2 {
+		t.Fatalf("responded timeout = %v, want 2", got)
+	}
+	requestedInput, _ := requestedPayload["input"].(map[string]any)
+	if requestedInput["cmd"] != "printf raw-ok" {
+		t.Fatalf("requested input = %+v, want normalized command", requestedInput)
+	}
+	if got := requestedPayload["timeout_seconds"]; got != 2 {
+		t.Fatalf("requested timeout = %v, want 2", got)
+	}
+	result := eng.Session.History[2]
+	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
+		t.Fatalf("tool result message wrong: %+v", result)
+	}
+	block := result.Blocks[0]
+	if block.Type != llm.BlockToolResult || block.IsError {
+		t.Fatalf("tool result block = %+v, want successful result", block)
+	}
+	if block.Content != "raw-ok" {
+		t.Fatalf("tool result content = %q, want raw-ok", block.Content)
+	}
+}
+
 func TestToolErrorContentTruncatesLargeOutput(t *testing.T) {
 	out := strings.Repeat("x", 40*1024)
 	got := toolErrorContent(out, errors.New("tools: bash timed out after 1s"))

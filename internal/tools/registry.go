@@ -4,6 +4,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -107,6 +108,7 @@ func (r *Registry) Call(ctx context.Context, name string, input map[string]any) 
 }
 
 func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[string]any) (string, CallInfo, error) {
+	input = NormalizeCallInput(input)
 	timeoutSeconds := CallTimeoutSeconds(input)
 	info := CallInfo{TimeoutSeconds: timeoutSeconds}
 	t, ok := r.Get(name)
@@ -127,6 +129,50 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		return out, info, fmt.Errorf("tools: %s timed out after %ds", name, timeoutSeconds)
 	}
 	return out, info, err
+}
+
+// NormalizeCallInput decodes OpenAI-compatible fallback arguments before a
+// tool sees them. Provider adapters should normally return structured input,
+// but this keeps leaked `_raw_arguments` payloads from failing builtin tools.
+func NormalizeCallInput(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	raw, ok := input["_raw_arguments"].(string)
+	if !ok || raw == "" {
+		return input
+	}
+	decoded, ok := decodeRawArguments(raw)
+	if !ok {
+		return input
+	}
+	out := make(map[string]any, len(decoded)+len(input))
+	for k, v := range decoded {
+		out[k] = v
+	}
+	for k, v := range input {
+		if k == "_raw_arguments" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func decodeRawArguments(raw string) (map[string]any, bool) {
+	rawBytes := []byte(raw)
+	var decoded map[string]any
+	if err := json.Unmarshal(rawBytes, &decoded); err == nil && decoded != nil {
+		return decoded, true
+	}
+	var encoded string
+	if err := json.Unmarshal(rawBytes, &encoded); err != nil || encoded == "" {
+		return nil, false
+	}
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil || decoded == nil {
+		return nil, false
+	}
+	return decoded, true
 }
 
 func CallTimeoutSeconds(input map[string]any) int {

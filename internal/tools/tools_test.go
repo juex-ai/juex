@@ -162,6 +162,47 @@ func TestRegistry_CallWithInfoAppliesTimeoutAndStripsReservedInput(t *testing.T)
 	}
 }
 
+func TestRegistry_CallWithInfoParsesRawArgumentsBeforeDispatch(t *testing.T) {
+	r := NewRegistry()
+	seen := make(chan map[string]any, 1)
+	if err := r.Register(Tool{
+		Name: "echo",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"timeout": map[string]any{"type": "integer"},
+			},
+		},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			seen <- in
+			return "ok", nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, info, err := r.CallWithInfo(context.Background(), "echo", map[string]any{
+		"_raw_arguments": `{"value":"x","timeout":2}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" {
+		t.Fatalf("out = %q, want ok", out)
+	}
+	if info.TimeoutSeconds != 2 {
+		t.Fatalf("timeout = %d, want 2", info.TimeoutSeconds)
+	}
+	input := <-seen
+	timeout, ok := toInt(input["timeout"])
+	if input["value"] != "x" || !ok || timeout != 2 {
+		t.Fatalf("handler input = %+v, want decoded raw arguments", input)
+	}
+	if _, ok := input["_raw_arguments"]; ok {
+		t.Fatalf("raw arguments leaked to handler: %+v", input)
+	}
+}
+
 func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, "")
@@ -191,6 +232,31 @@ func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "hello Juex" {
 		t.Fatalf("after edit: %q", string(data))
+	}
+}
+
+func TestBuiltins_BashAcceptsRawArgumentsFallback(t *testing.T) {
+	skipIfWindows(t)
+	r := NewRegistry()
+	RegisterBuiltins(r, "")
+
+	for name, input := range map[string]map[string]any{
+		"object": {
+			"_raw_arguments": `{"cmd":"printf raw-ok"}`,
+		},
+		"double_encoded": {
+			"_raw_arguments": `"{\"cmd\":\"printf raw-ok\"}"`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, err := r.Call(context.Background(), "bash", input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out != "raw-ok" {
+				t.Fatalf("out = %q, want raw-ok", out)
+			}
+		})
 	}
 }
 
