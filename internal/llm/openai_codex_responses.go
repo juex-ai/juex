@@ -201,17 +201,11 @@ func (p *openAICodexResponsesProvider) responseFromCodex(resp codexWireResponse)
 			}
 		case "function_call":
 			stop = StopToolUse
-			var input map[string]any
-			if item.Arguments != "" {
-				if err := json.Unmarshal([]byte(item.Arguments), &input); err != nil {
-					input = map[string]any{"_raw_arguments": item.Arguments}
-				}
-			}
 			out.Blocks = append(out.Blocks, Block{
 				Type:      BlockToolUse,
 				ToolUseID: item.CallID,
 				ToolName:  item.Name,
-				Input:     input,
+				Input:     parseToolArguments(item.Arguments),
 			})
 		}
 	}
