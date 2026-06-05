@@ -65,7 +65,8 @@ it cannot shrink the incoming user message itself. A pasted log or generated
 prompt can therefore produce a provider request much larger than the configured
 Juex context window even when compaction runs successfully.
 
-Add a runtime-owned materialization layer for large input-like content:
+The runtime-owned materialization layer records artifact metadata directly on
+the affected block:
 
 ```go
 type ContextArtifactProjection struct {
@@ -76,21 +77,20 @@ type ContextArtifactProjection struct {
     OriginalBytes int
     StoredPath    string
     SHA256        string
-    Preview       string
     HeadBytes     int
     TailBytes     int
     Truncated     bool
 }
 ```
 
-When a tool output exceeds `context.tool_result_inline_max_bytes`, Juex writes
-the full output to:
+When a tool output exceeds `compaction.tool_result_inline_max_bytes`, Juex
+writes the full output to:
 
 ```text
 .juex/artifacts/tool-results/<session-id>/<tool-use-id>.txt
 ```
 
-When a user input exceeds `context.user_input_inline_max_bytes`, Juex writes
+When a user input exceeds `compaction.user_input_inline_max_bytes`, Juex writes
 the full input to:
 
 ```text
@@ -120,15 +120,13 @@ byte-for-byte. This protects prefix-cache hits.
 Default policy:
 
 ```yaml
-context:
+compaction:
   user_input_inline_max_bytes: 65536
+  user_input_preview_head_bytes: 8192
+  user_input_preview_tail_bytes: 8192
   tool_result_inline_max_bytes: 32768
   tool_result_preview_head_bytes: 8192
   tool_result_preview_tail_bytes: 8192
-  user_input_preview_head_bytes: 8192
-  user_input_preview_tail_bytes: 8192
-  tool_result_artifact_dir: ".juex/artifacts/tool-results"
-  user_input_artifact_dir: ".juex/artifacts/user-inputs"
 ```
 
 Rationale:
@@ -148,11 +146,22 @@ latest compact summary + retained tail + messages after compact + incoming
 V2 extends this with a projection pass:
 
 ```go
-type ContextProjectionPolicy struct {
-    ToolResultInlineMaxBytes int
-    AssistantTextMaxBytes    int
-    ReasoningReplayMaxBytes  int
-    CacheStablePrefix        bool
+// internal/runtime/compaction_policy.go
+type compactionPolicy struct {
+    Enabled                    bool
+    ReserveTokens              int
+    KeepRecentTokens           int
+    TailTurns                  int
+    SummaryMaxTokens           int
+    ToolResultMaxChars         int
+    UserInputInlineMaxBytes    int
+    UserInputPreviewHeadBytes  int
+    UserInputPreviewTailBytes  int
+    ToolResultInlineMaxBytes   int
+    ToolResultPreviewHeadBytes int
+    ToolResultPreviewTailBytes int
+    MaxAutoFailures            int
+    TriggerTokens              int
 }
 ```
 
@@ -164,8 +173,8 @@ Projection rules:
 3. Keep recent tail raw until it crosses a configured tail budget.
 4. Keep compact summaries short and structured; do not ask them to carry system
    instructions, AGENTS.md, tool schemas, or cwd. Those are rebuilt.
-5. Older assistant reasoning is replayed only when provider capabilities require
-   it and the block has a replay signature or encrypted content.
+5. Assistant text/reasoning projection is future work. Today, reasoning replay
+   is controlled by provider capabilities and existing block metadata.
 
 This remains a runtime responsibility, not a provider responsibility.
 
@@ -175,18 +184,12 @@ Juex should make prompt stability explicit. Prompt sections already have keys in
 `internal/prompt`; provider adapters should receive a cache plan derived from
 those keys.
 
-Add optional request options:
+The current request options are:
 
 ```go
 type CachePolicy struct {
     StablePrefixKey string
-    Retention       string // "", "in_memory", "24h", "5m", "1h"
-    Breakpoints     []CacheBreakpoint
-}
-
-type CacheBreakpoint struct {
-    AfterSection string
-    TTL          string
+    Retention       string
 }
 
 type CompleteOptions struct {
@@ -199,8 +202,7 @@ type CompleteOptions struct {
 Provider mapping:
 
 - `openai/chat`, `openai/responses`, and `openai-codex/responses`: set
-  `prompt_cache_key` when supported, set `prompt_cache_retention` where the
-  protocol exposes it, and record provider cached-token details.
+  `prompt_cache_key` when supported and record provider cached-token details.
 - `anthropic/messages`: place `cache_control` breakpoints at stable section
   boundaries. The current adapter marks the system prompt and the last tool
   definition when a cache policy is present, and records
