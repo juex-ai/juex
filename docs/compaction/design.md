@@ -329,7 +329,8 @@ Currently emitted events:
   - `context_window`, `reserve_tokens`, `keep_recent_tokens`, `tail_turns`
 - `context.compact.completed`
   - `message_id`, `reason`, `auto`
-  - `tokens_before`, `tokens_after`, `summary_chars`, `summary_model`
+  - `estimated_tokens`, `tokens_before`, `tokens_after`, `summary_chars`,
+    `summary_model`
   - `tail_start_message_id`, `context_window`, `reserve_tokens`,
     `keep_recent_tokens`
 - `context.compact.errored` and `context.compact.skipped`
