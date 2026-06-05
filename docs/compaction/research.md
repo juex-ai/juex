@@ -4,14 +4,16 @@ Date: 2026-06-04
 
 This note compares Juex's current compaction behavior with the strongest
 patterns found in Codex, Claude Code, and other context-engineering projects.
-It is research for the next compaction iteration, not a changelog.
+It is research for the next compaction iteration, not a changelog. For the
+implemented V2 details, see `docs/compaction/design.md`.
 
 ## Current Juex Baseline
 
-Juex keeps the full transcript append-only in
-`.juex/sessions/<id>/conversation.jsonl`. Compaction appends a
-`MessageKindCompact` marker with typed metadata, then active provider context
-is assembled as:
+Juex keeps local session state recoverable under `.juex/`: ordinary transcript
+rows live in `.juex/sessions/<id>/conversation.jsonl`, while oversized user
+inputs and tool results are materialized under `.juex/artifacts/` before they
+reach provider context. Compaction appends a `MessageKindCompact` marker with
+typed metadata, then active provider context is assembled as:
 
 ```text
 latest compact summary
@@ -20,6 +22,10 @@ latest compact summary
 + incoming message
 ```
 
+That active context is then projected before provider calls. Oversized user
+input and tool-result blocks are replaced with stable provider-visible
+previews that include a path, byte count, SHA-256, and head/tail excerpt.
+
 The implementation is concentrated in:
 
 - `internal/runtime/compact.go`
@@ -27,31 +33,42 @@ The implementation is concentrated in:
 - `internal/runtime/compaction_select.go`
 - `internal/runtime/compaction_summary.go`
 - `internal/runtime/active_context.go`
+- `internal/runtime/context_projection.go`
+- `internal/runtime/context_usage.go`
 
 The current strong points are:
 
-- Full local history is preserved.
+- Full recoverable session content is preserved in transcript rows or
+  artifacts.
 - Explicit compact metadata records the boundary and token estimates.
 - Recent tail retention avoids relying only on a natural-language summary.
 - Tool-use/tool-result pairing is protected when choosing a cut point.
+- Oversized user inputs and successful tool outputs are externalized before
+  provider calls, with stable artifact previews persisted in the transcript.
 - Overflow errors compact and retry once.
 - Compaction summary requests are serialized as one bounded user message and
   capped at 16k estimated request tokens so the recovery request does not time
   out on very large histories.
+- OpenAI-compatible providers receive a stable prompt-cache key where the
+  adapter supports it; Anthropic receives ephemeral cache-control breakpoints
+  on stable prompt/tool sections.
+- Provider-reported cached input tokens are recorded in usage/context events
+  when available.
+- Automatic compaction has a consecutive-failure circuit breaker, while MCP
+  notification turns can continue after a proactive compact failure.
 
 The current gaps are:
 
-- Large successful tool outputs are appended verbatim. Only timed-out tool
-  errors are bounded before entering history.
-- Old cached prefixes are mutated only at full compaction boundaries; there is
-  no smaller stable projection layer for tool results, reasoning blocks, or
-  stale assistant messages.
-- Provider adapters do not expose prompt-cache keys, cache-control breakpoints,
-  prompt-cache retention, or native compaction as first-class capabilities.
+- Provider-native Responses compaction is not implemented yet.
 - Auto-compaction uses total active-context size, not growth after a stable
   prefix baseline, so large system/tool prefixes can make follow-up compacts
   happen too frequently.
-- Compaction quality is not scored against a repeatable long-context benchmark.
+- Assistant text/reasoning block projection and deferred MCP tool definition
+  loading are still future work.
+- Prompt-cache retention policy is supported by some adapters but is not yet a
+  runtime-level tuning knob.
+- The live model scorecard needs a refresh after each major context-management
+  change so cache ratios and quality regressions are visible.
 
 ## OpenAI / Codex Patterns
 
@@ -166,7 +183,3 @@ For Juex this suggests a provider-neutral cache contract:
   <https://platform.claude.com/docs/en/build-with-claude/prompt-caching>
 - DeepSeek-Reasonix README:
   <https://github.com/esengine/DeepSeek-Reasonix>
-- Local knowledge-base note:
-  `Research/everyclaw/Claude Code 与 Codex 上下文压缩机制深度对比：源码级解析.md`
-- Local knowledge-base note:
-  `Research/everyclaw/万字长文🏃为什么 Codex 上下文压缩几十次也不降智？从源码到黑盒的深度调研.md`

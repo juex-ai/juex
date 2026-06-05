@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -496,48 +497,10 @@ func TestPostTurn_UnknownSlashStartsAgentTurn(t *testing.T) {
 		t.Fatal("missing turn id")
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if show.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(show.Body)
-			show.Body.Close()
-			t.Fatalf("status = %d body = %s", show.StatusCode, body)
-		}
-		var parsed struct {
-			Messages []struct {
-				Role   string `json:"role"`
-				Blocks []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"blocks"`
-			} `json:"messages"`
-		}
-		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
-			show.Body.Close()
-			t.Fatal(err)
-		}
-		show.Body.Close()
-		var sawUser, sawAssistant bool
-		for _, msg := range parsed.Messages {
-			for _, block := range msg.Blocks {
-				if msg.Role == "user" && block.Type == "text" && block.Text == "/bogus" {
-					sawUser = true
-				}
-				if msg.Role == "assistant" && block.Type == "text" && block.Text == "ack" {
-					sawAssistant = true
-				}
-			}
-		}
-		if sawUser && sawAssistant {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("timed out waiting for unknown slash prompt to be handled as a normal turn")
+	waitForHTTPTranscript(t, ts.URL, c.ID, turn.TurnID, 30*time.Second, "unknown slash prompt to be handled as a normal turn", func(messages []testTranscriptMessage) bool {
+		return transcriptContainsRoleText(messages, "user", "/bogus") &&
+			transcriptContainsRoleText(messages, "assistant", "ack")
+	})
 }
 
 func TestPostTurn_CompactSlashConflictsWhileRunning(t *testing.T) {
@@ -676,36 +639,13 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 		t.Fatal("compact request did not finish")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var parsed struct {
-			Messages []struct {
-				Role   string `json:"role"`
-				Blocks []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"blocks"`
-			} `json:"messages"`
-		}
-		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
-			show.Body.Close()
-			t.Fatal(err)
-		}
-		show.Body.Close()
-		if transcriptContains(parsed.Messages, "after please") && transcriptContains(parsed.Messages, "after compact") {
-			secondHistory := prov.history(1)
-			if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "after please" {
-				t.Fatalf("second provider history = %+v", secondHistory)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	waitForHTTPTranscript(t, ts.URL, c.ID, "", 30*time.Second, "compact queued turn", func(messages []testTranscriptMessage) bool {
+		return transcriptContains(messages, "after please") && transcriptContains(messages, "after compact")
+	})
+	secondHistory := prov.history(1)
+	if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "after please" {
+		t.Fatalf("second provider history = %+v", secondHistory)
 	}
-	t.Fatal("timed out waiting for compact queued turn")
 }
 
 type pendingProvider struct {
@@ -843,36 +783,13 @@ func TestPostTurn_QueuesWhileRunning(t *testing.T) {
 	}
 
 	close(prov.release)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var parsed struct {
-			Messages []struct {
-				Role   string `json:"role"`
-				Blocks []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"blocks"`
-			} `json:"messages"`
-		}
-		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
-			show.Body.Close()
-			t.Fatal(err)
-		}
-		show.Body.Close()
-		if transcriptContains(parsed.Messages, "follow up") && transcriptContains(parsed.Messages, "second") {
-			secondHistory := prov.history(1)
-			if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "follow up" {
-				t.Fatalf("second provider history = %+v", secondHistory)
-			}
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	waitForHTTPTranscript(t, ts.URL, c.ID, firstTurn.TurnID, 30*time.Second, "queued input transcript", func(messages []testTranscriptMessage) bool {
+		return transcriptContains(messages, "follow up") && transcriptContains(messages, "second")
+	})
+	secondHistory := prov.history(1)
+	if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "follow up" {
+		t.Fatalf("second provider history = %+v", secondHistory)
 	}
-	t.Fatal("timed out waiting for queued input transcript")
 }
 
 func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {
@@ -936,13 +853,17 @@ func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {
 	close(prov.release)
 }
 
-func transcriptContains(messages []struct {
-	Role   string `json:"role"`
-	Blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"blocks"`
-}, text string) bool {
+type testTranscriptBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type testTranscriptMessage struct {
+	Role   string                `json:"role"`
+	Blocks []testTranscriptBlock `json:"blocks"`
+}
+
+func transcriptContains(messages []testTranscriptMessage, text string) bool {
 	for _, msg := range messages {
 		for _, block := range msg.Blocks {
 			if block.Type == "text" && block.Text == text {
@@ -951,6 +872,91 @@ func transcriptContains(messages []struct {
 		}
 	}
 	return false
+}
+
+func transcriptContainsRoleText(messages []testTranscriptMessage, role, text string) bool {
+	for _, msg := range messages {
+		if msg.Role != role {
+			continue
+		}
+		for _, block := range msg.Blocks {
+			if block.Type == "text" && block.Text == text {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func waitForHTTPTranscript(t *testing.T, baseURL, sessionID, turnID string, timeout time.Duration, label string, match func([]testTranscriptMessage) bool) {
+	t.Helper()
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+	var lastErr, lastState string
+	var lastMessages []testTranscriptMessage
+	for time.Now().Before(deadline) {
+		messages, err := fetchHTTPTranscript(client, baseURL, sessionID)
+		if err != nil {
+			lastErr = err.Error()
+		} else {
+			lastMessages = messages
+			if match(messages) {
+				return
+			}
+		}
+		if turnID != "" {
+			state, turnErr, err := fetchTurnState(client, baseURL, sessionID, turnID)
+			if err != nil {
+				lastState = err.Error()
+			} else {
+				lastState = state
+				if state == "errored" {
+					t.Fatalf("turn %s errored while waiting for %s: %s", turnID, label, turnErr)
+				}
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s; last_state=%q last_error=%q last_messages=%+v", label, lastState, lastErr, lastMessages)
+}
+
+func fetchHTTPTranscript(client *http.Client, baseURL, sessionID string) ([]testTranscriptMessage, error) {
+	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("session status=%d body=%s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Messages []testTranscriptMessage `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Messages, nil
+}
+
+func fetchTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {
+	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/turns/" + turnID)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("turn status=%d body=%s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		State string `json:"state"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", "", err
+	}
+	return parsed.State, parsed.Error, nil
 }
 
 func TestGetSessionContext(t *testing.T) {

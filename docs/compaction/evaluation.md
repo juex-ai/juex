@@ -143,16 +143,16 @@ and tool results before provider calls, then records provider cached-token
 details when available. Re-run the live matrix after context-projection changes
 to refresh the score table and cache ratios.
 
-## Future Automated Regression
+## Automated Regression
 
-Add a non-live quick test with a fake provider that:
+Normal `make test` covers the non-live regression shape with fake providers:
 
-- Uses `ContextWindow=32000`.
-- Seeds enough history to trigger auto-compaction.
-- Verifies compaction request tokens stay bounded.
-- Verifies the active context contains the compact marker plus recent tail.
-- Verifies oversized user inputs and tool results are externalized before
-  provider requests.
+- Small-context auto-compaction and compact-marker active context.
+- Bounded compaction summary requests.
+- Oversized user-input and tool-result externalization before provider
+  requests.
+- Context-usage accounting for compact summaries and artifact references.
 
-This quick test should run in normal `make test`. Live model scoring remains an
-operator-triggered evaluation because it uses credentials and has variable cost.
+Keep adding non-live tests here for deterministic runtime behavior. Live model
+scoring remains an operator-triggered evaluation because it uses credentials
+and has variable cost.

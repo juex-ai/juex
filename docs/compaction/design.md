@@ -318,27 +318,48 @@ rebuilt from source.
 
 ## Observability
 
-Add or extend events:
+Currently emitted events:
 
 - `context.projection.applied`
+  - `user_inputs_externalized`
   - `tool_results_externalized`
   - `bytes_externalized`
-  - `projected_tokens`
 - `context.compact.started`
-  - existing fields plus `trigger_scope`, `growth_tokens`
+  - `reason`, `auto`, `estimated_tokens`, `tokens_before`
+  - `context_window`, `reserve_tokens`, `keep_recent_tokens`, `tail_turns`
 - `context.compact.completed`
-  - existing fields plus `strategy`, `cached_input_tokens`
+  - `message_id`, `reason`, `auto`
+  - `estimated_tokens`, `tokens_before`, `tokens_after`, `summary_chars`,
+    `summary_model`
+  - `tail_start_message_id`, `context_window`, `reserve_tokens`,
+    `keep_recent_tokens`
+- `context.compact.errored` and `context.compact.skipped`
+  - compact errors and automatic failure-circuit-breaker state
 - `llm.responded`
-  - provider cached-token metrics when available
+  - response usage, cumulative token usage, model, blocks, and optional
+    `context_usage`
 
-Session `ContextUsage` should record:
+Provider cached-token metrics are carried in `Usage.CachedInputTokens`,
+`ContextUsage.CachedInputTokens`, and `llm.responded` usage payloads when the
+provider exposes them.
+
+Planned event extensions:
+
+- `projected_tokens` on `context.projection.applied`
+- `trigger_scope` and `growth_tokens` on `context.compact.started`
+- `strategy` and direct `cached_input_tokens` on `context.compact.completed`
+
+Session `ContextUsage` records:
 
 - `system_prompt`
-- `tools`
+- `system_tools`
+- `mcp_tools`
+- `memory_files`
+- `skills`
 - `compact_summary`
-- `retained_tail`
-- `messages_after_compact`
-- `incoming`
+- `context_artifacts`
+- `messages`
+- `response`
 - `cached_input_tokens`
 
 ## Evaluation Requirements
