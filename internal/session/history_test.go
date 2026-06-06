@@ -106,6 +106,23 @@ func TestWithHistoryLockRemovesStaleLock(t *testing.T) {
 	}
 }
 
+func TestAtomicWriteFileOverwritesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.json")
+	if err := atomicWriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(path, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new\n" {
+		t.Fatalf("file content = %q, want new", got)
+	}
+}
+
 func TestRecordHistoryUpsertsAndSetsActive(t *testing.T) {
 	root := t.TempDir()
 	historyPath := filepath.Join(root, "history.json")
