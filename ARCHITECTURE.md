@@ -102,20 +102,51 @@ const (
 )
 
 type Block struct {
-    Type      BlockType
-    Text      string
-    ToolUseID string
-    ToolName  string
-    Input     map[string]any
-    Content   string
-    IsError   bool
-    Signature string   // anthropic thinking-block signature
-    Redacted  bool     // anthropic redacted_thinking
+    Type           BlockType
+    Text           string
+    ToolUseID      string
+    ToolName       string
+    Input          map[string]any
+    TimeoutSeconds int    // runtime-applied tool timeout for UI/status
+    Content        string
+    IsError        bool
+    Signature      string // anthropic thinking-block signature
+    Redacted       bool   // provider-redacted reasoning content
+    Artifact       *ContextArtifactProjection
+}
+
+type ContextArtifactProjection struct {
+    SourceKind    string // "user_input" | "tool_result"
+    MessageID     string
+    ToolUseID     string
+    ToolName      string
+    OriginalBytes int
+    StoredPath    string
+    SHA256        string
+    HeadBytes     int
+    TailBytes     int
+    Truncated     bool
 }
 
 type Message struct {
-    Role         Role
-    Blocks       []Block
+    ID         string
+    Role       Role
+    Blocks     []Block
+    Kind       string // "" | "mcp_event" | "compact"
+    Model      string
+    Compaction *CompactionMetadata
+}
+
+type CompactionMetadata struct {
+    Auto               bool
+    Reason             string
+    PreviousSummaryID  string
+    FirstKeptMessageID string
+    TailStartMessageID string
+    TokensBefore       int
+    TokensAfter        int
+    SummaryChars       int
+    SummaryModel       string
 }
 
 type ContextUsage struct {
@@ -174,6 +205,21 @@ type Provider interface {
     Name() string
     Complete(ctx context.Context, sys string, history []Message, tools []ToolSpec) (Response, error)
 }
+
+type CompleteOptions struct {
+    Purpose         string
+    MaxOutputTokens int
+    CachePolicy     CachePolicy
+}
+
+type CachePolicy struct {
+    StablePrefixKey string
+    Retention       string
+}
+
+type ProviderWithOptions interface {
+    CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error)
+}
 ```
 
 Provider profiles resolve a user config into one wire protocol, a small preset,
@@ -222,6 +268,7 @@ func (r *Registry) Register(t Tool) error
 func (r *Registry) List() []Tool
 func (r *Registry) Specs() []llm.ToolSpec
 func (r *Registry) Call(ctx, name, input) (string, error)
+func (r *Registry) CallWithInfo(ctx, name, input) (string, CallInfo, error)
 ```
 
 Builtin set (5 file/exec + 3 memory). Skills are NOT a tool — they are
@@ -250,6 +297,12 @@ stdout or stderr before failing, a bounded copy of that output is preserved in
 the error tool result before the timeout detail. On Unix, `bash` runs in its
 own process group so a timeout terminates descendant processes that still hold
 stdout or stderr pipes open.
+
+Provider adapters should normally return structured tool input. The registry
+still normalizes leaked OpenAI-compatible `_raw_arguments` payloads, including
+double-encoded JSON strings, before timeout handling and before calling the
+tool handler. This keeps builtin tools working when an endpoint exposes raw
+argument text instead of parsed JSON.
 
 MCP servers are optional runtime extensions. Startup is attempted per
 configured server: servers that connect successfully register
@@ -382,9 +435,11 @@ func (a *App) Close() error
 
 `run` and `repl` create an app-local MCP manager because each command owns one
 runtime process and one active app. `serve` first ensures `history.active` has
-an active primary session record, then creates a process-scoped MCP manager at
-server startup. Each session app registers proxy tool handlers against that
-shared manager instead of starting its own MCP subprocesses.
+an active primary session record, then creates one process-scoped MCP manager.
+The HTTP listener is allowed to come up before MCP warmup finishes, but session
+opening waits for the in-flight MCP startup so every web session registers
+proxy handlers against the shared manager instead of starting its own MCP
+subprocesses.
 
 ```go
 // internal/runtime/loop.go
@@ -451,10 +506,10 @@ func (s *Server) Run(ctx) error
 ```
 
 `juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no auth),
-ensures an active primary session exists, and loads project MCP servers before
-accepting requests. Each session gets its own `*app.App`; events flow to a
-per-session broadcaster that fans out to connected SSE clients. Slow clients
-are dropped after a 5s buffer-full timeout.
+ensures an active primary session record exists, starts listening, and then
+warms the shared MCP manager plus the active primary session. Each session gets
+its own `*app.App`; events flow to a per-session broadcaster that fans out to
+connected SSE clients. Slow clients are dropped after a 5s buffer-full timeout.
 `make web` builds the React SPA in `frontend/`, copies the bundle to
 `internal/web/dist`, and the Go binary embeds that directory with `go:embed`.
 
