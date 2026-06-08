@@ -211,6 +211,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		AgentsMDDirs:       []string{root, projectAgents},
 		Memory:             memStore,
 		Skills:             skillLoader,
+		WorkDir:            root,
 		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 

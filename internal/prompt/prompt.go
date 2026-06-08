@@ -29,6 +29,7 @@ type Builder struct {
 	AgentsMDDirs       []string // loaded after global AGENTS.md, in caller-provided order
 	Memory             *memory.Store
 	Skills             *skills.Loader
+	WorkDir            string
 	Now                func() time.Time
 }
 
@@ -89,7 +90,10 @@ func (b *Builder) operatingContext() string {
 	if b.Now != nil {
 		now = b.Now
 	}
-	cwd, _ := os.Getwd()
+	cwd := b.WorkDir
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
 	return fmt.Sprintf(
 		"## Operating Context\n- cwd: %s\n- os: %s/%s\n- time: %s",
 		cwd, runtime.GOOS, runtime.GOARCH,

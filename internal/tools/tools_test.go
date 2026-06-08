@@ -235,6 +235,58 @@ func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	}
 }
 
+func TestBuiltins_FileToolsResolveRelativePathsFromWorkDir(t *testing.T) {
+	processDir := t.TempDir()
+	t.Chdir(processDir)
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "music"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	readmePath := filepath.Join(workDir, "music", "README.md")
+	if err := os.WriteFile(readmePath, []byte("hello world"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	RegisterBuiltins(r, workDir)
+
+	out, err := r.Call(context.Background(), "read", map[string]any{"path": "music/README.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "hello world" {
+		t.Fatalf("read output = %q, want workdir file contents", out)
+	}
+
+	if _, err := r.Call(context.Background(), "edit", map[string]any{
+		"path": "music/README.md",
+		"old":  "world",
+		"new":  "Juex",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	edited, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(edited) != "hello Juex" {
+		t.Fatalf("edited file = %q, want workdir file updated", edited)
+	}
+
+	if _, err := r.Call(context.Background(), "write", map[string]any{
+		"path":    "music/transposed.json",
+		"content": `{"ok":true}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "music", "transposed.json")); err != nil {
+		t.Fatalf("write did not create file under workdir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(processDir, "music", "transposed.json")); !os.IsNotExist(err) {
+		t.Fatalf("write used process cwd; stat err = %v", err)
+	}
+}
+
 func TestBuiltins_BashAcceptsRawArgumentsFallback(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()

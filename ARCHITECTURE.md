@@ -286,8 +286,9 @@ with the standard `read` builtin against the path printed there.
 | `memory_search` | substring match |
 | `memory_delete` | remove an entry by name |
 
-`tools.RegisterBuiltins(reg, workDir)` injects `workDir` so `bash` and `grep`
-fall back to it when the model does not pass an explicit `cwd` / `path`.
+`tools.RegisterBuiltins(reg, workDir)` injects `workDir` so `read`, `write`,
+and `edit` resolve relative paths against the agent workspace, and `bash` /
+`grep` fall back to it when the model does not pass an explicit `cwd` / `path`.
 All LLM-facing tool schemas include an optional `timeout` field in seconds.
 The registry applies a per-call timeout context, caps it at 300 seconds, and
 strips the reserved field before invoking tools that do not declare their own
