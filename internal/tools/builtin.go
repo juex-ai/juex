@@ -13,20 +13,25 @@ import (
 
 // RegisterBuiltins adds the builtin tool set: read / write / edit / bash / grep.
 //
-// workDir is the default working directory used when bash / grep are
-// invoked without an explicit cwd / path. Pass "" to fall back to the
-// process cwd (bash) and "." (grep) respectively.
+// workDir is the default working directory used for relative file paths and
+// for bash / grep calls without an explicit cwd / path. Pass "" to fall back
+// to the process cwd (file tools and bash) and "." (grep).
 func RegisterBuiltins(r *Registry, workDir string) {
-	r.MustRegister(readTool())
-	r.MustRegister(writeTool())
-	r.MustRegister(editTool())
+	if workDir != "" {
+		if abs, err := filepath.Abs(workDir); err == nil {
+			workDir = abs
+		}
+	}
+	r.MustRegister(readTool(workDir))
+	r.MustRegister(writeTool(workDir))
+	r.MustRegister(editTool(workDir))
 	r.MustRegister(bashTool(workDir))
 	r.MustRegister(grepTool(workDir))
 }
 
 // ----- read -----
 
-func readTool() Tool {
+func readTool(workDir string) Tool {
 	return Tool{
 		Name:        "read",
 		Description: "Read a UTF-8 text file. Returns the file contents. Optional offset (1-based line) and limit (max lines).",
@@ -44,6 +49,7 @@ func readTool() Tool {
 			if path == "" {
 				return "", fmt.Errorf("read: missing path")
 			}
+			path = resolveWorkPath(workDir, path)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return "", err
@@ -72,7 +78,7 @@ func readTool() Tool {
 
 // ----- write -----
 
-func writeTool() Tool {
+func writeTool(workDir string) Tool {
 	return Tool{
 		Name:        "write",
 		Description: "Write content to a file, creating parent directories if needed. Overwrites existing files.",
@@ -90,6 +96,7 @@ func writeTool() Tool {
 			if path == "" {
 				return "", fmt.Errorf("write: missing path")
 			}
+			path = resolveWorkPath(workDir, path)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return "", err
 			}
@@ -103,7 +110,7 @@ func writeTool() Tool {
 
 // ----- edit -----
 
-func editTool() Tool {
+func editTool(workDir string) Tool {
 	return Tool{
 		Name:        "edit",
 		Description: "Replace `old` with `new` in the file at `path`. By default `old` must appear exactly once; set replace_all to replace every occurrence and optionally expected_replacements to require an exact count.",
@@ -136,6 +143,7 @@ func editTool() Tool {
 			if path == "" || oldStr == "" {
 				return "", fmt.Errorf("edit: path and old required")
 			}
+			path = resolveWorkPath(workDir, path)
 			if expectedSet && expected != 1 && !replaceAll {
 				return "", fmt.Errorf("edit: expected_replacements greater than 1 requires replace_all")
 			}
@@ -171,6 +179,13 @@ func editTool() Tool {
 			return fmt.Sprintf("edited %s (%d %s)", path, replacements, replacementLabel), nil
 		},
 	}
+}
+
+func resolveWorkPath(workDir, path string) string {
+	if path == "" || filepath.IsAbs(path) || workDir == "" {
+		return path
+	}
+	return filepath.Join(workDir, path)
 }
 
 // ----- bash -----

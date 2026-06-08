@@ -250,6 +250,28 @@ func TestLoad_DefaultsWorkDirToCwd(t *testing.T) {
 	}
 }
 
+func TestLoadForWorkDirNormalizesRelativeWorkDir(t *testing.T) {
+	prepareConfigTest(t)
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_BASE", "https://x")
+	t.Setenv("PROVIDER_API_KEY", "k")
+	t.Setenv("PROVIDER_API_MODEL", "m")
+	base := t.TempDir()
+	t.Chdir(base)
+	if err := os.MkdirAll("workspace", 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForWorkDir("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantWD := filepath.Join(base, "workspace")
+	if cfg.WorkDir != wantWD {
+		t.Fatalf("WorkDir = %q, want %q", cfg.WorkDir, wantWD)
+	}
+}
+
 func TestSkillDirs_AndPaths(t *testing.T) {
 	cfg := Config{
 		HomeAgentsDir: filepath.Join("/u", ".agents"),

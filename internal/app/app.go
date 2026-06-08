@@ -191,6 +191,7 @@ func New(opts Options) (*App, error) {
 		AgentsMDDirs:       cfg.AgentsMDDirs(),
 		Memory:             memStore,
 		Skills:             skillLoader,
+		WorkDir:            cfg.WorkDir,
 	}
 
 	eng := &runtime.Engine{

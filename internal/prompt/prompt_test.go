@@ -203,6 +203,43 @@ func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 	}
 }
 
+func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
+	processDir := t.TempDir()
+	t.Chdir(processDir)
+	workDir := t.TempDir()
+	b := &Builder{
+		AgentsMDDirs: []string{t.TempDir()},
+		WorkDir:      workDir,
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
+	}
+
+	got := b.Build()
+	mustContain(t, got, "- cwd: "+workDir)
+	if strings.Contains(got, "- cwd: "+processDir) {
+		t.Fatalf("operating context used process cwd instead of workdir:\n%s", got)
+	}
+}
+
+func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
+	base := t.TempDir()
+	t.Chdir(base)
+	if err := os.MkdirAll("workspace", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := &Builder{
+		AgentsMDDirs: []string{t.TempDir()},
+		WorkDir:      "workspace",
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
+	}
+
+	got := b.Build()
+	want := filepath.Join(base, "workspace")
+	mustContain(t, got, "- cwd: "+want)
+	if strings.Contains(got, "- cwd: workspace") {
+		t.Fatalf("operating context kept relative workdir:\n%s", got)
+	}
+}
+
 func TestBuilder_MemorySectionRendersAllEntries(t *testing.T) {
 	store := memory.NewStore(t.TempDir())
 	if err := store.Write(memory.Entry{Name: "one", Description: "first desc", Type: "feedback", Body: "b"}); err != nil {

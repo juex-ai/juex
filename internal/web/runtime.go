@@ -184,6 +184,7 @@ func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
 		AgentsMDDirs:       s.opts.Cfg.AgentsMDDirs(),
 		Memory:             memStore,
 		Skills:             skillLoader,
+		WorkDir:            s.opts.Cfg.WorkDir,
 	}
 	sections := builder.Sections()
 	items := make([]systemPromptEntry, 0, len(sections))

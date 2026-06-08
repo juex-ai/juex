@@ -20,6 +20,7 @@ import (
 type stubProvider struct {
 	replies []llm.Response
 	calls   int
+	systems []string
 }
 
 func (s *stubProvider) Name() string { return "stub" }
@@ -27,6 +28,7 @@ func (s *stubProvider) Complete(ctx context.Context, sys string, h []llm.Message
 	if s.calls >= len(s.replies) {
 		return llm.Response{}, errors.New("stub exhausted")
 	}
+	s.systems = append(s.systems, sys)
 	r := s.replies[s.calls]
 	s.calls++
 	return r, nil
@@ -173,6 +175,66 @@ func TestApp_RunSingleTurn(t *testing.T) {
 	}
 	if got := a.TokenUsage(); got != (llm.Usage{InputTokens: 8, OutputTokens: 3}) {
 		t.Fatalf("usage = %+v", got)
+	}
+}
+
+func TestApp_RunUsesWorkDirForPromptAndFileTools(t *testing.T) {
+	processDir := t.TempDir()
+	t.Chdir(processDir)
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "music"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "music", "README.md"), []byte("spelling rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prov := &stubProvider{replies: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "read-1",
+				ToolName:  "read",
+				Input:     map[string]any{"path": "music/README.md"},
+			}}},
+			StopReason: llm.StopToolUse,
+		},
+		{
+			Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+			StopReason: llm.StopEndTurn,
+		},
+	}}
+	a, err := New(Options{
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: workDir},
+		Provider: prov,
+		WorkDir:  workDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+
+	out, err := a.Run(context.Background(), "read relative file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	if len(prov.systems) == 0 {
+		t.Fatal("provider was not called")
+	}
+	if !strings.Contains(prov.systems[0], "- cwd: "+workDir) {
+		t.Fatalf("system prompt did not use workdir:\n%s", prov.systems[0])
+	}
+	if strings.Contains(prov.systems[0], "- cwd: "+processDir) {
+		t.Fatalf("system prompt used process cwd:\n%s", prov.systems[0])
+	}
+	if len(a.Session.History) < 3 {
+		t.Fatalf("history len = %d, want tool result", len(a.Session.History))
+	}
+	result := a.Session.History[2].Blocks[0]
+	if result.IsError || result.Content != "spelling rules" {
+		t.Fatalf("tool result = %+v, want workdir file contents", result)
 	}
 }
 
