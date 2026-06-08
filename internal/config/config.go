@@ -148,6 +148,9 @@ func loadForWorkDir(workDir string, resolveAuth bool) (Config, error) {
 		}
 		workDir = cwd
 	}
+	if abs, err := filepath.Abs(workDir); err == nil {
+		workDir = abs
+	}
 	cfg.WorkDir = workDir
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")

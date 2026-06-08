@@ -17,6 +17,11 @@ import (
 // for bash / grep calls without an explicit cwd / path. Pass "" to fall back
 // to the process cwd (file tools and bash) and "." (grep).
 func RegisterBuiltins(r *Registry, workDir string) {
+	if workDir != "" {
+		if abs, err := filepath.Abs(workDir); err == nil {
+			workDir = abs
+		}
+	}
 	r.MustRegister(readTool(workDir))
 	r.MustRegister(writeTool(workDir))
 	r.MustRegister(editTool(workDir))

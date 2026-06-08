@@ -287,6 +287,30 @@ func TestBuiltins_FileToolsResolveRelativePathsFromWorkDir(t *testing.T) {
 	}
 }
 
+func TestBuiltins_RelativeWorkDirIsCapturedAsAbsolute(t *testing.T) {
+	base := t.TempDir()
+	workDir := filepath.Join(base, "workspace")
+	if err := os.MkdirAll(filepath.Join(workDir, "music"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "music", "README.md"), []byte("rules"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(base)
+
+	r := NewRegistry()
+	RegisterBuiltins(r, "workspace")
+	t.Chdir(t.TempDir())
+
+	out, err := r.Call(context.Background(), "read", map[string]any{"path": "music/README.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "rules" {
+		t.Fatalf("read output = %q, want file from original workdir", out)
+	}
+}
+
 func TestBuiltins_BashAcceptsRawArgumentsFallback(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()

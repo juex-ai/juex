@@ -93,6 +93,8 @@ func (b *Builder) operatingContext() string {
 	cwd := b.WorkDir
 	if cwd == "" {
 		cwd, _ = os.Getwd()
+	} else if abs, err := filepath.Abs(cwd); err == nil {
+		cwd = abs
 	}
 	return fmt.Sprintf(
 		"## Operating Context\n- cwd: %s\n- os: %s/%s\n- time: %s",
