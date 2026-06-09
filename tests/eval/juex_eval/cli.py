@@ -147,7 +147,7 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
 def run_development(args: argparse.Namespace) -> int:
     validate_development_args(args)
 
-    report_dir = pathlib.Path(args.report_dir or REPO_ROOT / "docs" / "reports" / "development-validation" / args.run_id)
+    report_dir = pathlib.Path(args.report_dir or helper.default_report_dir("development-validation", args.run_id))
     command_logs = report_dir / "command-logs"
     command_logs.mkdir(parents=True, exist_ok=True)
     commands_file = report_dir / "commands.jsonl"

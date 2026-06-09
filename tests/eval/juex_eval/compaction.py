@@ -93,7 +93,7 @@ def run(args: argparse.Namespace) -> int:
         models = [rotated_model]
         print(f"rotated compaction eval model: {rotated_model}")
 
-    out_root = pathlib.Path(args.out_root or REPO_ROOT / "docs" / "reports" / "compaction-eval" / args.run_id)
+    out_root = pathlib.Path(args.out_root or helper.default_report_dir("compaction-eval", args.run_id))
     out_root.mkdir(parents=True, exist_ok=True)
     cfg = helper.load_yaml_file(config)
     temp_dirs: list[pathlib.Path] = []

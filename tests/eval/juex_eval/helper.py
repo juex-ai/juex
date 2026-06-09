@@ -28,6 +28,7 @@ import yaml
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+REPORT_ROOT = REPO_ROOT / ".tmp" / "reports"
 
 
 def main() -> int:
@@ -91,6 +92,14 @@ def default_juex_bin() -> str:
     return found or ""
 
 
+def default_report_dir(kind: str, run_id: str) -> pathlib.Path:
+    if not run_id.strip():
+        raise ValueError("run_id cannot be empty")
+    if "/" in run_id or "\\" in run_id:
+        raise ValueError(f"run_id cannot contain path separators: {run_id}")
+    return REPORT_ROOT / kind / run_id
+
+
 def provider_smoke(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="provider_model_smoke.sh",
@@ -137,7 +146,7 @@ def provider_smoke(argv: list[str]) -> int:
     if not config_path.is_file():
         raise ValueError(f"provider config not found: {parsed.config}")
 
-    report_dir = pathlib.Path(parsed.report_dir or REPO_ROOT / "docs" / "reports" / "provider-model-smoke" / parsed.run_id)
+    report_dir = pathlib.Path(parsed.report_dir or default_report_dir("provider-model-smoke", parsed.run_id))
     (report_dir / "cases").mkdir(parents=True, exist_ok=True)
     work_root_created = False
     if parsed.work_root:
