@@ -34,9 +34,7 @@ jobs:
           go-version: stable
           cache: true
       # uv is needed by tests/e2e live-binary smoke (Python MCP fixture).
-      # The test skips itself when uv isn't found, so this is best-effort.
       - uses: astral-sh/setup-uv@v3
-        if: matrix.os != 'windows-latest'
         with:
           version: latest
       - name: Prepare embedded web dist

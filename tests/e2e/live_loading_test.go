@@ -20,9 +20,6 @@ import (
 // realistic MCP server (the official Python SDK — most MCP servers in
 // the wild are Python).
 func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("skipping on windows: bash-tool defaults differ; this test is unix-focused")
-	}
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
