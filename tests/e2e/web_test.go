@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -68,38 +69,28 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("turn POST status = %d body=%s", resp.StatusCode, body)
 	}
+	var turn webStartTurnResponse
+	if err := json.NewDecoder(resp.Body).Decode(&turn); err != nil {
+		t.Fatal(err)
+	}
 	resp.Body.Close()
+	if turn.TurnID == "" {
+		t.Fatal("turn response missing turn id")
+	}
 
 	// 3. Wait until turn shows in transcript.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		show, _ := http.Get(ts.URL + "/api/sessions/" + c.ID)
-		var parsed struct {
-			Messages []struct {
-				Role   string `json:"role"`
-				Blocks []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"blocks"`
-			} `json:"messages"`
-		}
-		if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
-			show.Body.Close()
-			t.Fatal(err)
-		}
-		show.Body.Close()
-		for _, m := range parsed.Messages {
+	waitForWebTranscript(t, ts.URL, c.ID, turn.TurnID, 30*time.Second, "assistant reply", func(messages []webTranscriptMessage) bool {
+		for _, m := range messages {
 			if m.Role == "assistant" {
 				for _, b := range m.Blocks {
 					if b.Type == "text" && b.Text == "noted" {
-						return
+						return true
 					}
 				}
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("turn never appeared in transcript")
+		return false
+	})
 }
 
 type pendingWebProvider struct {
@@ -220,4 +211,85 @@ func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("pending input never reached second provider call")
+}
+
+type webStartTurnResponse struct {
+	TurnID string `json:"turn_id"`
+}
+
+type webTranscriptMessage struct {
+	Role   string `json:"role"`
+	Blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"blocks"`
+}
+
+func waitForWebTranscript(t *testing.T, baseURL, sessionID, turnID string, timeout time.Duration, label string, match func([]webTranscriptMessage) bool) {
+	t.Helper()
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+	var lastErr, lastState string
+	var lastMessages []webTranscriptMessage
+	for time.Now().Before(deadline) {
+		messages, err := fetchWebTranscript(client, baseURL, sessionID)
+		if err != nil {
+			lastErr = err.Error()
+		} else {
+			lastMessages = messages
+			if match(messages) {
+				return
+			}
+		}
+		state, turnErr, err := fetchWebTurnState(client, baseURL, sessionID, turnID)
+		if err != nil {
+			lastState = err.Error()
+		} else {
+			lastState = state
+			if state == "errored" {
+				t.Fatalf("turn %s errored while waiting for %s: %s", turnID, label, turnErr)
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s; last_state=%q last_error=%q last_messages=%+v", label, lastState, lastErr, lastMessages)
+}
+
+func fetchWebTranscript(client *http.Client, baseURL, sessionID string) ([]webTranscriptMessage, error) {
+	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("session status=%d body=%s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Messages []webTranscriptMessage `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return nil, err
+	}
+	return parsed.Messages, nil
+}
+
+func fetchWebTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {
+	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/turns/" + turnID)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", "", fmt.Errorf("turn status=%d body=%s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		State string `json:"state"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", "", err
+	}
+	return parsed.State, parsed.Error, nil
 }

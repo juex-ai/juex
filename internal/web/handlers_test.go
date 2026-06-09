@@ -1146,12 +1146,15 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 		t.Errorf("missing turn_id")
 	}
 
-	// Wait for the goroutine to finish. Windows race builds can take a few
-	// seconds to schedule the turn even though the stub provider returns
-	// immediately.
-	deadline := time.Now().Add(30 * time.Second)
+	// Wait for the goroutine to finish. Windows race builds run packages in
+	// parallel and can take a while to schedule this async turn even though the
+	// stub provider returns immediately.
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(60 * time.Second)
+	var lastErr, lastState string
+	var lastMessages any
 	for time.Now().Before(deadline) {
-		show, err := http.Get(ts.URL + "/api/sessions/" + c.ID)
+		show, err := client.Get(ts.URL + "/api/sessions/" + c.ID)
 		if err == nil {
 			var parsed struct {
 				TokenUsage struct {
@@ -1179,56 +1182,74 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 					} `json:"blocks"`
 				} `json:"messages"`
 			}
-			if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
+			if show.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(show.Body)
 				show.Body.Close()
-				t.Fatal(err)
-			}
-			show.Body.Close()
-			for _, m := range parsed.Messages {
-				if m.Role == "assistant" {
-					for _, b := range m.Blocks {
-						if b.Type == "text" && b.Text == "ack" {
-							if parsed.TokenUsage.InputTokens != 4 || parsed.TokenUsage.OutputTokens != 2 {
-								t.Fatalf("token_usage = %+v", parsed.TokenUsage)
-							}
-							if m.Usage != nil {
-								t.Fatalf("message usage should be omitted: %+v", m.Usage)
-							}
-							if m.ContextUsage != nil {
-								t.Fatalf("message context_usage should be omitted: %+v", m.ContextUsage)
-							}
-							if parsed.ContextUsage.Model != "stub" ||
-								parsed.ContextUsage.ContextWindow != 256000 ||
-								parsed.ContextUsage.InputTokens != 4 ||
-								parsed.ContextUsage.OutputTokens != 2 ||
-								parsed.ContextUsage.TotalTokens != 6 {
-								t.Fatalf("context_usage = %+v", parsed.ContextUsage)
-							}
-							if len(parsed.ContextUsage.Breakdown) == 0 {
-								t.Fatal("context_usage missing breakdown")
-							}
-							var hasResponse bool
-							for _, part := range parsed.ContextUsage.Breakdown {
-								if part.Key == "response" && part.Tokens == 2 {
-									hasResponse = true
-									break
+				lastErr = fmt.Sprintf("session status=%d body=%s", show.StatusCode, body)
+			} else {
+				if err := json.NewDecoder(show.Body).Decode(&parsed); err != nil {
+					show.Body.Close()
+					t.Fatal(err)
+				}
+				show.Body.Close()
+				lastMessages = parsed.Messages
+				for _, m := range parsed.Messages {
+					if m.Role == "assistant" {
+						for _, b := range m.Blocks {
+							if b.Type == "text" && b.Text == "ack" {
+								if parsed.TokenUsage.InputTokens != 4 || parsed.TokenUsage.OutputTokens != 2 {
+									t.Fatalf("token_usage = %+v", parsed.TokenUsage)
 								}
+								if m.Usage != nil {
+									t.Fatalf("message usage should be omitted: %+v", m.Usage)
+								}
+								if m.ContextUsage != nil {
+									t.Fatalf("message context_usage should be omitted: %+v", m.ContextUsage)
+								}
+								if parsed.ContextUsage.Model != "stub" ||
+									parsed.ContextUsage.ContextWindow != 256000 ||
+									parsed.ContextUsage.InputTokens != 4 ||
+									parsed.ContextUsage.OutputTokens != 2 ||
+									parsed.ContextUsage.TotalTokens != 6 {
+									t.Fatalf("context_usage = %+v", parsed.ContextUsage)
+								}
+								if len(parsed.ContextUsage.Breakdown) == 0 {
+									t.Fatal("context_usage missing breakdown")
+								}
+								var hasResponse bool
+								for _, part := range parsed.ContextUsage.Breakdown {
+									if part.Key == "response" && part.Tokens == 2 {
+										hasResponse = true
+										break
+									}
+								}
+								if !hasResponse {
+									t.Fatalf("context_usage missing response breakdown: %+v", parsed.ContextUsage.Breakdown)
+								}
+								if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); err != nil {
+									t.Fatalf("conversation stat after turn err = %v", err)
+								}
+								return
 							}
-							if !hasResponse {
-								t.Fatalf("context_usage missing response breakdown: %+v", parsed.ContextUsage.Breakdown)
-							}
-							if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); err != nil {
-								t.Fatalf("conversation stat after turn err = %v", err)
-							}
-							return
 						}
 					}
 				}
 			}
+		} else {
+			lastErr = err.Error()
+		}
+		state, turnErr, err := fetchTurnState(client, ts.URL, c.ID, got.TurnID)
+		if err != nil {
+			lastState = err.Error()
+		} else {
+			lastState = state
+			if state == "errored" {
+				t.Fatalf("turn %s errored while waiting for ack to persist: %s", got.TurnID, turnErr)
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("timed out waiting for ack to be persisted")
+	t.Fatalf("timed out waiting for ack to be persisted; last_state=%q last_error=%q last_messages=%+v", lastState, lastErr, lastMessages)
 }
 
 func TestPostTurn_RequiresActivePrimary(t *testing.T) {
