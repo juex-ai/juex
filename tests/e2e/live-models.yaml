@@ -1,6 +1,7 @@
-# Default live-provider validation scope. Keep this list small enough for
-# routine local development; use provider_model_smoke.sh --all-models for broad
-# provider matrix audits.
+# Live-provider validation scope. Routine scripts rotate one ref from each
+# section and record the last successful ref in .juex/live-model-rotation.json.
+# Use the script-level --all-models flag when a larger change needs every ref in
+# a section.
 provider_smoke_models:
   - openai-codex/gpt-5.5
   - ark/doubao-seed-2.0-pro

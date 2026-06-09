@@ -12,7 +12,7 @@ Default checks:
   - go test ./tests/e2e -count=1
   - go test ./... -count=1
   - make build
-  - provider_model_smoke.sh against the curated tests/e2e/live-models.yaml set
+  - provider_model_smoke.sh against one rotated tests/e2e/live-models.yaml ref
 
 Options:
   --run-id ID              Stable run id. Default: UTC timestamp.
@@ -20,12 +20,15 @@ Options:
                            docs/reports/development-validation/<run-id>.
   --provider-only REF      Pass --only to provider_model_smoke.sh.
   --provider-timeout SEC   Per-turn provider smoke timeout. Default: 240.
-  --provider-all-models    Run every provider/model from ~/.juex/juex.yaml.
+  --provider-all-models    Run every provider_smoke_models ref.
+  --provider-all-config-models
+                           Run every provider/model from ~/.juex/juex.yaml.
   --no-provider-smoke      Skip live provider/model smoke.
   --skip-tests             Skip deterministic Go tests.
   --compaction-eval        Also run scripts/compaction_eval.sh.
+  --compaction-all-models  Run every compaction_eval_models ref.
   --compaction-model REF   Add a compaction eval model. Repeatable. If omitted,
-                           compaction_eval.sh uses its default model set.
+                           compaction_eval.sh uses one rotated model.
   -h, --help               Show this help.
 USAGE
 }
@@ -34,14 +37,25 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 cd "$repo_root"
 
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Missing uv. Install uv or run through the project toolchain before using development_eval.sh." >&2
+  exit 2
+fi
+
+run_py() {
+  uv run --quiet --project "$repo_root" python "$@"
+}
+
 run_id="${JUEX_DEVELOPMENT_EVAL_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 report_dir="${JUEX_DEVELOPMENT_EVAL_REPORT_DIR:-}"
 provider_only="${JUEX_PROVIDER_SMOKE_ONLY:-}"
 provider_timeout="${JUEX_PROVIDER_SMOKE_TIMEOUT:-240}"
 run_provider_smoke=1
 provider_all_models=0
+provider_all_config_models=0
 run_tests=1
 run_compaction_eval=0
+compaction_all_models=0
 compaction_models=()
 
 while [[ $# -gt 0 ]]; do
@@ -66,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       provider_all_models=1
       shift
       ;;
+    --provider-all-config-models)
+      provider_all_config_models=1
+      shift
+      ;;
     --no-provider-smoke)
       run_provider_smoke=0
       shift
@@ -76,6 +94,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --compaction-eval)
       run_compaction_eval=1
+      shift
+      ;;
+    --compaction-all-models)
+      compaction_all_models=1
       shift
       ;;
     --compaction-model)
@@ -93,6 +115,19 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$provider_only" && ( "$provider_all_models" == 1 || "$provider_all_config_models" == 1 ) ]]; then
+  echo "--provider-only cannot be combined with provider all-model options" >&2
+  exit 2
+fi
+if [[ "$provider_all_models" == 1 && "$provider_all_config_models" == 1 ]]; then
+  echo "--provider-all-models and --provider-all-config-models are mutually exclusive" >&2
+  exit 2
+fi
+if [[ "$compaction_all_models" == 1 && "${#compaction_models[@]}" -gt 0 ]]; then
+  echo "--compaction-all-models cannot be combined with --compaction-model" >&2
+  exit 2
+fi
 
 if [[ -z "$report_dir" ]]; then
   report_dir="$repo_root/docs/reports/development-validation/$run_id"
@@ -113,7 +148,7 @@ command_string() {
 }
 
 append_command_result() {
-  python3 scripts/evalhelper.py append-command \
+  run_py scripts/evalhelper.py append-command \
     --file "$commands_file" \
     --label "$1" \
     --command "$2" \
@@ -158,6 +193,9 @@ if [[ "$run_provider_smoke" == 1 ]]; then
   if [[ "$provider_all_models" == 1 ]]; then
     provider_args+=(--all-models)
   fi
+  if [[ "$provider_all_config_models" == 1 ]]; then
+    provider_args+=(--all-config-models)
+  fi
   run_cmd provider-model-smoke "${provider_args[@]}" || overall=1
 fi
 
@@ -165,6 +203,9 @@ compaction_report_dir=""
 if [[ "$run_compaction_eval" == 1 ]]; then
   compaction_report_dir="$report_dir/compaction-eval"
   compaction_args=(env "OUT_ROOT=$compaction_report_dir" "RUN_ID=$run_id" "JUEX_BIN=./dist/juex" bash scripts/compaction_eval.sh)
+  if [[ "$compaction_all_models" == 1 ]]; then
+    compaction_args+=(--all-models)
+  fi
   if [[ "${#compaction_models[@]}" -gt 0 ]]; then
     compaction_args+=("${compaction_models[@]}")
   fi
@@ -174,7 +215,7 @@ fi
 record_json="$report_dir/record.json"
 record_md="$report_dir/record.md"
 
-python3 scripts/evalhelper.py write-development-record \
+run_py scripts/evalhelper.py write-development-record \
   --report-dir "$report_dir" \
   --run-id "$run_id" \
   --commands-file "$commands_file" \
