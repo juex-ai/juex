@@ -291,6 +291,25 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	if !strings.HasPrefix(strings.TrimSpace(body), "{") {
 		t.Fatalf("expected JSON, got:\n%s", body)
 	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Shell.Profile == "" || plan.Shell.Family == "" || plan.Shell.Binary == "" {
+		t.Fatalf("shell profile missing from dry-run plan: %+v", plan.Shell)
+	}
+	haveShell := false
+	for _, name := range plan.Tools {
+		if name == "shell" {
+			haveShell = true
+		}
+		if name == "bash" {
+			t.Fatalf("dry-run tools should not include bash: %+v", plan.Tools)
+		}
+	}
+	if !haveShell {
+		t.Fatalf("dry-run tools missing shell: %+v", plan.Tools)
+	}
 }
 
 func TestRunCmd_DryRunRuntimeBudgetFlagsOverrideConfig(t *testing.T) {

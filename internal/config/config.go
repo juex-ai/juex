@@ -36,6 +36,7 @@ type Config struct {
 	ProviderCompat            llm.CompatOptions
 	Compaction                CompactionConfig
 	Runtime                   RuntimeConfig
+	Shell                     ShellProfile
 	EnableUserGlobalResources bool
 
 	HomeAgentsDir string // ~/.agents (user-global)
@@ -43,6 +44,7 @@ type Config struct {
 	WorkDir       string // explicit; defaults to os.Getwd()
 
 	modelRef        string
+	shellConfig     ShellConfig
 	providerConfigs map[string]providerConfig
 }
 
@@ -52,6 +54,7 @@ type fileConfig struct {
 	Providers                 []providerConfig `yaml:"providers"`
 	Compaction                compactionConfig `yaml:"compaction"`
 	Runtime                   runtimeConfig    `yaml:"runtime"`
+	Shell                     *ShellConfig     `yaml:"shell"`
 }
 
 type providerConfig struct {
@@ -156,10 +159,17 @@ func Load() (Config, error) {
 
 // LoadForWorkDir is Load with an explicit working directory.
 func LoadForWorkDir(workDir string) (Config, error) {
-	return loadForWorkDir(workDir, true)
+	cfg, err := loadForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
 }
 
-func loadForWorkDir(workDir string, resolveAuth bool) (Config, error) {
+func loadForWorkDir(workDir string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
@@ -194,18 +204,6 @@ func loadForWorkDir(workDir string, resolveAuth bool) (Config, error) {
 		return cfg, err
 	}
 	applyOSEnv(&cfg)
-	if resolveAuth {
-		if err := resolveCodexAuth(&cfg); err != nil {
-			return cfg, err
-		}
-	}
-	return cfg, nil
-}
-
-func resolveCodexAuthInConfig(cfg Config) (Config, error) {
-	if err := resolveCodexAuth(&cfg); err != nil {
-		return cfg, err
-	}
 	return cfg, nil
 }
 
@@ -222,9 +220,9 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 		err error
 	)
 	if workDir != "" {
-		cfg, err = loadForWorkDir(workDir, false)
+		cfg, err = loadForWorkDir(workDir)
 	} else {
-		cfg, err = loadForWorkDir("", false)
+		cfg, err = loadForWorkDir("")
 	}
 	if err != nil {
 		return cfg, err
@@ -237,7 +235,22 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 		return cfg, err
 	}
 	applyOSEnv(&cfg)
-	return resolveCodexAuthInConfig(cfg)
+	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func finalizeLoadedConfig(cfg *Config, resolveAuth bool) error {
+	if err := resolveShellProfileForConfig(cfg); err != nil {
+		return err
+	}
+	if resolveAuth {
+		if err := resolveCodexAuth(cfg); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // NewProvider constructs the LLM provider implied by the config.
@@ -400,6 +413,9 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyRuntimeConfig(cfg, fc.Runtime)
+	if fc.Shell != nil {
+		cfg.shellConfig = *fc.Shell
+	}
 	return nil
 }
 

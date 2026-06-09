@@ -132,7 +132,7 @@ func New(opts Options) (*App, error) {
 	}
 
 	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, cfg.WorkDir)
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: cfg.WorkDir, Shell: toolsShellProfile(cfg.Shell)})
 
 	skillLoader := skills.NewLoader(cfg.SkillDirs()...)
 	if err := skillLoader.Load(); err != nil {
@@ -188,6 +188,7 @@ func New(opts Options) (*App, error) {
 		Memory:             memStore,
 		Skills:             skillLoader,
 		WorkDir:            cfg.WorkDir,
+		Shell:              promptShellProfile(cfg.Shell),
 	}
 
 	eng := &runtime.Engine{
@@ -256,6 +257,28 @@ func New(opts Options) (*App, error) {
 		a.cleanup = append(a.cleanup, mgr.Close)
 	}
 	return a, nil
+}
+
+func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
+	return tools.ShellProfile{
+		Profile:       p.Profile,
+		Family:        p.Family,
+		Binary:        p.Binary,
+		Args:          append([]string(nil), p.Args...),
+		PathStyle:     p.PathStyle,
+		HostPathStyle: p.HostPathStyle,
+	}
+}
+
+func promptShellProfile(p config.ShellProfile) prompt.ShellProfile {
+	return prompt.ShellProfile{
+		Profile:       p.Profile,
+		Family:        p.Family,
+		Binary:        p.Binary,
+		Args:          append([]string(nil), p.Args...),
+		PathStyle:     p.PathStyle,
+		HostPathStyle: p.HostPathStyle,
+	}
 }
 
 func openSessionForOptions(cfg config.Config, opts Options) (*session.Session, error) {

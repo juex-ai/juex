@@ -14,8 +14,8 @@ mise exec -- go test ./tests/e2e -count=1
 
 | Area | Test | What it protects |
 | --- | --- | --- |
-| Full runtime loop | `TestEndToEnd_FullStack` | Prompt sources, skills, work-local memory tools, MCP stdio tools, builtin read/write/edit/bash/grep, parallel tool calls, event JSONL, conversation JSONL. |
-| Portable runtime loop | `TestEndToEnd_FullStackPortable` | Cross-platform prompt, skills, memory tools, MCP stdio, read/write/edit/grep, event JSONL, and conversation JSONL without relying on a local bash executable. |
+| Full runtime loop | `TestEndToEnd_FullStack` | Prompt sources, skills, work-local memory tools, MCP stdio tools, builtin read/write/edit/shell/grep, parallel tool calls, event JSONL, conversation JSONL. |
+| Portable runtime loop | `TestEndToEnd_FullStackPortable` | Cross-platform prompt, skills, memory tools, MCP stdio, read/write/edit/grep, event JSONL, and conversation JSONL with an injected fake shell profile. |
 | Session resume | `TestEndToEnd_ResumeRoundTrip` | A resumed app session reuses the same session id and replays prior user/assistant history before the next prompt. |
 | Binary loading | `TestLiveBinary_LoadsSkillsAndMCP` | The compiled `juex` binary loads project skills and a realistic Python MCP server through `juex run --dry-run --json`. |
 | Provider protocols | `TestLiveBinary_ProviderProtocolAndThinkingMatrix` | The compiled binary routes config to OpenAI Responses, custom OpenAI Chat, and DeepSeek-compatible Chat, including thinking-effort capability gates. |
@@ -40,7 +40,7 @@ They read selected local configs from `.juex/*.yaml` and currently exercise:
 
 - plain completion;
 - read-tool use;
-- a multi-step write/edit/bash workflow.
+- a multi-step write/edit/shell workflow.
 
 Keep live prompts objective and self-grading: they should assert concrete
 strings or filesystem effects, not subjective answer quality.

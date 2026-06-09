@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,13 +12,24 @@ import (
 	"time"
 )
 
-// skipIfWindows guards bash-dependent tests on platforms without a default
-// bash. CI runs windows-latest where /bin/bash is absent.
+// skipIfWindows guards tests that intentionally exercise POSIX-only command
+// syntax or process-group behavior.
 func skipIfWindows(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("bash tool requires bash; skipping on windows")
+		t.Skip("test uses POSIX shell syntax")
 	}
+}
+
+func registerTestBuiltins(r *Registry, workDir string) {
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile()})
+}
+
+func pwdCommand() string {
+	if runtime.GOOS == "windows" {
+		return "cd"
+	}
+	return "pwd"
 }
 
 var _ = filepath.Join
@@ -30,6 +43,115 @@ func TestRegistry_RegisterDuplicate(t *testing.T) {
 	if err := r.Register(tool); err == nil {
 		t.Fatal("expected duplicate error")
 	}
+}
+
+func TestBuiltins_ShellUsesConfiguredProfileAndCwd(t *testing.T) {
+	r := NewRegistry()
+	workDir := t.TempDir()
+	callDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "shell.json")
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MARKER", marker)
+
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir: workDir,
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": "echo hi", "cwd": callDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "fake shell ok") {
+		t.Fatalf("out = %q, want fake shell output", out)
+	}
+
+	var payload struct {
+		Cwd  string   `json:"cwd"`
+		Args []string `json:"args"`
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Cwd != callDir {
+		t.Fatalf("cwd = %q, want %q", payload.Cwd, callDir)
+	}
+	if len(payload.Args) == 0 || payload.Args[len(payload.Args)-1] != "echo hi" {
+		t.Fatalf("args = %#v, want command appended as final arg", payload.Args)
+	}
+	if _, ok := r.Get("bash"); ok {
+		t.Fatal("bash tool should not be registered")
+	}
+}
+
+func TestBuiltins_ShellRelativeCwdResolvesFromWorkDir(t *testing.T) {
+	r := NewRegistry()
+	workDir := t.TempDir()
+	relativeDir := "nested"
+	wantDir := filepath.Join(workDir, relativeDir)
+	if err := os.MkdirAll(wantDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "shell.json")
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MARKER", marker)
+
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir: workDir,
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	if _, err := r.Call(context.Background(), "shell", map[string]any{"cmd": "echo hi", "cwd": relativeDir}); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct {
+		Cwd string `json:"cwd"`
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Cwd != wantDir {
+		t.Fatalf("cwd = %q, want %q", payload.Cwd, wantDir)
+	}
+}
+
+func TestShellHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_FAKE_SHELL") != "1" {
+		return
+	}
+	payload := map[string]any{
+		"args": os.Args,
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		payload["cwd"] = cwd
+	}
+	if marker := os.Getenv("JUEX_FAKE_SHELL_MARKER"); marker != "" {
+		data, _ := json.Marshal(payload)
+		_ = os.WriteFile(marker, data, 0o644)
+	}
+	fmt.Fprintln(os.Stdout, "fake shell ok")
+	os.Exit(0)
 }
 
 func TestRegistry_NormalizesNullSchemaEntries(t *testing.T) {
@@ -205,7 +327,7 @@ func TestRegistry_CallWithInfoParsesRawArgumentsBeforeDispatch(t *testing.T) {
 
 func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")
@@ -248,7 +370,7 @@ func TestBuiltins_FileToolsResolveRelativePathsFromWorkDir(t *testing.T) {
 	}
 
 	r := NewRegistry()
-	RegisterBuiltins(r, workDir)
+	registerTestBuiltins(r, workDir)
 
 	out, err := r.Call(context.Background(), "read", map[string]any{"path": "music/README.md"})
 	if err != nil {
@@ -299,7 +421,7 @@ func TestBuiltins_RelativeWorkDirIsCapturedAsAbsolute(t *testing.T) {
 	t.Chdir(base)
 
 	r := NewRegistry()
-	RegisterBuiltins(r, "workspace")
+	registerTestBuiltins(r, "workspace")
 	t.Chdir(t.TempDir())
 
 	out, err := r.Call(context.Background(), "read", map[string]any{"path": "music/README.md"})
@@ -311,25 +433,24 @@ func TestBuiltins_RelativeWorkDirIsCapturedAsAbsolute(t *testing.T) {
 	}
 }
 
-func TestBuiltins_BashAcceptsRawArgumentsFallback(t *testing.T) {
-	skipIfWindows(t)
+func TestBuiltins_ShellAcceptsRawArgumentsFallback(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	for name, input := range map[string]map[string]any{
 		"object": {
-			"_raw_arguments": `{"cmd":"printf raw-ok"}`,
+			"_raw_arguments": `{"cmd":"echo raw-ok"}`,
 		},
 		"double_encoded": {
-			"_raw_arguments": `"{\"cmd\":\"printf raw-ok\"}"`,
+			"_raw_arguments": `"{\"cmd\":\"echo raw-ok\"}"`,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			out, err := r.Call(context.Background(), "bash", input)
+			out, err := r.Call(context.Background(), "shell", input)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if out != "raw-ok" {
+			if strings.TrimSpace(out) != "raw-ok" {
 				t.Fatalf("out = %q, want raw-ok", out)
 			}
 		})
@@ -338,7 +459,7 @@ func TestBuiltins_BashAcceptsRawArgumentsFallback(t *testing.T) {
 
 func TestBuiltins_EditAmbiguous(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")
@@ -353,7 +474,7 @@ func TestBuiltins_EditAmbiguous(t *testing.T) {
 
 func TestBuiltins_EditReplaceAll(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")
@@ -384,7 +505,7 @@ func TestBuiltins_EditReplaceAll(t *testing.T) {
 
 func TestBuiltins_EditExpectedReplacementsMismatchPreservesFile(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")
@@ -417,7 +538,7 @@ func TestBuiltins_EditExpectedReplacementsMismatchPreservesFile(t *testing.T) {
 
 func TestBuiltins_EditExpectedReplacementsNullIsIgnored(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "foo.txt")
@@ -442,22 +563,21 @@ func TestBuiltins_EditExpectedReplacementsNullIsIgnored(t *testing.T) {
 	}
 }
 
-func TestBuiltins_Bash(t *testing.T) {
-	skipIfWindows(t)
+func TestBuiltins_Shell(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
-	out, err := r.Call(context.Background(), "bash", map[string]any{"cmd": "echo hello"})
+	registerTestBuiltins(r, "")
+	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": "echo hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "hello") {
-		t.Fatalf("bash output: %q", out)
+		t.Fatalf("shell output: %q", out)
 	}
 }
 
 func TestBuiltins_Grep(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\nalphabet"), 0o644); err != nil {
@@ -479,7 +599,7 @@ func TestBuiltins_Grep(t *testing.T) {
 
 func TestBuiltins_GrepNoMatches(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha"), 0o644); err != nil {
 		t.Fatal(err)
@@ -493,11 +613,11 @@ func TestBuiltins_GrepNoMatches(t *testing.T) {
 	}
 }
 
-func TestBuiltins_BashTimeout(t *testing.T) {
+func TestBuiltins_ShellTimeout(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
-	out, info, err := r.CallWithInfo(context.Background(), "bash", map[string]any{
+	registerTestBuiltins(r, "")
+	out, info, err := r.CallWithInfo(context.Background(), "shell", map[string]any{
 		"cmd":     "printf 'before timeout stdout\\n'; printf 'before timeout stderr\\n' >&2; sleep 5",
 		"timeout": 1,
 	})
@@ -515,13 +635,13 @@ func TestBuiltins_BashTimeout(t *testing.T) {
 	}
 }
 
-func TestBuiltins_BashTimeoutKillsChildProcessGroup(t *testing.T) {
+func TestBuiltins_ShellTimeoutKillsChildProcessGroup(t *testing.T) {
 	skipIfWindows(t)
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 
 	start := time.Now()
-	out, info, err := r.CallWithInfo(context.Background(), "bash", map[string]any{
+	out, info, err := r.CallWithInfo(context.Background(), "shell", map[string]any{
 		"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
 		"timeout": 1,
 	})
@@ -543,12 +663,11 @@ func TestBuiltins_BashTimeoutKillsChildProcessGroup(t *testing.T) {
 	}
 }
 
-func TestBuiltins_BashCwd(t *testing.T) {
-	skipIfWindows(t)
+func TestBuiltins_ShellCwd(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 	dir := t.TempDir()
-	out, err := r.Call(context.Background(), "bash", map[string]any{"cmd": "pwd", "cwd": dir})
+	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": pwdCommand(), "cwd": dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +679,7 @@ func TestBuiltins_BashCwd(t *testing.T) {
 
 func TestBuiltins_ReadOffsetLimit(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "lines.txt")
 	if err := os.WriteFile(path, []byte("a\nb\nc\nd\ne"), 0o644); err != nil {
@@ -577,7 +696,7 @@ func TestBuiltins_ReadOffsetLimit(t *testing.T) {
 
 func TestBuiltins_GrepRegex(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\nTWO\nthree\n42abc"), 0o644); err != nil {
 		t.Fatal(err)
@@ -593,24 +712,23 @@ func TestBuiltins_GrepRegex(t *testing.T) {
 
 func TestBuiltins_EditMissingFile(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 	_, err := r.Call(context.Background(), "edit", map[string]any{"path": "/tmp/__nope__.txt", "old": "x", "new": "y"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 }
 
-func TestBuiltins_BashDefaultsToWorkDir(t *testing.T) {
-	skipIfWindows(t)
+func TestBuiltins_ShellDefaultsToWorkDir(t *testing.T) {
 	r := NewRegistry()
 	dir := t.TempDir()
-	RegisterBuiltins(r, dir)
-	out, err := r.Call(context.Background(), "bash", map[string]any{"cmd": "pwd"})
+	registerTestBuiltins(r, dir)
+	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": pwdCommand()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, filepath.Base(dir)) {
-		t.Fatalf("bash defaulted to %q, want under %s", out, dir)
+		t.Fatalf("shell defaulted to %q, want under %s", out, dir)
 	}
 }
 
@@ -620,7 +738,7 @@ func TestBuiltins_GrepDefaultsToWorkDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("alpha"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	RegisterBuiltins(r, dir)
+	registerTestBuiltins(r, dir)
 	out, err := r.Call(context.Background(), "grep", map[string]any{"pattern": "alpha"})
 	if err != nil {
 		t.Fatal(err)
@@ -630,14 +748,13 @@ func TestBuiltins_GrepDefaultsToWorkDir(t *testing.T) {
 	}
 }
 
-func TestBuiltins_BashCwdOverridesWorkDir(t *testing.T) {
-	skipIfWindows(t)
+func TestBuiltins_ShellCwdOverridesWorkDir(t *testing.T) {
 	// Explicit cwd in the call wins over the configured WorkDir.
 	r := NewRegistry()
 	work := t.TempDir()
 	other := t.TempDir()
-	RegisterBuiltins(r, work)
-	out, err := r.Call(context.Background(), "bash", map[string]any{"cmd": "pwd", "cwd": other})
+	registerTestBuiltins(r, work)
+	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": pwdCommand(), "cwd": other})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,13 +765,13 @@ func TestBuiltins_BashCwdOverridesWorkDir(t *testing.T) {
 
 func TestSpecs_OrderedAndComplete(t *testing.T) {
 	r := NewRegistry()
-	RegisterBuiltins(r, "")
+	registerTestBuiltins(r, "")
 	specs := r.Specs()
 	names := make([]string, len(specs))
 	for i, s := range specs {
 		names[i] = s.Name
 	}
-	want := []string{"bash", "edit", "grep", "read", "write"}
+	want := []string{"edit", "grep", "read", "shell", "write"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("want %v, got %v", want, names)
 	}

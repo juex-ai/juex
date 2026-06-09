@@ -13,7 +13,7 @@ test("applyToolRequestedToMessages adds a running tool block to a pending assist
   const next = applyToolRequestedToMessages(messages, {
     turnID: "t1",
     toolUseID: "tool-1",
-    toolName: "bash",
+    toolName: "shell",
     input: { cmd: "sleep 10" },
     timeoutSeconds: 30,
   });
@@ -23,7 +23,7 @@ test("applyToolRequestedToMessages adds a running tool block to a pending assist
   assert.deepEqual(assistant.blocks?.[0], {
     type: "tool_use",
     tool_use_id: "tool-1",
-    tool_name: "bash",
+    tool_name: "shell",
     input: { cmd: "sleep 10" },
     timeout_seconds: 30,
   });
@@ -38,7 +38,7 @@ test("applyToolRequestedToMessages updates an existing tool block without duplic
         {
           type: "tool_use",
           tool_use_id: "tool-1",
-          tool_name: "bash",
+          tool_name: "shell",
           input: { cmd: "sleep 10" },
         },
       ],
@@ -48,7 +48,7 @@ test("applyToolRequestedToMessages updates an existing tool block without duplic
   const next = applyToolRequestedToMessages(messages, {
     turnID: "t1",
     toolUseID: "tool-1",
-    toolName: "bash",
+    toolName: "shell",
     input: { cmd: "sleep 10" },
     timeoutSeconds: 45,
   });
@@ -57,7 +57,7 @@ test("applyToolRequestedToMessages updates an existing tool block without duplic
   assert.deepEqual(next[0].blocks?.[0], {
     type: "tool_use",
     tool_use_id: "tool-1",
-    tool_name: "bash",
+    tool_name: "shell",
     input: { cmd: "sleep 10" },
     timeout_seconds: 45,
   });
@@ -77,7 +77,7 @@ test("applyToolRequestedToMessages appends to a completed assistant message", ()
   const next = applyToolRequestedToMessages(messages, {
     turnID: "t1",
     toolUseID: "tool-1",
-    toolName: "bash",
+    toolName: "shell",
     input: { cmd: "sleep 10" },
     timeoutSeconds: 30,
   });
@@ -86,7 +86,7 @@ test("applyToolRequestedToMessages appends to a completed assistant message", ()
   assert.deepEqual(next[1].blocks?.[1], {
     type: "tool_use",
     tool_use_id: "tool-1",
-    tool_name: "bash",
+    tool_name: "shell",
     input: { cmd: "sleep 10" },
     timeout_seconds: 30,
   });

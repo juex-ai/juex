@@ -80,6 +80,11 @@ servers still come from `.agents/`. Runtime state lives under `.juex/` so it
 can stay uncommitted. User-global provider fallback configuration lives at
 `~/.juex/juex.yaml`.
 
+The builtin command tool is `shell`. Juex resolves a `ShellProfile` from the
+process runtime OS: Windows binaries default to PowerShell when available,
+Linux/macOS binaries default to POSIX shells, and Linux binaries running under
+WSL stay POSIX unless `shell.profile: wsl` is configured explicitly.
+
 ## Development
 
 Use the project toolchain wrapper when available:

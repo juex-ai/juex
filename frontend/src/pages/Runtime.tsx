@@ -49,6 +49,19 @@ export function Runtime() {
               <dd className="break-all px-3 py-2 font-mono text-xs">
                 {data.work_dir || "-"}
               </dd>
+              <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Shell
+              </dt>
+              <dd className="border-t px-3 py-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Badge variant="outline" className="font-mono text-[11px]">
+                    {shellLabel(data)}
+                  </Badge>
+                  <span className="min-w-0 break-all font-mono text-xs">
+                    {shellCommand(data)}
+                  </span>
+                </div>
+              </dd>
             </dl>
           </div>
         </section>
@@ -305,6 +318,20 @@ function providerCapabilities(data: RuntimeStatusResponse): string[] {
     caps.max_output_tokens ? "max output" : "",
   ].filter(Boolean);
   return labels.length > 0 ? labels : ["none"];
+}
+
+function shellLabel(data: RuntimeStatusResponse): string {
+  const shell = data.shell;
+  const profile = shell?.profile || "-";
+  const family = shell?.family || "-";
+  const style = shell?.path_style || "-";
+  return `${profile} · ${family} · ${style} paths`;
+}
+
+function shellCommand(data: RuntimeStatusResponse): string {
+  const shell = data.shell;
+  if (!shell?.binary) return "-";
+  return [shell.binary, ...(shell.args ?? []), "<cmd>"].join(" ");
 }
 
 function mcpSummaryLabel(data: RuntimeStatusResponse): string {

@@ -219,6 +219,19 @@ export interface FileContentResponse {
   truncated: boolean;
 }
 
+export interface ShellProfile {
+  profile: string;
+  family: string;
+  binary: string;
+  args?: string[];
+  path_style: string;
+  host_path_style?: string;
+  source: string;
+  runtime_os: string;
+  runtime_arch: string;
+  environment?: string;
+}
+
 export interface RuntimeStatusResponse {
   work_dir: string;
   provider: {
@@ -234,6 +247,7 @@ export interface RuntimeStatusResponse {
       max_output_tokens: boolean;
     };
   };
+  shell: ShellProfile;
   system_prompt?: {
     count: number;
     items: SystemPromptEntry[];

@@ -63,6 +63,18 @@ func TestLoadFromFile_RejectsLegacyProviderConfig(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_RejectsScalarShellConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, configPath, "shell: powershell\n")
+
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), "shell") {
+		t.Fatalf("err = %v, want scalar shell config rejection", err)
+	}
+}
+
 func TestLoadFromFile_OSEnvOverridesExplicitConfig(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
@@ -195,6 +207,41 @@ runtime:
 	}
 }
 
+func TestLoad_WorkShellEmptyResetsGlobalShell(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	global := `model: openai/gpt-global
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+shell:
+  profile: custom
+  binary: ` + quoteYAMLString(os.Args[0]) + `
+  family: posix
+  args: ["-test.run=TestNoop"]
+  path_style: posix
+`
+	local := `shell: {}
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Shell.Profile == "custom" {
+		t.Fatalf("work-local shell: {} should reset user-global shell config, got %+v", cfg.Shell)
+	}
+	if !strings.HasPrefix(cfg.Shell.Source, "auto:") {
+		t.Fatalf("shell source = %q, want auto source after reset", cfg.Shell.Source)
+	}
+}
+
 func TestLoad_DefaultRuntimeConfigPath(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
@@ -281,6 +328,123 @@ func TestLoad_DefaultsWorkDirToCwd(t *testing.T) {
 	wantWD, _ := os.Getwd()
 	if cfg.WorkDir != wantWD {
 		t.Fatalf("WorkDir = %q, want %q", cfg.WorkDir, wantWD)
+	}
+}
+
+func TestResolveShellProfile_AutoWindowsPrefersPowerShell(t *testing.T) {
+	profile, err := ResolveShellProfile(ShellConfig{}, ShellResolveOptions{
+		RuntimeOS:   "windows",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+		LookPath: func(name string) (string, error) {
+			switch name {
+			case "pwsh":
+				return `C:\Tools\pwsh.exe`, nil
+			case "powershell.exe", "cmd.exe":
+				return `C:\Windows\System32\` + name, nil
+			default:
+				return "", os.ErrNotExist
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Profile != "powershell" || profile.Family != "powershell" || profile.Binary != `C:\Tools\pwsh.exe` {
+		t.Fatalf("profile = %+v", profile)
+	}
+	if strings.Join(profile.Args, " ") != "-NoProfile -Command" || profile.PathStyle != "windows" || profile.Source != "auto:windows" {
+		t.Fatalf("profile metadata = %+v", profile)
+	}
+	if profile.RuntimeOS != "windows" || profile.RuntimeArch != "amd64" {
+		t.Fatalf("runtime metadata = %+v", profile)
+	}
+}
+
+func TestResolveShellProfile_LinuxWSLStaysPOSIX(t *testing.T) {
+	profile, err := ResolveShellProfile(ShellConfig{}, ShellResolveOptions{
+		RuntimeOS:   "linux",
+		RuntimeArch: "amd64",
+		LookupEnv: func(key string) (string, bool) {
+			if key == "WSL_DISTRO_NAME" {
+				return "Ubuntu", true
+			}
+			return "", false
+		},
+		LookPath: func(name string) (string, error) {
+			if name == "bash" {
+				return "/usr/bin/bash", nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Profile != "bash" || profile.Family != "posix" || profile.Environment != "wsl" {
+		t.Fatalf("profile = %+v, want WSL environment with POSIX shell", profile)
+	}
+}
+
+func TestResolveShellProfile_BuiltinRejectsNonBinaryOverrides(t *testing.T) {
+	_, err := ResolveShellProfile(ShellConfig{Profile: "powershell", Binary: "bash"}, ShellResolveOptions{
+		RuntimeOS:   "windows",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+		LookPath: func(name string) (string, error) {
+			if name == "bash" {
+				return `/usr/bin/bash`, nil
+			}
+			return "", os.ErrNotExist
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "shell.profile powershell cannot use binary bash") {
+		t.Fatalf("err = %v, want profile/binary mismatch", err)
+	}
+}
+
+func TestResolveShellProfile_CustomRequiresFields(t *testing.T) {
+	_, err := ResolveShellProfile(ShellConfig{Profile: "custom", Binary: os.Args[0], Family: "posix"}, ShellResolveOptions{
+		RuntimeOS:   "linux",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+		LookPath:    func(string) (string, error) { return "", os.ErrNotExist },
+	})
+	if err == nil || !strings.Contains(err.Error(), "custom") || !strings.Contains(err.Error(), "args") {
+		t.Fatalf("err = %v, want custom missing args error", err)
+	}
+}
+
+func TestResolveShellProfile_CustomPathWithSeparatorBecomesAbsolute(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	binary := filepath.Join("bin", "custom-shell")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	profile, err := ResolveShellProfile(ShellConfig{
+		Profile:   "custom",
+		Binary:    binary,
+		Family:    "posix",
+		Args:      []string{"-c"},
+		PathStyle: "posix",
+	}, ShellResolveOptions{
+		RuntimeOS:   "linux",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(profile.Binary) {
+		t.Fatalf("binary = %q, want absolute path", profile.Binary)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(profile.Binary), "/bin/custom-shell") {
+		t.Fatalf("binary = %q, want resolved custom shell path", profile.Binary)
 	}
 }
 
@@ -1013,6 +1177,11 @@ func writeTextFile(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func quoteYAMLString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
 
 func fakeCodexIDToken(t *testing.T, claims map[string]any) string {
