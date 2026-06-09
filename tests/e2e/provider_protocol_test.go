@@ -103,13 +103,13 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var capturedPath string
-			var capturedBody map[string]any
+			requests := make(chan capturedProviderRequest, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				capturedPath = r.URL.Path
-				if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Errorf("decode request: %v", err)
 				}
+				requests <- capturedProviderRequest{path: r.URL.Path, body: body}
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(tc.responseBody))
 			}))
@@ -130,31 +130,42 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("juex run: %v\n%s", err, out)
 			}
-			if !strings.HasSuffix(capturedPath, tc.wantPathSuffix) {
-				t.Fatalf("request path = %q, want suffix %q", capturedPath, tc.wantPathSuffix)
+			var captured capturedProviderRequest
+			select {
+			case captured = <-requests:
+			default:
+				t.Fatal("fake provider did not receive a request")
 			}
-			if capturedBody["model"] == "" {
-				t.Fatalf("request body missing model: %+v", capturedBody)
+			if !strings.HasSuffix(captured.path, tc.wantPathSuffix) {
+				t.Fatalf("request path = %q, want suffix %q", captured.path, tc.wantPathSuffix)
+			}
+			if model, _ := captured.body["model"].(string); model == "" {
+				t.Fatalf("request body missing model: %+v", captured.body)
 			}
 			if tc.wantNoReasoningEffort {
-				if _, ok := capturedBody["reasoning_effort"]; ok {
-					t.Fatalf("reasoning_effort should be omitted when disabled: %+v", capturedBody)
+				if _, ok := captured.body["reasoning_effort"]; ok {
+					t.Fatalf("reasoning_effort should be omitted when disabled: %+v", captured.body)
 				}
-				if _, ok := capturedBody["reasoning"]; ok {
-					t.Fatalf("reasoning should be omitted when disabled: %+v", capturedBody)
+				if _, ok := captured.body["reasoning"]; ok {
+					t.Fatalf("reasoning should be omitted when disabled: %+v", captured.body)
 				}
 				return
 			}
 			if tc.wantPathSuffix == "/responses" {
-				reasoning, ok := capturedBody["reasoning"].(map[string]any)
+				reasoning, ok := captured.body["reasoning"].(map[string]any)
 				if !ok || reasoning["effort"] != tc.wantReasoningEffort {
-					t.Fatalf("responses reasoning = %+v, want effort %q; body=%+v", reasoning, tc.wantReasoningEffort, capturedBody)
+					t.Fatalf("responses reasoning = %+v, want effort %q; body=%+v", reasoning, tc.wantReasoningEffort, captured.body)
 				}
-			} else if got := capturedBody["reasoning_effort"]; got != tc.wantReasoningEffort {
-				t.Fatalf("reasoning_effort = %v, want %q; body=%+v", got, tc.wantReasoningEffort, capturedBody)
+			} else if got := captured.body["reasoning_effort"]; got != tc.wantReasoningEffort {
+				t.Fatalf("reasoning_effort = %v, want %q; body=%+v", got, tc.wantReasoningEffort, captured.body)
 			}
 		})
 	}
+}
+
+type capturedProviderRequest struct {
+	path string
+	body map[string]any
 }
 
 func chatCompletionResponse(text string) string {
