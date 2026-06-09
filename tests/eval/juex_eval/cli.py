@@ -108,7 +108,8 @@ def run_development(args: argparse.Namespace) -> int:
     commands_file = report_dir / "commands.jsonl"
     commands_file.write_text("", encoding="utf-8")
 
-    tool_prefix = ["mise", "exec", "--"] if shutil.which("mise") else []
+    mise_path = shutil.which("mise")
+    tool_prefix = [mise_path, "exec", "--"] if mise_path else []
     overall = 0
 
     if not args.skip_tests:

@@ -93,6 +93,9 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 		"tests/eval/compaction_eval.sh",
 	} {
 		t.Run(script, func(t *testing.T) {
+			if _, err := exec.LookPath("bash"); err != nil {
+				t.Skip("bash not found; skipping shell wrapper test")
+			}
 			cmd := exec.Command("bash", filepath.Join(root, script), "--help")
 			cmd.Dir = t.TempDir()
 			out, err := cmd.CombinedOutput()

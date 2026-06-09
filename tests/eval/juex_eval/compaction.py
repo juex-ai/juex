@@ -88,7 +88,13 @@ def run(args: argparse.Namespace) -> int:
 
 def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib.Path, temp_dirs: list[pathlib.Path]) -> int:
     safe = model.replace("/", "__")
+    if "/" not in model:
+        print(f"FAIL {model}: invalid model ref format (expected provider/model)", file=sys.stderr)
+        return 1
     provider_id, model_id = model.split("/", 1)
+    if not provider_id or not model_id:
+        print(f"FAIL {model}: invalid model ref format (expected provider/model)", file=sys.stderr)
+        return 1
     work = pathlib.Path(tempfile.mkdtemp(prefix=f"juex-compaction-eval.{safe}."))
     temp_dirs.append(work)
     out_dir = out_root / safe
