@@ -234,7 +234,9 @@ must set `providers[].protocol` explicitly. Known presets own their protocol:
 `deepseek` uses `openai/chat` with reasoning effort enabled. To use another
 OpenAI-compatible Chat provider, define a custom `providers[].id`, set
 `providers[].protocol: openai/chat`, and point the top-level `model` at that
-provider/model pair.
+provider/model pair. Custom `openai/chat` profiles enable reasoning effort by
+default; set `providers[].capabilities.reasoning_effort: false` only when an
+endpoint rejects that field.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and

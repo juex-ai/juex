@@ -92,8 +92,8 @@ func TestResolveProfile_CustomProtocolUsesCompatibleOpenAIChatDefaults(t *testin
 	if profile.ID != "custom" || profile.Protocol != ProtocolOpenAIChat {
 		t.Fatalf("profile = %+v", profile)
 	}
-	if !profile.Capabilities.Tools || profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
-		t.Fatalf("capabilities = %+v, want conservative OpenAI-compatible chat defaults", profile.Capabilities)
+	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
+		t.Fatalf("capabilities = %+v, want OpenAI-compatible chat defaults with reasoning effort", profile.Capabilities)
 	}
 }
 

@@ -226,6 +226,7 @@ func customOpenAIChatProfile(id string, proto Protocol) ProviderProfile {
 		Protocol: proto,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
+			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
 		},

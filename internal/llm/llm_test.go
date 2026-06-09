@@ -636,16 +636,12 @@ func TestOpenAI_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	enabled := true
 	p := NewOpenAI(Config{
 		Protocol:       string(ProtocolOpenAIChat),
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "m",
 		ThinkingEffort: "low",
-		Capabilities: CapabilityOverrides{
-			ReasoningEffort: &enabled,
-		},
 	}, nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
