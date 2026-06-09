@@ -76,10 +76,7 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		dir := t.TempDir()
 		cmd := exec.Command(bin, "run", "hi")
 		cmd.Dir = dir
-		cmd.Env = []string{
-			"PATH=" + os.Getenv("PATH"),
-			"HOME=" + dir,
-		}
+		cmd.Env = isolatedCLIEnv(dir)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err == nil {
@@ -95,10 +92,7 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		// fine — we only care about flag parsing.
 		dir := t.TempDir()
 		cmd := exec.Command(bin, "--cwd", dir, "run", "hi")
-		cmd.Env = []string{
-			"PATH=" + os.Getenv("PATH"),
-			"HOME=" + dir,
-		}
+		cmd.Env = isolatedCLIEnv(dir)
 		out, _ := cmd.CombinedOutput()
 		body := string(out)
 		// Should NOT see "unknown flag" / "unknown shorthand"
@@ -122,4 +116,21 @@ func buildBinary(t *testing.T) string {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
 	return bin
+}
+
+func isolatedCLIEnv(home string) []string {
+	env := append([]string{}, os.Environ()...)
+	env = append(env,
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
+		"PROVIDER_API_ID=",
+		"PROVIDER_API_PROTOCOL=",
+		"PROVIDER_API_BASE=",
+		"PROVIDER_API_KEY=",
+		"PROVIDER_API_MODEL=",
+		"PROVIDER_THINKING_EFFORT=",
+		"PROVIDER_CONTEXT_WINDOW=",
+	)
+	return env
 }
