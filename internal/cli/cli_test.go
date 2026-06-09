@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,12 +148,94 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "session"`, // flag
 		`"name": "config"`,  // persistent flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
+		`"name": "enable-user-global-resources"`,
 		`"shorthand": "C"`,
 		`"persistent": true`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("schema missing %q in:\n%s", want, body)
 		}
+	}
+}
+
+func TestLoadConfig_EnableUserGlobalResourcesFlagOverridesConfig(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	path := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(path, "enable_user_global_resources: false\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(&persistentFlags{cwd: work, enableUserGlobalResources: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserGlobalResources {
+		t.Fatal("--enable-user-global-resources=1 should override config false")
+	}
+
+	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(path, "enable_user_global_resources: true\n"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfig(&persistentFlags{cwd: work, enableUserGlobalResources: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableUserGlobalResources {
+		t.Fatal("--enable-user-global-resources=0 should override config true")
+	}
+}
+
+func TestLoadConfig_EnableUserGlobalResourcesFlagRejectsInvalidBool(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadConfig(&persistentFlags{cwd: work, enableUserGlobalResources: "maybe"})
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--enable-user-global-resources") {
+		t.Fatalf("err = %T %v, want usage error for enable-user-global-resources", err, err)
+	}
+}
+
+func TestRunCmd_EnableUserGlobalResourcesBareFlagMeansTrue(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configPath, "enable_user_global_resources: false\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(home, ".agents", "skills", "global", "SKILL.md"), `---
+name: global
+description: global skill
+---
+body`); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "--enable-user-global-resources", "run", "--dry-run", "--json", "hello"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	}
+	body := out.String()
+	if !strings.Contains(body, `"skill_count": 1`) || !strings.Contains(body, `"name": "global"`) {
+		t.Fatalf("dry-run should include user-global skill after bare enable flag:\n%s", body)
 	}
 }
 
@@ -460,6 +543,32 @@ func writeJuexConfigFile(path, id, base, key, model string) error {
 		"    models:\n" +
 		"      - id: " + model + "\n"
 	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+func appendTextFile(path, body string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(body)
+	return err
+}
+
+func writeTextFile(path, body string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+func setHomeForCLITest(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
+	return home
 }
 
 func TestRunCmd_ResumeAndSessionMutuallyExclusive(t *testing.T) {

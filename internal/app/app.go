@@ -182,12 +182,8 @@ func New(opts Options) (*App, error) {
 	}
 	sessionUnsubscribe := sess.SubscribeBus(bus)
 
-	var globalAgents string
-	if cfg.HomeAgentsDir != "" {
-		globalAgents = filepath.Join(cfg.HomeAgentsDir, "AGENTS.md")
-	}
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: globalAgents,
+		GlobalAgentsMDPath: cfg.GlobalAgentsMDPath(),
 		AgentsMDDirs:       cfg.AgentsMDDirs(),
 		Memory:             memStore,
 		Skills:             skillLoader,

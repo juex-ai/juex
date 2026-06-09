@@ -22,18 +22,19 @@ import (
 // live under .agents. Runtime data (memory, sessions, history) lives under
 // .juex so it does not overlap with project agent configuration.
 type Config struct {
-	ProviderID           string
-	ProviderProtocol     string
-	BaseURL              string
-	APIKey               string
-	Model                string
-	ThinkingEffort       string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
-	ContextWindow        int    // provider context window in tokens; defaults to 256K
-	ProviderHeaders      map[string]string
-	ProviderQuery        map[string]string
-	ProviderCapabilities llm.CapabilityOverrides
-	ProviderCompat       llm.CompatOptions
-	Compaction           CompactionConfig
+	ProviderID                string
+	ProviderProtocol          string
+	BaseURL                   string
+	APIKey                    string
+	Model                     string
+	ThinkingEffort            string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
+	ContextWindow             int    // provider context window in tokens; defaults to 256K
+	ProviderHeaders           map[string]string
+	ProviderQuery             map[string]string
+	ProviderCapabilities      llm.CapabilityOverrides
+	ProviderCompat            llm.CompatOptions
+	Compaction                CompactionConfig
+	EnableUserGlobalResources bool
 
 	HomeAgentsDir string // ~/.agents (user-global)
 	HomeJuexDir   string // ~/.juex (user-global runtime config)
@@ -44,9 +45,10 @@ type Config struct {
 }
 
 type fileConfig struct {
-	Model      string           `yaml:"model"`
-	Providers  []providerConfig `yaml:"providers"`
-	Compaction compactionConfig `yaml:"compaction"`
+	Model                     string           `yaml:"model"`
+	EnableUserGlobalResources optionalBool     `yaml:"enable_user_global_resources"`
+	Providers                 []providerConfig `yaml:"providers"`
+	Compaction                compactionConfig `yaml:"compaction"`
 }
 
 type providerConfig struct {
@@ -136,9 +138,10 @@ func LoadForWorkDir(workDir string) (Config, error) {
 
 func loadForWorkDir(workDir string, resolveAuth bool) (Config, error) {
 	cfg := Config{
-		ContextWindow:   DefaultContextWindow,
-		Compaction:      DefaultCompactionConfig(),
-		providerConfigs: map[string]providerConfig{},
+		ContextWindow:             DefaultContextWindow,
+		Compaction:                DefaultCompactionConfig(),
+		EnableUserGlobalResources: true,
+		providerConfigs:           map[string]providerConfig{},
 	}
 
 	if workDir == "" {
@@ -262,7 +265,7 @@ func (c Config) JuexDir() string {
 // user entries by name).
 func (c Config) SkillDirs() []string {
 	var out []string
-	if c.HomeAgentsDir != "" {
+	if c.EnableUserGlobalResources && c.HomeAgentsDir != "" {
 		out = append(out, filepath.Join(c.HomeAgentsDir, "skills"))
 	}
 	if c.WorkDir != "" {
@@ -314,6 +317,15 @@ func (c Config) HomeRuntimeConfigPath() string {
 	return filepath.Join(c.HomeJuexDir, "juex.yaml")
 }
 
+// GlobalAgentsMDPath returns the user-global AGENTS.md path when user-global
+// resources are enabled.
+func (c Config) GlobalAgentsMDPath() string {
+	if !c.EnableUserGlobalResources || c.HomeAgentsDir == "" {
+		return ""
+	}
+	return filepath.Join(c.HomeAgentsDir, "AGENTS.md")
+}
+
 // AgentsMDDirs returns directories that may contain AGENTS.md (project root
 // + project .agents subdir). The home-global AGENTS.md is loaded separately
 // because its absolute path is required.
@@ -328,7 +340,7 @@ func (c Config) AgentsMDDirs() []string {
 // user-global first, project-local second.
 func (c Config) MCPConfigPaths() []string {
 	var out []string
-	if c.HomeAgentsDir != "" {
+	if c.EnableUserGlobalResources && c.HomeAgentsDir != "" {
 		out = append(out, filepath.Join(c.HomeAgentsDir, "mcp.json"))
 	}
 	if c.WorkDir != "" {
@@ -357,11 +369,42 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 	if strings.TrimSpace(fc.Model) != "" {
 		cfg.modelRef = strings.TrimSpace(fc.Model)
 	}
+	if fc.EnableUserGlobalResources.Set {
+		cfg.EnableUserGlobalResources = fc.EnableUserGlobalResources.Value
+	}
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	return nil
+}
+
+type optionalBool struct {
+	Set   bool
+	Value bool
+}
+
+func (b *optionalBool) UnmarshalYAML(node *yaml.Node) error {
+	value, err := ParseBoolValue(node.Value)
+	if err != nil {
+		return err
+	}
+	b.Set = true
+	b.Value = value
+	return nil
+}
+
+// ParseBoolValue parses config/flag boolean values. It accepts true/false,
+// 1/0, yes/no, and on/off so CLI and YAML behave the same way.
+func ParseBoolValue(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true, nil
+	case "0", "false", "f", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected boolean value true/false or 1/0, got %q", value)
+	}
 }
 
 func DefaultCompactionConfig() CompactionConfig {

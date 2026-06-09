@@ -70,11 +70,15 @@ Juex keeps runtime state in the current work directory:
     └── events.jsonl
 ```
 
-User-global agent configuration lives under `~/.agents/`. Juex loads
-`~/.agents/AGENTS.md` before work-local AGENTS.md files, then loads project
-configuration for agents, MCP servers, and skills from `.agents/`. Runtime state
-lives under `.juex/` so it can stay uncommitted. User-global provider fallback
-configuration lives at `~/.juex/juex.yaml`.
+User-global resources that can affect the agent live under `~/.agents/`. By
+default, Juex loads `~/.agents/AGENTS.md` before work-local AGENTS.md files,
+and also reads user-global skills and MCP servers from `~/.agents/skills` and
+`~/.agents/mcp.json`. Set `enable_user_global_resources: false` in
+`juex.yaml`, or pass `--enable-user-global-resources=false`, to ignore those
+user-global resources for a run. Project-local AGENTS.md, skills, and MCP
+servers still come from `.agents/`. Runtime state lives under `.juex/` so it
+can stay uncommitted. User-global provider fallback configuration lives at
+`~/.juex/juex.yaml`.
 
 ## Development
 

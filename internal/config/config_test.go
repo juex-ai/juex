@@ -250,6 +250,92 @@ func TestLoad_DefaultsWorkDirToCwd(t *testing.T) {
 	}
 }
 
+func TestLoad_EnableUserGlobalResourcesDefaultsAndOverrides(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+
+	cfg, err := LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserGlobalResources {
+		t.Fatal("EnableUserGlobalResources should default to true")
+	}
+
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "enable_user_global_resources: 0\n")
+	cfg, err = LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableUserGlobalResources {
+		t.Fatal("global enable_user_global_resources: 0 should disable user-global resources")
+	}
+	if cfg.GlobalAgentsMDPath() != "" {
+		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
+	}
+	if got := cfg.SkillDirs(); len(got) != 1 || got[0] != filepath.Join(work, ".agents", "skills") {
+		t.Fatalf("SkillDirs = %v", got)
+	}
+	if got := cfg.MCPConfigPaths(); len(got) != 1 || got[0] != filepath.Join(work, ".agents", "mcp.json") {
+		t.Fatalf("MCPConfigPaths = %v", got)
+	}
+
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), "enable_user_global_resources: 1\n")
+	cfg, err = LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserGlobalResources {
+		t.Fatal("work-local enable_user_global_resources: 1 should override global false")
+	}
+
+	override := filepath.Join(work, "override.yaml")
+	writeTextFile(t, override, "enable_user_global_resources: false\n")
+	cfg, err = LoadFromFileForWorkDir(override, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableUserGlobalResources {
+		t.Fatal("--config override false should win over work-local true")
+	}
+}
+
+func TestLoadFromFile_EnableUserGlobalResourcesBoolValues(t *testing.T) {
+	cases := map[string]bool{
+		"true":  true,
+		"false": false,
+		"1":     true,
+		"0":     false,
+	}
+	for value, want := range cases {
+		t.Run(value, func(t *testing.T) {
+			prepareConfigTest(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "juex.yaml")
+			writeTextFile(t, path, "enable_user_global_resources: "+value+"\n")
+			cfg, err := LoadFromFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.EnableUserGlobalResources != want {
+				t.Fatalf("EnableUserGlobalResources = %v, want %v", cfg.EnableUserGlobalResources, want)
+			}
+		})
+	}
+}
+
+func TestLoadFromFile_EnableUserGlobalResourcesRejectsInvalidBool(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, path, "enable_user_global_resources: maybe\n")
+
+	_, err := LoadFromFile(path)
+	if err == nil || !strings.Contains(err.Error(), "expected boolean value") {
+		t.Fatalf("err = %v, want boolean parse error", err)
+	}
+}
+
 func TestLoadForWorkDirNormalizesRelativeWorkDir(t *testing.T) {
 	prepareConfigTest(t)
 	t.Setenv("PROVIDER_API_ID", "openai")
@@ -274,9 +360,10 @@ func TestLoadForWorkDirNormalizesRelativeWorkDir(t *testing.T) {
 
 func TestSkillDirs_AndPaths(t *testing.T) {
 	cfg := Config{
-		HomeAgentsDir: filepath.Join("/u", ".agents"),
-		HomeJuexDir:   filepath.Join("/u", ".juex"),
-		WorkDir:       filepath.Join("/proj"),
+		HomeAgentsDir:             filepath.Join("/u", ".agents"),
+		HomeJuexDir:               filepath.Join("/u", ".juex"),
+		WorkDir:                   filepath.Join("/proj"),
+		EnableUserGlobalResources: true,
 	}
 	wantUserSkills := filepath.Join("/u", ".agents", "skills")
 	wantProjSkills := filepath.Join("/proj", ".agents", "skills")
@@ -316,7 +403,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 }
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
-	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex")}
+	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserGlobalResources: true}
 	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
@@ -335,6 +422,24 @@ func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	mcp := cfg.MCPConfigPaths()
 	if len(mcp) != 1 || mcp[0] != wantMCP {
 		t.Fatalf("mcp = %v", mcp)
+	}
+}
+
+func TestPaths_DisabledUserGlobalResourcesOmitsHomeResources(t *testing.T) {
+	cfg := Config{
+		HomeAgentsDir:             filepath.Join("/u", ".agents"),
+		HomeJuexDir:               filepath.Join("/u", ".juex"),
+		WorkDir:                   filepath.Join("/proj"),
+		EnableUserGlobalResources: false,
+	}
+	if cfg.GlobalAgentsMDPath() != "" {
+		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
+	}
+	if got := cfg.SkillDirs(); len(got) != 1 || got[0] != filepath.Join("/proj", ".agents", "skills") {
+		t.Fatalf("SkillDirs = %v", got)
+	}
+	if got := cfg.MCPConfigPaths(); len(got) != 1 || got[0] != filepath.Join("/proj", ".agents", "mcp.json") {
+		t.Fatalf("MCPConfigPaths = %v", got)
 	}
 }
 
