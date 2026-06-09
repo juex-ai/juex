@@ -419,6 +419,9 @@ func (b *optionalBool) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (d *yamlDuration) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return fmt.Errorf("expected duration scalar, got non-scalar node")
+	}
 	value := strings.TrimSpace(node.Value)
 	if value == "" {
 		return nil
@@ -436,6 +439,9 @@ func (d *yamlDuration) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (i *optionalPositiveInt) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return fmt.Errorf("expected positive integer scalar, got non-scalar node")
+	}
 	value, err := strconv.Atoi(strings.TrimSpace(node.Value))
 	if err != nil {
 		return fmt.Errorf("expected positive integer, got %q", node.Value)

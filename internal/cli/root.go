@@ -36,7 +36,8 @@ func Execute() int {
 		return ExitSuccess
 	}
 	alreadyEmitted := false
-	if emitted, ok := err.(*emittedError); ok {
+	var emitted *emittedError
+	if errors.As(err, &emitted) && emitted != nil && emitted.err != nil {
 		err = emitted.err
 		alreadyEmitted = true
 	}

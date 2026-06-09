@@ -607,8 +607,12 @@ runtime:
 }
 
 func TestLoadFromFile_RuntimeConfigRejectsInvalidValues(t *testing.T) {
-	for name, body := range map[string]string{
-		"zero iters": `model: openai/gpt-4
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"zero iters": {
+			body: `model: openai/gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -618,7 +622,10 @@ providers:
 runtime:
   max_iters: 0
 `,
-		"bad duration": `model: openai/gpt-4
+			want: "integer must be positive",
+		},
+		"bad duration": {
+			body: `model: openai/gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -628,14 +635,47 @@ providers:
 runtime:
   max_duration: forever
 `,
+			want: "expected duration",
+		},
+		"duration sequence": {
+			body: `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  max_duration: [5m]
+`,
+			want: "duration scalar",
+		},
+		"iters mapping": {
+			body: `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  max_iters:
+    value: 3
+`,
+			want: "positive integer scalar",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			prepareConfigTest(t)
 			dir := t.TempDir()
 			configPath := filepath.Join(dir, "juex.yaml")
-			writeTextFile(t, configPath, body)
-			if _, err := LoadFromFile(configPath); err == nil {
+			writeTextFile(t, configPath, tc.body)
+			_, err := LoadFromFile(configPath)
+			if err == nil {
 				t.Fatal("expected invalid runtime config error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want substring %q", err, tc.want)
 			}
 		})
 	}
