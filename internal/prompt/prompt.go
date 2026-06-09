@@ -30,7 +30,17 @@ type Builder struct {
 	Memory             *memory.Store
 	Skills             *skills.Loader
 	WorkDir            string
+	Shell              ShellProfile
 	Now                func() time.Time
+}
+
+type ShellProfile struct {
+	Profile       string
+	Family        string
+	Binary        string
+	Args          []string
+	PathStyle     string
+	HostPathStyle string
 }
 
 type Section struct {
@@ -96,11 +106,41 @@ func (b *Builder) operatingContext() string {
 	} else if abs, err := filepath.Abs(cwd); err == nil {
 		cwd = abs
 	}
-	return fmt.Sprintf(
-		"## Operating Context\n- cwd: %s\n- os: %s/%s\n- time: %s",
-		cwd, runtime.GOOS, runtime.GOARCH,
-		now().UTC().Format(time.RFC3339),
-	)
+	lines := []string{
+		"## Operating Context",
+		fmt.Sprintf("- cwd: %s", cwd),
+		fmt.Sprintf("- os: %s/%s", runtime.GOOS, runtime.GOARCH),
+		fmt.Sprintf("- time: %s", now().UTC().Format(time.RFC3339)),
+	}
+	if b.Shell.Binary != "" || b.Shell.Profile != "" || b.Shell.Family != "" {
+		profile := b.Shell.Profile
+		if profile == "" {
+			profile = b.Shell.Family
+		}
+		binary := b.Shell.Binary
+		if binary == "" {
+			binary = "shell"
+		}
+		family := b.Shell.Family
+		if family == "" {
+			family = profile
+		}
+		pathStyle := b.Shell.PathStyle
+		if pathStyle == "" {
+			pathStyle = "platform"
+		}
+		lines = append(lines,
+			fmt.Sprintf("- shell: %s (%s)", profile, binary),
+			fmt.Sprintf("- shell_family: %s", family),
+			fmt.Sprintf("- shell_path_style: %s", pathStyle),
+			"",
+			fmt.Sprintf("Use the `shell` tool with %s syntax.", family),
+		)
+		if family == "powershell" {
+			lines = append(lines, "For powershell, do not use POSIX heredocs, rm -rf, grep-only assumptions, or bash-specific expansion.")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *Builder) agentsSectionLabel(path string) string {

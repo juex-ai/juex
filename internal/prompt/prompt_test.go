@@ -220,6 +220,33 @@ func TestBuilder_OperatingContextUsesWorkDir(t *testing.T) {
 	}
 }
 
+func TestBuilder_OperatingContextIncludesShellProfile(t *testing.T) {
+	b := &Builder{
+		AgentsMDDirs: []string{t.TempDir()},
+		Shell: ShellProfile{
+			Profile:   "powershell",
+			Family:    "powershell",
+			Binary:    "pwsh",
+			Args:      []string{"-NoProfile", "-Command"},
+			PathStyle: "windows",
+		},
+		Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
+	}
+
+	got := b.Build()
+	for _, want := range []string{
+		"- shell: powershell (pwsh)",
+		"- shell_family: powershell",
+		"- shell_path_style: windows",
+		"Use the `shell` tool with powershell syntax.",
+		"do not use POSIX heredocs",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("operating context missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestBuilder_OperatingContextNormalizesRelativeWorkDir(t *testing.T) {
 	base := t.TempDir()
 	t.Chdir(base)

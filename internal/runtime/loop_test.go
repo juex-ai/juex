@@ -87,7 +87,7 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 	t.Helper()
 	reg := tools.NewRegistry()
 	if builtinTools {
-		tools.RegisterBuiltins(reg, "")
+		tools.RegisterBuiltins(reg, tools.BuiltinOptions{Shell: tools.DefaultShellProfile()})
 	}
 	bus := events.NewBus()
 	sess, err := session.New(t.TempDir())
@@ -1455,13 +1455,13 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	}
 }
 
-func TestTurn_BuiltinBashTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
+func TestTurn_BuiltinShellTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 	if goruntime.GOOS == "windows" {
-		t.Skip("bash tool requires bash; skipping on windows")
+		t.Skip("test uses POSIX process-group behavior")
 	}
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "bash_timeout", ToolName: "bash", Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "shell_timeout", ToolName: "shell", Input: map[string]any{
 				"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
 				"timeout": 1,
 			}},
@@ -1477,7 +1477,7 @@ func TestTurn_BuiltinBashTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 	})
 
 	start := time.Now()
-	out, err := eng.Turn(context.Background(), "run bash")
+	out, err := eng.Turn(context.Background(), "run shell")
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
@@ -1504,13 +1504,13 @@ func TestTurn_BuiltinBashTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 	}
 }
 
-func TestTurn_BuiltinBashRawArgumentsNormalizeAndContinue(t *testing.T) {
+func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if goruntime.GOOS == "windows" {
-		t.Skip("bash tool requires bash; skipping on windows")
+		t.Skip("test uses POSIX shell command syntax")
 	}
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "bash_raw", ToolName: "bash", Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "shell_raw", ToolName: "shell", Input: map[string]any{
 				"_raw_arguments": `{"cmd":"printf raw-ok","timeout":2}`,
 			}},
 		}}, StopReason: llm.StopToolUse},
@@ -1529,7 +1529,7 @@ func TestTurn_BuiltinBashRawArgumentsNormalizeAndContinue(t *testing.T) {
 		}
 	})
 
-	out, err := eng.Turn(context.Background(), "run bash")
+	out, err := eng.Turn(context.Background(), "run shell")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1583,14 +1583,14 @@ func TestTurn_BuiltinBashRawArgumentsNormalizeAndContinue(t *testing.T) {
 
 func TestToolErrorContentTruncatesLargeOutput(t *testing.T) {
 	out := strings.Repeat("x", 40*1024)
-	got := toolErrorContent(out, errors.New("tools: bash timed out after 1s"))
+	got := toolErrorContent(out, errors.New("tools: shell timed out after 1s"))
 	if len(got) >= len(out) {
 		t.Fatalf("tool error content len = %d, want less than unbounded output len %d", len(got), len(out))
 	}
 	if !strings.Contains(got, "... (remaining output truncated) ...") {
 		t.Fatalf("tool error content = %q, want truncation marker", got)
 	}
-	if !strings.Contains(got, "[tool error]\ntools: bash timed out after 1s") {
+	if !strings.Contains(got, "[tool error]\ntools: shell timed out after 1s") {
 		t.Fatalf("tool error content = %q, want timeout detail", got)
 	}
 }

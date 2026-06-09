@@ -7,7 +7,7 @@
 //   - Skill loading (path appears in system prompt; model loads body via `read`)
 //   - Work-local memory entries -> system prompt + memory_write/search round-trip
 //   - MCP stdio client -> registered as mcp__<server>__<tool> in the registry
-//   - Builtin tools end-to-end: write, read, edit, bash, grep
+//   - Builtin tools end-to-end: write, read, edit, shell, grep
 //   - Parallel tool calls in a single response
 //   - Event emission landing in events.jsonl
 //   - Conversation messages landing in conversation.jsonl
@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -82,7 +81,7 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 		for _, t := range tools {
 			toolNames[t.Name] = true
 		}
-		for _, want := range []string{"read", "write", "edit", "bash", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
+		for _, want := range []string{"read", "write", "edit", "shell", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
 			if !toolNames[want] {
 				p.t.Errorf("tool %q missing from registry; have %v", want, keys(toolNames))
 			}
@@ -102,9 +101,6 @@ func keys(m map[string]bool) []string {
 func TestEndToEnd_FullStack(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e is slow")
-	}
-	if goruntime.GOOS == "windows" {
-		t.Skip("e2e drives the bash builtin which is unavailable on windows")
 	}
 
 	// -- Filesystem layout --
@@ -175,7 +171,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 
 	// -- Build registry like the CLI does --
 	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, root)
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: e2eToolShellProfile()})
 	skillLoader := skills.NewLoader(filepath.Join(homeAgents, "skills"), filepath.Join(projectAgents, "skills"))
 	if err := skillLoader.Load(); err != nil {
 		t.Fatal(err)
@@ -212,12 +208,13 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		Memory:             memStore,
 		Skills:             skillLoader,
 		WorkDir:            root,
+		Shell:              e2ePromptShellProfile(),
 		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
 	// -- Script the model --
 	// Step 1: parallel calls to read AGENTS.md, write a new file, ping MCP.
-	// Step 2: edit the demo file then grep for the new content + bash check.
+	// Step 2: edit the demo file then grep for the new content + shell check.
 	// Step 3: write a new memory entry then read the trim-tool skill.
 	// Step 4: a search of memory.
 	// Step 5: end with text only -> turn ends.
@@ -238,7 +235,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 					{Type: llm.BlockText, Text: "now mutate and verify"},
 					{Type: llm.BlockToolUse, ToolUseID: "t4", ToolName: "edit", Input: map[string]any{"path": demoFile, "old": "placeholder", "new": "FINAL"}},
 					{Type: llm.BlockToolUse, ToolUseID: "t5", ToolName: "grep", Input: map[string]any{"pattern": "FINAL", "path": demoFile}},
-					{Type: llm.BlockToolUse, ToolUseID: "t6", ToolName: "bash", Input: map[string]any{"cmd": "echo SCRIPTED && wc -l " + demoFile}},
+					{Type: llm.BlockToolUse, ToolUseID: "t6", ToolName: "shell", Input: map[string]any{"cmd": "echo SCRIPTED && wc -l " + demoFile}},
 				}},
 				StopReason: llm.StopToolUse,
 			},
@@ -437,7 +434,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 	}
 
 	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, root)
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: e2eToolShellProfile()})
 	skillLoader := skills.NewLoader(filepath.Join(homeAgents, "skills"), filepath.Join(projectAgents, "skills"))
 	if err := skillLoader.Load(); err != nil {
 		t.Fatal(err)
@@ -472,6 +469,7 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		Memory:             memStore,
 		Skills:             skillLoader,
 		WorkDir:            root,
+		Shell:              e2ePromptShellProfile(),
 		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
 	}
 
@@ -633,6 +631,41 @@ func TestMain(m *testing.M) {
 		return
 	}
 	os.Exit(m.Run())
+}
+
+func e2eToolShellProfile() tools.ShellProfile {
+	return tools.ShellProfile{
+		Profile:   "fake-posix",
+		Family:    "posix",
+		Binary:    os.Args[0],
+		Args:      []string{"-test.run=TestE2EShellHelperProcess", "--", "--juex-e2e-shell"},
+		PathStyle: "posix",
+	}
+}
+
+func e2ePromptShellProfile() prompt.ShellProfile {
+	return prompt.ShellProfile{
+		Profile:   "fake-posix",
+		Family:    "posix",
+		Binary:    os.Args[0],
+		Args:      []string{"-test.run=TestE2EShellHelperProcess", "--", "--juex-e2e-shell"},
+		PathStyle: "posix",
+	}
+}
+
+func TestE2EShellHelperProcess(t *testing.T) {
+	hasSentinel := false
+	for _, arg := range os.Args {
+		if arg == "--juex-e2e-shell" {
+			hasSentinel = true
+			break
+		}
+	}
+	if !hasSentinel {
+		return
+	}
+	fmt.Fprintln(os.Stdout, "SCRIPTED")
+	os.Exit(0)
 }
 
 func runFakeMCP() {

@@ -11,6 +11,19 @@ model: openai/gpt-4.1
 # for this workspace or run.
 # enable_user_global_resources: true
 
+# Optional workspace command shell. Omitted is the same as profile: auto.
+# The field is always an object; scalar values like `shell: powershell` are not
+# accepted. Built-in profiles are auto, powershell, cmd, bash, zsh, sh,
+# git-bash, wsl, and custom. Use custom only when you need to set family, args,
+# or path styles yourself.
+# shell:
+#   profile: auto
+#   # binary: pwsh
+#   # For profile: custom only:
+#   # family: powershell
+#   # args: ["-NoProfile", "-Command"]
+#   # path_style: windows
+
 providers:
   # Known preset provider ids: openai, openai-codex, anthropic, deepseek.
   # Known presets fix the protocol and default base URL. Custom providers must

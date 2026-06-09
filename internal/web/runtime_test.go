@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/tools"
@@ -102,6 +103,36 @@ func TestRuntimeStatusReportsAbsoluteWorkDir(t *testing.T) {
 	}
 	if got.WorkDir != work {
 		t.Fatalf("work_dir = %q, want %q", got.WorkDir, work)
+	}
+}
+
+func TestRuntimeStatusIncludesShellProfile(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Cfg.Shell = config.ShellProfile{
+		Profile:   "powershell",
+		Family:    "powershell",
+		Binary:    "pwsh",
+		Args:      []string{"-NoProfile", "-Command"},
+		PathStyle: "windows",
+		Source:    "test",
+		RuntimeOS: "windows",
+	}
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Shell.Profile != "powershell" || got.Shell.Family != "powershell" || got.Shell.PathStyle != "windows" {
+		t.Fatalf("shell = %+v", got.Shell)
+	}
+	foundPromptShell := false
+	for _, item := range got.SystemPrompt.Items {
+		if item.Key == "operating_context" && strings.Contains(item.Text, "- shell: powershell (pwsh)") {
+			foundPromptShell = true
+		}
+	}
+	if !foundPromptShell {
+		t.Fatalf("system prompt did not include shell profile: %+v", got.SystemPrompt.Items)
 	}
 }
 

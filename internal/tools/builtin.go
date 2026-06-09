@@ -8,25 +8,64 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
-// RegisterBuiltins adds the builtin tool set: read / write / edit / bash / grep.
+type BuiltinOptions struct {
+	WorkDir string
+	Shell   ShellProfile
+}
+
+type ShellProfile struct {
+	Profile       string
+	Family        string
+	Binary        string
+	Args          []string
+	PathStyle     string
+	HostPathStyle string
+}
+
+// RegisterBuiltins adds the builtin tool set: read / write / edit / shell / grep.
 //
 // workDir is the default working directory used for relative file paths and
-// for bash / grep calls without an explicit cwd / path. Pass "" to fall back
-// to the process cwd (file tools and bash) and "." (grep).
-func RegisterBuiltins(r *Registry, workDir string) {
+// for shell / grep calls without an explicit cwd / path. Pass "" to fall back
+// to the process cwd (file tools and shell) and "." (grep).
+func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
+	workDir := opts.WorkDir
 	if workDir != "" {
 		if abs, err := filepath.Abs(workDir); err == nil {
 			workDir = abs
 		}
 	}
+	shell := opts.Shell
+	if shell.Binary == "" {
+		shell = DefaultShellProfile()
+	}
 	r.MustRegister(readTool(workDir))
 	r.MustRegister(writeTool(workDir))
 	r.MustRegister(editTool(workDir))
-	r.MustRegister(bashTool(workDir))
+	r.MustRegister(shellTool(workDir, shell))
 	r.MustRegister(grepTool(workDir))
+}
+
+func DefaultShellProfile() ShellProfile {
+	if runtime.GOOS == "windows" {
+		return ShellProfile{
+			Profile:   "cmd",
+			Family:    "cmd",
+			Binary:    "cmd.exe",
+			Args:      []string{"/c"},
+			PathStyle: "windows",
+		}
+	}
+	return ShellProfile{
+		Profile:   "sh",
+		Family:    "posix",
+		Binary:    "sh",
+		Args:      []string{"-c"},
+		PathStyle: "posix",
+	}
 }
 
 // ----- read -----
@@ -188,12 +227,12 @@ func resolveWorkPath(workDir, path string) string {
 	return filepath.Join(workDir, path)
 }
 
-// ----- bash -----
+// ----- shell -----
 
-func bashTool(defaultCwd string) Tool {
+func shellTool(defaultCwd string, profile ShellProfile) Tool {
 	return Tool{
-		Name:        "bash",
-		Description: "Run a shell command via `bash -c`. Returns stdout+stderr. Optional cwd and timeout (seconds, default 60).",
+		Name:        "shell",
+		Description: shellToolDescription(profile),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -211,13 +250,15 @@ func bashTool(defaultCwd string) Tool {
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
 			cmd, _ := in["cmd"].(string)
 			if cmd == "" {
-				return "", fmt.Errorf("bash: missing cmd")
+				return "", fmt.Errorf("shell: missing cmd")
 			}
 			cwd, _ := in["cwd"].(string)
 			if cwd == "" {
 				cwd = defaultCwd
 			}
-			ec := exec.CommandContext(ctx, "bash", "-c", cmd)
+			argv := append([]string(nil), profile.Args...)
+			argv = append(argv, cmd)
+			ec := exec.CommandContext(ctx, profile.Binary, argv...)
 			configureCommandForContext(ec)
 			if cwd != "" {
 				ec.Dir = cwd
@@ -232,6 +273,29 @@ func bashTool(defaultCwd string) Tool {
 			return string(out), nil
 		},
 	}
+}
+
+func shellToolDescription(profile ShellProfile) string {
+	name := profile.Profile
+	if name == "" {
+		name = profile.Family
+	}
+	if name == "" {
+		name = "configured"
+	}
+	binary := profile.Binary
+	if binary == "" {
+		binary = "shell"
+	}
+	style := profile.PathStyle
+	if style == "" {
+		style = "platform"
+	}
+	family := profile.Family
+	if family == "" {
+		family = name
+	}
+	return fmt.Sprintf("Run a command in the current workspace shell. Current shell: %s via `%s %s <cmd>`. Use %s syntax and %s paths. Returns stdout+stderr. Optional cwd and timeout (seconds, default 60).", name, binary, strings.Join(profile.Args, " "), family, style)
 }
 
 // ----- grep -----

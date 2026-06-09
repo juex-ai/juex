@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
@@ -17,11 +18,12 @@ import (
 )
 
 type runtimeStatusResponse struct {
-	WorkDir      string             `json:"work_dir"`
-	Provider     providerStatus     `json:"provider"`
-	SystemPrompt systemPromptStatus `json:"system_prompt"`
-	MCP          mcpStatus          `json:"mcp"`
-	Skills       skillsStatus       `json:"skills"`
+	WorkDir      string              `json:"work_dir"`
+	Provider     providerStatus      `json:"provider"`
+	Shell        config.ShellProfile `json:"shell"`
+	SystemPrompt systemPromptStatus  `json:"system_prompt"`
+	MCP          mcpStatus           `json:"mcp"`
+	Skills       skillsStatus        `json:"skills"`
 }
 
 type providerStatus struct {
@@ -155,6 +157,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	return runtimeStatusResponse{
 		WorkDir:      s.absoluteWorkDir(),
 		Provider:     s.providerStatus(),
+		Shell:        s.opts.Cfg.Shell,
 		SystemPrompt: systemPrompt,
 		MCP: mcpStatus{
 			Configured: len(servers),
@@ -181,6 +184,7 @@ func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
 		Memory:             memStore,
 		Skills:             skillLoader,
 		WorkDir:            s.opts.Cfg.WorkDir,
+		Shell:              promptShellProfile(s.opts.Cfg.Shell),
 	}
 	sections := builder.Sections()
 	items := make([]systemPromptEntry, 0, len(sections))
@@ -198,6 +202,17 @@ func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
 		Count: len(items),
 		Items: items,
 	}, nil
+}
+
+func promptShellProfile(p config.ShellProfile) prompt.ShellProfile {
+	return prompt.ShellProfile{
+		Profile:       p.Profile,
+		Family:        p.Family,
+		Binary:        p.Binary,
+		Args:          append([]string(nil), p.Args...),
+		PathStyle:     p.PathStyle,
+		HostPathStyle: p.HostPathStyle,
+	}
 }
 
 func runtimePromptLabel(section prompt.Section) string {

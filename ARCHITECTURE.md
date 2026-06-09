@@ -291,22 +291,23 @@ with the standard `read` builtin against the path printed there.
 | `read` | read file (offset/limit) |
 | `write` | overwrite file |
 | `edit` | old -> new in-place replace; unique by default, optional replace_all / expected_replacements |
-| `bash` | run shell (timeout, cwd; defaults to WorkDir) |
+| `shell` | run the resolved workspace shell (timeout, cwd; defaults to WorkDir) |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
 | `memory_write` | persist a memory entry |
 | `memory_search` | substring match |
 | `memory_delete` | remove an entry by name |
 
-`tools.RegisterBuiltins(reg, workDir)` injects `workDir` so `read`, `write`,
-and `edit` resolve relative paths against the agent workspace, and `bash` /
-`grep` fall back to it when the model does not pass an explicit `cwd` / `path`.
+`tools.RegisterBuiltins(reg, BuiltinOptions{WorkDir, Shell})` injects
+`workDir` so `read`, `write`, and `edit` resolve relative paths against the
+agent workspace, and `shell` / `grep` fall back to it when the model does not
+pass an explicit `cwd` / `path`.
 All LLM-facing tool schemas include an optional `timeout` field in seconds.
 The registry applies a per-call timeout context, caps it at 300 seconds, and
 strips the reserved field before invoking tools that do not declare their own
 `timeout` input. Tool timeouts are returned as ordinary error tool results so
 the agent can recover in the next model round. When a timed-out tool captured
 stdout or stderr before failing, a bounded copy of that output is preserved in
-the error tool result before the timeout detail. On Unix, `bash` runs in its
+the error tool result before the timeout detail. On Unix, `shell` runs in its
 own process group so a timeout terminates descendant processes that still hold
 stdout or stderr pipes open.
 
@@ -623,6 +624,8 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 ```yaml
 model: openai/gpt-4.1
 enable_user_global_resources: true
+shell:
+  profile: auto
 providers:
   - id: openai
     base_url: ""
@@ -665,6 +668,10 @@ runtime:
 |---|---|
 | `model` | active model reference in `provider_id/model_id` form |
 | `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json` |
+| `shell` | optional object; omitted or `{}` means `profile: auto`; scalar values are rejected |
+| `shell.profile` | `auto`, `powershell`, `cmd`, `bash`, `zsh`, `sh`, `git-bash`, `wsl`, or `custom`; auto uses the Juex process runtime OS |
+| `shell.binary` | optional executable override for built-in profiles; validated before startup and never silently falls back |
+| `shell.family` / `shell.args` / `shell.path_style` / `shell.host_path_style` | required only for `profile: custom`; built-in profiles reject these fields to avoid ambiguous partial overrides |
 | `providers[].id` | required provider id; known presets are `openai`, `openai-codex`, `anthropic`, and `deepseek` |
 | `providers[].protocol` | required for custom providers; public values are `anthropic/messages`, `openai/responses`, and `openai/chat` |
 | `providers[].base_url` | full base URL for custom providers; known presets use their provider default unless overridden for testing |
@@ -706,7 +713,15 @@ Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider_id/model_id` or override a few fields while inheriting missing values
 from `~/.juex/juex.yaml`. The legacy top-level `provider:` block is not
-supported.
+supported. `shell` is an object-level override rather than a deep merge:
+workspace `shell: {}` resets any user-global shell config back to auto.
+
+The resolved `ShellProfile` is included in `juex run --dry-run --json`,
+`/api/runtime`, the system prompt operating context, and the `shell` tool
+description. Windows native binaries prefer `pwsh` / `powershell.exe` before
+`cmd.exe`; Linux and macOS binaries use POSIX shells; Linux binaries under WSL
+are marked with `environment: wsl` but still run POSIX unless `shell.profile:
+wsl` is configured explicitly.
 
 Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
 `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_API_MODEL`,
@@ -901,8 +916,9 @@ workflow; runs entirely on GitHub Actions.
 - `ci.yml` — push + PR, three jobs:
   - `lint`: golangci-lint (default preset).
   - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
-    runs `go test ./... -race -count=1`. Bash-tool tests skip on Windows
-    via a `runtime.GOOS` guard.
+    runs `go test ./... -race -count=1`. POSIX-only shell timeout tests skip
+    on Windows via a `runtime.GOOS` guard; the builtin tool itself is named
+    `shell` and has Windows coverage through config/profile tests.
 - `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/qwen.juex.yaml`
   and `.juex/minimax.juex.yaml` provider configs from repo secrets, then
   runs `-tags=integration ./tests/e2e/...`. Required secrets:
@@ -929,7 +945,7 @@ Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
-| `tools` | registry duplicate, read/write/edit/grep/bash, regex grep, bash timeout, default-cwd from WorkDir |
+| `tools` | registry duplicate, read/write/edit/grep/shell, regex grep, shell timeout, default-cwd from WorkDir |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |

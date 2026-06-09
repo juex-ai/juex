@@ -49,21 +49,22 @@ type errorJSON struct {
 // Derivable paths (memory_dir / sessions_dir under <work_dir>/.juex)
 // are intentionally omitted — readers can reconstruct them from work_dir.
 type dryRunPlan struct {
-	ProviderID  string         `json:"provider_id,omitempty"`
-	Protocol    string         `json:"protocol,omitempty"`
-	Model       string         `json:"model"`
-	BaseURL     string         `json:"base_url"`
-	WorkDir     string         `json:"work_dir"`
-	ConfigFile  string         `json:"config_file,omitempty"`
-	Prompt      string         `json:"prompt"`
-	PromptChars int            `json:"prompt_chars"`
-	SystemChars int            `json:"system_prompt_chars"`
-	ToolCount   int            `json:"tool_count"`
-	Tools       []string       `json:"tools"`
-	SkillCount  int            `json:"skill_count"`
-	Skills      []skillSummary `json:"skills,omitempty"`
-	MCP         app.MCPStatus  `json:"mcp"`
-	Runtime     *runtimePlan   `json:"runtime,omitempty"`
+	ProviderID  string              `json:"provider_id,omitempty"`
+	Protocol    string              `json:"protocol,omitempty"`
+	Model       string              `json:"model"`
+	BaseURL     string              `json:"base_url"`
+	WorkDir     string              `json:"work_dir"`
+	ConfigFile  string              `json:"config_file,omitempty"`
+	Prompt      string              `json:"prompt"`
+	PromptChars int                 `json:"prompt_chars"`
+	SystemChars int                 `json:"system_prompt_chars"`
+	ToolCount   int                 `json:"tool_count"`
+	Tools       []string            `json:"tools"`
+	Shell       config.ShellProfile `json:"shell"`
+	SkillCount  int                 `json:"skill_count"`
+	Skills      []skillSummary      `json:"skills,omitempty"`
+	MCP         app.MCPStatus       `json:"mcp"`
+	Runtime     *runtimePlan        `json:"runtime,omitempty"`
 }
 
 type runtimePlan struct {
@@ -303,6 +304,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		SystemChars: len(system),
 		ToolCount:   len(tools),
 		Tools:       tools,
+		Shell:       cfg.Shell,
 		SkillCount:  len(skillSummaries),
 		Skills:      skillSummaries,
 		MCP:         a.MCPStatus(),
