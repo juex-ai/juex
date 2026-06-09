@@ -66,7 +66,7 @@ func (d *anthropicStreamDiagnostics) observe(chunk []byte) {
 			return
 		}
 		line := append([]byte{}, d.line...)
-		line = append(line, chunk[:lineEnd]...)
+		line = appendBoundedBytes(line, chunk[:lineEnd], anthropicStreamPreviewBytes)
 		d.line = d.line[:0]
 		d.observeLine(bytes.TrimSuffix(line, []byte{'\r'}))
 		chunk = chunk[lineEnd+1:]
