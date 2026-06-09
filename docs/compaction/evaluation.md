@@ -11,7 +11,7 @@ providers.
 
 ## Models
 
-The default model matrix is maintained in `tests/e2e/live-models.yaml`:
+The default model matrix is maintained in `tests/eval/live-models.yaml`:
 
 | Label | Juex model ref | Notes |
 | --- | --- | --- |
@@ -88,25 +88,25 @@ Build the current binary:
 mise exec -- make build
 ```
 
-Run one rotated model from `tests/e2e/live-models.yaml`:
+Run one rotated model from `tests/eval/live-models.yaml`:
 
 ```bash
-scripts/compaction_eval.sh
+tests/eval/compaction_eval.sh
 ```
 
 Run every configured compaction-eval model:
 
 ```bash
-scripts/compaction_eval.sh --all-models
+tests/eval/compaction_eval.sh --all-models
 ```
 
 Run one provider:
 
 ```bash
-scripts/compaction_eval.sh openai-codex/gpt-5.5
+tests/eval/compaction_eval.sh openai-codex/gpt-5.5
 ```
 
-The script reads model refs from `tests/e2e/live-models.yaml`, records the last
+The script reads model refs from `tests/eval/live-models.yaml`, records the last
 successful default run in `.juex/live-model-rotation.json`, and reads provider
 details from `~/.juex/juex.yaml` by default. Override the source with
 `JUEX_PROVIDER_CONFIG=/path/to/juex.yaml` when testing another provider config,
