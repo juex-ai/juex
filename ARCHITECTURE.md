@@ -742,6 +742,10 @@ messages after the compact marker. Large user inputs and tool results are
 materialized to `.juex/artifacts/user-inputs/<session-id>/` and
 `.juex/artifacts/tool-results/<session-id>/`; provider-visible messages keep a
 stable replacement with path, byte count, SHA-256, and head/tail preview.
+Compaction summary input keeps readable reasoning summaries when providers
+expose them, but encrypted/redacted reasoning payloads are represented only as
+small metadata placeholders; those blobs are replay material for compatible
+providers, not useful content for the summary model.
 Manual compact and active-context inspection are available through
 `juex sessions compact --instructions`, `juex sessions context`, local
 `/compact [instructions]` and `/status` slash commands, and matching Web API

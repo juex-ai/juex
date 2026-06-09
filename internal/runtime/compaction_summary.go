@@ -140,6 +140,13 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 		case llm.BlockText:
 			writeSummaryField(&sb, "text", block.Text, toolResultMaxChars)
 		case llm.BlockReasoning:
+			if block.Redacted {
+				if block.Text != "" {
+					writeSummaryField(&sb, "reasoning", block.Text, toolResultMaxChars)
+				}
+				writeRedactedReasoningMetadata(&sb, block)
+				continue
+			}
 			text := block.Text
 			if text == "" {
 				text = block.Content
@@ -169,6 +176,17 @@ func serializeMessageForSummary(msg llm.Message, toolResultMaxChars int) string 
 		}
 	}
 	return sb.String()
+}
+
+func writeRedactedReasoningMetadata(sb *strings.Builder, block llm.Block) {
+	sb.WriteString("reasoning: [redacted reasoning omitted")
+	if block.Signature != "" {
+		fmt.Fprintf(sb, "; id=%s", block.Signature)
+	}
+	if block.Content != "" {
+		fmt.Fprintf(sb, "; encrypted_bytes=%d", len(block.Content))
+	}
+	sb.WriteString("]\n")
 }
 
 func writeSummaryField(sb *strings.Builder, label, value string, maxChars int) {

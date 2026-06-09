@@ -14,13 +14,17 @@ import (
 )
 
 type projectionStats struct {
-	UserInputsExternalized  int
-	ToolResultsExternalized int
-	BytesExternalized       int
+	UserInputsExternalized        int
+	ToolResultsExternalized       int
+	ReasoningContentsStripped     int
+	BytesExternalized             int
+	ReasoningContentBytesStripped int
 }
 
 func (s projectionStats) empty() bool {
-	return s.UserInputsExternalized == 0 && s.ToolResultsExternalized == 0
+	return s.UserInputsExternalized == 0 &&
+		s.ToolResultsExternalized == 0 &&
+		s.ReasoningContentsStripped == 0
 }
 
 func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) (llm.Message, projectionStats, error) {
@@ -92,6 +96,44 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 		total.BytesExternalized += stats.BytesExternalized
 	}
 	return out, total, nil
+}
+
+func stripRedactedReasoningForProviderBudget(systemPrompt string, tools []llm.ToolSpec, msgs []llm.Message, policy compactionPolicy) ([]llm.Message, projectionStats) {
+	if !policy.Enabled || policy.TriggerTokens <= 0 {
+		return msgs, projectionStats{}
+	}
+	if estimateContextTokens(systemPrompt, tools, msgs) < policy.TriggerTokens {
+		return msgs, projectionStats{}
+	}
+	out := make([]llm.Message, len(msgs))
+	var total projectionStats
+	for i, msg := range msgs {
+		out[i] = msg
+		var cloned []llm.Block
+		for j, block := range msg.Blocks {
+			if block.Type != llm.BlockReasoning || !block.Redacted || block.Content == "" {
+				if cloned != nil {
+					cloned = append(cloned, block)
+				}
+				continue
+			}
+			if cloned == nil {
+				cloned = make([]llm.Block, j, len(msg.Blocks))
+				copy(cloned, msg.Blocks[:j])
+			}
+			total.ReasoningContentsStripped++
+			total.ReasoningContentBytesStripped += len(block.Content)
+			block.Content = ""
+			cloned = append(cloned, block)
+		}
+		if cloned != nil {
+			out[i].Blocks = cloned
+		}
+	}
+	if total.empty() {
+		return msgs, projectionStats{}
+	}
+	return out, total
 }
 
 func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, block llm.Block, content string, headBytes, tailBytes int) (llm.ContextArtifactProjection, string, error) {
@@ -240,9 +282,14 @@ func (e *Engine) emitProjectionApplied(turnID string, stats projectionStats) {
 	if stats.empty() {
 		return
 	}
-	e.emit(events.Event{Type: "context.projection.applied", TurnID: turnID, Payload: map[string]any{
+	payload := map[string]any{
 		"user_inputs_externalized":  stats.UserInputsExternalized,
 		"tool_results_externalized": stats.ToolResultsExternalized,
 		"bytes_externalized":        stats.BytesExternalized,
-	}})
+	}
+	if stats.ReasoningContentsStripped > 0 {
+		payload["reasoning_contents_stripped"] = stats.ReasoningContentsStripped
+		payload["reasoning_content_bytes_stripped"] = stats.ReasoningContentBytesStripped
+	}
+	e.emit(events.Event{Type: "context.projection.applied", TurnID: turnID, Payload: payload})
 }

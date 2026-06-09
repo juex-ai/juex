@@ -44,6 +44,44 @@ func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T
 	}
 }
 
+func TestBuildCompactionSummaryRequest_OmitsRedactedReasoningContent(t *testing.T) {
+	encrypted := "enc_" + strings.Repeat("secret", 1000)
+	input := []llm.Message{
+		{ID: "assistant-1", Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type:      llm.BlockReasoning,
+			Signature: "rs_1",
+			Content:   encrypted,
+			Redacted:  true,
+		}}},
+		{ID: "assistant-2", Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type:     llm.BlockReasoning,
+			Text:     "visible reasoning summary",
+			Content:  "enc_keep_metadata_only",
+			Redacted: true,
+		}}},
+		{ID: "assistant-3", Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type:    llm.BlockReasoning,
+			Content: "plain reasoning content",
+		}}},
+	}
+
+	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionPolicy{ToolResultMaxChars: 2000}, "")
+	body := hist[0].FirstText()
+
+	if strings.Contains(body, encrypted) || strings.Contains(body, "enc_keep_metadata_only") {
+		t.Fatalf("redacted reasoning encrypted content leaked into summary request:\n%s", body)
+	}
+	if !strings.Contains(body, "redacted reasoning omitted") {
+		t.Fatalf("summary request should preserve redacted reasoning metadata:\n%s", body)
+	}
+	if !strings.Contains(body, "visible reasoning summary") {
+		t.Fatalf("visible reasoning summary was dropped:\n%s", body)
+	}
+	if !strings.Contains(body, "plain reasoning content") {
+		t.Fatalf("non-redacted reasoning content should remain available:\n%s", body)
+	}
+}
+
 func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) {
 	input := []llm.Message{
 		testMsg("facts", llm.RoleUser, strings.Join([]string{

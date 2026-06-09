@@ -390,6 +390,61 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	}
 }
 
+func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "handled event"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 120
+	eng.Compaction = config.DefaultCompactionConfig()
+	eng.autoCompactFailures = effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow).MaxAutoFailures
+	secret := "enc_" + strings.Repeat("secret ", 200)
+	if err := eng.Session.Append(llm.Message{
+		ID:   "assistant-1",
+		Role: llm.RoleAssistant,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockReasoning,
+			Text:      "previous reasoning summary",
+			Signature: "rs_1",
+			Content:   secret,
+			Redacted:  true,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stripped int
+	bus.Subscribe("context.projection.applied", func(e events.Event) {
+		payload, _ := e.Payload.(map[string]any)
+		if n, ok := payload["reasoning_contents_stripped"].(int); ok {
+			stripped += n
+		}
+	})
+
+	msg := llm.TextMessage(llm.RoleUser, "local:message:notify")
+	msg.Kind = llm.MessageKindMCPEvent
+	out, err := eng.TurnMessage(context.Background(), msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "handled event" {
+		t.Fatalf("out = %q, want handled event", out)
+	}
+	providerText := messagesText(prov.histories[0])
+	if strings.Contains(providerText, secret) {
+		t.Fatalf("provider received redacted reasoning encrypted content:\n%s", providerText)
+	}
+	if !strings.Contains(providerText, "previous reasoning summary") {
+		t.Fatalf("provider lost reasoning summary:\n%s", providerText)
+	}
+	if stripped != 1 {
+		t.Fatalf("stripped event count = %d, want 1", stripped)
+	}
+	if eng.Session.History[0].Blocks[0].Content != secret {
+		t.Fatalf("session history reasoning content was mutated")
+	}
+}
+
 func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
 	prov := &mockProviderWithErrors{
 		errs: []error{fmt.Errorf("context_length_exceeded")},
