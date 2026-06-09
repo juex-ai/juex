@@ -46,6 +46,45 @@ func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	}
 }
 
+func TestStripRedactedReasoningForProviderBudgetOnlyWhenOverTrigger(t *testing.T) {
+	secret := "enc_" + strings.Repeat("secret ", 100)
+	msgs := []llm.Message{{
+		ID:   "assistant-1",
+		Role: llm.RoleAssistant,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockReasoning,
+			Text:      "short summary",
+			Signature: "rs_1",
+			Content:   secret,
+			Redacted:  true,
+		}},
+	}}
+	policy := compactionPolicy{Enabled: true, TriggerTokens: 100000}
+
+	under, stats := stripRedactedReasoningForProviderBudget("", nil, msgs, policy)
+	if !stats.empty() {
+		t.Fatalf("under-budget stats = %+v, want empty", stats)
+	}
+	if under[0].Blocks[0].Content != secret {
+		t.Fatalf("under-budget content stripped unexpectedly")
+	}
+
+	policy.TriggerTokens = 1
+	over, stats := stripRedactedReasoningForProviderBudget("", nil, msgs, policy)
+	if stats.ReasoningContentsStripped != 1 || stats.ReasoningContentBytesStripped != len(secret) {
+		t.Fatalf("over-budget stats = %+v", stats)
+	}
+	if over[0].Blocks[0].Content != "" {
+		t.Fatalf("over-budget content = %q, want stripped", over[0].Blocks[0].Content)
+	}
+	if over[0].Blocks[0].Text != "short summary" || over[0].Blocks[0].Signature != "rs_1" {
+		t.Fatalf("reasoning metadata lost: %+v", over[0].Blocks[0])
+	}
+	if msgs[0].Blocks[0].Content != secret {
+		t.Fatalf("original message was mutated")
+	}
+}
+
 func TestPreviewPartsKeepsUTF8Boundaries(t *testing.T) {
 	content := strings.Repeat("界", 4) + "middle" + strings.Repeat("尾", 4)
 	head, tail := previewParts(content, 4, 4)

@@ -295,6 +295,8 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			return "", e.failTurn(turnID, err)
 		}
 		e.emitProjectionApplied(turnID, projection)
+		requestHistory, projection = stripRedactedReasoningForProviderBudget(systemPrompt, tools, requestHistory, policy)
+		e.emitProjectionApplied(turnID, projection)
 		if budgetStatus.Near() {
 			requestHistory = appendBudgetFinalizationMessage(requestHistory, budgetStatus)
 		}
