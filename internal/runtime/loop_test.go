@@ -1141,6 +1141,120 @@ func TestTurn_BudgetExceeded(t *testing.T) {
 	}
 }
 
+func TestTurn_NearIterationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "noop_1", ToolName: "noop"},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.MaxIters = 2
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "noop",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+	var warningPayloads []map[string]any
+	bus.Subscribe("turn.budget.warning", func(e events.Event) {
+		payload, _ := e.Payload.(map[string]any)
+		warningPayloads = append(warningPayloads, payload)
+	})
+
+	out, err := eng.Turn(context.Background(), "need tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	if len(warningPayloads) != 1 {
+		t.Fatalf("warning payloads = %+v, want one", warningPayloads)
+	}
+	payload := warningPayloads[0]
+	if payload["kind"] != BudgetWarningKindIterationLimit || payload["budget"] != "iterations" || payload["remaining_iters"] != 1 || payload["max_iters"] != 2 {
+		t.Fatalf("warning payload = %+v", payload)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
+	}
+	if strings.Contains(messagesText(prov.histories[0]), runtimeBudgetFinalizationHint) {
+		t.Fatalf("first provider request unexpectedly had finalization hint")
+	}
+	if !strings.Contains(messagesText(prov.histories[1]), runtimeBudgetFinalizationHint) {
+		t.Fatalf("second provider request missing finalization hint: %+v", prov.histories[1])
+	}
+	if strings.Contains(messagesText(eng.Session.History), runtimeBudgetFinalizationHint) {
+		t.Fatalf("session history should not persist finalization hint")
+	}
+}
+
+func TestTurn_NearDurationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "slow_1", ToolName: "slow"},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.MaxIters = 5
+	eng.MaxDur = 800 * time.Millisecond
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "slow",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			time.Sleep(450 * time.Millisecond)
+			return "ok", nil
+		},
+	})
+	var durationWarning map[string]any
+	bus.Subscribe("turn.budget.warning", func(e events.Event) {
+		payload, _ := e.Payload.(map[string]any)
+		if payload["budget"] == "duration" {
+			durationWarning = payload
+		}
+	})
+
+	out, err := eng.Turn(context.Background(), "run slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	if durationWarning == nil {
+		t.Fatal("missing duration budget warning")
+	}
+	if durationWarning["kind"] != BudgetWarningKindTimeout || durationWarning["max_duration_ms"] != int64(800) {
+		t.Fatalf("duration warning = %+v", durationWarning)
+	}
+	remaining, ok := durationWarning["remaining_duration_ms"].(int64)
+	if !ok || remaining <= 0 || remaining >= 800 {
+		t.Fatalf("remaining_duration_ms = %v, want positive value below max", durationWarning["remaining_duration_ms"])
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
+	}
+	if !strings.Contains(messagesText(prov.histories[1]), runtimeBudgetFinalizationHint) {
+		t.Fatalf("second provider request missing finalization hint: %+v", prov.histories[1])
+	}
+	if strings.Contains(messagesText(eng.Session.History), runtimeBudgetFinalizationHint) {
+		t.Fatalf("session history should not persist finalization hint")
+	}
+}
+
+func TestTurnBudgetStatusIgnoresUnsetDurationBudget(t *testing.T) {
+	status := currentTurnBudgetStatus("turn-1", 0, 3, time.Now().Add(-time.Minute), 0)
+	if status.DurationNear {
+		t.Fatalf("DurationNear = true for unset duration budget")
+	}
+	if status.Near() {
+		t.Fatalf("Near = true, want false when iteration and duration budgets are not near")
+	}
+}
+
 func TestTurn_MaxDurationBudgetError(t *testing.T) {
 	prov := &mockProvider{
 		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "x"), StopReason: llm.StopEndTurn}},

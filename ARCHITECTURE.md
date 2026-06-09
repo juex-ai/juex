@@ -474,6 +474,13 @@ single turn. Budget failures are typed as `runtime_iteration_limit` or
 `runtime_timeout`; `juex run --json` includes the stable kind, session id,
 session dir, work dir, and budget details.
 
+When a turn is close to its iteration or duration budget, the runtime emits
+`turn.budget.warning` with `runtime_iteration_warning` or
+`runtime_timeout_warning`. Provider requests made while near a budget receive a
+small provider-only user message asking the model to finish now and avoid
+non-essential tools. That synthetic message is not appended to session history;
+the hard iteration and duration limits remain unchanged.
+
 `Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
 single LLM response run via `errgroup`-style goroutines; results are
 re-attached to history in the original order.

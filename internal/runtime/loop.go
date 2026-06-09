@@ -260,6 +260,8 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 
 	var lastText string
 	retriedOverflow := false
+	iterationBudgetWarned := false
+	durationBudgetWarned := false
 	for iter := 0; iter < maxIters; iter++ {
 		select {
 		case <-turnCtx.Done():
@@ -274,6 +276,15 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			return "", e.failTurn(turnID, err)
 		}
 
+		budgetStatus := currentTurnBudgetStatus(turnID, iter, maxIters, start, maxDur)
+		if budgetStatus.IterationNear && !iterationBudgetWarned {
+			e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.IterationWarningDetails()})
+			iterationBudgetWarned = true
+		}
+		if budgetStatus.DurationNear && !durationBudgetWarned {
+			e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.DurationWarningDetails()})
+			durationBudgetWarned = true
+		}
 		e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: map[string]any{
 			"iter": iter, "history_len": len(e.Session.History), "tool_count": len(tools),
 		}})
@@ -284,6 +295,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			return "", e.failTurn(turnID, err)
 		}
 		e.emitProjectionApplied(turnID, projection)
+		if budgetStatus.Near() {
+			requestHistory = append(requestHistory, budgetFinalizationMessage(budgetStatus))
+		}
 		resp, err := llm.CompleteWithOptions(turnCtx, e.Provider, systemPrompt, requestHistory, tools, llm.CompleteOptions{
 			Purpose:     "turn",
 			CachePolicy: e.cachePolicyLocked(),
