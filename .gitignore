@@ -49,6 +49,10 @@ __pycache__
 .mock/
 .draft/
 
+# generated local validation artifacts
+/.tmp/
+/docs/reports/
+
 # superpowers
 .superpowers
 
@@ -63,13 +67,5 @@ internal/web/dist
 # juex runtime state (per-project session/memory artefacts)
 .juex/
 .config/
-
-# generated local validation reports; keep only docs and placeholders
-/docs/reports/provider-model-smoke/*
-!/docs/reports/provider-model-smoke/.gitkeep
-/docs/reports/development-validation/*
-!/docs/reports/development-validation/.gitkeep
-/docs/reports/compaction-eval/*
-!/docs/reports/compaction-eval/.gitkeep
 
 .understand-anything/

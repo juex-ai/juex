@@ -203,6 +203,25 @@ func TestEvalHelpersTolerateProgrammaticNone(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestEvalDefaultReportDirsUseTmpRoot(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import helper",
+		"for kind in ['provider-model-smoke', 'development-validation', 'compaction-eval']:",
+		"    path = helper.default_report_dir(kind, 'run-id').as_posix()",
+		"    assert path.endswith(f'/.tmp/reports/{kind}/run-id'), path",
+		"    assert '/docs/reports/' not in path, path",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func runRotation(t *testing.T, root, modelList, state string, args ...string) string {
 	t.Helper()
 	baseArgs := []string{

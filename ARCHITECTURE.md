@@ -966,7 +966,7 @@ There are two live layers:
 - `mise exec -- make provider-smoke` reads the provider/model refs from
   `tests/eval/live-models.yaml`, verifies the selected ref exists in
   `~/.juex/juex.yaml`, then runs a three-turn real binary smoke and writes a
-  redacted report under `docs/reports/provider-model-smoke/`. By default it
+  redacted report under `.tmp/reports/provider-model-smoke/`. By default it
   rotates one model using `.juex/live-model-rotation.json`; pass `--all-models`
   to `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.

@@ -30,7 +30,15 @@ Common selection and output flags are intentionally consistent across commands:
 - `development_eval.sh --only provider/model` passes the provider smoke scope.
 - `development_eval.sh --compaction-eval --compaction-only provider/model`
   passes the compaction scope.
-- `--report-dir` sets the output directory for each command.
+- `--report-dir` overrides the output directory for each command.
+
+By default, local run artifacts are written under
+`.tmp/reports/<report-kind>/<run-id>/` and the directory is created on demand.
+Report kinds are:
+
+- `provider-model-smoke`
+- `development-validation`
+- `compaction-eval`
 
 Use `--all-models` only for broader changes where every listed model must be
 covered. `provider_model_smoke.sh --all-config-models` is reserved for full

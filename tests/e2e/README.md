@@ -59,7 +59,7 @@ provider/model at a time into an isolated temporary workdir, and runs a real
 compiled `juex` binary through three resumed turns: plain reply, `read` tool
 use, and a reasoning prompt. The script writes redacted `summary.json`,
 `results.jsonl`, and per-case logs under
-`docs/reports/provider-model-smoke/<run-id>/`. A failed provider/model is not a
+`.tmp/reports/provider-model-smoke/<run-id>/`. A failed provider/model is not a
 skip; keep the report and explain whether the problem is configuration,
 provider capability, prompt-following, or a Juex regression. Use `--all-models`
 for every ref in `provider_smoke_models`, or `--all-config-models` only for
@@ -93,7 +93,8 @@ bash tests/eval/development_eval.sh
 Use `--compaction-eval` for compaction, context projection, reasoning replay,
 or long-session changes. The record links command logs, provider/model smoke
 summary, and any scorecards so a later worker can tell whether behavior got
-better, stayed flat, or regressed.
+better, stayed flat, or regressed. Default records are written under
+`.tmp/reports/development-validation/`.
 
 ## Coverage Rules
 

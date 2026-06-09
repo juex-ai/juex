@@ -119,7 +119,7 @@ Set `JUEX_EVAL_TURN_TIMEOUT` to override the per-turn timeout (default 600s).
 The script writes redacted run artifacts under:
 
 ```text
-docs/reports/compaction-eval/<timestamp>/
+.tmp/reports/compaction-eval/<timestamp>/
 ```
 
 Each provider directory contains:
