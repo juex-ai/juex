@@ -12,15 +12,6 @@ import (
 	"time"
 )
 
-// skipIfWindows guards tests that intentionally exercise POSIX-only command
-// syntax or process-group behavior.
-func skipIfWindows(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("test uses POSIX shell syntax")
-	}
-}
-
 func registerTestBuiltins(r *Registry, workDir string) {
 	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile()})
 }
@@ -139,6 +130,12 @@ func TestBuiltins_ShellRelativeCwdResolvesFromWorkDir(t *testing.T) {
 func TestShellHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_FAKE_SHELL") != "1" {
 		return
+	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "timeout" {
+		fmt.Fprintln(os.Stdout, "before timeout stdout")
+		fmt.Fprintln(os.Stderr, "before timeout stderr")
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
 	}
 	payload := map[string]any{
 		"args": os.Args,
@@ -614,11 +611,20 @@ func TestBuiltins_GrepNoMatches(t *testing.T) {
 }
 
 func TestBuiltins_ShellTimeout(t *testing.T) {
-	skipIfWindows(t)
 	r := NewRegistry()
-	registerTestBuiltins(r, "")
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "timeout")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
 	out, info, err := r.CallWithInfo(context.Background(), "shell", map[string]any{
-		"cmd":     "printf 'before timeout stdout\\n'; printf 'before timeout stderr\\n' >&2; sleep 5",
+		"cmd":     "ignored by fake shell",
 		"timeout": 1,
 	})
 	if err == nil {
@@ -632,34 +638,6 @@ func TestBuiltins_ShellTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out after 1s") {
 		t.Fatalf("expected timeout error, got %v", err)
-	}
-}
-
-func TestBuiltins_ShellTimeoutKillsChildProcessGroup(t *testing.T) {
-	skipIfWindows(t)
-	r := NewRegistry()
-	registerTestBuiltins(r, "")
-
-	start := time.Now()
-	out, info, err := r.CallWithInfo(context.Background(), "shell", map[string]any{
-		"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
-		"timeout": 1,
-	})
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("expected timeout error")
-	}
-	if !strings.Contains(out, "child still owns pipe") {
-		t.Fatalf("timeout output = %q, want captured stdout", out)
-	}
-	if !info.TimedOut || info.TimeoutSeconds != 1 {
-		t.Fatalf("info = %+v, want timed out after 1s", info)
-	}
-	if !strings.Contains(err.Error(), "timed out after 1s") {
-		t.Fatalf("expected normalized timeout error, got %v", err)
-	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("timeout waited for child process to exit: %s", elapsed)
 	}
 }
 

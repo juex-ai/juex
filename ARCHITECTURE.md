@@ -916,9 +916,8 @@ workflow; runs entirely on GitHub Actions.
 - `ci.yml` — push + PR, three jobs:
   - `lint`: golangci-lint (default preset).
   - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
-    runs `go test ./... -race -count=1`. POSIX-only shell timeout tests skip
-    on Windows via a `runtime.GOOS` guard; the builtin tool itself is named
-    `shell` and has Windows coverage through config/profile tests.
+    runs `go test ./... -race -count=1`. Generic `shell` behavior runs on
+    Windows; Unix process-group timeout coverage lives in `!windows` test files.
 - `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/qwen.juex.yaml`
   and `.juex/minimax.juex.yaml` provider configs from repo secrets, then
   runs `-tags=integration ./tests/e2e/...`. Required secrets:

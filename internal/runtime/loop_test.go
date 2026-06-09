@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	goruntime "runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1455,63 +1454,11 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	}
 }
 
-func TestTurn_BuiltinShellTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
-	if goruntime.GOOS == "windows" {
-		t.Skip("test uses POSIX process-group behavior")
-	}
-	prov := &mockProvider{script: []llm.Response{
-		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "shell_timeout", ToolName: "shell", Input: map[string]any{
-				"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
-				"timeout": 1,
-			}},
-		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
-	}}
-	eng, bus := newEngine(t, prov, true)
-	eng.MaxDur = 3 * time.Second
-
-	var erroredPayload map[string]any
-	bus.Subscribe("tool.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(map[string]any)
-	})
-
-	start := time.Now()
-	out, err := eng.Turn(context.Background(), "run shell")
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != "recovered" {
-		t.Fatalf("out = %q, want recovered", out)
-	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("turn waited for child process to exit: %s", elapsed)
-	}
-	result := eng.Session.History[2]
-	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
-		t.Fatalf("tool result message wrong: %+v", result)
-	}
-	block := result.Blocks[0]
-	if block.Type != llm.BlockToolResult || !block.IsError {
-		t.Fatalf("tool result block = %+v, want error result", block)
-	}
-	if !strings.Contains(block.Content, "timed out after 1s") {
-		t.Fatalf("tool result content = %q, want timeout detail", block.Content)
-	}
-	if got := erroredPayload["timed_out"]; got != true {
-		t.Fatalf("errored timed_out = %v, want true", got)
-	}
-}
-
 func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
-	if goruntime.GOOS == "windows" {
-		t.Skip("test uses POSIX shell command syntax")
-	}
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "shell_raw", ToolName: "shell", Input: map[string]any{
-				"_raw_arguments": `{"cmd":"printf raw-ok","timeout":2}`,
+				"_raw_arguments": `{"cmd":"echo raw-ok","timeout":2}`,
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
@@ -1541,7 +1488,7 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 		t.Fatalf("assistant message wrong: %+v", assistant)
 	}
 	input := assistant.Blocks[0].Input
-	if input["cmd"] != "printf raw-ok" || input["timeout"] != 2.0 {
+	if input["cmd"] != "echo raw-ok" || input["timeout"] != 2.0 {
 		t.Fatalf("assistant tool input = %+v, want normalized command and timeout", input)
 	}
 	if _, ok := input["_raw_arguments"]; ok {
@@ -1555,14 +1502,14 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 		t.Fatalf("responded tool_calls = %+v, want one tool call", respondedPayload["tool_calls"])
 	}
 	respondedInput, _ := respondedCalls[0]["input"].(map[string]any)
-	if respondedInput["cmd"] != "printf raw-ok" {
+	if respondedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("responded tool input = %+v, want normalized command", respondedInput)
 	}
 	if got := respondedCalls[0]["timeout_seconds"]; got != 2 {
 		t.Fatalf("responded timeout = %v, want 2", got)
 	}
 	requestedInput, _ := requestedPayload["input"].(map[string]any)
-	if requestedInput["cmd"] != "printf raw-ok" {
+	if requestedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("requested input = %+v, want normalized command", requestedInput)
 	}
 	if got := requestedPayload["timeout_seconds"]; got != 2 {
@@ -1576,7 +1523,7 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if block.Type != llm.BlockToolResult || block.IsError {
 		t.Fatalf("tool result block = %+v, want successful result", block)
 	}
-	if block.Content != "raw-ok" {
+	if strings.TrimSpace(block.Content) != "raw-ok" {
 		t.Fatalf("tool result content = %q, want raw-ok", block.Content)
 	}
 }
