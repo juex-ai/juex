@@ -26,7 +26,7 @@ Critical Context
 Relevant Files
 Tool Failures
 
-Preserve exact file paths, commands, error strings, identifiers, decisions, and current next steps. If a previous summary is provided, update it: keep still-correct information, add new progress, remove stale information, and refresh next steps. Do not answer the latest user request. Do not call tools.`)
+Preserve exact file paths, commands, error strings, identifiers, decisions, and current next steps. In Critical Context, copy the actual values of labeled facts, task IDs, branch names, user constraints, safety guards, commands, and errors that a later turn may need. Never replace concrete facts with vague phrases such as "facts were stored", "facts were preserved", "noted", or "available in context"; include the values themselves. If a previous summary is provided, update it: keep still-correct information, add new progress, remove stale information, and refresh next steps. Do not answer the latest user request. Do not call tools.`)
 	if focus := strings.TrimSpace(instructions); focus != "" {
 		sys += "\n\nCompact Instructions:\n" + focus
 	}

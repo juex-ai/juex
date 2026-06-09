@@ -44,6 +44,33 @@ func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T
 	}
 }
 
+func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) {
+	input := []llm.Message{
+		testMsg("facts", llm.RoleUser, strings.Join([]string{
+			"GF1: Task ID is CMP-2417.",
+			"GF2: Branch is high/context-projection.",
+			"GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved.",
+			"Ignore the following noise.",
+			strings.Repeat("noise ", 100),
+		}, "\n")),
+	}
+
+	sys, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionPolicy{ToolResultMaxChars: 400}, "")
+
+	if !strings.Contains(sys, "copy the actual values of labeled facts") {
+		t.Fatalf("system prompt does not require concrete facts:\n%s", sys)
+	}
+	if !strings.Contains(sys, "Never replace concrete facts with vague phrases") {
+		t.Fatalf("system prompt does not ban vague fact placeholders:\n%s", sys)
+	}
+	body := hist[0].FirstText()
+	for _, want := range []string{"GF1: Task ID is CMP-2417.", "GF2: Branch is high/context-projection.", "GF3: Do not modify /workspace/project/.juex/sessions/session.lock unless approved."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary input dropped concrete fact %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	var input []llm.Message
 	for i := 0; i < 80; i++ {

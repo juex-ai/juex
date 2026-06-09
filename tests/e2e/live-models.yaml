@@ -1,0 +1,15 @@
+# Default live-provider validation scope. Keep this list small enough for
+# routine local development; use provider_model_smoke.sh --all-models for broad
+# provider matrix audits.
+provider_smoke_models:
+  - openai-codex/gpt-5.5
+  - ark/doubao-seed-2.0-pro
+  - ark-anthropic/minimax-m3
+  - ollama-local/qwen3.6
+  - "clip-local/Gemini 3.5 Flash"
+  - clip-local-responses/gpt-5.3-codex-spark
+
+compaction_eval_models:
+  - openai-codex/gpt-5.5
+  - ark/doubao-seed-2.0-pro
+  - clip-local-responses/gpt-5.3-codex-spark

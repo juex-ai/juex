@@ -11,13 +11,13 @@ providers.
 
 ## Models
 
-The requested model matrix is:
+The default model matrix is maintained in `tests/e2e/live-models.yaml`:
 
 | Label | Juex model ref | Notes |
 | --- | --- | --- |
 | OpenAI Codex | `openai-codex/gpt-5.5` | Uses the Codex Responses adapter. |
-| Ark DeepSeek | `ark/deepseek-v4-pro` | OpenAI-compatible chat through Ark. |
-| Clip Local GPT | `clip-local/gpt-5.5` | Local proxy provider. |
+| Ark Doubao | `ark/doubao-seed-2.0-pro` | OpenAI-compatible chat through Ark. |
+| Clip Local Responses | `clip-local-responses/gpt-5.3-codex-spark` | Local proxy provider through the Responses protocol. |
 
 ## Window Size
 
@@ -88,7 +88,7 @@ Build the current binary:
 mise exec -- make build
 ```
 
-Run all configured providers:
+Run the default configured model set:
 
 ```bash
 scripts/compaction_eval.sh
@@ -100,7 +100,16 @@ Run one provider:
 scripts/compaction_eval.sh openai-codex/gpt-5.5
 ```
 
-The script creates temporary work directories and writes run artifacts under:
+The script reads model refs from `tests/e2e/live-models.yaml` and provider
+details from `~/.juex/juex.yaml` by default. Override the source with
+`JUEX_PROVIDER_CONFIG=/path/to/juex.yaml` when testing another provider config,
+or pass explicit model refs on the command line for a focused run. For each
+model it writes a temporary work-local config containing only that
+provider/model, disables tool calling, enables compaction, and deletes the
+temporary config after the run unless `KEEP_WORKDIR=1` is set.
+Set `JUEX_EVAL_TURN_TIMEOUT` to override the per-turn timeout (default 600s).
+
+The script writes redacted run artifacts under:
 
 ```text
 docs/reports/compaction-eval/<timestamp>/
@@ -114,34 +123,6 @@ Each provider directory contains:
 - `events.jsonl` copies, when available
 - `conversation.jsonl` copies, when available
 - `scorecard.md`
-
-## Initial Run Log
-
-Run ID: `20260604T152013Z-clean`
-
-Tools were disabled at the provider capability layer for the clean run so the
-models could not store the gold facts through `memory_write`.
-
-| Date | Commit | Model | Score | Compacted | Cache ratio | Input tokens by turn | Notes |
-| --- | --- | --- | ---: | --- | --- | --- | --- |
-| 2026-06-04 | working tree | `openai-codex/gpt-5.5` | 52/52 | yes | not captured | 49,256 / 101,636 / 125,022 | Answer satisfied every rubric item; the first scorer revision counted `Tools: None` as 48/52 before the scorer accepted that wording. |
-| 2026-06-04 | working tree | `ark/deepseek-v4-pro` | 52/52 | yes | not captured | 50,724 / 102,424 / 123,596 | Perfect gold-fact recall. |
-| 2026-06-04 | working tree | `clip-local/gpt-5.5` | 52/52 | yes | not captured | 50,022 / 102,851 / 126,288 | Perfect gold-fact recall through the local proxy. |
-
-Observed compaction metadata:
-
-| Model | Representative `tokens_before -> tokens_after` | Summary chars |
-| --- | --- | ---: |
-| `openai-codex/gpt-5.5` | 35,795 -> 7,503 | 3,626 |
-| `ark/deepseek-v4-pro` | 35,130 -> 6,729 | 1,327 |
-| `clip-local/gpt-5.5` | 34,803 -> 7,026 | 2,772 |
-
-The evaluation validates the previous summary quality for objective fact recall,
-but it also exposed the V2 requirement that a successful pre-turn compact does
-not shrink the incoming user message. Juex now externalizes oversized user input
-and tool results before provider calls, then records provider cached-token
-details when available. Re-run the live matrix after context-projection changes
-to refresh the score table and cache ratios.
 
 ## Automated Regression
 

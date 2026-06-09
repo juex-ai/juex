@@ -1,4 +1,4 @@
-.PHONY: test lint build snapshot release-dry integration clean help install-local cross web web-dev
+.PHONY: test lint build snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-dev
 
 web:
 	cd frontend && pnpm install && pnpm build
@@ -33,6 +33,8 @@ help:
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
 	@echo "  integration   go test -tags=integration ./tests/e2e/..."
+	@echo "  provider-smoke live curated provider/model smoke from tests/e2e/live-models.yaml"
+	@echo "  development-eval standard post-development validation record"
 	@echo "  clean         remove dist/"
 
 test:
@@ -59,6 +61,12 @@ release-dry:
 
 integration:
 	go test -tags=integration ./tests/e2e/... -count=1
+
+provider-smoke: build
+	bash scripts/provider_model_smoke.sh --juex $(DIST_BIN)
+
+development-eval:
+	bash scripts/development_eval.sh
 
 clean:
 	rm -rf dist

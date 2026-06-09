@@ -35,26 +35,43 @@ change needs live coverage, build the current binary and run the smoke script:
 
 ```bash
 mise exec -- make build
-bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --juex ./dist/juex
+bash scripts/provider_model_smoke.sh --juex ./dist/juex
 ```
 
-The script reads the provider/model matrix from `~/.juex/juex.yaml`, but it
-only prints provider and model ids. For each model it creates an isolated temp
-workdir, copies only that provider/model into a temp config, and runs Juex with
-a temp `HOME` so global MCP servers and skills are not loaded. The temp config
-contains credentials; it is deleted after success unless `--keep` is passed.
+The canonical script reads provider credentials from `~/.juex/juex.yaml`, but
+the default live model set comes from `tests/e2e/live-models.yaml` to keep local
+validation bounded. It fails if a listed provider/model ref is missing from the
+provider config. For each selected model it creates an isolated temp workdir,
+copies only that provider/model into a temp config, and runs Juex with a temp
+`HOME` so global MCP servers and skills are not loaded. The temp config contains
+credentials; it is deleted after success unless `--keep` is passed.
 Each case runs a three-turn session: a setup turn, a `read` tool-call turn that
 must return a unique smoke token, and a short reasoning prompt. The result line
 reports whether a `tool_use` block was recorded and whether reasoning/thinking
-blocks were exposed by that provider.
+blocks were exposed by that provider. A redacted report is written under
+`docs/reports/provider-model-smoke/<run-id>/`.
 
 Useful options:
 
 ```bash
-bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --only ark/deepseek-v4-pro
-bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --work-root /tmp/juex-provider-smoke --keep
-bash .agents/skills/juex-localtest/scripts/provider-model-smoke.sh --timeout 360
+bash scripts/provider_model_smoke.sh --only ark/doubao-seed-2.0-pro
+bash scripts/provider_model_smoke.sh --all-models
+bash scripts/provider_model_smoke.sh --work-root /tmp/juex-provider-smoke --keep
+bash scripts/provider_model_smoke.sh --timeout 360
+bash scripts/provider_model_smoke.sh --retries 0
 ```
+
+For full post-development validation, run:
+
+```bash
+bash scripts/development_eval.sh
+```
+
+Use `--compaction-eval` when a change touches compaction, context projection,
+provider reasoning replay, or long-session behavior. The compaction evaluator
+uses the `compaction_eval_models` list from `tests/e2e/live-models.yaml`, reads
+provider/model details from `~/.juex/juex.yaml`, and writes scorecards under the
+development record.
 
 ## Failure Handling
 

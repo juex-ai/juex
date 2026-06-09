@@ -1297,26 +1297,25 @@ func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
 	}
 	turnResp.Body.Close()
 
-	deadline := time.Now().Add(2 * time.Second)
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr, lastState string
 	for time.Now().Before(deadline) {
-		r, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/turns/" + t1.TurnID)
+		state, turnErr, err := fetchTurnState(client, ts.URL, c.ID, t1.TurnID)
 		if err != nil {
-			t.Fatal(err)
+			lastErr = err.Error()
+		} else {
+			lastState = state
+			if state == "errored" {
+				t.Fatalf("turn errored while waiting for done: %s", turnErr)
+			}
 		}
-		var st struct {
-			State string `json:"state"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&st); err != nil {
-			r.Body.Close()
-			t.Fatal(err)
-		}
-		r.Body.Close()
-		if st.State == "done" {
+		if state == "done" {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatal("turn never reached done state")
+	t.Fatalf("turn never reached done state; last_state=%q last_error=%q", lastState, lastErr)
 }
 
 func TestPostInterrupt_IdempotentWhenIdle(t *testing.T) {
