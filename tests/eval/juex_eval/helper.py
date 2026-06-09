@@ -27,11 +27,15 @@ from typing import Any
 import yaml
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
+    return main_with_args(sys.argv[1:])
+
+
+def main_with_args(argv: list[str]) -> int:
+    if len(argv) < 1:
         print(
             "usage: evalhelper.py "
             "<provider-smoke|list-models|write-model-config|run-timeout|append-command|write-development-record> ...",
@@ -39,8 +43,8 @@ def main() -> int:
         )
         return 2
 
-    command = sys.argv[1]
-    args = sys.argv[2:]
+    command = argv[0]
+    args = argv[1:]
     try:
         if command == "provider-smoke":
             return provider_smoke(args)
@@ -94,7 +98,7 @@ def provider_smoke(argv: list[str]) -> int:
     )
     parser.add_argument("--juex", default=env_default("JUEX_BIN", default_juex_bin()))
     parser.add_argument("--config", default=env_default("JUEX_PROVIDER_CONFIG", str(pathlib.Path.home() / ".juex" / "juex.yaml")))
-    parser.add_argument("--model-list", default=env_default("JUEX_LIVE_MODEL_LIST", str(REPO_ROOT / "tests" / "e2e" / "live-models.yaml")))
+    parser.add_argument("--model-list", default=env_default("JUEX_LIVE_MODEL_LIST", str(REPO_ROOT / "tests" / "eval" / "live-models.yaml")))
     parser.add_argument(
         "--all-models",
         action="store_true",
@@ -659,7 +663,7 @@ def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str
 
 def list_models(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-list", default=env_default("JUEX_LIVE_MODEL_LIST", str(REPO_ROOT / "tests" / "e2e" / "live-models.yaml")))
+    parser.add_argument("--model-list", default=env_default("JUEX_LIVE_MODEL_LIST", str(REPO_ROOT / "tests" / "eval" / "live-models.yaml")))
     parser.add_argument("--section", default="provider_smoke_models")
     parsed = parser.parse_args(argv)
     for ref in load_model_refs(pathlib.Path(parsed.model_list), parsed.section):

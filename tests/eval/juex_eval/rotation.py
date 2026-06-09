@@ -15,12 +15,16 @@ from typing import Any
 import yaml
 
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_MODEL_LIST = REPO_ROOT / "tests" / "e2e" / "live-models.yaml"
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+DEFAULT_MODEL_LIST = REPO_ROOT / "tests" / "eval" / "live-models.yaml"
 DEFAULT_STATE_PATH = REPO_ROOT / ".juex" / "live-model-rotation.json"
 
 
 def main() -> int:
+    return main_with_args(sys.argv[1:])
+
+
+def main_with_args(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Rotate live provider/evaluation model refs.")
     parser.add_argument(
         "--model-list",
@@ -45,7 +49,7 @@ def main() -> int:
     status_parser = subparsers.add_parser("status", help="Print the current rotation state.")
     add_section_arg(status_parser)
 
-    parsed = parser.parse_args()
+    parsed = parser.parse_args(argv)
     model_list_path = pathlib.Path(parsed.model_list).expanduser()
     state_path = pathlib.Path(parsed.state).expanduser()
 

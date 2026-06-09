@@ -67,7 +67,7 @@ mise exec -- go test ./... -race -count=1
 
 Before declaring feature work complete, run the relevant deterministic tests and
 write a development validation record with `mise exec -- make development-eval`
-or `bash scripts/development_eval.sh` when a narrower command set is justified.
+or `bash tests/eval/development_eval.sh` when a narrower command set is justified.
 For provider/protocol, reasoning, tool-call, session, compaction, CLI, or web
 runtime changes, include the real local provider/model sweep from
 `~/.juex/juex.yaml`. If an evaluation score or smoke result regresses, record

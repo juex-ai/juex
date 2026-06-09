@@ -71,6 +71,41 @@ func TestLiveModelRotationScript(t *testing.T) {
 	}
 }
 
+func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	moduleHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "--help")
+	for _, want := range []string{"development", "provider-smoke", "compaction", "rotation"} {
+		if !strings.Contains(moduleHelp, want) {
+			t.Fatalf("module help missing %q:\n%s", want, moduleHelp)
+		}
+	}
+
+	for _, script := range []string{
+		"tests/eval/development_eval.sh",
+		"tests/eval/provider_model_smoke.sh",
+		"tests/eval/compaction_eval.sh",
+	} {
+		t.Run(script, func(t *testing.T) {
+			cmd := exec.Command("bash", filepath.Join(root, script), "--help")
+			cmd.Dir = t.TempDir()
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s --help failed: %v\n%s", script, err, out)
+			}
+			if !strings.Contains(strings.ToLower(string(out)), "usage:") {
+				t.Fatalf("%s --help missing Usage:\n%s", script, out)
+			}
+		})
+	}
+}
+
 func runRotation(t *testing.T, root, modelList, state string, args ...string) string {
 	t.Helper()
 	baseArgs := []string{
@@ -79,16 +114,31 @@ func runRotation(t *testing.T, root, modelList, state string, args ...string) st
 		"--project",
 		root,
 		"python",
-		filepath.Join(root, "scripts/live_model_rotation.py"),
+		"-m",
+		"tests.eval.juex_eval",
+		"rotation",
 		"--model-list",
 		modelList,
 		"--state",
 		state,
 	}
 	cmd := exec.Command("uv", append(baseArgs, args...)...)
+	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("rotation command failed: %v\n%s", err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func runUV(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	baseArgs := []string{"run", "--quiet", "--project", root}
+	cmd := exec.Command("uv", append(baseArgs, args...)...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("uv command failed: %v\n%s", err, out)
+	}
+	return string(out)
 }

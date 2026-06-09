@@ -8,18 +8,18 @@ curated.
 Use these entrypoints:
 
 ```bash
-bash scripts/provider_model_smoke.sh --juex ./dist/juex
-bash scripts/development_eval.sh
-bash scripts/development_eval.sh --compaction-eval
+bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
+bash tests/eval/development_eval.sh
+bash tests/eval/development_eval.sh --compaction-eval
 ```
 
 Report roles:
 
 | Directory | Purpose |
 | --- | --- |
-| `provider-model-smoke/<run-id>/` | Real-provider smoke using credentials from `~/.juex/juex.yaml`; default runs rotate one `provider_smoke_models` ref from `tests/e2e/live-models.yaml`, while `--all-models` runs every listed ref. Records pass/fail, tool-use evidence, and whether thinking blocks were exposed. |
+| `provider-model-smoke/<run-id>/` | Real-provider smoke using credentials from `~/.juex/juex.yaml`; default runs rotate one `provider_smoke_models` ref from `tests/eval/live-models.yaml`, while `--all-models` runs every listed ref. Records pass/fail, tool-use evidence, and whether thinking blocks were exposed. |
 | `development-validation/<run-id>/` | Per-task validation record: commit, commands, provider smoke summary, and optional quality scorecards. |
-| `compaction-eval/<run-id>/` | Gold-fact retention scorecards from `scripts/compaction_eval.sh`; default runs rotate one `compaction_eval_models` ref from `tests/e2e/live-models.yaml`, while `--all-models` runs every listed ref. Provider configs come from `~/.juex/juex.yaml` unless `JUEX_PROVIDER_CONFIG` is set. |
+| `compaction-eval/<run-id>/` | Gold-fact retention scorecards from `tests/eval/compaction_eval.sh`; default runs rotate one `compaction_eval_models` ref from `tests/eval/live-models.yaml`, while `--all-models` runs every listed ref. Provider configs come from `~/.juex/juex.yaml` unless `JUEX_PROVIDER_CONFIG` is set. |
 
 If a validation or evaluation regresses, keep the failing local report and note
 the investigated cause in the PR or task before merging.

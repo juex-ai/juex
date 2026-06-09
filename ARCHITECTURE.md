@@ -875,7 +875,7 @@ hallucinations).
 | `make snapshot` | `goreleaser release --snapshot --clean` (7 archives in `dist/`) |
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
-| `make provider-smoke` | build-dependent rotating live smoke for model refs in `tests/e2e/live-models.yaml` using `~/.juex/juex.yaml` credentials |
+| `make provider-smoke` | build-dependent rotating live smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
 | `make development-eval` | deterministic tests, build, rotating live provider/model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
 
@@ -949,19 +949,19 @@ There are two live layers:
 - `mise exec -- go test -tags=integration ./tests/e2e/... -run Live -count=1`
   uses selected repo-local configs for CI/manual integration.
 - `mise exec -- make provider-smoke` reads the provider/model refs from
-  `tests/e2e/live-models.yaml`, verifies the selected ref exists in
+  `tests/eval/live-models.yaml`, verifies the selected ref exists in
   `~/.juex/juex.yaml`, then runs a three-turn real binary smoke and writes a
   redacted report under `docs/reports/provider-model-smoke/`. By default it
   rotates one model using `.juex/live-model-rotation.json`; pass `--all-models`
-  to `scripts/provider_model_smoke.sh` only for provider matrix migrations or
+  to `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.
 
 Every feature validation should leave a development record with
-`mise exec -- make development-eval` or `bash scripts/development_eval.sh`.
+`mise exec -- make development-eval` or `bash tests/eval/development_eval.sh`.
 The record captures the commit, command exits, provider/model smoke summary,
 and any quality evaluation results. The live compaction quality evaluation is
 documented in `docs/compaction/evaluation.md` and run with
-`scripts/compaction_eval.sh`; use it when compaction, context projection,
+`tests/eval/compaction_eval.sh`; use it when compaction, context projection,
 provider replay, or long-session behavior changes.
 
 ---

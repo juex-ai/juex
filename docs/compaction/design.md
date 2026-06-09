@@ -380,7 +380,7 @@ Every compaction change should be evaluated on:
 
 The quick automated test should run with a context window between one tenth and
 one quarter of a normal 256k window. The default live evaluation model refs are
-maintained in `tests/e2e/live-models.yaml`.
+maintained in `tests/eval/live-models.yaml`.
 
 ## Rollout Plan
 

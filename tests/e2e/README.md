@@ -49,11 +49,11 @@ For development validation, also run the rotating local provider/model smoke:
 
 ```bash
 mise exec -- make build
-bash scripts/provider_model_smoke.sh --juex ./dist/juex
+bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 ```
 
 This reads credentials from `~/.juex/juex.yaml`, picks the next
-`provider_smoke_models` ref from `tests/e2e/live-models.yaml`, and records the
+`provider_smoke_models` ref from `tests/eval/live-models.yaml`, and records the
 last successful ref in `.juex/live-model-rotation.json`. It copies one
 provider/model at a time into an isolated temporary workdir, and runs a real
 compiled `juex` binary through three resumed turns: plain reply, `read` tool
@@ -71,7 +71,7 @@ The compaction evaluation is operator-triggered:
 
 ```bash
 mise exec -- make build
-scripts/compaction_eval.sh
+tests/eval/compaction_eval.sh
 ```
 
 See `docs/compaction/evaluation.md` for the gold facts, scoring rubric, cache
@@ -79,7 +79,7 @@ metrics, and report output shape. This is the project-level quality evaluation
 for long-running agent context retention. Normal e2e tests cover deterministic
 runtime behavior; the live compaction evaluation rotates one
 `compaction_eval_models` ref by default so routine validation stays cheap while
-covering the full list over time. Use `scripts/compaction_eval.sh --all-models`
+covering the full list over time. Use `tests/eval/compaction_eval.sh --all-models`
 when a larger change needs every compaction model. Provider/model details still
 come from `~/.juex/juex.yaml` unless `JUEX_PROVIDER_CONFIG` points at another
 config.
@@ -87,7 +87,7 @@ config.
 Every completed development task should leave a validation record:
 
 ```bash
-bash scripts/development_eval.sh
+bash tests/eval/development_eval.sh
 ```
 
 Use `--compaction-eval` for compaction, context projection, reasoning replay,
@@ -114,10 +114,10 @@ Use the smallest run set that still covers the changed behavior:
 | Go unit/package tests | `mise exec -- go test ./... -count=1` | Every production code change. |
 | Non-live e2e | `mise exec -- go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
 | Live integration build tag | `mise exec -- make integration` | Manual credential-backed checks against the repo-local `.juex/*.yaml` fixtures. |
-| Rotating provider smoke | `bash scripts/provider_model_smoke.sh --juex ./dist/juex` | Provider protocol, thinking, tool-call, config, or request/response changes. |
-| Listed provider smoke | `bash scripts/provider_model_smoke.sh --juex ./dist/juex --all-models` | Larger changes where every `provider_smoke_models` ref should be checked. |
-| Full config provider smoke | `bash scripts/provider_model_smoke.sh --juex ./dist/juex --all-config-models` | Provider matrix audits where every local config entry must be checked. |
-| Compaction quality eval | `bash scripts/development_eval.sh --compaction-eval` | Compaction, context projection, reasoning replay, or long-session changes. |
+| Rotating provider smoke | `bash tests/eval/provider_model_smoke.sh --juex ./dist/juex` | Provider protocol, thinking, tool-call, config, or request/response changes. |
+| Listed provider smoke | `bash tests/eval/provider_model_smoke.sh --juex ./dist/juex --all-models` | Larger changes where every `provider_smoke_models` ref should be checked. |
+| Full config provider smoke | `bash tests/eval/provider_model_smoke.sh --juex ./dist/juex --all-config-models` | Provider matrix audits where every local config entry must be checked. |
+| Compaction quality eval | `bash tests/eval/development_eval.sh --compaction-eval` | Compaction, context projection, reasoning replay, or long-session changes. |
 
 The default post-development record runs deterministic tests, build, and the
 rotating provider smoke. Add compaction quality only when the change can affect
