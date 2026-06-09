@@ -104,3 +104,18 @@ func budgetFinalizationMessage(status turnBudgetStatus) llm.Message {
 	}
 	return llm.TextMessage(llm.RoleUser, runtimeBudgetFinalizationHint+detail+". Do not start non-essential tools; provide the best final answer now.")
 }
+
+func appendBudgetFinalizationMessage(history []llm.Message, status turnBudgetStatus) []llm.Message {
+	hint := budgetFinalizationMessage(status)
+	if len(history) == 0 {
+		return append(history, hint)
+	}
+	lastIdx := len(history) - 1
+	last := history[lastIdx]
+	if last.Role != llm.RoleUser {
+		return append(history, hint)
+	}
+	last.Blocks = append(append([]llm.Block(nil), last.Blocks...), hint.Blocks...)
+	history[lastIdx] = last
+	return history
+}

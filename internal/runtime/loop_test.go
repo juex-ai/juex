@@ -427,6 +427,15 @@ func messagesText(msgs []llm.Message) string {
 	return sb.String()
 }
 
+func hasAdjacentSameRole(msgs []llm.Message) bool {
+	for i := 1; i < len(msgs); i++ {
+		if msgs[i-1].Role == msgs[i].Role {
+			return true
+		}
+	}
+	return false
+}
+
 func signal(ch chan struct{}) {
 	select {
 	case ch <- struct{}{}:
@@ -1185,6 +1194,41 @@ func TestTurn_NearIterationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
 	}
 	if !strings.Contains(messagesText(prov.histories[1]), runtimeBudgetFinalizationHint) {
 		t.Fatalf("second provider request missing finalization hint: %+v", prov.histories[1])
+	}
+	if hasAdjacentSameRole(prov.histories[1]) {
+		t.Fatalf("second provider request has adjacent matching roles: %+v", prov.histories[1])
+	}
+	if strings.Contains(messagesText(eng.Session.History), runtimeBudgetFinalizationHint) {
+		t.Fatalf("session history should not persist finalization hint")
+	}
+}
+
+func TestTurn_NearIterationBudgetMergesHintIntoTrailingUserMessage(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.MaxIters = 1
+
+	out, err := eng.Turn(context.Background(), "finish soon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	if len(prov.histories) != 1 {
+		t.Fatalf("provider histories = %d, want 1", len(prov.histories))
+	}
+	history := prov.histories[0]
+	if len(history) != 1 || history[0].Role != llm.RoleUser {
+		t.Fatalf("provider history = %+v, want one merged user message", history)
+	}
+	if len(history[0].Blocks) != 2 {
+		t.Fatalf("provider user blocks = %+v, want original prompt plus finalization hint", history[0].Blocks)
+	}
+	if !strings.Contains(messagesText(history), runtimeBudgetFinalizationHint) {
+		t.Fatalf("provider request missing finalization hint: %+v", history)
 	}
 	if strings.Contains(messagesText(eng.Session.History), runtimeBudgetFinalizationHint) {
 		t.Fatalf("session history should not persist finalization hint")

@@ -296,7 +296,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}
 		e.emitProjectionApplied(turnID, projection)
 		if budgetStatus.Near() {
-			requestHistory = append(requestHistory, budgetFinalizationMessage(budgetStatus))
+			requestHistory = appendBudgetFinalizationMessage(requestHistory, budgetStatus)
 		}
 		resp, err := llm.CompleteWithOptions(turnCtx, e.Provider, systemPrompt, requestHistory, tools, llm.CompleteOptions{
 			Purpose:     "turn",
