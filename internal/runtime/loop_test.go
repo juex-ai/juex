@@ -1118,11 +1118,54 @@ func TestTurn_BudgetExceeded(t *testing.T) {
 	}
 	t.Cleanup(func() { sess.Close() })
 	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
-	eng := &Engine{Provider: prov, Tools: reg, Bus: events.NewBus(), Session: sess, Prompt: pb, MaxIters: 3, MaxDur: 30 * time.Second}
+	bus := events.NewBus()
+	var erroredPayload map[string]any
+	bus.Subscribe("turn.errored", func(e events.Event) {
+		erroredPayload, _ = e.Payload.(map[string]any)
+	})
+	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb, MaxIters: 3, MaxDur: 30 * time.Second}
 
 	_, err = eng.Turn(context.Background(), "loop")
 	if err == nil || !strings.Contains(err.Error(), "iterations exceeded") {
 		t.Fatalf("expected budget breach, got %v", err)
+	}
+	budgetErr, ok := AsBudgetError(err)
+	if !ok {
+		t.Fatalf("expected BudgetError, got %T: %v", err, err)
+	}
+	if budgetErr.Kind != BudgetErrorKindIterationLimit || budgetErr.MaxIters != 3 || budgetErr.Budget != "iterations" {
+		t.Fatalf("budget error = %+v", budgetErr)
+	}
+	if erroredPayload["kind"] != BudgetErrorKindIterationLimit || erroredPayload["max_iters"] != 3 {
+		t.Fatalf("turn.errored payload = %+v", erroredPayload)
+	}
+}
+
+func TestTurn_MaxDurationBudgetError(t *testing.T) {
+	prov := &mockProvider{
+		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "x"), StopReason: llm.StopEndTurn}},
+		delay:  200 * time.Millisecond,
+	}
+	eng, bus := newEngine(t, prov, false)
+	eng.MaxDur = 20 * time.Millisecond
+	var erroredPayload map[string]any
+	bus.Subscribe("turn.errored", func(e events.Event) {
+		erroredPayload, _ = e.Payload.(map[string]any)
+	})
+
+	_, err := eng.Turn(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected duration budget error")
+	}
+	budgetErr, ok := AsBudgetError(err)
+	if !ok {
+		t.Fatalf("expected BudgetError, got %T: %v", err, err)
+	}
+	if budgetErr.Kind != BudgetErrorKindTimeout || budgetErr.MaxDuration != 20*time.Millisecond || budgetErr.Budget != "duration" {
+		t.Fatalf("budget error = %+v", budgetErr)
+	}
+	if erroredPayload["kind"] != BudgetErrorKindTimeout || erroredPayload["max_duration_ms"] != int64(20) {
+		t.Fatalf("turn.errored payload = %+v", erroredPayload)
 	}
 }
 

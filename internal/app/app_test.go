@@ -115,6 +115,34 @@ func TestApp_DefaultCreatesActivePrimaryWhenHistoryIsEmpty(t *testing.T) {
 	}
 }
 
+func TestApp_NewAppliesRuntimeBudgets(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    dir,
+			Runtime: config.RuntimeConfig{
+				MaxIters:    7,
+				MaxDuration: 12 * time.Second,
+			},
+		},
+		Provider: &stubProvider{replies: []llm.Response{}},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if a.Engine.MaxIters != 7 {
+		t.Fatalf("Engine.MaxIters = %d, want 7", a.Engine.MaxIters)
+	}
+	if a.Engine.MaxDur != 12*time.Second {
+		t.Fatalf("Engine.MaxDur = %s, want 12s", a.Engine.MaxDur)
+	}
+}
+
 func TestApp_NewSideDoesNotChangeActive(t *testing.T) {
 	dir := t.TempDir()
 	primary, err := New(Options{

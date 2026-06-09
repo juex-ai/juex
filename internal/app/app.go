@@ -196,6 +196,8 @@ func New(opts Options) (*App, error) {
 		Bus:           bus,
 		Session:       sess,
 		Prompt:        pb,
+		MaxIters:      cfg.Runtime.MaxIters,
+		MaxDur:        cfg.Runtime.MaxDuration,
 		ContextWindow: cfg.ContextWindow,
 		Compaction:    cfg.Compaction,
 	}

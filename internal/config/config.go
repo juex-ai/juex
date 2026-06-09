@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"gopkg.in/yaml.v3"
@@ -34,6 +35,7 @@ type Config struct {
 	ProviderCapabilities      llm.CapabilityOverrides
 	ProviderCompat            llm.CompatOptions
 	Compaction                CompactionConfig
+	Runtime                   RuntimeConfig
 	EnableUserGlobalResources bool
 
 	HomeAgentsDir string // ~/.agents (user-global)
@@ -49,6 +51,7 @@ type fileConfig struct {
 	EnableUserGlobalResources optionalBool     `yaml:"enable_user_global_resources"`
 	Providers                 []providerConfig `yaml:"providers"`
 	Compaction                compactionConfig `yaml:"compaction"`
+	Runtime                   runtimeConfig    `yaml:"runtime"`
 }
 
 type providerConfig struct {
@@ -101,6 +104,11 @@ type CompactionConfig struct {
 	MaxAutoFailures            int
 }
 
+type RuntimeConfig struct {
+	MaxIters    int
+	MaxDuration time.Duration
+}
+
 type compactionConfig struct {
 	Enabled                    *bool `yaml:"enabled"`
 	ReserveTokens              int   `yaml:"reserve_tokens"`
@@ -115,6 +123,21 @@ type compactionConfig struct {
 	ToolResultPreviewHeadBytes int   `yaml:"tool_result_preview_head_bytes"`
 	ToolResultPreviewTailBytes int   `yaml:"tool_result_preview_tail_bytes"`
 	MaxAutoFailures            int   `yaml:"max_auto_failures"`
+}
+
+type runtimeConfig struct {
+	MaxIters    optionalPositiveInt `yaml:"max_iters"`
+	MaxDuration yamlDuration        `yaml:"max_duration"`
+}
+
+type optionalPositiveInt struct {
+	Set   bool
+	Value int
+}
+
+type yamlDuration struct {
+	Set   bool
+	Value time.Duration
 }
 
 const DefaultContextWindow = 256000
@@ -376,6 +399,7 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
+	applyRuntimeConfig(cfg, fc.Runtime)
 	return nil
 }
 
@@ -391,6 +415,42 @@ func (b *optionalBool) UnmarshalYAML(node *yaml.Node) error {
 	}
 	b.Set = true
 	b.Value = value
+	return nil
+}
+
+func (d *yamlDuration) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return fmt.Errorf("expected duration scalar, got non-scalar node")
+	}
+	value := strings.TrimSpace(node.Value)
+	if value == "" {
+		return nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return fmt.Errorf("expected duration like 30s or 5m, got %q", value)
+	}
+	if parsed <= 0 {
+		return fmt.Errorf("duration must be positive, got %q", value)
+	}
+	d.Set = true
+	d.Value = parsed
+	return nil
+}
+
+func (i *optionalPositiveInt) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode {
+		return fmt.Errorf("expected positive integer scalar, got non-scalar node")
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(node.Value))
+	if err != nil {
+		return fmt.Errorf("expected positive integer, got %q", node.Value)
+	}
+	if value <= 0 {
+		return fmt.Errorf("integer must be positive, got %d", value)
+	}
+	i.Set = true
+	i.Value = value
 	return nil
 }
 
@@ -422,6 +482,15 @@ func DefaultCompactionConfig() CompactionConfig {
 		ToolResultPreviewHeadBytes: 8192,
 		ToolResultPreviewTailBytes: 8192,
 		MaxAutoFailures:            3,
+	}
+}
+
+func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
+	if c.MaxIters.Set {
+		cfg.Runtime.MaxIters = c.MaxIters.Value
+	}
+	if c.MaxDuration.Set {
+		cfg.Runtime.MaxDuration = c.MaxDuration.Value
 	}
 }
 

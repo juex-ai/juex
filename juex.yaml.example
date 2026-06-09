@@ -75,3 +75,10 @@ compaction:
   tool_result_preview_head_bytes: 8192
   tool_result_preview_tail_bytes: 8192
   max_auto_failures: 3
+
+# Optional per-turn runtime budgets. Omit to use defaults: 25 loop iterations
+# and 5 minutes. CLI flags `juex run --max-iters` and `--max-duration` override
+# these values for a single run.
+# runtime:
+#   max_iters: 25
+#   max_duration: 5m

@@ -88,10 +88,16 @@ Build the current binary:
 mise exec -- make build
 ```
 
-Run the default configured model set:
+Run one rotated model from `tests/e2e/live-models.yaml`:
 
 ```bash
 scripts/compaction_eval.sh
+```
+
+Run every configured compaction-eval model:
+
+```bash
+scripts/compaction_eval.sh --all-models
 ```
 
 Run one provider:
@@ -100,11 +106,12 @@ Run one provider:
 scripts/compaction_eval.sh openai-codex/gpt-5.5
 ```
 
-The script reads model refs from `tests/e2e/live-models.yaml` and provider
+The script reads model refs from `tests/e2e/live-models.yaml`, records the last
+successful default run in `.juex/live-model-rotation.json`, and reads provider
 details from `~/.juex/juex.yaml` by default. Override the source with
 `JUEX_PROVIDER_CONFIG=/path/to/juex.yaml` when testing another provider config,
 or pass explicit model refs on the command line for a focused run. For each
-model it writes a temporary work-local config containing only that
+selected model it writes a temporary work-local config containing only that
 provider/model, disables tool calling, enables compaction, and deletes the
 temporary config after the run unless `KEEP_WORKDIR=1` is set.
 Set `JUEX_EVAL_TURN_TIMEOUT` to override the per-turn timeout (default 600s).

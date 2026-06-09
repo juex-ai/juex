@@ -467,6 +467,13 @@ type Engine struct {
 func (e *Engine) Turn(ctx, userInput) (string, error)
 ```
 
+`MaxIters` and `MaxDur` default inside the runtime when unset. Operators can
+tune them with `runtime.max_iters` and `runtime.max_duration` in YAML, while
+`juex run --max-iters` and `--max-duration` override the loaded config for a
+single turn. Budget failures are typed as `runtime_iteration_limit` or
+`runtime_timeout`; `juex run --json` includes the stable kind, session id,
+session dir, work dir, and budget details.
+
 `Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
 single LLM response run via `errgroup`-style goroutines; results are
 re-attached to history in the original order.
@@ -639,6 +646,9 @@ compaction:
   tool_result_preview_head_bytes: 8192
   tool_result_preview_tail_bytes: 8192
   max_auto_failures: 3
+runtime:
+  max_iters: 25
+  max_duration: 5m
 ```
 
 | Field | Description |
@@ -673,13 +683,16 @@ compaction:
 | `compaction.tool_result_preview_head_bytes` | leading bytes kept inline for externalized tool output |
 | `compaction.tool_result_preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
+| `runtime.max_iters` | optional per-turn LLM/tool loop iteration budget; omitted keeps the built-in default of 25 |
+| `runtime.max_duration` | optional per-turn wall-clock budget as a Go duration string such as `5m` or `900s`; omitted keeps the built-in default of 5 minutes |
 
 Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
 `.juex` directory) < `--config <path>` (if supplied) < `os.Environ`. Explicit
 CLI flags for individual settings, such as
-`--enable-user-global-resources=false`, apply after config load. `.env` is no
-longer read by default. Provider definitions merge by `providers[].id` and
+`--enable-user-global-resources=false`, `juex run --max-iters`, and `juex run
+--max-duration`, apply after config load. `.env` is no longer read by default.
+Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider_id/model_id` or override a few fields while inheriting missing values
 from `~/.juex/juex.yaml`. The legacy top-level `provider:` block is not
@@ -852,8 +865,8 @@ hallucinations).
 | `make snapshot` | `goreleaser release --snapshot --clean` (7 archives in `dist/`) |
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
-| `make provider-smoke` | build-dependent live smoke for the curated model refs in `tests/e2e/live-models.yaml` using `~/.juex/juex.yaml` credentials |
-| `make development-eval` | deterministic tests, build, curated live provider/model smoke, and a redacted validation record |
+| `make provider-smoke` | build-dependent rotating live smoke for model refs in `tests/e2e/live-models.yaml` using `~/.juex/juex.yaml` credentials |
+| `make development-eval` | deterministic tests, build, rotating live provider/model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
 
 ### `goreleaser`
@@ -925,12 +938,13 @@ There are two live layers:
 
 - `mise exec -- go test -tags=integration ./tests/e2e/... -run Live -count=1`
   uses selected repo-local configs for CI/manual integration.
-- `mise exec -- make provider-smoke` reads the curated provider/model refs from
-  `tests/e2e/live-models.yaml`, verifies each ref exists in `~/.juex/juex.yaml`,
-  then runs a three-turn real binary smoke for each selected model and writes a
-  redacted report under `docs/reports/provider-model-smoke/`. Pass
-  `--all-models` to `scripts/provider_model_smoke.sh` only for provider matrix
-  migrations or full local config audits.
+- `mise exec -- make provider-smoke` reads the provider/model refs from
+  `tests/e2e/live-models.yaml`, verifies the selected ref exists in
+  `~/.juex/juex.yaml`, then runs a three-turn real binary smoke and writes a
+  redacted report under `docs/reports/provider-model-smoke/`. By default it
+  rotates one model using `.juex/live-model-rotation.json`; pass `--all-models`
+  to `scripts/provider_model_smoke.sh` only for provider matrix migrations or
+  full local config audits.
 
 Every feature validation should leave a development record with
 `mise exec -- make development-eval` or `bash scripts/development_eval.sh`.
