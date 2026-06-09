@@ -22,6 +22,17 @@ uv run --project . python -m tests.eval.juex_eval --help
 - `provider_smoke_models` rotates routine provider/tool/thinking smoke tests.
 - `compaction_eval_models` rotates routine compaction quality checks.
 
+Common selection and output flags are intentionally consistent across commands:
+
+- `provider_model_smoke.sh --only provider/model` runs one live provider smoke.
+- `compaction_eval.sh --only provider/model` runs one compaction eval; repeat
+  the flag to run a small explicit set.
+- `development_eval.sh --only provider/model` passes the provider smoke scope.
+- `development_eval.sh --compaction-eval --compaction-only provider/model`
+  passes the compaction scope.
+- `--report-dir` sets the output directory for each command.
+
 Use `--all-models` only for broader changes where every listed model must be
-covered. Local rotation success is stored in `.juex/live-model-rotation.json`
-and is intentionally not committed.
+covered. `provider_model_smoke.sh --all-config-models` is reserved for full
+provider config audits. Local rotation success is stored in
+`.juex/live-model-rotation.json` and is intentionally not committed.
