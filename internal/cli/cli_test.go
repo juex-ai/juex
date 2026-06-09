@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -289,6 +290,36 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	}
 	if !strings.HasPrefix(strings.TrimSpace(body), "{") {
 		t.Fatalf("expected JSON, got:\n%s", body)
+	}
+}
+
+func TestRunCmd_DryRunRuntimeBudgetFlagsOverrideConfig(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := dir + "/juex.yaml"
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configFile, "runtime:\n  max_iters: 3\n  max_duration: 10s\n"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--max-iters", "9", "--max-duration", "12s", "hello"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Runtime == nil {
+		t.Fatalf("runtime plan missing: %s", out.String())
+	}
+	if plan.Runtime.MaxIters != 9 || plan.Runtime.MaxDuration != "12s" || plan.Runtime.MaxDurationMs != 12000 {
+		t.Fatalf("runtime plan = %+v, want flag overrides", plan.Runtime)
 	}
 }
 

@@ -148,7 +148,11 @@ score_answer() {
   fi
   if grep -q "mise exec -- go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1" "$answer"; then score=$((score + 6)); fi
   if grep -Eqi "no tools|tools:[[:space:]]*none|tools:[[:space:]]*no" "$answer"; then score=$((score + 4)); fi
-  if ! grep -Eqi "merged|pull request #[0-9]+|PR #[0-9]+.*merged" "$answer"; then
+  # Penalize invented merge claims without treating the required
+  # NoInventedMerge label or negated wording such as "no ... merged
+  # information" as a merge claim.
+  local positive_merge_claim='(pull request|pr)[[:space:]]*#?[0-9]+([^[:alnum:]]+[[:alnum:]]+){0,8}[^[:alnum:]]merged|merged[[:space:]]+(pull request|pr)[[:space:]]*#?[0-9]+|merged[[:space:]]+into[[:space:]]+main|merge[[:space:]]+commit[[:space:]]+[0-9a-f]{7,}'
+  if ! grep -Eqi "$positive_merge_claim" "$answer"; then
     score=$((score + 6))
   fi
   if grep -Eqi "compact|summary|compaction" "$answer"; then score=$((score + 6)); fi

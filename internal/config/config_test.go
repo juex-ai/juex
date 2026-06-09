@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadFromFile(t *testing.T) {
@@ -158,6 +159,39 @@ providers:
 	}
 	if cfg.ThinkingEffort != "low" || cfg.ContextWindow != 128000 {
 		t.Fatalf("model config = thinking:%q context:%d", cfg.ThinkingEffort, cfg.ContextWindow)
+	}
+}
+
+func TestLoad_WorkRuntimeConfigOverridesGlobalFields(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	global := `model: openai/gpt-global
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+runtime:
+  max_iters: 5
+  max_duration: 20s
+`
+	local := `runtime:
+  max_duration: 45s
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runtime.MaxIters != 5 {
+		t.Fatalf("Runtime.MaxIters = %d, want inherited global value 5", cfg.Runtime.MaxIters)
+	}
+	if cfg.Runtime.MaxDuration != 45*time.Second {
+		t.Fatalf("Runtime.MaxDuration = %s, want work override 45s", cfg.Runtime.MaxDuration)
 	}
 }
 
@@ -540,6 +574,70 @@ func TestLoadFromFile_CompactionDefaults(t *testing.T) {
 	}
 	if !cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 16384 || cfg.Compaction.KeepRecentTokens != 20000 || cfg.Compaction.TailTurns != 2 || cfg.Compaction.SummaryMaxTokens != 2048 || cfg.Compaction.ToolResultMaxChars != 2000 {
 		t.Fatalf("Compaction defaults = %+v", cfg.Compaction)
+	}
+}
+
+func TestLoadFromFile_RuntimeConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  max_iters: 42
+  max_duration: 15m
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Runtime.MaxIters != 42 {
+		t.Fatalf("Runtime.MaxIters = %d, want 42", cfg.Runtime.MaxIters)
+	}
+	if cfg.Runtime.MaxDuration != 15*time.Minute {
+		t.Fatalf("Runtime.MaxDuration = %s, want 15m", cfg.Runtime.MaxDuration)
+	}
+}
+
+func TestLoadFromFile_RuntimeConfigRejectsInvalidValues(t *testing.T) {
+	for name, body := range map[string]string{
+		"zero iters": `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  max_iters: 0
+`,
+		"bad duration": `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  max_duration: forever
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			prepareConfigTest(t)
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "juex.yaml")
+			writeTextFile(t, configPath, body)
+			if _, err := LoadFromFile(configPath); err == nil {
+				t.Fatal("expected invalid runtime config error")
+			}
+		})
 	}
 }
 

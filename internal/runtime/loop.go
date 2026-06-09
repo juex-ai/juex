@@ -263,6 +263,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	for iter := 0; iter < maxIters; iter++ {
 		select {
 		case <-turnCtx.Done():
+			if turnTimedOut(ctx, turnCtx) {
+				return "", e.failTurn(turnID, timeoutBudgetError(turnID, maxDur, turnCtx.Err()))
+			}
 			return "", e.failTurn(turnID, fmt.Errorf("turn budget exceeded: %w", turnCtx.Err()))
 		default:
 		}
@@ -286,6 +289,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			CachePolicy: e.cachePolicyLocked(),
 		})
 		if err != nil {
+			if turnTimedOut(ctx, turnCtx) {
+				return "", e.failTurn(turnID, timeoutBudgetError(turnID, maxDur, fmt.Errorf("llm: %w", err)))
+			}
 			if llm.IsContextOverflowError(err) && !retriedOverflow {
 				if _, compactErr := e.compactLocked(turnCtx, turnID, systemPrompt, "overflow_retry", true, ""); compactErr != nil {
 					return "", e.failTurn(turnID, fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr))
@@ -334,7 +340,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			lastText = msg.FirstText()
 			if !e.finishActiveTurnIfNoPending(turnID) {
 				if iter == maxIters-1 {
-					return "", e.failTurn(turnID, fmt.Errorf("turn iterations exceeded (%d)", maxIters))
+					return "", e.failTurn(turnID, iterationBudgetError(turnID, maxIters))
 				}
 				continue
 			}
@@ -403,7 +409,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}
 
 		if iter == maxIters-1 {
-			return "", e.failTurn(turnID, fmt.Errorf("turn iterations exceeded (%d)", maxIters))
+			return "", e.failTurn(turnID, iterationBudgetError(turnID, maxIters))
 		}
 	}
 
@@ -514,8 +520,37 @@ func (e *Engine) emit(ev events.Event) {
 }
 
 func (e *Engine) failTurn(turnID string, err error) error {
-	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: map[string]any{"error": err.Error()}})
+	payload := map[string]any{"error": err.Error()}
+	if budgetErr, ok := AsBudgetError(err); ok {
+		for k, v := range budgetErr.Details() {
+			payload[k] = v
+		}
+	}
+	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: payload})
 	return err
+}
+
+func iterationBudgetError(turnID string, maxIters int) *BudgetError {
+	return &BudgetError{
+		Kind:     BudgetErrorKindIterationLimit,
+		Budget:   "iterations",
+		TurnID:   turnID,
+		MaxIters: maxIters,
+	}
+}
+
+func timeoutBudgetError(turnID string, maxDur time.Duration, cause error) *BudgetError {
+	return &BudgetError{
+		Kind:        BudgetErrorKindTimeout,
+		Budget:      "duration",
+		TurnID:      turnID,
+		MaxDuration: maxDur,
+		Cause:       cause,
+	}
+}
+
+func turnTimedOut(parent context.Context, turnCtx context.Context) bool {
+	return parent.Err() == nil && errors.Is(turnCtx.Err(), context.DeadlineExceeded)
 }
 
 func newID() string {

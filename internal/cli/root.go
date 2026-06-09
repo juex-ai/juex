@@ -35,9 +35,14 @@ func Execute() int {
 	if err == nil {
 		return ExitSuccess
 	}
+	alreadyEmitted := false
+	if emitted, ok := err.(*emittedError); ok {
+		err = emitted.err
+		alreadyEmitted = true
+	}
 	var lockErr *session.LockError
 	if errors.As(err, &lockErr) {
-		fmt.Fprintln(os.Stderr, "Error:", err.Error())
+		printErrorIfNeeded(alreadyEmitted, err)
 		return ExitConflict
 	}
 	switch err.(type) {
@@ -45,21 +50,28 @@ func Execute() int {
 		// Dry run is a successful preview, not an error. No print.
 		return ExitDryRun
 	case *usageError:
-		fmt.Fprintln(os.Stderr, "Error:", err.Error())
+		printErrorIfNeeded(alreadyEmitted, err)
 		return ExitUsageError
 	case *notFoundError:
-		fmt.Fprintln(os.Stderr, "Error:", err.Error())
+		printErrorIfNeeded(alreadyEmitted, err)
 		return ExitNotFound
 	case *permissionError:
-		fmt.Fprintln(os.Stderr, "Error:", err.Error())
+		printErrorIfNeeded(alreadyEmitted, err)
 		return ExitPermission
 	case *conflictError:
-		fmt.Fprintln(os.Stderr, "Error:", err.Error())
+		printErrorIfNeeded(alreadyEmitted, err)
 		return ExitConflict
 	default:
-		fmt.Fprintln(os.Stderr, "Error:", err.Error())
+		printErrorIfNeeded(alreadyEmitted, err)
 		return ExitGeneralError
 	}
+}
+
+func printErrorIfNeeded(alreadyEmitted bool, err error) {
+	if alreadyEmitted {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "Error:", err.Error())
 }
 
 // usageError marks an error caused by bad CLI usage (missing required arg,
@@ -94,6 +106,22 @@ func (c *conflictError) Error() string { return c.msg }
 type dryRunOK struct{ msg string }
 
 func (d *dryRunOK) Error() string { return d.msg }
+
+type emittedError struct{ err error }
+
+func (e *emittedError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *emittedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
 
 type persistentFlags struct {
 	configPath                string

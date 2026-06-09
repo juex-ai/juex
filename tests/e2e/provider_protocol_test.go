@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
@@ -166,6 +168,65 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 type capturedProviderRequest struct {
 	path string
 	body map[string]any
+}
+
+func TestLiveBinary_RuntimeTimeoutJSONIncludesSessionMetadata(t *testing.T) {
+	bin := buildJuex(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(200 * time.Millisecond):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"resp_1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"too late"}]}]}`))
+		}
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body := "model: openai/gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
+    protocol: openai/responses
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: gpt-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--json", "--max-duration", "20ms", "hello")
+	home := t.TempDir()
+	cmd.Env = isolatedJuexBinaryEnv(home)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("expected runtime timeout failure")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	var got struct {
+		Error      string         `json:"error"`
+		SessionID  string         `json:"session_id"`
+		SessionDir string         `json:"session_dir"`
+		WorkDir    string         `json:"work_dir"`
+		Details    map[string]any `json:"details"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr.String())
+	}
+	if got.Error != "runtime_timeout" {
+		t.Fatalf("error = %q, want runtime_timeout; stderr=%s", got.Error, stderr.String())
+	}
+	if got.SessionID == "" || got.SessionDir == "" || got.WorkDir != work {
+		t.Fatalf("metadata = %+v, want session id/dir and work dir %s", got, work)
+	}
+	if got.Details["kind"] != "runtime_timeout" || got.Details["budget"] != "duration" {
+		t.Fatalf("details = %+v", got.Details)
+	}
 }
 
 func chatCompletionResponse(text string) string {
