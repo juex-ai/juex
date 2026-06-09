@@ -27,7 +27,7 @@ type Config struct {
 	BaseURL              string
 	APIKey               string
 	Model                string
-	ThinkingEffort       string // "low", "medium", "high", or "" (provider default)
+	ThinkingEffort       string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
 	ContextWindow        int    // provider context window in tokens; defaults to 256K
 	ProviderHeaders      map[string]string
 	ProviderQuery        map[string]string

@@ -655,6 +655,31 @@ func TestOpenAI_ThinkingEffort(t *testing.T) {
 	}
 }
 
+func TestOpenAI_DeepSeekPresetEnablesThinkingEffort(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{
+		ID:             "deepseek",
+		BaseURL:        srv.URL,
+		APIKey:         "k",
+		Model:          "deepseek-v4-pro",
+		ThinkingEffort: "max",
+	}, nil)
+	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if capturedBody["reasoning_effort"] != "max" {
+		t.Errorf("reasoning_effort = %v, want %q", capturedBody["reasoning_effort"], "max")
+	}
+}
+
 func TestOpenAI_NoThinkingEffort(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1200,25 +1225,32 @@ func TestAnthropic_ThinkingEffort(t *testing.T) {
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
+	outputConfig, ok := capturedBody["output_config"].(map[string]any)
+	if !ok {
+		t.Fatalf("output_config not present or wrong type: %+v", capturedBody["output_config"])
+	}
+	if outputConfig["effort"] != "low" {
+		t.Errorf("output_config.effort = %v, want %q", outputConfig["effort"], "low")
+	}
 	thinking, ok := capturedBody["thinking"].(map[string]any)
 	if !ok {
 		t.Fatalf("thinking not present or wrong type: %+v", capturedBody["thinking"])
 	}
-	if thinking["type"] != "enabled" {
-		t.Errorf("thinking.type = %v, want %q", thinking["type"], "enabled")
+	if thinking["type"] != "adaptive" {
+		t.Errorf("thinking.type = %v, want %q", thinking["type"], "adaptive")
 	}
-	budgetTokens, _ := thinking["budget_tokens"].(float64)
-	if budgetTokens != 2048 {
-		t.Errorf("thinking.budget_tokens = %v, want 2048", budgetTokens)
+	if thinking["display"] != "summarized" {
+		t.Errorf("thinking.display = %v, want %q", thinking["display"], "summarized")
 	}
-	// max_tokens should be bumped when thinking is enabled
-	maxTokens, _ := capturedBody["max_tokens"].(float64)
-	if maxTokens != 8192 {
-		t.Errorf("max_tokens = %v, want 8192", maxTokens)
+	if _, present := thinking["budget_tokens"]; present {
+		t.Fatalf("thinking should not use deprecated budget_tokens: %+v", thinking)
+	}
+	if capturedBody["max_tokens"] != float64(4096) {
+		t.Errorf("max_tokens = %v, want provider visible-output default 4096", capturedBody["max_tokens"])
 	}
 }
 
-func TestAnthropic_NoThinkingEffort(t *testing.T) {
+func TestAnthropic_DefaultEffortUsesAdaptiveThinking(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		buf, _ := io.ReadAll(r.Body)
@@ -1231,8 +1263,12 @@ func TestAnthropic_NoThinkingEffort(t *testing.T) {
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if _, present := capturedBody["thinking"]; present {
-		t.Errorf("thinking should be absent when not configured, got %v", capturedBody["thinking"])
+	if _, present := capturedBody["output_config"]; present {
+		t.Errorf("output_config should be absent when effort is empty, got %v", capturedBody["output_config"])
+	}
+	thinking, ok := capturedBody["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "adaptive" {
+		t.Fatalf("thinking = %+v, want adaptive", capturedBody["thinking"])
 	}
 	maxTokens, _ := capturedBody["max_tokens"].(float64)
 	if maxTokens != 4096 {
@@ -1302,15 +1338,19 @@ func TestProviderCompleteOptions_PreservesThinkingForCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteWithOptions: %v", err)
 	}
+	outputConfig, ok := captured["output_config"].(map[string]any)
+	if !ok || outputConfig["effort"] != "high" {
+		t.Fatalf("output_config = %+v, want high effort", captured["output_config"])
+	}
 	thinking, ok := captured["thinking"].(map[string]any)
-	if !ok {
-		t.Fatalf("thinking not preserved for compaction: %+v", captured["thinking"])
+	if !ok || thinking["type"] != "adaptive" {
+		t.Fatalf("thinking = %+v, want adaptive", captured["thinking"])
 	}
-	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(32768) {
-		t.Fatalf("thinking = %+v, want high budget", thinking)
+	if _, present := thinking["budget_tokens"]; present {
+		t.Fatalf("thinking should not use deprecated budget_tokens: %+v", thinking)
 	}
-	if captured["max_tokens"] != float64(32768+1234) {
-		t.Fatalf("max_tokens = %v, want thinking budget plus visible output", captured["max_tokens"])
+	if captured["max_tokens"] != float64(1234) {
+		t.Fatalf("max_tokens = %v, want visible output token cap", captured["max_tokens"])
 	}
 }
 

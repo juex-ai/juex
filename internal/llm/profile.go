@@ -166,6 +166,18 @@ var providerPresets = map[string]ProviderProfile{
 		},
 		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content", "reasoning", "thinking"}},
 	},
+	"deepseek": {
+		ID:       "deepseek",
+		Protocol: ProtocolOpenAIChat,
+		BaseURL:  "https://api.deepseek.com",
+		Capabilities: ProviderCapabilities{
+			Tools:           true,
+			ReasoningEffort: true,
+			ReasoningReplay: true,
+			MaxOutputTokens: true,
+		},
+		Compat: CompatOptions{ReasoningReplayFields: []string{"reasoning_content"}},
+	},
 }
 
 func customProfileForProtocol(id, rawProtocol string) (ProviderProfile, error) {

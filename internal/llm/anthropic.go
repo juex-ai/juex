@@ -29,6 +29,13 @@ func NewAnthropic(cfg Config, _ any) Provider {
 		profile.APIKey = cfg.APIKey
 		profile.Model = cfg.Model
 		profile.BaseURL = cfg.BaseURL
+		profile.ThinkingEffort = cfg.ThinkingEffort
+		profile.Headers = cloneStringMap(cfg.Headers)
+		profile.Query = cloneStringMap(cfg.Query)
+		profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
+		if len(cfg.Compat.ReasoningReplayFields) > 0 {
+			profile.Compat = cfg.Compat
+		}
 	}
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),
@@ -58,25 +65,8 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 
 func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
 	maxTokens := int64(4096)
-	var budgetTokens int64
-	if p.profile.Capabilities.ReasoningEffort {
-		switch p.profile.ThinkingEffort {
-		case "low":
-			budgetTokens = 2048
-			maxTokens = 8192
-		case "medium":
-			budgetTokens = 8192
-			maxTokens = 16384
-		case "high":
-			budgetTokens = 32768
-			maxTokens = 64000
-		}
-	}
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		maxTokens = int64(opts.MaxOutputTokens)
-		if budgetTokens > 0 {
-			maxTokens += budgetTokens
-		}
 	}
 
 	params := anthropic.MessageNewParams{
@@ -88,10 +78,15 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	if p.profile.Capabilities.Tools {
 		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
 	}
-	if budgetTokens > 0 {
+	if p.profile.Capabilities.ReasoningEffort {
+		if p.profile.ThinkingEffort != "" {
+			params.OutputConfig = anthropic.OutputConfigParam{
+				Effort: anthropic.OutputConfigEffort(p.profile.ThinkingEffort),
+			}
+		}
 		params.Thinking = anthropic.ThinkingConfigParamUnion{
-			OfEnabled: &anthropic.ThinkingConfigEnabledParam{
-				BudgetTokens: budgetTokens,
+			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
+				Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
 			},
 		}
 	}

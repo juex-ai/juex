@@ -7,7 +7,7 @@
 model: openai/gpt-4.1
 
 providers:
-  # Known preset provider ids: openai, openai-codex, anthropic.
+  # Known preset provider ids: openai, openai-codex, anthropic, deepseek.
   # Known presets fix the protocol and default base URL. Custom providers must
   # use their own id and set protocol explicitly.
   - id: openai
@@ -37,10 +37,18 @@ providers:
     models:
       - id: gpt-4.1
         # Optional: control reasoning depth for thinking models.
-        # Valid values: "low", "medium", "high". Omit to use the provider default.
+        # Valid values: "low", "medium", "high", "xhigh", "max".
+        # Omit to use the provider default.
         # thinking_effort: ""
         # Optional: model context window in tokens. Defaults to 256000.
         # context_window: 256000
+
+  # DeepSeek uses OpenAI-compatible Chat Completions, with reasoning_effort
+  # enabled by default and reasoning_content replayed across tool turns.
+  # - id: deepseek
+  #   api_key: ""
+  #   models:
+  #     - id: deepseek-v4-pro
 
   # For OpenAI Codex OAuth, switch the top-level model to
   # openai-codex/gpt-5.5 and use:
