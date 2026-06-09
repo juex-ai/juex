@@ -335,13 +335,34 @@ func resolveExecutable(binary string, opts ShellResolveOptions) (string, error) 
 	if binary == "" {
 		return "", os.ErrNotExist
 	}
+	var resolved string
 	if hasPathSeparator(binary) || filepath.IsAbs(binary) {
-		if opts.FileExists(binary) {
-			return binary, nil
+		if !opts.FileExists(binary) {
+			return "", os.ErrNotExist
 		}
-		return "", os.ErrNotExist
+		resolved = binary
+	} else {
+		path, err := opts.LookPath(binary)
+		if err != nil {
+			return "", err
+		}
+		resolved = path
 	}
-	return opts.LookPath(binary)
+	if opts.RuntimeOS == "windows" && isWindowsAbsolutePath(resolved) && runtime.GOOS != "windows" {
+		return resolved, nil
+	}
+	if abs, err := filepath.Abs(resolved); err == nil {
+		return abs, nil
+	}
+	return resolved, nil
+}
+
+func isWindowsAbsolutePath(p string) bool {
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		c := p[0]
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	}
+	return strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, `//`)
 }
 
 func shellBinaryMatches(spec shellBuiltinSpec, binary string) bool {

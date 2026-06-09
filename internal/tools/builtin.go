@@ -255,6 +255,8 @@ func shellTool(defaultCwd string, profile ShellProfile) Tool {
 			cwd, _ := in["cwd"].(string)
 			if cwd == "" {
 				cwd = defaultCwd
+			} else {
+				cwd = resolveWorkPath(defaultCwd, cwd)
 			}
 			argv := append([]string(nil), profile.Args...)
 			argv = append(argv, cmd)

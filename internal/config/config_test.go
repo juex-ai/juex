@@ -415,6 +415,39 @@ func TestResolveShellProfile_CustomRequiresFields(t *testing.T) {
 	}
 }
 
+func TestResolveShellProfile_CustomPathWithSeparatorBecomesAbsolute(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	binary := filepath.Join("bin", "custom-shell")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("fake"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	profile, err := ResolveShellProfile(ShellConfig{
+		Profile:   "custom",
+		Binary:    binary,
+		Family:    "posix",
+		Args:      []string{"-c"},
+		PathStyle: "posix",
+	}, ShellResolveOptions{
+		RuntimeOS:   "linux",
+		RuntimeArch: "amd64",
+		LookupEnv:   func(string) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(profile.Binary) {
+		t.Fatalf("binary = %q, want absolute path", profile.Binary)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(profile.Binary), "/bin/custom-shell") {
+		t.Fatalf("binary = %q, want resolved custom shell path", profile.Binary)
+	}
+}
+
 func TestLoad_EnableUserGlobalResourcesDefaultsAndOverrides(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()

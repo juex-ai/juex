@@ -94,6 +94,48 @@ func TestBuiltins_ShellUsesConfiguredProfileAndCwd(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ShellRelativeCwdResolvesFromWorkDir(t *testing.T) {
+	r := NewRegistry()
+	workDir := t.TempDir()
+	relativeDir := "nested"
+	wantDir := filepath.Join(workDir, relativeDir)
+	if err := os.MkdirAll(wantDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "shell.json")
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MARKER", marker)
+
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir: workDir,
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	if _, err := r.Call(context.Background(), "shell", map[string]any{"cmd": "echo hi", "cwd": relativeDir}); err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct {
+		Cwd string `json:"cwd"`
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Cwd != wantDir {
+		t.Fatalf("cwd = %q, want %q", payload.Cwd, wantDir)
+	}
+}
+
 func TestShellHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_FAKE_SHELL") != "1" {
 		return
