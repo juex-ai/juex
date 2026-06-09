@@ -915,10 +915,13 @@ Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
 | `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
-| `tests/e2e` | full-stack tempdir scenario; live OpenAI/Anthropic round-trip + multi-step (build-tag) |
+| `tests/e2e` | full-stack tempdir scenario, resume round-trip, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, web turn persistence, web pending input, live provider smoke (build-tag) |
 
-Total: 15 Go packages, 100+ unit tests, all green; 6 live integration tests
-gated by build tag.
+Run the deterministic suite with `mise exec -- go test ./... -count=1`.
+Provider-quality smoke tests remain explicit because they use credentials:
+`mise exec -- go test -tags=integration ./tests/e2e/... -run Live -count=1`.
+The live compaction quality evaluation is documented in
+`docs/compaction/evaluation.md` and run with `scripts/compaction_eval.sh`.
 
 ---
 

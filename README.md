@@ -103,6 +103,7 @@ copies it into `internal/web/dist`, and embeds it into `dist/juex`.
 | `ARCHITECTURE.md` | Implementation map: modules, interfaces, data flow, tests. |
 | `DESIGN.md` | Web UI design guide. |
 | `frontend/README.md` | Frontend-specific development notes. |
+| `tests/e2e/README.md` | Cross-package e2e and live-evaluation coverage matrix. |
 | `docs/AGENT_CLI_AUDIT.md` | CLI audit against agent-oriented CLI principles. |
 | `docs/compaction/` | Context compaction research, V2 design, and live evaluation notes. |
 | `docs/superpowers/` | Historical specs and implementation plans. |

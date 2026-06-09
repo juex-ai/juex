@@ -5,7 +5,7 @@
 //
 //   - AGENTS.md hierarchy loading (project + subdir + global)
 //   - Skill loading (path appears in system prompt; model loads body via `read`)
-//   - Memory entries -> system prompt + memory_write/search round-trip
+//   - Work-local memory entries -> system prompt + memory_write/search round-trip
 //   - MCP stdio client -> registered as mcp__<server>__<tool> in the registry
 //   - Builtin tools end-to-end: write, read, edit, bash, grep
 //   - Parallel tool calls in a single response
@@ -147,8 +147,8 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Memory entry (user-global)
-	memStore := memory.NewStore(filepath.Join(homeAgents, "memory"))
+	// Memory entry (work-local)
+	memStore := memory.NewStore(filepath.Join(root, ".juex", "memory"))
 	if err := memStore.Write(memory.Entry{
 		Name:        "prefer-yaml",
 		Description: "Prefer YAML over JSON in config files",
@@ -199,7 +199,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 
 	// -- Build runtime --
 	bus := events.NewBus()
-	sess, err := session.New(filepath.Join(homeAgents, "sessions"))
+	sess, err := session.New(filepath.Join(root, ".juex", "sessions"))
 	if err != nil {
 		t.Fatal(err)
 	}
