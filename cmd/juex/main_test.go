@@ -94,7 +94,12 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		// recognised. The command will fail on missing provider, which is
 		// fine — we only care about flag parsing.
 		dir := t.TempDir()
-		out, _ := exec.Command(bin, "--cwd", dir, "run", "hi").CombinedOutput()
+		cmd := exec.Command(bin, "--cwd", dir, "run", "hi")
+		cmd.Env = []string{
+			"PATH=" + os.Getenv("PATH"),
+			"HOME=" + dir,
+		}
+		out, _ := cmd.CombinedOutput()
 		body := string(out)
 		// Should NOT see "unknown flag" / "unknown shorthand"
 		if strings.Contains(body, "unknown flag") || strings.Contains(body, "unknown shorthand") {

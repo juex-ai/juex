@@ -344,8 +344,8 @@ older consumers.
 
 ### 3.4 Memory
 
-Layer 1 (AGENTS.md hierarchy: user-global + project + project subdir) is
-read directly by the prompt builder. Layer 2 (memory entries with
+Layer 1 (AGENTS.md hierarchy: optional user-global + project + project subdir)
+is read directly by the prompt builder. Layer 2 (memory entries with
 frontmatter + `MEMORY.md` index) is owned by the work-local Store.
 
 ```go
@@ -367,9 +367,11 @@ func (s *Store) Delete(name string) error
 ```
 
 Sessions and memory are **work-local** runtime data under `<WorkDir>/.juex/`.
-Skills, mcp.json, and AGENTS.md still live under `.agents` and come from both
-user-global and project-local scopes (project entries override user entries by
-name).
+Skills, mcp.json, and AGENTS.md still live under `.agents` and come from
+project-local scope. User-global `~/.agents` resources are also loaded by
+default unless `enable_user_global_resources` or
+`--enable-user-global-resources` disables them. Project MCP servers and skills
+override user entries by name; AGENTS.md files are concatenated in load order.
 
 ### 3.5 Session
 
@@ -500,7 +502,8 @@ Persistent flags inherited by all subcommands:
 |---|---|---|
 | `--config` |  | unset (path to `juex.yaml` override) |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
-| `--verbose` | `-V` | false (stream events to stderr) |
+| `--enable-user-global-resources` |  | config value (true/false or 1/0) |
+| `--verbose` |  | false (stream events to stderr) |
 
 `cmd/juex/main.go` is 5 lines: `os.Exit(cli.Execute())`.
 
@@ -602,6 +605,7 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 
 ```yaml
 model: openai/gpt-4.1
+enable_user_global_resources: true
 providers:
   - id: openai
     base_url: ""
@@ -640,6 +644,7 @@ compaction:
 | Field | Description |
 |---|---|
 | `model` | active model reference in `provider_id/model_id` form |
+| `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json` |
 | `providers[].id` | required provider id; known presets are `openai`, `openai-codex`, `anthropic`, and `deepseek` |
 | `providers[].protocol` | required for custom providers; public values are `anthropic/messages`, `openai/responses`, and `openai/chat` |
 | `providers[].base_url` | full base URL for custom providers; known presets use their provider default unless overridden for testing |
@@ -671,8 +676,10 @@ compaction:
 
 Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
-`.juex` directory) < `--config <path>` (if supplied) < `os.Environ`. `.env` is
-no longer read by default. Provider definitions merge by `providers[].id` and
+`.juex` directory) < `--config <path>` (if supplied) < `os.Environ`. Explicit
+CLI flags for individual settings, such as
+`--enable-user-global-resources=false`, apply after config load. `.env` is no
+longer read by default. Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider_id/model_id` or override a few fields while inheriting missing values
 from `~/.juex/juex.yaml`. The legacy top-level `provider:` block is not
@@ -723,7 +730,7 @@ ordinary user turns keep failing loudly on compaction errors.
 Resources split between user-global and work-local:
 
 ```
-~/.agents/                       # user-global (read-only from juex's view)
+~/.agents/                       # optional user-global resources
 ├── AGENTS.md                    # global agent rules
 ├── mcp.json                     # global MCP servers (project may override)
 └── skills/<name>/SKILL.md       # global skills (project may override)
@@ -747,6 +754,9 @@ Resources split between user-global and work-local:
         ├── conversation.jsonl
         └── events.jsonl
 ```
+
+The user-global `~/.agents` resources are read-only from Juex's view and are
+loaded only when user-global resources are enabled.
 
 **Migration from earlier prototype:** sessions and memory used to live under
 `.agents/` or `~/.agents/`. The runtime now reads / writes project-local

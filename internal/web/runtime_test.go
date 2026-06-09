@@ -182,6 +182,7 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	work := srv.opts.Cfg.WorkDir
 	homeAgents := t.TempDir()
 	srv.opts.Cfg.HomeAgentsDir = homeAgents
+	srv.opts.Cfg.EnableUserGlobalResources = true
 	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "AGENTS.md"), "global runtime rule")
 	mustWriteRuntimeFile(t, filepath.Join(work, "AGENTS.md"), "workspace root rule")
 	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "AGENTS.md"), "workspace agents rule")
@@ -222,6 +223,7 @@ func TestRuntimeStatusOrdersProjectBeforeUserSources(t *testing.T) {
 	srv := newTestServer(t)
 	homeAgents := t.TempDir()
 	srv.opts.Cfg.HomeAgentsDir = homeAgents
+	srv.opts.Cfg.EnableUserGlobalResources = true
 	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "mcp.json"), `{
   "mcpServers": {
     "shared": { "command": "user-shared" },
@@ -294,6 +296,59 @@ body`)
 		if gotSkill.Name != want.name || gotSkill.Source != want.source || gotSkill.Description != want.description {
 			t.Fatalf("skill[%d] = %+v, want %+v", i, gotSkill, want)
 		}
+	}
+}
+
+func TestRuntimeStatusSkipsUserGlobalResourcesWhenDisabled(t *testing.T) {
+	srv := newTestServer(t)
+	homeAgents := t.TempDir()
+	srv.opts.Cfg.HomeAgentsDir = homeAgents
+	srv.opts.Cfg.EnableUserGlobalResources = false
+	work := srv.opts.Cfg.WorkDir
+
+	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "AGENTS.md"), "global runtime rule")
+	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "mcp.json"), `{
+  "mcpServers": {
+    "user": { "command": "user-command" }
+  }
+}`)
+	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "skills", "user", "SKILL.md"), `---
+name: user
+description: user skill
+---
+body`)
+	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "AGENTS.md"), "workspace agents rule")
+	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "project": { "command": "project-command" }
+  }
+}`)
+	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "skills", "project", "SKILL.md"), `---
+name: project
+description: project skill
+---
+body`)
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SystemPrompt.Items) != 3 {
+		t.Fatalf("system prompt = %+v", got.SystemPrompt)
+	}
+	if got.SystemPrompt.Items[0].Label != ".agents/AGENTS.md" || strings.Contains(got.SystemPrompt.Items[0].Text, "global runtime rule") {
+		t.Fatalf("system prompt should skip global AGENTS.md and keep project entry: %+v", got.SystemPrompt.Items)
+	}
+	for _, item := range got.SystemPrompt.Items {
+		if strings.Contains(item.Text, "global runtime rule") || strings.Contains(item.Text, "user skill") {
+			t.Fatalf("system prompt includes disabled user-global resource: %+v", item)
+		}
+	}
+	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "project" || got.MCP.Servers[0].Source != "project" {
+		t.Fatalf("servers = %+v", got.MCP.Servers)
+	}
+	if len(got.Skills.Items) != 1 || got.Skills.Items[0].Name != "project" || got.Skills.Items[0].Source != "project" {
+		t.Fatalf("skills = %+v", got.Skills.Items)
 	}
 }
 

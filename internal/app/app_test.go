@@ -515,11 +515,12 @@ func TestAppPromptLoadsGlobalAgentsBeforeWorkspaceAgents(t *testing.T) {
 
 	a, err := New(Options{
 		Config: config.Config{
-			ProviderID:    "openai",
-			APIKey:        "x",
-			Model:         "m",
-			HomeAgentsDir: homeAgents,
-			WorkDir:       work,
+			ProviderID:                "openai",
+			APIKey:                    "x",
+			Model:                     "m",
+			HomeAgentsDir:             homeAgents,
+			WorkDir:                   work,
+			EnableUserGlobalResources: true,
 		},
 		Provider: &stubProvider{},
 		WorkDir:  work,
@@ -537,6 +538,46 @@ func TestAppPromptLoadsGlobalAgentsBeforeWorkspaceAgents(t *testing.T) {
 	}
 	if globalPos > workspacePos {
 		t.Fatalf("global AGENTS.md should load before workspace AGENTS.md:\n%s", got)
+	}
+}
+
+func TestAppPromptSkipsGlobalAgentsWhenUserGlobalResourcesDisabled(t *testing.T) {
+	work := t.TempDir()
+	homeAgents := t.TempDir()
+	projectAgents := filepath.Join(work, ".agents")
+	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeAgents, "AGENTS.md"), []byte("global agent rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectAgents, "AGENTS.md"), []byte("workspace agent rule"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID:                "openai",
+			APIKey:                    "x",
+			Model:                     "m",
+			HomeAgentsDir:             homeAgents,
+			WorkDir:                   work,
+			EnableUserGlobalResources: false,
+		},
+		Provider: &stubProvider{},
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	got := a.Engine.Prompt.Build()
+	if strings.Contains(got, "global agent rule") {
+		t.Fatalf("prompt should skip global AGENTS.md when user-global resources are disabled:\n%s", got)
+	}
+	if !strings.Contains(got, "workspace agent rule") {
+		t.Fatalf("prompt should keep workspace AGENTS.md when user-global resources are disabled:\n%s", got)
 	}
 }
 

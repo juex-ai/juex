@@ -96,9 +96,10 @@ type dryRunOK struct{ msg string }
 func (d *dryRunOK) Error() string { return d.msg }
 
 type persistentFlags struct {
-	configPath string
-	cwd        string
-	verbose    bool
+	configPath                string
+	cwd                       string
+	enableUserGlobalResources string
+	verbose                   bool
 }
 
 func newRootCmd() *cobra.Command {
@@ -114,6 +115,10 @@ func newRootCmd() *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
+	cmd.PersistentFlags().StringVar(&flags.enableUserGlobalResources, "enable-user-global-resources", "", "enable user-global ~/.agents resources (true/false or 1/0; default from config)")
+	if flag := cmd.PersistentFlags().Lookup("enable-user-global-resources"); flag != nil {
+		flag.NoOptDefVal = "true"
+	}
 	// --verbose has no short form at root level so each subcommand can use
 	// -v locally (see version.go); cobra would otherwise conflict.
 	cmd.PersistentFlags().BoolVar(&flags.verbose, "verbose", false, "stream runtime lifecycle events to stderr")
@@ -141,6 +146,13 @@ func loadConfig(flags *persistentFlags) (config.Config, error) {
 	}
 	if err != nil {
 		return cfg, err
+	}
+	if flags != nil && flags.enableUserGlobalResources != "" {
+		enabled, err := config.ParseBoolValue(flags.enableUserGlobalResources)
+		if err != nil {
+			return cfg, &usageError{msg: "--enable-user-global-resources: " + err.Error()}
+		}
+		cfg.EnableUserGlobalResources = enabled
 	}
 	return cfg, nil
 }

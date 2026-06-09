@@ -171,16 +171,12 @@ func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
 	if err != nil {
 		return systemPromptStatus{}, err
 	}
-	var globalAgents string
-	if s.opts.Cfg.HomeAgentsDir != "" {
-		globalAgents = filepath.Join(s.opts.Cfg.HomeAgentsDir, "AGENTS.md")
-	}
 	var memStore *memory.Store
 	if memoryDir := s.opts.Cfg.MemoryDir(); memoryDir != "" {
 		memStore = memory.NewStore(memoryDir)
 	}
 	builder := &prompt.Builder{
-		GlobalAgentsMDPath: globalAgents,
+		GlobalAgentsMDPath: s.opts.Cfg.GlobalAgentsMDPath(),
 		AgentsMDDirs:       s.opts.Cfg.AgentsMDDirs(),
 		Memory:             memStore,
 		Skills:             skillLoader,
