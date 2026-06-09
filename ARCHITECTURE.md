@@ -226,13 +226,17 @@ Provider profiles resolve a user config into one wire protocol, a small preset,
 and explicit capability gates. Public custom protocol families are
 `anthropic/messages`, `openai/responses`, and `openai/chat`. The
 `openai-codex/responses` protocol is reserved for the `openai-codex` preset,
-which targets the ChatGPT Codex backend. Presets exist only for `openai`,
-`openai-codex`, and `anthropic`; unknown custom provider entries must set
-`providers[].protocol` explicitly. Known presets own their protocol: `openai`
-uses `openai/responses`, `openai-codex` uses `openai-codex/responses`, and
-`anthropic` uses `anthropic/messages`. To use an OpenAI-compatible Chat
-provider, define a custom `providers[].id`, set `providers[].protocol:
-openai/chat`, and point the top-level `model` at that provider/model pair.
+which targets the ChatGPT Codex backend. Presets exist for `openai`,
+`openai-codex`, `anthropic`, and `deepseek`; unknown custom provider entries
+must set `providers[].protocol` explicitly. Known presets own their protocol:
+`openai` uses `openai/responses`, `openai-codex` uses
+`openai-codex/responses`, `anthropic` uses `anthropic/messages`, and
+`deepseek` uses `openai/chat` with reasoning effort enabled. To use another
+OpenAI-compatible Chat provider, define a custom `providers[].id`, set
+`providers[].protocol: openai/chat`, and point the top-level `model` at that
+provider/model pair. Custom `openai/chat` profiles enable reasoning effort by
+default; set `providers[].capabilities.reasoning_effort: false` only when an
+endpoint rejects that field.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
@@ -251,6 +255,10 @@ provider-compatible knobs: OpenAI-compatible chat can replay
 `reasoning_content` / `reasoning` / `thinking`, Anthropic replays thinking
 blocks, and Responses stores reasoning item IDs plus encrypted content when the
 provider returns them.
+Anthropic thinking uses adaptive thinking plus `output_config.effort` when an
+effort is configured; an empty effort enables adaptive thinking without
+overriding the provider default. DeepSeek uses the OpenAI Chat
+`reasoning_effort` field and replays only `reasoning_content` by default.
 
 ### 3.2 Tools
 
@@ -632,7 +640,7 @@ compaction:
 | Field | Description |
 |---|---|
 | `model` | active model reference in `provider_id/model_id` form |
-| `providers[].id` | required provider id; known presets are `openai`, `openai-codex`, and `anthropic` |
+| `providers[].id` | required provider id; known presets are `openai`, `openai-codex`, `anthropic`, and `deepseek` |
 | `providers[].protocol` | required for custom providers; public values are `anthropic/messages`, `openai/responses`, and `openai/chat` |
 | `providers[].base_url` | full base URL for custom providers; known presets use their provider default unless overridden for testing |
 | `providers[].api_key` | API key |
@@ -641,7 +649,7 @@ compaction:
 | `providers[].capabilities` | optional provider-level gates for tools, streaming, reasoning effort/replay, and max output tokens |
 | `providers[].compat.reasoning_replay_fields` | OpenAI-compatible raw assistant fields to replay when reasoning replay is enabled |
 | `providers[].models[].id` | model name sent to the provider |
-| `providers[].models[].thinking_effort` | optional reasoning depth for thinking models |
+| `providers[].models[].thinking_effort` | optional reasoning depth for thinking models; supported values are `low`, `medium`, `high`, `xhigh`, and `max` |
 | `providers[].models[].context_window` | optional model context window in tokens; defaults to `256000` |
 | `providers[].models[].headers` | optional model-level HTTP header overrides |
 | `providers[].models[].query` | optional model-level query parameter overrides |

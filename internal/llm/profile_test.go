@@ -23,6 +23,29 @@ func TestResolveProfile_KnownPresetUsesFixedProtocol(t *testing.T) {
 	}
 }
 
+func TestResolveProfile_DeepSeekPresetUsesOpenAIChatWithReasoningEffort(t *testing.T) {
+	profile, err := ResolveProfile(Config{
+		ID:     "deepseek",
+		APIKey: "k",
+		Model:  "deepseek-v4-pro",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "deepseek" || profile.Protocol != ProtocolOpenAIChat {
+		t.Fatalf("profile = %+v", profile)
+	}
+	if profile.BaseURL != "https://api.deepseek.com" {
+		t.Fatalf("base url = %q", profile.BaseURL)
+	}
+	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
+		t.Fatalf("capabilities = %+v", profile.Capabilities)
+	}
+	if got := profile.Compat.ReasoningReplayFields; len(got) != 1 || got[0] != "reasoning_content" {
+		t.Fatalf("compat = %+v", profile.Compat)
+	}
+}
+
 func TestResolveProfile_RejectsKnownPresetProtocolOverride(t *testing.T) {
 	_, err := ResolveProfile(Config{
 		ID:       "openai",
@@ -69,8 +92,8 @@ func TestResolveProfile_CustomProtocolUsesCompatibleOpenAIChatDefaults(t *testin
 	if profile.ID != "custom" || profile.Protocol != ProtocolOpenAIChat {
 		t.Fatalf("profile = %+v", profile)
 	}
-	if !profile.Capabilities.Tools || profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
-		t.Fatalf("capabilities = %+v, want conservative OpenAI-compatible chat defaults", profile.Capabilities)
+	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
+		t.Fatalf("capabilities = %+v, want OpenAI-compatible chat defaults with reasoning effort", profile.Capabilities)
 	}
 }
 

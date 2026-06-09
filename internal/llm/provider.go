@@ -36,7 +36,7 @@ type Config struct {
 	BaseURL        string
 	APIKey         string
 	Model          string
-	ThinkingEffort string // "low", "medium", "high", or "" (provider default)
+	ThinkingEffort string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
 	Headers        map[string]string
 	Query          map[string]string
 	Capabilities   CapabilityOverrides
