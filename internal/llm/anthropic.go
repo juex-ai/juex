@@ -107,16 +107,82 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	}
 
 	msg := anthropic.Message{}
-	stream := p.client.Messages.NewStreaming(ctx, params)
+	streamDiagnostics := &anthropicStreamDiagnostics{}
+	stream := p.client.Messages.NewStreaming(ctx, params, option.WithMiddleware(streamDiagnostics.middleware))
 	for stream.Next() {
-		if err := msg.Accumulate(stream.Current()); err != nil {
-			return Response{}, fmt.Errorf("anthropic stream: %w", err)
+		event := stream.Current()
+		if err := msg.Accumulate(event); err != nil {
+			return Response{}, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
 		}
 	}
 	if err := stream.Err(); err != nil {
+		if streamErr := anthropicStreamParseErrorFromDiagnostics(p.Name(), streamDiagnostics, err); streamErr != nil {
+			return Response{}, streamErr
+		}
 		return Response{}, fmt.Errorf("anthropic: %w", err)
 	}
 	return p.responseFromMessage(&msg), nil
+}
+
+func anthropicStreamParseErrorFromEvent(provider string, event anthropic.MessageStreamEventUnion, cause error) *StreamParseError {
+	raw := trimStreamPreview(event.RawJSON())
+	eventType := event.Type
+	if eventType == "" {
+		eventType = extractAnthropicStreamType(raw)
+	}
+	idx, hasIndex := extractAnthropicStreamIndex(raw)
+	if hasAnthropicContentBlockIndex(eventType) {
+		idx = event.Index
+		hasIndex = true
+	}
+	return newAnthropicStreamParseError(provider, anthropicStreamDiagnostic{
+		EventType:  eventType,
+		Index:      idx,
+		HasIndex:   hasIndex,
+		RawPreview: raw,
+	}, cause)
+}
+
+func anthropicStreamParseErrorFromDiagnostics(provider string, diagnostics *anthropicStreamDiagnostics, cause error) *StreamParseError {
+	diag := diagnostics.last()
+	if !isAnthropicParsedStreamEvent(diag.EventType) {
+		return nil
+	}
+	return newAnthropicStreamParseError(provider, diag, cause)
+}
+
+func newAnthropicStreamParseError(provider string, diag anthropicStreamDiagnostic, cause error) *StreamParseError {
+	eventType := diag.EventType
+	if eventType == "" {
+		eventType = "stream"
+	}
+	return &StreamParseError{
+		Kind:       StreamParseErrorKindAnthropic,
+		Provider:   provider,
+		EventType:  eventType,
+		Index:      diag.Index,
+		HasIndex:   diag.HasIndex,
+		RawPreview: diag.RawPreview,
+		Cause:      cause,
+	}
+}
+
+func hasAnthropicContentBlockIndex(eventType string) bool {
+	switch eventType {
+	case "content_block_start", "content_block_delta", "content_block_stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAnthropicParsedStreamEvent(eventType string) bool {
+	switch eventType {
+	case "message_start", "message_delta", "message_stop", "content_block_start", "content_block_delta", "content_block_stop":
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response {

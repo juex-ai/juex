@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,6 +64,24 @@ func writeAnthropicTextAndToolStream(w http.ResponseWriter, model, text string, 
 	fmt.Fprint(w, `data: {"type":"content_block_stop","index":1}`+"\n\n")
 	fmt.Fprint(w, "event: message_delta\n")
 	fmt.Fprintf(w, `data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":%d}}`+"\n\n", outputTokens)
+	fmt.Fprint(w, "event: message_stop\n")
+	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+}
+
+func writeAnthropicSplitToolInputStream(w http.ResponseWriter, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	fmt.Fprint(w, "event: message_start\n")
+	fmt.Fprintf(w, `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}`+"\n\n", model)
+	fmt.Fprint(w, "event: content_block_start\n")
+	fmt.Fprint(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu_1","name":"read","input":{}}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"/tmp/x\"}"}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_stop\n")
+	fmt.Fprint(w, `data: {"type":"content_block_stop","index":0}`+"\n\n")
+	fmt.Fprint(w, "event: message_delta\n")
+	fmt.Fprint(w, `data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":4}}`+"\n\n")
 	fmt.Fprint(w, "event: message_stop\n")
 	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
 }
@@ -131,6 +150,80 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 	sysBlocks, ok := capturedBody["system"].([]any)
 	if !ok || len(sysBlocks) == 0 {
 		t.Errorf("system not propagated: %+v", capturedBody["system"])
+	}
+}
+
+func TestAnthropic_MalformedStreamChunkReturnsDiagnosticError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\n")
+		fmt.Fprint(w, `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}`+"\n\n")
+		fmt.Fprint(w, "event: content_block_start\n")
+		fmt.Fprint(w, `data: {"type":"content_block_start","index":0,"content_block":`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{
+		ID:      "anthropic",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}, nil)
+
+	_, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err == nil {
+		t.Fatal("Complete succeeded, want diagnostic stream parse error")
+	}
+	var streamErr *StreamParseError
+	if !errors.As(err, &streamErr) {
+		t.Fatalf("error type = %T, want StreamParseError: %v", err, err)
+	}
+	if streamErr.Kind != StreamParseErrorKindAnthropic || streamErr.EventType != "content_block_start" {
+		t.Fatalf("stream error = %+v", streamErr)
+	}
+	if !streamErr.HasIndex || streamErr.Index != 0 {
+		t.Fatalf("stream error index = %+v, want index 0", streamErr)
+	}
+	if streamErr.Cause == nil || !strings.Contains(streamErr.Cause.Error(), "unexpected end of JSON input") {
+		t.Fatalf("stream error cause = %v", streamErr.Cause)
+	}
+	for _, want := range []string{
+		"kind=anthropic_stream_parse",
+		"provider=anthropic:claude-test",
+		"event_type=content_block_start",
+		"index=0",
+		"raw_preview=",
+		"unexpected end of JSON input",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
+func TestAnthropic_SplitInputJSONDeltaStillAccumulates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAnthropicSplitToolInputStream(w, "claude-test")
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{
+		ID:      "anthropic",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}, nil)
+
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	calls := resp.Message.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls = %+v, want one", calls)
+	}
+	if calls[0].Input["path"] != "/tmp/x" {
+		t.Fatalf("tool input = %+v, want path /tmp/x", calls[0].Input)
 	}
 }
 

@@ -245,6 +245,9 @@ OpenAI Responses API. SDK-backed clients use `WithMaxRetries(10)`, and the
 raw HTTP `openai-codex/responses` adapter mirrors that retry boundary for
 recoverable transport/API failures such as network errors, 408/409/429, and
 5xx responses. Ordinary request errors are returned immediately.
+Malformed provider stream events are wrapped as `StreamParseError` with a
+stable kind, provider/model identity, event type, optional content block index,
+and a bounded raw event preview.
 
 Capability gates decide which request features are sent. If a profile disables
 tools, tool specs and provider-facing tool history are omitted. If it disables
