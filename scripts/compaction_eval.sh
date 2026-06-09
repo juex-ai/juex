@@ -5,7 +5,33 @@
 
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+usage() {
+  cat <<'USAGE'
+Usage: compaction_eval.sh [options] [provider/model ...]
+
+Runs the live compaction quality smoke. By default it rotates one model from
+tests/e2e/live-models.yaml and advances the local rotation state only after a
+successful run.
+
+Options:
+  --all-models             Run every ref in compaction_eval_models.
+  --model-list PATH        YAML model list. Default: tests/e2e/live-models.yaml.
+  -h, --help               Show this help.
+USAGE
+}
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+cd "$repo_root"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Missing uv. Install uv or run through the project toolchain before using compaction_eval.sh." >&2
+  exit 2
+fi
+
+run_py() {
+  uv run --quiet --project "$repo_root" python "$@"
+}
 
 JUEX_BIN=${JUEX_BIN:-"./dist/juex"}
 if [ ! -x "$JUEX_BIN" ]; then
@@ -22,6 +48,9 @@ PROVIDER_CONTEXT_WINDOW=${PROVIDER_CONTEXT_WINDOW:-32000}
 EVAL_TURN_TIMEOUT=${JUEX_EVAL_TURN_TIMEOUT:-600}
 KEEP_WORKDIR=${KEEP_WORKDIR:-0}
 TMP_WORKDIRS=()
+all_models=0
+explicit_models=()
+rotated_model=""
 
 cleanup() {
   if [ "$KEEP_WORKDIR" = "1" ]; then
@@ -33,12 +62,48 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ "$#" -gt 0 ]; then
-  MODELS=("$@")
-else
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all-models)
+      all_models=1
+      shift
+      ;;
+    --model-list)
+      MODEL_LIST_PATH="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      explicit_models+=("$@")
+      break
+      ;;
+    --*)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      explicit_models+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ "$all_models" = "1" ] && [ "${#explicit_models[@]}" -gt 0 ]; then
+  echo "--all-models cannot be combined with explicit provider/model refs" >&2
+  exit 2
+fi
+
+if [ "${#explicit_models[@]}" -gt 0 ]; then
+  MODELS=("${explicit_models[@]}")
+elif [ "$all_models" = "1" ]; then
   MODELS=()
   model_list_tmp=$(mktemp "${TMPDIR:-/tmp}/juex-compaction-models.XXXXXX")
-  if ! python3 scripts/evalhelper.py list-models --model-list "$MODEL_LIST_PATH" --section compaction_eval_models > "$model_list_tmp"; then
+  if ! run_py scripts/evalhelper.py list-models --model-list "$MODEL_LIST_PATH" --section compaction_eval_models > "$model_list_tmp"; then
     rm -f "$model_list_tmp"
     exit 1
   fi
@@ -50,6 +115,10 @@ else
     echo "No compaction eval models found in $MODEL_LIST_PATH" >&2
     exit 1
   fi
+else
+  rotated_model="$(run_py scripts/live_model_rotation.py --model-list "$MODEL_LIST_PATH" select --section compaction_eval_models)"
+  MODELS=("$rotated_model")
+  echo "rotated compaction eval model: ${rotated_model}"
 fi
 
 RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -109,7 +178,7 @@ cache_ratio_from_events() {
 run_with_timeout() {
   local seconds=$1
   shift
-  python3 scripts/evalhelper.py run-timeout --seconds "$seconds" -- "$@"
+  run_py scripts/evalhelper.py run-timeout --seconds "$seconds" -- "$@"
 }
 
 run_eval_turn() {
@@ -183,7 +252,7 @@ write_model_config() {
   local provider_id=$1
   local model_id=$2
   local output_path=$3
-  python3 scripts/evalhelper.py write-model-config \
+  run_py scripts/evalhelper.py write-model-config \
     --source "$CONFIG_PATH" \
     --provider "$provider_id" \
     --model "$model_id" \
@@ -345,4 +414,7 @@ done
 echo "Reports written to ${OUT_ROOT}"
 if [ "$failed" -ne 0 ]; then
   exit 1
+fi
+if [ -n "$rotated_model" ]; then
+  run_py scripts/live_model_rotation.py --model-list "$MODEL_LIST_PATH" mark-success --section compaction_eval_models --model "$rotated_model"
 fi

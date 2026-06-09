@@ -2,8 +2,8 @@
 """Local evaluation helper for JueX development scripts.
 
 This is intentionally a repository-local script, not production runtime code.
-It avoids Ruby and third-party Python packages so validation scripts work on a
-plain macOS developer machine.
+It runs through uv-managed dependencies so validation scripts behave
+consistently across developer machines.
 """
 
 from __future__ import annotations
@@ -24,12 +24,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import yaml
+
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-
-
-class SimpleYAMLError(ValueError):
-    pass
 
 
 def main() -> int:
@@ -97,7 +95,18 @@ def provider_smoke(argv: list[str]) -> int:
     parser.add_argument("--juex", default=env_default("JUEX_BIN", default_juex_bin()))
     parser.add_argument("--config", default=env_default("JUEX_PROVIDER_CONFIG", str(pathlib.Path.home() / ".juex" / "juex.yaml")))
     parser.add_argument("--model-list", default=env_default("JUEX_LIVE_MODEL_LIST", str(REPO_ROOT / "tests" / "e2e" / "live-models.yaml")))
-    parser.add_argument("--all-models", action="store_true", default=env_bool("JUEX_PROVIDER_SMOKE_ALL_MODELS"))
+    parser.add_argument(
+        "--all-models",
+        action="store_true",
+        default=env_bool("JUEX_PROVIDER_SMOKE_ALL_MODELS"),
+        help="Run every model ref listed in --model-list provider_smoke_models.",
+    )
+    parser.add_argument(
+        "--all-config-models",
+        action="store_true",
+        default=env_bool("JUEX_PROVIDER_SMOKE_ALL_CONFIG_MODELS"),
+        help="Run every provider/model found in the provider config.",
+    )
     parser.add_argument("--work-root", default=env_default("JUEX_PROVIDER_SMOKE_ROOT", ""))
     parser.add_argument("--report-dir", default=env_default("JUEX_PROVIDER_SMOKE_REPORT_DIR", ""))
     parser.add_argument("--run-id", default=env_default("JUEX_PROVIDER_SMOKE_RUN_ID", time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())))
@@ -111,6 +120,10 @@ def provider_smoke(argv: list[str]) -> int:
         raise ValueError("--timeout must be a positive integer")
     if parsed.retries < 0:
         raise ValueError("--retries must be a non-negative integer")
+    if parsed.only and (parsed.all_models or parsed.all_config_models):
+        raise ValueError("--only is mutually exclusive with --all-models and --all-config-models")
+    if parsed.all_models and parsed.all_config_models:
+        raise ValueError("--all-models and --all-config-models are mutually exclusive")
     if not parsed.juex:
         raise ValueError("juex binary not found; run 'mise exec -- make build' or pass --juex")
     if not os.access(parsed.juex, os.X_OK):
@@ -138,9 +151,11 @@ def provider_smoke(argv: list[str]) -> int:
 
         selected_refs: set[str] | None = None
         model_list_label = "all provider config models"
-        if parsed.only:
+        if parsed.all_config_models:
+            pass
+        elif parsed.only:
             model_list_label = f"filter {parsed.only}"
-        elif not parsed.all_models:
+        else:
             selected = load_model_refs(model_list_path, "provider_smoke_models")
             selected_refs = set(selected)
             missing = sorted(ref for ref in selected if ref not in {row.ref for row in rows})
@@ -150,7 +165,7 @@ def provider_smoke(argv: list[str]) -> int:
                     + ", ".join(missing)
                     + f" (model list: {parsed.model_list})"
                 )
-            model_list_label = parsed.model_list
+            model_list_label = f"{parsed.model_list} ({'all listed models' if parsed.all_models else 'listed model scope'})"
 
         matrix_file = report_dir / "matrix.tsv"
         results_file = report_dir / "results.jsonl"
@@ -848,265 +863,14 @@ def load_model_refs(path: pathlib.Path, section: str) -> list[str]:
 
 
 def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:
-    value = SimpleYAMLParser(path.read_text(encoding="utf-8")).parse()
+    value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(value, dict):
-        raise SimpleYAMLError(f"{path} must contain a YAML mapping")
+        raise ValueError(f"{path} must contain a YAML mapping")
     return value
 
 
-class SimpleYAMLParser:
-    def __init__(self, text: str):
-        self.lines: list[tuple[int, str]] = []
-        for line_no, raw in enumerate(text.splitlines(), 1):
-            if "\t" in raw[: len(raw) - len(raw.lstrip())]:
-                raise SimpleYAMLError(f"tabs are not supported in YAML indentation at line {line_no}")
-            stripped = strip_yaml_comment(raw).rstrip()
-            if not stripped.strip():
-                continue
-            self.lines.append((len(stripped) - len(stripped.lstrip(" ")), stripped.lstrip(" ")))
-
-    def parse(self) -> Any:
-        if not self.lines:
-            return {}
-        value, index = self.parse_block(0, self.lines[0][0])
-        if index != len(self.lines):
-            raise SimpleYAMLError(f"unexpected trailing YAML content: {self.lines[index][1]}")
-        return value
-
-    def parse_block(self, index: int, indent: int) -> tuple[Any, int]:
-        if self.lines[index][1].startswith("-"):
-            return self.parse_sequence(index, indent)
-        return self.parse_mapping(index, indent)
-
-    def parse_mapping(self, index: int, indent: int) -> tuple[dict[str, Any], int]:
-        out: dict[str, Any] = {}
-        while index < len(self.lines):
-            current_indent, content = self.lines[index]
-            if current_indent < indent:
-                break
-            if current_indent > indent:
-                raise SimpleYAMLError(f"unexpected indentation before: {content}")
-            if content.startswith("-"):
-                break
-            key, rest = split_key_value(content)
-            index += 1
-            if rest == "":
-                if index < len(self.lines) and self.lines[index][0] > indent:
-                    value, index = self.parse_block(index, self.lines[index][0])
-                else:
-                    value = None
-            else:
-                value = parse_scalar(rest)
-            out[key] = value
-        return out, index
-
-    def parse_sequence(self, index: int, indent: int) -> tuple[list[Any], int]:
-        out: list[Any] = []
-        while index < len(self.lines):
-            current_indent, content = self.lines[index]
-            if current_indent < indent:
-                break
-            if current_indent > indent:
-                raise SimpleYAMLError(f"unexpected indentation before: {content}")
-            if not content.startswith("-"):
-                break
-            after = content[1:].strip()
-            index += 1
-            if after == "":
-                if index < len(self.lines) and self.lines[index][0] > indent:
-                    item, index = self.parse_block(index, self.lines[index][0])
-                else:
-                    item = None
-                out.append(item)
-                continue
-
-            if has_key_value(after):
-                key, rest = split_key_value(after)
-                item: dict[str, Any] = {}
-                if rest == "":
-                    if index < len(self.lines) and self.lines[index][0] > indent:
-                        value, index = self.parse_block(index, self.lines[index][0])
-                    else:
-                        value = None
-                else:
-                    value = parse_scalar(rest)
-                item[key] = value
-                if index < len(self.lines) and self.lines[index][0] > indent:
-                    continuation, index = self.parse_mapping(index, self.lines[index][0])
-                    item.update(continuation)
-                out.append(item)
-                continue
-
-            out.append(parse_scalar(after))
-        return out, index
-
-
-def strip_yaml_comment(line: str) -> str:
-    quote: str | None = None
-    escaped = False
-    for idx, char in enumerate(line):
-        if quote:
-            if quote == '"' and escaped:
-                escaped = False
-            elif quote == '"' and char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = None
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            continue
-        if char == "#" and (idx == 0 or line[idx - 1].isspace()):
-            return line[:idx]
-    return line
-
-
-def has_key_value(text: str) -> bool:
-    try:
-        split_key_value(text)
-        return True
-    except SimpleYAMLError:
-        return False
-
-
-def split_key_value(text: str) -> tuple[str, str]:
-    quote: str | None = None
-    escaped = False
-    for idx, char in enumerate(text):
-        if quote:
-            if quote == '"' and escaped:
-                escaped = False
-            elif quote == '"' and char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = None
-            continue
-        if char in {"'", '"'}:
-            quote = char
-            continue
-        if char == ":":
-            key = text[:idx].strip()
-            rest = text[idx + 1 :].strip()
-            if not key:
-                raise SimpleYAMLError(f"empty YAML key in: {text}")
-            return unquote_key(key), rest
-    raise SimpleYAMLError(f"expected key: value in YAML line: {text}")
-
-
-def unquote_key(key: str) -> str:
-    if len(key) >= 2 and key[0] == key[-1] and key[0] in {"'", '"'}:
-        return parse_scalar(key)
-    return key
-
-
-def parse_scalar(text: str) -> Any:
-    text = text.strip()
-    if text == "":
-        return ""
-    if text in {"[]", "{}"}:
-        return [] if text == "[]" else {}
-    if text[0] == '"' and text[-1:] == '"':
-        return json.loads(text)
-    if text[0] == "'" and text[-1:] == "'":
-        return text[1:-1].replace("''", "'")
-    lowered = text.lower()
-    if lowered in {"true", "yes", "on"}:
-        return True
-    if lowered in {"false", "no", "off"}:
-        return False
-    if lowered in {"null", "~"}:
-        return None
-    if re.fullmatch(r"[-+]?[0-9]+", text):
-        return int(text)
-    if re.fullmatch(r"[-+]?[0-9]+\.[0-9]+", text):
-        return float(text)
-    if text.startswith("[") and text.endswith("]"):
-        body = text[1:-1].strip()
-        if not body:
-            return []
-        return [parse_scalar(part.strip()) for part in split_inline_csv(body)]
-    return text
-
-
-def split_inline_csv(text: str) -> list[str]:
-    parts: list[str] = []
-    quote: str | None = None
-    escaped = False
-    start = 0
-    for idx, char in enumerate(text):
-        if quote:
-            if quote == '"' and escaped:
-                escaped = False
-            elif quote == '"' and char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = None
-            continue
-        if char in {"'", '"'}:
-            quote = char
-        elif char == ",":
-            parts.append(text[start:idx])
-            start = idx + 1
-    parts.append(text[start:])
-    return parts
-
-
-def dump_yaml(value: Any, indent: int = 0) -> str:
-    lines = dump_yaml_lines(value, indent)
-    return "\n".join(lines) + "\n"
-
-
-def dump_yaml_lines(value: Any, indent: int) -> list[str]:
-    prefix = " " * indent
-    if isinstance(value, dict):
-        lines: list[str] = []
-        for key, child in value.items():
-            if is_scalar(child):
-                lines.append(f"{prefix}{key}: {format_scalar(child)}")
-            else:
-                lines.append(f"{prefix}{key}:")
-                lines.extend(dump_yaml_lines(child, indent + 2))
-        return lines
-    if isinstance(value, list):
-        lines = []
-        for child in value:
-            if is_scalar(child):
-                lines.append(f"{prefix}- {format_scalar(child)}")
-            elif isinstance(child, dict):
-                items = list(child.items())
-                if not items:
-                    lines.append(f"{prefix}- {{}}")
-                    continue
-                first_key, first_value = items[0]
-                if is_scalar(first_value):
-                    lines.append(f"{prefix}- {first_key}: {format_scalar(first_value)}")
-                else:
-                    lines.append(f"{prefix}- {first_key}:")
-                    lines.extend(dump_yaml_lines(first_value, indent + 4))
-                for key, nested in items[1:]:
-                    if is_scalar(nested):
-                        lines.append(f"{prefix}  {key}: {format_scalar(nested)}")
-                    else:
-                        lines.append(f"{prefix}  {key}:")
-                        lines.extend(dump_yaml_lines(nested, indent + 4))
-            else:
-                lines.append(f"{prefix}- {format_scalar(str(child))}")
-        return lines
-    return [f"{prefix}{format_scalar(value)}"]
-
-
-def is_scalar(value: Any) -> bool:
-    return value is None or isinstance(value, (str, int, float, bool))
-
-
-def format_scalar(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    return json.dumps(str(value), ensure_ascii=False)
+def dump_yaml(value: Any) -> str:
+    return yaml.safe_dump(value, sort_keys=False, allow_unicode=True)
 
 
 def json_file_value(path: pathlib.Path, key: str) -> str:
