@@ -26,22 +26,52 @@ DEFAULT_COMPACTION = {
 
 def add_args(parser: argparse.ArgumentParser) -> None:
     parser.description = "Run the live compaction quality smoke."
-    parser.add_argument("models", nargs="*", help="Explicit provider/model refs. Defaults to one rotated ref.")
+    parser.add_argument(
+        "models",
+        nargs="*",
+        help="Explicit provider/model refs. Prefer --only for new usage. Defaults to one rotated ref.",
+    )
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="Run one explicit provider/model ref. May be repeated.",
+    )
     parser.add_argument("--all-models", action="store_true", help="Run every ref in compaction_eval_models.")
-    parser.add_argument("--model-list", default=os.environ.get("JUEX_LIVE_MODEL_LIST") or str(REPO_ROOT / "tests" / "eval" / "live-models.yaml"))
-    parser.add_argument("--rotation-state", default=os.environ.get("JUEX_LIVE_MODEL_ROTATION_STATE") or str(REPO_ROOT / ".juex" / "live-model-rotation.json"))
+    parser.add_argument(
+        "--model-list",
+        default=os.environ.get("JUEX_LIVE_MODEL_LIST") or str(REPO_ROOT / "tests" / "eval" / "live-models.yaml"),
+    )
+    parser.add_argument(
+        "--rotation-state",
+        default=os.environ.get("JUEX_LIVE_MODEL_ROTATION_STATE") or str(REPO_ROOT / ".juex" / "live-model-rotation.json"),
+    )
     parser.add_argument("--juex", default=os.environ.get("JUEX_BIN") or "./dist/juex")
-    parser.add_argument("--config", default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"))
-    parser.add_argument("--out-root", default=os.environ.get("OUT_ROOT") or "")
-    parser.add_argument("--run-id", default=os.environ.get("RUN_ID") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
+    parser.add_argument(
+        "--config",
+        default=os.environ.get("JUEX_PROVIDER_CONFIG") or str(pathlib.Path.home() / ".juex" / "juex.yaml"),
+    )
+    parser.add_argument(
+        "--report-dir",
+        "--out-root",
+        dest="out_root",
+        metavar="REPORT_DIR",
+        default=os.environ.get("JUEX_COMPACTION_REPORT_DIR") or os.environ.get("OUT_ROOT") or "",
+        help="Write compaction eval reports under this directory.",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=os.environ.get("JUEX_COMPACTION_RUN_ID") or os.environ.get("RUN_ID") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()),
+    )
     parser.add_argument("--context-window", type=int, default=int(os.environ.get("PROVIDER_CONTEXT_WINDOW") or "32000"))
     parser.add_argument("--turn-timeout", type=int, default=int(os.environ.get("JUEX_EVAL_TURN_TIMEOUT") or "600"))
     parser.add_argument("--keep-workdir", action="store_true", default=(os.environ.get("KEEP_WORKDIR") == "1"))
 
 
 def run(args: argparse.Namespace) -> int:
-    if args.all_models and args.models:
-        raise ValueError("--all-models cannot be combined with explicit provider/model refs")
+    explicit_models = [*(args.only or []), *(args.models or [])]
+    if args.all_models and explicit_models:
+        raise ValueError("--all-models cannot be combined with --only or positional provider/model refs")
     juex = pathlib.Path(args.juex)
     if not os.access(juex, os.X_OK):
         raise ValueError(f"Missing executable {args.juex}. Run: mise exec -- make build")
@@ -52,8 +82,8 @@ def run(args: argparse.Namespace) -> int:
     model_list = pathlib.Path(args.model_list).expanduser()
     rotation_state = pathlib.Path(args.rotation_state).expanduser()
     rotated_model = ""
-    if args.models:
-        models = list(args.models)
+    if explicit_models:
+        models = explicit_models
     elif args.all_models:
         models = rotation.load_model_refs(model_list, "compaction_eval_models")
     else:

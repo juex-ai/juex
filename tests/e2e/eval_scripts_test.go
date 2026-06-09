@@ -82,10 +82,17 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 
 	moduleHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "--help")
 	for _, want := range []string{"development", "provider-smoke", "compaction", "rotation"} {
-		if !strings.Contains(moduleHelp, want) {
-			t.Fatalf("module help missing %q:\n%s", want, moduleHelp)
-		}
+		assertHelpContains(t, moduleHelp, want)
 	}
+
+	providerHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "provider-smoke", "--help")
+	assertHelpContains(t, providerHelp, "--only", "--report-dir")
+
+	compactionHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "compaction", "--help")
+	assertHelpContains(t, compactionHelp, "--only", "--report-dir")
+
+	developmentHelp := runUV(t, root, "python", "-m", "tests.eval.juex_eval", "development", "--help")
+	assertHelpContains(t, developmentHelp, "--only", "--compaction-only", "--report-dir")
 
 	for _, script := range []string{
 		"tests/eval/development_eval.sh",
@@ -107,6 +114,93 @@ func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli",
+		"args = Namespace(",
+		"    skip_tests=True,",
+		"    no_provider_smoke=False,",
+		"    compaction_eval=True,",
+		"    run_id='unit',",
+		"    provider_timeout=7,",
+		"    provider_only='ark/model',",
+		"    provider_all_models=False,",
+		"    provider_all_config_models=False,",
+		"    compaction_all_models=False,",
+		"    compaction_only=['openai/model', 'ark/other'],",
+		")",
+		"steps, _, _ = cli.development_steps(args, Path('reports'), [])",
+		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
+	}, "\n")
+	out := runUV(t, root, "python", "-c", program)
+
+	var steps []struct {
+		Label   string   `json:"label"`
+		Command []string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(out), &steps); err != nil {
+		t.Fatalf("decode steps: %v\n%s", err, out)
+	}
+
+	providerCmd := findEvalCommand(t, steps, "provider-model-smoke")
+	assertCommandFlagValue(t, providerCmd, "--only", "ark/model")
+	assertCommandHasFlag(t, providerCmd, "--report-dir")
+	assertCommandLacks(t, providerCmd, "--provider-only")
+
+	compactionCmd := findEvalCommand(t, steps, "compaction-eval")
+	assertCommandFlagValue(t, compactionCmd, "--only", "openai/model")
+	assertCommandFlagValue(t, compactionCmd, "--only", "ark/other")
+	assertCommandHasFlag(t, compactionCmd, "--report-dir")
+	assertCommandLacks(t, compactionCmd, "--out-root")
+}
+
+func TestEvalHelpersTolerateProgrammaticNone(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli, compaction",
+		"command = []",
+		"cli.append_repeated(command, '--only', None)",
+		"assert command == []",
+		"args = Namespace(",
+		"    only=None,",
+		"    models=None,",
+		"    all_models=False,",
+		"    juex='/no/such/juex',",
+		"    config='/no/such/config',",
+		"    model_list='/no/such/models.yaml',",
+		"    rotation_state='/no/such/rotation.json',",
+		"    out_root='',",
+		"    keep_workdir=False,",
+		")",
+		"try:",
+		"    compaction.run(args)",
+		"except ValueError as exc:",
+		"    assert 'Missing executable' in str(exc)",
+		"else:",
+		"    raise AssertionError('expected missing executable error')",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
 }
 
 func runRotation(t *testing.T, root, modelList, state string, args ...string) string {
@@ -144,4 +238,56 @@ func runUV(t *testing.T, root string, args ...string) string {
 		t.Fatalf("uv command failed: %v\n%s", err, out)
 	}
 	return string(out)
+}
+
+func assertHelpContains(t *testing.T, help string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help missing %q:\n%s", want, help)
+		}
+	}
+}
+
+func findEvalCommand(t *testing.T, steps []struct {
+	Label   string   `json:"label"`
+	Command []string `json:"command"`
+}, label string) []string {
+	t.Helper()
+	for _, step := range steps {
+		if step.Label == label {
+			return step.Command
+		}
+	}
+	t.Fatalf("missing step %q: %#v", label, steps)
+	return nil
+}
+
+func assertCommandFlagValue(t *testing.T, command []string, flag, value string) {
+	t.Helper()
+	for index, part := range command {
+		if part == flag && index+1 < len(command) && command[index+1] == value {
+			return
+		}
+	}
+	t.Fatalf("command missing %s %s: %#v", flag, value, command)
+}
+
+func assertCommandHasFlag(t *testing.T, command []string, flag string) {
+	t.Helper()
+	for _, part := range command {
+		if part == flag {
+			return
+		}
+	}
+	t.Fatalf("command missing %s: %#v", flag, command)
+}
+
+func assertCommandLacks(t *testing.T, command []string, forbidden string) {
+	t.Helper()
+	for _, part := range command {
+		if part == forbidden {
+			t.Fatalf("command should not contain %s: %#v", forbidden, command)
+		}
+	}
 }
