@@ -22,6 +22,11 @@ mise exec -- go test ./tests/e2e -count=1
 | Web turn API | `TestWeb_TurnRoundTripPersists` | Web session creation, turn submission, async completion, and persisted transcript reads. |
 | Web pending input | `TestWeb_PendingInputQueuesDuringActiveTurn` | A second web turn queues while a provider call is active, then drains into the next provider request. |
 
+`TestLiveBinary_LoadsSkillsAndMCP` runs the Python fake MCP server through
+`uv run --project <repo> python ...`. The `mcp` SDK dependency is managed by
+the repository `pyproject.toml` and `uv.lock`, not by a PEP 723 script header
+or `uvx`.
+
 ## Live Provider Smoke
 
 Live tests are opt-in because they use credentials and real providers:
