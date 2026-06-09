@@ -12,7 +12,14 @@ if [ ! -x "$JUEX_BIN" ]; then
   echo "Missing $JUEX_BIN. Run: mise exec -- make build" >&2
   exit 1
 fi
+CONFIG_PATH=${JUEX_PROVIDER_CONFIG:-"$HOME/.juex/juex.yaml"}
+if [ ! -f "$CONFIG_PATH" ]; then
+  echo "Missing provider config: $CONFIG_PATH" >&2
+  exit 1
+fi
+MODEL_LIST_PATH=${JUEX_LIVE_MODEL_LIST:-"tests/e2e/live-models.yaml"}
 PROVIDER_CONTEXT_WINDOW=${PROVIDER_CONTEXT_WINDOW:-32000}
+EVAL_TURN_TIMEOUT=${JUEX_EVAL_TURN_TIMEOUT:-600}
 KEEP_WORKDIR=${KEEP_WORKDIR:-0}
 TMP_WORKDIRS=()
 
@@ -29,16 +36,26 @@ trap cleanup EXIT
 if [ "$#" -gt 0 ]; then
   MODELS=("$@")
 else
-  MODELS=(
-    "openai-codex/gpt-5.5"
-    "ark/deepseek-v4-pro"
-    "clip-local/gpt-5.5"
-  )
+  MODELS=()
+  model_list_tmp=$(mktemp "${TMPDIR:-/tmp}/juex-compaction-models.XXXXXX")
+  if ! python3 scripts/evalhelper.py list-models --model-list "$MODEL_LIST_PATH" --section compaction_eval_models > "$model_list_tmp"; then
+    rm -f "$model_list_tmp"
+    exit 1
+  fi
+  while IFS= read -r model; do
+    MODELS+=("$model")
+  done < "$model_list_tmp"
+  rm -f "$model_list_tmp"
+  if [ "${#MODELS[@]}" -eq 0 ]; then
+    echo "No compaction eval models found in $MODEL_LIST_PATH" >&2
+    exit 1
+  fi
 fi
 
 RUN_ID=${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 OUT_ROOT=${OUT_ROOT:-"docs/reports/compaction-eval/${RUN_ID}"}
 mkdir -p "$OUT_ROOT"
+failed=0
 
 noise() {
   local label=$1
@@ -89,6 +106,92 @@ cache_ratio_from_events() {
   }'
 }
 
+run_with_timeout() {
+  local seconds=$1
+  shift
+  python3 scripts/evalhelper.py run-timeout --seconds "$seconds" -- "$@"
+}
+
+run_eval_turn() {
+  local work=$1
+  local prompt_file=$2
+  local output_file=$3
+  run_with_timeout "$EVAL_TURN_TIMEOUT" \
+    env "PROVIDER_CONTEXT_WINDOW=$PROVIDER_CONTEXT_WINDOW" \
+      "$JUEX_BIN" -C "$work" --enable-user-global-resources=false run "$(cat "$prompt_file")" \
+      >"$output_file" 2>&1
+  local status=$?
+  cat "$output_file"
+  return "$status"
+}
+
+copy_runtime_artifacts() {
+  local work=$1
+  local out_dir=$2
+  while IFS= read -r conversation; do
+    cp "$conversation" "$out_dir/conversation.jsonl"
+  done < <(find "$work/.juex/sessions" -type f -name conversation.jsonl -print 2>/dev/null)
+  while IFS= read -r events; do
+    cp "$events" "$out_dir/events.jsonl"
+  done < <(find "$work/.juex/sessions" -type f -name events.jsonl -print 2>/dev/null)
+}
+
+first_events_file() {
+  local work=$1
+  local file
+  while IFS= read -r file; do
+    printf "%s" "$file"
+    return
+  done < <(find "$work/.juex/sessions" -type f -name events.jsonl -print 2>/dev/null)
+}
+
+write_failure_scorecard() {
+  local model=$1
+  local work=$2
+  local out_dir=$3
+  local stage=$4
+  local compacted=$5
+  local cache_ratio=$6
+  local output_file=$7
+  local error_tail
+  error_tail=$(tail -n 20 "$output_file" 2>/dev/null || true)
+  {
+    echo "# Compaction Eval Scorecard"
+    echo
+    echo "- Model: \`${model}\`"
+    if [ "$KEEP_WORKDIR" = "1" ]; then
+      echo "- Work dir: \`${work}\`"
+    else
+      echo "- Work dir: cleaned after artifact copy; set \`KEEP_WORKDIR=1\` to keep it"
+    fi
+    echo "- Context window: ${PROVIDER_CONTEXT_WINDOW}"
+    echo "- Turn timeout: ${EVAL_TURN_TIMEOUT}s"
+    echo "- Score: n/a"
+    echo "- Compacted: ${compacted}"
+    echo "- Cache ratio: ${cache_ratio}"
+    echo "- Error stage: ${stage}"
+    echo
+    echo "## Error Tail"
+    echo
+    echo '```text'
+    printf "%s\n" "$error_tail"
+    echo '```'
+  } > "$out_dir/scorecard.md"
+}
+
+write_model_config() {
+  local provider_id=$1
+  local model_id=$2
+  local output_path=$3
+  python3 scripts/evalhelper.py write-model-config \
+    --source "$CONFIG_PATH" \
+    --provider "$provider_id" \
+    --model "$model_id" \
+    --output "$output_path" \
+    --disable-tools \
+    --compaction-eval
+}
+
 for model in "${MODELS[@]}"; do
   safe_model=${model//\//__}
   provider_id=${model%%/*}
@@ -97,23 +200,12 @@ for model in "${MODELS[@]}"; do
   TMP_WORKDIRS+=("$work")
   out_dir="${OUT_ROOT}/${safe_model}"
   mkdir -p "$work/.juex" "$out_dir"
-
-  cat > "$work/.juex/juex.yaml" <<EOF
-model: ${model}
-providers:
-  - id: ${provider_id}
-    capabilities:
-      tools: false
-    models:
-      - id: ${model_id}
-compaction:
-  enabled: true
-  reserve_tokens: 8000
-  keep_recent_tokens: 6000
-  tail_turns: 1
-  summary_max_tokens: 2048
-  tool_result_max_chars: 1200
-EOF
+  if ! write_model_config "$provider_id" "$model_id" "$work/.juex/juex.yaml" 2>"$out_dir/config-error.txt"; then
+    write_failure_scorecard "$model" "$work" "$out_dir" "config" "no" "not captured" "$out_dir/config-error.txt"
+    echo "FAIL ${model}: provider/model not found in ${CONFIG_PATH}" >&2
+    failed=$((failed + 1))
+    continue
+  fi
 
   turn1_prompt="$work/turn1.prompt.txt"
   turn2_prompt="$work/turn2.prompt.txt"
@@ -136,7 +228,7 @@ GF6: The next command is mise exec -- go test ./internal/runtime -run TestTurn_A
 
 Ignore the following noise for later recall.
 EOF
-    noise "turn1" 900
+    noise "turn1" 1400
   } > "$turn1_prompt"
 
   {
@@ -147,11 +239,13 @@ in conversation context only. Answer only: TURN2 STORED.
 
 Irrelevant context begins below.
 EOF
-    noise "turn2" 700
+    noise "turn2" 1100
   } > "$turn2_prompt"
 
   cat > "$turn3_prompt" <<'EOF'
 No tools. Answer the evaluation questions using only this session's context.
+The session may have been compacted; compacted summaries and replacement
+context are valid session context for this evaluation.
 
 Return exactly these labels:
 GF1:
@@ -166,9 +260,43 @@ NoInventedMerge:
 EOF
 
   echo "==> Running $model in $work"
-  PROVIDER_CONTEXT_WINDOW="$PROVIDER_CONTEXT_WINDOW" "$JUEX_BIN" -C "$work" run "$(cat "$turn1_prompt")" | tee "$out_dir/turn1.txt"
-  PROVIDER_CONTEXT_WINDOW="$PROVIDER_CONTEXT_WINDOW" "$JUEX_BIN" -C "$work" run "$(cat "$turn2_prompt")" | tee "$out_dir/turn2.txt"
-  PROVIDER_CONTEXT_WINDOW="$PROVIDER_CONTEXT_WINDOW" "$JUEX_BIN" -C "$work" run "$(cat "$turn3_prompt")" | tee "$out_dir/turn3.txt"
+  if ! run_eval_turn "$work" "$turn1_prompt" "$out_dir/turn1.txt"; then
+    compacted="no"
+    cache_ratio="not captured"
+    copy_runtime_artifacts "$work" "$out_dir"
+    write_failure_scorecard "$model" "$work" "$out_dir" "turn1" "$compacted" "$cache_ratio" "$out_dir/turn1.txt"
+    echo "FAIL ${model}: turn1 failed" >&2
+    failed=$((failed + 1))
+    continue
+  fi
+  if ! run_eval_turn "$work" "$turn2_prompt" "$out_dir/turn2.txt"; then
+    compacted="no"
+    cache_ratio="not captured"
+    copy_runtime_artifacts "$work" "$out_dir"
+    write_failure_scorecard "$model" "$work" "$out_dir" "turn2" "$compacted" "$cache_ratio" "$out_dir/turn2.txt"
+    echo "FAIL ${model}: turn2 failed" >&2
+    failed=$((failed + 1))
+    continue
+  fi
+  if ! run_eval_turn "$work" "$turn3_prompt" "$out_dir/turn3.txt"; then
+    compacted="no"
+    while IFS= read -r conversation; do
+      if grep -q '"kind":"compact"' "$conversation"; then
+        compacted="yes"
+        break
+      fi
+    done < <(find "$work/.juex/sessions" -type f -name conversation.jsonl -print 2>/dev/null)
+    cache_ratio="not captured"
+    events_for_scorecard=$(first_events_file "$work")
+    if [ -n "$events_for_scorecard" ]; then
+      cache_ratio=$(cache_ratio_from_events "$events_for_scorecard")
+    fi
+    copy_runtime_artifacts "$work" "$out_dir"
+    write_failure_scorecard "$model" "$work" "$out_dir" "turn3" "$compacted" "$cache_ratio" "$out_dir/turn3.txt"
+    echo "FAIL ${model}: turn3 failed" >&2
+    failed=$((failed + 1))
+    continue
+  fi
 
   score=$(score_answer "$out_dir/turn3.txt")
   compacted="no"
@@ -179,7 +307,7 @@ EOF
     fi
   done < <(find "$work/.juex/sessions" -type f -name conversation.jsonl -print 2>/dev/null)
   cache_ratio="not captured"
-  events_for_scorecard=$(find "$work/.juex/sessions" -type f -name events.jsonl -print -quit 2>/dev/null || true)
+  events_for_scorecard=$(first_events_file "$work")
   if [ -n "$events_for_scorecard" ]; then
     cache_ratio=$(cache_ratio_from_events "$events_for_scorecard")
   fi
@@ -194,19 +322,27 @@ EOF
       echo "- Work dir: cleaned after artifact copy; set \`KEEP_WORKDIR=1\` to keep it"
     fi
     echo "- Context window: ${PROVIDER_CONTEXT_WINDOW}"
+    echo "- Turn timeout: ${EVAL_TURN_TIMEOUT}s"
     echo "- Score: ${score}/52"
     echo "- Compacted: ${compacted}"
     echo "- Cache ratio: ${cache_ratio}"
   } > "$out_dir/scorecard.md"
 
-  while IFS= read -r conversation; do
-    cp "$conversation" "$out_dir/conversation.jsonl"
-  done < <(find "$work/.juex/sessions" -type f -name conversation.jsonl -print 2>/dev/null)
-  while IFS= read -r events; do
-    cp "$events" "$out_dir/events.jsonl"
-  done < <(find "$work/.juex/sessions" -type f -name events.jsonl -print 2>/dev/null)
+  if [ "$compacted" != "yes" ]; then
+    echo "FAIL ${model}: compaction did not run" >&2
+    failed=$((failed + 1))
+  fi
+  if [ "$score" -lt 36 ]; then
+    echo "FAIL ${model}: score ${score}/52 is below the regression threshold" >&2
+    failed=$((failed + 1))
+  fi
+
+  copy_runtime_artifacts "$work" "$out_dir"
 
   echo "==> $model score ${score}/52, compacted=${compacted}"
 done
 
 echo "Reports written to ${OUT_ROOT}"
+if [ "$failed" -ne 0 ]; then
+  exit 1
+fi

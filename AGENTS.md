@@ -59,9 +59,19 @@ Prefer project tooling:
 ```bash
 mise exec -- make test
 mise exec -- make integration
+mise exec -- make provider-smoke
+mise exec -- make development-eval
 mise exec -- make build
 mise exec -- go test ./... -race -count=1
 ```
+
+Before declaring feature work complete, run the relevant deterministic tests and
+write a development validation record with `mise exec -- make development-eval`
+or `bash scripts/development_eval.sh` when a narrower command set is justified.
+For provider/protocol, reasoning, tool-call, session, compaction, CLI, or web
+runtime changes, include the real local provider/model sweep from
+`~/.juex/juex.yaml`. If an evaluation score or smoke result regresses, record
+the failure and investigate before merging.
 
 ## Documentation
 

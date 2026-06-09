@@ -313,6 +313,9 @@ V2 adds two rules:
 - Include `Evidence References` when a tool result was externalized.
 - Include `Confidence / Missing Context` when earlier transcript was omitted to
   fit the compaction request.
+- Copy the concrete values of labeled facts, task IDs, paths, commands, error
+  strings, constraints, and safety guards. Do not replace them with vague
+  placeholders such as "facts were stored" or "available in context".
 
 The summary should never restate AGENTS.md, tool schemas, provider settings, or
 current cwd unless they were directly part of the task decision. Those are
@@ -376,11 +379,8 @@ Every compaction change should be evaluated on:
 - Recovery behavior when compaction request is itself oversized.
 
 The quick automated test should run with a context window between one tenth and
-one quarter of a normal 256k window. The live evaluation should use:
-
-- `openai-codex/gpt-5.5`
-- `ark/deepseek-v4-pro`
-- `clip-local/gpt-5.5`
+one quarter of a normal 256k window. The default live evaluation model refs are
+maintained in `tests/e2e/live-models.yaml`.
 
 ## Rollout Plan
 

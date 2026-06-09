@@ -39,6 +39,23 @@ They read selected local configs from `.juex/*.yaml` and currently exercise:
 Keep live prompts objective and self-grading: they should assert concrete
 strings or filesystem effects, not subjective answer quality.
 
+For development validation, also run the curated local provider/model smoke:
+
+```bash
+mise exec -- make build
+bash scripts/provider_model_smoke.sh --juex ./dist/juex
+```
+
+This reads credentials from `~/.juex/juex.yaml` and the default model set from
+`tests/e2e/live-models.yaml`. It copies one provider/model at a time into an
+isolated temporary workdir, and runs a real compiled `juex` binary through
+three resumed turns: plain reply, `read` tool use, and a reasoning prompt. The
+script writes redacted `summary.json`, `results.jsonl`, and per-case logs under
+`docs/reports/provider-model-smoke/<run-id>/`. A failed provider/model is not a
+skip; keep the report and explain whether the problem is configuration,
+provider capability, prompt-following, or a Juex regression. Use
+`--all-models` only for provider migrations or broad config audits.
+
 ## Compaction Quality Evaluation
 
 The compaction evaluation is operator-triggered:
@@ -52,7 +69,20 @@ See `docs/compaction/evaluation.md` for the gold facts, scoring rubric, cache
 metrics, and report output shape. This is the project-level quality evaluation
 for long-running agent context retention. Normal e2e tests cover deterministic
 runtime behavior; the live compaction evaluation compares provider quality and
-cache behavior over time.
+cache behavior over time using `compaction_eval_models` from
+`tests/e2e/live-models.yaml` and provider/model details from `~/.juex/juex.yaml`
+unless `JUEX_PROVIDER_CONFIG` points at another config.
+
+Every completed development task should leave a validation record:
+
+```bash
+bash scripts/development_eval.sh
+```
+
+Use `--compaction-eval` for compaction, context projection, reasoning replay,
+or long-session changes. The record links command logs, provider/model smoke
+summary, and any scorecards so a later worker can tell whether behavior got
+better, stayed flat, or regressed.
 
 ## Coverage Rules
 
@@ -61,5 +91,23 @@ cache behavior over time.
   provider, MCP, or filesystem boundaries.
 - Prefer local fake providers/MCP servers over live credentials unless the
   goal is explicitly provider quality.
-- For live evaluations, record objective scorecards and keep generated run
+- For live evaluations, record objective scorecards. Keep raw generated run
   artifacts out of normal commits unless they are curated reports.
+
+## Minimal Run Matrix
+
+Use the smallest run set that still covers the changed behavior:
+
+| Layer | Case set | When to run |
+| --- | --- | --- |
+| Go unit/package tests | `mise exec -- go test ./... -count=1` | Every production code change. |
+| Non-live e2e | `mise exec -- go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
+| Live integration build tag | `mise exec -- make integration` | Manual credential-backed checks against the repo-local `.juex/*.yaml` fixtures. |
+| Curated provider smoke | `bash scripts/provider_model_smoke.sh --juex ./dist/juex` | Provider protocol, thinking, tool-call, config, or request/response changes. |
+| All-model provider smoke | `bash scripts/provider_model_smoke.sh --juex ./dist/juex --all-models` | Provider matrix migrations or audits where every local config entry must be checked. |
+| Compaction quality eval | `bash scripts/development_eval.sh --compaction-eval` | Compaction, context projection, reasoning replay, or long-session changes. |
+
+The default post-development record runs deterministic tests, build, and the
+curated provider smoke. Add compaction quality only when the change can affect
+long-context retention; add `--all-models` only when the provider matrix itself
+is the subject.
