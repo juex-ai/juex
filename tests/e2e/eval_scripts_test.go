@@ -167,6 +167,42 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 	assertCommandLacks(t, compactionCmd, "--out-root")
 }
 
+func TestEvalHelpersTolerateProgrammaticNone(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from argparse import Namespace",
+		"from tests.eval.juex_eval import cli, compaction",
+		"command = []",
+		"cli.append_repeated(command, '--only', None)",
+		"assert command == []",
+		"args = Namespace(",
+		"    only=None,",
+		"    models=None,",
+		"    all_models=False,",
+		"    juex='/no/such/juex',",
+		"    config='/no/such/config',",
+		"    model_list='/no/such/models.yaml',",
+		"    rotation_state='/no/such/rotation.json',",
+		"    out_root='',",
+		"    keep_workdir=False,",
+		")",
+		"try:",
+		"    compaction.run(args)",
+		"except ValueError as exc:",
+		"    assert 'Missing executable' in str(exc)",
+		"else:",
+		"    raise AssertionError('expected missing executable error')",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func runRotation(t *testing.T, root, modelList, state string, args ...string) string {
 	t.Helper()
 	baseArgs := []string{

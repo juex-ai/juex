@@ -236,8 +236,8 @@ def append_value(command: list[str], flag: str, value: object) -> None:
         command.extend([flag, str(value)])
 
 
-def append_repeated(command: list[str], flag: str, values: list[str]) -> None:
-    for value in values:
+def append_repeated(command: list[str], flag: str, values: list[str] | None) -> None:
+    for value in values or []:
         append_value(command, flag, value)
 
 

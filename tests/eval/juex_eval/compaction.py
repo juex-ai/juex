@@ -69,7 +69,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> int:
-    explicit_models = [*args.only, *args.models]
+    explicit_models = [*(args.only or []), *(args.models or [])]
     if args.all_models and explicit_models:
         raise ValueError("--all-models cannot be combined with --only or positional provider/model refs")
     juex = pathlib.Path(args.juex)
