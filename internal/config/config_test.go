@@ -50,6 +50,27 @@ providers:
 	}
 }
 
+func TestParseModelRef(t *testing.T) {
+	ref, err := ParseModelRef(" local-proxy/meta-llama/Llama-3-8b-chat ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.ProviderID != "local-proxy" || ref.ModelID != "meta-llama/Llama-3-8b-chat" {
+		t.Fatalf("ref = %+v", ref)
+	}
+	if got := ref.String(); got != "local-proxy/meta-llama/Llama-3-8b-chat" {
+		t.Fatalf("String() = %q", got)
+	}
+
+	for _, raw := range []string{"", "provider-only", "/model", "provider/"} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := ParseModelRef(raw); err == nil {
+				t.Fatalf("ParseModelRef(%q) returned nil error", raw)
+			}
+		})
+	}
+}
+
 func TestLoadFromFile_RejectsLegacyProviderConfig(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
