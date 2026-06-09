@@ -15,12 +15,18 @@ mise exec -- go test ./tests/e2e -count=1
 | Area | Test | What it protects |
 | --- | --- | --- |
 | Full runtime loop | `TestEndToEnd_FullStack` | Prompt sources, skills, work-local memory tools, MCP stdio tools, builtin read/write/edit/bash/grep, parallel tool calls, event JSONL, conversation JSONL. |
+| Portable runtime loop | `TestEndToEnd_FullStackPortable` | Cross-platform prompt, skills, memory tools, MCP stdio, read/write/edit/grep, event JSONL, and conversation JSONL without relying on a local bash executable. |
 | Session resume | `TestEndToEnd_ResumeRoundTrip` | A resumed app session reuses the same session id and replays prior user/assistant history before the next prompt. |
 | Binary loading | `TestLiveBinary_LoadsSkillsAndMCP` | The compiled `juex` binary loads project skills and a realistic Python MCP server through `juex run --dry-run --json`. |
 | Provider protocols | `TestLiveBinary_ProviderProtocolAndThinkingMatrix` | The compiled binary routes config to OpenAI Responses, custom OpenAI Chat, and DeepSeek-compatible Chat, including thinking-effort capability gates. |
 | CLI schema | `TestLiveBinary_SchemaIncludesAllSubcommands` | The compiled binary exposes the documented command tree. |
 | Web turn API | `TestWeb_TurnRoundTripPersists` | Web session creation, turn submission, async completion, and persisted transcript reads. |
 | Web pending input | `TestWeb_PendingInputQueuesDuringActiveTurn` | A second web turn queues while a provider call is active, then drains into the next provider request. |
+
+`TestLiveBinary_LoadsSkillsAndMCP` runs the Python fake MCP server through
+`uv run --project <repo> python ...`. The `mcp` SDK dependency is managed by
+the repository `pyproject.toml` and `uv.lock`, not by a PEP 723 script header
+or `uvx`.
 
 ## Live Provider Smoke
 

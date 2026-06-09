@@ -12,7 +12,7 @@ import (
 
 // TestLiveBinary_LoadsSkillsAndMCP builds the real `juex` binary, points
 // it at a tempdir containing both a skill and an mcp.json that launches a
-// real Python MCP server (via `uv run`), and asserts that
+// real Python MCP server (via the project uv environment), and asserts that
 // `juex run --dry-run --json` reports both pieces in the resulting plan.
 //
 // This complements TestEndToEnd_FullStack (in-process, mocked LLM) by
@@ -20,21 +20,22 @@ import (
 // realistic MCP server (the official Python SDK — most MCP servers in
 // the wild are Python).
 func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("skipping on windows: bash-tool defaults differ; this test is unix-focused")
-	}
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
 	}
 
 	bin := buildJuex(t)
 	mcpScript := pythonMCPScript(t)
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	work := t.TempDir()
 	if err := writeSkillFile(work, "trim-tool", "trim trailing whitespace"); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeMCPConfig(work, "uv", []string{"run", mcpScript}); err != nil {
+	if err := writeMCPConfig(work, "uv", []string{"run", "--quiet", "--project", root, "python", mcpScript}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -377,6 +377,238 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	// (Already implied by toolErrs == 0; this is a stronger check on payload size.)
 }
 
+func TestEndToEnd_FullStackPortable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e is slow")
+	}
+
+	root := t.TempDir()
+	homeRoot := t.TempDir()
+	homeAgents := filepath.Join(homeRoot, ".agents")
+	if err := os.MkdirAll(homeAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"),
+		[]byte("project rule: respond like a senior engineer"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projectAgents := filepath.Join(root, ".agents")
+	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectAgents, "AGENTS.md"),
+		[]byte("subdir rule: keep diffs small"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(homeAgents, "AGENTS.md"),
+		[]byte("global rule: never leak secrets"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(projectAgents, "skills", "trim-tool")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: trim-tool\ndescription: trim trailing whitespace\ntype: model-invocable\n---\nFull body explains how to trim."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	memStore := memory.NewStore(filepath.Join(root, ".juex", "memory"))
+	if err := memStore.Write(memory.Entry{
+		Name:        "prefer-yaml",
+		Description: "Prefer YAML over JSON in config files",
+		Type:        "feedback",
+		Body:        "Reason: easier to comment.\nHow to apply: pick YAML when both work.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mcpConfig := mcp.Config{MCPServers: map[string]mcp.ServerSpec{
+		"local": {Command: os.Args[0], Env: map[string]string{"JUEX_E2E_MCP": "1"}},
+	}}
+	mcpJSON, _ := json.Marshal(mcpConfig)
+	if err := os.WriteFile(filepath.Join(projectAgents, "mcp.json"), mcpJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	demoFile := filepath.Join(root, "demo.txt")
+	if err := os.WriteFile(demoFile, []byte("hello world\nplaceholder\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := tools.NewRegistry()
+	tools.RegisterBuiltins(reg, root)
+	skillLoader := skills.NewLoader(filepath.Join(homeAgents, "skills"), filepath.Join(projectAgents, "skills"))
+	if err := skillLoader.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := memStore.RegisterTools(reg); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	mcpClients, err := mcp.RegisterAll(ctx, mcpConfig, reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, c := range mcpClients {
+			c.Close()
+		}
+	}()
+
+	bus := events.NewBus()
+	sess, err := session.New(filepath.Join(root, ".juex", "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+	sess.SubscribeBus(bus)
+
+	pb := &prompt.Builder{
+		GlobalAgentsMDPath: filepath.Join(homeAgents, "AGENTS.md"),
+		AgentsMDDirs:       []string{root, projectAgents},
+		Memory:             memStore,
+		Skills:             skillLoader,
+		WorkDir:            root,
+		Now:                func() time.Time { return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) },
+	}
+
+	prov := &scriptProvider{
+		t: t,
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockText, Text: "portable gather"},
+					{Type: llm.BlockToolUse, ToolUseID: "p1", ToolName: "read", Input: map[string]any{"path": filepath.Join(root, "AGENTS.md")}},
+					{Type: llm.BlockToolUse, ToolUseID: "p2", ToolName: "write", Input: map[string]any{"path": filepath.Join(root, "out.txt"), "content": "portable write\n"}},
+					{Type: llm.BlockToolUse, ToolUseID: "p3", ToolName: "mcp__local__echo", Input: map[string]any{"text": "portable"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockText, Text: "portable mutate"},
+					{Type: llm.BlockToolUse, ToolUseID: "p4", ToolName: "edit", Input: map[string]any{"path": demoFile, "old": "placeholder", "new": "PORTABLE"}},
+					{Type: llm.BlockToolUse, ToolUseID: "p5", ToolName: "grep", Input: map[string]any{"pattern": "PORTABLE", "path": demoFile}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockText, Text: "portable persist"},
+					{Type: llm.BlockToolUse, ToolUseID: "p6", ToolName: "memory_write", Input: map[string]any{
+						"name": "portable-finding", "description": "portable e2e edited demo file",
+						"type": "project", "body": "edited via portable e2e",
+					}},
+					{Type: llm.BlockToolUse, ToolUseID: "p7", ToolName: "read", Input: map[string]any{"path": filepath.Join(projectAgents, "skills", "trim-tool", "SKILL.md")}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockText, Text: "portable verify memory"},
+					{Type: llm.BlockToolUse, ToolUseID: "p8", ToolName: "memory_search", Input: map[string]any{"query": "portable"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "PORTABLE COMPLETE: demo.txt edited, memory persisted, MCP echoed"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+
+	var toolErrs int32
+	bus.Subscribe("tool.errored", func(e events.Event) {
+		atomic.AddInt32(&toolErrs, 1)
+		t.Logf("tool errored: %+v", e.Payload)
+	})
+
+	eng := &runtime.Engine{
+		Provider: prov,
+		Tools:    reg,
+		Bus:      bus,
+		Session:  sess,
+		Prompt:   pb,
+		MaxIters: 20,
+		MaxDur:   30 * time.Second,
+	}
+
+	out, err := eng.Turn(ctx, "drive the portable demo")
+	if err != nil {
+		t.Fatalf("Turn: %v", err)
+	}
+	if !strings.Contains(out, "PORTABLE COMPLETE") {
+		t.Fatalf("final text wrong: %q", out)
+	}
+	if toolErrs != 0 {
+		t.Fatalf("expected zero tool errors, got %d", toolErrs)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "out.txt")); err != nil || string(data) != "portable write\n" {
+		t.Fatalf("out.txt: data=%q err=%v", data, err)
+	}
+	demoData, err := os.ReadFile(demoFile)
+	if err != nil || !strings.Contains(string(demoData), "PORTABLE") || strings.Contains(string(demoData), "placeholder") {
+		t.Fatalf("demo.txt: data=%q err=%v", demoData, err)
+	}
+	mems, err := memStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasFinding := false
+	for _, m := range mems {
+		if m.Name == "portable-finding" {
+			hasFinding = true
+			if !strings.Contains(m.Body, "edited via portable e2e") {
+				t.Errorf("memory body lost: %+v", m)
+			}
+		}
+	}
+	if !hasFinding {
+		t.Fatalf("portable-finding memory not persisted; entries: %+v", mems)
+	}
+
+	convLines := readLines(t, filepath.Join(sess.Dir, "conversation.jsonl"))
+	if len(convLines) != 10 {
+		t.Errorf("conversation.jsonl line count = %d; want 10", len(convLines))
+	}
+	for i, line := range convLines {
+		var m llm.Message
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("line %d not valid JSON message: %v: %s", i, err, line)
+		}
+	}
+	eventLines := readLines(t, filepath.Join(sess.Dir, "events.jsonl"))
+	wantTypes := map[string]bool{
+		"turn.started": false, "turn.completed": false,
+		"llm.requested": false, "llm.responded": false,
+		"tool.requested": false, "tool.completed": false,
+	}
+	for _, line := range eventLines {
+		var ev events.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil {
+			if _, ok := wantTypes[ev.Type]; ok {
+				wantTypes[ev.Type] = true
+			}
+		}
+	}
+	for typ, seen := range wantTypes {
+		if !seen {
+			t.Errorf("expected event type %q not seen in events.jsonl", typ)
+		}
+	}
+	if int(prov.called.Load()) != len(prov.steps) {
+		t.Errorf("script not fully executed: %d / %d", prov.called.Load(), len(prov.steps))
+	}
+	for i := 1; i < len(prov.history); i++ {
+		if len(prov.history[i]) <= len(prov.history[i-1]) {
+			t.Errorf("history did not grow at call %d (%d vs %d)", i, len(prov.history[i]), len(prov.history[i-1]))
+		}
+	}
+}
+
 func readLines(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)
