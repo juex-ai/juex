@@ -19,10 +19,11 @@ Use the project toolchain wrapper when available:
 mise exec -- <command>
 ```
 
-1. **Focused tests first** - run `go test -v ./path/to/package/...` for each
-   changed Go package that has `*_test.go` files. For cross-package CLI,
+1. **Focused tests first** - run
+   `mise exec -- go test -v ./path/to/package/...` for each changed Go package
+   that has `*_test.go` files. For cross-package CLI,
    runtime, session, provider, web, MCP, shell, or eval behavior, include
-   `./tests/e2e`.
+   `./tests/e2e/...`.
 2. **Full deterministic suite** - `mise exec -- make test` runs
    `go test ./... -count=1`, including non-live e2e tests.
 3. **Frontend and embedded binary build** - `mise exec -- make build` runs the
