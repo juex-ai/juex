@@ -93,6 +93,10 @@ def default_juex_bin() -> str:
 
 
 def default_report_dir(kind: str, run_id: str) -> pathlib.Path:
+    if not run_id.strip():
+        raise ValueError("run_id cannot be empty")
+    if "/" in run_id or "\\" in run_id:
+        raise ValueError(f"run_id cannot contain path separators: {run_id}")
     return REPORT_ROOT / kind / run_id
 
 

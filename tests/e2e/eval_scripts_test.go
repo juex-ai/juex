@@ -218,6 +218,13 @@ func TestEvalDefaultReportDirsUseTmpRoot(t *testing.T) {
 		"    path = helper.default_report_dir(kind, 'run-id').as_posix()",
 		"    assert path.endswith(f'/.tmp/reports/{kind}/run-id'), path",
 		"    assert '/docs/reports/' not in path, path",
+		"for bad_run_id in ['', ' ', '../run', 'nested/run', r'nested\\run']:",
+		"    try:",
+		"        helper.default_report_dir('provider-model-smoke', bad_run_id)",
+		"    except ValueError:",
+		"        pass",
+		"    else:",
+		"        raise AssertionError(f'expected invalid run_id: {bad_run_id!r}')",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
