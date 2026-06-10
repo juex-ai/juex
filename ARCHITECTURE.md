@@ -52,6 +52,7 @@ juex/
 │   ├── version/    version.go    # ldflags-injected build metadata
 │   ├── config/                   # juex.yaml, shell profile, Codex auth loading
 │   │   ├── config.go
+│   │   ├── values.go             # resolved ProviderSelection, paths, and limits
 │   │   ├── shell.go
 │   │   └── codex_auth.go
 │   ├── events/     bus.go        # in-process EventBus (glob)
@@ -265,6 +266,8 @@ type CachePolicy struct {
 type ProviderWithOptions interface {
     CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error)
 }
+
+func NewProvider(profile ProviderProfile) (Provider, error)
 ```
 
 Provider profiles resolve a user config into one wire protocol, a small preset,
@@ -282,6 +285,8 @@ OpenAI-compatible Chat provider, define a custom `providers[].id`, set
 provider/model pair. Custom `openai/chat` profiles enable reasoning effort by
 default; set `providers[].capabilities.reasoning_effort: false` only when an
 endpoint rejects that field.
+`internal/config` resolves `ProviderSelection` into a `ProviderProfile`; the
+LLM package owns concrete provider construction through `llm.NewProvider`.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
@@ -809,6 +814,14 @@ provider_id/model_id` or override a few fields while inheriting missing values
 from `~/.juex/juex.yaml`. The legacy top-level `provider:` block is not
 supported. `shell` is an object-level override rather than a deep merge:
 workspace `shell: {}` resets any user-global shell config back to auto.
+
+After loading, `internal/config` exposes narrower value objects for composition:
+`ProviderSelection` for profile resolution, `RuntimePaths` for work-local
+runtime storage, `ResourcePaths` for AGENTS/skills/MCP inputs, and
+`RuntimeLimits` for turn budgets, context window, and compaction policy. The
+older `Config` path/profile methods remain compatibility delegates. Config does
+not construct providers; app resolves the profile and asks `internal/llm` to
+build the adapter.
 
 The resolved `ShellProfile` is included in `juex run --dry-run --json`,
 `/api/runtime`, the system prompt operating context, and the `shell` tool

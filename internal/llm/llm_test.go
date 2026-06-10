@@ -737,6 +737,25 @@ func TestNewProvider_Errors(t *testing.T) {
 	}
 }
 
+func TestNewProvider_FromResolvedProfile(t *testing.T) {
+	profile, err := ResolveProfile(Config{
+		ID:       "openai",
+		Protocol: string(ProtocolOpenAIResponses),
+		APIKey:   "sk-test",
+		Model:    "gpt-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := NewProvider(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "openai:gpt-test" {
+		t.Fatalf("provider name = %q", provider.Name())
+	}
+}
+
 func TestExtractReasoningContent(t *testing.T) {
 	cases := map[string]struct{ in, want string }{
 		"deepseek":  {`{"role":"assistant","content":"hi","reasoning_content":"deepseek thoughts"}`, "deepseek thoughts"},

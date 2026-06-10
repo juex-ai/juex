@@ -17,6 +17,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -114,7 +115,11 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 // shared builtin tool registry, in a fresh tempdir session.
 func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	t.Helper()
-	provider, err := cfg.NewProvider()
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatalf("provider profile: %v", err)
+	}
+	provider, err := llm.NewProvider(profile)
 	if err != nil {
 		t.Fatalf("provider: %v", err)
 	}

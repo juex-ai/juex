@@ -1,6 +1,5 @@
-// Package config wires the runtime: config-file loading, agents-dir resolution,
-// and LLM provider construction. Everything that needs a filesystem path lives
-// here so other packages can stay path-agnostic.
+// Package config resolves config files, env overrides, auth, and filesystem
+// paths into explicit values for app/runtime composition.
 package config
 
 import (
@@ -263,136 +262,69 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool) error {
 	return nil
 }
 
-// NewProvider constructs the LLM provider implied by the config.
-func (c Config) NewProvider() (llm.Provider, error) {
-	if c.ProviderID == "" && c.ProviderProtocol == "" {
-		return nil, fmt.Errorf("config: provider id/protocol is empty")
-	}
-	return llm.New(c.llmConfig())
-}
-
 func (c Config) ProviderProfile() (llm.ProviderProfile, error) {
-	return llm.ResolveProfile(c.llmConfig())
-}
-
-func (c Config) llmConfig() llm.Config {
-	return llm.Config{
-		ID:             c.ProviderID,
-		Protocol:       c.ProviderProtocol,
-		BaseURL:        c.BaseURL,
-		APIKey:         c.APIKey,
-		Model:          c.Model,
-		ThinkingEffort: c.ThinkingEffort,
-		Headers:        c.ProviderHeaders,
-		Query:          c.ProviderQuery,
-		Capabilities:   c.ProviderCapabilities,
-		Compat:         c.ProviderCompat,
-	}
+	return c.ProviderSelection().ProviderProfile()
 }
 
 // ProjectAgentsDir is <WorkDir>/.agents.
 func (c Config) ProjectAgentsDir() string {
-	if c.WorkDir == "" {
-		return ""
-	}
-	return filepath.Join(c.WorkDir, ".agents")
+	return c.ResourcePaths().ProjectAgentsDir
 }
 
 // JuexDir is <WorkDir>/.juex and stores runtime data.
 func (c Config) JuexDir() string {
-	if c.WorkDir == "" {
-		return ""
-	}
-	return filepath.Join(c.WorkDir, ".juex")
+	return c.RuntimePaths().JuexDir
 }
 
 // SkillDirs returns the skill directories in load order:
 // user-global first, project-local second (project entries override
 // user entries by name).
 func (c Config) SkillDirs() []string {
-	var out []string
-	if c.EnableUserGlobalResources && c.HomeAgentsDir != "" {
-		out = append(out, filepath.Join(c.HomeAgentsDir, "skills"))
-	}
-	if c.WorkDir != "" {
-		out = append(out, filepath.Join(c.WorkDir, ".agents", "skills"))
-	}
-	return out
+	return c.ResourcePaths().SkillDirs
 }
 
 // MemoryDir returns the work-local memory store path.
 func (c Config) MemoryDir() string {
-	if c.WorkDir == "" {
-		return ""
-	}
-	return filepath.Join(c.JuexDir(), "memory")
+	return c.RuntimePaths().MemoryDir
 }
 
 // SessionsDir returns the work-local sessions root.
 func (c Config) SessionsDir() string {
-	if c.WorkDir == "" {
-		return ""
-	}
-	return filepath.Join(c.JuexDir(), "sessions")
+	return c.RuntimePaths().SessionsDir
 }
 
 // HistoryPath returns the work-local session history index path.
 func (c Config) HistoryPath() string {
-	if c.WorkDir == "" {
-		return ""
-	}
-	return filepath.Join(c.JuexDir(), "history.json")
+	return c.RuntimePaths().HistoryPath
 }
 
 // RuntimeConfigPath returns the work-local runtime config file path.
 func (c Config) RuntimeConfigPath() string {
-	if c.WorkDir == "" {
-		return ""
-	}
-	if filepath.Base(filepath.Clean(c.WorkDir)) == ".juex" {
-		return filepath.Join(c.WorkDir, "juex.yaml")
-	}
-	return filepath.Join(c.JuexDir(), "juex.yaml")
+	return c.RuntimePaths().RuntimeConfigPath
 }
 
 // HomeRuntimeConfigPath returns the user-global runtime config path.
 func (c Config) HomeRuntimeConfigPath() string {
-	if c.HomeJuexDir == "" {
-		return ""
-	}
-	return filepath.Join(c.HomeJuexDir, "juex.yaml")
+	return c.RuntimePaths().HomeRuntimeConfigPath
 }
 
 // GlobalAgentsMDPath returns the user-global AGENTS.md path when user-global
 // resources are enabled.
 func (c Config) GlobalAgentsMDPath() string {
-	if !c.EnableUserGlobalResources || c.HomeAgentsDir == "" {
-		return ""
-	}
-	return filepath.Join(c.HomeAgentsDir, "AGENTS.md")
+	return c.ResourcePaths().GlobalAgentsMDPath
 }
 
 // AgentsMDDirs returns directories that may contain AGENTS.md (project root
 // + project .agents subdir). The home-global AGENTS.md is loaded separately
 // because its absolute path is required.
 func (c Config) AgentsMDDirs() []string {
-	if c.WorkDir == "" {
-		return nil
-	}
-	return []string{c.WorkDir, filepath.Join(c.WorkDir, ".agents")}
+	return c.ResourcePaths().AgentsMDDirs
 }
 
 // MCPConfigPaths returns mcp.json candidates in load order:
 // user-global first, project-local second.
 func (c Config) MCPConfigPaths() []string {
-	var out []string
-	if c.EnableUserGlobalResources && c.HomeAgentsDir != "" {
-		out = append(out, filepath.Join(c.HomeAgentsDir, "mcp.json"))
-	}
-	if c.WorkDir != "" {
-		out = append(out, filepath.Join(c.WorkDir, ".agents", "mcp.json"))
-	}
-	return out
+	return c.ResourcePaths().MCPConfigPaths
 }
 
 func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
