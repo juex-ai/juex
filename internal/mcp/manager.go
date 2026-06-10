@@ -39,6 +39,10 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 		errors:  map[string]error{},
 	}
 	for name, spec := range cfg.MCPServers {
+		if err := validateToolNameServer(name); err != nil {
+			mgr.errors[name] = &ServerError{Server: name, Op: "tool name", Err: err}
+			continue
+		}
 		client, err := ConnectWithOptions(ctx, name, spec, opts)
 		if err != nil {
 			serverErr := &ServerError{Server: name, Op: "connect", Err: err}
@@ -71,7 +75,10 @@ func (m *Manager) RegisterTools(reg *tools.Registry) error {
 	for serverName, descs := range m.tools {
 		client := m.clients[serverName]
 		for _, d := range descs {
-			toolName := fmt.Sprintf("mcp__%s__%s", serverName, d.Name)
+			if err := validateToolNameParts(serverName, d.Name); err != nil {
+				return &ServerError{Server: serverName, Op: "tool name", Err: err}
+			}
+			toolName := ToolName(serverName, d.Name)
 			schema := d.InputSchema
 			if schema == nil {
 				schema = map[string]any{"type": "object"}
