@@ -547,7 +547,7 @@ type Engine struct {
     MaxDur           time.Duration // default 5min
     MaxPendingInputs int           // default 16
     ContextWindow    int           // default 256000
-    Compaction       config.CompactionConfig
+    Compaction       runtime.CompactionPolicy
 }
 func (e *Engine) Turn(ctx, userInput) (string, error)
 ```
@@ -558,6 +558,11 @@ tune them with `runtime.max_iters` and `runtime.max_duration` in YAML, while
 single turn. Budget failures are typed as `runtime_iteration_limit` or
 `runtime_timeout`; `juex run --json` includes the stable kind, session id,
 session dir, work dir, and budget details.
+
+Compaction policy defaults and the default context-window token count live on
+the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
+and environment input; `internal/app` passes the resolved value into
+`runtime.Engine`.
 
 When a turn is close to its iteration or duration budget, the runtime emits
 `turn.budget.warning` with `runtime_iteration_warning` or

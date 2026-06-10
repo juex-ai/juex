@@ -5,13 +5,12 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
 func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
-	cfg := config.DefaultCompactionConfig()
+	cfg := DefaultCompactionPolicy()
 	cfg.UserInputInlineMaxBytes = 64
 	cfg.UserInputPreviewHeadBytes = 8
 	cfg.UserInputPreviewTailBytes = 8

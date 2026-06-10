@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -117,7 +116,7 @@ func TestTurn_CompactionKeepsRecentTailInProviderContext(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 200
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 80
 	eng.Compaction.TailTurns = 1
 	eng.Compaction.ReserveTokens = 50
@@ -158,7 +157,7 @@ func TestTurn_ExternalizesLargeUserInputBeforeProviderRequest(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.UserInputInlineMaxBytes = 64
 	eng.Compaction.UserInputPreviewHeadBytes = 12
 	eng.Compaction.UserInputPreviewTailBytes = 12
@@ -201,7 +200,7 @@ func TestTurn_ExternalizesLargeToolResultBeforeNextProviderRequest(t *testing.T)
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.ToolResultInlineMaxBytes = 64
 	eng.Compaction.ToolResultPreviewHeadBytes = 10
 	eng.Compaction.ToolResultPreviewTailBytes = 10
@@ -251,7 +250,7 @@ func TestTurn_ProjectsLegacyLargeHistoryBeforeProviderRequest(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 10000
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.UserInputInlineMaxBytes = 64
 	eng.Compaction.UserInputPreviewHeadBytes = 10
 	eng.Compaction.UserInputPreviewTailBytes = 10
@@ -282,7 +281,7 @@ func TestTurn_AutoCompactionCircuitBreakerStopsRepeatedSummaryAttempts(t *testin
 	}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 100
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +307,7 @@ func TestCompactWithInstructionsResetsAutoCompactionFailures(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 100
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	eng.autoCompactFailures = 3
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
@@ -396,7 +395,7 @@ func TestTurnMessage_MCPEventStripsRedactedReasoningWhenAutoCompactionPaused(t *
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 120
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	eng.autoCompactFailures = effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow).MaxAutoFailures
 	secret := "enc_" + strings.Repeat("secret ", 200)
 	if err := eng.Session.Append(llm.Message{
@@ -803,7 +802,7 @@ func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
 	prov := &budgetedCompactionProvider{compactionLimit: 800}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 1200
-	eng.Compaction = config.DefaultCompactionConfig()
+	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.ReserveTokens = 300
 	eng.Compaction.SummaryMaxTokens = 100
 	eng.Compaction.ToolResultMaxChars = 2000

@@ -1,6 +1,8 @@
 package runtime
 
-import "github.com/juex-ai/juex/internal/config"
+import runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
+
+type CompactionPolicy = runtimepolicy.CompactionPolicy
 
 type compactionPolicy struct {
 	Enabled                    bool
@@ -19,75 +21,80 @@ type compactionPolicy struct {
 	TriggerTokens              int
 }
 
-func effectiveCompactionPolicy(cfg config.CompactionConfig, contextWindow int) compactionPolicy {
+func DefaultCompactionPolicy() CompactionPolicy {
+	return runtimepolicy.DefaultCompactionPolicy()
+}
+
+func effectiveCompactionPolicy(policy CompactionPolicy, contextWindow int) compactionPolicy {
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	if cfg.ReserveTokens <= 0 && cfg.KeepRecentTokens <= 0 && cfg.TailTurns <= 0 && cfg.SummaryMaxTokens <= 0 && cfg.ToolResultMaxChars <= 0 {
-		cfg = config.DefaultCompactionConfig()
+	defaults := DefaultCompactionPolicy()
+	if policy.ReserveTokens <= 0 && policy.KeepRecentTokens <= 0 && policy.TailTurns <= 0 && policy.SummaryMaxTokens <= 0 && policy.ToolResultMaxChars <= 0 {
+		policy = defaults
 	}
-	reserve := cfg.ReserveTokens
+	reserve := policy.ReserveTokens
 	if reserve <= 0 {
-		reserve = 16384
+		reserve = defaults.ReserveTokens
 	}
 	maxReserve := maxInt(1024, contextWindow/4)
 	if reserve > maxReserve {
 		reserve = maxReserve
 	}
-	keep := cfg.KeepRecentTokens
+	keep := policy.KeepRecentTokens
 	if keep <= 0 {
-		keep = 20000
+		keep = defaults.KeepRecentTokens
 	}
 	maxKeep := maxInt(512, contextWindow/3)
 	if keep > maxKeep {
 		keep = maxKeep
 	}
-	tailTurns := cfg.TailTurns
+	tailTurns := policy.TailTurns
 	if tailTurns <= 0 {
-		tailTurns = 2
+		tailTurns = defaults.TailTurns
 	}
-	summaryMax := cfg.SummaryMaxTokens
+	summaryMax := policy.SummaryMaxTokens
 	if summaryMax <= 0 {
-		summaryMax = 2048
+		summaryMax = defaults.SummaryMaxTokens
 	}
-	toolMax := cfg.ToolResultMaxChars
+	toolMax := policy.ToolResultMaxChars
 	if toolMax <= 0 {
-		toolMax = 2000
+		toolMax = defaults.ToolResultMaxChars
 	}
-	userInlineMax := cfg.UserInputInlineMaxBytes
+	userInlineMax := policy.UserInputInlineMaxBytes
 	if userInlineMax <= 0 {
-		userInlineMax = 65536
+		userInlineMax = defaults.UserInputInlineMaxBytes
 	}
-	userHead := cfg.UserInputPreviewHeadBytes
+	userHead := policy.UserInputPreviewHeadBytes
 	if userHead <= 0 {
-		userHead = 8192
+		userHead = defaults.UserInputPreviewHeadBytes
 	}
-	userTail := cfg.UserInputPreviewTailBytes
+	userTail := policy.UserInputPreviewTailBytes
 	if userTail <= 0 {
-		userTail = 8192
+		userTail = defaults.UserInputPreviewTailBytes
 	}
-	toolInlineMax := cfg.ToolResultInlineMaxBytes
+	toolInlineMax := policy.ToolResultInlineMaxBytes
 	if toolInlineMax <= 0 {
-		toolInlineMax = 32768
+		toolInlineMax = defaults.ToolResultInlineMaxBytes
 	}
-	toolHead := cfg.ToolResultPreviewHeadBytes
+	toolHead := policy.ToolResultPreviewHeadBytes
 	if toolHead <= 0 {
-		toolHead = 8192
+		toolHead = defaults.ToolResultPreviewHeadBytes
 	}
-	toolTail := cfg.ToolResultPreviewTailBytes
+	toolTail := policy.ToolResultPreviewTailBytes
 	if toolTail <= 0 {
-		toolTail = 8192
+		toolTail = defaults.ToolResultPreviewTailBytes
 	}
-	maxFailures := cfg.MaxAutoFailures
+	maxFailures := policy.MaxAutoFailures
 	if maxFailures <= 0 {
-		maxFailures = 3
+		maxFailures = defaults.MaxAutoFailures
 	}
 	trigger := contextWindow - reserve
 	if trigger <= 0 {
 		trigger = maxInt(1, contextWindow/2)
 	}
 	return compactionPolicy{
-		Enabled:                    cfg.Enabled,
+		Enabled:                    policy.Enabled,
 		ReserveTokens:              reserve,
 		KeepRecentTokens:           keep,
 		TailTurns:                  tailTurns,

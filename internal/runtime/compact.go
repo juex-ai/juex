@@ -7,9 +7,10 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 )
 
-const DefaultContextWindowTokens = 256000
+const DefaultContextWindowTokens = runtimepolicy.DefaultContextWindowTokens
 
 type CompactionResult struct {
 	MessageID          string `json:"message_id,omitempty"`

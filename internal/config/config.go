@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -91,21 +92,7 @@ type providerCompatConfig struct {
 	ReasoningReplayFields []string `yaml:"reasoning_replay_fields"`
 }
 
-type CompactionConfig struct {
-	Enabled                    bool
-	ReserveTokens              int
-	KeepRecentTokens           int
-	TailTurns                  int
-	SummaryMaxTokens           int
-	ToolResultMaxChars         int
-	UserInputInlineMaxBytes    int
-	UserInputPreviewHeadBytes  int
-	UserInputPreviewTailBytes  int
-	ToolResultInlineMaxBytes   int
-	ToolResultPreviewHeadBytes int
-	ToolResultPreviewTailBytes int
-	MaxAutoFailures            int
-}
+type CompactionConfig = runtimepolicy.CompactionPolicy
 
 type RuntimeConfig struct {
 	MaxIters    int
@@ -166,7 +153,7 @@ type yamlDuration struct {
 	Value time.Duration
 }
 
-const DefaultContextWindow = 256000
+const DefaultContextWindow = runtimepolicy.DefaultContextWindowTokens
 
 var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
@@ -507,21 +494,7 @@ func ParseBoolValue(value string) (bool, error) {
 }
 
 func DefaultCompactionConfig() CompactionConfig {
-	return CompactionConfig{
-		Enabled:                    true,
-		ReserveTokens:              16384,
-		KeepRecentTokens:           20000,
-		TailTurns:                  2,
-		SummaryMaxTokens:           2048,
-		ToolResultMaxChars:         2000,
-		UserInputInlineMaxBytes:    65536,
-		UserInputPreviewHeadBytes:  8192,
-		UserInputPreviewTailBytes:  8192,
-		ToolResultInlineMaxBytes:   32768,
-		ToolResultPreviewHeadBytes: 8192,
-		ToolResultPreviewTailBytes: 8192,
-		MaxAutoFailures:            3,
-	}
+	return runtimepolicy.DefaultCompactionPolicy()
 }
 
 func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
