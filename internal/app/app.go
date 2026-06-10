@@ -239,7 +239,7 @@ func New(opts Options) (*App, error) {
 		if sess.Kind == session.KindPrimary {
 			connectOpts.EnableClaudeChannel = true
 			connectOpts.OnNotification = func(n mcp.Notification) {
-				_ = a.handleMCPNotification(a.ctx, n)
+				_ = a.HandleMCPNotification(a.ctx, n)
 			}
 		}
 		mgr, err := mcp.NewManagerLayeredSoft(context.Background(), mcpConfigs, connectOpts)
@@ -342,10 +342,6 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	return a.Engine.Turn(ctx, prompt)
 }
 
-func (a *App) Compact(ctx context.Context, reason string, auto bool) (runtime.CompactionResult, error) {
-	return a.CompactWithInstructions(ctx, reason, auto, "")
-}
-
 func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
 	if a == nil || a.Engine == nil {
 		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
@@ -355,7 +351,7 @@ func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto b
 	return a.Engine.CompactWithInstructions(ctx, "session-compact", systemPrompt, reason, auto, instructions)
 }
 
-func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) error {
+func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) error {
 	if a == nil || a.Engine == nil {
 		return nil
 	}
@@ -377,10 +373,6 @@ func (a *App) handleMCPNotification(ctx context.Context, n mcp.Notification) err
 	}
 	_, err := a.Engine.TurnMessage(ctx, msg)
 	return err
-}
-
-func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) error {
-	return a.handleMCPNotification(ctx, n)
 }
 
 func (a *App) TokenUsage() llm.Usage {

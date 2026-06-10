@@ -272,7 +272,7 @@ func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	})
 
-	err := a.handleMCPNotification(context.Background(), mcp.Notification{
+	err := a.HandleMCPNotification(context.Background(), mcp.Notification{
 		ServerName: "local",
 		Method:     "notifications/claude/channel",
 		EventType:  "message",
@@ -358,7 +358,7 @@ func TestApp_MCPNotificationQueuesDuringActiveTurn(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("provider did not start")
 	}
-	if err := a.handleMCPNotification(context.Background(), mcp.Notification{
+	if err := a.HandleMCPNotification(context.Background(), mcp.Notification{
 		ServerName: "local",
 		EventType:  "message",
 		Content:    "queued",
@@ -387,7 +387,7 @@ func TestApp_MCPNotificationUsesLifecycleContext(t *testing.T) {
 	})
 	a.cancel()
 
-	err := a.handleMCPNotification(a.ctx, mcp.Notification{
+	err := a.HandleMCPNotification(a.ctx, mcp.Notification{
 		ServerName: "local",
 		Method:     "notifications/claude/channel",
 		EventType:  "message",
