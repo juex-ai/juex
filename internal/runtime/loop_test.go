@@ -359,8 +359,8 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	}
 	var compactErr string
 	bus.Subscribe("context.compact.errored", func(e events.Event) {
-		payload, _ := e.Payload.(map[string]any)
-		compactErr, _ = payload["error"].(string)
+		payload, _ := e.Payload.(ContextCompactErroredPayload)
+		compactErr = payload.Error
 	})
 
 	msg := llm.TextMessage(llm.RoleUser, "local:message:notify")
@@ -579,8 +579,8 @@ func TestTurn_PlainResponse(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	var eventUsage llm.Usage
 	bus.Subscribe("llm.responded", func(e events.Event) {
-		p := e.Payload.(map[string]any)
-		eventUsage = p["token_usage"].(llm.Usage)
+		payload := e.Payload.(LLMRespondedPayload)
+		eventUsage = payload.TokenUsage
 	})
 	out, err := eng.Turn(context.Background(), "hi")
 	if err != nil {
@@ -624,12 +624,8 @@ func TestTurn_LLMRespondedCarriesOrderedBlocks(t *testing.T) {
 		if got != nil {
 			return
 		}
-		p := e.Payload.(map[string]any)
-		blocks, ok := p["blocks"].([]llm.Block)
-		if !ok {
-			t.Fatalf("llm.responded blocks = %T, want []llm.Block", p["blocks"])
-		}
-		got = blocks
+		payload := e.Payload.(LLMRespondedPayload)
+		got = payload.Blocks
 	})
 
 	if _, err := eng.Turn(context.Background(), "inspect"); err != nil {
@@ -663,8 +659,10 @@ func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
 	eng.ContextWindow = 1000
 	var eventContext llm.ContextUsage
 	bus.Subscribe("llm.responded", func(e events.Event) {
-		p := e.Payload.(map[string]any)
-		eventContext = p["context_usage"].(llm.ContextUsage)
+		payload := e.Payload.(LLMRespondedPayload)
+		if payload.ContextUsage != nil {
+			eventContext = *payload.ContextUsage
+		}
 	})
 
 	if _, err := eng.Turn(context.Background(), "hi"); err != nil {
@@ -728,8 +726,8 @@ func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {
 	eng, bus := newEngine(t, prov, false)
 	var payloadKind string
 	bus.Subscribe("turn.started", func(e events.Event) {
-		p := e.Payload.(map[string]any)
-		payloadKind, _ = p["kind"].(string)
+		payload := e.Payload.(TurnStartedPayload)
+		payloadKind = payload.Kind
 	})
 
 	msg := llm.TextMessage(llm.RoleUser, "local:message:hello")
@@ -1187,9 +1185,9 @@ func TestTurn_BudgetExceeded(t *testing.T) {
 	t.Cleanup(func() { sess.Close() })
 	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
 	bus := events.NewBus()
-	var erroredPayload map[string]any
+	var erroredPayload TurnErroredPayload
 	bus.Subscribe("turn.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(map[string]any)
+		erroredPayload, _ = e.Payload.(TurnErroredPayload)
 	})
 	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb, MaxIters: 3, MaxDur: 30 * time.Second}
 
@@ -1204,7 +1202,7 @@ func TestTurn_BudgetExceeded(t *testing.T) {
 	if budgetErr.Kind != BudgetErrorKindIterationLimit || budgetErr.MaxIters != 3 || budgetErr.Budget != "iterations" {
 		t.Fatalf("budget error = %+v", budgetErr)
 	}
-	if erroredPayload["kind"] != BudgetErrorKindIterationLimit || erroredPayload["max_iters"] != 3 {
+	if erroredPayload.Kind != BudgetErrorKindIterationLimit || erroredPayload.MaxIters != 3 {
 		t.Fatalf("turn.errored payload = %+v", erroredPayload)
 	}
 }
@@ -1225,10 +1223,12 @@ func TestTurn_NearIterationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
 			return "ok", nil
 		},
 	})
-	var warningPayloads []map[string]any
+	var warningPayloads []TurnIterationBudgetWarningPayload
 	bus.Subscribe("turn.budget.warning", func(e events.Event) {
-		payload, _ := e.Payload.(map[string]any)
-		warningPayloads = append(warningPayloads, payload)
+		payload, ok := e.Payload.(TurnIterationBudgetWarningPayload)
+		if ok {
+			warningPayloads = append(warningPayloads, payload)
+		}
 	})
 
 	out, err := eng.Turn(context.Background(), "need tool")
@@ -1242,7 +1242,7 @@ func TestTurn_NearIterationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
 		t.Fatalf("warning payloads = %+v, want one", warningPayloads)
 	}
 	payload := warningPayloads[0]
-	if payload["kind"] != BudgetWarningKindIterationLimit || payload["budget"] != "iterations" || payload["remaining_iters"] != 1 || payload["max_iters"] != 2 {
+	if payload.Kind != BudgetWarningKindIterationLimit || payload.Budget != "iterations" || payload.RemainingIters != 1 || payload.MaxIters != 2 {
 		t.Fatalf("warning payload = %+v", payload)
 	}
 	if len(prov.histories) != 2 {
@@ -1312,11 +1312,11 @@ func TestTurn_NearDurationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
 			return "ok", nil
 		},
 	})
-	var durationWarning map[string]any
+	var durationWarning *TurnDurationBudgetWarningPayload
 	bus.Subscribe("turn.budget.warning", func(e events.Event) {
-		payload, _ := e.Payload.(map[string]any)
-		if payload["budget"] == "duration" {
-			durationWarning = payload
+		payload, ok := e.Payload.(TurnDurationBudgetWarningPayload)
+		if ok && payload.Budget == "duration" {
+			durationWarning = &payload
 		}
 	})
 
@@ -1330,12 +1330,11 @@ func TestTurn_NearDurationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
 	if durationWarning == nil {
 		t.Fatal("missing duration budget warning")
 	}
-	if durationWarning["kind"] != BudgetWarningKindTimeout || durationWarning["max_duration_ms"] != int64(800) {
+	if durationWarning.Kind != BudgetWarningKindTimeout || durationWarning.MaxDurationMS != int64(800) {
 		t.Fatalf("duration warning = %+v", durationWarning)
 	}
-	remaining, ok := durationWarning["remaining_duration_ms"].(int64)
-	if !ok || remaining <= 0 || remaining >= 800 {
-		t.Fatalf("remaining_duration_ms = %v, want positive value below max", durationWarning["remaining_duration_ms"])
+	if durationWarning.RemainingDurationMS <= 0 || durationWarning.RemainingDurationMS >= 800 {
+		t.Fatalf("remaining_duration_ms = %v, want positive value below max", durationWarning.RemainingDurationMS)
 	}
 	if len(prov.histories) != 2 {
 		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
@@ -1365,9 +1364,9 @@ func TestTurn_MaxDurationBudgetError(t *testing.T) {
 	}
 	eng, bus := newEngine(t, prov, false)
 	eng.MaxDur = 20 * time.Millisecond
-	var erroredPayload map[string]any
+	var erroredPayload TurnErroredPayload
 	bus.Subscribe("turn.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(map[string]any)
+		erroredPayload, _ = e.Payload.(TurnErroredPayload)
 	})
 
 	_, err := eng.Turn(context.Background(), "hi")
@@ -1381,7 +1380,7 @@ func TestTurn_MaxDurationBudgetError(t *testing.T) {
 	if budgetErr.Kind != BudgetErrorKindTimeout || budgetErr.MaxDuration != 20*time.Millisecond || budgetErr.Budget != "duration" {
 		t.Fatalf("budget error = %+v", budgetErr)
 	}
-	if erroredPayload["kind"] != BudgetErrorKindTimeout || erroredPayload["max_duration_ms"] != int64(20) {
+	if erroredPayload.Kind != BudgetErrorKindTimeout || erroredPayload.MaxDurationMS != int64(20) {
 		t.Fatalf("turn.errored payload = %+v", erroredPayload)
 	}
 }
@@ -1465,12 +1464,13 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 		},
 	})
 
-	var requestedPayload, erroredPayload map[string]any
+	var requestedPayload ToolRequestedPayload
+	var erroredPayload ToolErroredPayload
 	bus.Subscribe("tool.requested", func(e events.Event) {
-		requestedPayload, _ = e.Payload.(map[string]any)
+		requestedPayload, _ = e.Payload.(ToolRequestedPayload)
 	})
 	bus.Subscribe("tool.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(map[string]any)
+		erroredPayload, _ = e.Payload.(ToolErroredPayload)
 	})
 
 	out, err := eng.Turn(context.Background(), "run slow")
@@ -1494,22 +1494,22 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	if !strings.Contains(block.Content, "partial stdout") || !strings.Contains(block.Content, "partial stderr") {
 		t.Fatalf("tool result content = %q, want captured output", block.Content)
 	}
-	if got := requestedPayload["timeout_seconds"]; got != 1 {
+	if got := requestedPayload.TimeoutSeconds; got != 1 {
 		t.Fatalf("requested timeout_seconds = %v, want 1", got)
 	}
-	if got := requestedPayload["tool_use_id"]; got != "slow_1" {
+	if got := requestedPayload.ToolUseID; got != "slow_1" {
 		t.Fatalf("requested tool_use_id = %v, want slow_1", got)
 	}
-	if got := erroredPayload["timeout_seconds"]; got != 1 {
+	if got := erroredPayload.TimeoutSeconds; got != 1 {
 		t.Fatalf("errored timeout_seconds = %v, want 1", got)
 	}
-	if got := erroredPayload["timed_out"]; got != true {
+	if got := erroredPayload.TimedOut; got != true {
 		t.Fatalf("errored timed_out = %v, want true", got)
 	}
-	if got := erroredPayload["len"]; got != len("partial stdout\npartial stderr\n") {
+	if got := erroredPayload.Len; got != len("partial stdout\npartial stderr\n") {
 		t.Fatalf("errored len = %v, want captured output length", got)
 	}
-	if got := erroredPayload["preview"]; got != "partial stdout\npartial stderr\n" {
+	if got := erroredPayload.Preview; got != "partial stdout\npartial stderr\n" {
 		t.Fatalf("errored preview = %v, want captured output preview", got)
 	}
 }
@@ -1525,14 +1525,14 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, true)
 
-	var requestedPayload map[string]any
+	var requestedPayload ToolRequestedPayload
 	bus.Subscribe("tool.requested", func(e events.Event) {
-		requestedPayload, _ = e.Payload.(map[string]any)
+		requestedPayload, _ = e.Payload.(ToolRequestedPayload)
 	})
-	var respondedPayload map[string]any
+	var respondedPayload LLMRespondedPayload
 	bus.Subscribe("llm.responded", func(e events.Event) {
-		if respondedPayload == nil {
-			respondedPayload, _ = e.Payload.(map[string]any)
+		if respondedPayload.ToolCalls == nil {
+			respondedPayload, _ = e.Payload.(LLMRespondedPayload)
 		}
 	})
 
@@ -1557,22 +1557,22 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if assistant.Blocks[0].TimeoutSeconds != 2 {
 		t.Fatalf("assistant timeout = %d, want 2", assistant.Blocks[0].TimeoutSeconds)
 	}
-	respondedCalls, ok := respondedPayload["tool_calls"].([]map[string]any)
-	if !ok || len(respondedCalls) != 1 {
-		t.Fatalf("responded tool_calls = %+v, want one tool call", respondedPayload["tool_calls"])
+	respondedCalls := respondedPayload.ToolCalls
+	if len(respondedCalls) != 1 {
+		t.Fatalf("responded tool_calls = %+v, want one tool call", respondedPayload.ToolCalls)
 	}
-	respondedInput, _ := respondedCalls[0]["input"].(map[string]any)
+	respondedInput := respondedCalls[0].Input
 	if respondedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("responded tool input = %+v, want normalized command", respondedInput)
 	}
-	if got := respondedCalls[0]["timeout_seconds"]; got != 2 {
+	if got := respondedCalls[0].TimeoutSeconds; got != 2 {
 		t.Fatalf("responded timeout = %v, want 2", got)
 	}
-	requestedInput, _ := requestedPayload["input"].(map[string]any)
+	requestedInput := requestedPayload.Input
 	if requestedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("requested input = %+v, want normalized command", requestedInput)
 	}
-	if got := requestedPayload["timeout_seconds"]; got != 2 {
+	if got := requestedPayload.TimeoutSeconds; got != 2 {
 		t.Fatalf("requested timeout = %v, want 2", got)
 	}
 	result := eng.Session.History[2]

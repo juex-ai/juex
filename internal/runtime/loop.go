@@ -133,23 +133,23 @@ func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message)
 	}
 	if len(e.pendingInput) >= max {
 		e.pendingMu.Unlock()
-		e.emit(events.Event{Type: "pending_input.rejected", TurnID: turnID, Payload: map[string]any{
-			"input":              userMsg.FirstText(),
-			"kind":               userMsg.Kind,
-			"pending_count":      status.PendingCount,
-			"max_pending_inputs": status.MaxPendingInputs,
-			"reason":             "queue_full",
+		e.emit(events.Event{Type: "pending_input.rejected", TurnID: turnID, Payload: PendingInputRejectedPayload{
+			Input:            userMsg.FirstText(),
+			Kind:             userMsg.Kind,
+			PendingCount:     status.PendingCount,
+			MaxPendingInputs: status.MaxPendingInputs,
+			Reason:           "queue_full",
 		}})
 		return status, ErrPendingInputQueueFull
 	}
 	e.pendingInput = append(e.pendingInput, userMsg)
 	status.PendingCount = len(e.pendingInput)
 	e.pendingMu.Unlock()
-	e.emit(events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: map[string]any{
-		"input":              userMsg.FirstText(),
-		"kind":               userMsg.Kind,
-		"pending_count":      status.PendingCount,
-		"max_pending_inputs": status.MaxPendingInputs,
+	e.emit(events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
+		Input:            userMsg.FirstText(),
+		Kind:             userMsg.Kind,
+		PendingCount:     status.PendingCount,
+		MaxPendingInputs: status.MaxPendingInputs,
 	}})
 	return status, nil
 }
@@ -358,11 +358,10 @@ func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error
 	if err := e.Session.Append(userMsg); err != nil {
 		return fmt.Errorf("session append user: %w", err)
 	}
-	startPayload := map[string]any{"input": userMsg.FirstText()}
-	if userMsg.Kind != "" {
-		startPayload["kind"] = userMsg.Kind
-	}
-	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: startPayload})
+	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: TurnStartedPayload{
+		Input: userMsg.FirstText(),
+		Kind:  userMsg.Kind,
+	}})
 	return nil
 }
 
@@ -379,8 +378,10 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, limits tu
 		e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.DurationWarningDetails()})
 		warnings.durationWarned = true
 	}
-	e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: map[string]any{
-		"iter": iter, "history_len": len(e.Session.History), "tool_count": len(prepared.tools),
+	e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
+		Iter:       iter,
+		HistoryLen: len(e.Session.History),
+		ToolCount:  len(prepared.tools),
 	}})
 
 	requestHistory := e.activeContextLocked().Messages
@@ -421,18 +422,16 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	// tool calls so verbose UIs can render them without subscribing to
 	// the conversation log. Bounded by what the LLM returned in this
 	// single turn, so payload size is reasonable.
-	payload := map[string]any{
-		"stop_reason": resp.StopReason,
-		"usage":       resp.Usage,
-		"token_usage": totalUsage,
-		"blocks":      msg.Blocks,
-		"text":        responseText(msg),
-		"thinking":    responseThinking(msg),
-		"tool_calls":  responseToolCalls(msg),
-		"model":       msg.Model,
-	}
-	if contextUsage != nil {
-		payload["context_usage"] = *contextUsage
+	payload := LLMRespondedPayload{
+		StopReason:   resp.StopReason,
+		Usage:        resp.Usage,
+		TokenUsage:   totalUsage,
+		Blocks:       msg.Blocks,
+		Text:         responseText(msg),
+		Thinking:     responseThinking(msg),
+		ToolCalls:    responseToolCalls(msg),
+		Model:        msg.Model,
+		ContextUsage: contextUsage,
 	}
 	e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload})
 
@@ -459,10 +458,10 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 }
 
 func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, lastText string) {
-	e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: map[string]any{
-		"duration_ms": time.Since(start).Milliseconds(),
-		"output_len":  len(lastText),
-		"token_usage": e.Session.TokenUsageSnapshot(),
+	e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
+		DurationMS: time.Since(start).Milliseconds(),
+		OutputLen:  len(lastText),
+		TokenUsage: e.Session.TokenUsageSnapshot(),
 	}})
 }
 
@@ -495,43 +494,43 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Bl
 }
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) llm.Block {
-	e.emit(events.Event{Type: "tool.requested", TurnID: turnID, Payload: map[string]any{
-		"name":            call.ToolName,
-		"input":           call.Input,
-		"tool_use_id":     call.ToolUseID,
-		"timeout_seconds": call.TimeoutSeconds,
+	e.emit(events.Event{Type: "tool.requested", TurnID: turnID, Payload: ToolRequestedPayload{
+		Name:           call.ToolName,
+		Input:          call.Input,
+		ToolUseID:      call.ToolUseID,
+		TimeoutSeconds: call.TimeoutSeconds,
 	}})
 	out, info, err := e.Tools.CallWithInfo(ctx, call.ToolName, call.Input)
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
 	if err != nil {
 		block.Content = toolErrorContent(out, err)
 		block.IsError = true
-		payload := map[string]any{
-			"name":            call.ToolName,
-			"tool_use_id":     call.ToolUseID,
-			"error":           err.Error(),
-			"timeout_seconds": info.TimeoutSeconds,
+		payload := ToolErroredPayload{
+			Name:           call.ToolName,
+			ToolUseID:      call.ToolUseID,
+			Error:          err.Error(),
+			TimeoutSeconds: info.TimeoutSeconds,
 		}
 		if out != "" {
-			payload["len"] = len(out)
-			payload["preview"] = truncate(out, 200)
+			payload.Len = len(out)
+			payload.Preview = truncate(out, 200)
 		}
 		if info.TimedOut {
-			payload["timed_out"] = true
+			payload.TimedOut = true
 		}
 		e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: payload})
 		return block
 	}
 
 	block.Content = out
-	e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: map[string]any{
-		"name":            call.ToolName,
-		"tool_use_id":     call.ToolUseID,
-		"timeout_seconds": info.TimeoutSeconds,
-		"len":             len(out),
+	e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: ToolCompletedPayload{
+		Name:           call.ToolName,
+		ToolUseID:      call.ToolUseID,
+		TimeoutSeconds: info.TimeoutSeconds,
+		Len:            len(out),
 		// Truncated preview so events.jsonl stays readable for tools that
 		// return many KB.
-		"preview": truncate(out, 200),
+		Preview: truncate(out, 200),
 	}})
 	return block
 }
@@ -577,10 +576,10 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 			return fmt.Errorf("session append pending input: %w", err)
 		}
 	}
-	e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: map[string]any{
-		"count":              len(pending),
-		"pending_count":      0,
-		"max_pending_inputs": max,
+	e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
+		Count:            len(pending),
+		PendingCount:     0,
+		MaxPendingInputs: max,
 	}})
 	return nil
 }
@@ -620,10 +619,10 @@ func (e *Engine) finishActiveTurn(turnID string, dropPending bool) {
 	max := e.effectiveMaxPendingInputs()
 	e.pendingMu.Unlock()
 	if dropped > 0 {
-		e.emit(events.Event{Type: "pending_input.dropped", TurnID: turnID, Payload: map[string]any{
-			"count":              dropped,
-			"pending_count":      0,
-			"max_pending_inputs": max,
+		e.emit(events.Event{Type: "pending_input.dropped", TurnID: turnID, Payload: PendingInputDroppedPayload{
+			Count:            dropped,
+			PendingCount:     0,
+			MaxPendingInputs: max,
 		}})
 	}
 }
@@ -635,10 +634,15 @@ func (e *Engine) emit(ev events.Event) {
 }
 
 func (e *Engine) failTurn(turnID string, err error) error {
-	payload := map[string]any{"error": err.Error()}
+	payload := TurnErroredPayload{Error: err.Error()}
 	if budgetErr, ok := AsBudgetError(err); ok {
-		for k, v := range budgetErr.Details() {
-			payload[k] = v
+		payload.Kind = budgetErr.Kind
+		payload.Budget = budgetErr.Budget
+		payload.TurnID = budgetErr.TurnID
+		payload.MaxIters = budgetErr.MaxIters
+		if budgetErr.MaxDuration > 0 {
+			payload.MaxDuration = budgetErr.MaxDuration.String()
+			payload.MaxDurationMS = budgetErr.MaxDuration.Milliseconds()
 		}
 	}
 	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: payload})
@@ -706,15 +710,15 @@ func responseThinking(m llm.Message) string {
 
 // responseToolCalls returns one summary entry per tool_use block in the
 // assistant message: name + input map. Used by verbose UIs.
-func responseToolCalls(m llm.Message) []map[string]any {
-	var out []map[string]any
+func responseToolCalls(m llm.Message) []ToolCallPayload {
+	var out []ToolCallPayload
 	for _, b := range m.Blocks {
 		if b.Type == llm.BlockToolUse {
-			out = append(out, map[string]any{
-				"tool_use_id":     b.ToolUseID,
-				"name":            b.ToolName,
-				"input":           b.Input,
-				"timeout_seconds": b.TimeoutSeconds,
+			out = append(out, ToolCallPayload{
+				ToolUseID:      b.ToolUseID,
+				Name:           b.ToolName,
+				Input:          b.Input,
+				TimeoutSeconds: b.TimeoutSeconds,
 			})
 		}
 	}
