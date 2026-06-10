@@ -1,14 +1,21 @@
 package mcp
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	toolNamePrefix    = "mcp__"
 	toolNameSeparator = "__"
 )
 
-// ToolName returns the registry name for one MCP server tool.
+// ToolName returns the registry name for one MCP server tool. It panics if the
+// server/tool pair cannot be represented unambiguously by the registry scheme.
 func ToolName(server, tool string) string {
+	if err := validateToolNameParts(server, tool); err != nil {
+		panic(err)
+	}
 	return toolNamePrefix + server + toolNameSeparator + tool
 }
 
@@ -23,4 +30,24 @@ func ParseToolName(name string) (server, tool string, ok bool) {
 		return "", "", false
 	}
 	return server, tool, true
+}
+
+func validateToolNameParts(server, tool string) error {
+	if err := validateToolNameServer(server); err != nil {
+		return err
+	}
+	if tool == "" {
+		return fmt.Errorf("mcp: tool name cannot be empty")
+	}
+	return nil
+}
+
+func validateToolNameServer(server string) error {
+	if server == "" {
+		return fmt.Errorf("mcp: server name cannot be empty")
+	}
+	if strings.Contains(server, toolNameSeparator) {
+		return fmt.Errorf("mcp: server name cannot contain %q", toolNameSeparator)
+	}
+	return nil
 }

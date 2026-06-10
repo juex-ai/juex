@@ -1,6 +1,9 @@
 package mcp
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestToolNameRoundTrip(t *testing.T) {
 	tests := []struct {
@@ -57,5 +60,64 @@ func TestParseToolNameMalformed(t *testing.T) {
 				t.Fatalf("ParseToolName(%q) = (%q, %q, true), want !ok", name, server, tool)
 			}
 		})
+	}
+}
+
+func TestToolNameRejectsAmbiguousParts(t *testing.T) {
+	tests := []struct {
+		name   string
+		server string
+		tool   string
+	}{
+		{
+			name:   "empty server",
+			server: "",
+			tool:   "echo",
+		},
+		{
+			name:   "server contains separator",
+			server: "local__side",
+			tool:   "echo",
+		},
+		{
+			name:   "empty tool",
+			server: "local",
+			tool:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("ToolName(%q, %q) did not panic", tt.server, tt.tool)
+				}
+			}()
+			_ = ToolName(tt.server, tt.tool)
+		})
+	}
+}
+
+func TestNewManagerLayeredSoftRecordsInvalidToolNameServer(t *testing.T) {
+	mgr, err := NewManagerLayeredSoft(context.Background(), []Config{{
+		MCPServers: map[string]ServerSpec{
+			"bad__server": {Command: "unused"},
+		},
+	}}, ConnectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
+
+	errs := mgr.StartupErrors()
+	if errs["bad__server"] == "" {
+		t.Fatalf("startup errors = %+v, want bad__server error", errs)
+	}
+	if counts := mgr.ToolCounts(); len(counts) != 0 {
+		t.Fatalf("tool counts = %+v, want none", counts)
 	}
 }
