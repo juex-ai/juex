@@ -214,15 +214,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	maxIters := e.MaxIters
-	if maxIters <= 0 {
-		maxIters = defaultMaxIters
-	}
-	maxDur := e.MaxDur
-	if maxDur <= 0 {
-		maxDur = defaultMaxDur
-	}
-
+	limits := e.resolveTurnRunLimits()
 	if turnID == "" {
 		turnID = newID()
 	}
@@ -234,87 +226,42 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}
 	}()
 	start := time.Now()
-	turnCtx, cancel := context.WithTimeout(ctx, maxDur)
+	turnCtx, cancel := context.WithTimeout(ctx, limits.maxDuration)
 	defer cancel()
 
-	promptSections := e.Prompt.Sections()
-	systemPrompt := prompt.JoinSections(promptSections)
-	tools := e.Tools.Specs()
-	policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
-	projectedUserMsg, projection, err := e.projectMessageLocked(userMsg, policy)
+	prepared, err := e.prepareTurnContextLocked(turnCtx, turnID, userMsg)
 	if err != nil {
 		return "", e.failTurn(turnID, err)
 	}
-	userMsg = projectedUserMsg
-	e.emitProjectionApplied(turnID, projection)
 
-	if err := e.maybeCompact(turnCtx, turnID, systemPrompt, tools, userMsg); err != nil {
-		if !canContinueAfterAutoCompactError(turnCtx, userMsg) {
-			return "", e.failTurn(turnID, err)
-		}
+	if err := e.recordTurnStartLocked(turnID, prepared.userMessage); err != nil {
+		return "", e.failTurn(turnID, err)
 	}
-
-	if err := e.Session.Append(userMsg); err != nil {
-		return "", e.failTurn(turnID, fmt.Errorf("session append user: %w", err))
-	}
-	startPayload := map[string]any{"input": userMsg.FirstText()}
-	if userMsg.Kind != "" {
-		startPayload["kind"] = userMsg.Kind
-	}
-	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: startPayload})
 
 	var lastText string
 	retriedOverflow := false
-	iterationBudgetWarned := false
-	durationBudgetWarned := false
-	for iter := 0; iter < maxIters; iter++ {
-		select {
-		case <-turnCtx.Done():
-			if turnTimedOut(ctx, turnCtx) {
-				return "", e.failTurn(turnID, timeoutBudgetError(turnID, maxDur, turnCtx.Err()))
-			}
-			return "", e.failTurn(turnID, fmt.Errorf("turn budget exceeded: %w", turnCtx.Err()))
-		default:
+	budgetWarnings := turnBudgetWarningState{}
+	for iter := 0; iter < limits.maxIters; iter++ {
+		if err := checkTurnBudget(ctx, turnCtx, turnID, limits.maxDuration); err != nil {
+			return "", e.failTurn(turnID, err)
 		}
 
 		if err := e.drainPendingInputLocked(turnCtx, turnID); err != nil {
 			return "", e.failTurn(turnID, err)
 		}
 
-		budgetStatus := currentTurnBudgetStatus(turnID, iter, maxIters, start, maxDur)
-		if budgetStatus.IterationNear && !iterationBudgetWarned {
-			e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.IterationWarningDetails()})
-			iterationBudgetWarned = true
-		}
-		if budgetStatus.DurationNear && !durationBudgetWarned {
-			e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.DurationWarningDetails()})
-			durationBudgetWarned = true
-		}
-		e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: map[string]any{
-			"iter": iter, "history_len": len(e.Session.History), "tool_count": len(tools),
-		}})
-
-		requestHistory := e.activeContextLocked().Messages
-		requestHistory, projection, err = e.projectMessagesForProviderLocked(requestHistory, policy)
+		request, err := e.prepareProviderRequestLocked(turnID, iter, limits, start, prepared, &budgetWarnings)
 		if err != nil {
 			return "", e.failTurn(turnID, err)
 		}
-		e.emitProjectionApplied(turnID, projection)
-		requestHistory, projection = stripRedactedReasoningForProviderBudget(systemPrompt, tools, requestHistory, policy)
-		e.emitProjectionApplied(turnID, projection)
-		if budgetStatus.Near() {
-			requestHistory = appendBudgetFinalizationMessage(requestHistory, budgetStatus)
-		}
-		resp, err := llm.CompleteWithOptions(turnCtx, e.Provider, systemPrompt, requestHistory, tools, llm.CompleteOptions{
-			Purpose:     "turn",
-			CachePolicy: e.cachePolicyLocked(),
-		})
+
+		resp, err := e.requestProviderTurnLocked(turnCtx, prepared, request)
 		if err != nil {
 			if turnTimedOut(ctx, turnCtx) {
-				return "", e.failTurn(turnID, timeoutBudgetError(turnID, maxDur, fmt.Errorf("llm: %w", err)))
+				return "", e.failTurn(turnID, timeoutBudgetError(turnID, limits.maxDuration, fmt.Errorf("llm: %w", err)))
 			}
 			if llm.IsContextOverflowError(err) && !retriedOverflow {
-				if _, compactErr := e.compactLocked(turnCtx, turnID, systemPrompt, "overflow_retry", true, ""); compactErr != nil {
+				if _, compactErr := e.compactLocked(turnCtx, turnID, prepared.systemPrompt, "overflow_retry", true, ""); compactErr != nil {
 					return "", e.failTurn(turnID, fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr))
 				}
 				retriedOverflow = true
@@ -322,46 +269,16 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			}
 			return "", e.failTurn(turnID, fmt.Errorf("llm: %w", err))
 		}
-		msg := resp.Message
-		if msg.Model == "" && e.Provider != nil {
-			msg.Model = e.Provider.Name()
-		}
-		msg.Blocks = prepareToolInputs(msg.Blocks)
-		var contextUsage *llm.ContextUsage
-		if !resp.Usage.IsZero() {
-			snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, promptSections, tools, requestHistory)
-			contextUsage = &snapshot
-		}
-		totalUsage := e.Session.RecordResponseUsage(resp.Usage, contextUsage)
 
-		// Enrich the responded event with the assistant's text + thinking +
-		// tool calls so verbose UIs can render them without subscribing to
-		// the conversation log. Bounded by what the LLM returned in this
-		// single turn, so payload size is reasonable.
-		payload := map[string]any{
-			"stop_reason": resp.StopReason,
-			"usage":       resp.Usage,
-			"token_usage": totalUsage,
-			"blocks":      msg.Blocks,
-			"text":        responseText(msg),
-			"thinking":    responseThinking(msg),
-			"tool_calls":  responseToolCalls(msg),
-			"model":       msg.Model,
+		recorded, err := e.recordProviderResponseLocked(turnID, prepared, request, resp)
+		if err != nil {
+			return "", e.failTurn(turnID, err)
 		}
-		if contextUsage != nil {
-			payload["context_usage"] = *contextUsage
-		}
-		e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload})
-
-		toolCalls := msg.ToolCalls()
-		if err := e.Session.Append(msg); err != nil {
-			return "", e.failTurn(turnID, fmt.Errorf("session append assistant: %w", err))
-		}
-		if len(toolCalls) == 0 {
-			lastText = msg.FirstText()
+		if len(recorded.toolCalls) == 0 {
+			lastText = recorded.finalText
 			if !e.finishActiveTurnIfNoPending(turnID) {
-				if iter == maxIters-1 {
-					return "", e.failTurn(turnID, iterationBudgetError(turnID, maxIters))
+				if iter == limits.maxIters-1 {
+					return "", e.failTurn(turnID, iterationBudgetError(turnID, limits.maxIters))
 				}
 				continue
 			}
@@ -369,29 +286,198 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			break
 		}
 
-		results := e.runToolCalls(turnCtx, turnID, toolCalls)
-		toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
-		projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
-		if err != nil {
+		if err := e.recordToolBatchLocked(turnCtx, turnID, prepared.policy, recorded.toolCalls); err != nil {
 			return "", e.failTurn(turnID, err)
 		}
-		toolResultMsg = projectedToolResultMsg
-		e.emitProjectionApplied(turnID, projection)
-		if err := e.Session.Append(toolResultMsg); err != nil {
-			return "", e.failTurn(turnID, fmt.Errorf("session append tool result: %w", err))
-		}
 
-		if iter == maxIters-1 {
-			return "", e.failTurn(turnID, iterationBudgetError(turnID, maxIters))
+		if iter == limits.maxIters-1 {
+			return "", e.failTurn(turnID, iterationBudgetError(turnID, limits.maxIters))
 		}
 	}
 
+	e.recordTurnCompletionLocked(turnID, start, lastText)
+	return lastText, nil
+}
+
+type turnRunLimits struct {
+	maxIters    int
+	maxDuration time.Duration
+}
+
+type preparedTurnContext struct {
+	promptSections []prompt.Section
+	systemPrompt   string
+	tools          []llm.ToolSpec
+	policy         compactionPolicy
+	userMessage    llm.Message
+}
+
+type turnBudgetWarningState struct {
+	iterationWarned bool
+	durationWarned  bool
+}
+
+type providerTurnRequest struct {
+	history []llm.Message
+}
+
+type recordedProviderResponse struct {
+	finalText string
+	toolCalls []llm.Block
+}
+
+func (e *Engine) resolveTurnRunLimits() turnRunLimits {
+	limits := turnRunLimits{maxIters: e.MaxIters, maxDuration: e.MaxDur}
+	if limits.maxIters <= 0 {
+		limits.maxIters = defaultMaxIters
+	}
+	if limits.maxDuration <= 0 {
+		limits.maxDuration = defaultMaxDur
+	}
+	return limits
+}
+
+func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
+	prepared := preparedTurnContext{
+		promptSections: e.Prompt.Sections(),
+		tools:          e.Tools.Specs(),
+		policy:         effectiveCompactionPolicy(e.Compaction, e.ContextWindow),
+	}
+	prepared.systemPrompt = prompt.JoinSections(prepared.promptSections)
+	projectedUserMsg, projection, err := e.projectMessageLocked(userMsg, prepared.policy)
+	if err != nil {
+		return preparedTurnContext{}, err
+	}
+	prepared.userMessage = projectedUserMsg
+	e.emitProjectionApplied(turnID, projection)
+
+	if err := e.maybeCompact(ctx, turnID, prepared.systemPrompt, prepared.tools, prepared.userMessage); err != nil {
+		if !canContinueAfterAutoCompactError(ctx, prepared.userMessage) {
+			return preparedTurnContext{}, err
+		}
+	}
+	return prepared, nil
+}
+
+func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
+	if err := e.Session.Append(userMsg); err != nil {
+		return fmt.Errorf("session append user: %w", err)
+	}
+	startPayload := map[string]any{"input": userMsg.FirstText()}
+	if userMsg.Kind != "" {
+		startPayload["kind"] = userMsg.Kind
+	}
+	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: startPayload})
+	return nil
+}
+
+func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, limits turnRunLimits, start time.Time, prepared preparedTurnContext, warnings *turnBudgetWarningState) (providerTurnRequest, error) {
+	budgetStatus := currentTurnBudgetStatus(turnID, iter, limits.maxIters, start, limits.maxDuration)
+	if budgetStatus.IterationNear && !warnings.iterationWarned {
+		e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.IterationWarningDetails()})
+		warnings.iterationWarned = true
+	}
+	if budgetStatus.DurationNear && !warnings.durationWarned {
+		e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.DurationWarningDetails()})
+		warnings.durationWarned = true
+	}
+	e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: map[string]any{
+		"iter": iter, "history_len": len(e.Session.History), "tool_count": len(prepared.tools),
+	}})
+
+	requestHistory := e.activeContextLocked().Messages
+	projectedHistory, projection, err := e.projectMessagesForProviderLocked(requestHistory, prepared.policy)
+	if err != nil {
+		return providerTurnRequest{}, err
+	}
+	e.emitProjectionApplied(turnID, projection)
+	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
+	e.emitProjectionApplied(turnID, projection)
+	if budgetStatus.Near() {
+		projectedHistory = appendBudgetFinalizationMessage(projectedHistory, budgetStatus)
+	}
+	return providerTurnRequest{history: projectedHistory}, nil
+}
+
+func (e *Engine) requestProviderTurnLocked(ctx context.Context, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
+	return llm.CompleteWithOptions(ctx, e.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
+		Purpose:     "turn",
+		CachePolicy: e.cachePolicyLocked(),
+	})
+}
+
+func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTurnContext, request providerTurnRequest, resp llm.Response) (recordedProviderResponse, error) {
+	msg := resp.Message
+	if msg.Model == "" && e.Provider != nil {
+		msg.Model = e.Provider.Name()
+	}
+	msg.Blocks = prepareToolInputs(msg.Blocks)
+	var contextUsage *llm.ContextUsage
+	if !resp.Usage.IsZero() {
+		snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, prepared.promptSections, prepared.tools, request.history)
+		contextUsage = &snapshot
+	}
+	totalUsage := e.Session.RecordResponseUsage(resp.Usage, contextUsage)
+
+	// Enrich the responded event with the assistant's text + thinking +
+	// tool calls so verbose UIs can render them without subscribing to
+	// the conversation log. Bounded by what the LLM returned in this
+	// single turn, so payload size is reasonable.
+	payload := map[string]any{
+		"stop_reason": resp.StopReason,
+		"usage":       resp.Usage,
+		"token_usage": totalUsage,
+		"blocks":      msg.Blocks,
+		"text":        responseText(msg),
+		"thinking":    responseThinking(msg),
+		"tool_calls":  responseToolCalls(msg),
+		"model":       msg.Model,
+	}
+	if contextUsage != nil {
+		payload["context_usage"] = *contextUsage
+	}
+	e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload})
+
+	toolCalls := msg.ToolCalls()
+	if err := e.Session.Append(msg); err != nil {
+		return recordedProviderResponse{}, fmt.Errorf("session append assistant: %w", err)
+	}
+	return recordedProviderResponse{finalText: msg.FirstText(), toolCalls: toolCalls}, nil
+}
+
+func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
+	results := e.runToolCalls(ctx, turnID, toolCalls)
+	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
+	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
+	if err != nil {
+		return err
+	}
+	toolResultMsg = projectedToolResultMsg
+	e.emitProjectionApplied(turnID, projection)
+	if err := e.Session.Append(toolResultMsg); err != nil {
+		return fmt.Errorf("session append tool result: %w", err)
+	}
+	return nil
+}
+
+func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, lastText string) {
 	e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: map[string]any{
 		"duration_ms": time.Since(start).Milliseconds(),
 		"output_len":  len(lastText),
 		"token_usage": e.Session.TokenUsageSnapshot(),
 	}})
-	return lastText, nil
+}
+
+func checkTurnBudget(parent context.Context, turnCtx context.Context, turnID string, maxDur time.Duration) error {
+	select {
+	case <-turnCtx.Done():
+		if turnTimedOut(parent, turnCtx) {
+			return timeoutBudgetError(turnID, maxDur, turnCtx.Err())
+		}
+		return fmt.Errorf("turn budget exceeded: %w", turnCtx.Err())
+	default:
+		return nil
+	}
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while

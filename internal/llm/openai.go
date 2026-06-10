@@ -180,6 +180,10 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 				am.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
 					OfString: param.NewOpt(strings.Join(textParts, "\n")),
 				}
+			} else if len(reasoningParts) > 0 && len(toolCalls) == 0 {
+				am.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfString: param.NewOpt(""),
+				}
 			}
 			am.ToolCalls = toolCalls
 			if len(reasoningParts) > 0 {
