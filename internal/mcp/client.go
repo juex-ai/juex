@@ -243,21 +243,6 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	return sb.String(), nil
 }
 
-// RegisterAllLayered connects servers from multiple configs in order,
-// deduplicating by server name with later-wins precedence (so callers can
-// pass user-level config first and project-level config second to get
-// project-overrides-user behaviour).
-//
-// Returns the connected clients in the order they were started so the caller
-// can Close them at shutdown.
-func RegisterAllLayered(ctx context.Context, configs []Config, reg *tools.Registry) ([]*Client, error) {
-	return RegisterAllLayeredWithOptions(ctx, configs, reg, ConnectOptions{})
-}
-
-func RegisterAllLayeredWithOptions(ctx context.Context, configs []Config, reg *tools.Registry, opts ConnectOptions) ([]*Client, error) {
-	return RegisterAllWithOptions(ctx, MergeConfigs(configs), reg, opts)
-}
-
 // RegisterAll connects servers from cfg and registers their tools (prefixed
 // `mcp__<server>__<tool>`) into reg. Returns the connected clients so the
 // caller can Close them at shutdown. On error, any clients opened during this

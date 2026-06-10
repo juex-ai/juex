@@ -680,7 +680,7 @@ func TestMCPRegisterAll_MultipleServers(t *testing.T) {
 	}
 }
 
-func TestNewManagerSoftKeepsHealthyServersAndRecordsFailures(t *testing.T) {
+func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -688,7 +688,7 @@ func TestNewManagerSoftKeepsHealthyServersAndRecordsFailures(t *testing.T) {
 		"alpha": {Command: os.Args[0], Env: map[string]string{"JUEX_FAKE_MCP": "1"}},
 		"beta":  {Command: ""},
 	}}
-	mgr, err := NewManagerSoft(ctx, cfg, ConnectOptions{})
+	mgr, err := NewManagerLayeredSoft(ctx, []Config{cfg}, ConnectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +734,7 @@ func TestMCPClient_ContextCancellationStopsCall(t *testing.T) {
 	}
 }
 
-func TestRegisterAllLayered_ProjectOverridesUser(t *testing.T) {
+func TestNewManagerLayeredSoftProjectOverridesUser(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -745,19 +745,23 @@ func TestRegisterAllLayered_ProjectOverridesUser(t *testing.T) {
 		"shared": {Command: os.Args[0], Env: map[string]string{"JUEX_FAKE_MCP": "1", "JUEX_FAKE_MCP_TAG": "project"}},
 	}}
 
-	r := tools.NewRegistry()
-	clients, err := RegisterAllLayered(ctx, []Config{user, project}, r)
+	mgr, err := NewManagerLayeredSoft(ctx, []Config{user, project}, ConnectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, c := range clients {
-			c.Close()
+		if err := mgr.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
 		}
 	}()
 
-	if len(clients) != 1 {
-		t.Fatalf("expected 1 client (project), got %d", len(clients))
+	counts := mgr.ToolCounts()
+	if len(counts) != 1 || counts["shared"] == 0 {
+		t.Fatalf("expected shared project server only, got counts %+v", counts)
+	}
+	r := tools.NewRegistry()
+	if err := mgr.RegisterTools(r); err != nil {
+		t.Fatal(err)
 	}
 	tool, ok := r.Get("mcp__shared__envcheck")
 	if !ok {
@@ -772,23 +776,30 @@ func TestRegisterAllLayered_ProjectOverridesUser(t *testing.T) {
 	}
 }
 
-func TestRegisterAllLayered_DistinctServersAllRegister(t *testing.T) {
+func TestNewManagerLayeredSoftDistinctServersAllRegister(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	a := Config{MCPServers: map[string]ServerSpec{"a": {Command: os.Args[0], Env: map[string]string{"JUEX_FAKE_MCP": "1"}}}}
 	b := Config{MCPServers: map[string]ServerSpec{"b": {Command: os.Args[0], Env: map[string]string{"JUEX_FAKE_MCP": "1"}}}}
 
-	r := tools.NewRegistry()
-	clients, err := RegisterAllLayered(ctx, []Config{a, b}, r)
+	mgr, err := NewManagerLayeredSoft(ctx, []Config{a, b}, ConnectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		for _, c := range clients {
-			c.Close()
+		if err := mgr.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
 		}
 	}()
+	counts := mgr.ToolCounts()
+	if len(counts) != 2 || counts["a"] == 0 || counts["b"] == 0 {
+		t.Fatalf("expected both layered servers registered, got counts %+v", counts)
+	}
+	r := tools.NewRegistry()
+	if err := mgr.RegisterTools(r); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"mcp__a__echo", "mcp__b__echo"} {
 		if _, ok := r.Get(name); !ok {
 			t.Fatalf("missing tool %s, have %v", name, r.List())
