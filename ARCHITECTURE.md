@@ -476,6 +476,14 @@ opening waits for the in-flight MCP startup so every web session registers
 proxy handlers against the shared manager instead of starting its own MCP
 subprocesses.
 
+`internal/app` also owns turn admission for transports that need a domain
+decision before starting work. `App.AdmitTurn` classifies user input into
+started, queued, command-completed, conflict, rejected, or error outcomes. It
+parses slash commands, coordinates runtime pending-input admission, reserves
+turn ids, and promotes queued input after compact commands. Transports render
+that result and start any returned turn message; they should not duplicate
+busy, compact, pending-input, or slash-command policy.
+
 ```go
 // internal/runtime/loop.go
 type Engine struct {
@@ -573,6 +581,10 @@ window. Clients can request older windows with `before=<message_id>` and can
 lower or raise the window with `limit`, capped by the server.
 Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
+The web handler is a transport adapter over app-level turn admission: it
+validates HTTP/session access, decodes request JSON, renders admission results,
+updates its in-memory session cache when `/new` switches sessions, and owns
+SSE/cancel/turn-status bookkeeping for goroutines it starts.
 
 Routes:
 
