@@ -3,7 +3,6 @@ package runtime
 import (
 	"encoding/json"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -161,10 +160,7 @@ func estimateMessageTokens(history []llm.Message) int {
 }
 
 func EstimateTextTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	return EstimateCharsAsTokens(utf8.RuneCountInString(text))
+	return EstimateCharsAsTokens(len(text))
 }
 
 func EstimateCharsAsTokens(chars int) int {
