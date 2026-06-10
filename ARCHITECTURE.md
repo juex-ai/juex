@@ -34,32 +34,61 @@ juex/
 │   └── skills/                   # project-local agent skills
 ├── frontend/                     # React + Vite web UI source
 ├── internal/
-│   ├── app/        app.go        # runtime wiring (was in main.go)
+│   ├── app/                      # process composition, slash commands, session attachment, turn admission
+│   │   ├── app.go
+│   │   ├── session_attachment.go
+│   │   ├── slash.go
+│   │   └── turn_admission.go
 │   ├── cli/                      # cobra-based CLI surface
-│   │   ├── root.go               #   root cmd + persistent flags
-│   │   ├── run.go                #   `juex run "<prompt>"`
-│   │   ├── repl.go               #   `juex repl`
-│   │   └── version.go            #   `juex version [-v]`
+│   │   ├── root.go
+│   │   ├── run.go
+│   │   ├── repl.go
+│   │   ├── resume.go
+│   │   ├── schema.go
+│   │   ├── serve.go
+│   │   ├── sessions.go
+│   │   └── version.go
 │   ├── version/    version.go    # ldflags-injected build metadata
-│   ├── config/     config.go     # juex.yaml loader + WorkDir-driven paths
+│   ├── config/                   # juex.yaml, shell profile, Codex auth loading
+│   │   ├── config.go
+│   │   ├── shell.go
+│   │   └── codex_auth.go
 │   ├── events/     bus.go        # in-process EventBus (glob)
 │   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
 │   │   ├── provider.go
 │   │   ├── profile.go            # provider presets, protocol, capabilities
+│   │   ├── history.go            # provider transcript compaction
+│   │   ├── provider_projection.go
 │   │   ├── anthropic.go          # wraps anthropic-sdk-go
+│   │   ├── anthropic_stream_diagnostics.go
 │   │   ├── openai.go             # Chat Completions / compatible chat
-│   │   └── openai_responses.go   # OpenAI Responses adapter
+│   │   ├── openai_responses.go   # OpenAI Responses adapter
+│   │   ├── openai_codex_responses.go
+│   │   └── stream_error.go
 │   ├── tools/                    # tool registry + 5 builtins
 │   │   ├── registry.go
 │   │   └── builtin.go
-│   ├── mcp/        client.go     # stdio JSON-RPC 2.0 client, tools, notifications
+│   ├── mcp/                      # stdio JSON-RPC 2.0 client, config, process manager
+│   │   ├── config.go
+│   │   ├── client.go
+│   │   └── manager.go
 │   ├── skills/     loader.go     # SKILL.md frontmatter loader
 │   ├── memory/     memory.go     # AGENTS.md hierarchy + entry store
 │   ├── frontmatter/parser.go     # shared YAML frontmatter parser
 │   ├── prompt/     prompt.go     # system prompt assembly
-│   ├── session/    session.go    # conversation history + jsonl persistence
-│   ├── runtime/    loop.go       # turn loop + parallel dispatcher
+│   ├── session/                  # conversation history, info, locks, history index
+│   │   ├── session.go
+│   │   ├── history.go
+│   │   ├── info.go
+│   │   └── lock*.go
+│   ├── runtime/                  # turn loop, pending input, compaction, context projection
+│   │   ├── loop.go
+│   │   ├── active_context.go
+│   │   ├── budget_*.go
+│   │   ├── compact.go
+│   │   ├── compaction_*.go
+│   │   └── context_*.go
 │   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
 │   └── web/                      # HTTP API, SSE, SPA asset embedding
 ├── tests/
@@ -366,11 +395,12 @@ func (b *Bus) Subscribe(pattern string, fn func(Event))  // glob: "tool.*"
 func (b *Bus) Emit(e Event)                              // synchronous fan-out
 ```
 
-Standard event types: `turn.started/completed/errored`,
-`llm.requested/responded`, `tool.requested/completed/errored`,
-`memory.read/written`. `llm.responded` includes the assistant message's
-ordered `blocks` plus summary fields (`text`, `thinking`, `tool_calls`) for
-older consumers.
+Standard event families include `turn.started/completed/errored`,
+`turn.budget.warning`, `llm.requested/responded`,
+`tool.requested/completed/errored`, `pending_input.*`,
+`context.compact.*`, and `context.projection.applied`. `llm.responded`
+includes the assistant message's ordered `blocks` plus summary fields
+(`text`, `thinking`, `tool_calls`) for older consumers.
 
 ### 3.4 Memory
 
@@ -425,10 +455,12 @@ type Info struct {
 ```
 
 Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
-`AppendEvent(e)` writes to `events.jsonl`. `session.Load(dir)` re-hydrates
-an existing session in place. The latest `token_usage` and
-`context_usage` are restored from `llm.responded` events and exposed through
-session `Info`, not through individual messages.
+`AppendEvent(e)` writes to `events.jsonl`. Runtime callers resume sessions
+with `session.LoadWithOptions(dir, opts)` so aliases and lazy transcript
+creation are applied consistently; `session.Load` is only the no-option
+convenience wrapper. The latest `token_usage` and `context_usage` are restored
+from `llm.responded` events and exposed through session `Info`, not through
+individual messages.
 
 Each work directory has one active primary session recorded in
 `<WorkDir>/.juex/history.json` as `{active, sessions}`. `run`, `repl`, and
@@ -466,15 +498,18 @@ migrating `last` to `active`; subsequent writes omit `last`.
 ```go
 // internal/app/app.go
 type Options struct {
-    Config    config.Config
-    Provider  llm.Provider // optional; injectable for tests
-    Verbose   bool
-    Stderr    io.Writer
-    WorkDir   string       // overrides Config.WorkDir
-    MCPManager *mcp.Manager // optional process-scoped MCP owner
-    DisableMCP bool         // skip config loading when caller handles MCP
-    ResumeDir string       // load existing session dir instead of creating one
-    SessionMode SessionMode // attach active, new primary, or new side
+    Config              config.Config
+    Provider            llm.Provider // optional; injectable for tests
+    Verbose             bool
+    Stderr              io.Writer
+    WorkDir             string       // overrides Config.WorkDir
+    MCPManager          *mcp.Manager // optional process-scoped MCP owner
+    DisableMCP          bool         // skip config loading when caller handles MCP
+    SuppressMCPWarnings bool
+    ResumeDir           string       // load existing session dir instead of creating one
+    Alias               string
+    SessionMode         SessionMode // attach active, new primary, or new side
+    LazySession         bool
 }
 type App struct { Engine; Bus; Session; ... }
 func New(opts Options) (*App, error)
@@ -502,14 +537,16 @@ busy, compact, pending-input, or slash-command policy.
 ```go
 // internal/runtime/loop.go
 type Engine struct {
-    Provider  llm.Provider
-    Tools     *tools.Registry
-    Bus       *events.Bus
-    Session   *session.Session
-    Prompt    *prompt.Builder
-    MaxIters  int           // default 25
-    MaxDur    time.Duration // default 5min
-    MaxPendingInputs int    // default 16
+    Provider         llm.Provider
+    Tools            *tools.Registry
+    Bus              *events.Bus
+    Session          *session.Session
+    Prompt           *prompt.Builder
+    MaxIters         int           // default 25
+    MaxDur           time.Duration // default 5min
+    MaxPendingInputs int           // default 16
+    ContextWindow    int           // default 256000
+    Compaction       config.CompactionConfig
 }
 func (e *Engine) Turn(ctx, userInput) (string, error)
 ```
@@ -529,7 +566,7 @@ non-essential tools. That synthetic message is not appended to session history;
 the hard iteration and duration limits remain unchanged.
 
 `Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
-single LLM response run via `errgroup`-style goroutines; results are
+single LLM response run via `sync.WaitGroup`-backed goroutines; results are
 re-attached to history in the original order.
 
 While a turn is active, user messages and critical external events may be
@@ -552,7 +589,7 @@ juex
 │   ├── context <id> [--format json|text]
 │   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
-├── serve [--addr <host:port>] [--cors]
+├── serve [--addr <host:port>] [--unsafe-bind-any]
 ├── schema
 └── version [-v]
 ```
@@ -579,11 +616,12 @@ func (s *Server) Handler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` mounts the server on `127.0.0.1:8080` (loopback only, no auth),
-ensures an active primary session record exists, starts listening, and then
-warms the shared MCP manager plus the active primary session. Each session gets
-its own `*app.App`; events flow to a per-session broadcaster that fans out to
-connected SSE clients. Slow clients are dropped after a 5s buffer-full timeout.
+`juex serve` defaults to `127.0.0.1:8080` (loopback only, no auth). Binding
+beyond loopback requires `--unsafe-bind-any`. Startup ensures an active primary
+session record exists, starts listening, and then warms the shared MCP manager
+plus the active primary session. Each session gets its own `*app.App`; events
+flow to a per-session broadcaster that fans out to connected SSE clients. Slow
+clients are dropped after a 5s buffer-full timeout.
 `make web` builds the React SPA in `frontend/`, copies the bundle to
 `internal/web/dist`, and the Go binary embeds that directory with `go:embed`.
 
@@ -605,8 +643,10 @@ Routes:
 
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/healthz` | readiness probe |
 | GET | `/` | React SPA entry |
 | GET | `/sessions/<id>` | React SPA session route |
+| GET | `/runtime` | React SPA runtime route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/sessions` | JSON list |
 | POST | `/api/sessions` | create active primary session |
@@ -635,8 +675,8 @@ Routes:
                                   | emit turn.started
                                   v
                        +----------------------+
-                       | prompt.Build         | <--- AGENTS.md hierarchy
-                       |                      | <--- skills descriptions
+                       | Prompt.Sections      | <--- AGENTS.md hierarchy
+                       | + prompt.JoinSections| <--- skills descriptions
                        |                      | <--- memory entries
                        |                      | <--- tool specs
                        |                      | <--- operating context
@@ -883,10 +923,13 @@ stdout fails the connection as a protocol error; server logs must go to stderr.
 The web runtime status keeps the latest per-server connection error so `/runtime`
 can explain configured-but-disconnected servers.
 
-`RegisterAllLayered(ctx, configs, reg)` merges multiple configs by server
-name with later-wins precedence. App passes `[user, project]` so a project
-`mcp.json` overrides any user-level server with the same name; the user
-server is not started in that case.
+Production paths load user-global and project MCP configs in later-wins order,
+then start a best-effort process manager with
+`mcp.NewManagerLayeredSoft(ctx, configs, opts)`. Each app/session registry gets
+MCP proxy tools through `Manager.RegisterTools(reg)`. Project `mcp.json`
+entries override user-level servers with the same name; the user server is not
+started in that case. `RegisterAllLayered` remains as test/convenience helper
+coverage, not the app runtime path.
 
 Before MCP subprocess startup, Juex prepares each loaded server config for the
 active work directory. It injects `WORKDIR` and `JUEX_WORKDIR` into every MCP
