@@ -1485,6 +1485,72 @@ func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
 	}
 }
 
+func TestProjectProviderTranscriptGatesToolsAndReasoning(t *testing.T) {
+	history := []Message{
+		{
+			Role: RoleAssistant,
+			Blocks: []Block{
+				{Type: BlockText, Text: "thinking result"},
+				{Type: BlockReasoning, Text: "hidden", Signature: "rs_1"},
+				{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "read", Input: map[string]any{"path": "x"}},
+			},
+		},
+		{
+			Role: RoleUser,
+			Blocks: []Block{
+				{Type: BlockText, Text: "continue"},
+				{Type: BlockToolResult, ToolUseID: "call_1", Content: "file"},
+			},
+		},
+	}
+
+	noTools := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{ReasoningReplay: true},
+	}, providerProjectionOptions{})
+	if len(noTools[0].Blocks) != 2 || noTools[0].Blocks[1].Type != BlockReasoning {
+		t.Fatalf("assistant blocks without tools = %+v", noTools[0].Blocks)
+	}
+	if len(noTools[1].Blocks) != 1 || noTools[1].Blocks[0].Type != BlockText {
+		t.Fatalf("user blocks without tools = %+v", noTools[1].Blocks)
+	}
+
+	noReasoning := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	if len(noReasoning[0].Blocks) != 2 || noReasoning[0].Blocks[1].Type != BlockToolUse {
+		t.Fatalf("assistant blocks without reasoning = %+v", noReasoning[0].Blocks)
+	}
+	if len(noReasoning[1].Blocks) != 2 || noReasoning[1].Blocks[1].Type != BlockToolResult {
+		t.Fatalf("user blocks with tools = %+v", noReasoning[1].Blocks)
+	}
+
+	omitReasoning := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true, ReasoningReplay: true},
+	}, providerProjectionOptions{OmitReasoning: true})
+	for _, b := range omitReasoning[0].Blocks {
+		if b.Type == BlockReasoning {
+			t.Fatalf("reasoning should be omitted for codex-style projection: %+v", omitReasoning[0].Blocks)
+		}
+	}
+
+	if len(history[0].Blocks) != 3 || history[0].Blocks[1].Type != BlockReasoning {
+		t.Fatalf("projection mutated input history: %+v", history[0].Blocks)
+	}
+}
+
+func TestNormalizedFunctionParametersDefaults(t *testing.T) {
+	schema := normalizedFunctionParameters(map[string]any{"required": []any{"path", 3}})
+	assertEmptyProperties(t, schema)
+	req := normalizedFunctionRequired(schema)
+	if len(req) != 1 || req[0] != "path" {
+		t.Fatalf("required = %+v, want [path]", req)
+	}
+	props := normalizedFunctionProperties(map[string]any{"properties": map[string]any{"path": map[string]any{"type": "string"}}})
+	if _, ok := props["path"]; !ok {
+		t.Fatalf("properties = %+v, want path", props)
+	}
+}
+
 func TestParseToolArguments(t *testing.T) {
 	input := parseToolArguments(`{"path":"x","content":"hello"}`)
 	if input["path"] != "x" || input["content"] != "hello" {

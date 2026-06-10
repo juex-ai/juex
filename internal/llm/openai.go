@@ -131,7 +131,7 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 // tool_call_id <-> tool message linkage is preserved.
 func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatCompletionMessageParamUnion {
 	var out []openai.ChatCompletionMessageParamUnion
-	for _, m := range compactHistoryForProvider(history) {
+	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions{}) {
 		switch m.Role {
 		case RoleUser:
 			var userText strings.Builder
@@ -143,9 +143,6 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					}
 					userText.WriteString(b.Text)
 				case BlockToolResult:
-					if !profile.Capabilities.Tools {
-						continue
-					}
 					if userText.Len() > 0 {
 						out = append(out, openai.UserMessage(userText.String()))
 						userText.Reset()
@@ -170,9 +167,6 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 						reasoningParts = append(reasoningParts, b.Text)
 					}
 				case BlockToolUse:
-					if !profile.Capabilities.Tools {
-						continue
-					}
 					toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
 						ID: b.ToolUseID,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
@@ -220,50 +214,6 @@ func toOpenAITools(tools []ToolSpec) []openai.ChatCompletionToolParam {
 		})
 	}
 	return out
-}
-
-func normalizedFunctionParameters(schema map[string]any) map[string]any {
-	out := make(map[string]any, len(schema)+2)
-	for k, v := range schema {
-		out[k] = v
-	}
-	if out["type"] == nil || out["type"] == "" {
-		out["type"] = "object"
-	}
-	if out["properties"] == nil {
-		out["properties"] = map[string]any{}
-	}
-	return out
-}
-
-func toolCallArguments(input map[string]any) string {
-	if input == nil {
-		return "{}"
-	}
-	argBytes, err := json.Marshal(input)
-	if err != nil {
-		return "{}"
-	}
-	return string(argBytes)
-}
-
-func parseToolArguments(raw string) map[string]any {
-	if raw == "" {
-		return nil
-	}
-	rawBytes := []byte(raw)
-	var input map[string]any
-	if err := json.Unmarshal(rawBytes, &input); err == nil {
-		return input
-	}
-	var encoded string
-	if err := json.Unmarshal(rawBytes, &encoded); err == nil {
-		if err := json.Unmarshal([]byte(encoded), &input); err == nil {
-			return input
-		}
-		return map[string]any{"_raw_arguments": encoded}
-	}
-	return map[string]any{"_raw_arguments": raw}
 }
 
 // extractReasoningContent pulls a reasoning/thinking string out of a raw

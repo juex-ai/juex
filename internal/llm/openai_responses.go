@@ -154,28 +154,22 @@ type responseInputOptions struct {
 
 func toOpenAIResponseInputWithOptions(history []Message, profile ProviderProfile, opts responseInputOptions) responses.ResponseInputParam {
 	var out responses.ResponseInputParam
-	for _, m := range compactHistoryForProvider(history) {
+	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions{OmitReasoning: opts.OmitReasoning}) {
 		var textParts []string
 		for _, b := range m.Blocks {
 			switch b.Type {
 			case BlockText:
 				textParts = append(textParts, b.Text)
 			case BlockToolUse:
-				if !profile.Capabilities.Tools {
-					continue
-				}
 				out = appendResponseTextMessage(out, m.Role, textParts)
 				textParts = nil
 				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.Input), b.ToolUseID, b.ToolName))
 			case BlockToolResult:
-				if !profile.Capabilities.Tools {
-					continue
-				}
 				out = appendResponseTextMessage(out, m.Role, textParts)
 				textParts = nil
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(b.ToolUseID, b.Content))
 			case BlockReasoning:
-				if opts.OmitReasoning || !profile.Capabilities.ReasoningReplay || b.Signature == "" {
+				if b.Signature == "" {
 					continue
 				}
 				out = appendResponseTextMessage(out, m.Role, textParts)
