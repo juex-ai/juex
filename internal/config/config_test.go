@@ -748,6 +748,30 @@ providers:
 	}
 }
 
+func TestLoadFromFile_TrimsThinkingEffort(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        thinking_effort: " high "
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "high" {
+		t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, "high")
+	}
+}
+
 func TestLoadFromFile_RejectsInvalidThinkingEffort(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
@@ -769,6 +793,22 @@ providers:
 	}
 	if msg := err.Error(); !strings.Contains(msg, `invalid thinking_effort "turbo"`) || !strings.Contains(msg, allowedThinkingEffortText) {
 		t.Fatalf("error = %q", msg)
+	}
+}
+
+func TestLoadFromFile_TrimsThinkingEffortEnv(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+	t.Setenv("PROVIDER_THINKING_EFFORT", " medium ")
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ThinkingEffort != "medium" {
+		t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, "medium")
 	}
 }
 

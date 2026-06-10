@@ -465,13 +465,18 @@ func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
 			return fmt.Errorf("provider id is required")
 		}
 		p.ID = id
-		for _, model := range p.Models {
-			if strings.TrimSpace(model.ID) == "" {
+		for i := range p.Models {
+			model := &p.Models[i]
+			modelID := strings.TrimSpace(model.ID)
+			if modelID == "" {
 				return fmt.Errorf("provider %q model id is required", id)
 			}
-			if err := validateThinkingEffort(model.ThinkingEffort); err != nil {
-				return fmt.Errorf("provider %q model %q: %w", id, strings.TrimSpace(model.ID), err)
+			model.ID = modelID
+			thinkingEffort, err := normalizeThinkingEffort(model.ThinkingEffort)
+			if err != nil {
+				return fmt.Errorf("provider %q model %q: %w", id, modelID, err)
 			}
+			model.ThinkingEffort = thinkingEffort
 		}
 		existing := cfg.providerConfigs[id]
 		cfg.providerConfigs[id] = mergeProviderConfig(existing, p)
@@ -688,14 +693,15 @@ func applyCompactionConfig(cfg *Config, c compactionConfig) {
 	}
 }
 
-func validateThinkingEffort(value string) error {
-	if value == "" {
-		return nil
+func normalizeThinkingEffort(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
 	}
-	if _, ok := allowedThinkingEfforts[value]; ok {
-		return nil
+	if _, ok := allowedThinkingEfforts[trimmed]; ok {
+		return trimmed, nil
 	}
-	return fmt.Errorf("invalid thinking_effort %q (allowed values: %s)", value, allowedThinkingEffortText)
+	return "", fmt.Errorf("invalid thinking_effort %q (allowed values: %s)", value, allowedThinkingEffortText)
 }
 
 func applyOSEnv(cfg *Config) error {
@@ -724,10 +730,13 @@ func applyEnvMap(cfg *Config, values map[string]string) error {
 		cfg.Model = v
 	}
 	if v, ok := values["PROVIDER_THINKING_EFFORT"]; ok && v != "" {
-		if err := validateThinkingEffort(v); err != nil {
+		thinkingEffort, err := normalizeThinkingEffort(v)
+		if err != nil {
 			return fmt.Errorf("PROVIDER_THINKING_EFFORT: %w", err)
 		}
-		cfg.ThinkingEffort = v
+		if thinkingEffort != "" {
+			cfg.ThinkingEffort = thinkingEffort
+		}
 	}
 	if v, ok := values["PROVIDER_CONTEXT_WINDOW"]; ok && v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
