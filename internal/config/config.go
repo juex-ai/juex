@@ -112,6 +112,29 @@ type RuntimeConfig struct {
 	MaxDuration time.Duration
 }
 
+// ModelRef is the provider/model selector used by the top-level config model.
+// The provider id may not contain "/", while the model id may contain slashes
+// for OpenAI-compatible proxy model names such as meta-llama/Llama-3.
+type ModelRef struct {
+	ProviderID string
+	ModelID    string
+}
+
+func ParseModelRef(ref string) (ModelRef, error) {
+	parts := strings.SplitN(strings.TrimSpace(ref), "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return ModelRef{}, fmt.Errorf("config: model must be provider_id/model, got %q", ref)
+	}
+	return ModelRef{ProviderID: strings.TrimSpace(parts[0]), ModelID: strings.TrimSpace(parts[1])}, nil
+}
+
+func (r ModelRef) String() string {
+	if r.ProviderID == "" && r.ModelID == "" {
+		return ""
+	}
+	return r.ProviderID + "/" + r.ModelID
+}
+
 type compactionConfig struct {
 	Enabled                    *bool `yaml:"enabled"`
 	ReserveTokens              int   `yaml:"reserve_tokens"`
@@ -623,21 +646,21 @@ func mergeProviderCapabilitiesConfig(base, override providerCapabilitiesConfig) 
 }
 
 func resolveSelectedProvider(cfg *Config) error {
-	ref := strings.TrimSpace(cfg.modelRef)
-	if ref == "" {
+	rawRef := strings.TrimSpace(cfg.modelRef)
+	if rawRef == "" {
 		return nil
 	}
-	providerID, modelID, err := parseModelRef(ref)
+	ref, err := ParseModelRef(rawRef)
 	if err != nil {
 		return err
 	}
-	p, ok := cfg.providerConfigs[providerID]
+	p, ok := cfg.providerConfigs[ref.ProviderID]
 	if !ok {
-		return fmt.Errorf("config: model %q references unknown provider %q", ref, providerID)
+		return fmt.Errorf("config: model %q references unknown provider %q", ref.String(), ref.ProviderID)
 	}
-	model, ok := providerModelByID(p.Models, modelID)
+	model, ok := providerModelByID(p.Models, ref.ModelID)
 	if !ok {
-		return fmt.Errorf("config: model %q references unknown model %q for provider %q", ref, modelID, providerID)
+		return fmt.Errorf("config: model %q references unknown model %q for provider %q", ref.String(), ref.ModelID, ref.ProviderID)
 	}
 	resetProviderConfig(cfg)
 	cfg.ProviderID = p.ID
@@ -664,14 +687,6 @@ func resolveSelectedProvider(cfg *Config) error {
 		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), model.Compat.ReasoningReplayFields...)
 	}
 	return nil
-}
-
-func parseModelRef(ref string) (string, string, error) {
-	parts := strings.SplitN(ref, "/", 2)
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return "", "", fmt.Errorf("config: model must be provider_id/model, got %q", ref)
-	}
-	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
 func providerModelByID(models []providerModelConfig, id string) (providerModelConfig, bool) {

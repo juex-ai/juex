@@ -364,55 +364,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			break
 		}
 
-		// Run tool calls in parallel; preserve order in the resulting blocks.
-		results := make([]llm.Block, len(toolCalls))
-		var wg sync.WaitGroup
-		for i, tc := range toolCalls {
-			wg.Add(1)
-			go func(idx int, call llm.Block) {
-				defer wg.Done()
-				e.emit(events.Event{Type: "tool.requested", TurnID: turnID, Payload: map[string]any{
-					"name":            call.ToolName,
-					"input":           call.Input,
-					"tool_use_id":     call.ToolUseID,
-					"timeout_seconds": call.TimeoutSeconds,
-				}})
-				out, info, err := e.Tools.CallWithInfo(turnCtx, call.ToolName, call.Input)
-				block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
-				if err != nil {
-					block.Content = toolErrorContent(out, err)
-					block.IsError = true
-					payload := map[string]any{
-						"name":            call.ToolName,
-						"tool_use_id":     call.ToolUseID,
-						"error":           err.Error(),
-						"timeout_seconds": info.TimeoutSeconds,
-					}
-					if out != "" {
-						payload["len"] = len(out)
-						payload["preview"] = truncate(out, 200)
-					}
-					if info.TimedOut {
-						payload["timed_out"] = true
-					}
-					e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: payload})
-				} else {
-					block.Content = out
-					e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: map[string]any{
-						"name":            call.ToolName,
-						"tool_use_id":     call.ToolUseID,
-						"timeout_seconds": info.TimeoutSeconds,
-						"len":             len(out),
-						// Truncated preview so events.jsonl stays readable
-						// for tools that return many KB.
-						"preview": truncate(out, 200),
-					}})
-				}
-				results[idx] = block
-			}(i, tc)
-		}
-		wg.Wait()
-
+		results := e.runToolCalls(turnCtx, turnID, toolCalls)
 		toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
 		projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 		if err != nil {
@@ -435,6 +387,64 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		"token_usage": e.Session.TokenUsageSnapshot(),
 	}})
 	return lastText, nil
+}
+
+// runToolCalls executes one assistant tool-use batch concurrently while
+// preserving provider-facing result order.
+func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Block) []llm.Block {
+	results := make([]llm.Block, len(calls))
+	var wg sync.WaitGroup
+	for i, tc := range calls {
+		wg.Add(1)
+		go func(idx int, call llm.Block) {
+			defer wg.Done()
+			results[idx] = e.runToolCall(ctx, turnID, call)
+		}(i, tc)
+	}
+	wg.Wait()
+	return results
+}
+
+func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) llm.Block {
+	e.emit(events.Event{Type: "tool.requested", TurnID: turnID, Payload: map[string]any{
+		"name":            call.ToolName,
+		"input":           call.Input,
+		"tool_use_id":     call.ToolUseID,
+		"timeout_seconds": call.TimeoutSeconds,
+	}})
+	out, info, err := e.Tools.CallWithInfo(ctx, call.ToolName, call.Input)
+	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
+	if err != nil {
+		block.Content = toolErrorContent(out, err)
+		block.IsError = true
+		payload := map[string]any{
+			"name":            call.ToolName,
+			"tool_use_id":     call.ToolUseID,
+			"error":           err.Error(),
+			"timeout_seconds": info.TimeoutSeconds,
+		}
+		if out != "" {
+			payload["len"] = len(out)
+			payload["preview"] = truncate(out, 200)
+		}
+		if info.TimedOut {
+			payload["timed_out"] = true
+		}
+		e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: payload})
+		return block
+	}
+
+	block.Content = out
+	e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: map[string]any{
+		"name":            call.ToolName,
+		"tool_use_id":     call.ToolUseID,
+		"timeout_seconds": info.TimeoutSeconds,
+		"len":             len(out),
+		// Truncated preview so events.jsonl stays readable for tools that
+		// return many KB.
+		"preview": truncate(out, 200),
+	}})
+	return block
 }
 
 func (e *Engine) effectiveMaxPendingInputs() int {

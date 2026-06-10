@@ -29,7 +29,9 @@ user types a prompt in the CLI
 
 ```
 juex/
-├── cmd/juex/main.go              # 5-line entry: os.Exit(cli.Execute())
+├── cmd/juex/main.go              # CLI entry + startup bootstrap imports
+├── .agents/
+│   └── skills/                   # project-local agent skills
 ├── frontend/                     # React + Vite web UI source
 ├── internal/
 │   ├── app/        app.go        # runtime wiring (was in main.go)
@@ -61,9 +63,19 @@ juex/
 │   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
 │   └── web/                      # HTTP API, SSE, SPA asset embedding
 ├── tests/
-│   └── e2e/                      # cross-package end-to-end + integration tests
-│       ├── e2e_test.go           #   full-stack mock-LLM scenario
-│       └── integration_test.go   #   live LLM (build-tag gated)
+│   ├── e2e/                      # cross-package end-to-end + integration tests
+│   │   ├── e2e_test.go           #   full-stack mock-LLM scenario
+│   │   ├── eval_scripts_test.go  #   eval wrapper smoke tests
+│   │   ├── live_loading_test.go  #   binary skill + realistic MCP loading
+│   │   ├── provider_protocol_test.go
+│   │   ├── web_test.go
+│   │   └── integration_test.go   #   live LLM (build-tag gated)
+│   └── eval/                     # local live-provider and quality eval tools
+│       ├── live-models.yaml
+│       ├── provider_model_smoke.sh
+│       ├── compaction_eval.sh
+│       ├── development_eval.sh
+│       └── juex_eval/            # uv-managed Python helper package
 ├── .github/workflows/
 │   ├── ci.yml                    # push/PR: lint + matrix tests + race
 │   ├── integration.yml           # workflow_dispatch: live LLM tests
@@ -72,7 +84,8 @@ juex/
 │   ├── specs/                    # design docs
 │   └── plans/                    # implementation plans
 ├── .goreleaser.yml               # 6-platform cross-compile
-├── Makefile                      # test / lint / build / snapshot / integration
+├── Makefile                      # test / lint / build / snapshot / integration / eval
+├── pyproject.toml / uv.lock      # eval and fake-MCP Python dependencies
 ├── go.mod / go.sum
 ├── README.md / PHILOSOPHY.md / ARCHITECTURE.md / DESIGN.md
 ├── AGENTS.md / CLAUDE.md→AGENTS.md
@@ -523,7 +536,8 @@ Persistent flags inherited by all subcommands:
 | `--enable-user-global-resources` |  | config value (true/false or 1/0) |
 | `--verbose` |  | false (stream events to stderr) |
 
-`cmd/juex/main.go` is 5 lines: `os.Exit(cli.Execute())`.
+`cmd/juex/main.go` stays intentionally thin: startup bootstrap imports plus
+`os.Exit(cli.Execute())`.
 
 ### 3.8 Web Layer
 
