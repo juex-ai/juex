@@ -68,25 +68,25 @@ func (s turnBudgetStatus) Near() bool {
 	return s.IterationNear || s.DurationNear
 }
 
-func (s turnBudgetStatus) IterationWarningDetails() map[string]any {
-	return map[string]any{
-		"kind":            BudgetWarningKindIterationLimit,
-		"budget":          "iterations",
-		"turn_id":         s.TurnID,
-		"remaining_iters": s.RemainingIters,
-		"max_iters":       s.MaxIters,
+func (s turnBudgetStatus) IterationWarningDetails() TurnIterationBudgetWarningPayload {
+	return TurnIterationBudgetWarningPayload{
+		Kind:           BudgetWarningKindIterationLimit,
+		Budget:         "iterations",
+		TurnID:         s.TurnID,
+		RemainingIters: s.RemainingIters,
+		MaxIters:       s.MaxIters,
 	}
 }
 
-func (s turnBudgetStatus) DurationWarningDetails() map[string]any {
-	return map[string]any{
-		"kind":                  BudgetWarningKindTimeout,
-		"budget":                "duration",
-		"turn_id":               s.TurnID,
-		"remaining_duration":    s.RemainingDuration.String(),
-		"remaining_duration_ms": s.RemainingDuration.Milliseconds(),
-		"max_duration":          s.MaxDuration.String(),
-		"max_duration_ms":       s.MaxDuration.Milliseconds(),
+func (s turnBudgetStatus) DurationWarningDetails() TurnDurationBudgetWarningPayload {
+	return TurnDurationBudgetWarningPayload{
+		Kind:                BudgetWarningKindTimeout,
+		Budget:              "duration",
+		TurnID:              s.TurnID,
+		RemainingDuration:   s.RemainingDuration.String(),
+		RemainingDurationMS: s.RemainingDuration.Milliseconds(),
+		MaxDuration:         s.MaxDuration.String(),
+		MaxDurationMS:       s.MaxDuration.Milliseconds(),
 	}
 }
 

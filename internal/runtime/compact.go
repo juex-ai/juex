@@ -37,12 +37,12 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 	}
 	if e.autoCompactFailures >= policy.MaxAutoFailures {
 		err := fmt.Errorf("auto compaction paused after %d consecutive failures; run /compact with focus instructions or start a new session", policy.MaxAutoFailures)
-		e.emit(events.Event{Type: "context.compact.skipped", TurnID: turnID, Payload: map[string]any{
-			"reason":               "failure_circuit_breaker",
-			"auto":                 true,
-			"consecutive_failures": e.autoCompactFailures,
-			"max_auto_failures":    policy.MaxAutoFailures,
-			"error":                err.Error(),
+		e.emit(events.Event{Type: "context.compact.skipped", TurnID: turnID, Payload: ContextCompactSkippedPayload{
+			Reason:              "failure_circuit_breaker",
+			Auto:                true,
+			ConsecutiveFailures: e.autoCompactFailures,
+			MaxAutoFailures:     policy.MaxAutoFailures,
+			Error:               err.Error(),
 		}})
 		return err
 	}
@@ -81,15 +81,15 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 		contextWindow = DefaultContextWindowTokens
 	}
 	tokensBefore := estimateContextTokens(systemPrompt, nil, e.activeContextLocked().Messages)
-	e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: map[string]any{
-		"reason":             reason,
-		"auto":               auto,
-		"estimated_tokens":   tokensBefore,
-		"tokens_before":      tokensBefore,
-		"context_window":     contextWindow,
-		"reserve_tokens":     policy.ReserveTokens,
-		"keep_recent_tokens": policy.KeepRecentTokens,
-		"tail_turns":         policy.TailTurns,
+	e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: ContextCompactStartedPayload{
+		Reason:           reason,
+		Auto:             auto,
+		EstimatedTokens:  tokensBefore,
+		TokensBefore:     tokensBefore,
+		ContextWindow:    contextWindow,
+		ReserveTokens:    policy.ReserveTokens,
+		KeepRecentTokens: policy.KeepRecentTokens,
+		TailTurns:        policy.TailTurns,
 	}})
 
 	summarySystem, summaryHistory := buildCompactionSummaryRequest(systemPrompt, selection.PreviousSummary, selection.SummaryInput, policy, instructions)
@@ -100,20 +100,20 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	})
 	if err != nil {
 		compactErr := fmt.Errorf("compact context: %w", err)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: map[string]any{
-			"reason": reason,
-			"auto":   auto,
-			"error":  compactErr.Error(),
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
 		}})
 		return CompactionResult{}, compactErr
 	}
 	summary := strings.TrimSpace(responseText(resp.Message))
 	if summary == "" {
 		err := fmt.Errorf("compact context: empty summary")
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: map[string]any{
-			"reason": reason,
-			"auto":   auto,
-			"error":  err.Error(),
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  err.Error(),
 		}})
 		return CompactionResult{}, err
 	}
@@ -143,10 +143,10 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	msg.Compaction.TokensAfter = tokensAfter
 	if err := e.Session.Append(msg); err != nil {
 		err := fmt.Errorf("session append compact: %w", err)
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: map[string]any{
-			"reason": reason,
-			"auto":   auto,
-			"error":  err.Error(),
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  err.Error(),
 		}})
 		return CompactionResult{}, err
 	}
@@ -175,19 +175,19 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 		},
 	}
 	e.Session.RecordResponseUsage(resp.Usage, &contextUsage)
-	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: map[string]any{
-		"message_id":            result.MessageID,
-		"reason":                result.Reason,
-		"auto":                  result.Auto,
-		"estimated_tokens":      result.TokensBefore,
-		"tokens_before":         result.TokensBefore,
-		"tokens_after":          result.TokensAfter,
-		"summary_chars":         result.SummaryChars,
-		"summary_model":         result.SummaryModel,
-		"tail_start_message_id": result.TailStartMessageID,
-		"context_window":        contextWindow,
-		"reserve_tokens":        policy.ReserveTokens,
-		"keep_recent_tokens":    policy.KeepRecentTokens,
+	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
+		MessageID:          result.MessageID,
+		Reason:             result.Reason,
+		Auto:               result.Auto,
+		EstimatedTokens:    result.TokensBefore,
+		TokensBefore:       result.TokensBefore,
+		TokensAfter:        result.TokensAfter,
+		SummaryChars:       result.SummaryChars,
+		SummaryModel:       result.SummaryModel,
+		TailStartMessageID: result.TailStartMessageID,
+		ContextWindow:      contextWindow,
+		ReserveTokens:      policy.ReserveTokens,
+		KeepRecentTokens:   policy.KeepRecentTokens,
 	}})
 	return result, nil
 }

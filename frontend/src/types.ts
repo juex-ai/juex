@@ -194,13 +194,196 @@ export interface ActiveContextSnapshot {
   estimated_tokens: number;
 }
 
-export interface BusEvent {
+interface BusEventBase<TType extends string> {
   id: string;
-  type: string;             // e.g. "turn.started", "tool.requested"
-  timestamp: string;
+  type: TType;
+  ts: string;
   turn_id?: string;
-  payload?: unknown;
 }
+
+export interface TurnStartedPayload {
+  input: string;
+  kind?: string;
+}
+
+export interface TurnIterationBudgetWarningPayload {
+  kind: string;
+  budget: "iterations";
+  turn_id: string;
+  remaining_iters: number;
+  max_iters: number;
+}
+
+export interface TurnDurationBudgetWarningPayload {
+  kind: string;
+  budget: "duration";
+  turn_id: string;
+  remaining_duration: string;
+  remaining_duration_ms: number;
+  max_duration: string;
+  max_duration_ms: number;
+}
+
+export type TurnBudgetWarningPayload =
+  | TurnIterationBudgetWarningPayload
+  | TurnDurationBudgetWarningPayload;
+
+export interface TurnCompletedPayload {
+  duration_ms: number;
+  output_len: number;
+  token_usage: TokenUsage;
+}
+
+export interface TurnErroredPayload {
+  error: string;
+  kind?: string;
+  budget?: string;
+  turn_id?: string;
+  max_iters?: number;
+  max_duration?: string;
+  max_duration_ms?: number;
+}
+
+export interface LLMRequestedPayload {
+  iter: number;
+  history_len: number;
+  tool_count: number;
+}
+
+export interface ToolCallPayload {
+  tool_use_id: string;
+  name: string;
+  input?: Record<string, unknown> | null;
+  timeout_seconds: number;
+}
+
+export interface LLMRespondedPayload {
+  stop_reason: string;
+  usage: TokenUsage;
+  token_usage: TokenUsage;
+  blocks: Block[] | null;
+  text: string;
+  thinking: string;
+  tool_calls: ToolCallPayload[] | null;
+  model: string;
+  context_usage?: ContextUsage;
+}
+
+export interface ToolRequestedPayload {
+  name: string;
+  input?: Record<string, unknown> | null;
+  tool_use_id: string;
+  timeout_seconds: number;
+}
+
+export interface ToolCompletedPayload {
+  name: string;
+  tool_use_id: string;
+  timeout_seconds: number;
+  len: number;
+  preview: string;
+}
+
+export interface ToolErroredPayload {
+  name: string;
+  tool_use_id: string;
+  error: string;
+  timeout_seconds: number;
+  len?: number;
+  preview?: string;
+  timed_out?: boolean;
+}
+
+export interface PendingInputQueuedPayload {
+  input: string;
+  kind: string;
+  pending_count: number;
+  max_pending_inputs: number;
+}
+
+export interface PendingInputDrainedPayload {
+  count: number;
+  pending_count: number;
+  max_pending_inputs: number;
+}
+
+export type PendingInputDroppedPayload = PendingInputDrainedPayload;
+
+export interface PendingInputRejectedPayload {
+  input: string;
+  kind: string;
+  pending_count: number;
+  max_pending_inputs: number;
+  reason: string;
+}
+
+export interface ContextCompactSkippedPayload {
+  reason: string;
+  auto: boolean;
+  consecutive_failures: number;
+  max_auto_failures: number;
+  error: string;
+}
+
+export interface ContextCompactStartedPayload {
+  reason: string;
+  auto: boolean;
+  estimated_tokens: number;
+  tokens_before: number;
+  context_window: number;
+  reserve_tokens: number;
+  keep_recent_tokens: number;
+  tail_turns: number;
+}
+
+export interface ContextCompactErroredPayload {
+  reason: string;
+  auto: boolean;
+  error: string;
+}
+
+export interface ContextCompactCompletedPayload {
+  message_id: string;
+  reason: string;
+  auto: boolean;
+  estimated_tokens: number;
+  tokens_before: number;
+  tokens_after: number;
+  summary_chars: number;
+  summary_model: string;
+  tail_start_message_id: string;
+  context_window: number;
+  reserve_tokens: number;
+  keep_recent_tokens: number;
+}
+
+export interface ContextProjectionAppliedPayload {
+  user_inputs_externalized: number;
+  tool_results_externalized: number;
+  bytes_externalized: number;
+  reasoning_contents_stripped?: number;
+  reasoning_content_bytes_stripped?: number;
+}
+
+export type BusEvent =
+  | (BusEventBase<"turn.started"> & { payload: TurnStartedPayload })
+  | (BusEventBase<"turn.budget.warning"> & { payload: TurnBudgetWarningPayload })
+  | (BusEventBase<"turn.completed"> & { payload: TurnCompletedPayload })
+  | (BusEventBase<"turn.errored"> & { payload: TurnErroredPayload })
+  | (BusEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
+  | (BusEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
+  | (BusEventBase<"tool.requested"> & { payload: ToolRequestedPayload })
+  | (BusEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
+  | (BusEventBase<"tool.errored"> & { payload: ToolErroredPayload })
+  | (BusEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
+  | (BusEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
+  | (BusEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
+  | (BusEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
+  | (BusEventBase<"context.compact.skipped"> & { payload: ContextCompactSkippedPayload })
+  | (BusEventBase<"context.compact.started"> & { payload: ContextCompactStartedPayload })
+  | (BusEventBase<"context.compact.completed"> & { payload: ContextCompactCompletedPayload })
+  | (BusEventBase<"context.compact.errored"> & { payload: ContextCompactErroredPayload })
+  | (BusEventBase<"context.projection.applied"> & { payload: ContextProjectionAppliedPayload });
 
 export interface FileNode {
   name: string;

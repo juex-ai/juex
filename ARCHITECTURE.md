@@ -407,6 +407,8 @@ Standard event families include `turn.started/completed/errored`,
 `context.compact.*`, and `context.projection.applied`. `llm.responded`
 includes the assistant message's ordered `blocks` plus summary fields
 (`text`, `thinking`, `tool_calls`) for older consumers.
+Stable runtime event families use typed payload structs next to their emitters
+while the bus and JSONL/SSE wire shape stay generic through `Payload any`.
 
 ### 3.4 Memory
 

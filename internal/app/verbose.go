@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimeevents "github.com/juex-ai/juex/internal/runtime"
 )
 
 // verbosePrinter formats lifecycle events into a human-readable transcript
@@ -51,91 +52,90 @@ func (vp *verbosePrinter) handle(e events.Event) {
 	vp.mu.Lock()
 	defer vp.mu.Unlock()
 
-	p, _ := e.Payload.(map[string]any)
-
 	switch e.Type {
 	case "turn.started":
-		input, _ := p["input"].(string)
+		payload, _ := payloadAs[runtimeevents.TurnStartedPayload](e.Payload)
 		vp.turn = 0
 		vp.tStart = time.Now()
-		vp.printlnDim("› user: " + truncOneLine(input, 200))
+		vp.printlnDim("› user: " + truncOneLine(payload.Input, 200))
 	case "llm.requested":
 		vp.turn++
 		vp.printlnDim(fmt.Sprintf("[turn %d]", vp.turn))
 		vp.spin.start("thinking")
 	case "llm.responded":
 		vp.spin.halt()
-		if blocks, ok := responseBlocksFromPayload(p["blocks"]); ok {
-			vp.printResponseBlocks(blocks)
+		payload, _ := payloadAs[runtimeevents.LLMRespondedPayload](e.Payload)
+		if len(payload.Blocks) > 0 {
+			vp.printResponseBlocks(payload.Blocks)
 		} else {
-			if think, _ := p["thinking"].(string); think != "" {
-				vp.printIndentedBlock("thinking", think, true)
+			if payload.Thinking != "" {
+				vp.printIndentedBlock("thinking", payload.Thinking, true)
 			}
-			if text, _ := p["text"].(string); text != "" {
-				vp.printIndentedBlock("assistant", text, false)
+			if payload.Text != "" {
+				vp.printIndentedBlock("assistant", payload.Text, false)
 			}
 		}
-		if usage, ok := usageFrom(p["token_usage"]); ok {
-			vp.printlnDim("  " + FormatTokenUsage(usage))
+		if payloadFieldPresent(e.Payload, "token_usage") {
+			vp.printlnDim("  " + FormatTokenUsage(payload.TokenUsage))
 		}
 	case "tool.requested":
-		name, _ := p["name"].(string)
-		input := p["input"]
-		vp.printlnDim("  → " + name + "(" + oneLineJSON(input) + ")")
+		payload, _ := payloadAs[runtimeevents.ToolRequestedPayload](e.Payload)
+		vp.printlnDim("  → " + payload.Name + "(" + oneLineJSON(payload.Input) + ")")
 	case "tool.completed":
-		name, _ := p["name"].(string)
-		n := intFrom(p["len"])
-		vp.printlnDim(fmt.Sprintf("  ← %s: ok (%d bytes)", name, n))
+		payload, _ := payloadAs[runtimeevents.ToolCompletedPayload](e.Payload)
+		vp.printlnDim(fmt.Sprintf("  ← %s: ok (%d bytes)", payload.Name, payload.Len))
 	case "tool.errored":
-		name, _ := p["name"].(string)
-		errMsg, _ := p["error"].(string)
-		vp.printlnRed(fmt.Sprintf("  ← %s: ERROR %s", name, errMsg))
+		payload, _ := payloadAs[runtimeevents.ToolErroredPayload](e.Payload)
+		vp.printlnRed(fmt.Sprintf("  ← %s: ERROR %s", payload.Name, payload.Error))
 	case "pending_input.queued":
-		count := intFrom(p["pending_count"])
-		max := intFrom(p["max_pending_inputs"])
-		if max > 0 {
-			vp.printlnDim(fmt.Sprintf("  + pending input (%d/%d)", count, max))
+		payload, _ := payloadAs[runtimeevents.PendingInputQueuedPayload](e.Payload)
+		if payload.MaxPendingInputs > 0 {
+			vp.printlnDim(fmt.Sprintf("  + pending input (%d/%d)", payload.PendingCount, payload.MaxPendingInputs))
 		} else {
-			vp.printlnDim(fmt.Sprintf("  + pending input (%d)", count))
+			vp.printlnDim(fmt.Sprintf("  + pending input (%d)", payload.PendingCount))
 		}
 	case "pending_input.drained":
-		count := intFrom(p["count"])
-		vp.printlnDim(fmt.Sprintf("  + drained %d pending input(s)", count))
+		payload, _ := payloadAs[runtimeevents.PendingInputDrainedPayload](e.Payload)
+		vp.printlnDim(fmt.Sprintf("  + drained %d pending input(s)", payload.Count))
 	case "pending_input.dropped":
-		count := intFrom(p["count"])
-		vp.printlnRed(fmt.Sprintf("  + dropped %d pending input(s)", count))
+		payload, _ := payloadAs[runtimeevents.PendingInputDroppedPayload](e.Payload)
+		vp.printlnRed(fmt.Sprintf("  + dropped %d pending input(s)", payload.Count))
 	case "pending_input.rejected":
-		count := intFrom(p["pending_count"])
-		max := intFrom(p["max_pending_inputs"])
-		vp.printlnRed(fmt.Sprintf("  + rejected pending input (%d/%d)", count, max))
+		payload, _ := payloadAs[runtimeevents.PendingInputRejectedPayload](e.Payload)
+		vp.printlnRed(fmt.Sprintf("  + rejected pending input (%d/%d)", payload.PendingCount, payload.MaxPendingInputs))
 	case "turn.completed":
 		elapsed := time.Since(vp.tStart).Round(time.Millisecond)
 		vp.printlnDim(fmt.Sprintf("✓ done in %s", elapsed))
 	case "turn.errored":
-		errMsg, _ := p["error"].(string)
-		vp.printlnRed("✗ " + errMsg)
+		payload, _ := payloadAs[runtimeevents.TurnErroredPayload](e.Payload)
+		vp.printlnRed("✗ " + payload.Error)
 	}
 }
 
-func responseBlocksFromPayload(v any) ([]llm.Block, bool) {
-	switch blocks := v.(type) {
-	case []llm.Block:
-		return blocks, true
-	case []any:
-		buf, err := json.Marshal(blocks)
-		if err != nil {
-			return nil, false
-		}
-		var decoded []llm.Block
-		if err := json.Unmarshal(buf, &decoded); err != nil {
-			return nil, false
-		}
-		return decoded, true
-	case nil:
-		return nil, false
-	default:
-		return nil, false
+func payloadAs[T any](v any) (T, bool) {
+	var out T
+	if v == nil {
+		return out, false
 	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return out, false
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return out, false
+	}
+	return out, true
+}
+
+func payloadFieldPresent(v any, key string) bool {
+	if v == nil {
+		return false
+	}
+	if p, ok := v.(map[string]any); ok {
+		_, ok := p[key]
+		return ok
+	}
+	return true
 }
 
 func (vp *verbosePrinter) printResponseBlocks(blocks []llm.Block) {
@@ -216,31 +216,6 @@ func oneLineJSON(v any) string {
 		return string(b[:200]) + "..."
 	}
 	return string(b)
-}
-
-func intFrom(v any) int {
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	}
-	return 0
-}
-
-func usageFrom(v any) (llm.Usage, bool) {
-	switch u := v.(type) {
-	case llm.Usage:
-		return u, true
-	case map[string]any:
-		return llm.Usage{
-			InputTokens:  intFrom(u["input_tokens"]),
-			OutputTokens: intFrom(u["output_tokens"]),
-		}, true
-	}
-	return llm.Usage{}, false
 }
 
 // ---- spinner ----

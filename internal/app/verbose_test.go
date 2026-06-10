@@ -8,6 +8,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	runtimeevents "github.com/juex-ai/juex/internal/runtime"
 )
 
 // emitAll feeds a sequence of events through a verbosePrinter and returns
@@ -69,6 +70,41 @@ func TestVerbose_TurnLifecycle(t *testing.T) {
 		"[turn 2]",
 		"assistant: Found 14 files.",
 		"✓ done in",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in transcript:\n%s", want, out)
+		}
+	}
+}
+
+func TestVerbose_TypedPayloads(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{Input: "inspect typed events"}},
+		{Type: "llm.requested", Payload: runtimeevents.LLMRequestedPayload{Iter: 0, HistoryLen: 1, ToolCount: 1}},
+		{Type: "llm.responded", Payload: runtimeevents.LLMRespondedPayload{
+			Blocks: []llm.Block{
+				{Type: llm.BlockReasoning, Text: "typed thought"},
+				{Type: llm.BlockText, Text: "typed answer"},
+			},
+			TokenUsage: llm.Usage{InputTokens: 9, OutputTokens: 3},
+		}},
+		{Type: "tool.requested", Payload: runtimeevents.ToolRequestedPayload{Name: "read", Input: map[string]any{"path": "README.md"}}},
+		{Type: "tool.completed", Payload: runtimeevents.ToolCompletedPayload{Name: "read", Len: 42}},
+		{Type: "pending_input.queued", Payload: runtimeevents.PendingInputQueuedPayload{PendingCount: 1, MaxPendingInputs: 4}},
+		{Type: "pending_input.drained", Payload: runtimeevents.PendingInputDrainedPayload{Count: 1}},
+		{Type: "turn.errored", Payload: runtimeevents.TurnErroredPayload{Error: "typed failure"}},
+	})
+
+	for _, want := range []string{
+		"› user: inspect typed events",
+		"thinking: typed thought",
+		"assistant: typed answer",
+		"tokens: 12 total (input 9, output 3)",
+		"→ read(",
+		"← read: ok (42 bytes)",
+		"+ pending input (1/4)",
+		"+ drained 1 pending input(s)",
+		"✗ typed failure",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in transcript:\n%s", want, out)

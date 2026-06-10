@@ -25,9 +25,9 @@ func TestTurn_BuiltinShellTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 	eng, bus := newEngine(t, prov, true)
 	eng.MaxDur = 3 * time.Second
 
-	var erroredPayload map[string]any
+	var erroredPayload ToolErroredPayload
 	bus.Subscribe("tool.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(map[string]any)
+		erroredPayload, _ = e.Payload.(ToolErroredPayload)
 	})
 
 	start := time.Now()
@@ -53,7 +53,7 @@ func TestTurn_BuiltinShellTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 	if !strings.Contains(block.Content, "timed out after 1s") {
 		t.Fatalf("tool result content = %q, want timeout detail", block.Content)
 	}
-	if got := erroredPayload["timed_out"]; got != true {
+	if got := erroredPayload.TimedOut; got != true {
 		t.Fatalf("errored timed_out = %v, want true", got)
 	}
 }
