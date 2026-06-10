@@ -256,10 +256,12 @@ endpoint rejects that field.
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
 OpenAI-compatible Chat through `openai-go`; `openai_responses.go` wraps the
-OpenAI Responses API. SDK-backed clients use `WithMaxRetries(10)`, and the
-raw HTTP `openai-codex/responses` adapter mirrors that retry boundary for
-recoverable transport/API failures such as network errors, 408/409/429, and
-5xx responses. Ordinary request errors are returned immediately.
+OpenAI Responses API. The `openai-codex/responses` adapter also uses
+`openai-go` Responses streaming, but sets the ChatGPT Codex backend base URL,
+Codex auth headers, and Codex-only request fields inside its adapter. SDK-backed
+clients use `WithMaxRetries(10)` for recoverable transport/API failures such as
+network errors, 408/409/429, and 5xx responses. Ordinary request errors are
+returned immediately.
 Malformed provider stream events are wrapped as `StreamParseError` with a
 stable kind, provider/model identity, event type, optional content block index,
 and a bounded raw event preview.

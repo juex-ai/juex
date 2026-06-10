@@ -69,3 +69,5 @@ internal/web/dist
 .config/
 
 .understand-anything/
+
+.codegraph

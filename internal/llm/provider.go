@@ -67,7 +67,7 @@ func New(cfg Config) (Provider, error) {
 	case ProtocolOpenAIResponses:
 		return NewOpenAIResponses(resolved, &http.Client{Timeout: 120 * time.Second}), nil
 	case ProtocolOpenAICodexResponses:
-		return NewOpenAICodexResponses(resolved, &http.Client{Timeout: 120 * time.Second}), nil
+		return NewOpenAICodexResponses(resolved, nil), nil
 	default:
 		return nil, fmt.Errorf("llm: unsupported provider protocol %q", profile.Protocol)
 	}
