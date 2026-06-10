@@ -429,6 +429,15 @@ Each work directory has one active primary session recorded in
 `serve` attach to that active primary by default; `--new` and `/new` create a
 new primary and switch active. Side sessions are durable and listed, but never
 become active and are not valid Web turn targets.
+Workspace session attachment is an app-level policy. `internal/app` chooses
+the attachment target, records active/session history, preserves side-session
+non-activation, applies lazy fresh-session creation for web callers, and
+returns the lock mode (`attach_active`, `new_primary`, `new_side`, or
+`resume`) that the app lifetime must acquire. The policy prefers a valid
+`history.active` primary, then recorded primary sessions, then disk-listed
+primary sessions before creating a new active primary. Web startup and MCP
+notification routing use exported app helpers for active-primary records and
+ids instead of duplicating those rules.
 App lifetimes acquire `.juex/sessions/<id>/session.lock` so two processes do
 not append to the same session concurrently. Startup serializes lock cleanup
 with a short-lived guard file. If a leftover lock names a PID that is no longer
