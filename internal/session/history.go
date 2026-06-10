@@ -22,6 +22,10 @@ var (
 	historyLockTimeout    = 35 * time.Second
 	historyLockStaleAfter = 30 * time.Second
 	historyLockPoll       = 10 * time.Millisecond
+
+	// ErrCannotActivateSide is returned when a caller tries to make a side
+	// session the workspace active session.
+	ErrCannotActivateSide = errors.New("session: side sessions cannot become active")
 )
 
 type metadata struct {
@@ -164,21 +168,83 @@ func SetActive(path string, info Info) error {
 	if path == "" {
 		return nil
 	}
+	_, err := activateInfo(path, info)
+	return err
+}
+
+// Activate loads id from root and records it as the active primary session.
+func Activate(root, historyPath, id string) (Info, error) {
+	dir, ok := sessionDir(root, id)
+	if !ok {
+		return Info{}, os.ErrNotExist
+	}
+	info, _, err := LoadInfo(dir)
+	if err != nil {
+		return Info{}, err
+	}
+	return activateInfo(historyPath, info)
+}
+
+func activateInfo(path string, info Info) (Info, error) {
 	info = normalizeInfo(info)
 	if info.Kind != KindPrimary {
-		return fmt.Errorf("session: cannot activate %s session %s", info.Kind, info.ID)
+		return Info{}, fmt.Errorf("%w: %s", ErrCannotActivateSide, info.ID)
 	}
-	return withHistoryLock(path, func() error {
+	active := info
+	active.Active = true
+	if path == "" {
+		return active, nil
+	}
+	if err := withHistoryLock(path, func() error {
 		h, err := LoadHistory(path)
 		if err != nil {
 			return err
 		}
 		upsertHistorySession(&h, info)
-		active := info
-		active.Active = true
 		h.Active = &active
 		return writeHistory(path, h)
-	})
+	}); err != nil {
+		return Info{}, err
+	}
+	return active, nil
+}
+
+// MarkActive returns copies of infos with normalized Kind and Active fields.
+func MarkActive(path string, infos []Info) ([]Info, error) {
+	if path == "" {
+		return markActiveWithHistory(History{}, infos), nil
+	}
+	h, err := LoadHistory(path)
+	if err != nil {
+		return nil, err
+	}
+	return markActiveWithHistory(h, infos), nil
+}
+
+// MarkActiveInfo returns info with normalized Kind and Active fields.
+func MarkActiveInfo(path string, info Info) (Info, error) {
+	infos, err := MarkActive(path, []Info{info})
+	if err != nil {
+		return Info{}, err
+	}
+	if len(infos) == 0 {
+		return normalizeInfo(info), nil
+	}
+	return infos[0], nil
+}
+
+func markActiveWithHistory(h History, infos []Info) []Info {
+	h = normalizeHistory(h)
+	activeID := ""
+	if h.Active != nil {
+		activeID = h.Active.ID
+	}
+	out := append([]Info(nil), infos...)
+	for i := range out {
+		out[i] = normalizeInfo(out[i])
+		out[i].Active = activeID != "" && out[i].ID == activeID
+	}
+	return out
 }
 
 // Delete removes one on-disk session and drops its entry from history.

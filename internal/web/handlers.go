@@ -59,7 +59,11 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	infos = s.mergeActiveSessionInfos(infos)
-	infos = s.markActiveInfos(infos)
+	infos, err = session.MarkActive(s.opts.Cfg.HistoryPath(), infos)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": infos})
 }
 
@@ -144,7 +148,11 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
 		info, msgs := as.app.Session.Snapshot(time.Now().UTC())
-		info = s.markActiveInfo(info)
+		info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+			return
+		}
 		page, err := selectSessionMessagePage(msgs, window)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -174,7 +182,11 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	info = s.markActiveInfo(info)
+	info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, sessionShowResponse{
 		Info:            info,
 		Messages:        messagesForSessionResponse(page.Messages),
@@ -276,25 +288,19 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleActivateSession(w http.ResponseWriter, r *http.Request, id string) {
-	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	info, _, err := session.LoadInfo(dir)
+	info, err := session.Activate(s.opts.Cfg.SessionsDir(), s.opts.Cfg.HistoryPath(), id)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 			return
 		}
+		if errors.Is(err, session.ErrCannotActivateSide) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "side sessions cannot become active")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	if info.Kind != session.KindPrimary {
-		writeErr(w, http.StatusBadRequest, "bad_request", "side sessions cannot become active")
-		return
-	}
-	if err := session.SetActive(s.opts.Cfg.HistoryPath(), info); err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	info.Active = true
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -380,33 +386,6 @@ func (s *Server) mergeActiveSessionInfos(persisted []session.Info) []session.Inf
 	return infos
 }
 
-func (s *Server) markActiveInfos(infos []session.Info) []session.Info {
-	activeID := s.activeSessionID()
-	for i := range infos {
-		if infos[i].Kind == "" {
-			infos[i].Kind = session.KindPrimary
-		}
-		infos[i].Active = activeID != "" && infos[i].ID == activeID
-	}
-	return infos
-}
-
-func (s *Server) markActiveInfo(info session.Info) session.Info {
-	if info.Kind == "" {
-		info.Kind = session.KindPrimary
-	}
-	info.Active = s.activeSessionID() != "" && info.ID == s.activeSessionID()
-	return info
-}
-
-func (s *Server) activeSessionID() string {
-	h, err := session.LoadHistory(s.opts.Cfg.HistoryPath())
-	if err != nil || h.Active == nil {
-		return ""
-	}
-	return h.Active.ID
-}
-
 func (s *Server) webTurnAllowed(id string) (session.Info, bool, string) {
 	info, err := s.sessionInfo(id)
 	if err != nil {
@@ -425,13 +404,13 @@ func (s *Server) sessionInfo(id string) (session.Info, error) {
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
 		info, _ := as.app.Session.Snapshot(time.Now().UTC())
-		return s.markActiveInfo(info), nil
+		return session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
 	}
 	info, _, err := session.LoadInfo(filepath.Join(s.opts.Cfg.SessionsDir(), id))
 	if err != nil {
 		return session.Info{}, err
 	}
-	return s.markActiveInfo(info), nil
+	return session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
 }
 
 // turnRequest is the wire shape for POST /turns.
