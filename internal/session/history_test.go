@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -250,6 +251,93 @@ func TestRecordSessionSideDoesNotUpdateActive(t *testing.T) {
 		if info.ID == side.ID && info.Kind != KindSide {
 			t.Fatalf("side info = %+v, want side kind", info)
 		}
+	}
+}
+
+func TestActivatePrimarySetsHistoryAndReturnsActive(t *testing.T) {
+	root := t.TempDir()
+	sessionsRoot := filepath.Join(root, "sessions")
+	historyPath := filepath.Join(root, "history.json")
+	dir := makeSession(t, sessionsRoot, "20260506T103500-primary1",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "primary")},
+		time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC))
+	if err := SetAlias(dir, "daily"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Activate(sessionsRoot, historyPath, filepath.Base(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != filepath.Base(dir) || got.Alias != "daily" || got.Kind != KindPrimary || !got.Active {
+		t.Fatalf("activated = %+v", got)
+	}
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active == nil || h.Active.ID != got.ID || !h.Active.Active {
+		t.Fatalf("history active = %+v, want %s active", h.Active, got.ID)
+	}
+}
+
+func TestActivateRejectsSideSession(t *testing.T) {
+	root := t.TempDir()
+	sessionsRoot := filepath.Join(root, "sessions")
+	historyPath := filepath.Join(root, "history.json")
+	dir := makeSession(t, sessionsRoot, "20260506T103500-side0001",
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "side")},
+		time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC))
+	if err := SetKind(dir, KindSide); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Activate(sessionsRoot, historyPath, filepath.Base(dir))
+	if !errors.Is(err, ErrCannotActivateSide) {
+		t.Fatalf("err = %v, want ErrCannotActivateSide", err)
+	}
+	h, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Active != nil {
+		t.Fatalf("active = %+v, want nil", h.Active)
+	}
+}
+
+func TestActivateMissingSession(t *testing.T) {
+	root := t.TempDir()
+	_, err := Activate(filepath.Join(root, "sessions"), filepath.Join(root, "history.json"), "missing")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("err = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestMarkActiveCopiesInfosAndDefaultsKind(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	primary := Info{ID: "primary", Dir: filepath.Join(root, "primary")}
+	side := Info{ID: "side", Dir: filepath.Join(root, "side"), Kind: KindSide}
+	if err := SetActive(historyPath, primary); err != nil {
+		t.Fatal(err)
+	}
+
+	input := []Info{primary, side}
+	got, err := MarkActive(historyPath, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input[0].Kind != "" || input[0].Active {
+		t.Fatalf("input mutated = %+v", input[0])
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].Kind != KindPrimary || !got[0].Active {
+		t.Fatalf("primary = %+v, want default primary active", got[0])
+	}
+	if got[1].Kind != KindSide || got[1].Active {
+		t.Fatalf("side = %+v, want side inactive", got[1])
 	}
 }
 

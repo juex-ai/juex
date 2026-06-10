@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,7 +57,7 @@ func newSessionsListCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			infos, err = markActiveSessionInfos(infos, cfg.HistoryPath())
+			infos, err = session.MarkActive(cfg.HistoryPath(), infos)
 			if err != nil {
 				return err
 			}
@@ -97,25 +98,6 @@ func renderSessionsTable(cmd *cobra.Command, infos []session.Info) {
 		fmt.Fprintf(w, "%-32s  %-8s  %-6s  %-16s  %-20s  %5d  %s\n",
 			s.ID, s.Kind, active, truncateRunes(s.Alias, 16), s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
 	}
-}
-
-func markActiveSessionInfos(infos []session.Info, historyPath string) ([]session.Info, error) {
-	h, err := session.LoadHistory(historyPath)
-	if err != nil {
-		return nil, err
-	}
-	activeID := ""
-	if h.Active != nil {
-		activeID = h.Active.ID
-	}
-	out := append([]session.Info(nil), infos...)
-	for i := range out {
-		if out[i].Kind == "" {
-			out[i].Kind = session.KindPrimary
-		}
-		out[i].Active = activeID != "" && out[i].ID == activeID
-	}
-	return out, nil
 }
 
 type sessionsShowOutput struct {
@@ -210,21 +192,16 @@ func newSessionsActivateCmd(flags *persistentFlags) *cobra.Command {
 				return err
 			}
 			id := args[0]
-			dir := filepath.Join(cfg.SessionsDir(), id)
-			info, _, err := session.LoadInfo(dir)
+			info, err := session.Activate(cfg.SessionsDir(), cfg.HistoryPath(), id)
 			if err != nil {
 				if os.IsNotExist(err) {
 					return &notFoundError{msg: "session not found: " + id}
 				}
+				if errors.Is(err, session.ErrCannotActivateSide) {
+					return &usageError{msg: "side sessions cannot become active: " + id}
+				}
 				return err
 			}
-			if info.Kind != session.KindPrimary {
-				return &usageError{msg: "side sessions cannot become active: " + id}
-			}
-			if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
-				return err
-			}
-			info.Active = true
 			switch format {
 			case "json", "":
 				cmdPrintln(cmd, mustJSON(info))
