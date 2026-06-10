@@ -928,8 +928,8 @@ then start a best-effort process manager with
 `mcp.NewManagerLayeredSoft(ctx, configs, opts)`. Each app/session registry gets
 MCP proxy tools through `Manager.RegisterTools(reg)`. Project `mcp.json`
 entries override user-level servers with the same name; the user server is not
-started in that case. `RegisterAllLayered` remains as test/convenience helper
-coverage, not the app runtime path.
+started in that case. Tests that cover layered config behavior exercise the same
+manager API instead of a separate layered registration helper.
 
 Before MCP subprocess startup, Juex prepares each loaded server config for the
 active work directory. It injects `WORKDIR` and `JUEX_WORKDIR` into every MCP

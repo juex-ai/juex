@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -30,14 +29,10 @@ func MergeConfigs(configs []Config) Config {
 }
 
 func NewManagerLayeredSoft(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
-	return NewManagerSoft(ctx, MergeConfigs(configs), opts)
+	return newManager(ctx, MergeConfigs(configs), opts)
 }
 
-func NewManagerSoft(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {
-	return newManager(ctx, cfg, opts, true)
-}
-
-func newManager(ctx context.Context, cfg Config, opts ConnectOptions, soft bool) (*Manager, error) {
+func newManager(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {
 	mgr := &Manager{
 		clients: map[string]*Client{},
 		tools:   map[string][]ToolDescriptor{},
@@ -47,11 +42,8 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions, soft bool)
 		client, err := ConnectWithOptions(ctx, name, spec, opts)
 		if err != nil {
 			serverErr := &ServerError{Server: name, Op: "connect", Err: err}
-			if soft {
-				mgr.errors[name] = serverErr
-				continue
-			}
-			return nil, closeManagerOnError(mgr, serverErr)
+			mgr.errors[name] = serverErr
+			continue
 		}
 		mgr.clients[name] = client
 		descs, err := client.ListTools(ctx)
@@ -59,22 +51,12 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions, soft bool)
 			client.Close()
 			delete(mgr.clients, name)
 			serverErr := &ServerError{Server: name, Op: "tools/list", Err: err}
-			if soft {
-				mgr.errors[name] = serverErr
-				continue
-			}
-			return nil, closeManagerOnError(mgr, serverErr)
+			mgr.errors[name] = serverErr
+			continue
 		}
 		mgr.tools[name] = append([]ToolDescriptor(nil), descs...)
 	}
 	return mgr, nil
-}
-
-func closeManagerOnError(mgr *Manager, err *ServerError) error {
-	if closeErr := mgr.Close(); closeErr != nil {
-		err.Err = errors.Join(err.Err, fmt.Errorf("close partial clients: %w", closeErr))
-	}
-	return err
 }
 
 func (m *Manager) RegisterTools(reg *tools.Registry) error {
