@@ -780,7 +780,7 @@ runtime:
 | `providers[].capabilities` | optional provider-level gates for tools, streaming, reasoning effort/replay, and max output tokens |
 | `providers[].compat.reasoning_replay_fields` | OpenAI-compatible raw assistant fields to replay when reasoning replay is enabled |
 | `providers[].models[].id` | model name sent to the provider |
-| `providers[].models[].thinking_effort` | optional reasoning depth for thinking models; supported values are `low`, `medium`, `high`, `xhigh`, and `max` |
+| `providers[].models[].thinking_effort` | optional reasoning depth for thinking models; supported values are `low`, `medium`, `high`, `xhigh`, and `max`; invalid values fail config load |
 | `providers[].models[].context_window` | optional model context window in tokens; defaults to `256000` |
 | `providers[].models[].headers` | optional model-level HTTP header overrides |
 | `providers[].models[].query` | optional model-level query parameter overrides |
