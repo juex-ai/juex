@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -716,6 +717,74 @@ providers:
 	}
 	if cfg.ThinkingEffort != "low" {
 		t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, "low")
+	}
+}
+
+func TestLoadFromFile_ThinkingEffortAllowedValues(t *testing.T) {
+	for _, effort := range []string{"low", "medium", "high", "xhigh", "max"} {
+		t.Run(effort, func(t *testing.T) {
+			prepareConfigTest(t)
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "juex.yaml")
+			body := fmt.Sprintf(`model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        thinking_effort: %s
+`, effort)
+			writeTextFile(t, configPath, body)
+
+			cfg, err := LoadFromFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.ThinkingEffort != effort {
+				t.Fatalf("ThinkingEffort = %q, want %q", cfg.ThinkingEffort, effort)
+			}
+		})
+	}
+}
+
+func TestLoadFromFile_RejectsInvalidThinkingEffort(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+        thinking_effort: turbo
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(configPath)
+	if err == nil {
+		t.Fatal("expected invalid thinking_effort error")
+	}
+	if msg := err.Error(); !strings.Contains(msg, `invalid thinking_effort "turbo"`) || !strings.Contains(msg, allowedThinkingEffortText) {
+		t.Fatalf("error = %q", msg)
+	}
+}
+
+func TestLoadFromFile_RejectsInvalidThinkingEffortEnv(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+	t.Setenv("PROVIDER_THINKING_EFFORT", "turbo")
+
+	_, err := LoadFromFile(configPath)
+	if err == nil {
+		t.Fatal("expected invalid PROVIDER_THINKING_EFFORT error")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "PROVIDER_THINKING_EFFORT") || !strings.Contains(msg, allowedThinkingEffortText) {
+		t.Fatalf("error = %q", msg)
 	}
 }
 

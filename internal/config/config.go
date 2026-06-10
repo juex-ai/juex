@@ -156,6 +156,16 @@ const DefaultContextWindow = runtimepolicy.DefaultContextWindowTokens
 
 var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
+var allowedThinkingEfforts = map[string]struct{}{
+	"low":    {},
+	"medium": {},
+	"high":   {},
+	"xhigh":  {},
+	"max":    {},
+}
+
+const allowedThinkingEffortText = "low, medium, high, xhigh, max"
+
 // Load resolves config from ~/.juex/juex.yaml, the work-local juex.yaml, and
 // OS env vars.
 //
@@ -212,7 +222,9 @@ func loadForWorkDir(workDir string) (Config, error) {
 	if err := resolveSelectedProvider(&cfg); err != nil {
 		return cfg, err
 	}
-	applyOSEnv(&cfg)
+	if err := applyOSEnv(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -243,7 +255,9 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err := resolveSelectedProvider(&cfg); err != nil {
 		return cfg, err
 	}
-	applyOSEnv(&cfg)
+	if err := applyOSEnv(&cfg); err != nil {
+		return cfg, err
+	}
 	if err := finalizeLoadedConfig(&cfg, true); err != nil {
 		return cfg, err
 	}
@@ -454,6 +468,9 @@ func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
 		for _, model := range p.Models {
 			if strings.TrimSpace(model.ID) == "" {
 				return fmt.Errorf("provider %q model id is required", id)
+			}
+			if err := validateThinkingEffort(model.ThinkingEffort); err != nil {
+				return fmt.Errorf("provider %q model %q: %w", id, strings.TrimSpace(model.ID), err)
 			}
 		}
 		existing := cfg.providerConfigs[id]
@@ -671,17 +688,27 @@ func applyCompactionConfig(cfg *Config, c compactionConfig) {
 	}
 }
 
-func applyOSEnv(cfg *Config) {
+func validateThinkingEffort(value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, ok := allowedThinkingEfforts[value]; ok {
+		return nil
+	}
+	return fmt.Errorf("invalid thinking_effort %q (allowed values: %s)", value, allowedThinkingEffortText)
+}
+
+func applyOSEnv(cfg *Config) error {
 	values := map[string]string{}
 	for _, key := range providerEnvKeys {
 		if v, ok := os.LookupEnv(key); ok && v != "" {
 			values[key] = v
 		}
 	}
-	applyEnvMap(cfg, values)
+	return applyEnvMap(cfg, values)
 }
 
-func applyEnvMap(cfg *Config, values map[string]string) {
+func applyEnvMap(cfg *Config, values map[string]string) error {
 	id, hasID := values["PROVIDER_API_ID"]
 	protocol, hasProtocol := values["PROVIDER_API_PROTOCOL"]
 	if hasID || hasProtocol {
@@ -697,6 +724,9 @@ func applyEnvMap(cfg *Config, values map[string]string) {
 		cfg.Model = v
 	}
 	if v, ok := values["PROVIDER_THINKING_EFFORT"]; ok && v != "" {
+		if err := validateThinkingEffort(v); err != nil {
+			return fmt.Errorf("PROVIDER_THINKING_EFFORT: %w", err)
+		}
 		cfg.ThinkingEffort = v
 	}
 	if v, ok := values["PROVIDER_CONTEXT_WINDOW"]; ok && v != "" {
@@ -704,6 +734,7 @@ func applyEnvMap(cfg *Config, values map[string]string) {
 			cfg.ContextWindow = n
 		}
 	}
+	return nil
 }
 
 func applyProviderCapabilitiesConfig(dst *llm.CapabilityOverrides, src providerCapabilitiesConfig) {
