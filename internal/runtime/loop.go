@@ -15,7 +15,7 @@
 //   - Pending input lets transports queue user or critical external messages
 //     while preserving assistant tool-use / user tool-result adjacency.
 //   - A budget of MaxIters tool/llm round-trips and a MaxDur wall-clock cap
-//     guards against runaway loops, with warning events near the limit.
+//     guard against runaway loops, with warning events near the limit.
 //   - Every state transition emits an event with a stable TurnID so downstream
 //     consumers can stitch a transcript.
 package runtime
