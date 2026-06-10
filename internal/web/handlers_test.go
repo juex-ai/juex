@@ -354,7 +354,7 @@ func TestPostTurn_StatusSlashReturnsCommand(t *testing.T) {
 	prov := newPendingProvider()
 	work := t.TempDir()
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -509,7 +509,7 @@ func TestPostTurn_CompactSlashConflictsWhileRunning(t *testing.T) {
 	)
 	work := t.TempDir()
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -561,7 +561,7 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	defer releaseProvider()
 	work := t.TempDir()
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)

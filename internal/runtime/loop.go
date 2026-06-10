@@ -31,7 +31,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -61,7 +60,7 @@ type Engine struct {
 	// ContextWindow is the provider context window in tokens. When omitted,
 	// the engine uses DefaultContextWindowTokens.
 	ContextWindow int
-	Compaction    config.CompactionConfig
+	Compaction    CompactionPolicy
 
 	// mu serializes turns for one Engine. MCP notifications can arrive while
 	// a user turn is running, and both paths append to the same session

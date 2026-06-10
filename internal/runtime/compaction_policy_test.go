@@ -1,13 +1,9 @@
 package runtime
 
-import (
-	"testing"
-
-	"github.com/juex-ai/juex/internal/config"
-)
+import "testing"
 
 func TestEffectiveCompactionPolicy_ClampsSmallContextWindow(t *testing.T) {
-	p := effectiveCompactionPolicy(config.DefaultCompactionConfig(), 6400)
+	p := effectiveCompactionPolicy(DefaultCompactionPolicy(), 6400)
 	if p.ReserveTokens <= 0 || p.ReserveTokens >= 6400 {
 		t.Fatalf("reserve = %d", p.ReserveTokens)
 	}
@@ -16,5 +12,15 @@ func TestEffectiveCompactionPolicy_ClampsSmallContextWindow(t *testing.T) {
 	}
 	if p.TriggerTokens >= 6400 {
 		t.Fatalf("trigger = %d", p.TriggerTokens)
+	}
+}
+
+func TestEffectiveCompactionPolicy_PreservesExplicitDisabledZeroPolicy(t *testing.T) {
+	p := effectiveCompactionPolicy(CompactionPolicy{Enabled: false}, 6400)
+	if p.Enabled {
+		t.Fatal("policy enabled = true, want explicit disabled policy preserved")
+	}
+	if p.ReserveTokens <= 0 || p.KeepRecentTokens <= 0 || p.TriggerTokens <= 0 {
+		t.Fatalf("policy defaults were not filled: %+v", p)
 	}
 }
