@@ -372,6 +372,9 @@ func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error
 }
 
 func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, limits turnRunLimits, start time.Time, prepared preparedTurnContext, warnings *turnBudgetWarningState) (providerTurnRequest, error) {
+	if warnings == nil {
+		warnings = &turnBudgetWarningState{}
+	}
 	budgetStatus := currentTurnBudgetStatus(turnID, iter, limits.maxIters, start, limits.maxDuration)
 	if budgetStatus.IterationNear && !warnings.iterationWarned {
 		e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.IterationWarningDetails()})
