@@ -68,7 +68,7 @@ func TestContextUsageSnapshotDoesNotDoubleCountCompactAndArtifactMessages(t *tes
 	if parts["compact_summary"].Tokens != estimateMessageTokens([]llm.Message{compact}) {
 		t.Fatalf("compact summary tokens = %d", parts["compact_summary"].Tokens)
 	}
-	if parts["context_artifacts"].Tokens != estimateCharsAsTokens(len(artifactText)) {
+	if parts["context_artifacts"].Tokens != EstimateCharsAsTokens(len(artifactText)) {
 		t.Fatalf("artifact tokens = %d", parts["context_artifacts"].Tokens)
 	}
 	artifactEnvelope := artifact

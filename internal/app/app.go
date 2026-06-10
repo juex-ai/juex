@@ -193,7 +193,7 @@ func New(opts Options) (*App, error) {
 		Memory:             memStore,
 		Skills:             skillLoader,
 		WorkDir:            cfg.WorkDir,
-		Shell:              promptShellProfile(cfg.Shell),
+		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
 	}
 
 	eng := &runtime.Engine{
@@ -266,17 +266,6 @@ func New(opts Options) (*App, error) {
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 	return tools.ShellProfile{
-		Profile:       p.Profile,
-		Family:        p.Family,
-		Binary:        p.Binary,
-		Args:          append([]string(nil), p.Args...),
-		PathStyle:     p.PathStyle,
-		HostPathStyle: p.HostPathStyle,
-	}
-}
-
-func promptShellProfile(p config.ShellProfile) prompt.ShellProfile {
-	return prompt.ShellProfile{
 		Profile:       p.Profile,
 		Family:        p.Family,
 		Binary:        p.Binary,

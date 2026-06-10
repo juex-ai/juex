@@ -36,6 +36,24 @@ type Info struct {
 	ContextUsage *llm.ContextUsage `json:"context_usage,omitempty"`
 }
 
+// InfoDir returns the canonical on-disk directory for info under sessionsRoot.
+// Legacy or synthetic Info values without an ID keep their recorded Dir.
+func InfoDir(sessionsRoot string, info Info) string {
+	if info.ID != "" {
+		return filepath.Join(sessionsRoot, info.ID)
+	}
+	return info.Dir
+}
+
+// HasConversation reports whether dir contains a persisted conversation file.
+func HasConversation(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(dir, conversationFile))
+	return err == nil
+}
+
 // List enumerates every well-formed session directory under root and
 // returns one Info per session, sorted by LastActiveAt descending then
 // StartedAt descending. A missing root is treated as "no sessions" and

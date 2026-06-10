@@ -7,13 +7,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/prompt"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -184,7 +184,7 @@ func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
 		Memory:             memStore,
 		Skills:             skillLoader,
 		WorkDir:            s.opts.Cfg.WorkDir,
-		Shell:              promptShellProfile(s.opts.Cfg.Shell),
+		Shell:              prompt.ShellProfileFromConfig(s.opts.Cfg.Shell),
 	}
 	sections := builder.Sections()
 	items := make([]systemPromptEntry, 0, len(sections))
@@ -204,17 +204,6 @@ func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
 	}, nil
 }
 
-func promptShellProfile(p config.ShellProfile) prompt.ShellProfile {
-	return prompt.ShellProfile{
-		Profile:       p.Profile,
-		Family:        p.Family,
-		Binary:        p.Binary,
-		Args:          append([]string(nil), p.Args...),
-		PathStyle:     p.PathStyle,
-		HostPathStyle: p.HostPathStyle,
-	}
-}
-
 func runtimePromptLabel(section prompt.Section) string {
 	if section.Label != "" {
 		return section.Label
@@ -230,10 +219,7 @@ func runtimePromptSource(section prompt.Section) string {
 }
 
 func estimateRuntimePromptTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	return (utf8.RuneCountInString(text) + 3) / 4
+	return juexruntime.EstimateTextTokens(text)
 }
 
 func (s *Server) absoluteWorkDir() string {

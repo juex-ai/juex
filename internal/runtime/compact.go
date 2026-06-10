@@ -221,7 +221,7 @@ func ensureCompactionProgress(sel compactionSelection) compactionSelection {
 }
 
 func estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
-	return estimateCharsAsTokens(len(systemPrompt)) +
+	return EstimateCharsAsTokens(len(systemPrompt)) +
 		estimateToolTokens(tools) +
 		estimateMessageTokens(history)
 }

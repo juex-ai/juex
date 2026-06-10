@@ -70,7 +70,7 @@ func resolveSessionDir(rf resumeFlags, sessionsRoot, historyPath string, in io.R
 
 func existingSessionDir(sessionsRoot, id string) (string, bool) {
 	dir := filepath.Join(sessionsRoot, id)
-	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
+	if !session.HasConversation(dir) {
 		return "", false
 	}
 	return dir, true
@@ -85,7 +85,7 @@ func resolveSessionSelector(selector, sessionsRoot, historyPath string) (string,
 		if h.Active == nil || h.Active.ID == "" {
 			return "", &notFoundError{msg: "no active session to resume"}
 		}
-		dir := infoDir(sessionsRoot, *h.Active)
+		dir := session.InfoDir(sessionsRoot, *h.Active)
 		if _, ok := existingSessionDir(filepath.Dir(dir), filepath.Base(dir)); !ok {
 			return "", &notFoundError{msg: "session not found: " + h.Active.ID}
 		}
@@ -109,7 +109,7 @@ func resolveSessionSelector(selector, sessionsRoot, historyPath string) (string,
 		return matches[i].StartedAt.After(matches[j].StartedAt)
 	})
 	for _, match := range matches {
-		dir := infoDir(sessionsRoot, match)
+		dir := session.InfoDir(sessionsRoot, match)
 		if _, ok := existingSessionDir(filepath.Dir(dir), filepath.Base(dir)); ok {
 			return dir, nil
 		}
@@ -140,11 +140,4 @@ func aliasMatches(alias, sessionsRoot, historyPath string) ([]session.Info, erro
 		}
 	}
 	return matches, nil
-}
-
-func infoDir(sessionsRoot string, info session.Info) string {
-	if info.ID != "" {
-		return filepath.Join(sessionsRoot, info.ID)
-	}
-	return info.Dir
 }

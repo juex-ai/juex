@@ -68,6 +68,36 @@ func writeEvents(t *testing.T, dir string, evs []events.Event) {
 	}
 }
 
+func TestInfoDirPrefersID(t *testing.T) {
+	got := InfoDir("/sessions", Info{ID: "abc", Dir: "/legacy"})
+	if got != filepath.Join("/sessions", "abc") {
+		t.Fatalf("InfoDir = %q, want canonical ID path", got)
+	}
+}
+
+func TestInfoDirFallsBackToDir(t *testing.T) {
+	got := InfoDir("/sessions", Info{Dir: "/legacy"})
+	if got != "/legacy" {
+		t.Fatalf("InfoDir = %q, want recorded dir", got)
+	}
+}
+
+func TestHasConversation(t *testing.T) {
+	if HasConversation("") {
+		t.Fatal("HasConversation(\"\") = true, want false")
+	}
+	dir := t.TempDir()
+	if HasConversation(dir) {
+		t.Fatal("HasConversation(empty dir) = true, want false")
+	}
+	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !HasConversation(dir) {
+		t.Fatal("HasConversation(dir) = false, want true")
+	}
+}
+
 func TestLoadInfo_DefaultsKindToPrimary(t *testing.T) {
 	root := t.TempDir()
 	dir := makeSession(t, root, "20260506T103500-primary1",

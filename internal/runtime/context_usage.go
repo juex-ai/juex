@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
@@ -74,7 +75,7 @@ func estimateContextArtifactTokens(history []llm.Message) int {
 			chars += len(block.Text) + len(block.Content)
 		}
 	}
-	return estimateCharsAsTokens(chars)
+	return EstimateCharsAsTokens(chars)
 }
 
 func estimateOrdinaryMessageTokens(history []llm.Message) int {
@@ -119,7 +120,7 @@ func estimateSystemPromptTokens(sections []prompt.Section) int {
 			filtered = append(filtered, section)
 		}
 	}
-	return estimateCharsAsTokens(len(prompt.JoinSections(filtered)))
+	return EstimateCharsAsTokens(len(prompt.JoinSections(filtered)))
 }
 
 func estimateSectionTokens(sections []prompt.Section, key string) int {
@@ -129,7 +130,7 @@ func estimateSectionTokens(sections []prompt.Section, key string) int {
 			chars += len(section.Text)
 		}
 	}
-	return estimateCharsAsTokens(chars)
+	return EstimateCharsAsTokens(chars)
 }
 
 func estimateToolTokens(tools []llm.ToolSpec) int {
@@ -140,7 +141,7 @@ func estimateToolTokens(tools []llm.ToolSpec) int {
 	if err != nil {
 		return 0
 	}
-	return estimateCharsAsTokens(len(data))
+	return EstimateCharsAsTokens(len(data))
 }
 
 func estimateMessageTokens(history []llm.Message) int {
@@ -156,10 +157,17 @@ func estimateMessageTokens(history []llm.Message) int {
 			}
 		}
 	}
-	return estimateCharsAsTokens(chars)
+	return EstimateCharsAsTokens(chars)
 }
 
-func estimateCharsAsTokens(chars int) int {
+func EstimateTextTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	return EstimateCharsAsTokens(utf8.RuneCountInString(text))
+}
+
+func EstimateCharsAsTokens(chars int) int {
 	if chars <= 0 {
 		return 0
 	}
