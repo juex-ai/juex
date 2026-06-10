@@ -290,12 +290,17 @@ LLM package owns concrete provider construction through `llm.NewProvider`.
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
 OpenAI-compatible Chat through `openai-go`; `openai_responses.go` wraps the
-OpenAI Responses API. The `openai-codex/responses` adapter also uses
-`openai-go` Responses streaming, but sets the ChatGPT Codex backend base URL,
-Codex auth headers, and Codex-only request fields inside its adapter. SDK-backed
-clients use `WithMaxRetries(10)` for recoverable transport/API failures such as
-network errors, 408/409/429, and 5xx responses. Ordinary request errors are
-returned immediately.
+OpenAI Responses API. The `openai-codex/responses` adapter uses `openai-go`
+Responses streaming by default, but sets the ChatGPT Codex backend base URL,
+Codex auth headers, and Codex-only request fields inside its adapter. It can
+optionally use a Codex-style WebSocket transport via
+`compat.codex_transport`. That path sends `response.create` frames to
+`/codex/responses`, uses the Codex WebSocket beta header, caches the connection,
+and reuses `previous_response_id` only when the next logical request is a strict
+incremental extension of the previous request plus previous response output.
+SDK-backed HTTP clients use `WithMaxRetries(10)` for recoverable transport/API
+failures such as network errors, 408/409/429, and 5xx responses. Ordinary
+request errors are returned immediately.
 Provider adapters share a canonical projection helper before they encode SDK
 requests. The helper compacts history, filters tool and reasoning replay blocks
 through capability gates, supports Codex's reasoning-omit path, normalizes
@@ -773,6 +778,7 @@ compaction:
 | `providers[].query` | optional static query params for this provider profile |
 | `providers[].capabilities` | optional provider-level gates for tools, streaming, reasoning effort/replay, and max output tokens |
 | `providers[].compat.reasoning_replay_fields` | OpenAI-compatible raw assistant fields to replay when reasoning replay is enabled |
+| `providers[].compat.codex_transport` | optional `openai-codex` transport mode: `sse` (default), `auto`, `websocket`, or `websocket-cached` |
 | `providers[].models[].id` | model name sent to the provider |
 | `providers[].models[].thinking_effort` | optional reasoning depth for thinking models; supported values are `low`, `medium`, `high`, `xhigh`, and `max`; invalid values fail config load |
 | `providers[].models[].context_window` | optional model context window in tokens; defaults to `256000` |
@@ -780,6 +786,7 @@ compaction:
 | `providers[].models[].query` | optional model-level query parameter overrides |
 | `providers[].models[].capabilities` | optional model-level capability overrides |
 | `providers[].models[].compat.reasoning_replay_fields` | optional model-level compatibility overrides |
+| `providers[].models[].compat.codex_transport` | optional model-level override for `providers[].compat.codex_transport` |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |

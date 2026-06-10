@@ -52,6 +52,8 @@ providers:
     # compat:
     #   reasoning_replay_fields:
     #     - reasoning_content
+    #   # openai-codex only: sse (default), auto, websocket, or websocket-cached.
+    #   codex_transport: sse
     models:
       - id: gpt-4.1
         # Optional: control reasoning depth for thinking models.
@@ -71,6 +73,9 @@ providers:
   # For OpenAI Codex OAuth, switch the top-level model to
   # openai-codex/gpt-5.5 and use:
   # - id: openai-codex
+  #   # Optional: try Codex-style WebSocket cached transport.
+  #   # compat:
+  #   #   codex_transport: auto
   #   models:
   #     - id: gpt-5.5
 

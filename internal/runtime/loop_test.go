@@ -662,6 +662,7 @@ func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
 	got := info.ContextUsage
 	if got == nil {
 		t.Fatal("session context usage is nil")
+		return
 	}
 	if got.Model != "mock:model" {
 		t.Fatalf("model = %q", got.Model)

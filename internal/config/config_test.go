@@ -976,6 +976,7 @@ providers:
     compat:
       reasoning_replay_fields:
         - reasoning_content
+      codex_transport: auto
     models:
       - id: deepseek-chat
         context_window: 64000
@@ -983,6 +984,8 @@ providers:
           X-Model: deepseek-chat
         capabilities:
           max_output_tokens: false
+        compat:
+          codex_transport: websocket-cached
 `
 	writeTextFile(t, configPath, body)
 
@@ -1008,11 +1011,14 @@ providers:
 	if got := cfg.ProviderCompat.ReasoningReplayFields; len(got) != 1 || got[0] != "reasoning_content" {
 		t.Fatalf("compat = %+v", cfg.ProviderCompat)
 	}
+	if cfg.ProviderCompat.CodexTransport != "websocket-cached" {
+		t.Fatalf("codex transport = %q", cfg.ProviderCompat.CodexTransport)
+	}
 	profile, err := cfg.ProviderProfile()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != "deepseek" || profile.Protocol != "openai/chat" || profile.Capabilities.Tools || profile.Capabilities.MaxOutputTokens {
+	if profile.ID != "deepseek" || profile.Protocol != "openai/chat" || profile.Capabilities.Tools || profile.Capabilities.MaxOutputTokens || profile.Compat.CodexTransport != "websocket-cached" {
 		t.Fatalf("profile = %+v", profile)
 	}
 	selection := cfg.ProviderSelection()
@@ -1025,6 +1031,27 @@ providers:
 	}
 	if selectedProfile.ID != profile.ID || selectedProfile.Protocol != profile.Protocol || selectedProfile.Model != profile.Model {
 		t.Fatalf("selected profile = %+v, want %+v", selectedProfile, profile)
+	}
+}
+
+func TestLoadFromFile_ProviderCompatRejectsInvalidCodexTransport(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-test
+providers:
+  - id: openai
+    api_key: sk-x
+    compat:
+      codex_transport: sideways
+    models:
+      - id: gpt-test
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), "unsupported codex transport") {
+		t.Fatalf("err = %v, want invalid codex transport", err)
 	}
 }
 

@@ -87,6 +87,7 @@ type providerCapabilitiesConfig struct {
 
 type providerCompatConfig struct {
 	ReasoningReplayFields []string `yaml:"reasoning_replay_fields"`
+	CodexTransport        string   `yaml:"codex_transport"`
 }
 
 type CompactionConfig = runtimepolicy.CompactionPolicy
@@ -415,7 +416,17 @@ func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
 				return fmt.Errorf("provider %q model %q: %w", id, modelID, err)
 			}
 			model.ThinkingEffort = thinkingEffort
+			codexTransport, err := llm.NormalizeCodexTransport(model.Compat.CodexTransport)
+			if err != nil {
+				return fmt.Errorf("provider %q model %q: %w", id, modelID, err)
+			}
+			model.Compat.CodexTransport = codexTransport
 		}
+		codexTransport, err := llm.NormalizeCodexTransport(p.Compat.CodexTransport)
+		if err != nil {
+			return fmt.Errorf("provider %q: %w", id, err)
+		}
+		p.Compat.CodexTransport = codexTransport
 		existing := cfg.providerConfigs[id]
 		cfg.providerConfigs[id] = mergeProviderConfig(existing, p)
 	}
@@ -440,6 +451,9 @@ func mergeProviderConfig(base, override providerConfig) providerConfig {
 	base.Capabilities = mergeProviderCapabilitiesConfig(base.Capabilities, override.Capabilities)
 	if len(override.Compat.ReasoningReplayFields) > 0 {
 		base.Compat.ReasoningReplayFields = append([]string(nil), override.Compat.ReasoningReplayFields...)
+	}
+	if override.Compat.CodexTransport != "" {
+		base.Compat.CodexTransport = override.Compat.CodexTransport
 	}
 	base.Models = mergeProviderModelConfigs(base.Models, override.Models)
 	return base
@@ -487,6 +501,9 @@ func mergeProviderModelConfig(base, override providerModelConfig) providerModelC
 	base.Capabilities = mergeProviderCapabilitiesConfig(base.Capabilities, override.Capabilities)
 	if len(override.Compat.ReasoningReplayFields) > 0 {
 		base.Compat.ReasoningReplayFields = append([]string(nil), override.Compat.ReasoningReplayFields...)
+	}
+	if override.Compat.CodexTransport != "" {
+		base.Compat.CodexTransport = override.Compat.CodexTransport
 	}
 	return base
 }
@@ -539,6 +556,9 @@ func resolveSelectedProvider(cfg *Config) error {
 	if len(p.Compat.ReasoningReplayFields) > 0 {
 		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
 	}
+	if p.Compat.CodexTransport != "" {
+		cfg.ProviderCompat.CodexTransport = p.Compat.CodexTransport
+	}
 	if model.ThinkingEffort != "" {
 		cfg.ThinkingEffort = model.ThinkingEffort
 	}
@@ -550,6 +570,9 @@ func resolveSelectedProvider(cfg *Config) error {
 	applyProviderCapabilitiesConfig(&cfg.ProviderCapabilities, model.Capabilities)
 	if len(model.Compat.ReasoningReplayFields) > 0 {
 		cfg.ProviderCompat.ReasoningReplayFields = append([]string(nil), model.Compat.ReasoningReplayFields...)
+	}
+	if model.Compat.CodexTransport != "" {
+		cfg.ProviderCompat.CodexTransport = model.Compat.CodexTransport
 	}
 	return nil
 }

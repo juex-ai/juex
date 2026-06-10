@@ -33,6 +33,7 @@ type CapabilityOverrides struct {
 
 type CompatOptions struct {
 	ReasoningReplayFields []string
+	CodexTransport        string
 }
 
 type ProviderProfile struct {
@@ -67,6 +68,7 @@ func (p ProviderProfile) Config() Config {
 		},
 		Compat: CompatOptions{
 			ReasoningReplayFields: append([]string(nil), p.Compat.ReasoningReplayFields...),
+			CodexTransport:        p.Compat.CodexTransport,
 		},
 	}
 }
@@ -86,10 +88,41 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 	if len(cfg.Compat.ReasoningReplayFields) > 0 {
 		profile.Compat.ReasoningReplayFields = append([]string(nil), cfg.Compat.ReasoningReplayFields...)
 	}
+	if cfg.Compat.CodexTransport != "" {
+		transport, err := NormalizeCodexTransport(cfg.Compat.CodexTransport)
+		if err != nil {
+			return ProviderProfile{}, err
+		}
+		profile.Compat.CodexTransport = transport
+	}
 	if len(profile.Compat.ReasoningReplayFields) == 0 && profile.Capabilities.ReasoningReplay {
 		profile.Compat.ReasoningReplayFields = []string{"reasoning_content", "reasoning", "thinking"}
 	}
 	return profile, nil
+}
+
+const (
+	CodexTransportSSE             = "sse"
+	CodexTransportAuto            = "auto"
+	CodexTransportWebSocket       = "websocket"
+	CodexTransportWebSocketCached = "websocket-cached"
+)
+
+func NormalizeCodexTransport(raw string) (string, error) {
+	switch strings.TrimSpace(raw) {
+	case "":
+		return "", nil
+	case CodexTransportSSE:
+		return CodexTransportSSE, nil
+	case CodexTransportAuto:
+		return CodexTransportAuto, nil
+	case CodexTransportWebSocket:
+		return CodexTransportWebSocket, nil
+	case CodexTransportWebSocketCached:
+		return CodexTransportWebSocketCached, nil
+	default:
+		return "", fmt.Errorf("llm: unsupported codex transport %q", raw)
+	}
 }
 
 func baseProfile(cfg Config) (ProviderProfile, error) {
