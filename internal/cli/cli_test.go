@@ -312,7 +312,7 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	}
 }
 
-func TestRunCmd_DryRunRuntimeBudgetFlagsOverrideConfig(t *testing.T) {
+func TestRunCmd_DryRunOmitsLegacyRuntimeBudgetPlan(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
@@ -325,20 +325,34 @@ func TestRunCmd_DryRunRuntimeBudgetFlagsOverrideConfig(t *testing.T) {
 	if err := appendTextFile(configFile, "runtime:\n  max_iters: 3\n  max_duration: 10s\n"); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--max-iters", "9", "--max-duration", "12s", "hello"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
 	if _, ok := err.(*dryRunOK); !ok {
 		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
 	}
-	var plan dryRunPlan
+	var plan map[string]any
 	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.Runtime == nil {
-		t.Fatalf("runtime plan missing: %s", out.String())
+	if _, ok := plan["runtime"]; ok {
+		t.Fatalf("dry-run plan should omit runtime budget block: %s", out.String())
 	}
-	if plan.Runtime.MaxIters != 9 || plan.Runtime.MaxDuration != "12s" || plan.Runtime.MaxDurationMs != 12000 {
-		t.Fatalf("runtime plan = %+v, want flag overrides", plan.Runtime)
+}
+
+func TestRunCmd_HelpOmitsRuntimeBudgetFlags(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"run", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	body := out.String()
+	for _, removed := range []string{"--max-iters", "--max-duration"} {
+		if strings.Contains(body, removed) {
+			t.Fatalf("run help still contains %s:\n%s", removed, body)
+		}
 	}
 }
 

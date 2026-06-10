@@ -23,7 +23,6 @@ func TestTurn_BuiltinShellTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
-	eng.MaxDur = 3 * time.Second
 
 	var erroredPayload ToolErroredPayload
 	bus.Subscribe("tool.errored", func(e events.Event) {

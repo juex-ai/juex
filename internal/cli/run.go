@@ -15,7 +15,6 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
-	jruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -64,13 +63,6 @@ type dryRunPlan struct {
 	SkillCount  int                 `json:"skill_count"`
 	Skills      []skillSummary      `json:"skills,omitempty"`
 	MCP         app.MCPStatus       `json:"mcp"`
-	Runtime     *runtimePlan        `json:"runtime,omitempty"`
-}
-
-type runtimePlan struct {
-	MaxIters      int    `json:"max_iters,omitempty"`
-	MaxDuration   string `json:"max_duration,omitempty"`
-	MaxDurationMs int64  `json:"max_duration_ms,omitempty"`
 }
 
 // skillSummary mirrors what the system prompt's "Available Skills" section
@@ -97,8 +89,6 @@ func newRunCmd(flags *persistentFlags) *cobra.Command {
 		dryRun      bool
 		newSession  bool
 		sideSession bool
-		maxIters    int
-		maxDuration time.Duration
 		rf          resumeFlags
 	)
 	cmd := &cobra.Command{
@@ -142,9 +132,6 @@ execution is printed and the process exits with code 10.`,
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"set top-level model and providers[] entries in .juex/juex.yaml (copy from juex.yaml.example)", false)
-			}
-			if err := applyRuntimeFlagOverrides(cmd, &cfg, maxIters, maxDuration, jsonOut); err != nil {
-				return err
 			}
 
 			prompt := strings.Join(args, " ")
@@ -224,31 +211,11 @@ execution is printed and the process exits with code 10.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would execute (provider, model, prompt size, tool list); skip the LLM call; exit 10")
 	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
 	cmd.Flags().BoolVar(&sideSession, "side", false, "create a side session without changing the active primary")
-	cmd.Flags().IntVar(&maxIters, "max-iters", 0, "maximum LLM/tool loop iterations for this turn; overrides runtime.max_iters")
-	cmd.Flags().DurationVar(&maxDuration, "max-duration", 0, "maximum wall-clock duration for this turn (for example 5m or 900s); overrides runtime.max_duration")
 	cmd.Flags().StringVar(&rf.Resume, "resume", "", "deprecated: resume a past session by id, alias, or 'last'; use sessions activate")
 	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
 	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
 	return cmd
-}
-
-func applyRuntimeFlagOverrides(cmd *cobra.Command, cfg *config.Config, maxIters int, maxDuration time.Duration, jsonOut bool) error {
-	if cmd.Flags().Changed("max-iters") {
-		if maxIters <= 0 {
-			return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "--max-iters must be positive"},
-				"pass a positive integer, for example --max-iters 50", false)
-		}
-		cfg.Runtime.MaxIters = maxIters
-	}
-	if cmd.Flags().Changed("max-duration") {
-		if maxDuration <= 0 {
-			return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "--max-duration must be positive"},
-				"pass a positive duration, for example --max-duration 900s", false)
-		}
-		cfg.Runtime.MaxDuration = maxDuration
-	}
-	return nil
 }
 
 // runDryRun wires everything but the LLM call so we can introspect the
@@ -308,7 +275,6 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		SkillCount:  len(skillSummaries),
 		Skills:      skillSummaries,
 		MCP:         a.MCPStatus(),
-		Runtime:     runtimePlanFromConfig(cfg),
 	}
 
 	if jsonOut {
@@ -318,21 +284,6 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		cmdPrintln(cmd, mustJSON(plan))
 	}
 	return &dryRunOK{msg: "dry run complete"}
-}
-
-func runtimePlanFromConfig(cfg config.Config) *runtimePlan {
-	if cfg.Runtime.MaxIters <= 0 && cfg.Runtime.MaxDuration <= 0 {
-		return nil
-	}
-	plan := &runtimePlan{}
-	if cfg.Runtime.MaxIters > 0 {
-		plan.MaxIters = cfg.Runtime.MaxIters
-	}
-	if cfg.Runtime.MaxDuration > 0 {
-		plan.MaxDuration = cfg.Runtime.MaxDuration.String()
-		plan.MaxDurationMs = cfg.Runtime.MaxDuration.Milliseconds()
-	}
-	return plan
 }
 
 func configFileForPlan(flags *persistentFlags) string {
@@ -365,10 +316,6 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 			Suggestion: suggestion,
 			Retryable:  true,
 		}
-		if budgetErr, ok := jruntime.AsBudgetError(err); ok {
-			body.Error = budgetErr.Kind
-			body.Details = budgetErr.Details()
-		}
 		if a != nil && a.Session != nil {
 			body.SessionID = a.Session.ID
 			body.SessionDir = a.Session.Dir
@@ -397,9 +344,6 @@ func errorType(err error) string {
 	case *dryRunOK:
 		return "dry_run_ok"
 	default:
-		if budgetErr, ok := jruntime.AsBudgetError(err); ok {
-			return budgetErr.Kind
-		}
 		return "general_error"
 	}
 }

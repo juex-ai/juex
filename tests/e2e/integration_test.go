@@ -142,7 +142,6 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 	}
 	eng := &runtime.Engine{
 		Provider: provider, Tools: reg, Bus: bus, Session: sess, Prompt: pb,
-		MaxIters: 10, MaxDur: 180 * time.Second,
 	}
 
 	bus.Subscribe("*", func(e events.Event) {

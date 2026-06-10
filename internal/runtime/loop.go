@@ -14,8 +14,8 @@
 //     are collected and reattached to history in the original order.
 //   - Pending input lets transports queue user or critical external messages
 //     while preserving assistant tool-use / user tool-result adjacency.
-//   - A budget of MaxIters tool/llm round-trips and a MaxDur wall-clock cap
-//     guard against runaway loops, with warning events near the limit.
+//   - Turns run until the model finishes, the parent context is cancelled, or a
+//     provider/tool/context error stops progress.
 //   - Every state transition emits an event with a stable TurnID so downstream
 //     consumers can stitch a transcript.
 package runtime
@@ -39,8 +39,6 @@ import (
 )
 
 const (
-	defaultMaxIters        = 25
-	defaultMaxDur          = 5 * time.Minute
 	DefaultMaxPendingInput = 16
 	maxToolErrorOutput     = 32 * 1024
 )
@@ -51,8 +49,6 @@ type Engine struct {
 	Bus      *events.Bus
 	Session  *session.Session
 	Prompt   *prompt.Builder
-	MaxIters int
-	MaxDur   time.Duration
 	// MaxPendingInputs caps user or external event messages that can be
 	// queued while a turn is active. When omitted, DefaultMaxPendingInput is
 	// used. A full queue rejects new input instead of silently dropping it.
@@ -87,8 +83,8 @@ type PendingInputStatus struct {
 }
 
 // Turn drives one user input to completion. The returned string is the final
-// assistant text response (concatenated text blocks). Returns an error on
-// budget breach or context cancellation.
+// assistant text response (concatenated text blocks). Returns an error when
+// cancellation or provider/tool/context failure stops the turn.
 func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 	return e.TurnMessage(ctx, llm.TextMessage(llm.RoleUser, userInput))
 }
@@ -209,7 +205,6 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	limits := e.resolveTurnRunLimits()
 	if turnID == "" {
 		turnID = newID()
 	}
@@ -221,8 +216,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}
 	}()
 	start := time.Now()
-	turnCtx, cancel := context.WithTimeout(ctx, limits.maxDuration)
-	defer cancel()
+	turnCtx := ctx
 
 	prepared, err := e.prepareTurnContextLocked(turnCtx, turnID, userMsg)
 	if err != nil {
@@ -235,9 +229,8 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 
 	var lastText string
 	retriedOverflow := false
-	budgetWarnings := turnBudgetWarningState{}
-	for iter := 0; iter < limits.maxIters; iter++ {
-		if err := checkTurnBudget(ctx, turnCtx, turnID, limits.maxDuration); err != nil {
+	for iter := 0; ; iter++ {
+		if err := turnCtx.Err(); err != nil {
 			return "", e.failTurn(turnID, err)
 		}
 
@@ -245,16 +238,13 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			return "", e.failTurn(turnID, err)
 		}
 
-		request, err := e.prepareProviderRequestLocked(turnID, iter, limits, start, prepared, &budgetWarnings)
+		request, err := e.prepareProviderRequestLocked(turnID, iter, prepared)
 		if err != nil {
 			return "", e.failTurn(turnID, err)
 		}
 
 		resp, err := e.requestProviderTurnLocked(turnCtx, prepared, request)
 		if err != nil {
-			if turnTimedOut(ctx, turnCtx) {
-				return "", e.failTurn(turnID, timeoutBudgetError(turnID, limits.maxDuration, fmt.Errorf("llm: %w", err)))
-			}
 			if llm.IsContextOverflowError(err) && !retriedOverflow {
 				if _, compactErr := e.compactLocked(turnCtx, turnID, prepared.systemPrompt, "overflow_retry", true, ""); compactErr != nil {
 					return "", e.failTurn(turnID, fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr))
@@ -272,9 +262,6 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		if len(recorded.toolCalls) == 0 {
 			lastText = recorded.finalText
 			if !e.finishActiveTurnIfNoPending(turnID) {
-				if iter == limits.maxIters-1 {
-					return "", e.failTurn(turnID, iterationBudgetError(turnID, limits.maxIters))
-				}
 				continue
 			}
 			activeClosed = true
@@ -284,19 +271,10 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		if err := e.recordToolBatchLocked(turnCtx, turnID, prepared.policy, recorded.toolCalls); err != nil {
 			return "", e.failTurn(turnID, err)
 		}
-
-		if iter == limits.maxIters-1 {
-			return "", e.failTurn(turnID, iterationBudgetError(turnID, limits.maxIters))
-		}
 	}
 
 	e.recordTurnCompletionLocked(turnID, start, lastText)
 	return lastText, nil
-}
-
-type turnRunLimits struct {
-	maxIters    int
-	maxDuration time.Duration
 }
 
 type preparedTurnContext struct {
@@ -307,11 +285,6 @@ type preparedTurnContext struct {
 	userMessage    llm.Message
 }
 
-type turnBudgetWarningState struct {
-	iterationWarned bool
-	durationWarned  bool
-}
-
 type providerTurnRequest struct {
 	history []llm.Message
 }
@@ -319,17 +292,6 @@ type providerTurnRequest struct {
 type recordedProviderResponse struct {
 	finalText string
 	toolCalls []llm.Block
-}
-
-func (e *Engine) resolveTurnRunLimits() turnRunLimits {
-	limits := turnRunLimits{maxIters: e.MaxIters, maxDuration: e.MaxDur}
-	if limits.maxIters <= 0 {
-		limits.maxIters = defaultMaxIters
-	}
-	if limits.maxDuration <= 0 {
-		limits.maxDuration = defaultMaxDur
-	}
-	return limits
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
@@ -365,19 +327,7 @@ func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error
 	return nil
 }
 
-func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, limits turnRunLimits, start time.Time, prepared preparedTurnContext, warnings *turnBudgetWarningState) (providerTurnRequest, error) {
-	if warnings == nil {
-		warnings = &turnBudgetWarningState{}
-	}
-	budgetStatus := currentTurnBudgetStatus(turnID, iter, limits.maxIters, start, limits.maxDuration)
-	if budgetStatus.IterationNear && !warnings.iterationWarned {
-		e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.IterationWarningDetails()})
-		warnings.iterationWarned = true
-	}
-	if budgetStatus.DurationNear && !warnings.durationWarned {
-		e.emit(events.Event{Type: "turn.budget.warning", TurnID: turnID, Payload: budgetStatus.DurationWarningDetails()})
-		warnings.durationWarned = true
-	}
+func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared preparedTurnContext) (providerTurnRequest, error) {
 	e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
 		Iter:       iter,
 		HistoryLen: len(e.Session.History),
@@ -392,9 +342,6 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, limits tu
 	e.emitProjectionApplied(turnID, projection)
 	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
 	e.emitProjectionApplied(turnID, projection)
-	if budgetStatus.Near() {
-		projectedHistory = appendBudgetFinalizationMessage(projectedHistory, budgetStatus)
-	}
 	return providerTurnRequest{history: projectedHistory}, nil
 }
 
@@ -463,18 +410,6 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 		OutputLen:  len(lastText),
 		TokenUsage: e.Session.TokenUsageSnapshot(),
 	}})
-}
-
-func checkTurnBudget(parent context.Context, turnCtx context.Context, turnID string, maxDur time.Duration) error {
-	select {
-	case <-turnCtx.Done():
-		if turnTimedOut(parent, turnCtx) {
-			return timeoutBudgetError(turnID, maxDur, turnCtx.Err())
-		}
-		return fmt.Errorf("turn budget exceeded: %w", turnCtx.Err())
-	default:
-		return nil
-	}
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while
@@ -635,41 +570,8 @@ func (e *Engine) emit(ev events.Event) {
 
 func (e *Engine) failTurn(turnID string, err error) error {
 	payload := TurnErroredPayload{Error: err.Error()}
-	if budgetErr, ok := AsBudgetError(err); ok {
-		payload.Kind = budgetErr.Kind
-		payload.Budget = budgetErr.Budget
-		payload.TurnID = budgetErr.TurnID
-		payload.MaxIters = budgetErr.MaxIters
-		if budgetErr.MaxDuration > 0 {
-			payload.MaxDuration = budgetErr.MaxDuration.String()
-			payload.MaxDurationMS = budgetErr.MaxDuration.Milliseconds()
-		}
-	}
 	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: payload})
 	return err
-}
-
-func iterationBudgetError(turnID string, maxIters int) *BudgetError {
-	return &BudgetError{
-		Kind:     BudgetErrorKindIterationLimit,
-		Budget:   "iterations",
-		TurnID:   turnID,
-		MaxIters: maxIters,
-	}
-}
-
-func timeoutBudgetError(turnID string, maxDur time.Duration, cause error) *BudgetError {
-	return &BudgetError{
-		Kind:        BudgetErrorKindTimeout,
-		Budget:      "duration",
-		TurnID:      turnID,
-		MaxDuration: maxDur,
-		Cause:       cause,
-	}
-}
-
-func turnTimedOut(parent context.Context, turnCtx context.Context) bool {
-	return parent.Err() == nil && errors.Is(turnCtx.Err(), context.DeadlineExceeded)
 }
 
 func newID() string {

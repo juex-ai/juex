@@ -87,7 +87,6 @@ juex/
 │   ├── runtime/                  # turn loop, pending input, compaction, context projection
 │   │   ├── loop.go
 │   │   ├── active_context.go
-│   │   ├── budget_*.go
 │   │   ├── compact.go
 │   │   ├── compaction_*.go
 │   │   └── context_*.go
@@ -402,11 +401,10 @@ func (b *Bus) Emit(e Event)                              // synchronous fan-out
 ```
 
 Standard event families include `turn.started/completed/errored`,
-`turn.budget.warning`, `llm.requested/responded`,
-`tool.requested/completed/errored`, `pending_input.*`,
-`context.compact.*`, and `context.projection.applied`. `llm.responded`
-includes the assistant message's ordered `blocks` plus summary fields
-(`text`, `thinking`, `tool_calls`) for older consumers.
+`llm.requested/responded`, `tool.requested/completed/errored`,
+`pending_input.*`, `context.compact.*`, and `context.projection.applied`.
+`llm.responded` includes the assistant message's ordered `blocks` plus summary
+fields (`text`, `thinking`, `tool_calls`) for older consumers.
 Stable runtime event families use typed payload structs next to their emitters
 while the bus and JSONL/SSE wire shape stay generic through `Payload any`.
 
@@ -550,8 +548,6 @@ type Engine struct {
     Bus              *events.Bus
     Session          *session.Session
     Prompt           *prompt.Builder
-    MaxIters         int           // default 25
-    MaxDur           time.Duration // default 5min
     MaxPendingInputs int           // default 16
     ContextWindow    int           // default 256000
     Compaction       runtime.CompactionPolicy
@@ -559,24 +555,23 @@ type Engine struct {
 func (e *Engine) Turn(ctx, userInput) (string, error)
 ```
 
-`MaxIters` and `MaxDur` default inside the runtime when unset. Operators can
-tune them with `runtime.max_iters` and `runtime.max_duration` in YAML, while
-`juex run --max-iters` and `--max-duration` override the loaded config for a
-single turn. Budget failures are typed as `runtime_iteration_limit` or
-`runtime_timeout`; `juex run --json` includes the stable kind, session id,
-session dir, work dir, and budget details.
+Turns are Codex-aligned long-running loops: the runtime does not enforce a
+per-turn provider-request count or wall-clock duration cap. A turn stops when
+the assistant finishes without queued input, the parent context/user stop
+cancels it, provider/tool/context work fails according to its existing
+contract, or context projection/compaction cannot recover. `llm.requested`
+keeps an `iter` counter for observability only; the counter does not stop the
+turn.
 
 Compaction policy defaults and the default context-window token count live on
 the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
 and environment input; `internal/app` passes the resolved value into
 `runtime.Engine`.
 
-When a turn is close to its iteration or duration budget, the runtime emits
-`turn.budget.warning` with `runtime_iteration_warning` or
-`runtime_timeout_warning`. Provider requests made while near a budget receive a
-small provider-only user message asking the model to finish now and avoid
-non-essential tools. That synthetic message is not appended to session history;
-the hard iteration and duration limits remain unchanged.
+Tool and provider adapters keep their own safeguards. Builtin shell/tool calls
+retain per-action timeouts, MCP startup/tool timeouts remain adapter-level
+limits, and provider transports may enforce request or stream-idle protection.
+Those safeguards are not turn budgets and do not add `runtime_*` error kinds.
 
 `Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
 single LLM response run via `sync.WaitGroup`-backed goroutines; results are
@@ -760,9 +755,6 @@ compaction:
   tool_result_preview_head_bytes: 8192
   tool_result_preview_tail_bytes: 8192
   max_auto_failures: 3
-runtime:
-  max_iters: 25
-  max_duration: 5m
 ```
 
 | Field | Description |
@@ -801,15 +793,13 @@ runtime:
 | `compaction.tool_result_preview_head_bytes` | leading bytes kept inline for externalized tool output |
 | `compaction.tool_result_preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
-| `runtime.max_iters` | optional per-turn LLM/tool loop iteration budget; omitted keeps the built-in default of 25 |
-| `runtime.max_duration` | optional per-turn wall-clock budget as a Go duration string such as `5m` or `900s`; omitted keeps the built-in default of 5 minutes |
 
 Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
 `.juex` directory) < `--config <path>` (if supplied) < `os.Environ`. Explicit
 CLI flags for individual settings, such as
-`--enable-user-global-resources=false`, `juex run --max-iters`, and `juex run
---max-duration`, apply after config load. `.env` is no longer read by default.
+`--enable-user-global-resources=false`, apply after config load. `.env` is no
+longer read by default.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider_id/model_id` or override a few fields while inheriting missing values
@@ -820,10 +810,10 @@ workspace `shell: {}` resets any user-global shell config back to auto.
 After loading, `internal/config` exposes narrower value objects for composition:
 `ProviderSelection` for profile resolution, `RuntimePaths` for work-local
 runtime storage, `ResourcePaths` for AGENTS/skills/MCP inputs, and
-`RuntimeLimits` for turn budgets, context window, and compaction policy. The
-older `Config` path/profile methods remain compatibility delegates. Config does
-not construct providers; app resolves the profile and asks `internal/llm` to
-build the adapter.
+`RuntimeLimits` for context window and compaction policy. The older `Config`
+path/profile methods remain compatibility delegates. Config does not construct
+providers; app resolves the profile and asks `internal/llm` to build the
+adapter.
 
 The resolved `ShellProfile` is included in `juex run --dry-run --json`,
 `/api/runtime`, the system prompt operating context, and the `shell` tool
@@ -1070,7 +1060,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |
 | `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
 | `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |
-| `runtime` | mock-provider script, parallel tool calls, budget breach, ctx cancel, unknown-tool, provider error, multi-turn |
+| `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
 | `netbootstrap` | resolv.conf parsing (IPv4/IPv6/comments/malformed), JUEX_DNS env var, Termux PREFIX auto-detect, applyResolver wiring, idempotent install |
 | `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |

@@ -206,28 +206,6 @@ export interface TurnStartedPayload {
   kind?: string;
 }
 
-export interface TurnIterationBudgetWarningPayload {
-  kind: string;
-  budget: "iterations";
-  turn_id: string;
-  remaining_iters: number;
-  max_iters: number;
-}
-
-export interface TurnDurationBudgetWarningPayload {
-  kind: string;
-  budget: "duration";
-  turn_id: string;
-  remaining_duration: string;
-  remaining_duration_ms: number;
-  max_duration: string;
-  max_duration_ms: number;
-}
-
-export type TurnBudgetWarningPayload =
-  | TurnIterationBudgetWarningPayload
-  | TurnDurationBudgetWarningPayload;
-
 export interface TurnCompletedPayload {
   duration_ms: number;
   output_len: number;
@@ -236,12 +214,6 @@ export interface TurnCompletedPayload {
 
 export interface TurnErroredPayload {
   error: string;
-  kind?: string;
-  budget?: string;
-  turn_id?: string;
-  max_iters?: number;
-  max_duration?: string;
-  max_duration_ms?: number;
 }
 
 export interface LLMRequestedPayload {
@@ -367,7 +339,6 @@ export interface ContextProjectionAppliedPayload {
 
 export type BusEvent =
   | (BusEventBase<"turn.started"> & { payload: TurnStartedPayload })
-  | (BusEventBase<"turn.budget.warning"> & { payload: TurnBudgetWarningPayload })
   | (BusEventBase<"turn.completed"> & { payload: TurnCompletedPayload })
   | (BusEventBase<"turn.errored"> & { payload: TurnErroredPayload })
   | (BusEventBase<"llm.requested"> & { payload: LLMRequestedPayload })

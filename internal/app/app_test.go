@@ -115,18 +115,18 @@ func TestApp_DefaultCreatesActivePrimaryWhenHistoryIsEmpty(t *testing.T) {
 	}
 }
 
-func TestApp_NewAppliesRuntimeBudgets(t *testing.T) {
+func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	dir := t.TempDir()
+	compaction := config.DefaultCompactionConfig()
+	compaction.ReserveTokens = 123
 	a, err := New(Options{
 		Config: config.Config{
-			ProviderID: "openai",
-			APIKey:     "x",
-			Model:      "m",
-			WorkDir:    dir,
-			Runtime: config.RuntimeConfig{
-				MaxIters:    7,
-				MaxDuration: 12 * time.Second,
-			},
+			ProviderID:    "openai",
+			APIKey:        "x",
+			Model:         "m",
+			WorkDir:       dir,
+			ContextWindow: 2048,
+			Compaction:    compaction,
 		},
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
@@ -135,11 +135,11 @@ func TestApp_NewAppliesRuntimeBudgets(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if a.Engine.MaxIters != 7 {
-		t.Fatalf("Engine.MaxIters = %d, want 7", a.Engine.MaxIters)
+	if a.Engine.ContextWindow != 2048 {
+		t.Fatalf("Engine.ContextWindow = %d, want 2048", a.Engine.ContextWindow)
 	}
-	if a.Engine.MaxDur != 12*time.Second {
-		t.Fatalf("Engine.MaxDur = %s, want 12s", a.Engine.MaxDur)
+	if a.Engine.Compaction.ReserveTokens != 123 {
+		t.Fatalf("Engine.Compaction.ReserveTokens = %d, want 123", a.Engine.Compaction.ReserveTokens)
 	}
 }
 

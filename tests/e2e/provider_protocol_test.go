@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
@@ -170,16 +169,10 @@ type capturedProviderRequest struct {
 	body map[string]any
 }
 
-func TestLiveBinary_RuntimeTimeoutJSONIncludesSessionMetadata(t *testing.T) {
+func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
 	bin := buildJuex(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(200 * time.Millisecond):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"id":"resp_1","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"too late"}]}]}`))
-		}
+		http.Error(w, `{"error":{"message":"provider unavailable"}}`, http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -196,14 +189,14 @@ func TestLiveBinary_RuntimeTimeoutJSONIncludesSessionMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--json", "--max-duration", "20ms", "hello")
+	cmd := exec.Command(bin, "-C", work, "run", "--json", "hello")
 	home := t.TempDir()
 	cmd.Env = isolatedJuexBinaryEnv(home)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err == nil {
-		t.Fatal("expected runtime timeout failure")
+		t.Fatal("expected provider failure")
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
@@ -218,13 +211,13 @@ func TestLiveBinary_RuntimeTimeoutJSONIncludesSessionMetadata(t *testing.T) {
 	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
 		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr.String())
 	}
-	if got.Error != "runtime_timeout" {
-		t.Fatalf("error = %q, want runtime_timeout; stderr=%s", got.Error, stderr.String())
+	if got.Error != "general_error" {
+		t.Fatalf("error = %q, want general_error; stderr=%s", got.Error, stderr.String())
 	}
 	if got.SessionID == "" || got.SessionDir == "" || got.WorkDir != work {
 		t.Fatalf("metadata = %+v, want session id/dir and work dir %s", got, work)
 	}
-	if got.Details["kind"] != "runtime_timeout" || got.Details["budget"] != "duration" {
+	if got.Details != nil {
 		t.Fatalf("details = %+v", got.Details)
 	}
 }
