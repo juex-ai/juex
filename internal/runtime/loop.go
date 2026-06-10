@@ -1,18 +1,23 @@
-// Package runtime implements the synchronous turn loop that drives a single
-// user input through repeated LLM calls + tool dispatches until the model
-// stops requesting tools.
+// Package runtime implements the synchronous turn loop that drives user or
+// system-originated input through repeated LLM calls and tool dispatches until
+// the model stops requesting tools.
 //
 // Behaviour highlights:
 //
-//   - System prompt is rebuilt every turn from prompt.Builder so memory,
-//     skills, and AGENTS.md changes propagate immediately.
+//   - System prompt sections are rebuilt every turn so memory, skills, and
+//     AGENTS.md changes propagate immediately.
+//   - Context projection externalizes oversized user inputs and tool results
+//     before provider submission while preserving recoverable session history.
+//   - Automatic and manual compaction keep active context bounded with compact
+//     summary markers and retained recent tail messages.
 //   - tool_use blocks within a single LLM response run in parallel; results
 //     are collected and reattached to history in the original order.
+//   - Pending input lets transports queue user or critical external messages
+//     while preserving assistant tool-use / user tool-result adjacency.
 //   - A budget of MaxIters tool/llm round-trips and a MaxDur wall-clock cap
-//     guard against runaway loops.
-//   - Every state transition emits an event with a stable TurnID so
-//     downstream consumers (session jsonl, future hooks) can stitch a
-//     transcript.
+//     guards against runaway loops, with warning events near the limit.
+//   - Every state transition emits an event with a stable TurnID so downstream
+//     consumers can stitch a transcript.
 package runtime
 
 import (

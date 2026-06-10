@@ -1,9 +1,11 @@
-// Package app wires the runtime: config -> provider -> registry -> tools ->
-// MCP -> skills -> memory -> session -> prompt -> engine.
+// Package app wires process-level runtime dependencies: config -> provider ->
+// registry -> tools -> MCP -> skills -> memory -> session -> prompt -> engine.
 //
-// CLI layers should depend only on this package; tests can substitute the
-// Provider via Options.Provider so the runtime is exercised without hitting
-// the network.
+// It also owns application policies shared by transports, such as workspace
+// session attachment, slash commands, MCP notification routing, and turn
+// admission. CLI and web code may still import lower-level packages for their
+// own presentation and inspection surfaces; shared runtime decisions should
+// move here instead of being duplicated across transports.
 package app
 
 import (
