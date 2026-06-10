@@ -481,15 +481,6 @@ func messagesText(msgs []llm.Message) string {
 	return sb.String()
 }
 
-func hasAdjacentSameRole(msgs []llm.Message) bool {
-	for i := 1; i < len(msgs); i++ {
-		if msgs[i-1].Role == msgs[i].Role {
-			return true
-		}
-	}
-	return false
-}
-
 func signal(ch chan struct{}) {
 	select {
 	case ch <- struct{}{}:
