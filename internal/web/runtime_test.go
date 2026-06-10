@@ -244,12 +244,6 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	}
 }
 
-func TestRuntimePromptTokenEstimateMatchesRuntimeByteEstimate(t *testing.T) {
-	if got := estimateRuntimePromptTokens("你好世界"); got != 3 {
-		t.Fatalf("tokens = %d, want byte-based runtime estimate 3", got)
-	}
-}
-
 func TestRuntimeStatusOrdersProjectBeforeUserSources(t *testing.T) {
 	srv := newTestServer(t)
 	homeAgents := t.TempDir()

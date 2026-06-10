@@ -20,7 +20,6 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
-	"github.com/juex-ai/juex/internal/skills"
 )
 
 // Options configures a Server. Provider is optional; if unset, the
@@ -44,10 +43,9 @@ type Server struct {
 	closeMu  sync.Mutex
 	closed   bool
 
-	runtimeMu          sync.Mutex
-	runtimeSkills      *skillsStatus
-	runtimeSkillLoader *skills.Loader
-	runtimeMCPErr      map[string]string
+	runtimeMu     sync.Mutex
+	runtimeMCPErr map[string]string
+	runtimeSkills *app.RuntimeStatusSkillCache
 
 	mcpMu       sync.Mutex
 	mcpStarted  bool
@@ -82,7 +80,11 @@ func NewServer(opts Options) *Server {
 	if opts.Addr == "" {
 		opts.Addr = "127.0.0.1:8080"
 	}
-	return &Server{opts: opts, runtimeMCPErr: map[string]string{}}
+	return &Server{
+		opts:          opts,
+		runtimeMCPErr: map[string]string{},
+		runtimeSkills: app.NewRuntimeStatusSkillCache(),
+	}
 }
 
 // Handler returns the http.Handler wired with every route. Exposed so

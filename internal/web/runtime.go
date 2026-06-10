@@ -5,15 +5,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 
+	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
-	"github.com/juex-ai/juex/internal/memory"
-	"github.com/juex-ai/juex/internal/prompt"
-	juexruntime "github.com/juex-ai/juex/internal/runtime"
-	"github.com/juex-ai/juex/internal/skills"
 )
 
 type runtimeStatusResponse struct {
@@ -65,12 +61,6 @@ type mcpServerInfo struct {
 	Error     string   `json:"error,omitempty"`
 }
 
-type mcpServerConfig struct {
-	Name   string
-	Source string
-	Spec   mcp.ServerSpec
-}
-
 type skillsStatus struct {
 	Count int         `json:"count"`
 	Items []skillInfo `json:"items"`
@@ -101,124 +91,93 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err := s.ensureMCPStarted(context.Background()); err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	mcpServers, err := s.configuredMCPServerConfigs()
+	toolCounts := s.connectedMCPServers()
+	for serverName, count := range s.mcpToolCounts() {
+		if existing, ok := toolCounts[serverName]; !ok || existing < count {
+			toolCounts[serverName] = count
+		}
+	}
+	status, err := app.NewRuntimeStatusService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
+		MCPToolCounts: toolCounts,
+		MCPErrors:     s.mcpErrors(),
+		SkillCache:    s.runtimeSkills,
+	})
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	connected := s.connectedMCPServers()
-	managerTools := s.mcpToolCounts()
-	for serverName, count := range managerTools {
-		if connected[serverName] < count {
-			connected[serverName] = count
-		}
-	}
-	mcpErrors := s.mcpErrors()
-	connectedCount := 0
-	errorCount := 0
-	servers := make([]mcpServerInfo, 0, len(mcpServers))
-	for _, server := range mcpServers {
-		toolCount := connected[server.Name]
-		_, managerConnected := managerTools[server.Name]
-		status := "not_started"
-		errText := mcpErrors[server.Name]
-		if toolCount > 0 || managerConnected {
-			status = "connected"
-		} else if errText != "" {
-			status = "error"
-		}
-		info := mcpServerInfo{
-			Name:      server.Name,
-			Source:    server.Source,
-			Command:   server.Spec.Command,
-			Args:      append([]string(nil), server.Spec.Args...),
-			Status:    status,
-			Connected: toolCount > 0 || managerConnected,
-			ToolCount: toolCount,
-			Error:     errText,
-		}
-		if info.Connected {
-			connectedCount++
-		} else if info.Status == "error" {
-			errorCount++
-		}
-		servers = append(servers, info)
-	}
-
-	skillStatus, err := s.cachedSkillsStatus()
-	if err != nil {
-		return runtimeStatusResponse{}, err
-	}
-	systemPrompt, err := s.systemPromptStatus()
-	if err != nil {
-		return runtimeStatusResponse{}, err
-	}
-
-	return runtimeStatusResponse{
-		WorkDir:      s.absoluteWorkDir(),
-		Provider:     s.providerStatus(),
-		Shell:        s.opts.Cfg.Shell,
-		SystemPrompt: systemPrompt,
-		MCP: mcpStatus{
-			Configured: len(servers),
-			Connected:  connectedCount,
-			Errors:     errorCount,
-			Servers:    servers,
-		},
-		Skills: skillStatus,
-	}, nil
+	return runtimeStatusResponseFromApp(status), nil
 }
 
-func (s *Server) systemPromptStatus() (systemPromptStatus, error) {
-	_, skillLoader, err := s.cachedRuntimeSkills()
-	if err != nil {
-		return systemPromptStatus{}, err
+func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusResponse {
+	return runtimeStatusResponse{
+		WorkDir:      status.WorkDir,
+		Provider:     providerStatusFromApp(status.Provider),
+		Shell:        status.Shell,
+		SystemPrompt: systemPromptStatusFromApp(status.SystemPrompt),
+		MCP:          mcpStatusFromApp(status.MCP),
+		Skills:       skillsStatusFromApp(status.Skills),
 	}
-	var memStore *memory.Store
-	if memoryDir := s.opts.Cfg.MemoryDir(); memoryDir != "" {
-		memStore = memory.NewStore(memoryDir)
+}
+
+func providerStatusFromApp(status app.RuntimeProviderStatus) providerStatus {
+	return providerStatus{
+		ID:           status.ID,
+		Protocol:     status.Protocol,
+		Model:        status.Model,
+		BaseURL:      status.BaseURL,
+		Capabilities: status.Capabilities,
 	}
-	builder := &prompt.Builder{
-		GlobalAgentsMDPath: s.opts.Cfg.GlobalAgentsMDPath(),
-		AgentsMDDirs:       s.opts.Cfg.AgentsMDDirs(),
-		Memory:             memStore,
-		Skills:             skillLoader,
-		WorkDir:            s.opts.Cfg.WorkDir,
-		Shell:              prompt.ShellProfileFromConfig(s.opts.Cfg.Shell),
-	}
-	sections := builder.Sections()
-	items := make([]systemPromptEntry, 0, len(sections))
-	for _, section := range sections {
+}
+
+func systemPromptStatusFromApp(status app.RuntimeSystemPromptStatus) systemPromptStatus {
+	items := make([]systemPromptEntry, 0, len(status.Items))
+	for _, item := range status.Items {
 		items = append(items, systemPromptEntry{
-			Key:    section.Key,
-			Label:  runtimePromptLabel(section),
-			Source: runtimePromptSource(section),
-			Path:   section.Path,
-			Tokens: estimateRuntimePromptTokens(section.Text),
-			Text:   section.Text,
+			Key:    item.Key,
+			Label:  item.Label,
+			Source: item.Source,
+			Path:   item.Path,
+			Tokens: item.Tokens,
+			Text:   item.Text,
 		})
 	}
-	return systemPromptStatus{
-		Count: len(items),
-		Items: items,
-	}, nil
+	return systemPromptStatus{Count: status.Count, Items: items}
 }
 
-func runtimePromptLabel(section prompt.Section) string {
-	if section.Label != "" {
-		return section.Label
+func mcpStatusFromApp(status app.RuntimeMCPStatus) mcpStatus {
+	servers := make([]mcpServerInfo, 0, len(status.Servers))
+	for _, server := range status.Servers {
+		servers = append(servers, mcpServerInfo{
+			Name:      server.Name,
+			Source:    server.Source,
+			Command:   server.Command,
+			Args:      append([]string(nil), server.Args...),
+			Status:    server.Status,
+			Connected: server.Connected,
+			ToolCount: server.ToolCount,
+			Error:     server.Error,
+		})
 	}
-	return section.Key
-}
-
-func runtimePromptSource(section prompt.Section) string {
-	if section.Source != "" {
-		return section.Source
+	return mcpStatus{
+		Configured: status.Configured,
+		Connected:  status.Connected,
+		Errors:     status.Errors,
+		Servers:    servers,
 	}
-	return "runtime"
 }
 
-func estimateRuntimePromptTokens(text string) int {
-	return juexruntime.EstimateTextTokens(text)
+func skillsStatusFromApp(status app.RuntimeSkillsStatus) skillsStatus {
+	items := make([]skillInfo, 0, len(status.Items))
+	for _, item := range status.Items {
+		items = append(items, skillInfo{
+			Name:        item.Name,
+			Description: item.Description,
+			Type:        item.Type,
+			Source:      item.Source,
+			Path:        item.Path,
+		})
+	}
+	return skillsStatus{Count: status.Count, Items: items}
 }
 
 func (s *Server) absoluteWorkDir() string {
@@ -237,102 +196,6 @@ func (s *Server) absoluteWorkDir() string {
 	return abs
 }
 
-func (s *Server) providerStatus() providerStatus {
-	if s.opts.Cfg.ProviderID == "" && s.opts.Cfg.ProviderProtocol == "" {
-		return providerStatus{
-			Model:   s.opts.Cfg.Model,
-			BaseURL: s.opts.Cfg.BaseURL,
-		}
-	}
-	profile, err := s.opts.Cfg.ProviderProfile()
-	if err != nil {
-		return providerStatus{
-			ID:       s.opts.Cfg.ProviderID,
-			Protocol: s.opts.Cfg.ProviderProtocol,
-			Model:    s.opts.Cfg.Model,
-			BaseURL:  s.opts.Cfg.BaseURL,
-		}
-	}
-	return providerStatus{
-		ID:           profile.ID,
-		Protocol:     string(profile.Protocol),
-		Model:        profile.Model,
-		BaseURL:      profile.BaseURL,
-		Capabilities: profile.Capabilities,
-	}
-}
-
-func (s *Server) cachedSkillsStatus() (skillsStatus, error) {
-	status, _, err := s.cachedRuntimeSkills()
-	return status, err
-}
-
-func (s *Server) cachedRuntimeSkills() (skillsStatus, *skills.Loader, error) {
-	s.runtimeMu.Lock()
-	defer s.runtimeMu.Unlock()
-	if s.runtimeSkills != nil && s.runtimeSkillLoader != nil {
-		return cloneSkillsStatus(*s.runtimeSkills), s.runtimeSkillLoader, nil
-	}
-
-	skillLoader := skills.NewLoader(s.opts.Cfg.SkillDirs()...)
-	if err := skillLoader.Load(); err != nil {
-		return skillsStatus{}, nil, err
-	}
-	loadedSkills := skillLoader.All()
-	skillItems := make([]skillInfo, 0, len(loadedSkills))
-	for _, skill := range loadedSkills {
-		skillItems = append(skillItems, skillInfo{
-			Name:        skill.Name,
-			Description: skill.Description,
-			Type:        skill.Type,
-			Source:      skill.Source,
-			Path:        skill.Path,
-		})
-	}
-	sort.Slice(skillItems, func(i, j int) bool {
-		return runtimeSourceLess(skillItems[i].Source, skillItems[i].Name, skillItems[j].Source, skillItems[j].Name)
-	})
-	status := skillsStatus{
-		Count: len(skillItems),
-		Items: skillItems,
-	}
-	s.runtimeSkills = &status
-	s.runtimeSkillLoader = skillLoader
-	return cloneSkillsStatus(status), skillLoader, nil
-}
-
-func cloneSkillsStatus(status skillsStatus) skillsStatus {
-	status.Items = append([]skillInfo(nil), status.Items...)
-	return status
-}
-
-func (s *Server) configuredMCPServerConfigs() ([]mcpServerConfig, error) {
-	serversByName := map[string]mcpServerConfig{}
-	for _, path := range s.opts.Cfg.MCPConfigPaths() {
-		cfg, err := mcp.LoadConfig(path)
-		if err != nil {
-			return nil, err
-		}
-		cfg = mcp.PrepareConfig(cfg, s.absoluteWorkDir())
-		source := s.runtimeSourceForPath(path)
-		for name, spec := range cfg.MCPServers {
-			serversByName[name] = mcpServerConfig{
-				Name:   name,
-				Source: source,
-				Spec:   spec,
-			}
-		}
-	}
-	servers := make([]mcpServerConfig, 0, len(serversByName))
-	for _, server := range serversByName {
-		servers = append(servers, server)
-	}
-	sort.Slice(servers, func(i, j int) bool {
-		return runtimeSourceLess(servers[i].Source, servers[i].Name, servers[j].Source, servers[j].Name)
-	})
-	return servers, nil
-}
-
 func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
 	var configs []mcp.Config
 	for _, path := range s.opts.Cfg.MCPConfigPaths() {
@@ -346,43 +209,6 @@ func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
 		}
 	}
 	return configs, nil
-}
-
-func (s *Server) runtimeSourceForPath(path string) string {
-	cleanPath := filepath.Clean(path)
-	if s.opts.Cfg.WorkDir != "" {
-		projectPath := filepath.Join(s.opts.Cfg.WorkDir, ".agents", "mcp.json")
-		if cleanPath == filepath.Clean(projectPath) {
-			return "project"
-		}
-	}
-	if s.opts.Cfg.HomeAgentsDir != "" {
-		userPath := filepath.Join(s.opts.Cfg.HomeAgentsDir, "mcp.json")
-		if cleanPath == filepath.Clean(userPath) {
-			return "user"
-		}
-	}
-	return "runtime"
-}
-
-func runtimeSourceLess(leftSource, leftName, rightSource, rightName string) bool {
-	leftRank := runtimeSourceRank(leftSource)
-	rightRank := runtimeSourceRank(rightSource)
-	if leftRank != rightRank {
-		return leftRank < rightRank
-	}
-	return leftName < rightName
-}
-
-func runtimeSourceRank(source string) int {
-	switch source {
-	case "project":
-		return 0
-	case "user":
-		return 1
-	default:
-		return 2
-	}
 }
 
 func (s *Server) connectedMCPServers() map[string]int {

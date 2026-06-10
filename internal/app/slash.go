@@ -204,24 +204,12 @@ func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {
 	if a == nil {
 		return ProviderStatusSnapshot{}
 	}
-	cfg := a.cfg
-	if cfg.ProviderID == "" && cfg.ProviderProtocol == "" {
-		return ProviderStatusSnapshot{Model: cfg.Model, BaseURL: cfg.BaseURL}
-	}
-	profile, err := cfg.ProviderProfile()
-	if err != nil {
-		return ProviderStatusSnapshot{
-			ID:       cfg.ProviderID,
-			Protocol: cfg.ProviderProtocol,
-			Model:    cfg.Model,
-			BaseURL:  cfg.BaseURL,
-		}
-	}
+	status := providerRuntimeStatusFromConfig(a.cfg)
 	return ProviderStatusSnapshot{
-		ID:       profile.ID,
-		Protocol: string(profile.Protocol),
-		Model:    profile.Model,
-		BaseURL:  profile.BaseURL,
+		ID:       status.ID,
+		Protocol: status.Protocol,
+		Model:    status.Model,
+		BaseURL:  status.BaseURL,
 	}
 }
 
