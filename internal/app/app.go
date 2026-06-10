@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -165,15 +164,17 @@ func New(opts Options) (*App, error) {
 		mergedMCP = mcp.MergeConfigs(mcpConfigs)
 	}
 
-	sess, err := openSessionForOptions(cfg, opts)
+	attachment, err := AttachWorkspaceSession(cfg, SessionAttachmentRequest{
+		ResumeDir: opts.ResumeDir,
+		Mode:      opts.SessionMode,
+		Alias:     opts.Alias,
+		Lazy:      opts.LazySession,
+	})
 	if err != nil {
 		return nil, err
 	}
-	lockMode := string(normalizeSessionMode(opts.SessionMode))
-	if opts.ResumeDir != "" {
-		lockMode = "resume"
-	}
-	sessLock, err := session.AcquireSessionLock(sess.Dir, lockMode)
+	sess := attachment.Session
+	sessLock, err := session.AcquireSessionLock(sess.Dir, attachment.LockMode)
 	if err != nil {
 		sess.Close()
 		return nil, err
@@ -283,141 +284,6 @@ func promptShellProfile(p config.ShellProfile) prompt.ShellProfile {
 	}
 }
 
-func openSessionForOptions(cfg config.Config, opts Options) (*session.Session, error) {
-	if opts.ResumeDir != "" {
-		kind, err := session.LoadKind(opts.ResumeDir)
-		if err != nil {
-			return nil, err
-		}
-		active := kind == session.KindPrimary
-		sess, err := session.LoadWithOptions(opts.ResumeDir, session.Options{
-			Alias:        opts.Alias,
-			Active:       active,
-			RecordActive: active,
-			HistoryPath:  cfg.HistoryPath(),
-		})
-		if err != nil {
-			return nil, err
-		}
-		if active {
-			if err := session.SetActive(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
-				sess.Close()
-				return nil, err
-			}
-		}
-		return sess, nil
-	}
-
-	switch normalizeSessionMode(opts.SessionMode) {
-	case SessionModeNewPrimary:
-		return newPrimarySession(cfg, opts)
-	case SessionModeNewSide:
-		return newSideSession(cfg, opts)
-	default:
-		return attachActiveSession(cfg, opts)
-	}
-}
-
-func normalizeSessionMode(mode SessionMode) SessionMode {
-	switch mode {
-	case SessionModeNewPrimary, SessionModeNewSide:
-		return mode
-	default:
-		return SessionModeAttachActive
-	}
-}
-
-func attachActiveSession(cfg config.Config, opts Options) (*session.Session, error) {
-	h, err := session.LoadHistory(cfg.HistoryPath())
-	if err != nil {
-		return nil, err
-	}
-	if h.Active != nil && h.Active.ID != "" {
-		dir := infoDir(cfg.SessionsDir(), *h.Active)
-		if hasConversation(dir) {
-			return session.LoadWithOptions(dir, session.Options{
-				Alias:        opts.Alias,
-				Active:       true,
-				RecordActive: true,
-				HistoryPath:  cfg.HistoryPath(),
-			})
-		}
-	}
-	for _, info := range h.Sessions {
-		if info.Kind != session.KindPrimary {
-			continue
-		}
-		dir := infoDir(cfg.SessionsDir(), info)
-		if !hasConversation(dir) {
-			continue
-		}
-		if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
-			return nil, err
-		}
-		return session.LoadWithOptions(dir, session.Options{
-			Alias:        opts.Alias,
-			Active:       true,
-			RecordActive: true,
-			HistoryPath:  cfg.HistoryPath(),
-		})
-	}
-	return newPrimarySession(cfg, opts)
-}
-
-func newPrimarySession(cfg config.Config, opts Options) (*session.Session, error) {
-	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
-		Alias:        opts.Alias,
-		Kind:         session.KindPrimary,
-		Active:       true,
-		RecordActive: true,
-		HistoryPath:  cfg.HistoryPath(),
-		Lazy:         opts.LazySession,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err := session.SetActive(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
-		sess.Close()
-		return nil, err
-	}
-	return sess, nil
-}
-
-func newSideSession(cfg config.Config, opts Options) (*session.Session, error) {
-	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
-		Alias:          opts.Alias,
-		Kind:           session.KindSide,
-		NoRecordActive: true,
-		HistoryPath:    cfg.HistoryPath(),
-		Lazy:           opts.LazySession,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err := session.RecordSession(cfg.HistoryPath(), sess.Info(time.Now().UTC())); err != nil {
-		sess.Close()
-		return nil, err
-	}
-	return sess, nil
-}
-
-func infoDir(sessionsRoot string, info session.Info) string {
-	if info.ID != "" {
-		return filepath.Join(sessionsRoot, info.ID)
-	}
-	return info.Dir
-}
-
-func hasConversation(dir string) bool {
-	if dir == "" {
-		return false
-	}
-	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
-		return false
-	}
-	return true
-}
-
 func (a *App) SwitchToNewPrimarySession() error {
 	if a == nil || a.Session == nil {
 		return fmt.Errorf("app: nil session")
@@ -425,11 +291,12 @@ func (a *App) SwitchToNewPrimarySession() error {
 	if a.Session.Kind == session.KindSide {
 		return fmt.Errorf("side sessions cannot switch workspace active session")
 	}
-	sess, err := newPrimarySession(a.cfg, Options{})
+	attachment, err := AttachWorkspaceSession(a.cfg, SessionAttachmentRequest{Mode: SessionModeNewPrimary})
 	if err != nil {
 		return err
 	}
-	sessLock, err := session.AcquireSessionLock(sess.Dir, string(SessionModeNewPrimary))
+	sess := attachment.Session
+	sessLock, err := session.AcquireSessionLock(sess.Dir, attachment.LockMode)
 	if err != nil {
 		_ = sess.Close()
 		return err
