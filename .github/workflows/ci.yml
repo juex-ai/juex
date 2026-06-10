@@ -33,7 +33,7 @@ jobs:
         with:
           go-version: stable
           cache: true
-      # uv is needed by tests/e2e live-binary smoke (Python MCP fixture).
+      # uv is needed by the e2e Python MCP fixture and tests/eval contract tests.
       - uses: astral-sh/setup-uv@v3
         with:
           version: latest

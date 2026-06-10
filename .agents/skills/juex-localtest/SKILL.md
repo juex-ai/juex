@@ -51,8 +51,8 @@ There is no local service startup step for the current suite. Web tests use
   ```bash
   GOOS=windows GOARCH=amd64 mise exec -- go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
   ```
-- **Eval harness changes** - run the eval module help checks plus the focused
-  e2e tests in `tests/e2e/eval_scripts_test.go`.
+- **Eval harness changes** - run the eval module help checks plus
+  `mise exec -- go test ./tests/eval -count=1`.
 - **Docs or skill-only changes** - run `git diff --check`, stale-reference
   searches, and the smallest focused tests for affected command examples.
 - **Web-visible changes** - run `mise exec -- make build` and a browser/API

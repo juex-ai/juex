@@ -7,11 +7,20 @@ quality-evaluation helpers here.
 
 The stable command entrypoints live next to the evaluation code:
 
+- `tests/eval/eval_scripts_test.go`
 - `tests/eval/provider_model_smoke.sh`
 - `tests/eval/compaction_eval.sh`
 - `tests/eval/development_eval.sh`
 
-Those shell scripts are thin wrappers around the Python module:
+`tests/eval/eval_scripts_test.go` is a Go contract suite for this directory. It
+checks the Python module help surface, shell wrapper help, live-model rotation,
+development-step flags, and default report locations:
+
+```bash
+mise exec -- go test ./tests/eval -count=1
+```
+
+The shell scripts are thin wrappers around the Python module:
 
 ```bash
 uv run --project . python -m tests.eval.juex_eval --help
@@ -40,7 +49,54 @@ Report kinds are:
 - `development-validation`
 - `compaction-eval`
 
+## Provider Smoke
+
+Run the rotating local provider/model smoke after building the binary:
+
+```bash
+mise exec -- make build
+bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
+```
+
+This reads credentials from `~/.juex/juex.yaml`, picks the next
+`provider_smoke_models` ref from `live-models.yaml`, and records the last
+successful ref in `.juex/live-model-rotation.json`. It copies one provider/model
+at a time into an isolated temporary workdir, then runs a real compiled `juex`
+binary through three resumed turns: plain reply, `read` tool use, and a
+reasoning prompt. A failed provider/model is not a skip; keep the report and
+explain whether the problem is configuration, provider capability,
+prompt-following, or a JueX regression.
+
 Use `--all-models` only for broader changes where every listed model must be
 covered. `provider_model_smoke.sh --all-config-models` is reserved for full
 provider config audits. Local rotation success is stored in
 `.juex/live-model-rotation.json` and is intentionally not committed.
+
+## Compaction Quality
+
+The compaction evaluation is operator-triggered:
+
+```bash
+mise exec -- make build
+tests/eval/compaction_eval.sh
+```
+
+See `docs/compaction/evaluation.md` for the gold facts, scoring rubric, cache
+metrics, and report output shape. This is the project-level quality evaluation
+for long-running agent context retention. Normal e2e tests cover deterministic
+runtime behavior; the live compaction evaluation rotates one
+`compaction_eval_models` ref by default so routine validation stays cheap while
+covering the full list over time.
+
+## Development Records
+
+Every completed development task should leave a validation record:
+
+```bash
+bash tests/eval/development_eval.sh
+```
+
+Use `--compaction-eval` for compaction, context projection, reasoning replay,
+or long-session changes. The record links command logs, provider/model smoke
+summary, and any scorecards so a later worker can tell whether behavior got
+better, stayed flat, or regressed.

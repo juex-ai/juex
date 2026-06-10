@@ -65,12 +65,12 @@ juex/
 ├── tests/
 │   ├── e2e/                      # cross-package end-to-end + integration tests
 │   │   ├── e2e_test.go           #   full-stack mock-LLM scenario
-│   │   ├── eval_scripts_test.go  #   eval wrapper smoke tests
 │   │   ├── live_loading_test.go  #   binary skill + realistic MCP loading
 │   │   ├── provider_protocol_test.go
 │   │   ├── web_test.go
 │   │   └── integration_test.go   #   live LLM (build-tag gated)
 │   └── eval/                     # local live-provider and quality eval tools
+│       ├── eval_scripts_test.go  #   eval wrapper contract tests
 │       ├── live-models.yaml
 │       ├── provider_model_smoke.sh
 │       ├── compaction_eval.sh
@@ -93,8 +93,10 @@ juex/
 ```
 
 Per-package unit tests stay co-located with their source files (idiomatic Go).
-Only the cross-package end-to-end tests live in `tests/e2e/`. That directory
-is inside the same module, so it can import `internal/...` freely.
+Product-level cross-package tests live in `tests/e2e/`; evaluation harness
+contract tests and live-evaluation helpers live in `tests/eval/`. Both
+directories are inside the same module, so they can import `internal/...`
+freely.
 
 ---
 
@@ -955,7 +957,8 @@ workflow; runs entirely on GitHub Actions.
 
 ## 10. Test Strategy
 
-Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
+Each package has a `_test.go`; `tests/e2e/` covers product cross-package flow,
+and `tests/eval/` covers the local evaluation harness.
 
 | Package | Coverage highlights |
 |---|---|
@@ -974,6 +977,7 @@ Each package has a `_test.go`; `tests/e2e/` covers cross-package flow.
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario, resume round-trip, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, web turn persistence, web pending input, live provider smoke (build-tag) |
+| `tests/eval` | live-model rotation, eval shell wrappers, development step flags, report directory defaults |
 
 Run the deterministic suite with `mise exec -- go test ./... -count=1`.
 Provider-quality smoke tests remain explicit because they use credentials.
