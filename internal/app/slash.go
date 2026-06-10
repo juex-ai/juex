@@ -62,20 +62,27 @@ func ParseSlashCommand(input string) (SlashCommand, bool, error) {
 	}
 	fields := strings.Fields(trimmed)
 	commandName := fields[0]
+	if !isSlashCommandName(commandName) {
+		return SlashCommand{}, false, nil
+	}
+	if commandName == SlashCompact {
+		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
+		return SlashCommand{Name: commandName, Args: args}, true, nil
+	}
+	if len(fields) == 1 {
+		return SlashCommand{Name: commandName}, true, nil
+	}
+	args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
+	return SlashCommand{}, true, &SlashCommandArgumentsError{Name: commandName, Args: args}
+}
+
+func isSlashCommandName(commandName string) bool {
 	for _, name := range slashCommandNames {
-		if commandName == name && len(fields) == 1 {
-			return SlashCommand{Name: name}, true, nil
-		}
-		if commandName == SlashCompact && name == SlashCompact {
-			args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-			return SlashCommand{Name: name, Args: args}, true, nil
-		}
 		if commandName == name {
-			args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-			return SlashCommand{}, true, &SlashCommandArgumentsError{Name: name, Args: strings.TrimSpace(args)}
+			return true
 		}
 	}
-	return SlashCommand{}, false, nil
+	return false
 }
 
 func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashCommandResult, bool, error) {
@@ -180,7 +187,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		SessionDir:   sessionDir,
 		SessionKind:  sessionKind,
 		Active:       active,
-		WorkDir:      a.workDir(),
+		WorkDir:      a.cfg.WorkDir,
 		Turns:        turns,
 		LastActiveAt: lastActiveAt,
 		Provider:     a.providerStatusSnapshot(),
@@ -191,16 +198,6 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		ContextUsage: contextUsage,
 		PendingInput: pending,
 	}
-}
-
-func (a *App) workDir() string {
-	if a == nil {
-		return ""
-	}
-	if a.cfg.WorkDir != "" {
-		return a.cfg.WorkDir
-	}
-	return ""
 }
 
 func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {

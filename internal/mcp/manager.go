@@ -29,16 +29,8 @@ func MergeConfigs(configs []Config) Config {
 	return Config{MCPServers: merged}
 }
 
-func NewManagerLayered(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
-	return NewManager(ctx, MergeConfigs(configs), opts)
-}
-
 func NewManagerLayeredSoft(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
 	return NewManagerSoft(ctx, MergeConfigs(configs), opts)
-}
-
-func NewManager(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {
-	return newManager(ctx, cfg, opts, false)
 }
 
 func NewManagerSoft(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {

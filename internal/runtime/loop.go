@@ -94,10 +94,6 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 	return e.TurnMessage(ctx, llm.TextMessage(llm.RoleUser, userInput))
 }
 
-func (e *Engine) TurnWithID(ctx context.Context, userInput, turnID string) (string, error) {
-	return e.TurnMessageWithID(ctx, llm.TextMessage(llm.RoleUser, userInput), turnID)
-}
-
 func (e *Engine) ReserveTurnID(turnID string) error {
 	if e == nil {
 		return ErrNoActiveTurn
