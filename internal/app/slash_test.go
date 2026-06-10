@@ -91,11 +91,16 @@ func TestStatusSnapshotTextSeparatesTurnAndQueue(t *testing.T) {
 	}
 }
 
-func TestStatusSnapshotTextIncludesEmojiLabels(t *testing.T) {
+func TestStatusSnapshotTextUsesPlainLabels(t *testing.T) {
 	text := (StatusSnapshot{}).Text()
-	for _, want := range []string{"📊 Juex status", "🤖 provider:", "⚙️ turn:", "📥 queued input:"} {
+	for _, want := range []string{"Juex status", "provider:", "turn:", "queued input:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+	for _, emoji := range []string{"\U0001F4CA", "\U0001F916", "\u2699\ufe0f", "\U0001F4E5"} {
+		if strings.Contains(text, emoji) {
+			t.Fatalf("status text still contains emoji %q:\n%s", emoji, text)
 		}
 	}
 }
