@@ -66,7 +66,6 @@ type activeSession struct {
 	cancelMu   sync.Mutex
 	cancel     context.CancelFunc // nil when no turn is running
 	activeTurn string
-	compacting bool
 	turnWG     sync.WaitGroup
 
 	turnsMu sync.Mutex

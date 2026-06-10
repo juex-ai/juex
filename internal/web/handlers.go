@@ -320,12 +320,15 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 		req.Reason = "manual"
 	}
 
-	compactTurnID, ok := s.beginCompactTurn(w, as)
-	if !ok {
+	compactTurnID := s.nextTurnID("compact")
+	if err := as.app.BeginCompactAdmission(compactTurnID); err != nil {
+		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}
 	result, err := as.app.CompactWithInstructions(r.Context(), req.Reason, false, req.Instructions)
-	s.finishCompactTurn(as, compactTurnID)
+	if start := as.app.FinishCompactAdmission(compactTurnID, app.TurnIDFunc(s.nextTurnID)); start != nil {
+		s.startTurnMessage(as, start.TurnID, start.Message)
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
@@ -465,158 +468,66 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
-	slashCmd, isSlash, slashErr := app.ParseSlashCommand(req.Prompt)
-	if slashErr != nil {
-		writeJSON(w, http.StatusBadRequest, errorJSON{
-			Error:      "bad_request",
-			Message:    slashErr.Error(),
-			Suggestion: "available slash commands: " + app.AvailableSlashCommandsText(),
-			Retryable:  false,
-		})
-		return
-	}
-	if isSlash {
-		s.handleSlashTurn(w, r, as, slashCmd)
-		return
-	}
-
-	as.cancelMu.Lock()
-	if as.compacting {
-		as.cancelMu.Unlock()
-		s.enqueuePendingInput(w, r, as, req.Prompt)
-		return
-	}
-	if as.cancel != nil {
-		activeTurn := as.activeTurn
-		as.cancelMu.Unlock()
-		s.enqueuePendingInputWithTurn(w, r, as, req.Prompt, activeTurn)
-		return
-	}
-	turnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))
-	if err := as.app.Engine.ReserveTurnID(turnID); err != nil {
-		as.cancelMu.Unlock()
-		writeErr(w, http.StatusConflict, "conflict", err.Error())
-		return
-	}
-	s.startTurnMessageLocked(as, turnID, llm.TextMessage(llm.RoleUser, req.Prompt))
-	as.cancelMu.Unlock()
-
-	writeJSON(w, http.StatusAccepted, startTurnResponse{TurnID: turnID})
+	result := as.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
+		Prompt: req.Prompt,
+		IDs:    app.TurnIDFunc(s.nextTurnID),
+	})
+	s.applyTurnAdmissionResult(as, result)
+	s.writeTurnAdmissionResult(w, result)
 }
 
-func (s *Server) handleSlashTurn(w http.ResponseWriter, r *http.Request, as *activeSession, cmd app.SlashCommand) {
-	if cmd.Name == app.SlashCompact {
-		compactTurnID, ok := s.beginCompactTurn(w, as)
-		if !ok {
-			return
-		}
-		result, err := as.app.ExecuteParsedSlashCommand(r.Context(), cmd)
-		s.finishCompactTurn(as, compactTurnID)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, startTurnResponse{Command: &result})
-		return
+func (s *Server) nextTurnID(prefix string) string {
+	if prefix == "" {
+		prefix = "turn"
 	}
+	return fmt.Sprintf("%s-%d", prefix, s.nextTurn.Add(1))
+}
 
-	if cmd.Name == app.SlashNew {
-		as.cancelMu.Lock()
-		if as.cancel != nil || as.compacting {
-			as.cancelMu.Unlock()
-			writeErr(w, http.StatusConflict, "conflict", "session busy")
-			return
-		}
-		as.compacting = true
-		as.cancelMu.Unlock()
-
-		defer func() {
-			as.cancelMu.Lock()
-			as.compacting = false
-			as.cancelMu.Unlock()
-		}()
-	}
-
-	oldID := as.app.Session.ID
-	result, err := as.app.ExecuteParsedSlashCommand(r.Context(), cmd)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	if cmd.Name == app.SlashNew && as.app.Session.ID != oldID {
-		s.sessions.Delete(oldID)
+func (s *Server) applyTurnAdmissionResult(as *activeSession, result app.TurnAdmissionResult) {
+	if change := result.SessionChanged; change != nil && change.OldID != "" && change.NewID != "" {
+		s.sessions.Delete(change.OldID)
 		as.StartedAt = time.Now()
 		as.turnsMu.Lock()
 		as.turns = map[string]*turnState{}
 		as.turnsMu.Unlock()
-		s.sessions.Store(as.app.Session.ID, as)
+		s.sessions.Store(change.NewID, as)
 	}
-	writeJSON(w, http.StatusOK, startTurnResponse{Command: &result})
-}
-
-func (s *Server) beginCompactTurn(w http.ResponseWriter, as *activeSession) (string, bool) {
-	turnID := fmt.Sprintf("compact-%d", s.nextTurn.Add(1))
-	as.cancelMu.Lock()
-	if as.cancel != nil || as.compacting {
-		as.cancelMu.Unlock()
-		writeErr(w, http.StatusConflict, "conflict", "session busy")
-		return "", false
-	}
-	as.compacting = true
-	if err := as.app.Engine.ReserveTurnID(turnID); err != nil {
-		as.compacting = false
-		as.cancelMu.Unlock()
-		writeErr(w, http.StatusConflict, "conflict", err.Error())
-		return "", false
-	}
-	as.cancelMu.Unlock()
-	return turnID, true
-}
-
-func (s *Server) finishCompactTurn(as *activeSession, compactTurnID string) {
-	nextTurnID := fmt.Sprintf("turn-%d", s.nextTurn.Add(1))
-	as.cancelMu.Lock()
-	defer as.cancelMu.Unlock()
-	as.compacting = false
-	msg, _, promoted := as.app.Engine.PromotePendingInputTurn(compactTurnID, nextTurnID)
-	if promoted {
-		s.startTurnMessageLocked(as, nextTurnID, msg)
+	if result.Start != nil {
+		s.startTurnMessage(as, result.Start.TurnID, result.Start.Message)
 	}
 }
 
-func (s *Server) enqueuePendingInput(w http.ResponseWriter, r *http.Request, as *activeSession, prompt string) {
-	s.enqueuePendingInputWithTurn(w, r, as, prompt, "")
-}
-
-func (s *Server) enqueuePendingInputWithTurn(w http.ResponseWriter, r *http.Request, as *activeSession, prompt, fallbackTurnID string) {
-	status, err := as.app.Engine.EnqueuePendingInput(r.Context(), prompt)
-	if err != nil {
-		if errors.Is(err, runtime.ErrPendingInputQueueFull) {
-			writeJSON(w, http.StatusTooManyRequests, errorJSON{
-				Error:      "pending_input_full",
-				Message:    fmt.Sprintf("pending input queue full (%d/%d)", status.PendingCount, status.MaxPendingInputs),
-				Suggestion: "wait for the active turn to drain pending input before sending more",
-				Retryable:  true,
-			})
-			return
+func (s *Server) writeTurnAdmissionResult(w http.ResponseWriter, result app.TurnAdmissionResult) {
+	switch result.Kind {
+	case app.TurnAdmissionStarted:
+		writeJSON(w, http.StatusAccepted, startTurnResponse{TurnID: result.TurnID})
+	case app.TurnAdmissionQueued:
+		writeJSON(w, http.StatusAccepted, startTurnResponse{
+			TurnID:           result.TurnID,
+			Queued:           result.Queued,
+			PendingCount:     result.PendingCount,
+			MaxPendingInputs: result.MaxPendingInputs,
+		})
+	case app.TurnAdmissionCommandCompleted:
+		writeJSON(w, http.StatusOK, startTurnResponse{Command: result.Command})
+	case app.TurnAdmissionRejected:
+		status := http.StatusBadRequest
+		if result.Error.Kind == "pending_input_full" {
+			status = http.StatusTooManyRequests
 		}
-		if errors.Is(err, runtime.ErrNoActiveTurn) {
-			writeErr(w, http.StatusConflict, "conflict", "turn is not accepting pending input")
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
+		writeJSON(w, status, errorJSON{
+			Error:      result.Error.Kind,
+			Message:    result.Error.Message,
+			Suggestion: result.Error.Suggestion,
+			Retryable:  result.Error.Retryable,
+		})
+	case app.TurnAdmissionConflict:
+		writeErr(w, http.StatusConflict, result.Error.Kind, result.Error.Message)
+	case app.TurnAdmissionError:
+		writeErr(w, http.StatusInternalServerError, result.Error.Kind, result.Error.Message)
+	default:
+		writeErr(w, http.StatusInternalServerError, "general_error", "unknown turn admission result")
 	}
-	turnID := status.TurnID
-	if turnID == "" {
-		turnID = fallbackTurnID
-	}
-	writeJSON(w, http.StatusAccepted, startTurnResponse{
-		TurnID:           turnID,
-		Queued:           true,
-		PendingCount:     status.PendingCount,
-		MaxPendingInputs: status.MaxPendingInputs,
-	})
 }
 
 type turnStatusResponse struct {
@@ -662,6 +573,7 @@ func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id stri
 	cancelled := false
 	if as.cancel != nil {
 		as.cancel()
+		as.app.CompleteAdmittedTurn(as.activeTurn)
 		as.cancel = nil
 		as.activeTurn = ""
 		cancelled = true
@@ -727,6 +639,12 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	}
 }
 
+func (s *Server) startTurnMessage(as *activeSession, turnID string, msg llm.Message) {
+	as.cancelMu.Lock()
+	defer as.cancelMu.Unlock()
+	s.startTurnMessageLocked(as, turnID, msg)
+}
+
 func (s *Server) startTurnMessageLocked(as *activeSession, turnID string, msg llm.Message) {
 	ctx, cancel := context.WithCancel(context.Background())
 	as.cancel = cancel
@@ -742,6 +660,7 @@ func (s *Server) startTurnMessageLocked(as *activeSession, turnID string, msg ll
 // bookkeeping when it finishes.
 func (s *Server) runTurnMessage(ctx context.Context, as *activeSession, turnID string, msg llm.Message) {
 	defer as.turnWG.Done()
+	defer as.app.CompleteAdmittedTurn(turnID)
 	_, err := as.app.Engine.TurnMessageWithID(ctx, msg, turnID)
 	as.cancelMu.Lock()
 	as.cancel = nil

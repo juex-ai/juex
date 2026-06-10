@@ -78,6 +78,8 @@ type App struct {
 	skills  []skills.Skill
 	mcp     MCPStatus
 
+	turnAdmission turnAdmission
+
 	sessionLock        *session.Lock
 	sessionUnsubscribe func()
 }
