@@ -1538,6 +1538,42 @@ func TestProjectProviderTranscriptGatesToolsAndReasoning(t *testing.T) {
 	}
 }
 
+func TestProjectProviderTranscriptCompactsAfterFiltering(t *testing.T) {
+	history := []Message{
+		{
+			Role:   RoleUser,
+			Blocks: []Block{{Type: BlockText, Text: "first"}},
+		},
+		{
+			Role: RoleAssistant,
+			Blocks: []Block{{
+				Type:      BlockToolUse,
+				ToolUseID: "call_1",
+				ToolName:  "read",
+				Input:     map[string]any{"path": "x"},
+			}},
+		},
+		{
+			Role:   RoleUser,
+			Blocks: []Block{{Type: BlockText, Text: "second"}},
+		},
+	}
+
+	projected := projectProviderTranscript(history, ProviderProfile{}, providerProjectionOptions{})
+	if len(projected) != 1 {
+		t.Fatalf("projected message count = %d, want 1: %+v", len(projected), projected)
+	}
+	if projected[0].Role != RoleUser {
+		t.Fatalf("projected role = %q, want user", projected[0].Role)
+	}
+	if len(projected[0].Blocks) != 2 {
+		t.Fatalf("projected user block count = %d, want 2: %+v", len(projected[0].Blocks), projected[0].Blocks)
+	}
+	if got := []string{projected[0].Blocks[0].Text, projected[0].Blocks[1].Text}; got[0] != "first" || got[1] != "second" {
+		t.Fatalf("projected user blocks = %+v, want first/second", projected[0].Blocks)
+	}
+}
+
 func TestNormalizedFunctionParametersDefaults(t *testing.T) {
 	schema := normalizedFunctionParameters(map[string]any{"required": []any{"path", 3}})
 	assertEmptyProperties(t, schema)

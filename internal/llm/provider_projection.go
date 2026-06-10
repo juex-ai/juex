@@ -9,9 +9,8 @@ type providerProjectionOptions struct {
 }
 
 func projectProviderTranscript(history []Message, profile ProviderProfile, opts providerProjectionOptions) []Message {
-	compacted := compactHistoryForProvider(history)
-	out := make([]Message, 0, len(compacted))
-	for _, m := range compacted {
+	filtered := make([]Message, 0, len(history))
+	for _, m := range history {
 		projected := m
 		projected.Blocks = make([]Block, 0, len(m.Blocks))
 		for _, b := range m.Blocks {
@@ -19,9 +18,9 @@ func projectProviderTranscript(history []Message, profile ProviderProfile, opts 
 				projected.Blocks = append(projected.Blocks, b)
 			}
 		}
-		out = append(out, projected)
+		filtered = append(filtered, projected)
 	}
-	return out
+	return compactHistoryForProvider(filtered)
 }
 
 func shouldProjectProviderBlock(b Block, profile ProviderProfile, opts providerProjectionOptions) bool {
