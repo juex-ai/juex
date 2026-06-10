@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
@@ -35,7 +34,6 @@ type Config struct {
 	ProviderCapabilities      llm.CapabilityOverrides
 	ProviderCompat            llm.CompatOptions
 	Compaction                CompactionConfig
-	Runtime                   RuntimeConfig
 	Shell                     ShellProfile
 	EnableUserGlobalResources bool
 
@@ -93,11 +91,6 @@ type providerCompatConfig struct {
 
 type CompactionConfig = runtimepolicy.CompactionPolicy
 
-type RuntimeConfig struct {
-	MaxIters    int
-	MaxDuration time.Duration
-}
-
 // ModelRef is the provider/model selector used by the top-level config model.
 // The provider id may not contain "/", while the model id may contain slashes
 // for OpenAI-compatible proxy model names such as meta-llama/Llama-3.
@@ -137,19 +130,10 @@ type compactionConfig struct {
 	MaxAutoFailures            int   `yaml:"max_auto_failures"`
 }
 
-type runtimeConfig struct {
-	MaxIters    optionalPositiveInt `yaml:"max_iters"`
-	MaxDuration yamlDuration        `yaml:"max_duration"`
-}
+type runtimeConfig struct{}
 
-type optionalPositiveInt struct {
-	Set   bool
-	Value int
-}
-
-type yamlDuration struct {
-	Set   bool
-	Value time.Duration
+func (*runtimeConfig) UnmarshalYAML(*yaml.Node) error {
+	return nil
 }
 
 const DefaultContextWindow = runtimepolicy.DefaultContextWindowTokens
@@ -368,7 +352,6 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
-	applyRuntimeConfig(cfg, fc.Runtime)
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
 	}
@@ -390,42 +373,6 @@ func (b *optionalBool) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func (d *yamlDuration) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.ScalarNode {
-		return fmt.Errorf("expected duration scalar, got non-scalar node")
-	}
-	value := strings.TrimSpace(node.Value)
-	if value == "" {
-		return nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return fmt.Errorf("expected duration like 30s or 5m, got %q", value)
-	}
-	if parsed <= 0 {
-		return fmt.Errorf("duration must be positive, got %q", value)
-	}
-	d.Set = true
-	d.Value = parsed
-	return nil
-}
-
-func (i *optionalPositiveInt) UnmarshalYAML(node *yaml.Node) error {
-	if node.Kind != yaml.ScalarNode {
-		return fmt.Errorf("expected positive integer scalar, got non-scalar node")
-	}
-	value, err := strconv.Atoi(strings.TrimSpace(node.Value))
-	if err != nil {
-		return fmt.Errorf("expected positive integer, got %q", node.Value)
-	}
-	if value <= 0 {
-		return fmt.Errorf("integer must be positive, got %d", value)
-	}
-	i.Set = true
-	i.Value = value
-	return nil
-}
-
 // ParseBoolValue parses config/flag boolean values. It accepts true/false,
 // 1/0, yes/no, and on/off so CLI and YAML behave the same way.
 func ParseBoolValue(value string) (bool, error) {
@@ -441,15 +388,6 @@ func ParseBoolValue(value string) (bool, error) {
 
 func DefaultCompactionConfig() CompactionConfig {
 	return runtimepolicy.DefaultCompactionPolicy()
-}
-
-func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
-	if c.MaxIters.Set {
-		cfg.Runtime.MaxIters = c.MaxIters.Value
-	}
-	if c.MaxDuration.Set {
-		cfg.Runtime.MaxDuration = c.MaxDuration.Value
-	}
 }
 
 func applyProvidersConfig(cfg *Config, providers []providerConfig) error {

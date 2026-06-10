@@ -209,8 +209,6 @@ func New(opts Options) (*App, error) {
 		Bus:           bus,
 		Session:       sess,
 		Prompt:        pb,
-		MaxIters:      runtimeLimits.MaxIters,
-		MaxDur:        runtimeLimits.MaxDuration,
 		ContextWindow: runtimeLimits.ContextWindow,
 		Compaction:    runtimeLimits.Compaction,
 	}

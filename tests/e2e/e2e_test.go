@@ -274,15 +274,13 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		t.Logf("tool errored: %+v", e.Payload)
 	})
 
-	eng := &runtime.Engine{
-		Provider: prov,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt:   pb,
-		MaxIters: 20,
-		MaxDur:   30 * time.Second,
-	}
+		eng := &runtime.Engine{
+			Provider: prov,
+			Tools:    reg,
+			Bus:      bus,
+			Session:  sess,
+			Prompt:   pb,
+		}
 
 	out, err := eng.Turn(ctx, "drive the demo")
 	if err != nil {
@@ -524,15 +522,13 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		t.Logf("tool errored: %+v", e.Payload)
 	})
 
-	eng := &runtime.Engine{
-		Provider: prov,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt:   pb,
-		MaxIters: 20,
-		MaxDur:   30 * time.Second,
-	}
+		eng := &runtime.Engine{
+			Provider: prov,
+			Tools:    reg,
+			Bus:      bus,
+			Session:  sess,
+			Prompt:   pb,
+		}
 
 	out, err := eng.Turn(ctx, "drive the portable demo")
 	if err != nil {

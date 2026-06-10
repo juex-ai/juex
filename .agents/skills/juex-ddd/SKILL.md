@@ -80,7 +80,7 @@ Use this map to decide where behavior belongs:
 | Context | Owns | Does not own |
 | --- | --- | --- |
 | `internal/llm` | Canonical messages, blocks, provider profiles, protocol selection, capability gates, provider seams, SDK/wire adapters | Session lifecycle, tool execution, web response shapes, CLI flags |
-| `internal/runtime` | Turn loop, tool-call ordering, pending input queue, budgets, compaction policy, active context, context projection, event emission for turn facts | CLI flags, HTTP routing, provider SDK details, session discovery, MCP process lifecycle |
+| `internal/runtime` | Turn loop, tool-call ordering, pending input queue, long-running turn policy, compaction policy, active context, context projection, event emission for turn facts | CLI flags, HTTP routing, provider SDK details, session discovery, MCP process lifecycle |
 | `internal/session` | Session identity/kind/active metadata, history index, JSONL persistence, token/context usage snapshots, locks | Prompt assembly, provider calls, tool dispatch, web authorization |
 | `internal/tools` | Tool registry, builtin tool contracts, shell profile execution seam, timeout and result normalization | Provider protocol quirks, session persistence, prompt assembly |
 | `internal/mcp` | MCP config normalization, stdio process/client lifecycle, MCP tool discovery, notification transport | Runtime turn policy, active session selection, web session ownership |
@@ -172,7 +172,7 @@ Use these checks before adding or extracting a module:
    - **Entity**: identity and lifecycle, such as session, turn, provider
      profile, MCP server, task/eval run.
    - **Value object**: immutable meaning, such as model ref, capability set,
-     budget, shell profile, context usage, prompt section.
+     shell profile, context usage, prompt section.
    - **Domain service**: pure decision logic that does not naturally belong to
      one entity, such as active-session selection, compaction selection,
      provider capability resolution, or turn admission.

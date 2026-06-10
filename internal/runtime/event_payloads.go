@@ -7,24 +7,6 @@ type TurnStartedPayload struct {
 	Kind  string `json:"kind,omitempty"`
 }
 
-type TurnIterationBudgetWarningPayload struct {
-	Kind           string `json:"kind"`
-	Budget         string `json:"budget"`
-	TurnID         string `json:"turn_id"`
-	RemainingIters int    `json:"remaining_iters"`
-	MaxIters       int    `json:"max_iters"`
-}
-
-type TurnDurationBudgetWarningPayload struct {
-	Kind                string `json:"kind"`
-	Budget              string `json:"budget"`
-	TurnID              string `json:"turn_id"`
-	RemainingDuration   string `json:"remaining_duration"`
-	RemainingDurationMS int64  `json:"remaining_duration_ms"`
-	MaxDuration         string `json:"max_duration"`
-	MaxDurationMS       int64  `json:"max_duration_ms"`
-}
-
 type TurnCompletedPayload struct {
 	DurationMS int64     `json:"duration_ms"`
 	OutputLen  int       `json:"output_len"`
@@ -32,13 +14,7 @@ type TurnCompletedPayload struct {
 }
 
 type TurnErroredPayload struct {
-	Error         string `json:"error"`
-	Kind          string `json:"kind,omitempty"`
-	Budget        string `json:"budget,omitempty"`
-	TurnID        string `json:"turn_id,omitempty"`
-	MaxIters      int    `json:"max_iters,omitempty"`
-	MaxDuration   string `json:"max_duration,omitempty"`
-	MaxDurationMS int64  `json:"max_duration_ms,omitempty"`
+	Error string `json:"error"`
 }
 
 type LLMRequestedPayload struct {

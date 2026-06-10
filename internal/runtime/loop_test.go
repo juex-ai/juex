@@ -104,8 +104,6 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 		Bus:      bus,
 		Session:  sess,
 		Prompt:   pb,
-		MaxIters: 10,
-		MaxDur:   30 * time.Second,
 	}, bus
 }
 
@@ -481,15 +479,6 @@ func messagesText(msgs []llm.Message) string {
 		}
 	}
 	return sb.String()
-}
-
-func hasAdjacentSameRole(msgs []llm.Message) bool {
-	for i := 1; i < len(msgs); i++ {
-		if msgs[i-1].Role == msgs[i].Role {
-			return true
-		}
-	}
-	return false
 }
 
 func signal(ch chan struct{}) {
@@ -1162,226 +1151,52 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 	}
 }
 
-func TestTurn_BudgetExceeded(t *testing.T) {
-	// Provider keeps issuing tool calls forever; engine should bail.
-	loopResp := llm.Response{
-		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "a", ToolName: "echo", Input: map[string]any{}},
-		}},
-		StopReason: llm.StopToolUse,
+func TestTurn_AllowsMoreThanLegacyIterationBudget(t *testing.T) {
+	const toolTurns = 30
+	script := make([]llm.Response, 0, toolTurns+1)
+	for i := 0; i < toolTurns; i++ {
+		script = append(script, llm.Response{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{Type: llm.BlockToolUse, ToolUseID: fmt.Sprintf("echo_%02d", i), ToolName: "echo", Input: map[string]any{}},
+			}},
+			StopReason: llm.StopToolUse,
+		})
 	}
-	prov := &mockProvider{script: []llm.Response{loopResp, loopResp, loopResp, loopResp, loopResp}}
-	reg := tools.NewRegistry()
-	reg.MustRegister(tools.Tool{
+	script = append(script, llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
+	prov := &mockProvider{script: script}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
 		Name:    "echo",
 		Schema:  map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) { return "x", nil },
 	})
-
-	sess, err := session.New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { sess.Close() })
-	pb := &prompt.Builder{AgentsMDDirs: []string{t.TempDir()}, Now: func() time.Time { return time.Now() }}
-	bus := events.NewBus()
-	var erroredPayload TurnErroredPayload
+	var errored bool
 	bus.Subscribe("turn.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(TurnErroredPayload)
+		errored = true
 	})
-	eng := &Engine{Provider: prov, Tools: reg, Bus: bus, Session: sess, Prompt: pb, MaxIters: 3, MaxDur: 30 * time.Second}
-
-	_, err = eng.Turn(context.Background(), "loop")
-	if err == nil || !strings.Contains(err.Error(), "iterations exceeded") {
-		t.Fatalf("expected budget breach, got %v", err)
-	}
-	budgetErr, ok := AsBudgetError(err)
-	if !ok {
-		t.Fatalf("expected BudgetError, got %T: %v", err, err)
-	}
-	if budgetErr.Kind != BudgetErrorKindIterationLimit || budgetErr.MaxIters != 3 || budgetErr.Budget != "iterations" {
-		t.Fatalf("budget error = %+v", budgetErr)
-	}
-	if erroredPayload.Kind != BudgetErrorKindIterationLimit || erroredPayload.MaxIters != 3 {
-		t.Fatalf("turn.errored payload = %+v", erroredPayload)
-	}
-}
-
-func TestTurn_NearIterationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{
-		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "noop_1", ToolName: "noop"},
-		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
-	}}
-	eng, bus := newEngine(t, prov, false)
-	eng.MaxIters = 2
-	eng.Tools.MustRegister(tools.Tool{
-		Name:   "noop",
-		Schema: map[string]any{"type": "object"},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			return "ok", nil
-		},
-	})
-	var warningPayloads []TurnIterationBudgetWarningPayload
-	bus.Subscribe("turn.budget.warning", func(e events.Event) {
-		payload, ok := e.Payload.(TurnIterationBudgetWarningPayload)
+	var lastIter int
+	bus.Subscribe("llm.requested", func(e events.Event) {
+		payload, ok := e.Payload.(LLMRequestedPayload)
 		if ok {
-			warningPayloads = append(warningPayloads, payload)
+			lastIter = payload.Iter
 		}
 	})
 
-	out, err := eng.Turn(context.Background(), "need tool")
+	out, err := eng.Turn(context.Background(), "loop for a while")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out != "done" {
 		t.Fatalf("out = %q, want done", out)
 	}
-	if len(warningPayloads) != 1 {
-		t.Fatalf("warning payloads = %+v, want one", warningPayloads)
+	if errored {
+		t.Fatal("turn emitted turn.errored")
 	}
-	payload := warningPayloads[0]
-	if payload.Kind != BudgetWarningKindIterationLimit || payload.Budget != "iterations" || payload.RemainingIters != 1 || payload.MaxIters != 2 {
-		t.Fatalf("warning payload = %+v", payload)
+	if prov.called != toolTurns+1 {
+		t.Fatalf("provider calls = %d, want %d", prov.called, toolTurns+1)
 	}
-	if len(prov.histories) != 2 {
-		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
-	}
-	if strings.Contains(messagesText(prov.histories[0]), runtimeBudgetFinalizationHint) {
-		t.Fatalf("first provider request unexpectedly had finalization hint")
-	}
-	if !strings.Contains(messagesText(prov.histories[1]), runtimeBudgetFinalizationHint) {
-		t.Fatalf("second provider request missing finalization hint: %+v", prov.histories[1])
-	}
-	if hasAdjacentSameRole(prov.histories[1]) {
-		t.Fatalf("second provider request has adjacent matching roles: %+v", prov.histories[1])
-	}
-	if strings.Contains(messagesText(eng.Session.History), runtimeBudgetFinalizationHint) {
-		t.Fatalf("session history should not persist finalization hint")
-	}
-}
-
-func TestTurn_NearIterationBudgetMergesHintIntoTrailingUserMessage(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{
-		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
-	}}
-	eng, _ := newEngine(t, prov, false)
-	eng.MaxIters = 1
-
-	out, err := eng.Turn(context.Background(), "finish soon")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != "done" {
-		t.Fatalf("out = %q, want done", out)
-	}
-	if len(prov.histories) != 1 {
-		t.Fatalf("provider histories = %d, want 1", len(prov.histories))
-	}
-	history := prov.histories[0]
-	if len(history) != 1 || history[0].Role != llm.RoleUser {
-		t.Fatalf("provider history = %+v, want one merged user message", history)
-	}
-	if len(history[0].Blocks) != 2 {
-		t.Fatalf("provider user blocks = %+v, want original prompt plus finalization hint", history[0].Blocks)
-	}
-	if !strings.Contains(messagesText(history), runtimeBudgetFinalizationHint) {
-		t.Fatalf("provider request missing finalization hint: %+v", history)
-	}
-	if strings.Contains(messagesText(eng.Session.History), runtimeBudgetFinalizationHint) {
-		t.Fatalf("session history should not persist finalization hint")
-	}
-}
-
-func TestTurn_NearDurationBudgetEmitsWarningAndFinalizationHint(t *testing.T) {
-	prov := &mockProvider{script: []llm.Response{
-		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "slow_1", ToolName: "slow"},
-		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
-	}}
-	eng, bus := newEngine(t, prov, false)
-	eng.MaxIters = 5
-	eng.MaxDur = 800 * time.Millisecond
-	eng.Tools.MustRegister(tools.Tool{
-		Name:   "slow",
-		Schema: map[string]any{"type": "object"},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			time.Sleep(450 * time.Millisecond)
-			return "ok", nil
-		},
-	})
-	var durationWarning *TurnDurationBudgetWarningPayload
-	bus.Subscribe("turn.budget.warning", func(e events.Event) {
-		payload, ok := e.Payload.(TurnDurationBudgetWarningPayload)
-		if ok && payload.Budget == "duration" {
-			durationWarning = &payload
-		}
-	})
-
-	out, err := eng.Turn(context.Background(), "run slow")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out != "done" {
-		t.Fatalf("out = %q, want done", out)
-	}
-	if durationWarning == nil {
-		t.Fatal("missing duration budget warning")
-	}
-	if durationWarning.Kind != BudgetWarningKindTimeout || durationWarning.MaxDurationMS != int64(800) {
-		t.Fatalf("duration warning = %+v", durationWarning)
-	}
-	if durationWarning.RemainingDurationMS <= 0 || durationWarning.RemainingDurationMS >= 800 {
-		t.Fatalf("remaining_duration_ms = %v, want positive value below max", durationWarning.RemainingDurationMS)
-	}
-	if len(prov.histories) != 2 {
-		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
-	}
-	if !strings.Contains(messagesText(prov.histories[1]), runtimeBudgetFinalizationHint) {
-		t.Fatalf("second provider request missing finalization hint: %+v", prov.histories[1])
-	}
-	if strings.Contains(messagesText(eng.Session.History), runtimeBudgetFinalizationHint) {
-		t.Fatalf("session history should not persist finalization hint")
-	}
-}
-
-func TestTurnBudgetStatusIgnoresUnsetDurationBudget(t *testing.T) {
-	status := currentTurnBudgetStatus("turn-1", 0, 3, time.Now().Add(-time.Minute), 0)
-	if status.DurationNear {
-		t.Fatalf("DurationNear = true for unset duration budget")
-	}
-	if status.Near() {
-		t.Fatalf("Near = true, want false when iteration and duration budgets are not near")
-	}
-}
-
-func TestTurn_MaxDurationBudgetError(t *testing.T) {
-	prov := &mockProvider{
-		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "x"), StopReason: llm.StopEndTurn}},
-		delay:  200 * time.Millisecond,
-	}
-	eng, bus := newEngine(t, prov, false)
-	eng.MaxDur = 20 * time.Millisecond
-	var erroredPayload TurnErroredPayload
-	bus.Subscribe("turn.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(TurnErroredPayload)
-	})
-
-	_, err := eng.Turn(context.Background(), "hi")
-	if err == nil {
-		t.Fatal("expected duration budget error")
-	}
-	budgetErr, ok := AsBudgetError(err)
-	if !ok {
-		t.Fatalf("expected BudgetError, got %T: %v", err, err)
-	}
-	if budgetErr.Kind != BudgetErrorKindTimeout || budgetErr.MaxDuration != 20*time.Millisecond || budgetErr.Budget != "duration" {
-		t.Fatalf("budget error = %+v", budgetErr)
-	}
-	if erroredPayload.Kind != BudgetErrorKindTimeout || erroredPayload.MaxDurationMS != int64(20) {
-		t.Fatalf("turn.errored payload = %+v", erroredPayload)
+	if lastIter != toolTurns {
+		t.Fatalf("last llm.requested iter = %d, want %d", lastIter, toolTurns)
 	}
 }
 
@@ -1454,7 +1269,6 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	eng.MaxDur = 3 * time.Second
 	eng.Tools.MustRegister(tools.Tool{
 		Name:   "slow",
 		Schema: map[string]any{"type": "object"},
