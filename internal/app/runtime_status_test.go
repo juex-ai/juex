@@ -100,7 +100,7 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 		t.Fatalf("servers = %+v", status.MCP.Servers)
 	}
 	alpha, shared, zeta := status.MCP.Servers[0], status.MCP.Servers[1], status.MCP.Servers[2]
-	if alpha.Name != "alpha" || alpha.Source != "project" || alpha.Command != filepath.Join(work, "bin", "alpha") || alpha.Args[0] != "--workdir" || alpha.Args[1] != work || alpha.Status != "not_started" {
+	if alpha.Name != "alpha" || alpha.Source != "project" || filepath.ToSlash(alpha.Command) != filepath.ToSlash(work)+"/bin/alpha" || alpha.Args[0] != "--workdir" || alpha.Args[1] != work || alpha.Status != "not_started" {
 		t.Fatalf("alpha = %+v", alpha)
 	}
 	if shared.Name != "shared" || shared.Source != "project" || shared.Command != "project-shared" || !shared.Connected || shared.ToolCount != 2 {
@@ -108,6 +108,35 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	}
 	if zeta.Name != "zeta" || zeta.Source != "user" || zeta.Status != "error" || zeta.Error != "boom" {
 		t.Fatalf("zeta = %+v", zeta)
+	}
+}
+
+func TestRuntimeStatusServiceCachesSkillsWhenProvided(t *testing.T) {
+	work := t.TempDir()
+	skillPath := filepath.Join(work, ".agents", "skills", "review", "SKILL.md")
+	mustWriteRuntimeStatusFile(t, skillPath, `---
+name: review
+description: cached
+---
+body`)
+	cfg := config.Config{WorkDir: work}
+	cache := NewRuntimeStatusSkillCache()
+
+	first, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteRuntimeStatusFile(t, skillPath, `---
+name: review
+description: changed
+---
+body`)
+	second, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Skills.Items[0].Description != "cached" || second.Skills.Items[0].Description != "cached" {
+		t.Fatalf("skills cache did not preserve first load: first=%+v second=%+v", first.Skills.Items, second.Skills.Items)
 	}
 }
 

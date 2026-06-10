@@ -45,6 +45,7 @@ type Server struct {
 
 	runtimeMu     sync.Mutex
 	runtimeMCPErr map[string]string
+	runtimeSkills *app.RuntimeStatusSkillCache
 
 	mcpMu       sync.Mutex
 	mcpStarted  bool
@@ -79,7 +80,11 @@ func NewServer(opts Options) *Server {
 	if opts.Addr == "" {
 		opts.Addr = "127.0.0.1:8080"
 	}
-	return &Server{opts: opts, runtimeMCPErr: map[string]string{}}
+	return &Server{
+		opts:          opts,
+		runtimeMCPErr: map[string]string{},
+		runtimeSkills: app.NewRuntimeStatusSkillCache(),
+	}
 }
 
 // Handler returns the http.Handler wired with every route. Exposed so

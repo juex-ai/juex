@@ -100,6 +100,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	status, err := app.NewRuntimeStatusService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
 		MCPToolCounts: toolCounts,
 		MCPErrors:     s.mcpErrors(),
+		SkillCache:    s.runtimeSkills,
 	})
 	if err != nil {
 		return runtimeStatusResponse{}, err

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
@@ -27,6 +28,23 @@ func NewRuntimeStatusService(cfg config.Config) RuntimeStatusService {
 type RuntimeStatusOptions struct {
 	MCPToolCounts map[string]int
 	MCPErrors     map[string]string
+	SkillCache    *RuntimeStatusSkillCache
+}
+
+// RuntimeStatusSkillCache caches loaded skills for repeated status snapshots.
+// The cache is keyed by the resolved skill directory list, so tests and callers
+// that swap config directories get a fresh load without leaking skills.Loader
+// details into presentation layers.
+type RuntimeStatusSkillCache struct {
+	mu     sync.Mutex
+	dirs   []string
+	status RuntimeSkillsStatus
+	loader *skills.Loader
+	loaded bool
+}
+
+func NewRuntimeStatusSkillCache() *RuntimeStatusSkillCache {
+	return &RuntimeStatusSkillCache{}
 }
 
 type RuntimeStatus struct {
@@ -92,7 +110,7 @@ type RuntimeSkillInfo struct {
 }
 
 func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
-	skillStatus, skillLoader, err := s.skillsStatus()
+	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -156,8 +174,33 @@ func runtimePromptSource(section prompt.Section) string {
 	return "runtime"
 }
 
-func (s RuntimeStatusService) skillsStatus() (RuntimeSkillsStatus, *skills.Loader, error) {
-	skillLoader := skills.NewLoader(s.cfg.SkillDirs()...)
+func (s RuntimeStatusService) skillsStatus(cache *RuntimeStatusSkillCache) (RuntimeSkillsStatus, *skills.Loader, error) {
+	dirs := s.cfg.SkillDirs()
+	if cache != nil {
+		return cache.snapshot(dirs)
+	}
+	return loadRuntimeSkills(dirs)
+}
+
+func (c *RuntimeStatusSkillCache) snapshot(dirs []string) (RuntimeSkillsStatus, *skills.Loader, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.loaded && stringSlicesEqual(c.dirs, dirs) {
+		return cloneRuntimeSkillsStatus(c.status), c.loader, nil
+	}
+	status, loader, err := loadRuntimeSkills(dirs)
+	if err != nil {
+		return RuntimeSkillsStatus{}, nil, err
+	}
+	c.dirs = append([]string(nil), dirs...)
+	c.status = cloneRuntimeSkillsStatus(status)
+	c.loader = loader
+	c.loaded = true
+	return status, loader, nil
+}
+
+func loadRuntimeSkills(dirs []string) (RuntimeSkillsStatus, *skills.Loader, error) {
+	skillLoader := skills.NewLoader(dirs...)
 	if err := skillLoader.Load(); err != nil {
 		return RuntimeSkillsStatus{}, nil, err
 	}
@@ -176,6 +219,23 @@ func (s RuntimeStatusService) skillsStatus() (RuntimeSkillsStatus, *skills.Loade
 		return runtimeSourceLess(items[i].Source, items[i].Name, items[j].Source, items[j].Name)
 	})
 	return RuntimeSkillsStatus{Count: len(items), Items: items}, skillLoader, nil
+}
+
+func cloneRuntimeSkillsStatus(status RuntimeSkillsStatus) RuntimeSkillsStatus {
+	status.Items = append([]RuntimeSkillInfo(nil), status.Items...)
+	return status
+}
+
+func stringSlicesEqual(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type runtimeMCPServerConfig struct {
