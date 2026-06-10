@@ -619,6 +619,14 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 	if cfg.ProjectAgentsDir() != wantProjAgents {
 		t.Fatalf("project agents dir = %q, want %q", cfg.ProjectAgentsDir(), wantProjAgents)
 	}
+	runtimePaths := cfg.RuntimePaths()
+	if runtimePaths.WorkDir != filepath.Join("/proj") || runtimePaths.MemoryDir != cfg.MemoryDir() || runtimePaths.HistoryPath != cfg.HistoryPath() {
+		t.Fatalf("runtime paths = %+v", runtimePaths)
+	}
+	resourcePaths := cfg.ResourcePaths()
+	if resourcePaths.ProjectAgentsDir != wantProjAgents || len(resourcePaths.SkillDirs) != 2 || len(resourcePaths.MCPConfigPaths) != 2 {
+		t.Fatalf("resource paths = %+v", resourcePaths)
+	}
 }
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
@@ -662,10 +670,28 @@ func TestPaths_DisabledUserGlobalResourcesOmitsHomeResources(t *testing.T) {
 	}
 }
 
-func TestNewProvider_RequiresProviderSelector(t *testing.T) {
+func TestProviderSelection_RequiresProviderSelector(t *testing.T) {
 	cfg := Config{APIKey: "x", Model: "m"}
-	if _, err := cfg.NewProvider(); err == nil {
+	if _, err := cfg.ProviderSelection().ProviderProfile(); err == nil {
 		t.Fatal("expected error for empty provider selector")
+	}
+}
+
+func TestRuntimeLimits_ResolvedValues(t *testing.T) {
+	cfg := Config{
+		ContextWindow: 1234,
+		Compaction:    DefaultCompactionConfig(),
+		Runtime: RuntimeConfig{
+			MaxIters:    7,
+			MaxDuration: 5 * time.Second,
+		},
+	}
+	limits := cfg.RuntimeLimits()
+	if limits.ContextWindow != 1234 || limits.MaxIters != 7 || limits.MaxDuration != 5*time.Second {
+		t.Fatalf("runtime limits = %+v", limits)
+	}
+	if !limits.Compaction.Enabled {
+		t.Fatalf("compaction = %+v", limits.Compaction)
 	}
 }
 
@@ -964,6 +990,17 @@ providers:
 	}
 	if profile.ID != "deepseek" || profile.Protocol != "openai/chat" || profile.Capabilities.Tools || profile.Capabilities.MaxOutputTokens {
 		t.Fatalf("profile = %+v", profile)
+	}
+	selection := cfg.ProviderSelection()
+	if selection.ID != "deepseek" || selection.Model != "deepseek-chat" || selection.Headers["X-Model"] != "deepseek-chat" {
+		t.Fatalf("provider selection = %+v", selection)
+	}
+	selectedProfile, err := selection.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selectedProfile.ID != profile.ID || selectedProfile.Protocol != profile.Protocol || selectedProfile.Model != profile.Model {
+		t.Fatalf("selected profile = %+v, want %+v", selectedProfile, profile)
 	}
 }
 

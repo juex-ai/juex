@@ -114,6 +114,9 @@ func New(opts Options) (*App, error) {
 		}
 		cfg.WorkDir = wd
 	}
+	runtimePaths := cfg.RuntimePaths()
+	resourcePaths := cfg.ResourcePaths()
+	runtimeLimits := cfg.RuntimeLimits()
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = os.Stderr
@@ -121,7 +124,11 @@ func New(opts Options) (*App, error) {
 
 	provider := opts.Provider
 	if provider == nil {
-		p, err := cfg.NewProvider()
+		profile, err := cfg.ProviderSelection().ProviderProfile()
+		if err != nil {
+			return nil, err
+		}
+		p, err := llm.NewProvider(profile)
 		if err != nil {
 			return nil, err
 		}
@@ -135,9 +142,9 @@ func New(opts Options) (*App, error) {
 	}
 
 	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: cfg.WorkDir, Shell: toolsShellProfile(cfg.Shell)})
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: runtimePaths.WorkDir, Shell: toolsShellProfile(cfg.Shell)})
 
-	skillLoader := skills.NewLoader(cfg.SkillDirs()...)
+	skillLoader := skills.NewLoader(resourcePaths.SkillDirs...)
 	if err := skillLoader.Load(); err != nil {
 		return nil, err
 	}
@@ -145,7 +152,7 @@ func New(opts Options) (*App, error) {
 	// section (each entry includes its absolute path); the model loads a
 	// skill body with the standard `read` builtin. No dedicated tool.
 
-	memStore := memory.NewStore(cfg.MemoryDir())
+	memStore := memory.NewStore(runtimePaths.MemoryDir)
 	if err := memStore.RegisterTools(reg); err != nil {
 		return nil, err
 	}
@@ -153,12 +160,12 @@ func New(opts Options) (*App, error) {
 	var mcpConfigs []mcp.Config
 	var mergedMCP mcp.Config
 	if !opts.DisableMCP && opts.MCPManager == nil {
-		for _, path := range cfg.MCPConfigPaths() {
+		for _, path := range resourcePaths.MCPConfigPaths {
 			mcpCfg, err := mcp.LoadConfig(path)
 			if err != nil {
 				return nil, err
 			}
-			mcpCfg = mcp.PrepareConfig(mcpCfg, cfg.WorkDir)
+			mcpCfg = mcp.PrepareConfig(mcpCfg, runtimePaths.WorkDir)
 			if len(mcpCfg.MCPServers) > 0 {
 				mcpConfigs = append(mcpConfigs, mcpCfg)
 			}
@@ -188,11 +195,11 @@ func New(opts Options) (*App, error) {
 	sessionUnsubscribe := sess.SubscribeBus(bus)
 
 	pb := &prompt.Builder{
-		GlobalAgentsMDPath: cfg.GlobalAgentsMDPath(),
-		AgentsMDDirs:       cfg.AgentsMDDirs(),
+		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
+		AgentsMDDirs:       resourcePaths.AgentsMDDirs,
 		Memory:             memStore,
 		Skills:             skillLoader,
-		WorkDir:            cfg.WorkDir,
+		WorkDir:            runtimePaths.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
 	}
 
@@ -202,10 +209,10 @@ func New(opts Options) (*App, error) {
 		Bus:           bus,
 		Session:       sess,
 		Prompt:        pb,
-		MaxIters:      cfg.Runtime.MaxIters,
-		MaxDur:        cfg.Runtime.MaxDuration,
-		ContextWindow: cfg.ContextWindow,
-		Compaction:    cfg.Compaction,
+		MaxIters:      runtimeLimits.MaxIters,
+		MaxDur:        runtimeLimits.MaxDuration,
+		ContextWindow: runtimeLimits.ContextWindow,
+		Compaction:    runtimeLimits.Compaction,
 	}
 
 	appCtx, appCancel := context.WithCancel(context.Background())

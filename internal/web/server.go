@@ -22,8 +22,8 @@ import (
 	"github.com/juex-ai/juex/internal/session"
 )
 
-// Options configures a Server. Provider is optional; if unset, the
-// server constructs one per-session via cfg.NewProvider().
+// Options configures a Server. Provider is optional; if unset, each session
+// resolves a provider profile from config and constructs a provider in app.
 type Options struct {
 	Cfg          config.Config
 	Addr         string

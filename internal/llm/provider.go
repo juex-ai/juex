@@ -52,6 +52,11 @@ func New(cfg Config) (Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	return NewProvider(profile)
+}
+
+// NewProvider constructs the concrete provider for a resolved profile.
+func NewProvider(profile ProviderProfile) (Provider, error) {
 	if profile.APIKey == "" {
 		return nil, fmt.Errorf("llm: missing API key")
 	}
