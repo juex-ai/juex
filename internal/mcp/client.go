@@ -243,8 +243,8 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	return sb.String(), nil
 }
 
-// RegisterAll connects servers from cfg and registers their tools (prefixed
-// `mcp__<server>__<tool>`) into reg. Returns the connected clients so the
+// RegisterAll connects servers from cfg and registers their tools into reg
+// using ToolName. Returns the connected clients so the
 // caller can Close them at shutdown. On error, any clients opened during this
 // call are closed before returning.
 func RegisterAll(ctx context.Context, cfg Config, reg *tools.Registry) ([]*Client, error) {
@@ -266,7 +266,7 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 			return nil, &ServerError{Server: name, Op: "tools/list", Err: err}
 		}
 		for _, d := range descs {
-			toolName := fmt.Sprintf("mcp__%s__%s", name, d.Name)
+			toolName := ToolName(name, d.Name)
 			schema := d.InputSchema
 			if schema == nil {
 				schema = map[string]any{"type": "object"}

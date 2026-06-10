@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
@@ -394,7 +393,7 @@ func (s *Server) connectedMCPServers() map[string]int {
 			return true
 		}
 		for _, tool := range as.app.Engine.Tools.List() {
-			serverName, ok := mcpServerFromToolName(tool.Name)
+			serverName, _, ok := mcp.ParseToolName(tool.Name)
 			if ok {
 				if toolsByServer[serverName] == nil {
 					toolsByServer[serverName] = map[string]struct{}{}
@@ -409,17 +408,4 @@ func (s *Server) connectedMCPServers() map[string]int {
 		connected[serverName] = len(tools)
 	}
 	return connected
-}
-
-func mcpServerFromToolName(name string) (string, bool) {
-	const prefix = "mcp__"
-	if !strings.HasPrefix(name, prefix) {
-		return "", false
-	}
-	rest := strings.TrimPrefix(name, prefix)
-	server, _, ok := strings.Cut(rest, "__")
-	if !ok || server == "" {
-		return "", false
-	}
-	return server, true
 }

@@ -71,7 +71,7 @@ func (m *Manager) RegisterTools(reg *tools.Registry) error {
 	for serverName, descs := range m.tools {
 		client := m.clients[serverName]
 		for _, d := range descs {
-			toolName := fmt.Sprintf("mcp__%s__%s", serverName, d.Name)
+			toolName := ToolName(serverName, d.Name)
 			schema := d.InputSchema
 			if schema == nil {
 				schema = map[string]any{"type": "object"}
