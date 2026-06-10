@@ -143,6 +143,16 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 }
 
 func toOpenAIResponseInput(history []Message, profile ProviderProfile) responses.ResponseInputParam {
+	return toOpenAIResponseInputWithOptions(history, profile, responseInputOptions{})
+}
+
+type responseInputOptions struct {
+	// Codex uses store=false against the ChatGPT backend. Replaying reasoning
+	// item IDs in that mode makes the backend look up non-persisted items.
+	OmitReasoning bool
+}
+
+func toOpenAIResponseInputWithOptions(history []Message, profile ProviderProfile, opts responseInputOptions) responses.ResponseInputParam {
 	var out responses.ResponseInputParam
 	for _, m := range compactHistoryForProvider(history) {
 		var textParts []string
@@ -165,7 +175,7 @@ func toOpenAIResponseInput(history []Message, profile ProviderProfile) responses
 				textParts = nil
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(b.ToolUseID, b.Content))
 			case BlockReasoning:
-				if !profile.Capabilities.ReasoningReplay || b.Signature == "" {
+				if opts.OmitReasoning || !profile.Capabilities.ReasoningReplay || b.Signature == "" {
 					continue
 				}
 				out = appendResponseTextMessage(out, m.Role, textParts)

@@ -1173,7 +1173,7 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 		t.Fatalf("codex request should include reasoning controls: %+v", capturedBody)
 	}
 	input, _ := capturedBody["input"].([]any)
-	if len(input) < 4 {
+	if len(input) < 3 {
 		t.Fatalf("input = %+v", input)
 	}
 	if resp.StopReason != StopToolUse {
@@ -1190,6 +1190,52 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v", resp.Usage)
+	}
+}
+
+func TestOpenAICodexResponses_DoesNotReplayReasoningItemsWithStoreFalse(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Complete(context.Background(), "",
+		[]Message{
+			TextMessage(RoleUser, "first"),
+			{Role: RoleAssistant, Blocks: []Block{
+				{Type: BlockReasoning, Text: "prior", Signature: "rs_prev", Content: "enc_prev", Redacted: true},
+				{Type: BlockText, Text: "first answer"},
+			}},
+			TextMessage(RoleUser, "second"),
+		},
+		nil,
+	); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	if capturedBody["store"] != false {
+		t.Fatalf("store = %+v, want false", capturedBody["store"])
+	}
+	input, _ := capturedBody["input"].([]any)
+	for _, raw := range input {
+		item, _ := raw.(map[string]any)
+		if item["type"] == "reasoning" || item["id"] == "rs_prev" {
+			t.Fatalf("codex store=false request must not replay reasoning item: %+v; input=%+v", item, input)
+		}
 	}
 }
 

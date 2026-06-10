@@ -274,7 +274,10 @@ relying on every endpoint to ignore unknown fields. Reasoning replay fields are
 provider-compatible knobs: OpenAI-compatible chat can replay
 `reasoning_content` / `reasoning` / `thinking`, Anthropic replays thinking
 blocks, and Responses stores reasoning item IDs plus encrypted content when the
-provider returns them.
+provider returns them. The ChatGPT Codex Responses adapter captures reasoning
+output locally, but does not replay reasoning item IDs while sending
+`store=false`; those IDs are not persisted by the backend and can fail future
+requests.
 Anthropic thinking uses adaptive thinking plus `output_config.effort` when an
 effort is configured; an empty effort enables adaptive thinking without
 overriding the provider default. DeepSeek uses the OpenAI Chat
