@@ -29,10 +29,10 @@ func MergeConfigs(configs []Config) Config {
 }
 
 func NewManagerLayeredSoft(ctx context.Context, configs []Config, opts ConnectOptions) (*Manager, error) {
-	return newManager(ctx, MergeConfigs(configs), opts)
+	return newManager(ctx, MergeConfigs(configs), opts), nil
 }
 
-func newManager(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager, error) {
+func newManager(ctx context.Context, cfg Config, opts ConnectOptions) *Manager {
 	mgr := &Manager{
 		clients: map[string]*Client{},
 		tools:   map[string][]ToolDescriptor{},
@@ -56,7 +56,7 @@ func newManager(ctx context.Context, cfg Config, opts ConnectOptions) (*Manager,
 		}
 		mgr.tools[name] = append([]ToolDescriptor(nil), descs...)
 	}
-	return mgr, nil
+	return mgr
 }
 
 func (m *Manager) RegisterTools(reg *tools.Registry) error {
