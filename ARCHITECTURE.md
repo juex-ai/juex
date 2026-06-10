@@ -36,6 +36,7 @@ juex/
 ├── internal/
 │   ├── app/                      # process composition, slash commands, session attachment, turn admission
 │   │   ├── app.go
+│   │   ├── runtime_status.go
 │   │   ├── session_attachment.go
 │   │   ├── slash.go
 │   │   └── turn_admission.go
@@ -662,7 +663,7 @@ Routes:
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
-| GET | `/api/runtime` | system prompt, MCP, and skills status for the web header and runtime details page |
+| GET | `/api/runtime` | app-assembled system prompt, MCP, provider, shell, and skills status translated to the web DTO |
 
 ---
 
@@ -920,8 +921,11 @@ capability and do not become notification targets.
 
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.
-The web runtime status keeps the latest per-server connection error so `/runtime`
-can explain configured-but-disconnected servers.
+The app runtime status service assembles read-only runtime facts for
+`/api/runtime`: provider, shell, system prompt sections, skills, and configured
+MCP servers. The web layer keeps serve-process observations, such as the latest
+per-server MCP connection error and connected tool counts, then translates the
+app status into the browser DTO.
 
 Production paths load user-global and project MCP configs in later-wins order,
 then start a best-effort process manager with
