@@ -10,6 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/coder/websocket"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -1357,6 +1360,365 @@ func TestOpenAICodexResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCached
 	if resp.Usage.CachedInputTokens != 112 {
 		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
 	}
+}
+
+func TestOpenAICodexResponses_WebsocketCachedSendsCodexFrame(t *testing.T) {
+	type capture struct {
+		header http.Header
+		url    string
+		frame  map[string]any
+	}
+	captures := make(chan capture, 1)
+	serverErrs := make(chan error, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isWebsocketRequest(r) {
+			serverErrs <- fmt.Errorf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "websocket expected", http.StatusBadRequest)
+			return
+		}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			serverErrs <- err
+			return
+		}
+		defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			serverErrs <- err
+			return
+		}
+		var frame map[string]any
+		if err := json.Unmarshal(data, &frame); err != nil {
+			serverErrs <- err
+			return
+		}
+		captures <- capture{header: r.Header.Clone(), url: r.URL.String(), frame: frame}
+		if err := conn.Write(ctx, websocket.MessageText, codexCompletedWebsocketEvent("resp_1", "ok")); err != nil {
+			serverErrs <- err
+		}
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+		Headers:  map[string]string{"ChatGPT-Account-ID": "acct_1"},
+		Query:    map[string]string{"trace": "1"},
+		Compat:   CompatOptions{CodexTransport: CodexTransportWebSocketCached},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Complete(context.Background(), "system", []Message{TextMessage(RoleUser, "hello")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Message.FirstText() != "ok" {
+		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatal(err)
+	default:
+	}
+	captured := <-captures
+	if got := captured.header.Get("Authorization"); got != "Bearer codex-token" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	if got := captured.header.Get("OpenAI-Beta"); got != codexResponsesWebsocketBeta {
+		t.Fatalf("OpenAI-Beta = %q", got)
+	}
+	if got := captured.header.Get("chatgpt-account-id"); got != "acct_1" {
+		t.Fatalf("chatgpt-account-id = %q", got)
+	}
+	if got := captured.url; got != "/codex/responses?trace=1" {
+		t.Fatalf("websocket URL = %q", got)
+	}
+	if got := captured.frame["type"]; got != "response.create" {
+		t.Fatalf("type = %v", got)
+	}
+	if got := captured.frame["model"]; got != "gpt-test" {
+		t.Fatalf("model = %v", got)
+	}
+	if got := captured.frame["stream"]; got != true {
+		t.Fatalf("stream = %v", got)
+	}
+	if got := captured.frame["store"]; got != false {
+		t.Fatalf("store = %v", got)
+	}
+	if _, ok := captured.frame["previous_response_id"]; ok {
+		t.Fatalf("first websocket frame should not include previous_response_id: %+v", captured.frame)
+	}
+	input, _ := captured.frame["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("input = %+v", captured.frame["input"])
+	}
+}
+
+func TestOpenAICodexResponses_WebsocketCachedUsesPreviousResponseIDForIncrementalInput(t *testing.T) {
+	frames := make(chan map[string]any, 2)
+	serverErrs := make(chan error, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isWebsocketRequest(r) {
+			serverErrs <- fmt.Errorf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "websocket expected", http.StatusBadRequest)
+			return
+		}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			serverErrs <- err
+			return
+		}
+		defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		for i, event := range [][]byte{
+			codexCompletedWebsocketEvent("resp_1", "first answer"),
+			codexCompletedWebsocketEvent("resp_2", "second answer"),
+		} {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				serverErrs <- fmt.Errorf("read frame %d: %w", i, err)
+				return
+			}
+			var frame map[string]any
+			if err := json.Unmarshal(data, &frame); err != nil {
+				serverErrs <- err
+				return
+			}
+			frames <- frame
+			if err := conn.Write(ctx, websocket.MessageText, event); err != nil {
+				serverErrs <- err
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+		Compat:   CompatOptions{CodexTransport: CodexTransportWebSocketCached},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHistory := []Message{TextMessage(RoleUser, "first")}
+	firstResp, err := p.Complete(context.Background(), "", firstHistory, nil)
+	if err != nil {
+		t.Fatalf("first Complete: %v", err)
+	}
+	secondHistory := append(append([]Message{}, firstHistory...), firstResp.Message, TextMessage(RoleUser, "second"))
+	secondResp, err := p.Complete(context.Background(), "", secondHistory, nil)
+	if err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	if secondResp.Message.FirstText() != "second answer" {
+		t.Fatalf("second text = %q", secondResp.Message.FirstText())
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatal(err)
+	default:
+	}
+	firstFrame := <-frames
+	secondFrame := <-frames
+	if _, ok := firstFrame["previous_response_id"]; ok {
+		t.Fatalf("first frame should not include previous_response_id: %+v", firstFrame)
+	}
+	if got := secondFrame["previous_response_id"]; got != "resp_1" {
+		t.Fatalf("previous_response_id = %v, frame=%+v", got, secondFrame)
+	}
+	input, _ := secondFrame["input"].([]any)
+	if len(input) != 1 {
+		t.Fatalf("incremental input = %+v", secondFrame["input"])
+	}
+	item, _ := input[0].(map[string]any)
+	if item["role"] != "user" || item["content"] != "second" {
+		t.Fatalf("incremental item = %+v", item)
+	}
+}
+
+func TestOpenAICodexResponses_WebsocketModeDoesNotCacheConnectionOrPreviousResponse(t *testing.T) {
+	handshakes := make(chan struct{}, 2)
+	frames := make(chan map[string]any, 2)
+	serverErrs := make(chan error, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isWebsocketRequest(r) {
+			serverErrs <- fmt.Errorf("unexpected HTTP request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "websocket expected", http.StatusBadRequest)
+			return
+		}
+		handshakes <- struct{}{}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			serverErrs <- err
+			return
+		}
+		defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			serverErrs <- err
+			return
+		}
+		var frame map[string]any
+		if err := json.Unmarshal(data, &frame); err != nil {
+			serverErrs <- err
+			return
+		}
+		frames <- frame
+		if err := conn.Write(ctx, websocket.MessageText, codexCompletedWebsocketEvent("resp_ws", "ok")); err != nil {
+			serverErrs <- err
+		}
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+		Compat:   CompatOptions{CodexTransport: CodexTransportWebSocket},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstHistory := []Message{TextMessage(RoleUser, "first")}
+	firstResp, err := p.Complete(context.Background(), "", firstHistory, nil)
+	if err != nil {
+		t.Fatalf("first Complete: %v", err)
+	}
+	secondHistory := append(append([]Message{}, firstHistory...), firstResp.Message, TextMessage(RoleUser, "second"))
+	if _, err := p.Complete(context.Background(), "", secondHistory, nil); err != nil {
+		t.Fatalf("second Complete: %v", err)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatal(err)
+	default:
+	}
+	<-handshakes
+	<-handshakes
+	firstFrame := <-frames
+	secondFrame := <-frames
+	if _, ok := firstFrame["previous_response_id"]; ok {
+		t.Fatalf("first frame should not include previous_response_id: %+v", firstFrame)
+	}
+	if _, ok := secondFrame["previous_response_id"]; ok {
+		t.Fatalf("websocket mode should not include previous_response_id: %+v", secondFrame)
+	}
+	input, _ := secondFrame["input"].([]any)
+	if len(input) <= 1 {
+		t.Fatalf("websocket mode should send full input, got %+v", secondFrame["input"])
+	}
+}
+
+func TestOpenAICodexResponses_WebsocketAutoFallsBackToSSE(t *testing.T) {
+	wsAttempts := 0
+	sseAttempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isWebsocketRequest(r) {
+			wsAttempts++
+			http.Error(w, "websocket unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		sseAttempts++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", codexCompletedWebsocketEvent("resp_sse", "sse ok"))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+		Compat:   CompatOptions{CodexTransport: CodexTransportAuto},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Message.FirstText() != "sse ok" {
+		t.Fatalf("text = %q", resp.Message.FirstText())
+	}
+	if wsAttempts != 1 || sseAttempts != 1 {
+		t.Fatalf("attempts websocket/sse = %d/%d", wsAttempts, sseAttempts)
+	}
+}
+
+func TestOpenAICodexResponses_WebsocketClosedBeforeCompletedReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, _, _ = conn.Read(ctx)
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:       "openai-codex",
+		Protocol: "openai-codex/responses",
+		BaseURL:  srv.URL,
+		APIKey:   "codex-token",
+		Model:    "gpt-test",
+		Compat:   CompatOptions{CodexTransport: CodexTransportWebSocketCached},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err == nil || !strings.Contains(err.Error(), "response.completed") {
+		t.Fatalf("err = %v, want response.completed close error", err)
+	}
+}
+
+func isWebsocketRequest(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
+func codexCompletedWebsocketEvent(id, text string) []byte {
+	event := map[string]any{
+		"type": "response.completed",
+		"response": map[string]any{
+			"id":     id,
+			"model":  "gpt-test",
+			"status": "completed",
+			"output": []any{
+				map[string]any{
+					"type":   "message",
+					"id":     "msg_" + id,
+					"role":   "assistant",
+					"status": "completed",
+					"content": []any{
+						map[string]any{"type": "output_text", "text": text, "annotations": []any{}},
+					},
+				},
+			},
+			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+		},
+	}
+	raw, _ := json.Marshal(event)
+	return raw
 }
 
 func TestAnthropic_ThinkingEffort(t *testing.T) {

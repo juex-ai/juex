@@ -19,9 +19,11 @@ import (
 const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
 
 type openAICodexResponsesProvider struct {
-	cfg     Config
-	profile ProviderProfile
-	client  openai.Client
+	cfg       Config
+	profile   ProviderProfile
+	client    openai.Client
+	transport string
+	ws        *codexResponsesWebsocketTransport
 }
 
 func NewOpenAICodexResponses(cfg Config, client any) Provider {
@@ -40,6 +42,13 @@ func NewOpenAICodexResponses(cfg Config, client any) Provider {
 	}
 	if profile.BaseURL == "" {
 		profile.BaseURL = defaultOpenAICodexBaseURL
+	}
+	transport, err := NormalizeCodexTransport(profile.Compat.CodexTransport)
+	if err != nil {
+		transport = CodexTransportSSE
+	}
+	if transport == "" {
+		transport = CodexTransportSSE
 	}
 	opts := []option.RequestOption{
 		option.WithBaseURL(openAICodexResponsesBaseURL(profile.BaseURL)),
@@ -64,10 +73,16 @@ func NewOpenAICodexResponses(cfg Config, client any) Provider {
 	if httpClient, ok := client.(*http.Client); ok && httpClient != nil {
 		opts = append(opts, option.WithHTTPClient(httpClient))
 	}
+	var httpClient *http.Client
+	if c, ok := client.(*http.Client); ok {
+		httpClient = c
+	}
 	return &openAICodexResponsesProvider{
-		cfg:     profile.Config(),
-		profile: profile,
-		client:  openai.NewClient(opts...),
+		cfg:       profile.Config(),
+		profile:   profile,
+		client:    openai.NewClient(opts...),
+		transport: transport,
+		ws:        newCodexResponsesWebsocketTransport(profile, httpClient),
 	}
 }
 
@@ -79,14 +94,35 @@ func (p *openAICodexResponsesProvider) Complete(ctx context.Context, sys string,
 
 func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
 	params := p.codexRequestParams(sys, history, tools, opts)
+	var resp *responses.Response
+	var err error
+
+	switch p.transport {
+	case CodexTransportAuto:
+		resp, err = p.ws.Complete(ctx, params)
+		if err != nil {
+			resp, err = p.completeSSE(ctx, params)
+		}
+	case CodexTransportWebSocket, CodexTransportWebSocketCached:
+		resp, err = p.ws.Complete(ctx, params)
+	default:
+		resp, err = p.completeSSE(ctx, params)
+	}
+	if err != nil {
+		return Response{}, fmt.Errorf("openai codex responses: %w", err)
+	}
+	return p.responseFromCodexResponses(resp), nil
+}
+
+func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
 	stream := p.client.Responses.NewStreaming(ctx, params)
 	defer func() { _ = stream.Close() }()
 
 	resp, err := readCodexResponsesStream(stream)
 	if err != nil {
-		return Response{}, fmt.Errorf("openai codex responses: %w", err)
+		return nil, err
 	}
-	return p.responseFromCodexResponses(resp), nil
+	return resp, nil
 }
 
 func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []Message, tools []ToolSpec, opts CompleteOptions) responses.ResponseNewParams {

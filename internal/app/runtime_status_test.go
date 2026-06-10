@@ -56,6 +56,7 @@ body`)
 	}
 	if agentsEntry == nil {
 		t.Fatalf("system prompt missing workspace AGENTS.md: %+v", status.SystemPrompt.Items)
+		return
 	}
 	if !strings.Contains(agentsEntry.Text, "你好世界") {
 		t.Fatalf("agents text = %q", agentsEntry.Text)

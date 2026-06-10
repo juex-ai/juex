@@ -4,6 +4,7 @@ go 1.25.4
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.38.0
+	github.com/coder/websocket v1.8.14
 	github.com/openai/openai-go v1.12.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.9
