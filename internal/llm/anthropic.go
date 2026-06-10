@@ -232,30 +232,21 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 
 func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
-	for _, m := range compactHistoryForProvider(history) {
+	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions{}) {
 		var blocks []anthropic.ContentBlockParamUnion
 		for _, b := range m.Blocks {
 			switch b.Type {
 			case BlockText:
 				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
 			case BlockReasoning:
-				if !profile.Capabilities.ReasoningReplay {
-					continue
-				}
 				if b.Redacted {
 					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.Content))
 				} else {
 					blocks = append(blocks, anthropic.NewThinkingBlock(b.Signature, b.Text))
 				}
 			case BlockToolUse:
-				if !profile.Capabilities.Tools {
-					continue
-				}
 				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName))
 			case BlockToolResult:
-				if !profile.Capabilities.Tools {
-					continue
-				}
 				blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError))
 			}
 		}
@@ -272,18 +263,9 @@ func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic
 func toAnthropicTools(tools []ToolSpec, cachePrompt bool, cacheRetention string) []anthropic.ToolUnionParam {
 	out := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for i, t := range tools {
-		schema := anthropic.ToolInputSchemaParam{Properties: map[string]any{}}
-		if props, ok := t.Schema["properties"]; ok {
-			schema.Properties = props
-		}
-		if req, ok := t.Schema["required"].([]string); ok {
-			schema.Required = req
-		} else if reqAny, ok := t.Schema["required"].([]any); ok {
-			for _, r := range reqAny {
-				if s, ok := r.(string); ok {
-					schema.Required = append(schema.Required, s)
-				}
-			}
+		schema := anthropic.ToolInputSchemaParam{
+			Properties: normalizedFunctionProperties(t.Schema),
+			Required:   normalizedFunctionRequired(t.Schema),
 		}
 		tool := anthropic.ToolParam{
 			Name:        t.Name,

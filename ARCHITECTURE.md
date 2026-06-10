@@ -262,6 +262,12 @@ Codex auth headers, and Codex-only request fields inside its adapter. SDK-backed
 clients use `WithMaxRetries(10)` for recoverable transport/API failures such as
 network errors, 408/409/429, and 5xx responses. Ordinary request errors are
 returned immediately.
+Provider adapters share a canonical projection helper before they encode SDK
+requests. The helper compacts history, filters tool and reasoning replay blocks
+through capability gates, supports Codex's reasoning-omit path, normalizes
+function parameter schemas, and round-trips tool-call argument JSON fallbacks.
+Adapters still own protocol-specific SDK request structs, content-block
+shapes, cache-control placement, and response decoding.
 Malformed provider stream events are wrapped as `StreamParseError` with a
 stable kind, provider/model identity, event type, optional content block index,
 and a bounded raw event preview.
