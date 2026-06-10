@@ -132,7 +132,7 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 
 	pb := &prompt.Builder{
 		AgentsMDDirs: []string{t.TempDir()}, // empty
-		Shell:        promptShellProfile(cfg),
+		Shell:        prompt.ShellProfileFromConfig(cfg.Shell),
 		Now:          func() time.Time { return time.Now().UTC() },
 	}
 	eng := &runtime.Engine{
@@ -156,17 +156,6 @@ func runLiveTurn(t *testing.T, cfg config.Config, userPrompt string) string {
 
 func cfgShellProfile(cfg config.Config) tools.ShellProfile {
 	return tools.ShellProfile{
-		Profile:       cfg.Shell.Profile,
-		Family:        cfg.Shell.Family,
-		Binary:        cfg.Shell.Binary,
-		Args:          append([]string(nil), cfg.Shell.Args...),
-		PathStyle:     cfg.Shell.PathStyle,
-		HostPathStyle: cfg.Shell.HostPathStyle,
-	}
-}
-
-func promptShellProfile(cfg config.Config) prompt.ShellProfile {
-	return prompt.ShellProfile{
 		Profile:       cfg.Shell.Profile,
 		Family:        cfg.Shell.Family,
 		Binary:        cfg.Shell.Binary,

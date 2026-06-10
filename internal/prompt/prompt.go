@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/skills"
 )
@@ -41,6 +42,19 @@ type ShellProfile struct {
 	Args          []string
 	PathStyle     string
 	HostPathStyle string
+}
+
+// ShellProfileFromConfig converts the resolved config shell profile into the
+// prompt-facing value object used by Builder.
+func ShellProfileFromConfig(p config.ShellProfile) ShellProfile {
+	return ShellProfile{
+		Profile:       p.Profile,
+		Family:        p.Family,
+		Binary:        p.Binary,
+		Args:          append([]string(nil), p.Args...),
+		PathStyle:     p.PathStyle,
+		HostPathStyle: p.HostPathStyle,
+	}
 }
 
 type Section struct {

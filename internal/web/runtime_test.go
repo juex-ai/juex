@@ -244,9 +244,9 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	}
 }
 
-func TestRuntimePromptTokenEstimateCountsRunes(t *testing.T) {
-	if got := estimateRuntimePromptTokens("你好世界"); got != 1 {
-		t.Fatalf("tokens = %d, want 1", got)
+func TestRuntimePromptTokenEstimateMatchesRuntimeByteEstimate(t *testing.T) {
+	if got := estimateRuntimePromptTokens("你好世界"); got != 3 {
+		t.Fatalf("tokens = %d, want byte-based runtime estimate 3", got)
 	}
 }
 

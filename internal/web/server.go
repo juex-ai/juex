@@ -19,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -556,8 +557,8 @@ func (s *Server) getActiveSession(ctx context.Context, id string) (*activeSessio
 		return v.(*activeSession), nil
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
-		return nil, err
+	if !session.HasConversation(dir) {
+		return nil, os.ErrNotExist
 	}
 	return s.openSession(ctx, dir, app.SessionModeAttachActive)
 }

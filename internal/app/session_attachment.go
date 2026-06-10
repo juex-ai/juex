@@ -1,8 +1,6 @@
 package app
 
 import (
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
@@ -114,7 +112,7 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 	if !ok {
 		return newPrimaryWorkspaceSession(cfg, req, SessionModeAttachActive)
 	}
-	sess, err := session.LoadWithOptions(infoDir(cfg.SessionsDir(), info), session.Options{
+	sess, err := session.LoadWithOptions(session.InfoDir(cfg.SessionsDir(), info), session.Options{
 		Alias:        req.Alias,
 		Active:       true,
 		RecordActive: true,
@@ -196,22 +194,5 @@ func attachablePrimaryInfo(cfg config.Config, info session.Info) bool {
 	if session.NormalizeKind(info.Kind) != session.KindPrimary || info.ID == "" {
 		return false
 	}
-	return hasConversation(infoDir(cfg.SessionsDir(), info))
-}
-
-func infoDir(sessionsRoot string, info session.Info) string {
-	if info.ID != "" {
-		return filepath.Join(sessionsRoot, info.ID)
-	}
-	return info.Dir
-}
-
-func hasConversation(dir string) bool {
-	if dir == "" {
-		return false
-	}
-	if _, err := os.Stat(filepath.Join(dir, "conversation.jsonl")); err != nil {
-		return false
-	}
-	return true
+	return session.HasConversation(session.InfoDir(cfg.SessionsDir(), info))
 }
