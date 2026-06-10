@@ -62,19 +62,27 @@ func ParseSlashCommand(input string) (SlashCommand, bool, error) {
 	}
 	fields := strings.Fields(trimmed)
 	commandName := fields[0]
-	switch commandName {
-	case SlashCompact:
-		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-		return SlashCommand{Name: commandName, Args: args}, true, nil
-	case SlashNew, SlashStatus:
-		if len(fields) == 1 {
-			return SlashCommand{Name: commandName}, true, nil
-		}
-		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
-		return SlashCommand{}, true, &SlashCommandArgumentsError{Name: commandName, Args: args}
-	default:
+	if !isSlashCommandName(commandName) {
 		return SlashCommand{}, false, nil
 	}
+	if commandName == SlashCompact {
+		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
+		return SlashCommand{Name: commandName, Args: args}, true, nil
+	}
+	if len(fields) == 1 {
+		return SlashCommand{Name: commandName}, true, nil
+	}
+	args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
+	return SlashCommand{}, true, &SlashCommandArgumentsError{Name: commandName, Args: args}
+}
+
+func isSlashCommandName(commandName string) bool {
+	for _, name := range slashCommandNames {
+		if commandName == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashCommandResult, bool, error) {
