@@ -92,13 +92,49 @@ func TestStatusSnapshotTextSeparatesTurnAndQueue(t *testing.T) {
 }
 
 func TestStatusSnapshotTextUsesPlainLabels(t *testing.T) {
-	text := (StatusSnapshot{}).Text()
-	for _, want := range []string{"Juex status", "provider:", "turn:", "queued input:"} {
+	text := (StatusSnapshot{
+		SessionID:   "session-1",
+		Turns:       3,
+		SessionKind: "primary",
+		Active:      true,
+		WorkDir:     "/tmp/work",
+		Provider: ProviderStatusSnapshot{
+			ID:       "openai",
+			Protocol: "openai/responses",
+			Model:    "gpt-4.1",
+		},
+		MCP:        MCPStatus{Connected: 1, Configured: 2, Errors: 3},
+		SkillCount: 4,
+		TokenUsage: llm.Usage{InputTokens: 5, OutputTokens: 7},
+		ContextUsage: &llm.ContextUsage{
+			TotalTokens:   10,
+			ContextWindow: 100,
+			Model:         "gpt-4.1",
+		},
+		PendingInput: runtime.PendingInputStatus{
+			TurnID:           "turn-1",
+			PendingCount:     2,
+			MaxPendingInputs: 5,
+		},
+	}).Text()
+	for _, want := range []string{"Juex status", "session:", "session kind:", "workdir:", "provider:", "mcp:", "skills:", "tokens:", "context:", "turn:", "queued input:"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
 		}
 	}
-	for _, emoji := range []string{"\U0001F4CA", "\U0001F916", "\u2699\ufe0f", "\U0001F4E5"} {
+	for _, emoji := range []string{
+		"\U0001F4CA",
+		"\U0001F4AC",
+		"\U0001F4CC",
+		"\U0001F4C1",
+		"\U0001F916",
+		"\U0001F50C",
+		"\U0001F9E9",
+		"\U0001F522",
+		"\U0001F9E0",
+		"\u2699\ufe0f",
+		"\U0001F4E5",
+	} {
 		if strings.Contains(text, emoji) {
 			t.Fatalf("status text still contains emoji %q:\n%s", emoji, text)
 		}
