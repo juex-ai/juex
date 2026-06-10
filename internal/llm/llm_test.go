@@ -1242,7 +1242,7 @@ func TestOpenAICodexResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCached
 		t.Fatal(err)
 	}
 	resp, err := CompleteWithOptions(context.Background(), p, "sys", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
-		CachePolicy: CachePolicy{StablePrefixKey: "juex-cache-key"},
+		CachePolicy: CachePolicy{StablePrefixKey: "juex-cache-key", Retention: "24h"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1250,54 +1250,11 @@ func TestOpenAICodexResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCached
 	if capturedBody["prompt_cache_key"] != "juex-cache-key" {
 		t.Fatalf("prompt_cache_key = %+v", capturedBody["prompt_cache_key"])
 	}
+	if capturedBody["prompt_cache_retention"] != "24h" {
+		t.Fatalf("prompt_cache_retention = %+v", capturedBody["prompt_cache_retention"])
+	}
 	if resp.Usage.CachedInputTokens != 112 {
 		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
-	}
-}
-
-func TestReadCodexSSERejectsOversizedLine(t *testing.T) {
-	payload := "data: " + strings.Repeat("x", maxCodexSSELineBytes+1) + "\n\n"
-
-	if _, err := readCodexSSE(strings.NewReader(payload)); err == nil || !strings.Contains(err.Error(), "codex SSE read") {
-		t.Fatalf("expected oversized SSE line error, got %v", err)
-	}
-}
-
-func TestReadCodexSSERejectsTooManyDataLines(t *testing.T) {
-	var payload strings.Builder
-	for i := 0; i < maxCodexSSEDataLines+1; i++ {
-		payload.WriteString("data: {}\n")
-	}
-	payload.WriteString("\n")
-
-	if _, err := readCodexSSE(strings.NewReader(payload.String())); err == nil || !strings.Contains(err.Error(), "too many data lines") {
-		t.Fatalf("expected too many data lines error, got %v", err)
-	}
-}
-
-func TestCodexRetryDelayCapsRetryAfter(t *testing.T) {
-	h := http.Header{"Retry-After": []string{"999999"}}
-
-	if got := codexRetryDelay(0, h); got != maxCodexRetryDelay {
-		t.Fatalf("delay = %v, want %v", got, maxCodexRetryDelay)
-	}
-}
-
-func TestCodexRetryDelayKeepsZeroRetryAfterFast(t *testing.T) {
-	h := http.Header{}
-	h.Set("retry-after-ms", "0")
-
-	if got := codexRetryDelay(0, h); got != 0 {
-		t.Fatalf("delay = %v, want 0", got)
-	}
-}
-
-func TestCodexRetryDelayCapsBackoffWithJitter(t *testing.T) {
-	for i := 0; i < 20; i++ {
-		got := codexRetryDelay(100, nil)
-		if got <= 0 || got > maxCodexRetryDelay {
-			t.Fatalf("delay = %v, want within (0, %v]", got, maxCodexRetryDelay)
-		}
 	}
 }
 

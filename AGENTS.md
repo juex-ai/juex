@@ -33,6 +33,20 @@ Juex is a single-binary Go agent runtime. It currently includes:
 - work-local runtime state under `.juex/`
 - an in-process event bus and JSONL conversation/event history
 
+## Agent skills
+
+### Issue tracker
+
+Work is tracked in Taskline under the `juex` project. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use Taskline task labels for the five canonical triage roles. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repo. See `docs/agents/domain.md`.
+
 ## Core Rules
 
 - Read before writing: inspect nearby docs, exports, callers, and tests before editing.

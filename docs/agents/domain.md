@@ -1,0 +1,27 @@
+# Domain Docs
+
+How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+
+## Layout
+
+This is a single-context repo. Treat JueX as one product/runtime context with multiple internal modules, not as a multi-context monorepo.
+
+## Before exploring, read these
+
+- `README.md` for the project map and common commands.
+- `ARCHITECTURE.md` for modules, interfaces, data flow, storage, CLI, and API routes.
+- `PHILOSOPHY.md` when touching product direction, scope, or trade-offs.
+- `DESIGN.md` when touching the web UI, layout, styling, interaction, or visible copy.
+- `frontend/README.md` when working inside `frontend/`.
+- `CONTEXT.md` at the repo root if it exists.
+- `docs/adr/` if it exists; read ADRs that touch the area you're about to work in.
+
+If `CONTEXT.md` or `docs/adr/` do not exist, proceed silently. Do not create them unless the task resolves new domain terms or architectural decisions that need to be preserved.
+
+## Use project vocabulary
+
+When naming domain concepts in issues, refactor proposals, hypotheses, or tests, prefer the vocabulary already used in the project docs and nearby code.
+
+## Flag ADR conflicts
+
+If output contradicts an existing ADR, surface the conflict explicitly rather than silently overriding it.
