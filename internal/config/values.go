@@ -109,16 +109,16 @@ func (c Config) ResourcePaths() ResourcePaths {
 		HomeAgentsDir:       c.HomeAgentsDir,
 		UserGlobalResources: c.EnableUserGlobalResources,
 	}
+	if c.EnableUserGlobalResources && c.HomeAgentsDir != "" {
+		paths.GlobalAgentsMDPath = filepath.Join(c.HomeAgentsDir, "AGENTS.md")
+		paths.SkillDirs = append(paths.SkillDirs, filepath.Join(c.HomeAgentsDir, "skills"))
+		paths.MCPConfigPaths = append(paths.MCPConfigPaths, filepath.Join(c.HomeAgentsDir, "mcp.json"))
+	}
 	if c.WorkDir != "" {
 		paths.ProjectAgentsDir = filepath.Join(c.WorkDir, ".agents")
 		paths.SkillDirs = append(paths.SkillDirs, filepath.Join(paths.ProjectAgentsDir, "skills"))
-		paths.AgentsMDDirs = append(paths.AgentsMDDirs, c.WorkDir, paths.ProjectAgentsDir)
+		paths.AgentsMDDirs = []string{c.WorkDir, paths.ProjectAgentsDir}
 		paths.MCPConfigPaths = append(paths.MCPConfigPaths, filepath.Join(paths.ProjectAgentsDir, "mcp.json"))
-	}
-	if c.EnableUserGlobalResources && c.HomeAgentsDir != "" {
-		paths.GlobalAgentsMDPath = filepath.Join(c.HomeAgentsDir, "AGENTS.md")
-		paths.SkillDirs = append([]string{filepath.Join(c.HomeAgentsDir, "skills")}, paths.SkillDirs...)
-		paths.MCPConfigPaths = append([]string{filepath.Join(c.HomeAgentsDir, "mcp.json")}, paths.MCPConfigPaths...)
 	}
 	return paths
 }
