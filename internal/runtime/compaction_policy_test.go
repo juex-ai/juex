@@ -14,3 +14,13 @@ func TestEffectiveCompactionPolicy_ClampsSmallContextWindow(t *testing.T) {
 		t.Fatalf("trigger = %d", p.TriggerTokens)
 	}
 }
+
+func TestEffectiveCompactionPolicy_PreservesExplicitDisabledZeroPolicy(t *testing.T) {
+	p := effectiveCompactionPolicy(CompactionPolicy{Enabled: false}, 6400)
+	if p.Enabled {
+		t.Fatal("policy enabled = true, want explicit disabled policy preserved")
+	}
+	if p.ReserveTokens <= 0 || p.KeepRecentTokens <= 0 || p.TriggerTokens <= 0 {
+		t.Fatalf("policy defaults were not filled: %+v", p)
+	}
+}

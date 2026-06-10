@@ -329,6 +329,7 @@ func TestTurn_CompactionFailureDoesNotAppendMarker(t *testing.T) {
 	prov := &mockProviderWithErrors{errs: []error{fmt.Errorf("summary failed")}}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 100
+	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -352,6 +353,7 @@ func TestTurnMessage_MCPEventContinuesAfterAutoCompactionFailure(t *testing.T) {
 	}
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 100
+	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -454,6 +456,7 @@ func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
 	}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 10000
+	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
 		t.Fatal(err)
 	}
@@ -510,6 +513,7 @@ func TestCompact_ReturnsAppendedMessageIDAndMetadata(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -540,6 +544,7 @@ func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.ContextWindow = 1000
+	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
@@ -751,6 +756,7 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 120
+	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}

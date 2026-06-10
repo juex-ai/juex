@@ -31,7 +31,9 @@ func effectiveCompactionPolicy(policy CompactionPolicy, contextWindow int) compa
 	}
 	defaults := DefaultCompactionPolicy()
 	if policy.ReserveTokens <= 0 && policy.KeepRecentTokens <= 0 && policy.TailTurns <= 0 && policy.SummaryMaxTokens <= 0 && policy.ToolResultMaxChars <= 0 {
+		enabled := policy.Enabled
 		policy = defaults
+		policy.Enabled = enabled
 	}
 	reserve := policy.ReserveTokens
 	if reserve <= 0 {
