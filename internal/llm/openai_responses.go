@@ -154,7 +154,7 @@ type responseInputOptions struct {
 
 func toOpenAIResponseInputWithOptions(history []Message, profile ProviderProfile, opts responseInputOptions) responses.ResponseInputParam {
 	var out responses.ResponseInputParam
-	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions{OmitReasoning: opts.OmitReasoning}) {
+	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions(opts)) {
 		var textParts []string
 		for _, b := range m.Blocks {
 			switch b.Type {
