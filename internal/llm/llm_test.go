@@ -643,6 +643,42 @@ func TestOpenAI_CompactsEmptyHistoryMessages(t *testing.T) {
 	}
 }
 
+func TestOpenAI_ReplaysReasoningOnlyAssistantWithStringContent(t *testing.T) {
+	type wireReq struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	var captured wireReq
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	hist := []Message{
+		TextMessage(RoleUser, "hello"),
+		{Role: RoleAssistant, Blocks: []Block{{Type: BlockReasoning, Text: "thought"}}},
+		TextMessage(RoleUser, "again"),
+	}
+	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(captured.Messages) != 3 {
+		t.Fatalf("messages len = %d, want 3; messages=%+v", len(captured.Messages), captured.Messages)
+	}
+	if captured.Messages[1]["role"] != "assistant" {
+		t.Fatalf("middle message = %+v, want assistant", captured.Messages[1])
+	}
+	if captured.Messages[1]["content"] != "" {
+		t.Fatalf("assistant content = %#v, want empty string", captured.Messages[1]["content"])
+	}
+	if captured.Messages[1]["reasoning"] != "thought" {
+		t.Fatalf("assistant reasoning = %#v, want thought", captured.Messages[1]["reasoning"])
+	}
+}
+
 func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 	// Verify that tool_result blocks become role=tool messages, with the
 	// matching tool_call_id, when sent back through history.
