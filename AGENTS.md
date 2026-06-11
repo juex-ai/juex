@@ -95,4 +95,7 @@ the failure and investigate before merging.
 - If current docs would mislead the next worker, update them in the same change.
 - All documentation is English.
 - No emoji in code or docs unless explicitly asked.
+- User-facing product copy may keep explicitly requested icon/emoji prefixes
+  when tests cover them; do not remove those as generic cleanup. This exception
+  does not apply to comments, docs, identifiers, logs, or incidental code.
 - Comments should explain non-obvious why, not restate what the code does.

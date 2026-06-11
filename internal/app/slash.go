@@ -146,6 +146,20 @@ type ProviderStatusSnapshot struct {
 	BaseURL  string `json:"base_url,omitempty"`
 }
 
+const (
+	statusIconHeading     = "\U0001F4CA"
+	statusIconSession     = "\U0001F4AC"
+	statusIconSessionKind = "\U0001F4CC"
+	statusIconWorkDir     = "\U0001F4C1"
+	statusIconProvider    = "\U0001F916"
+	statusIconMCP         = "\U0001F50C"
+	statusIconSkills      = "\U0001F9E9"
+	statusIconTokens      = "\U0001F522"
+	statusIconContext     = "\U0001F9E0"
+	statusIconTurn        = "\u2699\ufe0f"
+	statusIconQueuedInput = "\U0001F4E5"
+)
+
 func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 	if a == nil {
 		return StatusSnapshot{}
@@ -215,40 +229,44 @@ func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {
 
 func (s StatusSnapshot) Text() string {
 	var lines []string
-	lines = append(lines, "Juex status")
+	lines = append(lines, statusLabel(statusIconHeading, "Juex status"))
 	if s.SessionID != "" {
-		lines = append(lines, fmt.Sprintf("session: %s (%d turns)", s.SessionID, s.Turns))
+		lines = append(lines, statusLabel(statusIconSession, fmt.Sprintf("session: %s (%d turns)", s.SessionID, s.Turns)))
 	}
 	if s.SessionKind != "" {
 		state := "inactive"
 		if s.Active {
 			state = "active"
 		}
-		lines = append(lines, fmt.Sprintf("session kind: %s (%s)", s.SessionKind, state))
+		lines = append(lines, statusLabel(statusIconSessionKind, fmt.Sprintf("session kind: %s (%s)", s.SessionKind, state)))
 	}
 	if s.WorkDir != "" {
-		lines = append(lines, "workdir: "+s.WorkDir)
+		lines = append(lines, statusLabel(statusIconWorkDir, "workdir: "+s.WorkDir))
 	}
-	lines = append(lines, "provider: "+formatProviderSnapshot(s.Provider))
-	lines = append(lines, fmt.Sprintf("mcp: %d/%d connected, %d errors", s.MCP.Connected, s.MCP.Configured, s.MCP.Errors))
-	lines = append(lines, fmt.Sprintf("skills: %d", s.SkillCount))
-	lines = append(lines, FormatTokenUsage(s.TokenUsage))
+	lines = append(lines, statusLabel(statusIconProvider, "provider: "+formatProviderSnapshot(s.Provider)))
+	lines = append(lines, statusLabel(statusIconMCP, fmt.Sprintf("mcp: %d/%d connected, %d errors", s.MCP.Connected, s.MCP.Configured, s.MCP.Errors)))
+	lines = append(lines, statusLabel(statusIconSkills, fmt.Sprintf("skills: %d", s.SkillCount)))
+	lines = append(lines, statusLabel(statusIconTokens, FormatTokenUsage(s.TokenUsage)))
 	if s.ContextUsage != nil {
-		lines = append(lines, fmt.Sprintf("context: %d/%d tokens (%s)", s.ContextUsage.TotalTokens, s.ContextUsage.ContextWindow, s.ContextUsage.Model))
+		lines = append(lines, statusLabel(statusIconContext, fmt.Sprintf("context: %d/%d tokens (%s)", s.ContextUsage.TotalTokens, s.ContextUsage.ContextWindow, s.ContextUsage.Model)))
 	} else {
-		lines = append(lines, "context: not measured yet")
+		lines = append(lines, statusLabel(statusIconContext, "context: not measured yet"))
 	}
 	turnState := "idle"
 	if s.PendingInput.TurnID != "" {
 		turnState = "running"
 	}
-	lines = append(lines, "turn: "+turnState)
+	lines = append(lines, statusLabel(statusIconTurn, "turn: "+turnState))
 	if s.PendingInput.MaxPendingInputs > 0 {
-		lines = append(lines, fmt.Sprintf("queued input: %d/%d", s.PendingInput.PendingCount, s.PendingInput.MaxPendingInputs))
+		lines = append(lines, statusLabel(statusIconQueuedInput, fmt.Sprintf("queued input: %d/%d", s.PendingInput.PendingCount, s.PendingInput.MaxPendingInputs)))
 	} else {
-		lines = append(lines, fmt.Sprintf("queued input: %d", s.PendingInput.PendingCount))
+		lines = append(lines, statusLabel(statusIconQueuedInput, fmt.Sprintf("queued input: %d", s.PendingInput.PendingCount)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func statusLabel(icon, text string) string {
+	return icon + " " + text
 }
 
 func formatProviderSnapshot(p ProviderStatusSnapshot) string {

@@ -91,7 +91,7 @@ func TestStatusSnapshotTextSeparatesTurnAndQueue(t *testing.T) {
 	}
 }
 
-func TestStatusSnapshotTextUsesPlainLabels(t *testing.T) {
+func TestStatusSnapshotTextUsesIntentionalIconLabels(t *testing.T) {
 	text := (StatusSnapshot{
 		SessionID:   "session-1",
 		Turns:       3,
@@ -117,26 +117,21 @@ func TestStatusSnapshotTextUsesPlainLabels(t *testing.T) {
 			MaxPendingInputs: 5,
 		},
 	}).Text()
-	for _, want := range []string{"Juex status", "session:", "session kind:", "workdir:", "provider:", "mcp:", "skills:", "tokens:", "context:", "turn:", "queued input:"} {
+	for _, want := range []string{
+		statusLabel(statusIconHeading, "Juex status"),
+		statusLabel(statusIconSession, "session:"),
+		statusLabel(statusIconSessionKind, "session kind:"),
+		statusLabel(statusIconWorkDir, "workdir:"),
+		statusLabel(statusIconProvider, "provider:"),
+		statusLabel(statusIconMCP, "mcp:"),
+		statusLabel(statusIconSkills, "skills:"),
+		statusLabel(statusIconTokens, "tokens:"),
+		statusLabel(statusIconContext, "context:"),
+		statusLabel(statusIconTurn, "turn:"),
+		statusLabel(statusIconQueuedInput, "queued input:"),
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
-		}
-	}
-	for _, emoji := range []string{
-		"\U0001F4CA",
-		"\U0001F4AC",
-		"\U0001F4CC",
-		"\U0001F4C1",
-		"\U0001F916",
-		"\U0001F50C",
-		"\U0001F9E9",
-		"\U0001F522",
-		"\U0001F9E0",
-		"\u2699\ufe0f",
-		"\U0001F4E5",
-	} {
-		if strings.Contains(text, emoji) {
-			t.Fatalf("status text still contains emoji %q:\n%s", emoji, text)
 		}
 	}
 }
