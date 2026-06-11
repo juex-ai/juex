@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -69,7 +70,7 @@ func TestParseSlashCommandRejectsArgumentsExplicitly(t *testing.T) {
 func TestStatusSnapshotNilApp(t *testing.T) {
 	var a *App
 	text := a.StatusSnapshot(time.Time{}).Text()
-	for _, want := range []string{"Juex status", "provider: not configured", "skills: 0", "turn: idle", "queued input: 0"} {
+	for _, want := range []string{"Juex status", "model: not configured", "skills: 0", "compact: 0, memory: 0 tokens", "success: llm n/a, tools n/a", "turn: idle", "queued input: 0"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
 		}
@@ -122,7 +123,7 @@ func TestStatusSnapshotTextUsesIntentionalIconLabels(t *testing.T) {
 		statusLabel(statusIconSession, "session:"),
 		statusLabel(statusIconSessionKind, "session kind:"),
 		statusLabel(statusIconWorkDir, "workdir:"),
-		statusLabel(statusIconProvider, "provider:"),
+		statusLabel(statusIconProvider, "model:"),
 		statusLabel(statusIconMCP, "mcp:"),
 		statusLabel(statusIconSkills, "skills:"),
 		statusLabel(statusIconTokens, "tokens:"),
@@ -136,13 +137,94 @@ func TestStatusSnapshotTextUsesIntentionalIconLabels(t *testing.T) {
 	}
 }
 
+func TestStatusSnapshotTextUsesCompactModelAndCacheHit(t *testing.T) {
+	text := (StatusSnapshot{
+		Provider: ProviderStatusSnapshot{
+			ID:       "ark",
+			Protocol: "openai/chat",
+			Model:    "deepseek-v4-pro",
+			BaseURL:  "https://ark.cn-beijing.volces.com/api/coding/v3",
+		},
+		ContextUsage: &llm.ContextUsage{
+			Model:             "ark:deepseek-v4-pro",
+			ContextWindow:     256000,
+			InputTokens:       32000,
+			OutputTokens:      47,
+			CachedInputTokens: 12000,
+			TotalTokens:       32047,
+		},
+	}).Text()
+	for _, want := range []string{
+		statusLabel(statusIconProvider, "model: ark/deepseek-v4-pro"),
+		statusLabel(statusIconContext, "context: 32047/256000 tokens, cache hit 37.5%"),
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"openai/chat", "ark:deepseek-v4-pro", "https://ark.cn-beijing.volces.com"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("status text should not include %q:\n%s", notWant, text)
+		}
+	}
+}
+
+func TestStatusSnapshotIncludesSessionCompactionAndSuccessRates(t *testing.T) {
+	a, _ := newStubApp(t)
+	appendCompactMessage(t, a.Session, "first compact summary", 80)
+	appendCompactMessage(t, a.Session, "latest compact summary", 480)
+	for i := 0; i < 4; i++ {
+		if err := a.Session.AppendEvent(events.Event{Type: "llm.requested"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if err := a.Session.AppendEvent(events.Event{Type: "llm.responded"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if err := a.Session.AppendEvent(events.Event{Type: "tool.requested"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 4; i++ {
+		if err := a.Session.AppendEvent(events.Event{Type: "tool.completed"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.Session.AppendEvent(events.Event{Type: "tool.errored"}); err != nil {
+		t.Fatal(err)
+	}
+
+	text := a.StatusSnapshot(time.Now().UTC()).Text()
+	for _, want := range []string{
+		statusLabel(statusIconCompact, "compact: 2, memory: ~120 tokens"),
+		statusLabel(statusIconSuccess, "success: llm 3/4 (75%), tools 4/5 (80%)"),
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func appendCompactMessage(t *testing.T, sess *session.Session, summary string, summaryChars int) {
+	t.Helper()
+	msg := llm.TextMessage(llm.RoleUser, summary)
+	msg.Kind = llm.MessageKindCompact
+	msg.Compaction = &llm.CompactionMetadata{SummaryChars: summaryChars}
+	if err := sess.Append(msg); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestApp_RunStatusSlashSkipsProvider(t *testing.T) {
 	a, prov := newStubApp(t)
 	out, err := a.Run(context.Background(), "/status")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Juex status", "session:", "provider:", "tokens:"} {
+	for _, want := range []string{"Juex status", "session:", "model:", "tokens:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status output missing %q in:\n%s", want, out)
 		}
