@@ -11,7 +11,19 @@ integration.
 
 ## Quick Start
 
-Build the binary:
+Install from a published GitHub Release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install-release.sh | bash
+```
+
+Preview the install without writing files:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install-release.sh | bash -s -- --dry-run
+```
+
+Or build from source:
 
 ```bash
 mise exec -- make build
@@ -29,10 +41,13 @@ cp juex.yaml.example .juex/juex.yaml
 Fill in provider settings, then run:
 
 ```bash
-./dist/juex run "summarize this repository"
-./dist/juex repl
-./dist/juex serve
+juex run "summarize this repository"
+juex repl
+juex serve
 ```
+
+If you built from source without installing, use `./dist/juex` instead of
+`juex`.
 
 `juex serve` starts a loopback-only web UI on `127.0.0.1:8080`.
 

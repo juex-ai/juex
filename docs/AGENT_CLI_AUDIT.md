@@ -22,7 +22,7 @@ deferral.
 
 | Concern | Where it lives |
 |---|---|
-| Single source of truth for the version | `CLI_CONFIG` at repo root; consumed by `Makefile`, `scripts/build.sh`, `scripts/install-local.sh` and injected into the binary via `-ldflags -X internal/version.Version=...`. |
+| Single source of truth for the version | `CLI_CONFIG` at repo root; consumed by `Makefile`, `scripts/build.sh`, `scripts/install-local.sh`, and `scripts/install-release.sh`. Build paths inject it into the binary via `-ldflags -X internal/version.Version=...`; the release installer uses it only to choose a default download version when run from a checkout. |
 | Build artefact location | All binaries (single-platform via `make build` / `install-local.sh`, cross-platform via `scripts/build.sh`) land under `dist/`. There is no `bin/` anymore. |
 | Runtime context surfacing | `juex version --verbose` (and `--json`) prints build metadata plus irreducible runtime inputs such as `work_dir`, provider type, model, and base URL. Derived paths are intentionally omitted; runtime state is rooted at `<work_dir>/.juex/`. |
 | Stable schema for tooling | `juex schema` walks the cobra tree (skipping cobra's own `help`/`completion` subcommands), sorts entries deterministically, and emits a JSON document that agents and editors can embed without parsing `--help` text. |
