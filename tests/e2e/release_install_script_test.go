@@ -73,6 +73,85 @@ func TestReleaseInstallScriptDryRunResolvesAssets(t *testing.T) {
 	}
 }
 
+func TestLegacyReleaseInstallScriptDelegatesToRootInstallScript(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	root, script := legacyReleaseInstallScript(t)
+
+	cmd := exec.Command("bash", script, "--dry-run", "--version", "0.0.1", "--bin-dir", filepath.Join(t.TempDir(), "bin"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_OS=linux",
+		"JUEX_INSTALL_ARCH=amd64",
+		"HOME="+t.TempDir(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("legacy dry-run failed: %v\n%s", err, out)
+	}
+	body := string(out)
+	for _, want := range []string{
+		"archive: juex_0.0.1_linux_amd64.tar.gz",
+		"install target:",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("legacy dry-run output missing %q\n%s", want, body)
+		}
+	}
+}
+
+func TestPowerShellInstallerHasDryRunContract(t *testing.T) {
+	root, script := powerShellInstallScript(t)
+	body, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"param(",
+		"[switch]$DryRun",
+		"juex.exe",
+		"checksums.txt",
+		"Get-FileHash",
+		"Expand-Archive",
+		"Remove-Item -Force",
+		"try {",
+		"if ($tmp) {",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("install.ps1 missing %q", want)
+		}
+	}
+
+	powerShell, ok := findPowerShell()
+	if !ok {
+		t.Skip("PowerShell not found; static install.ps1 contract was checked")
+	}
+	cmd := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-DryRun", "-Version", "0.0.1", "-BinDir", filepath.Join(t.TempDir(), "bin"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_OS=windows",
+		"JUEX_INSTALL_ARCH=amd64",
+		"USERPROFILE="+t.TempDir(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install.ps1 dry-run failed: %v\n%s", err, out)
+	}
+	output := string(out)
+	for _, want := range []string{
+		"version: 0.0.1",
+		"release tag: v0.0.1",
+		"archive: juex_0.0.1_windows_amd64.zip",
+		"install target:",
+		"juex.exe",
+		"uninstall: Remove-Item -Force",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("install.ps1 dry-run output missing %q\n%s", want, output)
+		}
+	}
+}
+
 func TestReleaseInstallScriptDryRunUsesCLIConfigVersion(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	root, script := releaseInstallScript(t)
@@ -96,6 +175,41 @@ func TestReleaseInstallScriptDryRunUsesCLIConfigVersion(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dry-run output missing %q\n%s", want, body)
 		}
+	}
+}
+
+func TestReleaseInstallScriptDryRunStripsCRLFCLIConfigVersion(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	root, script := releaseInstallScript(t)
+	config := filepath.Join(t.TempDir(), "CLI_CONFIG")
+	if err := os.WriteFile(config, []byte("VERSION=0.3.0\r\nNAME=juex\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", script, "--dry-run", "--bin-dir", filepath.Join(t.TempDir(), "bin"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_CLI_CONFIG="+config,
+		"JUEX_INSTALL_OS=linux",
+		"JUEX_INSTALL_ARCH=amd64",
+		"HOME="+t.TempDir(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run failed: %v\n%s", err, out)
+	}
+	body := string(out)
+	for _, want := range []string{
+		"version: 0.3.0\n",
+		"release tag: v0.3.0\n",
+		"archive: juex_0.3.0_linux_amd64.tar.gz",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dry-run output missing %q\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "\r") {
+		t.Fatalf("dry-run output contains carriage return\n%q", body)
 	}
 }
 
@@ -187,7 +301,7 @@ func TestReleaseInstallScriptVerifyChecksum(t *testing.T) {
 	}
 	sum := sha256.Sum256(body)
 	checksums := filepath.Join(tmp, "checksums.txt")
-	if err := os.WriteFile(checksums, []byte(fmt.Sprintf("%x  %s\n", sum, filepath.Base(archive))), 0o644); err != nil {
+	if err := os.WriteFile(checksums, []byte(fmt.Sprintf("%x  %s\r\n", sum, filepath.Base(archive))), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -270,7 +384,34 @@ func releaseInstallScript(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return root, filepath.Join(root, "install.sh")
+}
+
+func legacyReleaseInstallScript(t *testing.T) (string, string) {
+	t.Helper()
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
 	return root, filepath.Join(root, "scripts", "install-release.sh")
+}
+
+func powerShellInstallScript(t *testing.T) (string, string) {
+	t.Helper()
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, filepath.Join(root, "install.ps1")
+}
+
+func findPowerShell() (string, bool) {
+	for _, name := range []string{"pwsh", "powershell"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 func skipReleaseInstallScriptTestIfUnsupported(t *testing.T) {

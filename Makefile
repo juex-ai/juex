@@ -29,7 +29,7 @@ help:
 	@echo "  lint          golangci-lint run"
 	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
 	@echo "  install-local install ~/.local/bin/juex (builds via dist/)"
-	@echo "  install-release install ~/.local/bin/juex from GitHub Release"
+	@echo "  install-release install ~/.local/bin/juex from GitHub Release via ./install.sh"
 	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
@@ -52,7 +52,7 @@ install-local:
 	./scripts/install-local.sh
 
 install-release:
-	./scripts/install-release.sh
+	./install.sh
 
 cross:
 	./scripts/build.sh
