@@ -8,6 +8,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 const (
@@ -136,6 +137,8 @@ type StatusSnapshot struct {
 	TokenUsage   llm.Usage                  `json:"token_usage"`
 	TokenTotal   int                        `json:"token_total"`
 	ContextUsage *llm.ContextUsage          `json:"context_usage,omitempty"`
+	Compaction   StatusCompactionSnapshot   `json:"compaction"`
+	SuccessRates StatusSuccessRatesSnapshot `json:"success_rates"`
 	PendingInput runtime.PendingInputStatus `json:"pending_input"`
 }
 
@@ -144,6 +147,18 @@ type ProviderStatusSnapshot struct {
 	Protocol string `json:"protocol,omitempty"`
 	Model    string `json:"model,omitempty"`
 	BaseURL  string `json:"base_url,omitempty"`
+}
+
+type StatusCompactionSnapshot struct {
+	Count        int `json:"count"`
+	MemoryTokens int `json:"memory_tokens"`
+}
+
+type StatusSuccessRatesSnapshot struct {
+	LLMRequests   int `json:"llm_requests"`
+	LLMSuccesses  int `json:"llm_successes"`
+	ToolRequests  int `json:"tool_requests"`
+	ToolSuccesses int `json:"tool_successes"`
 }
 
 const (
@@ -156,6 +171,8 @@ const (
 	statusIconSkills      = "\U0001F9E9"
 	statusIconTokens      = "\U0001F522"
 	statusIconContext     = "\U0001F9E0"
+	statusIconCompact     = "\U0001F5DC\ufe0f"
+	statusIconSuccess     = "\U0001F4C8"
 	statusIconTurn        = "\u2699\ufe0f"
 	statusIconQueuedInput = "\U0001F4E5"
 )
@@ -176,9 +193,11 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		active       bool
 		tokenUsage   llm.Usage
 		contextUsage *llm.ContextUsage
+		compaction   StatusCompactionSnapshot
+		successRates StatusSuccessRatesSnapshot
 	)
 	if a.Session != nil {
-		info := a.Session.Info(now)
+		info, history := a.Session.Snapshot(now)
 		sessionID = info.ID
 		sessionDir = info.Dir
 		sessionKind = info.Kind
@@ -191,6 +210,8 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 			copied.Breakdown = append([]llm.ContextUsagePart(nil), info.ContextUsage.Breakdown...)
 			contextUsage = &copied
 		}
+		compaction = compactionStatusFromHistory(history)
+		successRates = successRatesFromSessionStats(a.Session.RuntimeStats())
 	}
 	pending := runtime.PendingInputStatus{}
 	if a.Engine != nil {
@@ -210,6 +231,8 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		TokenUsage:   tokenUsage,
 		TokenTotal:   tokenUsage.TotalTokens(),
 		ContextUsage: contextUsage,
+		Compaction:   compaction,
+		SuccessRates: successRates,
 		PendingInput: pending,
 	}
 }
@@ -243,15 +266,17 @@ func (s StatusSnapshot) Text() string {
 	if s.WorkDir != "" {
 		lines = append(lines, statusLabel(statusIconWorkDir, "workdir: "+s.WorkDir))
 	}
-	lines = append(lines, statusLabel(statusIconProvider, "provider: "+formatProviderSnapshot(s.Provider)))
+	lines = append(lines, statusLabel(statusIconProvider, "model: "+formatModelSnapshot(s.Provider)))
 	lines = append(lines, statusLabel(statusIconMCP, fmt.Sprintf("mcp: %d/%d connected, %d errors", s.MCP.Connected, s.MCP.Configured, s.MCP.Errors)))
 	lines = append(lines, statusLabel(statusIconSkills, fmt.Sprintf("skills: %d", s.SkillCount)))
 	lines = append(lines, statusLabel(statusIconTokens, FormatTokenUsage(s.TokenUsage)))
 	if s.ContextUsage != nil {
-		lines = append(lines, statusLabel(statusIconContext, fmt.Sprintf("context: %d/%d tokens (%s)", s.ContextUsage.TotalTokens, s.ContextUsage.ContextWindow, s.ContextUsage.Model)))
+		lines = append(lines, statusLabel(statusIconContext, "context: "+formatContextUsage(*s.ContextUsage)))
 	} else {
 		lines = append(lines, statusLabel(statusIconContext, "context: not measured yet"))
 	}
+	lines = append(lines, statusLabel(statusIconCompact, formatCompactionStatus(s.Compaction)))
+	lines = append(lines, statusLabel(statusIconSuccess, formatSuccessRates(s.SuccessRates)))
 	turnState := "idle"
 	if s.PendingInput.TurnID != "" {
 		turnState = "running"
@@ -269,22 +294,83 @@ func statusLabel(icon, text string) string {
 	return icon + " " + text
 }
 
-func formatProviderSnapshot(p ProviderStatusSnapshot) string {
-	var parts []string
-	if p.ID != "" {
-		parts = append(parts, p.ID)
+func compactionStatusFromHistory(history []llm.Message) StatusCompactionSnapshot {
+	var status StatusCompactionSnapshot
+	for _, msg := range history {
+		if msg.Kind != llm.MessageKindCompact {
+			continue
+		}
+		status.Count++
+		status.MemoryTokens = compactMemoryTokens(msg)
 	}
-	if p.Protocol != "" {
-		parts = append(parts, p.Protocol)
+	return status
+}
+
+func compactMemoryTokens(msg llm.Message) int {
+	if msg.Compaction != nil && msg.Compaction.SummaryChars > 0 {
+		return runtime.EstimateCharsAsTokens(msg.Compaction.SummaryChars)
 	}
-	if p.Model != "" {
-		parts = append(parts, p.Model)
+	return runtime.EstimateTextTokens(msg.FirstText())
+}
+
+func successRatesFromSessionStats(stats session.RuntimeStats) StatusSuccessRatesSnapshot {
+	return StatusSuccessRatesSnapshot{
+		LLMRequests:   stats.LLMRequests,
+		LLMSuccesses:  stats.LLMSuccesses,
+		ToolRequests:  stats.ToolRequests,
+		ToolSuccesses: stats.ToolSuccesses,
 	}
-	if p.BaseURL != "" {
-		parts = append(parts, p.BaseURL)
-	}
-	if len(parts) == 0 {
+}
+
+func formatModelSnapshot(p ProviderStatusSnapshot) string {
+	switch {
+	case p.ID != "" && p.Model != "":
+		return p.ID + "/" + p.Model
+	case p.Model != "":
+		return p.Model
+	case p.ID != "":
+		return p.ID
+	default:
 		return "not configured"
 	}
-	return strings.Join(parts, " / ")
+}
+
+func formatContextUsage(usage llm.ContextUsage) string {
+	tokens := fmt.Sprintf("%d tokens", usage.TotalTokens)
+	if usage.ContextWindow > 0 {
+		tokens = fmt.Sprintf("%d/%d tokens", usage.TotalTokens, usage.ContextWindow)
+	}
+	return fmt.Sprintf("%s, cache hit %s", tokens, percent(usage.CachedInputTokens, usage.InputTokens))
+}
+
+func formatCompactionStatus(status StatusCompactionSnapshot) string {
+	memory := "0 tokens"
+	if status.MemoryTokens > 0 {
+		memory = fmt.Sprintf("~%d tokens", status.MemoryTokens)
+	}
+	return fmt.Sprintf("compact: %d, memory: %s", status.Count, memory)
+}
+
+func formatSuccessRates(status StatusSuccessRatesSnapshot) string {
+	return fmt.Sprintf("success: llm %s, tools %s",
+		formatSuccessRate(status.LLMSuccesses, status.LLMRequests),
+		formatSuccessRate(status.ToolSuccesses, status.ToolRequests))
+}
+
+func formatSuccessRate(successes, requests int) string {
+	if requests <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%d/%d (%s)", successes, requests, percent(successes, requests))
+}
+
+func percent(numerator, denominator int) string {
+	if denominator <= 0 {
+		return "n/a"
+	}
+	rate := float64(numerator) * 100 / float64(denominator)
+	if rate == float64(int(rate)) {
+		return fmt.Sprintf("%.0f%%", rate)
+	}
+	return fmt.Sprintf("%.1f%%", rate)
 }
