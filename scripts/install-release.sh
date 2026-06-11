@@ -70,7 +70,8 @@ resolve_latest_version() {
   command -v curl >/dev/null 2>&1 || die "curl is required to resolve the latest release"
 
   local effective_url
-  effective_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${repo_url%/}/releases/latest")
+  effective_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${repo_url%/}/releases/latest") ||
+    die "failed to resolve latest release from ${repo_url}"
   [[ "$effective_url" == *"/tag/"* ]] || die "could not resolve latest release from ${repo_url}"
   printf '%s\n' "${effective_url##*/}"
 }
@@ -143,23 +144,22 @@ download_file() {
   local url="$1"
   local out="$2"
   case "$url" in
+    http://*|https://*)
+      if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$out"
+      elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$out"
+      else
+        die "curl or wget is required to download release assets"
+      fi
+      ;;
     file://*)
       cp "${url#file://}" "$out"
-      return
       ;;
-    /*|./*|../*)
+    *)
       cp "$url" "$out"
-      return
       ;;
   esac
-
-  if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$url" -o "$out"
-  elif command -v wget >/dev/null 2>&1; then
-    wget -q "$url" -O "$out"
-  else
-    die "curl or wget is required to download release assets"
-  fi
 }
 
 compute_sha256() {
@@ -186,8 +186,7 @@ verify_checksum() {
   local actual
   actual=$(compute_sha256 "$archive")
   if [[ "$actual" != "$expected" ]]; then
-    printf 'checksum mismatch for %s: expected %s, got %s\n' "$archive_base" "$expected" "$actual" >&2
-    return 1
+    die "checksum mismatch for ${archive_base}: expected ${expected}, got ${actual}"
   fi
   printf 'checksum ok: %s\n' "$archive_base"
 }
@@ -212,7 +211,7 @@ extract_binary() {
   esac
 
   local extracted
-  extracted=$(find "$out_dir" -type f -name "$binary_name" -print -quit)
+  extracted=$(find "$out_dir" -type f -name "$binary_name" -print | sed -n '1p')
   [[ -n "$extracted" ]] || die "binary ${binary_name} not found in archive"
   printf '%s\n' "$extracted"
 }
@@ -221,6 +220,7 @@ install_binary() {
   local source="$1"
   local target="$2"
   mkdir -p "$(dirname "$target")"
+  rm -f "$target"
   cp "$source" "$target"
   chmod +x "$target"
 }

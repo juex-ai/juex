@@ -129,8 +129,12 @@ func TestReleaseInstallScriptDryRunResolvesLatestVersion(t *testing.T) {
 
 func TestReleaseInstallScriptInstallsFromReleaseDirectory(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
-	root, script := releaseInstallScript(t)
-	releaseDir := t.TempDir()
+	_, script := releaseInstallScript(t)
+	work := t.TempDir()
+	releaseDir := filepath.Join(work, "release")
+	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	archive := filepath.Join(releaseDir, "juex_0.0.1_linux_amd64.tar.gz")
 	binary := []byte("#!/bin/sh\necho juex fixture\n")
 	writeTarGz(t, archive, "juex_0.0.1_linux_amd64/juex", binary)
@@ -141,11 +145,11 @@ func TestReleaseInstallScriptInstallsFromReleaseDirectory(t *testing.T) {
 
 	binDir := filepath.Join(t.TempDir(), "bin")
 	cmd := exec.Command("bash", script, "--version", "0.0.1", "--bin-dir", binDir)
-	cmd.Dir = root
+	cmd.Dir = work
 	cmd.Env = append(os.Environ(),
 		"JUEX_INSTALL_OS=linux",
 		"JUEX_INSTALL_ARCH=amd64",
-		"JUEX_INSTALL_RELEASE_BASE_URL="+releaseDir,
+		"JUEX_INSTALL_RELEASE_BASE_URL=release",
 		"HOME="+t.TempDir(),
 	)
 	out, err := cmd.CombinedOutput()
@@ -222,11 +226,8 @@ func writeTarGz(t *testing.T, path, name string, body []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
 	gz := gzip.NewWriter(file)
-	defer gz.Close()
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
 
 	if err := tw.WriteHeader(&tar.Header{
 		Name: name,
@@ -236,6 +237,15 @@ func writeTarGz(t *testing.T, path, name string, body []byte) {
 		t.Fatal(err)
 	}
 	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
 		t.Fatal(err)
 	}
 }
