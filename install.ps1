@@ -28,7 +28,7 @@ function Read-CliConfigVersion {
   if (Test-Path -LiteralPath $config) {
     foreach ($line in Get-Content -LiteralPath $config) {
       if ($line -match '^VERSION=(.+)$') {
-        return $Matches[1]
+        return $Matches[1].TrimEnd("`r")
       }
     }
   }
@@ -66,10 +66,17 @@ function Resolve-LatestVersion {
   }
 
   $effectiveUrl = $null
-  if ($response.BaseResponse -and $response.BaseResponse.ResponseUri) {
-    $effectiveUrl = $response.BaseResponse.ResponseUri.AbsoluteUri
-  } elseif ($response.BaseResponse -and $response.BaseResponse.RequestMessage -and $response.BaseResponse.RequestMessage.RequestUri) {
-    $effectiveUrl = $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+  try {
+    if ($response.BaseResponse -and $response.BaseResponse.ResponseUri) {
+      $effectiveUrl = $response.BaseResponse.ResponseUri.AbsoluteUri
+    }
+  } catch {}
+  if (-not $effectiveUrl) {
+    try {
+      if ($response.BaseResponse -and $response.BaseResponse.RequestMessage -and $response.BaseResponse.RequestMessage.RequestUri) {
+        $effectiveUrl = $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+      }
+    } catch {}
   }
   if (-not $effectiveUrl -or $effectiveUrl -notmatch '/tag/') {
     Die "could not resolve latest release from $repoUrl"
@@ -254,8 +261,9 @@ if ($DryRun) {
   exit 0
 }
 
-$tmp = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString()))
+$tmp = $null
 try {
+  $tmp = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString()))
   $archivePath = Join-Path $tmp.FullName $archive
   $checksumsPath = Join-Path $tmp.FullName "checksums.txt"
   $extractDir = Join-Path $tmp.FullName "extract"
@@ -269,5 +277,7 @@ try {
   Install-Binary -Source $extracted -Target $installTarget
   Write-Host "Installed juex to $installTarget"
 } finally {
-  Remove-Item -LiteralPath $tmp.FullName -Recurse -Force -ErrorAction SilentlyContinue
+  if ($tmp) {
+    Remove-Item -LiteralPath $tmp.FullName -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }

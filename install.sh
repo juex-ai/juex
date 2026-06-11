@@ -47,7 +47,7 @@ script_repo_root() {
 read_cli_config_version() {
   local config="${JUEX_INSTALL_CLI_CONFIG:-$(script_repo_root)/CLI_CONFIG}"
   if [[ -f "$config" ]]; then
-    awk -F= '/^VERSION=/{print $2; exit}' "$config"
+    awk -F= '/^VERSION=/{sub(/\r$/, "", $2); print $2; exit}' "$config"
   fi
 }
 
@@ -67,11 +67,17 @@ resolve_latest_version() {
   fi
 
   local repo_url="${JUEX_INSTALL_REPO_URL:-https://github.com/${JUEX_INSTALL_REPO:-juex-ai/juex}}"
-  command -v curl >/dev/null 2>&1 || die "curl is required to resolve the latest release"
-
   local effective_url
-  effective_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${repo_url%/}/releases/latest") ||
-    die "failed to resolve latest release from ${repo_url}"
+  if command -v curl >/dev/null 2>&1; then
+    effective_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${repo_url%/}/releases/latest") ||
+      die "failed to resolve latest release from ${repo_url}"
+  elif command -v wget >/dev/null 2>&1; then
+    effective_url=$(wget -S --spider "${repo_url%/}/releases/latest" 2>&1 |
+      awk 'tolower($1) == "location:" {sub(/\r$/, "", $2); url=$2} END {print url}') || true
+    [[ -n "$effective_url" ]] || die "failed to resolve latest release from ${repo_url} using wget"
+  else
+    die "curl or wget is required to resolve the latest release"
+  fi
   [[ "$effective_url" == *"/tag/"* ]] || die "could not resolve latest release from ${repo_url}"
   printf '%s\n' "${effective_url##*/}"
 }
@@ -180,7 +186,7 @@ verify_checksum() {
   archive_base=$(basename "$archive")
 
   local expected
-  expected=$(awk -v file="$archive_base" '($2 == file || $2 == "*" file) {print $1; exit}' "$checksums")
+  expected=$(awk -v file="$archive_base" '{sub(/\r$/, "", $2)} ($2 == file || $2 == "*" file) {print $1; exit}' "$checksums")
   [[ -n "$expected" ]] || die "checksum entry not found for ${archive_base}"
 
   local actual

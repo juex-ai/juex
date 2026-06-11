@@ -114,6 +114,8 @@ func TestPowerShellInstallerHasDryRunContract(t *testing.T) {
 		"Get-FileHash",
 		"Expand-Archive",
 		"Remove-Item -Force",
+		"try {",
+		"if ($tmp) {",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("install.ps1 missing %q", want)
@@ -173,6 +175,41 @@ func TestReleaseInstallScriptDryRunUsesCLIConfigVersion(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dry-run output missing %q\n%s", want, body)
 		}
+	}
+}
+
+func TestReleaseInstallScriptDryRunStripsCRLFCLIConfigVersion(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	root, script := releaseInstallScript(t)
+	config := filepath.Join(t.TempDir(), "CLI_CONFIG")
+	if err := os.WriteFile(config, []byte("VERSION=0.3.0\r\nNAME=juex\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", script, "--dry-run", "--bin-dir", filepath.Join(t.TempDir(), "bin"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_CLI_CONFIG="+config,
+		"JUEX_INSTALL_OS=linux",
+		"JUEX_INSTALL_ARCH=amd64",
+		"HOME="+t.TempDir(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run failed: %v\n%s", err, out)
+	}
+	body := string(out)
+	for _, want := range []string{
+		"version: 0.3.0\n",
+		"release tag: v0.3.0\n",
+		"archive: juex_0.3.0_linux_amd64.tar.gz",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dry-run output missing %q\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "\r") {
+		t.Fatalf("dry-run output contains carriage return\n%q", body)
 	}
 }
 
@@ -264,7 +301,7 @@ func TestReleaseInstallScriptVerifyChecksum(t *testing.T) {
 	}
 	sum := sha256.Sum256(body)
 	checksums := filepath.Join(tmp, "checksums.txt")
-	if err := os.WriteFile(checksums, []byte(fmt.Sprintf("%x  %s\n", sum, filepath.Base(archive))), 0o644); err != nil {
+	if err := os.WriteFile(checksums, []byte(fmt.Sprintf("%x  %s\r\n", sum, filepath.Base(archive))), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
