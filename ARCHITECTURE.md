@@ -1003,6 +1003,7 @@ hallucinations).
 | `make test` | `go test ./... -count=1` |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
+| `make install-release` | `scripts/install-release.sh`, downloads the current-platform GitHub Release archive, verifies `checksums.txt`, and installs `juex` into `~/.local/bin` by default |
 | `make snapshot` | `goreleaser release --snapshot --clean` (7 archives in `dist/`) |
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
@@ -1026,6 +1027,11 @@ Each binary is stamped with the same ldflags as `make build`. Archives are
 binary-only `tar.gz` files (Linux + Mac) or `zip` files (Windows); a
 `checksums.txt` accompanies them. Triggered on `v*` tag push via the release
 workflow; runs entirely on GitHub Actions.
+
+`scripts/install-release.sh` is the released-binary installer. It detects
+macOS/Linux platform archives, supports `--dry-run`, verifies the archive
+against `checksums.txt`, and installs into a user-writable bin directory.
+`scripts/install-local.sh` remains the source-build installer for this checkout.
 
 ### CI Workflows
 
