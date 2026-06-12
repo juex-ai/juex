@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -17,6 +20,7 @@ import (
 )
 
 const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
+const codexSSERetryBaseDelay = 100 * time.Millisecond
 
 type openAICodexResponsesProvider struct {
 	cfg       Config
@@ -115,14 +119,21 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 }
 
 func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
-	stream := p.client.Responses.NewStreaming(ctx, params)
-	defer func() { _ = stream.Close() }()
-
-	resp, err := readCodexResponsesStream(stream)
-	if err != nil {
-		return nil, err
+	for attempt := 0; attempt <= providerMaxRetries; attempt++ {
+		stream := p.client.Responses.NewStreaming(ctx, params)
+		resp, err := readCodexResponsesStream(stream)
+		_ = stream.Close()
+		if err == nil {
+			return resp, nil
+		}
+		if attempt == providerMaxRetries || !isRetryableCodexSSEReadError(err) || ctx.Err() != nil {
+			return nil, err
+		}
+		if err := waitCodexSSERetry(ctx, attempt); err != nil {
+			return nil, err
+		}
 	}
-	return resp, nil
+	return nil, fmt.Errorf("codex SSE retry exhausted")
 }
 
 func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []Message, tools []ToolSpec, opts CompleteOptions) responses.ResponseNewParams {
@@ -195,18 +206,71 @@ func readCodexResponsesStream(stream codexResponsesStream) (*responses.Response,
 		}
 	}
 	if err := stream.Err(); err != nil {
-		return nil, fmt.Errorf("codex SSE read: %w", err)
+		return nil, &codexSSEReadError{cause: err}
 	}
 	if !hasFinal {
 		if len(items) > 0 {
 			return &responses.Response{Status: responses.ResponseStatusCompleted, Output: items}, nil
 		}
-		return nil, fmt.Errorf("stream closed before response.completed")
+		return nil, &codexSSEReadError{cause: errors.New("stream closed before response.completed")}
 	}
 	if len(finalResp.Output) == 0 && len(items) > 0 {
 		finalResp.Output = items
 	}
 	return &finalResp, nil
+}
+
+type codexSSEReadError struct {
+	cause error
+}
+
+func (e *codexSSEReadError) Error() string {
+	return fmt.Sprintf("codex SSE read: %v", e.cause)
+}
+
+func (e *codexSSEReadError) Unwrap() error {
+	return e.cause
+}
+
+func isRetryableCodexSSEReadError(err error) bool {
+	var readErr *codexSSEReadError
+	if !errors.As(err, &readErr) {
+		return false
+	}
+	if errors.Is(readErr.cause, context.Canceled) || errors.Is(readErr.cause, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(readErr.cause, io.EOF) || errors.Is(readErr.cause, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := strings.ToLower(readErr.cause.Error())
+	for _, needle := range []string{
+		"eof",
+		"connection reset",
+		"broken pipe",
+		"server closed idle connection",
+		"use of closed network connection",
+		"http2: client connection lost",
+		"stream reset",
+		"stream closed",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitCodexSSERetry(ctx context.Context, attempt int) error {
+	delay := time.Duration(attempt+1) * codexSSERetryBaseDelay
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func responseErrorMessage(resp responses.Response) string {
