@@ -51,6 +51,21 @@ test("formatMCPEventForDisplay returns a collapsed preview", () => {
   });
 });
 
+test("formatMCPEventForDisplay previews params content and keeps full params body", () => {
+  const params = JSON.stringify(
+    { content: "hello from mcp", meta: { event_type: "message", topic: "ops" } },
+    null,
+    2,
+  );
+
+  assert.deepEqual(formatMCPEventForDisplay(`server:message:${params}`), {
+    label: "server:message",
+    content: params,
+    preview: "hello from mcp",
+    copyText: params,
+  });
+});
+
 test("formatMCPEventForDisplay keeps full content as copy text", () => {
   assert.deepEqual(formatMCPEventForDisplay("server:changed:line 1\n\nline 2"), {
     label: "server:changed",

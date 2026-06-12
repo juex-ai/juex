@@ -114,7 +114,7 @@ func runFakeServer() {
 					"method":  "notifications/claude/channel",
 					"params": map[string]any{
 						"content": "[realtime] hello alice",
-						"meta":    map[string]any{"event_type": "message"},
+						"meta":    map[string]any{"event_type": "message", "topic": "ops"},
 					},
 				})
 			}
@@ -342,6 +342,13 @@ func TestMCPClient_ClaudeChannelNotification(t *testing.T) {
 		if n.ServerName != "fake" || n.Method != "notifications/claude/channel" ||
 			n.EventType != "message" || n.Content != "[realtime] hello alice" {
 			t.Fatalf("notification = %+v", n)
+		}
+		meta, ok := n.Params["meta"].(map[string]any)
+		if !ok {
+			t.Fatalf("notification params meta = %#v, want object", n.Params["meta"])
+		}
+		if meta["topic"] != "ops" {
+			t.Fatalf("notification params meta topic = %#v, want ops", meta["topic"])
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out waiting for notification")

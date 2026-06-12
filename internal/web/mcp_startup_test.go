@@ -43,7 +43,7 @@ func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	waitForMCPEventInSession(t, last.Dir, "alpha:message:hello from mcp")
+	waitForMCPEventInSession(t, last.Dir, "alpha:message:{\n  \"content\": \"hello from mcp\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}")
 	waitForSessionTextInSession(t, last.Dir, llm.RoleAssistant, "ack")
 	assertNoMCPEventInSession(t, older.Dir)
 }
@@ -60,7 +60,7 @@ func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
 	defer stopRunServer(t, cancel, errCh)
 
 	active := waitForActivePrimary(t, srv)
-	waitForMCPEventInSession(t, active.Dir, "alpha:message:hello from mcp")
+	waitForMCPEventInSession(t, active.Dir, "alpha:message:{\n  \"content\": \"hello from mcp\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}")
 	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
 }
 
@@ -233,7 +233,7 @@ func runWebFakeMCPServer() {
 					"method":  "notifications/claude/channel",
 					"params": map[string]any{
 						"content": "hello from mcp",
-						"meta":    map[string]any{"event_type": "message"},
+						"meta":    map[string]any{"event_type": "message", "topic": "ops"},
 					},
 				})
 			}
