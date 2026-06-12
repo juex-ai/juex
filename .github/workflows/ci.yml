@@ -44,3 +44,69 @@ jobs:
         shell: bash
       - run: go test ./... -race -count=1
         shell: bash
+      - name: Test release installer
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(awk -F= '/^VERSION=/{sub(/\r$/, "", $2); print $2; exit}' CLI_CONFIG)"
+          os_name="$(go env GOOS)"
+          arch="$(go env GOARCH)"
+          work="${RUNNER_TEMP}/juex-install-test"
+          release_dir="${work}/release"
+          payload_dir="${work}/payload"
+          rm -rf "$work"
+          mkdir -p "$release_dir" "$payload_dir"
+
+          go build -trimpath -o "${payload_dir}/juex" ./cmd/juex
+          archive="juex_${version}_${os_name}_${arch}.tar.gz"
+          tar -C "$payload_dir" -czf "${release_dir}/${archive}" juex
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd "$release_dir" && sha256sum "$archive" > checksums.txt)
+          else
+            (cd "$release_dir" && shasum -a 256 "$archive" > checksums.txt)
+          fi
+
+          JUEX_INSTALL_RELEASE_BASE_URL="file://${release_dir}" \
+            JUEX_INSTALL_VERSION="$version" \
+            JUEX_INSTALL_OS="$os_name" \
+            JUEX_INSTALL_ARCH="$arch" \
+            bash scripts/install.sh
+
+          if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+            export PATH="$HOME/.local/bin:$PATH"
+            printf '%s\n' "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          juex version
+      - name: Test PowerShell release installer
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Select-String -Path CLI_CONFIG -Pattern '^VERSION=(.+)$').Matches[0].Groups[1].Value.TrimEnd("`r")
+          $work = Join-Path $env:RUNNER_TEMP "juex-install-test"
+          $releaseDir = Join-Path $work "release"
+          $payloadDir = Join-Path $work "payload"
+          Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $releaseDir, $payloadDir | Out-Null
+
+          $binary = Join-Path $payloadDir "juex.exe"
+          go build -trimpath -o $binary ./cmd/juex
+          $archive = "juex_${version}_windows_amd64.zip"
+          $archivePath = Join-Path $releaseDir $archive
+          Compress-Archive -LiteralPath $binary -DestinationPath $archivePath -Force
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath (Join-Path $releaseDir "checksums.txt") -Value "$hash  $archive"
+
+          $env:JUEX_INSTALL_RELEASE_BASE_URL = ($releaseDir -replace '\\', '/')
+          $env:JUEX_INSTALL_VERSION = $version
+          $env:JUEX_INSTALL_OS = "windows"
+          $env:JUEX_INSTALL_ARCH = "amd64"
+          ./scripts/install.ps1
+
+          $binDir = Join-Path $HOME ".local\bin"
+          if (-not (($env:PATH -split [System.IO.Path]::PathSeparator) -contains $binDir)) {
+            $env:PATH = "$binDir$([System.IO.Path]::PathSeparator)$env:PATH"
+            Add-Content -Path $env:GITHUB_PATH -Value $binDir
+          }
+          juex.exe version

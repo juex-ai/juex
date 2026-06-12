@@ -14,20 +14,20 @@ integration.
 Install from a published GitHub Release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.sh | bash
 ```
 
 On Windows PowerShell:
 
 ```powershell
-iwr -UseBasicParsing https://raw.githubusercontent.com/juex-ai/juex/main/install.ps1 -OutFile install.ps1
+iwr -UseBasicParsing https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.ps1 -OutFile install.ps1
 .\install.ps1
 ```
 
 Preview the install without writing files:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/install.sh | bash -s -- --dry-run
+curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.sh | bash -s -- --dry-run
 ```
 
 ```powershell

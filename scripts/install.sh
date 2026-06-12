@@ -2,9 +2,9 @@
 # Install juex from a GitHub Release archive for the current machine.
 #
 # Usage:
-#   install.sh
-#   install.sh --dry-run
-#   install.sh --version 0.0.1
+#   scripts/install.sh
+#   scripts/install.sh --dry-run
+#   scripts/install.sh --version 0.0.1
 #
 # Environment:
 #   PREFIX=/custom/prefix
@@ -24,7 +24,7 @@ usage() {
 Install juex from a GitHub Release.
 
 Usage:
-  install.sh [--version VERSION] [--prefix DIR] [--bin-dir DIR] [--dry-run]
+  scripts/install.sh [--version VERSION] [--prefix DIR] [--bin-dir DIR] [--dry-run]
 
 Options:
   --version VERSION  Release version to install, such as 0.0.1 or v0.0.1.
@@ -38,7 +38,13 @@ EOF
 script_repo_root() {
   local source_path="${BASH_SOURCE[0]:-}"
   if [[ -n "$source_path" && -f "$source_path" ]]; then
-    (cd "$(dirname "$source_path")" && pwd)
+    local script_dir
+    script_dir=$(cd "$(dirname "$source_path")" && pwd)
+    if [[ "${script_dir##*/}" == "scripts" && -f "${script_dir}/../CLI_CONFIG" ]]; then
+      (cd "${script_dir}/.." && pwd)
+    else
+      printf '%s\n' "$script_dir"
+    fi
   else
     pwd
   fi
@@ -327,6 +333,14 @@ EOF
   fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
-fi
+_juex_install_source="${BASH_SOURCE[0]:-}"
+case "$_juex_install_source" in
+  ""|stdin|/dev/stdin|/dev/fd/*)
+    main "$@"
+    ;;
+  *)
+    if [[ "$_juex_install_source" == "$0" || ! -f "$_juex_install_source" ]]; then
+      main "$@"
+    fi
+    ;;
+esac
