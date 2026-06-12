@@ -1036,11 +1036,11 @@ binary-only `tar.gz` files (Linux + Mac) or `zip` files (Windows); a
 workflow; runs entirely on GitHub Actions.
 
 `scripts/install.sh` is the POSIX released-binary installer for macOS/Linux. It
-detects platform archives, supports `--dry-run`, works when piped into `bash`,
-verifies the archive against `checksums.txt`, and installs into a user-writable
-bin directory. `scripts/install.ps1` is the Windows PowerShell installer for
-released `zip` archives. `scripts/install-local.sh` remains the source-build
-installer for this checkout.
+detects platform archives, works when piped into `bash`, verifies the archive
+against `checksums.txt`, and installs into a user-writable bin directory.
+`scripts/install.ps1` is the Windows PowerShell installer for released `zip`
+archives. `scripts/install-local.sh` remains the source-build installer for
+this checkout.
 
 ### CI Workflows
 

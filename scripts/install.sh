@@ -3,7 +3,6 @@
 #
 # Usage:
 #   scripts/install.sh
-#   scripts/install.sh --dry-run
 #   scripts/install.sh --version 0.0.1
 #
 # Environment:
@@ -24,13 +23,12 @@ usage() {
 Install juex from a GitHub Release.
 
 Usage:
-  scripts/install.sh [--version VERSION] [--prefix DIR] [--bin-dir DIR] [--dry-run]
+  scripts/install.sh [--version VERSION] [--prefix DIR] [--bin-dir DIR]
 
 Options:
   --version VERSION  Release version to install, such as 0.0.1 or v0.0.1.
   --prefix DIR       Install prefix. Defaults to $PREFIX or ~/.local.
   --bin-dir DIR      Exact directory for the juex binary. Overrides --prefix.
-  --dry-run          Print the install plan without downloading or writing files.
   -h, --help         Show this help.
 EOF
 }
