@@ -151,6 +151,54 @@ func TestMakefileDoesNotExposeReleaseInstaller(t *testing.T) {
 	}
 }
 
+func TestInstallerDryRunIsInternalOnly(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		rel       string
+		forbidden []string
+	}{
+		{
+			rel: "README.md",
+			forbidden: []string{
+				"Preview the install without writing files",
+				"bash -s -- --dry-run",
+				".\\install.ps1 -DryRun",
+			},
+		},
+		{
+			rel: "ARCHITECTURE.md",
+			forbidden: []string{
+				"supports `--dry-run`",
+			},
+		},
+		{
+			rel: "scripts/install.sh",
+			forbidden: []string{
+				"#   scripts/install.sh --dry-run",
+				"[--dry-run]",
+				"--dry-run          Print the install plan",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.rel, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join(root, tc.rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := string(body)
+			for _, forbidden := range tc.forbidden {
+				if strings.Contains(text, forbidden) {
+					t.Errorf("%s should not document installer dry-run with %q", tc.rel, forbidden)
+				}
+			}
+		})
+	}
+}
+
 func TestPowerShellInstallerHasDryRunContract(t *testing.T) {
 	root, script := powerShellInstallScript(t)
 	body, err := os.ReadFile(script)

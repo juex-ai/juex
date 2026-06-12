@@ -24,16 +24,6 @@ iwr -UseBasicParsing https://raw.githubusercontent.com/juex-ai/juex/main/scripts
 .\install.ps1
 ```
 
-Preview the install without writing files:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.sh | bash -s -- --dry-run
-```
-
-```powershell
-.\install.ps1 -DryRun
-```
-
 Or build from source:
 
 ```bash
