@@ -302,7 +302,10 @@ and reuses `previous_response_id` only when the next logical request is a strict
 incremental extension of the previous request plus previous response output.
 SDK-backed HTTP clients use `WithMaxRetries(10)` for recoverable transport/API
 failures such as network errors, 408/409/429, and 5xx responses. Ordinary
-request errors are returned immediately.
+request errors are returned immediately. The Codex Responses SSE adapter adds a
+second narrow retry layer for transient stream-read failures such as EOF after a
+streaming response has already started; semantic stream events such as
+`response.failed` are returned without retry.
 Provider adapters share a canonical projection helper before they encode SDK
 requests. The helper compacts history, filters tool and reasoning replay blocks
 through capability gates, supports Codex's reasoning-omit path, normalizes
