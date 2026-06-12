@@ -15,6 +15,12 @@ function Die {
 
 function Get-RepoRoot {
   if ($PSScriptRoot) {
+    if ((Split-Path -Leaf $PSScriptRoot) -eq "scripts") {
+      $parent = Split-Path -Parent $PSScriptRoot
+      if (Test-Path -LiteralPath (Join-Path $parent "CLI_CONFIG")) {
+        return $parent
+      }
+    }
     return $PSScriptRoot
   }
   return (Get-Location).Path
