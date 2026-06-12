@@ -40,7 +40,7 @@ script_repo_root() {
   if [[ -n "$source_path" && -f "$source_path" ]]; then
     local script_dir
     script_dir=$(cd "$(dirname "$source_path")" && pwd)
-    if [[ "$(basename "$script_dir")" == "scripts" && -f "${script_dir}/../CLI_CONFIG" ]]; then
+    if [[ "${script_dir##*/}" == "scripts" && -f "${script_dir}/../CLI_CONFIG" ]]; then
       (cd "${script_dir}/.." && pwd)
     else
       printf '%s\n' "$script_dir"
@@ -334,6 +334,13 @@ EOF
 }
 
 _juex_install_source="${BASH_SOURCE[0]:-}"
-if [[ -z "$_juex_install_source" || "$_juex_install_source" == "$0" ]]; then
-  main "$@"
-fi
+case "$_juex_install_source" in
+  ""|stdin|/dev/stdin|/dev/fd/*)
+    main "$@"
+    ;;
+  *)
+    if [[ "$_juex_install_source" == "$0" || ! -f "$_juex_install_source" ]]; then
+      main "$@"
+    fi
+    ;;
+esac
