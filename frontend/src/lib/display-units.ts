@@ -29,6 +29,12 @@ export type MessageGroup = {
   model?: string;
 };
 
+function normalizeTextBlock(block: TextBlock): TextBlock {
+  // Older transcripts can contain {"type":"text"} for empty provider output.
+  if (typeof block.text === "string") return block;
+  return { ...block, text: "" };
+}
+
 // Walk all messages in order and produce the render groups. tool_use lives in
 // an assistant message and the matching tool_result lives in the next user
 // message (Anthropic-style); we fold them into one tool unit on the assistant
@@ -50,7 +56,7 @@ export function messagesToGroups(
     for (const block of msg.blocks ?? []) {
       switch (block.type) {
         case "text":
-          units.push({ kind: "text", block });
+          units.push({ kind: "text", block: normalizeTextBlock(block) });
           break;
         case "reasoning":
           units.push({ kind: "reasoning", block });
