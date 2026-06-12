@@ -184,16 +184,18 @@ func TestInstallerDryRunIsInternalOnly(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		body, err := os.ReadFile(filepath.Join(root, tc.rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := string(body)
-		for _, forbidden := range tc.forbidden {
-			if strings.Contains(text, forbidden) {
-				t.Fatalf("%s should not document installer dry-run with %q", tc.rel, forbidden)
+		t.Run(tc.rel, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join(root, tc.rel))
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
+			text := string(body)
+			for _, forbidden := range tc.forbidden {
+				if strings.Contains(text, forbidden) {
+					t.Errorf("%s should not document installer dry-run with %q", tc.rel, forbidden)
+				}
+			}
+		})
 	}
 }
 
