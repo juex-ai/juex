@@ -124,6 +124,33 @@ func TestReleaseInstallScriptsLiveUnderScriptsDirectory(t *testing.T) {
 	}
 }
 
+func TestMakefileDoesNotExposeReleaseInstaller(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "install-release:") {
+			t.Fatalf("Makefile should not define install-release target")
+		}
+		if strings.HasPrefix(trimmed, ".PHONY:") {
+			for _, target := range strings.Fields(strings.TrimPrefix(trimmed, ".PHONY:")) {
+				if target == "install-release" {
+					t.Fatalf("Makefile should not include install-release in .PHONY")
+				}
+			}
+		}
+		if strings.HasPrefix(trimmed, "@echo") && strings.Contains(trimmed, "install-release") {
+			t.Fatalf("Makefile help should not expose install-release")
+		}
+	}
+}
+
 func TestPowerShellInstallerHasDryRunContract(t *testing.T) {
 	root, script := powerShellInstallScript(t)
 	body, err := os.ReadFile(script)

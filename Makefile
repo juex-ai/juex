@@ -1,4 +1,4 @@
-.PHONY: test lint build snapshot release-dry integration provider-smoke development-eval clean help install-local install-release cross web web-dev
+.PHONY: test lint build snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-dev
 
 web:
 	cd frontend && pnpm install && pnpm build
@@ -29,7 +29,6 @@ help:
 	@echo "  lint          golangci-lint run"
 	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
 	@echo "  install-local install ~/.local/bin/juex (builds via dist/)"
-	@echo "  install-release install ~/.local/bin/juex from GitHub Release via ./scripts/install.sh"
 	@echo "  cross         build all 7 platform archives in dist/ (no goreleaser)"
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
@@ -50,9 +49,6 @@ build: web
 
 install-local:
 	./scripts/install-local.sh
-
-install-release:
-	./scripts/install.sh
 
 cross:
 	./scripts/build.sh
