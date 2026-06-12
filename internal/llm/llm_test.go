@@ -660,6 +660,43 @@ func TestOpenAICodexResponses_RetriesSSEReadEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAICodexResponses_RetriesStreamClosedBeforeCompleted(t *testing.T) {
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}}` + "\n\n",
+			)),
+			Request: r,
+		}, nil
+	})}
+	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if resp.Message.FirstText() != "ok" {
+		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+	}
+}
+
 func TestOpenAI_CompactsEmptyHistoryMessages(t *testing.T) {
 	type wireReq struct {
 		Messages []map[string]any `json:"messages"`
