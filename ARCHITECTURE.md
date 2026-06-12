@@ -1011,7 +1011,6 @@ hallucinations).
 | `make test` | `go test ./... -count=1` |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
-| `make install-release` | `scripts/install.sh`, downloads the current-platform GitHub Release archive, verifies `checksums.txt`, and installs `juex` into `~/.local/bin` by default |
 | `make snapshot` | `goreleaser release --snapshot --clean` (7 archives in `dist/`) |
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
