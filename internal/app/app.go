@@ -11,6 +11,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -358,7 +359,7 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if eventType == "" {
 		eventType = "notification"
 	}
-	msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("%s:%s:%s", n.ServerName, eventType, n.Content))
+	msg := llm.TextMessage(llm.RoleUser, formatMCPNotificationText(n, eventType))
 	msg.Kind = llm.MessageKindMCPEvent
 	if _, err := a.Engine.EnqueuePendingMessage(ctx, msg); err == nil {
 		return nil
@@ -367,6 +368,35 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	}
 	_, err := a.Engine.TurnMessage(ctx, msg)
 	return err
+}
+
+func formatMCPNotificationText(n mcp.Notification, eventType string) string {
+	params := cloneNotificationParams(n.Params)
+	if len(params) == 0 {
+		params = map[string]any{}
+		if n.Content != "" {
+			params["content"] = n.Content
+		}
+		if eventType != "" {
+			params["meta"] = map[string]any{"event_type": eventType}
+		}
+	}
+	body, err := json.MarshalIndent(params, "", "  ")
+	if err != nil {
+		body = []byte(n.Content)
+	}
+	return fmt.Sprintf("%s:%s:%s", n.ServerName, eventType, string(body))
+}
+
+func cloneNotificationParams(params map[string]any) map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(params))
+	for k, v := range params {
+		out[k] = v
+	}
+	return out
 }
 
 func (a *App) TokenUsage() llm.Usage {

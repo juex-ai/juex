@@ -9,9 +9,10 @@ const FALLBACK_LABEL = "mcp:event";
 
 export function formatMCPEventForDisplay(text: string): MCPEventDisplay {
   const event = parseMCPEventText(text);
+  const previewText = paramsContentPreview(event.content) ?? event.content;
   return {
     ...event,
-    preview: oneLinePreview(event.content),
+    preview: oneLinePreview(previewText),
     copyText: event.content,
   };
 }
@@ -43,4 +44,15 @@ export function oneLinePreview(text: string, maxLength = 120): string {
   if (!singleLine) return "empty event";
   if (singleLine.length <= maxLength) return singleLine;
   return `${singleLine.slice(0, maxLength)}...`;
+}
+
+function paramsContentPreview(text: string): string | null {
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const content = (value as { content?: unknown }).content;
+    return typeof content === "string" ? content : null;
+  } catch {
+    return null;
+  }
 }

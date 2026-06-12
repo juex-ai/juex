@@ -929,13 +929,15 @@ Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
 tools into multiple per-session registries. In `serve`, session tool handlers
 forward calls into the shared manager; closing a session does not close MCP.
 
-Claude channel notifications are formatted as
-`<mcp_name>:<event_type>:<event_content>` and run through the normal Agent
-turn loop as `mcp_event` user messages. For `run` and `repl`, notifications
-target the command's only primary app. For `serve`, notifications target
-`<WorkDir>/.juex/history.json.active`: the active primary session. Side
-sessions do not declare the `experimental["claude/channel"]` initialize
-capability and do not become notification targets.
+Claude channel notifications preserve the full JSON-RPC `params` object. They
+are formatted as `<mcp_name>:<event_type>:<params_json>` and run through the
+normal Agent turn loop as `mcp_event` user messages. `params.content` remains a
+display preview, while metadata under `params.meta` is visible to the Agent.
+For `run` and `repl`, notifications target the command's only primary app. For
+`serve`, notifications target `<WorkDir>/.juex/history.json.active`: the active
+primary session. Side sessions do not declare the
+`experimental["claude/channel"]` initialize capability and do not become
+notification targets.
 
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.

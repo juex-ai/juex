@@ -277,6 +277,10 @@ func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
 		Method:     "notifications/claude/channel",
 		EventType:  "message",
 		Content:    "[realtime] hello alice",
+		Params: map[string]any{
+			"content": "[realtime] hello alice",
+			"meta":    map[string]any{"event_type": "message", "topic": "ops"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +295,7 @@ func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
 	if user.Kind != llm.MessageKindMCPEvent {
 		t.Fatalf("user kind = %q", user.Kind)
 	}
-	if got := user.FirstText(); got != "local:message:[realtime] hello alice" {
+	if got, want := user.FirstText(), "local:message:{\n  \"content\": \"[realtime] hello alice\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}"; got != want {
 		t.Fatalf("user text = %q", got)
 	}
 }
@@ -362,6 +366,10 @@ func TestApp_MCPNotificationQueuesDuringActiveTurn(t *testing.T) {
 		ServerName: "local",
 		EventType:  "message",
 		Content:    "queued",
+		Params: map[string]any{
+			"content": "queued",
+			"meta":    map[string]any{"event_type": "message", "topic": "ops"},
+		},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +383,7 @@ func TestApp_MCPNotificationQueuesDuringActiveTurn(t *testing.T) {
 	if a.Session.History[2].Kind != llm.MessageKindMCPEvent {
 		t.Fatalf("queued message kind = %q", a.Session.History[2].Kind)
 	}
-	if got := a.Session.History[2].FirstText(); got != "local:message:queued" {
+	if got, want := a.Session.History[2].FirstText(), "local:message:{\n  \"content\": \"queued\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}"; got != want {
 		t.Fatalf("queued text = %q", got)
 	}
 }

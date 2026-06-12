@@ -93,6 +93,7 @@ type Notification struct {
 	Method     string
 	EventType  string
 	Content    string
+	Params     map[string]any
 }
 
 type ConnectOptions struct {
@@ -465,22 +466,23 @@ func (c *Client) handleNotification(msg rpcEnvelope) {
 	if c.onNotification == nil || msg.Method != "notifications/claude/channel" {
 		return
 	}
-	var params struct {
-		Content string         `json:"content"`
-		Meta    map[string]any `json:"meta"`
-	}
+	var params map[string]any
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
 		return
 	}
 	eventType := "notification"
-	if raw, ok := params.Meta["event_type"].(string); ok && raw != "" {
-		eventType = raw
+	if meta, ok := params["meta"].(map[string]any); ok {
+		if raw, ok := meta["event_type"].(string); ok && raw != "" {
+			eventType = raw
+		}
 	}
+	content, _ := params["content"].(string)
 	go c.onNotification(Notification{
 		ServerName: c.name,
 		Method:     msg.Method,
 		EventType:  eventType,
-		Content:    params.Content,
+		Content:    content,
+		Params:     params,
 	})
 }
 
