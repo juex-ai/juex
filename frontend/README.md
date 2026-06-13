@@ -50,7 +50,7 @@ into `internal/web/dist/` for Go embedding.
 | Path | Purpose |
 | --- | --- |
 | `src/api.ts` | typed fetch helpers, session message pagination, workspace file preview URLs, and SSE subscription |
-| `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including transcript paging metadata |
+| `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including transcript paging metadata and live tool output deltas |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
 | `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
@@ -59,7 +59,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
 | `src/lib/home-route.ts` | pure helper for choosing the web root redirect target |
-| `src/lib/live-tool-events.ts` | pure live transcript updates for tool.requested events |
+| `src/lib/live-tool-events.ts` | pure live transcript updates for tool requested/output-delta events |
 | `src/lib/loading-state.ts` | pure loading-state display text helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |

@@ -1329,10 +1329,55 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	}
 }
 
+func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "stream_1", ToolName: "streamer", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "streamer",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			events := tools.ToolCallEventsFromContext(ctx)
+			events.Emit(tools.OutputDelta{
+				Tool:      "streamer",
+				ToolUseID: "stream_1",
+				SessionID: "sh_test",
+				ChunkID:   7,
+				Stream:    "combined",
+				Text:      "live bytes",
+			})
+			return "final", nil
+		},
+	})
+
+	var deltaPayload ToolOutputDeltaPayload
+	bus.Subscribe("tool.output_delta", func(e events.Event) {
+		deltaPayload, _ = e.Payload.(ToolOutputDeltaPayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	if deltaPayload.Name != "streamer" || deltaPayload.ToolUseID != "stream_1" {
+		t.Fatalf("delta payload identity = %+v", deltaPayload)
+	}
+	if deltaPayload.SessionID != "sh_test" || deltaPayload.ChunkID != 7 || deltaPayload.Text != "live bytes" {
+		t.Fatalf("delta payload = %+v", deltaPayload)
+	}
+}
+
 func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "shell_raw", ToolName: "shell", Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_raw", ToolName: "exec_command", Input: map[string]any{
 				"_raw_arguments": `{"cmd":"echo raw-ok","timeout":2}`,
 			}},
 		}}, StopReason: llm.StopToolUse},
@@ -1398,8 +1443,8 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if block.Type != llm.BlockToolResult || block.IsError {
 		t.Fatalf("tool result block = %+v, want successful result", block)
 	}
-	if strings.TrimSpace(block.Content) != "raw-ok" {
-		t.Fatalf("tool result content = %q, want raw-ok", block.Content)
+	if !strings.Contains(block.Content, "Process exited with code 0") || !strings.Contains(block.Content, "raw-ok") {
+		t.Fatalf("tool result content = %q, want successful raw-ok output", block.Content)
 	}
 }
 

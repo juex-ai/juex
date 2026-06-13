@@ -42,7 +42,7 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 		{
 			name: "tool error includes output fields when present",
 			payload: ToolErroredPayload{
-				Name:           "shell",
+				Name:           "exec_command",
 				ToolUseID:      "tu2",
 				Error:          "timeout",
 				TimeoutSeconds: 1,
@@ -51,7 +51,7 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 				TimedOut:       true,
 			},
 			want: map[string]any{
-				"name":            "shell",
+				"name":            "exec_command",
 				"tool_use_id":     "tu2",
 				"error":           "timeout",
 				"timeout_seconds": float64(1),

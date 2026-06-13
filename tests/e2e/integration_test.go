@@ -233,7 +233,7 @@ func TestLiveConfigs_MultiStep(t *testing.T) {
 			prompt := "You will work in directory " + dir + ". " +
 				"Step 1: use the `write` tool to create scratch.txt with content `start`. " +
 				"Step 2: use the `edit` tool to replace `start` with `JUEX_LIVE_42`. " +
-				"Step 3: use the `shell` tool to print " + target + " with the current shell syntax. " +
+				"Step 3: use the `exec_command` tool to print " + target + " with the current shell syntax. " +
 				"Step 4: reply with the final file contents only, on a single line."
 			out := runLiveTurn(t, lc.cfg, prompt)
 			if !strings.Contains(out, "JUEX_LIVE_42") {

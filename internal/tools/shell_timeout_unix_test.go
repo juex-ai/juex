@@ -14,7 +14,7 @@ func TestBuiltins_ShellTimeoutKillsChildProcessGroup(t *testing.T) {
 	registerTestBuiltins(r, "")
 
 	start := time.Now()
-	out, info, err := r.CallWithInfo(context.Background(), "shell", map[string]any{
+	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
 		"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
 		"timeout": 1,
 	})

@@ -1,12 +1,14 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +38,7 @@ func TestRegistry_RegisterDuplicate(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ShellUsesConfiguredProfileAndCwd(t *testing.T) {
+func TestBuiltins_ExecCommandUsesConfiguredProfileAndWorkdir(t *testing.T) {
 	r := NewRegistry()
 	workDir := t.TempDir()
 	callDir := t.TempDir()
@@ -55,7 +57,7 @@ func TestBuiltins_ShellUsesConfiguredProfileAndCwd(t *testing.T) {
 		},
 	})
 
-	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": "echo hi", "cwd": callDir})
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "echo hi", "workdir": callDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func TestBuiltins_ShellUsesConfiguredProfileAndCwd(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ShellRelativeCwdResolvesFromWorkDir(t *testing.T) {
+func TestBuiltins_ExecCommandRelativeWorkdirResolvesFromWorkDir(t *testing.T) {
 	r := NewRegistry()
 	workDir := t.TempDir()
 	relativeDir := "nested"
@@ -108,7 +110,7 @@ func TestBuiltins_ShellRelativeCwdResolvesFromWorkDir(t *testing.T) {
 		},
 	})
 
-	if _, err := r.Call(context.Background(), "shell", map[string]any{"cmd": "echo hi", "cwd": relativeDir}); err != nil {
+	if _, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "echo hi", "workdir": relativeDir}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -137,6 +139,35 @@ func TestShellHelperProcess(t *testing.T) {
 		time.Sleep(5 * time.Second)
 		os.Exit(0)
 	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "delayed" {
+		fmt.Fprintln(os.Stdout, "first chunk")
+		time.Sleep(500 * time.Millisecond)
+		fmt.Fprintln(os.Stdout, "second chunk")
+		os.Exit(0)
+	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "stdin" {
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		fmt.Fprintf(os.Stdout, "got:%s", line)
+		os.Exit(0)
+	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "confirm" {
+		fmt.Fprint(os.Stdout, "Install package? [yes/no] ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if strings.TrimSpace(line) == "yes" {
+			fmt.Fprintln(os.Stdout, "accepted")
+			fmt.Fprintln(os.Stdout, "install complete")
+			os.Exit(0)
+		}
+		fmt.Fprintln(os.Stdout, "declined")
+		os.Exit(1)
+	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "tty" {
+		fmt.Fprintf(os.Stdout, "stdin_tty:%t stdout_tty:%t stderr_tty:%t\n", isCharDevice(os.Stdin), isCharDevice(os.Stdout), isCharDevice(os.Stderr))
+		fmt.Fprint(os.Stdout, "enter value: ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		fmt.Fprintf(os.Stdout, "tty got:%s", line)
+		os.Exit(0)
+	}
 	payload := map[string]any{
 		"args": os.Args,
 	}
@@ -149,6 +180,11 @@ func TestShellHelperProcess(t *testing.T) {
 	}
 	fmt.Fprintln(os.Stdout, "fake shell ok")
 	os.Exit(0)
+}
+
+func isCharDevice(file *os.File) bool {
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func TestRegistry_NormalizesNullSchemaEntries(t *testing.T) {
@@ -430,7 +466,7 @@ func TestBuiltins_RelativeWorkDirIsCapturedAsAbsolute(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ShellAcceptsRawArgumentsFallback(t *testing.T) {
+func TestBuiltins_ExecCommandAcceptsRawArgumentsFallback(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, "")
 
@@ -443,12 +479,12 @@ func TestBuiltins_ShellAcceptsRawArgumentsFallback(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			out, err := r.Call(context.Background(), "shell", input)
+			out, err := r.Call(context.Background(), "exec_command", input)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if strings.TrimSpace(out) != "raw-ok" {
-				t.Fatalf("out = %q, want raw-ok", out)
+			if !strings.Contains(out, "Process exited with code 0") || !strings.Contains(out, "raw-ok") {
+				t.Fatalf("out = %q, want successful raw-ok output", out)
 			}
 		})
 	}
@@ -560,15 +596,292 @@ func TestBuiltins_EditExpectedReplacementsNullIsIgnored(t *testing.T) {
 	}
 }
 
-func TestBuiltins_Shell(t *testing.T) {
+func TestBuiltins_ExecCommand(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, "")
-	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": "echo hello"})
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "echo hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "hello") {
 		t.Fatalf("shell output: %q", out)
+	}
+	if strings.Contains(out, "Process running with session ID") {
+		t.Fatalf("quick exit output should not expose a session id: %q", out)
+	}
+	if !strings.Contains(out, "Original token count:") {
+		t.Fatalf("exec output = %q, want original token count", out)
+	}
+}
+
+func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T) {
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "delayed")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":           "delayed",
+		"yield_time_ms": 250,
+		"timeout":       2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sessionIDFromOutput(t, out)
+	if !strings.Contains(out, "Process running with session ID") {
+		t.Fatalf("initial output = %q, want running status", out)
+	}
+	if !strings.Contains(out, "first chunk") {
+		t.Fatalf("initial output = %q, want first chunk", out)
+	}
+
+	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    sessionID,
+		"yield_time_ms": 800,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Process exited with code 0") {
+		t.Fatalf("poll output = %q, want exited status", out)
+	}
+	if strings.Contains(out, "Process running with session ID") {
+		t.Fatalf("exited poll output should not expose a session id: %q", out)
+	}
+	if !strings.Contains(out, "second chunk") {
+		t.Fatalf("poll output = %q, want second chunk", out)
+	}
+}
+
+func TestBuiltins_ExecCommandTTYWritesStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows tty coverage runs through ConPTY-specific tests")
+	}
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "stdin")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":           "stdin",
+		"tty":           true,
+		"yield_time_ms": 250,
+		"timeout":       2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sessionIDFromOutput(t, out)
+
+	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    sessionID,
+		"chars":         "hello\n",
+		"yield_time_ms": 1500,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "got:hello") {
+		t.Fatalf("stdin output = %q, want echoed input", out)
+	}
+	if !strings.Contains(out, "Process exited with code 0") {
+		t.Fatalf("stdin output = %q, want exited status", out)
+	}
+}
+
+func TestBuiltins_WriteStdinCanAnswerInteractivePrompt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows tty coverage runs through ConPTY-specific tests")
+	}
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "confirm")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":           "confirm",
+		"tty":           true,
+		"yield_time_ms": 250,
+		"timeout":       2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sessionIDFromOutput(t, out)
+	if !strings.Contains(out, "Process running with session ID") {
+		t.Fatalf("initial output = %q, want running status", out)
+	}
+	if !strings.Contains(out, "Install package? [yes/no]") {
+		t.Fatalf("initial output = %q, want interactive prompt", out)
+	}
+
+	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    sessionID,
+		"chars":         "yes\n",
+		"yield_time_ms": 1500,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "accepted") || !strings.Contains(out, "install complete") {
+		t.Fatalf("continued output = %q, want accepted install output", out)
+	}
+	if !strings.Contains(out, "Process exited with code 0") {
+		t.Fatalf("continued output = %q, want successful exit", out)
+	}
+}
+
+func TestBuiltins_WriteStdinRejectsNonTTYInput(t *testing.T) {
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "delayed")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":           "delayed",
+		"yield_time_ms": 250,
+		"timeout":       2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sessionIDFromOutput(t, out)
+
+	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    sessionID,
+		"chars":         "hello\n",
+		"yield_time_ms": 500,
+	})
+	if err == nil {
+		t.Fatalf("write_stdin output = %q, want non-tty stdin error", out)
+	}
+	if !strings.Contains(err.Error(), "stdin is closed for this session") {
+		t.Fatalf("write_stdin err = %v, want stdin closed error", err)
+	}
+}
+
+func TestBuiltins_ExecCommandTTYAllocatesTerminalAndAcceptsChars(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows tty coverage runs through ConPTY-specific tests")
+	}
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "tty")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":           "tty",
+		"tty":           true,
+		"yield_time_ms": 250,
+		"timeout":       2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sessionIDFromOutput(t, out)
+	for _, want := range []string{"stdin_tty:true", "stdout_tty:true", "stderr_tty:true", "enter value:"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("initial tty output = %q, want %q", out, want)
+		}
+	}
+
+	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    sessionID,
+		"chars":         "green\n",
+		"yield_time_ms": 1500,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "tty got:green") {
+		t.Fatalf("continued tty output = %q, want tty response", out)
+	}
+	if !strings.Contains(out, "Process exited with code 0") {
+		t.Fatalf("continued tty output = %q, want successful exit", out)
+	}
+}
+
+func TestBuiltins_ExecCommandYieldEmitsOutputDeltas(t *testing.T) {
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "delayed")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+	deltas := make(chan OutputDelta, 10)
+	ctx := WithToolCallEvents(context.Background(), ToolCallEvents{
+		Tool:      "exec_command",
+		ToolUseID: "tool-1",
+		Emit: func(delta OutputDelta) {
+			deltas <- delta
+		},
+	})
+
+	if _, err := r.Call(ctx, "exec_command", map[string]any{
+		"cmd":           "delayed",
+		"yield_time_ms": 250,
+		"timeout":       2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var delta OutputDelta
+	select {
+	case delta = <-deltas:
+	case <-time.After(time.Second):
+		t.Fatal("expected output delta")
+	}
+	if delta.Tool != "exec_command" || delta.ToolUseID != "tool-1" || delta.SessionID == "" {
+		t.Fatalf("delta metadata = %+v", delta)
+	}
+	if !strings.Contains(delta.Text, "first chunk") {
+		t.Fatalf("delta text = %q, want first chunk", delta.Text)
 	}
 }
 
@@ -610,7 +923,7 @@ func TestBuiltins_GrepNoMatches(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ShellTimeout(t *testing.T) {
+func TestBuiltins_ExecCommandTimeout(t *testing.T) {
 	r := NewRegistry()
 	t.Setenv("JUEX_FAKE_SHELL", "1")
 	t.Setenv("JUEX_FAKE_SHELL_MODE", "timeout")
@@ -623,7 +936,7 @@ func TestBuiltins_ShellTimeout(t *testing.T) {
 			PathStyle: "posix",
 		},
 	})
-	out, info, err := r.CallWithInfo(context.Background(), "shell", map[string]any{
+	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
 		"cmd":     "ignored by fake shell",
 		"timeout": 1,
 	})
@@ -641,11 +954,11 @@ func TestBuiltins_ShellTimeout(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ShellCwd(t *testing.T) {
+func TestBuiltins_ExecCommandWorkdir(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, "")
 	dir := t.TempDir()
-	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": pwdCommand(), "cwd": dir})
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": pwdCommand(), "workdir": dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,11 +1010,11 @@ func TestBuiltins_EditMissingFile(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ShellDefaultsToWorkDir(t *testing.T) {
+func TestBuiltins_ExecCommandDefaultsToWorkDir(t *testing.T) {
 	r := NewRegistry()
 	dir := t.TempDir()
 	registerTestBuiltins(r, dir)
-	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": pwdCommand()})
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": pwdCommand()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -726,13 +1039,13 @@ func TestBuiltins_GrepDefaultsToWorkDir(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ShellCwdOverridesWorkDir(t *testing.T) {
-	// Explicit cwd in the call wins over the configured WorkDir.
+func TestBuiltins_ExecCommandWorkdirOverridesWorkDir(t *testing.T) {
+	// Explicit workdir in the call wins over the configured WorkDir.
 	r := NewRegistry()
 	work := t.TempDir()
 	other := t.TempDir()
 	registerTestBuiltins(r, work)
-	out, err := r.Call(context.Background(), "shell", map[string]any{"cmd": pwdCommand(), "cwd": other})
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": pwdCommand(), "workdir": other})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -749,8 +1062,81 @@ func TestSpecs_OrderedAndComplete(t *testing.T) {
 	for i, s := range specs {
 		names[i] = s.Name
 	}
-	want := []string{"edit", "grep", "read", "shell", "write"}
+	want := []string{"edit", "exec_command", "grep", "read", "write", "write_stdin"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("want %v, got %v", want, names)
 	}
+	if _, ok := r.Get("shell"); ok {
+		t.Fatal("legacy shell tool should not be registered")
+	}
+	if _, ok := r.Get("shell_input"); ok {
+		t.Fatal("legacy shell_input tool should not be registered")
+	}
+}
+
+func TestBuiltinSchemas_ExecCommandAndWriteStdinShape(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, "")
+	specs := r.Specs()
+	byName := map[string]map[string]any{}
+	for _, spec := range specs {
+		byName[spec.Name] = spec.Schema
+	}
+
+	execProps := schemaProperties(t, byName["exec_command"])
+	for _, want := range []string{"cmd", "workdir", "tty", "yield_time_ms", "max_output_tokens", "timeout"} {
+		if _, ok := execProps[want]; !ok {
+			t.Fatalf("exec_command schema missing %q: %+v", want, execProps)
+		}
+	}
+	if _, ok := execProps["cwd"]; ok {
+		t.Fatalf("exec_command schema exposes legacy cwd: %+v", execProps)
+	}
+
+	stdinProps := schemaProperties(t, byName["write_stdin"])
+	for _, want := range []string{"session_id", "chars", "yield_time_ms", "max_output_tokens", "timeout"} {
+		if _, ok := stdinProps[want]; !ok {
+			t.Fatalf("write_stdin schema missing %q: %+v", want, stdinProps)
+		}
+	}
+	if _, ok := stdinProps["stdin"]; ok {
+		t.Fatalf("write_stdin schema exposes legacy stdin: %+v", stdinProps)
+	}
+	sessionIDSchema, _ := stdinProps["session_id"].(map[string]any)
+	if sessionIDSchema["type"] != "integer" {
+		t.Fatalf("write_stdin session_id schema = %+v, want integer", sessionIDSchema)
+	}
+}
+
+func TestShellYieldClampMatchesExecSemantics(t *testing.T) {
+	if got := clampShellYield(1*time.Millisecond, minShellYield, maxShellYield); got != minShellYield {
+		t.Fatalf("exec yield clamp = %s, want %s", got, minShellYield)
+	}
+	if got := clampShellYield(1*time.Millisecond, defaultShellInputPollYield, maxShellInputPollYield); got != defaultShellInputPollYield {
+		t.Fatalf("empty poll yield clamp = %s, want %s", got, defaultShellInputPollYield)
+	}
+}
+
+func schemaProperties(t *testing.T, schema map[string]any) map[string]any {
+	t.Helper()
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema has no properties: %+v", schema)
+	}
+	return props
+}
+
+func sessionIDFromOutput(t *testing.T, out string) int {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Process running with session ID ") {
+			sessionID, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "Process running with session ID ")))
+			if err != nil {
+				t.Fatalf("invalid session id in output:\n%s", out)
+			}
+			return sessionID
+		}
+	}
+	t.Fatalf("missing session id in output:\n%s", out)
+	return 0
 }

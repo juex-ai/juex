@@ -239,7 +239,7 @@ func TestBuilder_OperatingContextIncludesShellProfile(t *testing.T) {
 		"- shell: powershell (pwsh)",
 		"- shell_family: powershell",
 		"- shell_path_style: windows",
-		"Use the `shell` tool with powershell syntax.",
+		"Use the `exec_command` tool with powershell syntax.",
 		"do not use POSIX heredocs",
 	} {
 		if !strings.Contains(got, want) {

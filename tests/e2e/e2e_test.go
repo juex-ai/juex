@@ -81,7 +81,7 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 		for _, t := range tools {
 			toolNames[t.Name] = true
 		}
-		for _, want := range []string{"read", "write", "edit", "shell", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
+		for _, want := range []string{"read", "write", "edit", "exec_command", "write_stdin", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
 			if !toolNames[want] {
 				p.t.Errorf("tool %q missing from registry; have %v", want, keys(toolNames))
 			}
@@ -235,7 +235,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 					{Type: llm.BlockText, Text: "now mutate and verify"},
 					{Type: llm.BlockToolUse, ToolUseID: "t4", ToolName: "edit", Input: map[string]any{"path": demoFile, "old": "placeholder", "new": "FINAL"}},
 					{Type: llm.BlockToolUse, ToolUseID: "t5", ToolName: "grep", Input: map[string]any{"pattern": "FINAL", "path": demoFile}},
-					{Type: llm.BlockToolUse, ToolUseID: "t6", ToolName: "shell", Input: map[string]any{"cmd": "echo SCRIPTED && wc -l " + demoFile}},
+					{Type: llm.BlockToolUse, ToolUseID: "t6", ToolName: "exec_command", Input: map[string]any{"cmd": "echo SCRIPTED && wc -l " + demoFile}},
 				}},
 				StopReason: llm.StopToolUse,
 			},
@@ -274,13 +274,13 @@ func TestEndToEnd_FullStack(t *testing.T) {
 		t.Logf("tool errored: %+v", e.Payload)
 	})
 
-		eng := &runtime.Engine{
-			Provider: prov,
-			Tools:    reg,
-			Bus:      bus,
-			Session:  sess,
-			Prompt:   pb,
-		}
+	eng := &runtime.Engine{
+		Provider: prov,
+		Tools:    reg,
+		Bus:      bus,
+		Session:  sess,
+		Prompt:   pb,
+	}
 
 	out, err := eng.Turn(ctx, "drive the demo")
 	if err != nil {
@@ -522,13 +522,13 @@ func TestEndToEnd_FullStackPortable(t *testing.T) {
 		t.Logf("tool errored: %+v", e.Payload)
 	})
 
-		eng := &runtime.Engine{
-			Provider: prov,
-			Tools:    reg,
-			Bus:      bus,
-			Session:  sess,
-			Prompt:   pb,
-		}
+	eng := &runtime.Engine{
+		Provider: prov,
+		Tools:    reg,
+		Bus:      bus,
+		Session:  sess,
+		Prompt:   pb,
+	}
 
 	out, err := eng.Turn(ctx, "drive the portable demo")
 	if err != nil {
