@@ -15,6 +15,7 @@ import os
 import pathlib
 import random
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -253,6 +254,11 @@ def provider_smoke(argv: list[str]) -> int:
                 "passed": total - failed,
                 "failed": failed,
                 "tool_use_recorded": sum(1 for result in results if result.tool_status == "yes"),
+                "exec_command_tool_use_recorded": sum(1 for result in results if result.exec_command_status == "yes"),
+                "tty_recorded": sum(1 for result in results if result.tty_status == "yes"),
+                "stdin_recorded": sum(1 for result in results if result.stdin_status == "yes"),
+                "filesystem_verified": sum(1 for result in results if result.filesystem_status == "yes"),
+                "event_delta_recorded": sum(1 for result in results if result.event_delta_status == "yes"),
                 "thinking_observed": sum(1 for result in results if result.thinking_status == "observed"),
                 "results_jsonl_path": str(results_file),
             },
@@ -289,6 +295,11 @@ class SmokeResult:
     status: str = "fail"
     session_id: str = ""
     tool_status: str = "no"
+    exec_command_status: str = "no"
+    tty_status: str = "no"
+    stdin_status: str = "no"
+    filesystem_status: str = "no"
+    event_delta_status: str = "no"
     thinking_status: str = "not_observed"
     error_stage: str = ""
     error: str = ""
@@ -387,46 +398,242 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     print(f"==> {row.ref} [{row.protocol}]")
     token = f"juex-smoke-{safe}-{int(time.time())}-{random.randrange(0x1000000):06x}"
     case_config = case_dir / "provider.juex.yaml"
-    smoke_file = case_dir / "smoke.txt"
+    manifest_file = case_dir / "release-manifest.txt"
+    notes_file = case_dir / "agent-notes.txt"
     try:
         write_selected_config(ctx.config, row.provider_id, row.model_id, case_config)
-        smoke_file.write_text(f"provider_model_smoke_token={token}\n", encoding="utf-8")
+        manifest_file.write_text(
+            "\n".join(
+                [
+                    "release=interactive-agent-smoke",
+                    f"token={token}",
+                    "required_tools=read,write,edit,grep,exec_command,write_stdin",
+                    "required_tty=true",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
     except Exception as exc:  # noqa: BLE001
         return fail_smoke_case(result, case_dir, artifact_dir, "config", str(exc))
 
-    if run_turn_with_retries(ctx, case_dir, case_config, "turn1", ["--new", f"This is provider/model smoke turn 1. Reply with exactly: READY {token}"]) != 0:
+    installer_cmd = tty_installer_command(token)
+    prompt = provider_smoke_agent_prompt(manifest_file, notes_file, token, installer_cmd)
+    if run_turn_with_retries(ctx, case_dir, case_config, "turn1", ["--new", prompt]) != 0:
         return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "turn1 failed")
     session_id = json_file_value(case_dir / "turn1.stdout.json", "session_id")
     if not session_id:
         return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing session_id")
     result.session_id = session_id
-
-    turn2 = (
-        f"Use the read tool to read this exact file path: {smoke_file}. "
-        "Then answer with exactly the token value from the file, with no extra prose."
-    )
-    if run_turn_with_retries(ctx, case_dir, case_config, "turn2", ["--session", session_id, turn2]) != 0:
-        return fail_smoke_case(result, case_dir, artifact_dir, "turn2", "turn2 failed")
-    if not file_contains(case_dir / "turn2.stdout.json", token):
-        return fail_smoke_case(result, case_dir, artifact_dir, "turn2", "missing smoke token")
-
-    turn3 = f"Reason briefly if your API exposes thinking. What is 17 + 25? Include only '42' and the smoke token {token} in the final answer."
-    if run_turn_with_retries(ctx, case_dir, case_config, "turn3", ["--session", session_id, turn3]) != 0:
-        return fail_smoke_case(result, case_dir, artifact_dir, "turn3", "turn3 failed")
-    if not file_contains(case_dir / "turn3.stdout.json", token) or not file_contains(case_dir / "turn3.stdout.json", "42"):
-        return fail_smoke_case(result, case_dir, artifact_dir, "turn3", "missing 42 or smoke token")
+    if not file_contains(case_dir / "turn1.stdout.json", f"EVAL_PASS {token}"):
+        return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing final EVAL_PASS token")
 
     conversation = case_dir / ".juex" / "sessions" / session_id / "conversation.jsonl"
     if not conversation.is_file():
         return fail_smoke_case(result, case_dir, artifact_dir, "session", "missing conversation log")
-    if not file_contains(conversation, '"type":"tool_use"'):
-        return fail_smoke_case(result, case_dir, artifact_dir, "session", "missing tool_use block")
+    ok, detail = validate_agent_smoke_files(notes_file, case_dir / "tty-result.txt", token)
+    if not ok:
+        return fail_smoke_case(result, case_dir, artifact_dir, "filesystem", detail)
+    result.filesystem_status = "yes"
+    ok, detail = conversation_has_agent_smoke_tools(conversation, token)
+    if not ok:
+        return fail_smoke_case(result, case_dir, artifact_dir, "session", detail)
     result.tool_status = "yes"
+    result.exec_command_status = "yes"
+    result.tty_status = "yes"
+    result.stdin_status = "yes"
+    events = case_dir / ".juex" / "sessions" / session_id / "events.jsonl"
+    ok, detail = events_have_agent_smoke_deltas(events, token)
+    if not ok:
+        return fail_smoke_case(result, case_dir, artifact_dir, "session", detail)
+    result.event_delta_status = "yes"
     result.thinking_status = "observed" if file_contains(conversation, '"type":"reasoning"') else "not_exposed"
     copy_case_artifacts(case_dir, artifact_dir)
     result.status = "pass"
-    print(f"ok  {row.ref} session={session_id} toolcall={result.tool_status} thinking={result.thinking_status} artifacts={artifact_dir}")
+    print(
+        f"ok  {row.ref} session={session_id} toolcall={result.tool_status} "
+        f"exec_command={result.exec_command_status} tty={result.tty_status} "
+        f"stdin={result.stdin_status} events={result.event_delta_status} "
+        f"thinking={result.thinking_status} artifacts={artifact_dir}"
+    )
     return result
+
+
+def provider_smoke_agent_prompt(manifest_file: pathlib.Path, notes_file: pathlib.Path, token: str, installer_cmd: str) -> str:
+    return "\n".join(
+        [
+            "You are running a live JueX agent smoke evaluation. This is not a Q&A task.",
+            "You must complete the workflow by using the requested tools. Do not skip tool calls.",
+            "Use exactly one tool call per assistant response, in this order:",
+            f"1. read: read this manifest file: {manifest_file}",
+            f"2. write: create this notes file: {notes_file}",
+            "   The notes file content must be exactly:",
+            f"   token={token}",
+            "   status=pending",
+            "   manifest=read",
+            f"3. edit: in {notes_file}, replace exactly one occurrence of status=pending with status=edited.",
+            f"4. grep: search for the exact token {token} in {manifest_file}.",
+            "5. exec_command: run the exact command below with tty:true, yield_time_ms:1600, max_output_tokens:20000.",
+            "   This command prints changing progress with carriage returns, then waits for confirmation.",
+            installer_cmd,
+            "6. write_stdin: use the numeric session_id from the exec_command result, chars exactly \"yes\\n\", yield_time_ms:2500, max_output_tokens:20000.",
+            "7. exec_command: run this exact verification command with yield_time_ms:1000 and max_output_tokens:20000:",
+            f"   cat {shlex.quote(str(notes_file))} && cat {shlex.quote('tty-result.txt')} && printf 'POST_CHECK={token}\\n'",
+            f"Only after all seven tool steps have succeeded, answer exactly: EVAL_PASS {token}",
+        ]
+    )
+
+
+def tty_installer_command(token: str) -> str:
+    code = "\n".join(
+        [
+            "import pathlib, sys, time",
+            f"token = {token!r}",
+            "print('TTY-BOOT ' + token, flush=True)",
+            "for pct in (0, 20, 40, 60, 80):",
+            "    sys.stdout.write('\\rINSTALL %03d%%' % pct)",
+            "    sys.stdout.flush()",
+            "    time.sleep(0.25)",
+            "print('\\nPROMPT approve install? [yes/no]: ', end='', flush=True)",
+            "answer = sys.stdin.readline().strip()",
+            "print('INPUT=' + answer, flush=True)",
+            "for step in ('unpack', 'configure', 'verify'):",
+            "    print('STEP ' + step, flush=True)",
+            "    time.sleep(0.2)",
+            "pathlib.Path('tty-result.txt').write_text('token=' + token + '\\napproved=' + answer + '\\n', encoding='utf-8')",
+            "print('TTY-DONE ' + token, flush=True)",
+        ]
+    )
+    return "python3 -u -c " + shlex.quote(code)
+
+
+def validate_agent_smoke_files(notes_file: pathlib.Path, tty_result_file: pathlib.Path, token: str) -> tuple[bool, str]:
+    if not notes_file.is_file():
+        return False, f"missing notes file: {notes_file}"
+    notes = notes_file.read_text(encoding="utf-8", errors="replace")
+    for want in (f"token={token}", "status=edited", "manifest=read"):
+        if want not in notes:
+            return False, f"notes file missing {want!r}: {notes!r}"
+    if "status=pending" in notes:
+        return False, f"notes file was not edited: {notes!r}"
+    if not tty_result_file.is_file():
+        return False, f"missing tty result file: {tty_result_file}"
+    tty_result = tty_result_file.read_text(encoding="utf-8", errors="replace")
+    for want in (f"token={token}", "approved=yes"):
+        if want not in tty_result:
+            return False, f"tty result missing {want!r}: {tty_result!r}"
+    return True, ""
+
+
+def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[bool, str]:
+    if not path.is_file():
+        return False, "missing conversation log"
+    tool_uses: dict[str, str] = {}
+    seen_tools: set[str] = set()
+    legacy_uses: list[str] = []
+    saw_tty_exec = False
+    saw_write_stdin = False
+    saw_exec_result = False
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return False, f"read conversation: {exc}"
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError as exc:
+            return False, f"conversation line {line_number} is invalid JSON: {exc}"
+        blocks = message.get("blocks") if isinstance(message, dict) else None
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "tool_use":
+                tool_name = block.get("tool_name")
+                if isinstance(tool_name, str):
+                    seen_tools.add(tool_name)
+                    tool_use_id = str(block.get("tool_use_id") or "")
+                    if tool_use_id:
+                        tool_uses[tool_use_id] = tool_name
+                input_value = block.get("input")
+                if tool_name == "exec_command":
+                    saw_tty_exec = saw_tty_exec or (isinstance(input_value, dict) and input_value.get("tty") is True)
+                if tool_name == "write_stdin":
+                    saw_write_stdin = True
+                if tool_name in {"shell", "shell_input"}:
+                    legacy_uses.append(f"{line_number}:{tool_name}")
+            elif block_type == "tool_result":
+                tool_use_id = str(block.get("tool_use_id") or "")
+                content = str(block.get("content") or "")
+                if tool_uses.get(tool_use_id) == "exec_command" and token in content and "Process exited with code 0" in content:
+                    saw_exec_result = True
+    if legacy_uses:
+        return False, "conversation contains legacy shell tool_use: " + ", ".join(legacy_uses)
+    required = {"read", "write", "edit", "grep", "exec_command", "write_stdin"}
+    missing = sorted(required - seen_tools)
+    if missing:
+        return False, "missing required tool_use blocks: " + ", ".join(missing)
+    if not saw_tty_exec:
+        return False, "missing exec_command tool_use with tty:true"
+    if not saw_write_stdin:
+        return False, "missing write_stdin tool_use"
+    if not saw_exec_result:
+        return False, f"missing exec_command tool_result containing {token} and successful exit status"
+    return True, ""
+
+
+def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool, str]:
+    if not path.is_file():
+        return False, "missing events log"
+    delta_count = 0
+    saw_install = False
+    saw_prompt = False
+    saw_done = False
+    saw_carriage_return = False
+    saw_write_stdin_completed = False
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return False, f"read events: {exc}"
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            return False, f"events line {line_number} is invalid JSON: {exc}"
+        payload = event.get("payload") if isinstance(event, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        if event.get("type") == "tool.output_delta":
+            text = str(payload.get("text") or "")
+            delta_count += 1
+            saw_install = saw_install or "INSTALL" in text
+            saw_prompt = saw_prompt or "PROMPT approve install" in text
+            saw_done = saw_done or f"TTY-DONE {token}" in text
+            saw_carriage_return = saw_carriage_return or "\r" in text
+        if event.get("type") == "tool.completed" and payload.get("name") == "write_stdin":
+            saw_write_stdin_completed = True
+    if delta_count < 3:
+        return False, f"expected at least 3 tool.output_delta events, saw {delta_count}"
+    missing = []
+    if not saw_install:
+        missing.append("INSTALL progress")
+    if not saw_prompt:
+        missing.append("interactive prompt")
+    if not saw_done:
+        missing.append("TTY-DONE token")
+    if not saw_carriage_return:
+        missing.append("carriage-return progress update")
+    if not saw_write_stdin_completed:
+        missing.append("write_stdin completion")
+    if missing:
+        return False, "events missing " + ", ".join(missing)
+    return True, ""
 
 
 def run_turn_with_retries(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:
@@ -613,15 +820,22 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Passed: {summary['passed']}",
         f"- Failed: {summary['failed']}",
         f"- Tool use recorded: {summary['tool_use_recorded']}",
+        f"- Exec command tool use recorded: {summary['exec_command_tool_use_recorded']}",
+        f"- TTY recorded: {summary['tty_recorded']}",
+        f"- Stdin recorded: {summary['stdin_recorded']}",
+        f"- Filesystem verified: {summary['filesystem_verified']}",
+        f"- Event delta recorded: {summary['event_delta_recorded']}",
         f"- Thinking observed: {summary['thinking_observed']}",
         "",
-        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Thinking | Error stage |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Error stage |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in results:
         lines.append(
             f"| `{result.ref}` | `{result.protocol}` | `{result.thinking_effort}` | "
-            f"{result.status} | {result.tool_status} | {result.thinking_status} | {result.error_stage} |"
+            f"{result.status} | {result.tool_status} | {result.exec_command_status} | "
+            f"{result.tty_status} | {result.stdin_status} | {result.filesystem_status} | "
+            f"{result.event_delta_status} | {result.thinking_status} | {result.error_stage} |"
         )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -823,6 +1037,11 @@ def write_development_record(
             ("passed", "Passed"),
             ("failed", "Failed"),
             ("tool_use_recorded", "Tool use recorded"),
+            ("exec_command_tool_use_recorded", "Exec command tool use recorded"),
+            ("tty_recorded", "TTY recorded"),
+            ("stdin_recorded", "Stdin recorded"),
+            ("filesystem_verified", "Filesystem verified"),
+            ("event_delta_recorded", "Event delta recorded"),
             ("thinking_observed", "Thinking observed"),
         ]:
             if key in provider:

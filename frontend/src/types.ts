@@ -256,6 +256,16 @@ export interface ToolCompletedPayload {
   preview: string;
 }
 
+export interface ToolOutputDeltaPayload {
+  name: string;
+  tool_use_id: string;
+  session_id: string;
+  chunk_id: number;
+  stream: string;
+  text: string;
+  truncated?: boolean;
+}
+
 export interface ToolErroredPayload {
   name: string;
   tool_use_id: string;
@@ -345,6 +355,7 @@ export type BusEvent =
   | (BusEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
   | (BusEventBase<"tool.requested"> & { payload: ToolRequestedPayload })
   | (BusEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
+  | (BusEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })
   | (BusEventBase<"tool.errored"> & { payload: ToolErroredPayload })
   | (BusEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
   | (BusEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })

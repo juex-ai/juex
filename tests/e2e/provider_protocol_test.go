@@ -3,13 +3,18 @@ package e2e
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/juex-ai/juex/internal/llm"
 )
 
 func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
@@ -169,6 +174,97 @@ type capturedProviderRequest struct {
 	body map[string]any
 }
 
+func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
+	bin := buildJuex(t)
+
+	const marker = "JUEX_CLI_EXEC_E2E"
+	var requestCount atomic.Int32
+	var mu sync.Mutex
+	var firstBody map[string]any
+	var secondBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		switch requestCount.Add(1) {
+		case 1:
+			mu.Lock()
+			firstBody = body
+			mu.Unlock()
+			writeJSON(t, w, chatToolCallResponse("call_exec_cli", "exec_command", map[string]any{
+				"cmd":     "echo " + marker,
+				"timeout": 5,
+			}))
+		case 2:
+			mu.Lock()
+			secondBody = body
+			mu.Unlock()
+			writeJSON(t, w, chatCompletionResponseMap("cli exec command complete"))
+		default:
+			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
+			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
+		}
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+    protocol: openai/chat
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: chat-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "run the exec command e2e marker")
+	home := t.TempDir()
+	cmd.Env = isolatedJuexBinaryEnv(home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("juex run: %v\n%s", err, out)
+	}
+	if got := requestCount.Load(); got != 2 {
+		t.Fatalf("provider requests = %d, want 2", got)
+	}
+
+	var result struct {
+		Text       string `json:"text"`
+		SessionID  string `json:"session_id"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
+	}
+	if result.Text != "cli exec command complete" || result.SessionID == "" || result.SessionDir == "" {
+		t.Fatalf("run result = %+v", result)
+	}
+
+	mu.Lock()
+	first := cloneMap(firstBody)
+	second := cloneMap(secondBody)
+	mu.Unlock()
+	if !requestHasTool(first, "exec_command") || !requestHasTool(first, "write_stdin") {
+		t.Fatalf("first provider request missing exec_command/write_stdin tools: %+v", first["tools"])
+	}
+	if requestHasTool(first, "shell") || requestHasTool(first, "shell_input") {
+		t.Fatalf("first provider request exposed legacy shell tools: %+v", first["tools"])
+	}
+	if !requestHasToolResult(second, "call_exec_cli", marker) {
+		t.Fatalf("second provider request missing exec_command result containing %q: %+v", marker, second["messages"])
+	}
+
+	conversationPath := filepath.Join(result.SessionDir, "conversation.jsonl")
+	assertConversationExecCommandToolRoundTrip(t, conversationPath, "call_exec_cli", marker)
+}
+
 func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
 	bin := buildJuex(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -235,6 +331,120 @@ func chatCompletionResponse(text string) string {
   ],
   "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
 }`
+}
+
+func chatCompletionResponseMap(text string) map[string]any {
+	return map[string]any{
+		"id":     "chatcmpl_1",
+		"object": "chat.completion",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       map[string]any{"role": "assistant", "content": text},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+	}
+}
+
+func chatToolCallResponse(callID, name string, arguments map[string]any) map[string]any {
+	args, _ := json.Marshal(arguments)
+	return map[string]any{
+		"id":     "chatcmpl_tool_1",
+		"object": "chat.completion",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []any{map[string]any{
+					"id":   callID,
+					"type": "function",
+					"function": map[string]any{
+						"name":      name,
+						"arguments": string(args),
+					},
+				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+		"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+	}
+}
+
+func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Errorf("write json response: %v", err)
+	}
+}
+
+func requestHasTool(body map[string]any, name string) bool {
+	tools, _ := body["tools"].([]any)
+	for _, raw := range tools {
+		tool, _ := raw.(map[string]any)
+		function, _ := tool["function"].(map[string]any)
+		if function["name"] == name {
+			return true
+		}
+	}
+	return false
+}
+
+func requestHasToolResult(body map[string]any, toolCallID string, want string) bool {
+	messages, _ := body["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] != "tool" || message["tool_call_id"] != toolCallID {
+			continue
+		}
+		if strings.Contains(fmt.Sprint(message["content"]), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func assertConversationExecCommandToolRoundTrip(t *testing.T, path string, toolUseID string, wantOutput string) {
+	t.Helper()
+
+	lines := readLines(t, path)
+	var sawToolUse bool
+	var sawToolResult bool
+	for i, line := range lines {
+		var message llm.Message
+		if err := json.Unmarshal([]byte(line), &message); err != nil {
+			t.Fatalf("conversation line %d is not a message: %v\n%s", i, err, line)
+		}
+		for _, block := range message.Blocks {
+			switch block.Type {
+			case llm.BlockToolUse:
+				if block.ToolUseID == toolUseID && block.ToolName == "exec_command" {
+					sawToolUse = true
+				}
+				if block.ToolName == "shell" || block.ToolName == "shell_input" {
+					t.Fatalf("conversation contains legacy shell tool_use on line %d: %s", i, line)
+				}
+			case llm.BlockToolResult:
+				if block.ToolUseID == toolUseID && strings.Contains(block.Content, wantOutput) && strings.Contains(block.Content, "Process exited with code 0") {
+					sawToolResult = true
+				}
+			}
+		}
+	}
+	if !sawToolUse {
+		t.Fatalf("conversation missing exec_command tool_use with id %q in %s", toolUseID, path)
+	}
+	if !sawToolResult {
+		t.Fatalf("conversation missing tool_result for %q containing command output %q in %s", toolUseID, wantOutput, path)
+	}
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func isolatedJuexBinaryEnv(home string) []string {

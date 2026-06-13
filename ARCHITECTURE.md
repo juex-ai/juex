@@ -68,7 +68,7 @@ juex/
 │   │   ├── openai_responses.go   # OpenAI Responses adapter
 │   │   ├── openai_codex_responses.go
 │   │   └── stream_error.go
-│   ├── tools/                    # tool registry + 5 builtins
+│   ├── tools/                    # tool registry + builtin tools
 │   │   ├── registry.go
 │   │   └── builtin.go
 │   ├── mcp/                      # stdio JSON-RPC 2.0 client, config, process manager
@@ -353,7 +353,7 @@ func (r *Registry) Call(ctx, name, input) (string, error)
 func (r *Registry) CallWithInfo(ctx, name, input) (string, CallInfo, error)
 ```
 
-Builtin set (5 file/exec + 3 memory). Skills are NOT a tool — they are
+Builtin set (file/search/exec/session + 3 memory). Skills are NOT a tool — they are
 markdown files surfaced in the system prompt; the model reads a skill body
 with the standard `read` builtin against the path printed there.
 
@@ -362,25 +362,37 @@ with the standard `read` builtin against the path printed there.
 | `read` | read file (offset/limit) |
 | `write` | overwrite file |
 | `edit` | old -> new in-place replace; unique by default, optional replace_all / expected_replacements |
-| `shell` | run the resolved workspace shell (timeout, cwd; defaults to WorkDir) |
+| `exec_command` | run a command through the resolved workspace shell (timeout, workdir; defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
+| `write_stdin` | poll a running command session or write `chars` to a TTY session using the numeric `session_id` returned by `exec_command` |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
 | `memory_write` | persist a memory entry |
 | `memory_search` | substring match |
 | `memory_delete` | remove an entry by name |
 
-`tools.RegisterBuiltins(reg, BuiltinOptions{WorkDir, Shell})` injects
+`tools.RegisterBuiltins(reg, BuiltinOptions{WorkDir, Shell, ShellSessions})` injects
 `workDir` so `read`, `write`, and `edit` resolve relative paths against the
-agent workspace, and `shell` / `grep` fall back to it when the model does not
-pass an explicit `cwd` / `path`.
+agent workspace, and `exec_command` / `grep` fall back to it when the model
+does not pass an explicit `workdir` / `path`.
 All LLM-facing tool schemas include an optional `timeout` field in seconds.
 The registry applies a per-call timeout context, caps it at 300 seconds, and
 strips the reserved field before invoking tools that do not declare their own
 `timeout` input. Tool timeouts are returned as ordinary error tool results so
 the agent can recover in the next model round. When a timed-out tool captured
 stdout or stderr before failing, a bounded copy of that output is preserved in
-the error tool result before the timeout detail. On Unix, `shell` runs in its
+the error tool result before the timeout detail. On Unix, `exec_command` runs in its
 own process group so a timeout terminates descendant processes that still hold
 stdout or stderr pipes open.
+
+`exec_command` always starts the process through a shared in-memory session
+manager and waits only for the bounded yield window. If the process is still
+alive, the tool result includes a numeric `session_id`; quick-exit commands do
+not expose a follow-up session. Later `write_stdin` calls poll unread output
+or write follow-up `chars`. Non-TTY sessions use regular stdout/stderr pipes
+and close stdin at start, matching Codex's unified exec behavior. `tty: true`
+allocates a pseudo-terminal on supported platforms so interactive programs can
+prompt and receive follow-up input. Session transcripts and SSE deltas are
+bounded, completed sessions are pruned, and sessions are not durable across
+Juex process restart.
 
 Provider adapters should normally return structured tool input. The registry
 still normalizes leaked OpenAI-compatible `_raw_arguments` payloads, including
@@ -412,7 +424,7 @@ func (b *Bus) Emit(e Event)                              // synchronous fan-out
 ```
 
 Standard event families include `turn.started/completed/errored`,
-`llm.requested/responded`, `tool.requested/completed/errored`,
+`llm.requested/responded`, `tool.requested/output_delta/completed/errored`,
 `pending_input.*`, `context.compact.*`, and `context.projection.applied`.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary
 fields (`text`, `thinking`, `tool_calls`) for older consumers.
@@ -583,6 +595,9 @@ Tool and provider adapters keep their own safeguards. Builtin shell/tool calls
 retain per-action timeouts, MCP startup/tool timeouts remain adapter-level
 limits, and provider transports may enforce request or stream-idle protection.
 Those safeguards are not turn budgets and do not add `runtime_*` error kinds.
+Long-running command sessions continue after the initial `exec_command` tool
+result when the process is still alive after the yield window; their process
+lifetime is still bounded by the original tool timeout or app shutdown.
 
 `Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
 single LLM response run via `sync.WaitGroup`-backed goroutines; results are
@@ -711,7 +726,7 @@ Routes:
                           no               yes ---> parallel:
                           v                          for each:
                   Session.Append                     | Registry.Call
-                  emit turn.completed                | emit tool.requested/completed
+                  emit turn.completed                | emit tool.requested/output_delta/completed
                   return text                        v
                                                history.append(tool_result)
                                                     |
@@ -829,8 +844,8 @@ providers; app resolves the profile and asks `internal/llm` to build the
 adapter.
 
 The resolved `ShellProfile` is included in `juex run --dry-run --json`,
-`/api/runtime`, the system prompt operating context, and the `shell` tool
-description. Windows native binaries prefer `pwsh` / `powershell.exe` before
+`/api/runtime`, the system prompt operating context, and the `exec_command`
+tool description. Windows native binaries prefer `pwsh` / `powershell.exe` before
 `cmd.exe`; Linux and macOS binaries use POSIX shells; Linux binaries under WSL
 are marked with `environment: wsl` but still run POSIX unless `shell.profile:
 wsl` is configured explicitly.
@@ -1047,7 +1062,7 @@ this checkout.
 - `ci.yml` — push + PR, three jobs:
   - `lint`: golangci-lint (default preset).
   - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
-    runs `go test ./... -race -count=1`. Generic `shell` behavior runs on
+    runs `go test ./... -race -count=1`. Generic command execution behavior runs on
     Windows; Unix process-group timeout coverage lives in `!windows` test files.
 - `integration.yml` — `workflow_dispatch` only. Hydrates `.juex/qwen.juex.yaml`
   and `.juex/minimax.juex.yaml` provider configs from repo secrets, then
@@ -1076,7 +1091,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
-| `tools` | registry duplicate, read/write/edit/grep/shell, regex grep, shell timeout, default-cwd from WorkDir |
+| `tools` | registry duplicate, read/write/edit/grep/exec_command/write_stdin, regex grep, command timeout/session yield, default WorkDir |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |

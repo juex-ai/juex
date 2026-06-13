@@ -12,10 +12,10 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-func TestTurn_BuiltinShellTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
+func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "shell_timeout", ToolName: "shell", Input: map[string]any{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_timeout", ToolName: "exec_command", Input: map[string]any{
 				"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
 				"timeout": 1,
 			}},

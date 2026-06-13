@@ -148,7 +148,7 @@ func (b *Builder) operatingContext() string {
 			fmt.Sprintf("- shell_family: %s", family),
 			fmt.Sprintf("- shell_path_style: %s", pathStyle),
 			"",
-			fmt.Sprintf("Use the `shell` tool with %s syntax.", family),
+			fmt.Sprintf("Use the `exec_command` tool with %s syntax.", family),
 		)
 		if family == "powershell" {
 			lines = append(lines, "For powershell, do not use POSIX heredocs, rm -rf, grep-only assumptions, or bash-specific expansion.")

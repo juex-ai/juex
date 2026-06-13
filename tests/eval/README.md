@@ -28,7 +28,7 @@ uv run --project . python -m tests.eval.juex_eval --help
 
 `live-models.yaml` controls the bounded live-model scope:
 
-- `provider_smoke_models` rotates routine provider/tool/thinking smoke tests.
+- `provider_smoke_models` rotates routine provider/tool/exec/thinking smoke tests.
 - `compaction_eval_models` rotates routine compaction quality checks.
 
 Common selection and output flags are intentionally consistent across commands:
@@ -62,10 +62,26 @@ This reads credentials from `~/.juex/juex.yaml`, picks the next
 `provider_smoke_models` ref from `live-models.yaml`, and records the last
 successful ref in `.juex/live-model-rotation.json`. It copies one provider/model
 at a time into an isolated temporary workdir, then runs a real compiled `juex`
-binary through three resumed turns: plain reply, `read` tool use, and a
-reasoning prompt. A failed provider/model is not a skip; keep the report and
-explain whether the problem is configuration, provider capability,
-prompt-following, or a JueX regression.
+binary through one live agent workflow. The prompt requires the model to use
+`read`, `write`, `edit`, `grep`, `exec_command`, and `write_stdin` against
+case-local files and a deterministic interactive installer command.
+
+The smoke is intentionally stricter than a simple provider connectivity check.
+It parses the persisted `conversation.jsonl`, checks filesystem side effects,
+and parses `events.jsonl`. A passing run requires:
+
+- all required tool-use blocks to be present;
+- no legacy `shell` or `shell_input` tool use;
+- an `exec_command` call with `tty:true`;
+- incremental `tool.output_delta` events, including carriage-return progress;
+- a mid-command `write_stdin` interaction that resumes the running process;
+- successful command completion and verification output containing the run
+  token;
+- expected `write`/`edit` file side effects on disk.
+
+A failed provider/model is not a skip; keep the report and explain whether the
+problem is configuration, provider capability, prompt-following, or a JueX
+regression.
 
 Use `--all-models` only for broader changes where every listed model must be
 covered. `provider_model_smoke.sh --all-config-models` is reserved for full

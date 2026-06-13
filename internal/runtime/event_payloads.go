@@ -57,6 +57,16 @@ type ToolCompletedPayload struct {
 	Preview        string `json:"preview"`
 }
 
+type ToolOutputDeltaPayload struct {
+	Name      string `json:"name"`
+	ToolUseID string `json:"tool_use_id"`
+	SessionID string `json:"session_id"`
+	ChunkID   int    `json:"chunk_id"`
+	Stream    string `json:"stream"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
 type ToolErroredPayload struct {
 	Name           string `json:"name"`
 	ToolUseID      string `json:"tool_use_id"`
