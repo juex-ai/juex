@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -127,6 +128,7 @@ func (e *emittedError) Unwrap() error {
 type persistentFlags struct {
 	configPath                string
 	cwd                       string
+	model                     string
 	enableUserGlobalResources string
 	verbose                   bool
 }
@@ -141,9 +143,17 @@ func newRootCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if flag := cmd.Root().PersistentFlags().Lookup("model"); flag != nil && flag.Changed && strings.TrimSpace(flags.model) == "" {
+				_, err := config.ParseModelRef("")
+				return &usageError{msg: "--model: " + err.Error()}
+			}
+			return nil
+		},
 	}
 	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
+	cmd.PersistentFlags().StringVar(&flags.model, "model", "", "model override in provider_id/model_id form")
 	cmd.PersistentFlags().StringVar(&flags.enableUserGlobalResources, "enable-user-global-resources", "", "enable user-global ~/.agents resources (true/false or 1/0; default from config)")
 	if flag := cmd.PersistentFlags().Lookup("enable-user-global-resources"); flag != nil {
 		flag.NoOptDefVal = "true"
@@ -169,11 +179,15 @@ func loadConfig(flags *persistentFlags) (config.Config, error) {
 	)
 	configPath := explicitConfigPath(flags)
 	if configPath != "" {
-		cfg, err = config.LoadFromFileForWorkDir(configPath, flags.cwd)
+		cfg, err = config.LoadFromFileForWorkDirWithModelOverride(configPath, flags.cwd, modelOverride(flags))
 	} else {
-		cfg, err = config.LoadForWorkDir(flags.cwd)
+		cfg, err = config.LoadForWorkDirWithModelOverride(flags.cwd, modelOverride(flags))
 	}
 	if err != nil {
+		var modelErr *config.ModelOverrideError
+		if errors.As(err, &modelErr) {
+			return cfg, &usageError{msg: "--model: " + err.Error()}
+		}
 		return cfg, err
 	}
 	if flags != nil && flags.enableUserGlobalResources != "" {
@@ -191,6 +205,13 @@ func explicitConfigPath(flags *persistentFlags) string {
 		return ""
 	}
 	return flags.configPath
+}
+
+func modelOverride(flags *persistentFlags) string {
+	if flags == nil {
+		return ""
+	}
+	return flags.model
 }
 
 // cmdPrintln is a small helper so subcommands always write to the cobra

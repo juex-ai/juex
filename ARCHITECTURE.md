@@ -824,10 +824,12 @@ compaction:
 
 Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
-`.juex` directory) < `--config <path>` (if supplied) < `os.Environ`. Explicit
-CLI flags for individual settings, such as
-`--enable-user-global-resources=false`, apply after config load. `.env` is no
-longer read by default.
+`.juex` directory) < `--config <path>` (if supplied) < `os.Environ` <
+explicit CLI flags. `--model provider_id/model_id` selects a configured
+provider/model after YAML merge and wins over `PROVIDER_API_ID`,
+`PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`; non-conflicting env overrides
+such as `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_THINKING_EFFORT`,
+and `PROVIDER_CONTEXT_WINDOW` still apply. `.env` is no longer read by default.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider_id/model_id` or override a few fields while inheriting missing values

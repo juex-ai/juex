@@ -110,6 +110,59 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_ModelFlagUsesUserGlobalProvider(t *testing.T) {
+	bin := buildJuex(t)
+	work := t.TempDir()
+	home := t.TempDir()
+
+	configPath := filepath.Join(home, ".juex", "juex.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configBody := `model: openai/gpt-default
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-default
+      - id: gpt-global
+`
+	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin,
+		"--cwd", work,
+		"--model", "openai/gpt-global",
+		"run", "--dry-run", "--json", "x")
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok || ee.ExitCode() != 10 {
+			t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, out, ee.Stderr)
+		}
+	}
+
+	var plan struct {
+		ProviderID string `json:"provider_id"`
+		Model      string `json:"model"`
+		BaseURL    string `json:"base_url"`
+		WorkDir    string `json:"work_dir"`
+	}
+	if err := json.Unmarshal(out, &plan); err != nil {
+		t.Fatalf("parse plan: %v\noutput:\n%s", err, out)
+	}
+	if plan.ProviderID != "openai" || plan.Model != "gpt-global" || plan.BaseURL != "https://global.example" || plan.WorkDir != work {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
 // TestLiveBinary_SchemaIncludesAllSubcommands runs `juex schema` and
 // verifies every documented subcommand shows up. Cheap — proves the
 // binary wires cobra correctly.

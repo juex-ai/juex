@@ -3,7 +3,8 @@
 # The workspace .juex directory is local runtime state and should not be
 # committed.
 
-# Active model, in provider_id/model_id form.
+# Active model, in provider_id/model_id form. Override per invocation with
+# `juex --model provider_id/model_id ...`.
 model: openai/gpt-4.1
 
 # User-global resources under ~/.agents are enabled by default. Set to false
