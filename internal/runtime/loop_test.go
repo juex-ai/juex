@@ -2160,7 +2160,7 @@ func TestTurn_FinishGateAllowsNonblockingExploratoryFailure(t *testing.T) {
 	if len(prov.histories) != 2 {
 		t.Fatalf("provider calls = %d, want no continuation", len(prov.histories))
 	}
-	if continued != 0 {
+	if atomic.LoadInt32(&continued) != 0 {
 		t.Fatalf("nonblocking exploratory failure triggered continuation")
 	}
 }

@@ -248,29 +248,18 @@ func (l *toolFailureLedger) continuationPrompt() (string, ToolFailureContinuedPa
 	}
 	sort.Strings(fingerprints)
 	setKey := strings.Join(fingerprints, ",")
+	showBlockedReason := false
 	if l.continuedSets[setKey] {
 		if l.blockedReasonSets[setKey] {
 			return "", ToolFailureContinuedPayload{}, false
 		}
-		l.blockedReasonSets[setKey] = true
-		prompt := l.blockedReasonPrompt(failures, repeated)
-		return prompt, ToolFailureContinuedPayload{
-			FailureCount:          len(failures),
-			Fingerprints:          fingerprints,
-			Repeated:              repeated,
-			ContinuationPromptLen: len(prompt),
-		}, true
+		showBlockedReason = true
+	} else {
+		l.continuedSets[setKey] = true
+		showBlockedReason = needsBlockedReason
 	}
-	l.continuedSets[setKey] = true
-	if needsBlockedReason {
-		l.blockedReasonSets[setKey] = true
-		prompt := l.blockedReasonPrompt(failures, repeated)
-		return prompt, ToolFailureContinuedPayload{
-			FailureCount:          len(failures),
-			Fingerprints:          fingerprints,
-			Repeated:              repeated,
-			ContinuationPromptLen: len(prompt),
-		}, true
+	if showBlockedReason {
+		return l.blockedReasonContinuation(setKey, failures, fingerprints, repeated)
 	}
 
 	var b strings.Builder
@@ -301,6 +290,17 @@ func (l *toolFailureLedger) continuationPrompt() (string, ToolFailureContinuedPa
 		b.WriteByte('\n')
 	}
 	prompt := b.String()
+	return prompt, ToolFailureContinuedPayload{
+		FailureCount:          len(failures),
+		Fingerprints:          fingerprints,
+		Repeated:              repeated,
+		ContinuationPromptLen: len(prompt),
+	}, true
+}
+
+func (l *toolFailureLedger) blockedReasonContinuation(setKey string, failures []*toolFailureRecord, fingerprints []string, repeated bool) (string, ToolFailureContinuedPayload, bool) {
+	l.blockedReasonSets[setKey] = true
+	prompt := l.blockedReasonPrompt(failures, repeated)
 	return prompt, ToolFailureContinuedPayload{
 		FailureCount:          len(failures),
 		Fingerprints:          fingerprints,
