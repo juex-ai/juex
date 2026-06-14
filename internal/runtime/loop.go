@@ -261,7 +261,11 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	}
 	turnID = e.beginActiveTurn(turnID)
 	previousFailures := e.toolFailures
-	e.toolFailures = newToolFailureLedger()
+	var sessionDir string
+	if e.Session != nil {
+		sessionDir = e.Session.Dir
+	}
+	e.toolFailures = newToolFailureLedger(sessionDir)
 	activeClosed := false
 	defer func() {
 		e.toolFailures = previousFailures

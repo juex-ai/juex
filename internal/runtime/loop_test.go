@@ -2032,6 +2032,36 @@ func TestToolFailureClassificationMappings(t *testing.T) {
 			blocking: true,
 		},
 		{
+			name: "hook_error_runtime_fatal_from_error_only",
+			obs: toolFailureObservation{
+				ToolName: "exec_command",
+				Error:    "hooks: tool denied",
+				Content:  "ordinary output",
+			},
+			want:     ToolFailureRuntimeFatal,
+			blocking: true,
+		},
+		{
+			name: "hook_word_in_output_is_not_runtime_fatal",
+			obs: toolFailureObservation{
+				ToolName: "exec_command",
+				Error:    "process exited with code 1",
+				Content:  "running hooks: pre-commit\n[tool error]\nprocess exited with code 1",
+				ExitCode: intPtr(1),
+			},
+			want:     ToolFailureRecoverable,
+			blocking: true,
+		},
+		{
+			name: "windows_missing_read_is_nonblocking",
+			obs: toolFailureObservation{
+				ToolName: "read",
+				Content:  "open MISSING: The system cannot find the file specified.",
+			},
+			want:     ToolFailureNonblockingExploratory,
+			blocking: false,
+		},
+		{
 			name: "grep_no_matches_nonblocking",
 			obs: toolFailureObservation{
 				ToolName: "grep",
@@ -2183,7 +2213,7 @@ func TestTurn_FileMutationMarksToolFailureStale(t *testing.T) {
 func TestToolFailureLedgerReopensStaleFingerprintOnNewFailure(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "artifact.txt")
-	ledger := newToolFailureLedger()
+	ledger := newToolFailureLedger("")
 	fail := toolFailureObservation{
 		ToolName:  "check_ready",
 		ToolUseID: "check_1",
@@ -2211,6 +2241,44 @@ func TestToolFailureLedgerReopensStaleFingerprintOnNewFailure(t *testing.T) {
 	reopened := ledger.recordFailure(fail)
 	if reopened.Status != ToolFailureStatusUnresolved || reopened.Occurrences != 1 {
 		t.Fatalf("reopened = %+v", reopened)
+	}
+}
+
+func TestToolFailureLedgerResolvesRelativePathsFromSessionDir(t *testing.T) {
+	workDir := t.TempDir()
+	sessionDir := filepath.Join(workDir, ".juex", "sessions", "session-1")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(workDir, "artifact.txt")
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ledger := newToolFailureLedger(sessionDir)
+	recorded := ledger.recordFailure(toolFailureObservation{
+		ToolName:  "check_ready",
+		ToolUseID: "check_1",
+		Input:     map[string]any{"path": "artifact.txt"},
+		Content:   "artifact is not ready\n[tool error]\ncheck failed",
+		Error:     "check failed",
+	})
+	if len(recorded.RelatedPaths) != 1 || recorded.RelatedPaths[0] != target {
+		t.Fatalf("related paths = %+v, want %q", recorded.RelatedPaths, target)
+	}
+	if recorded.LatestModUnixMS == 0 {
+		t.Fatalf("latest mod time not captured: %+v", recorded)
+	}
+	if err := os.WriteFile(target, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stale := ledger.recordSuccess(toolFailureObservation{
+		ToolName:  "write",
+		ToolUseID: "write_1",
+		Input:     map[string]any{"path": "artifact.txt"},
+		Content:   "ok",
+	})
+	if len(stale) != 1 || len(stale[0].RelatedPaths) != 1 || stale[0].RelatedPaths[0] != target {
+		t.Fatalf("stale payload = %+v", stale)
 	}
 }
 
