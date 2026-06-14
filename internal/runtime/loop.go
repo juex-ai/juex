@@ -435,7 +435,30 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		ToolUseID:      call.ToolUseID,
 		TimeoutSeconds: call.TimeoutSeconds,
 	}})
-	out, info, err := e.Tools.CallWithInfo(ctx, call.ToolName, call.Input)
+	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
+		Tool:      call.ToolName,
+		ToolUseID: call.ToolUseID,
+		Emit: func(delta tools.OutputDelta) {
+			name := delta.Tool
+			if name == "" {
+				name = call.ToolName
+			}
+			toolUseID := delta.ToolUseID
+			if toolUseID == "" {
+				toolUseID = call.ToolUseID
+			}
+			e.emit(events.Event{Type: "tool.output_delta", TurnID: turnID, Payload: ToolOutputDeltaPayload{
+				Name:      name,
+				ToolUseID: toolUseID,
+				SessionID: delta.SessionID,
+				ChunkID:   delta.ChunkID,
+				Stream:    delta.Stream,
+				Text:      delta.Text,
+				Truncated: delta.Truncated,
+			}})
+		},
+	})
+	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
 	if err != nil {
 		block.Content = toolErrorContent(out, err)

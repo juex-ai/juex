@@ -46,7 +46,10 @@ import {
   type MessageGroup,
 } from "@/lib/display-units";
 import { assistantBlocksFromEventPayload } from "@/lib/assistant-blocks";
-import { applyToolRequestedToMessages } from "@/lib/live-tool-events";
+import {
+  applyToolOutputDeltaToMessages,
+  applyToolRequestedToMessages,
+} from "@/lib/live-tool-events";
 import {
   COMPACTING_SUBMIT_HINT,
   composerSubmitAction,
@@ -324,6 +327,17 @@ export function Session() {
             appendToolResult(e, false);
             setTurnActiveControllerState(true);
             setStatus({ kind: "running" });
+            break;
+          case "tool.output_delta":
+            setLiveMessages((prev) =>
+              applyToolOutputDeltaToMessages(prev, {
+                turnID: e.turn_id,
+                toolUseID: eventString(e, "tool_use_id"),
+                text: eventString(e, "text"),
+              }),
+            );
+            setTurnActiveControllerState(true);
+            setStatus({ kind: "tool", name: eventString(e, "name") ?? "exec_command" });
             break;
           case "tool.errored":
             appendToolResult(e, true);

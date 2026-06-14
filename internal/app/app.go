@@ -142,8 +142,21 @@ func New(opts Options) (*App, error) {
 		bus.Subscribe("*", vp.handle)
 	}
 
+	appCtx, appCancel := context.WithCancel(context.Background())
+	shellSessions := tools.NewShellSessionManager(appCtx)
+	appContextTransferred := false
+	defer func() {
+		if !appContextTransferred {
+			_ = shellSessions.Close()
+			appCancel()
+		}
+	}()
 	reg := tools.NewRegistry()
-	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: runtimePaths.WorkDir, Shell: toolsShellProfile(cfg.Shell)})
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
+		WorkDir:       runtimePaths.WorkDir,
+		Shell:         toolsShellProfile(cfg.Shell),
+		ShellSessions: shellSessions,
+	})
 
 	skillLoader := skills.NewLoader(resourcePaths.SkillDirs...)
 	if err := skillLoader.Load(); err != nil {
@@ -214,7 +227,6 @@ func New(opts Options) (*App, error) {
 		Compaction:    runtimeLimits.Compaction,
 	}
 
-	appCtx, appCancel := context.WithCancel(context.Background())
 	a := &App{
 		Engine:             eng,
 		Bus:                bus,
@@ -227,7 +239,7 @@ func New(opts Options) (*App, error) {
 		sessionUnsubscribe: sessionUnsubscribe,
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	a.cleanup = append(a.cleanup, func() error {
+	a.cleanup = append(a.cleanup, shellSessions.Close, func() error {
 		if a.sessionUnsubscribe != nil {
 			a.sessionUnsubscribe()
 			a.sessionUnsubscribe = nil
@@ -267,6 +279,7 @@ func New(opts Options) (*App, error) {
 		a.mcp = buildMCPStatus(mergedMCP.MCPServers, mgr.ToolCounts(), startupErrors)
 		a.cleanup = append(a.cleanup, mgr.Close)
 	}
+	appContextTransferred = true
 	return a, nil
 }
 

@@ -298,17 +298,21 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	if plan.Shell.Profile == "" || plan.Shell.Family == "" || plan.Shell.Binary == "" {
 		t.Fatalf("shell profile missing from dry-run plan: %+v", plan.Shell)
 	}
-	haveShell := false
+	haveExecCommand := false
+	haveWriteStdin := false
 	for _, name := range plan.Tools {
-		if name == "shell" {
-			haveShell = true
+		if name == "exec_command" {
+			haveExecCommand = true
+		}
+		if name == "write_stdin" {
+			haveWriteStdin = true
 		}
 		if name == "bash" {
 			t.Fatalf("dry-run tools should not include bash: %+v", plan.Tools)
 		}
 	}
-	if !haveShell {
-		t.Fatalf("dry-run tools missing shell: %+v", plan.Tools)
+	if !haveExecCommand || !haveWriteStdin {
+		t.Fatalf("dry-run tools missing exec_command/write_stdin: %+v", plan.Tools)
 	}
 }
 
