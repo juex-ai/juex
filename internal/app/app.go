@@ -257,11 +257,13 @@ func New(opts Options) (*App, error) {
 			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
 			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
 		},
-		PendingInputQueue: runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
-		PendingInputTTL:   pendingInputTTL,
-		ExternalEventTTL:  externalEventTTL,
-		ContextWindow:     runtimeLimits.ContextWindow,
-		Compaction:        runtimeLimits.Compaction,
+		PendingInputQueue:   runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
+		PendingInputTTL:     pendingInputTTL,
+		ExternalEventTTL:    externalEventTTL,
+		WorkingState:        workingStateStore(sess, runtimeLimits.WorkingStateEnabled),
+		DisableWorkingState: !runtimeLimits.WorkingStateEnabled,
+		ContextWindow:       runtimeLimits.ContextWindow,
+		Compaction:          runtimeLimits.Compaction,
 	}
 
 	a := &App{
@@ -338,6 +340,13 @@ func New(opts Options) (*App, error) {
 	return a, nil
 }
 
+func workingStateStore(sess *session.Session, enabled bool) *runtime.WorkingStateStore {
+	if !enabled || sess == nil || sess.Dir == "" {
+		return nil
+	}
+	return runtime.NewWorkingStateStore(sess.Dir, runtime.WorkingStateOptions{})
+}
+
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 	return tools.ShellProfile{
 		Profile:       p.Profile,
@@ -384,6 +393,9 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	if a.Engine != nil {
 		a.Engine.Session = sess
 		a.Engine.PendingInputQueue = runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{})
+		limits := a.cfg.RuntimeLimits()
+		a.Engine.DisableWorkingState = !limits.WorkingStateEnabled
+		a.Engine.WorkingState = workingStateStore(sess, limits.WorkingStateEnabled)
 	}
 	a.sessionUnsubscribe = sess.SubscribeBus(a.Bus)
 	if err := a.attachObservability(sess); err != nil {

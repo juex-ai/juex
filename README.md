@@ -96,6 +96,7 @@ Juex keeps runtime state in the current work directory:
     ├── conversation.jsonl
     ├── events.jsonl
     ├── pending_input.jsonl
+    ├── working_state.json
     ├── trace.jsonl
     ├── spans.jsonl
     └── tools.jsonl
@@ -136,6 +137,13 @@ Pending input accepted while a turn is already running is persisted in the
 session's `pending_input.jsonl` and replayed after restart when still safe and
 unexpired. Configure `runtime.pending_input_ttl` for user steer messages and
 `runtime.external_event_ttl` for MCP/external event messages.
+
+When enabled, Juex also keeps a generic session-local `working_state.json`
+sidecar for current goals, hard constraints, artifacts, checks, open issues,
+last successful checks, and stale checks. Non-empty sidecars are injected into
+provider context as an advisory runtime working-state block; empty sidecars do
+not change ordinary runs. Set `runtime.working_state_enabled: false` to disable
+sidecar persistence, updates, and injection.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop

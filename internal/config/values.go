@@ -125,17 +125,19 @@ func (c Config) ResourcePaths() ResourcePaths {
 
 // RuntimeLimits contains runtime policy values after config resolution.
 type RuntimeLimits struct {
-	ContextWindow    int
-	Compaction       CompactionConfig
-	PendingInputTTL  time.Duration
-	ExternalEventTTL time.Duration
+	ContextWindow       int
+	Compaction          CompactionConfig
+	PendingInputTTL     time.Duration
+	ExternalEventTTL    time.Duration
+	WorkingStateEnabled bool
 }
 
 func (c Config) RuntimeLimits() RuntimeLimits {
 	return RuntimeLimits{
-		ContextWindow:    c.ContextWindow,
-		Compaction:       c.Compaction,
-		PendingInputTTL:  c.PendingInputTTL,
-		ExternalEventTTL: c.ExternalEventTTL,
+		ContextWindow:       c.ContextWindow,
+		Compaction:          c.Compaction,
+		PendingInputTTL:     c.PendingInputTTL,
+		ExternalEventTTL:    c.ExternalEventTTL,
+		WorkingStateEnabled: !c.DisableWorkingState,
 	}
 }

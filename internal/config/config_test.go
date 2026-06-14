@@ -1105,6 +1105,7 @@ providers:
 runtime:
   pending_input_ttl: 30m
   external_event_ttl: 48h
+  working_state_enabled: false
 `
 	writeTextFile(t, configPath, body)
 
@@ -1115,6 +1116,9 @@ runtime:
 	limits := cfg.RuntimeLimits()
 	if limits.PendingInputTTL != 30*time.Minute || limits.ExternalEventTTL != 48*time.Hour {
 		t.Fatalf("runtime TTLs = %+v", limits)
+	}
+	if limits.WorkingStateEnabled {
+		t.Fatalf("working state should be disabled: %+v", limits)
 	}
 }
 

@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -119,6 +120,21 @@ func TestParseOutputValidatesDecisions(t *testing.T) {
 	}
 	if _, err := ParseOutput([]byte(`{"decision":"maybe"}`)); err == nil {
 		t.Fatal("expected invalid decision error")
+	}
+}
+
+func TestParseOutputCarriesWorkingStatePatch(t *testing.T) {
+	out, err := ParseOutput([]byte(`{"working_state":{"hard_constraints":[{"text":"keep tests green","confidence":0.9}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var patch map[string]any
+	if err := json.Unmarshal(out.WorkingState, &patch); err != nil {
+		t.Fatal(err)
+	}
+	const key = "hard_constraints"
+	if _, ok := patch[key]; !ok {
+		t.Fatalf("working_state missing %q: %+v", key, patch)
 	}
 }
 
