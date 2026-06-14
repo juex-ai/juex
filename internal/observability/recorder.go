@@ -86,6 +86,9 @@ type Recorder struct {
 	mu         sync.Mutex
 	files      map[string]*os.File
 	spanStarts map[string]time.Time
+
+	closed       bool
+	filesEnsured bool
 }
 
 func NewRecorder(opts Options) (*Recorder, error) {
@@ -110,6 +113,9 @@ func (r *Recorder) Record(ev events.Event) error {
 	if r == nil || r.sessionDir == "" {
 		return nil
 	}
+	if ev.Type == "tool.output_delta" && !r.shouldRecord(LevelDebug) {
+		return nil
+	}
 	meta := classify(ev)
 	if !r.shouldRecord(meta.Level) {
 		return nil
@@ -122,8 +128,14 @@ func (r *Recorder) Record(ev events.Event) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.ensureStableFilesLocked(); err != nil {
-		return err
+	if r.closed {
+		return nil
+	}
+	if !r.filesEnsured {
+		if err := r.ensureStableFilesLocked(); err != nil {
+			return err
+		}
+		r.filesEnsured = true
 	}
 
 	trace := TraceRecord{
@@ -173,13 +185,17 @@ func (r *Recorder) Close() error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return nil
+	}
+	r.closed = true
 	var first error
-	for _, name := range sortedFileNames(r.files) {
-		if err := r.files[name].Close(); err != nil && first == nil {
+	for _, f := range r.files {
+		if err := f.Close(); err != nil && first == nil {
 			first = err
 		}
 	}
-	r.files = map[string]*os.File{}
+	r.files = nil
 	return first
 }
 
@@ -368,6 +384,9 @@ func (r *Recorder) spanRecordLocked(ts time.Time, ev events.Event, meta eventMet
 func payloadMap(payload any) map[string]any {
 	if payload == nil {
 		return nil
+	}
+	if m, ok := payload.(map[string]any); ok {
+		return m
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -684,13 +703,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func sortedFileNames(files map[string]*os.File) []string {
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

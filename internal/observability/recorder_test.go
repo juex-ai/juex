@@ -93,6 +93,31 @@ func TestRecorderDebugRecordsDebugEvents(t *testing.T) {
 	}
 }
 
+func TestRecorderCloseIsIdempotentAndPreventsReopen(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("turn.started", "t1", map[string]any{"input": "hello"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("turn.completed", "t1", map[string]any{"output_len": 2})); err != nil {
+		t.Fatal(err)
+	}
+
+	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
+	if len(trace) != 1 || trace[0].Event != "turn.started" {
+		t.Fatalf("trace after close = %+v, want no write-after-close", trace)
+	}
+}
+
 func TestRecorderWritesSpanSchemaAndParents(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
