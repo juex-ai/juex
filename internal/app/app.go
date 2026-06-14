@@ -27,6 +27,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
+	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -39,6 +40,8 @@ type Options struct {
 	Config   config.Config
 	Provider llm.Provider // optional; if nil, derived from Config
 	Verbose  bool
+	Debug    bool
+	LogLevel string
 	Stderr   io.Writer
 	WorkDir  string // if set, overrides Config.WorkDir
 	// MCPManager, when set, provides process-scoped MCP clients owned by
@@ -86,6 +89,11 @@ type App struct {
 
 	sessionLock        *session.Lock
 	sessionUnsubscribe func()
+
+	debug                    bool
+	logLevel                 string
+	recorder                 *observability.Recorder
+	observabilityUnsubscribe func()
 }
 
 type MCPStatus struct {
@@ -253,9 +261,20 @@ func New(opts Options) (*App, error) {
 		skills:             skillLoader.All(),
 		sessionLock:        sessLock,
 		sessionUnsubscribe: sessionUnsubscribe,
+		debug:              opts.Debug,
+		logLevel:           opts.LogLevel,
+	}
+	if err := a.attachObservability(sess); err != nil {
+		closeSessionResources()
+		return nil, err
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
 	a.cleanup = append(a.cleanup, shellSessions.Close, func() error {
+		if err := a.detachObservability(); err != nil {
+			return err
+		}
+		return nil
+	}, func() error {
 		if a.sessionUnsubscribe != nil {
 			a.sessionUnsubscribe()
 			a.sessionUnsubscribe = nil
@@ -264,6 +283,7 @@ func New(opts Options) (*App, error) {
 	}, sessLock.Close, sess.Close)
 	if opts.MCPManager != nil {
 		if err := opts.MCPManager.RegisterTools(reg); err != nil {
+			_ = a.detachObservability()
 			closeSessionResources()
 			return nil, err
 		}
@@ -278,6 +298,7 @@ func New(opts Options) (*App, error) {
 		}
 		mgr, err := mcp.NewManagerLayeredSoft(context.Background(), mcpConfigs, connectOpts)
 		if err != nil {
+			_ = a.detachObservability()
 			closeSessionResources()
 			return nil, err
 		}
@@ -289,6 +310,7 @@ func New(opts Options) (*App, error) {
 			if closeErr := mgr.Close(); closeErr != nil {
 				err = errors.Join(err, closeErr)
 			}
+			_ = a.detachObservability()
 			closeSessionResources()
 			return nil, err
 		}
@@ -336,6 +358,7 @@ func (a *App) SwitchToNewPrimarySession() error {
 }
 
 func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
+	_ = a.detachObservability()
 	if a.sessionUnsubscribe != nil {
 		a.sessionUnsubscribe()
 		a.sessionUnsubscribe = nil
@@ -349,6 +372,11 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 		a.Engine.Session = sess
 	}
 	a.sessionUnsubscribe = sess.SubscribeBus(a.Bus)
+	if err := a.attachObservability(sess); err != nil {
+		// Session switching happens after startup. Surface recorder failures as
+		// a runtime event so callers still receive a usable session.
+		a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
+	}
 	a.cleanup = append(a.cleanup, sessLock.Close, sess.Close)
 
 	if oldLock != nil {
@@ -357,6 +385,42 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
+}
+
+func (a *App) attachObservability(sess *session.Session) error {
+	if a == nil || a.Bus == nil || sess == nil {
+		return nil
+	}
+	rec, err := observability.NewRecorder(observability.Options{
+		SessionID:  sess.ID,
+		SessionDir: sess.Dir,
+		Debug:      a.debug,
+		LogLevel:   a.logLevel,
+	})
+	if err != nil {
+		return err
+	}
+	a.recorder = rec
+	a.observabilityUnsubscribe = a.Bus.Subscribe("*", func(e events.Event) {
+		_ = rec.Record(e)
+	})
+	return nil
+}
+
+func (a *App) detachObservability() error {
+	if a == nil {
+		return nil
+	}
+	if a.observabilityUnsubscribe != nil {
+		a.observabilityUnsubscribe()
+		a.observabilityUnsubscribe = nil
+	}
+	if a.recorder == nil {
+		return nil
+	}
+	err := a.recorder.Close()
+	a.recorder = nil
+	return err
 }
 
 // Run drives a single turn synchronously.

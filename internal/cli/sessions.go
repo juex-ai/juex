@@ -301,7 +301,7 @@ func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := compactSession(cmd.Context(), cfg, args[0], reason, instructions, nil)
+			result, err := compactSession(cmd.Context(), cfg, args[0], reason, instructions, nil, flags.debug, flags.logLevel)
 			if err != nil {
 				if os.IsNotExist(err) {
 					return &notFoundError{msg: "session not found: " + args[0]}
@@ -325,7 +325,7 @@ func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
 	return cmd
 }
 
-func compactSession(ctx context.Context, cfg config.Config, id, reason, instructions string, provider llm.Provider) (runtime.CompactionResult, error) {
+func compactSession(ctx context.Context, cfg config.Config, id, reason, instructions string, provider llm.Provider, debug bool, logLevel string) (runtime.CompactionResult, error) {
 	if reason == "" {
 		reason = "manual"
 	}
@@ -333,6 +333,8 @@ func compactSession(ctx context.Context, cfg config.Config, id, reason, instruct
 	a, err := app.New(app.Options{
 		Config:     cfg,
 		Provider:   provider,
+		Debug:      debug,
+		LogLevel:   logLevel,
 		ResumeDir:  dir,
 		DisableMCP: true,
 	})

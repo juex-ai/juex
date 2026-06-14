@@ -30,6 +30,8 @@ type Options struct {
 	Provider     llm.Provider // optional; injected for tests
 	AllowAnyBind bool         // bypass the loopback bind check; CLI sets this for --unsafe-bind-any
 	Verbose      bool
+	Debug        bool
+	LogLevel     string
 	Stderr       io.Writer
 }
 
@@ -306,6 +308,8 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		Config:      s.opts.Cfg,
 		Provider:    s.opts.Provider,
 		Verbose:     s.opts.Verbose,
+		Debug:       s.opts.Debug,
+		LogLevel:    s.opts.LogLevel,
 		Stderr:      s.stderr(),
 		WorkDir:     s.opts.Cfg.WorkDir,
 		MCPManager:  s.mcpManagerSnapshot(),

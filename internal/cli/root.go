@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -130,6 +131,8 @@ type persistentFlags struct {
 	cwd                       string
 	model                     string
 	enableUserGlobalResources string
+	debug                     bool
+	logLevel                  string
 	verbose                   bool
 }
 
@@ -148,6 +151,9 @@ func newRootCmd() *cobra.Command {
 				_, err := config.ParseModelRef("")
 				return &usageError{msg: "--model: " + err.Error()}
 			}
+			if _, err := observability.ParseLevel(flags.logLevel); err != nil {
+				return &usageError{msg: "--log-level: " + err.Error()}
+			}
 			return nil
 		},
 	}
@@ -160,6 +166,8 @@ func newRootCmd() *cobra.Command {
 	}
 	// --verbose has no short form at root level so each subcommand can use
 	// -v locally (see version.go); cobra would otherwise conflict.
+	cmd.PersistentFlags().BoolVar(&flags.debug, "debug", false, "write detailed session logs, traces, spans, and tool summaries")
+	cmd.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "minimum session log level: debug, info, warn, or error (default info)")
 	cmd.PersistentFlags().BoolVar(&flags.verbose, "verbose", false, "stream runtime lifecycle events to stderr")
 
 	cmd.AddCommand(newRunCmd(flags))

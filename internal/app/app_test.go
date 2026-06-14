@@ -176,6 +176,55 @@ func TestApp_NewRunsSessionStartHooks(t *testing.T) {
 	}
 }
 
+func TestApp_DebugObservabilityWritesSessionArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(Options{
+		Config: config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: &stubProvider{replies: []llm.Response{{
+			Message:    llm.TextMessage(llm.RoleAssistant, "answer"),
+			StopReason: llm.StopEndTurn,
+		}}},
+		WorkDir: dir,
+		Debug:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := a.Run(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "answer" {
+		t.Fatalf("out = %q", out)
+	}
+	sessionDir := a.Session.Dir
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rel := range []string{"logs/juex.log", "logs/debug.log", "trace.jsonl", "spans.jsonl", "tools.jsonl"} {
+		if _, err := os.Stat(filepath.Join(sessionDir, rel)); err != nil {
+			t.Fatalf("%s missing: %v", rel, err)
+		}
+	}
+	trace, err := os.ReadFile(filepath.Join(sessionDir, "trace.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"event":"turn.started"`, `"event":"llm.requested"`, `"event":"llm.responded"`, `"event":"finish.attempted"`, `"session_id":"` + filepath.Base(sessionDir) + `"`} {
+		if !strings.Contains(string(trace), want) {
+			t.Fatalf("trace missing %s:\n%s", want, trace)
+		}
+	}
+	debugData, err := os.ReadFile(filepath.Join(sessionDir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(debugData), "finish.attempted") {
+		t.Fatalf("debug log missing finish event:\n%s", debugData)
+	}
+}
+
 func TestApp_NewSessionStartHookDenyFailsStartup(t *testing.T) {
 	dir := t.TempDir()
 	_, err := New(Options{

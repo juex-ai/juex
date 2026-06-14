@@ -224,7 +224,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "run the exec command e2e marker")
+	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "run the exec command e2e marker")
 	home := t.TempDir()
 	cmd.Env = isolatedJuexBinaryEnv(home)
 	out, err := cmd.CombinedOutput()
@@ -263,6 +263,23 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 
 	conversationPath := filepath.Join(result.SessionDir, "conversation.jsonl")
 	assertConversationExecCommandToolRoundTrip(t, conversationPath, "call_exec_cli", marker)
+	for _, rel := range []string{"logs/juex.log", "logs/debug.log", "trace.jsonl", "spans.jsonl", "tools.jsonl"} {
+		if _, err := os.Stat(filepath.Join(result.SessionDir, rel)); err != nil {
+			t.Fatalf("debug artifact %s missing: %v", rel, err)
+		}
+	}
+	trace := readJSONLObjects(t, filepath.Join(result.SessionDir, "trace.jsonl"))
+	for _, want := range []string{"tool.completed", "finish.attempted"} {
+		if !jsonlHasString(trace, "event", want) {
+			t.Fatalf("trace missing %q: %+v", want, trace)
+		}
+	}
+	if spans := readJSONLObjects(t, filepath.Join(result.SessionDir, "spans.jsonl")); len(spans) == 0 {
+		t.Fatalf("spans.jsonl should be parseable and non-empty")
+	}
+	if tools := readJSONLObjects(t, filepath.Join(result.SessionDir, "tools.jsonl")); !jsonlHasString(tools, "event", "tool.completed") {
+		t.Fatalf("tools missing tool.completed: %+v", tools)
+	}
 }
 
 func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {

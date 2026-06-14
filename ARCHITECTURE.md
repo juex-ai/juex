@@ -57,6 +57,7 @@ juex/
 │   │   └── codex_auth.go
 │   ├── events/     bus.go        # in-process EventBus (glob)
 │   ├── hooks/                    # trusted lifecycle command hook execution
+│   ├── observability/            # session-local logs, traces, spans, tool summaries
 │   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
 │   │   ├── provider.go
@@ -491,6 +492,14 @@ creation are applied consistently; `session.Load` is only the no-option
 convenience wrapper. The latest `token_usage` and `context_usage` are restored
 from `llm.responded` events and exposed through session `Info`, not through
 individual messages.
+
+`internal/observability` subscribes to the same in-process event bus and writes
+derived session-local artifacts: `logs/juex.log`, `logs/debug.log`,
+`trace.jsonl`, `spans.jsonl`, and `tools.jsonl`. These files are diagnostic
+views over runtime events and intentionally do not alter the compatibility
+shape of `conversation.jsonl` or `events.jsonl`. Trace records include
+`session_id`, `turn_id`, span identifiers, level/status, duration, error kind,
+artifact paths, and bounded summaries with secret-shaped values redacted.
 
 Each work directory has one active primary session recorded in
 `<WorkDir>/.juex/history.json` as `{active, sessions}`. `run`, `repl`, and
@@ -962,10 +971,16 @@ Resources split between user-global and work-local:
     │   ├── MEMORY.md
     │   └── *.md
     └── sessions/<id>/           # work-local conversation history
+        ├── logs/
+        │   ├── juex.log         # human-readable session event summary
+        │   └── debug.log        # detailed event summary when --debug/log-level=debug
         ├── session.json         # alias + kind metadata
         ├── session.lock         # held while an app owns the session
         ├── conversation.jsonl
-        └── events.jsonl
+        ├── events.jsonl
+        ├── trace.jsonl          # structured event trace derived from the bus
+        ├── spans.jsonl          # start/end/error/instant spans by turn
+        └── tools.jsonl          # sanitized tool input/output/error summaries
 ```
 
 The user-global `~/.agents` resources are read-only from Juex's view and are
@@ -1142,11 +1157,12 @@ and `tests/eval/` covers the local evaluation harness.
 | `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
 | `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |
 | `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
+| `observability` | log-level parsing, stable artifact creation, trace/span schema, parent-child spans, tool summaries, redaction, error-kind classification |
 | `netbootstrap` | resolv.conf parsing (IPv4/IPv6/comments/malformed), JUEX_DNS env var, Termux PREFIX auto-detect, applyResolver wiring, idempotent install |
-| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, history update, missing-key fail, default-cwd |
-| `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flag |
+| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, observability artifact wiring, history update, missing-key fail, default-cwd |
+| `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
-| `tests/e2e` | full-stack tempdir scenario, resume round-trip, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, web turn persistence, web pending input, live provider smoke (build-tag) |
+| `tests/e2e` | full-stack tempdir scenario, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | live-model rotation, eval shell wrappers, development step flags, report directory defaults |
 
 Run the deterministic suite with `mise exec -- go test ./... -count=1`.

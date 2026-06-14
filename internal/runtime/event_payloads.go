@@ -60,6 +60,7 @@ type LLMRequestedPayload struct {
 }
 
 type LLMRespondedPayload struct {
+	Iter         int               `json:"iter,omitempty"`
 	StopReason   llm.StopReason    `json:"stop_reason"`
 	Usage        llm.Usage         `json:"usage"`
 	TokenUsage   llm.Usage         `json:"token_usage"`
@@ -69,6 +70,11 @@ type LLMRespondedPayload struct {
 	ToolCalls    []ToolCallPayload `json:"tool_calls"`
 	Model        string            `json:"model"`
 	ContextUsage *llm.ContextUsage `json:"context_usage,omitempty"`
+}
+
+type FinishAttemptedPayload struct {
+	StopReason llm.StopReason `json:"stop_reason"`
+	OutputLen  int            `json:"output_len"`
 }
 
 type ToolCallPayload struct {
