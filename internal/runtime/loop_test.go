@@ -155,6 +155,27 @@ func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *ev
 	}, bus
 }
 
+func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider) *Engine {
+	t.Helper()
+	reg := tools.NewRegistry()
+	bus := events.NewBus()
+	sess.SubscribeBus(bus)
+	pb := &prompt.Builder{
+		AgentsMDDirs: []string{t.TempDir()},
+		Now:          func() time.Time { return time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) },
+	}
+	return &Engine{
+		Provider:          prov,
+		Tools:             reg,
+		Bus:               bus,
+		Session:           sess,
+		Prompt:            pb,
+		PendingInputQueue: NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }}),
+		PendingInputTTL:   time.Hour,
+		ExternalEventTTL:  24 * time.Hour,
+	}
+}
+
 func TestTurn_CompactionKeepsRecentTailInProviderContext(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 10, OutputTokens: 2}},
@@ -1308,6 +1329,202 @@ func TestTurn_PendingInputContinuesAfterPlainResponse(t *testing.T) {
 	second := prov.histories[1]
 	if got := second[len(second)-1].FirstText(); got != "follow up" {
 		t.Fatalf("second call last message = %q", got)
+	}
+}
+
+func TestTurn_ReplaysPersistedPendingInputAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := newEngineForSession(t, sess, &mockProvider{})
+	if err := eng.ReserveTurnID("turn-active"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "replay me"), PendingInputOptions{ID: "event-1", TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := session.Load(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reloaded.Close() })
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	restarted := newEngineForSession(t, reloaded, prov)
+	if _, err := restarted.Turn(context.Background(), "after restart"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 1 {
+		t.Fatalf("provider calls = %d", len(prov.histories))
+	}
+	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "replay me" {
+		t.Fatalf("last provider message = %q", got)
+	}
+}
+
+func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := newEngineForSession(t, sess, &mockProvider{})
+	if err := eng.ReserveTurnID("turn-active"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "only once"), PendingInputOptions{ID: "event-1", TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	firstReload, err := session.Load(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstProvider := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first done"), StopReason: llm.StopEndTurn},
+	}}
+	firstEngine := newEngineForSession(t, firstReload, firstProvider)
+	if _, err := firstEngine.Turn(context.Background(), "first after restart"); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstReload.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondReload, err := session.Load(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { secondReload.Close() })
+	secondProvider := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "second done"), StopReason: llm.StopEndTurn},
+	}}
+	secondEngine := newEngineForSession(t, secondReload, secondProvider)
+	if _, err := secondEngine.Turn(context.Background(), "second after restart"); err != nil {
+		t.Fatal(err)
+	}
+	last := secondProvider.histories[0][len(secondProvider.histories[0])-1]
+	if got := last.FirstText(); got != "second after restart" {
+		t.Fatalf("last provider message = %q, want second turn without replay", got)
+	}
+}
+
+func TestEngine_DeduplicatesPendingInputByEventID(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.PendingInputQueue = NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }})
+	eng.PendingInputTTL = time.Hour
+	if err := eng.ReserveTurnID("turn-active"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "one"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "two"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PendingCount != 1 || second.PendingCount != 1 {
+		t.Fatalf("pending counts first=%d second=%d, want deduped count 1", first.PendingCount, second.PendingCount)
+	}
+}
+
+func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }})
+	record, err := store.Enqueue(llm.TextMessage(llm.RoleUser, "already appended"), PendingInputOptions{ID: "event-1", TTL: time.Hour}, "turn-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAdmitted([]string{record.ID}, "turn-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(record.Message); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := session.Load(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reloaded.Close() })
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng := newEngineForSession(t, reloaded, prov)
+	if _, err := eng.Turn(context.Background(), "fresh input"); err != nil {
+		t.Fatal(err)
+	}
+	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "fresh input" {
+		t.Fatalf("last provider message = %q, want no duplicate replay", got)
+	}
+	records, err := store.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[record.ID].State != PendingInputStateProcessed {
+		t.Fatalf("state = %q, want processed", records[record.ID].State)
+	}
+}
+
+func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng := newEngineForSession(t, sess, prov)
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "after compact"), PendingInputOptions{ID: "event-1", TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PendingCount != 1 {
+		t.Fatalf("pending count = %d", status.PendingCount)
+	}
+	var drained int32
+	eng.Bus.Subscribe("pending_input.drained", func(e events.Event) {
+		atomic.AddInt32(&drained, 1)
+	})
+
+	msg, _, ok := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	if !ok {
+		t.Fatal("pending input was not promoted")
+	}
+	if _, err := eng.TurnMessageWithID(context.Background(), msg, "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&drained) != 0 {
+		t.Fatalf("pending_input.drained events = %d, want none for promoted main message", drained)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records["event-1"].State != PendingInputStateProcessed {
+		t.Fatalf("state = %q, want processed", records["event-1"].State)
 	}
 }
 

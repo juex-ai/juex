@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadFromFile(t *testing.T) {
@@ -1087,6 +1088,55 @@ runtime:
 	}
 	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4" {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadFromFile_PendingInputRuntimeTTL(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  pending_input_ttl: 30m
+  external_event_ttl: 48h
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := cfg.RuntimeLimits()
+	if limits.PendingInputTTL != 30*time.Minute || limits.ExternalEventTTL != 48*time.Hour {
+		t.Fatalf("runtime TTLs = %+v", limits)
+	}
+}
+
+func TestLoadFromFile_InvalidPendingInputRuntimeTTL(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  pending_input_ttl: soon
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), "pending_input_ttl") {
+		t.Fatalf("err = %v, want pending_input_ttl parse error", err)
 	}
 }
 

@@ -95,6 +95,7 @@ Juex keeps runtime state in the current work directory:
     ├── session.json
     ├── conversation.jsonl
     ├── events.jsonl
+    ├── pending_input.jsonl
     ├── trace.jsonl
     ├── spans.jsonl
     └── tools.jsonl
@@ -119,6 +120,11 @@ numeric `session_id` only when the process is still running. Set `tty: true`
 for interactive commands that need a real terminal and follow-up input;
 `write_stdin` polls running sessions or writes `chars` only to TTY sessions
 while live output is streamed through runtime events.
+
+Pending input accepted while a turn is already running is persisted in the
+session's `pending_input.jsonl` and replayed after restart when still safe and
+unexpired. Configure `runtime.pending_input_ttl` for user steer messages and
+`runtime.external_event_ttl` for MCP/external event messages.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop

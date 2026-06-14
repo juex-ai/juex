@@ -40,8 +40,10 @@ import (
 )
 
 const (
-	DefaultMaxPendingInput = 16
-	maxToolErrorOutput     = 32 * 1024
+	DefaultMaxPendingInput  = 16
+	DefaultPendingInputTTL  = 15 * time.Minute
+	DefaultExternalEventTTL = 24 * time.Hour
+	maxToolErrorOutput      = 32 * 1024
 )
 
 type Engine struct {
@@ -58,6 +60,15 @@ type Engine struct {
 	// queued while a turn is active. When omitted, DefaultMaxPendingInput is
 	// used. A full queue rejects new input instead of silently dropping it.
 	MaxPendingInputs int
+	// PendingInputQueue persists pending input records in the session
+	// directory. When omitted, the engine creates a session-local queue on
+	// first use.
+	PendingInputQueue *PendingInputQueue
+	// PendingInputTTL controls generated-id user steer records.
+	PendingInputTTL time.Duration
+	// ExternalEventTTL controls MCP/external event records when the caller
+	// does not pass a TTL.
+	ExternalEventTTL time.Duration
 	// ContextWindow is the provider context window in tokens. When omitted,
 	// the engine uses DefaultContextWindowTokens.
 	ContextWindow int
@@ -70,7 +81,7 @@ type Engine struct {
 
 	pendingMu    sync.Mutex
 	activeTurnID string
-	pendingInput []llm.Message
+	pendingInput []queuedPendingInput
 
 	autoCompactFailures int
 }
@@ -89,6 +100,11 @@ type PendingInputStatus struct {
 	TurnID           string `json:"turn_id,omitempty"`
 	PendingCount     int    `json:"pending_count"`
 	MaxPendingInputs int    `json:"max_pending_inputs"`
+}
+
+type queuedPendingInput struct {
+	RecordID string
+	Message  llm.Message
 }
 
 // Turn drives one user input to completion. The returned string is the final
@@ -119,6 +135,10 @@ func (e *Engine) EnqueuePendingInput(ctx context.Context, userInput string) (Pen
 }
 
 func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message) (PendingInputStatus, error) {
+	return e.EnqueuePendingMessageWithOptions(ctx, userMsg, PendingInputOptions{})
+}
+
+func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg llm.Message, opts PendingInputOptions) (PendingInputStatus, error) {
 	if e == nil {
 		return PendingInputStatus{}, ErrNoActiveTurn
 	}
@@ -147,7 +167,28 @@ func (e *Engine) EnqueuePendingMessage(ctx context.Context, userMsg llm.Message)
 		}})
 		return status, ErrPendingInputQueueFull
 	}
-	e.pendingInput = append(e.pendingInput, userMsg)
+	recordID := ""
+	if queue := e.pendingInputQueueLocked(); queue != nil {
+		opts = e.defaultPendingInputOptions(userMsg, opts)
+		record, err := queue.Enqueue(userMsg, opts, turnID)
+		if err != nil {
+			e.pendingMu.Unlock()
+			return status, err
+		}
+		recordID = record.ID
+		userMsg = record.Message
+		if !isReplayablePendingState(record.State) {
+			status.PendingCount = len(e.pendingInput)
+			e.pendingMu.Unlock()
+			return status, nil
+		}
+		if e.hasPendingRecordLocked(record.ID) {
+			status.PendingCount = len(e.pendingInput)
+			e.pendingMu.Unlock()
+			return status, nil
+		}
+	}
+	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg})
 	status.PendingCount = len(e.pendingInput)
 	e.pendingMu.Unlock()
 	e.emit(events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
@@ -192,11 +233,11 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 			MaxPendingInputs: max,
 		}, false
 	}
-	msg := e.pendingInput[0]
-	e.pendingInput[0] = llm.Message{}
+	item := e.pendingInput[0]
+	e.pendingInput[0] = queuedPendingInput{}
 	e.pendingInput = e.pendingInput[1:]
 	e.activeTurnID = nextTurnID
-	return msg, PendingInputStatus{
+	return item.Message, PendingInputStatus{
 		TurnID:           nextTurnID,
 		PendingCount:     len(e.pendingInput),
 		MaxPendingInputs: max,
@@ -226,6 +267,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	}()
 	start := time.Now()
 	turnCtx := ctx
+	if err := e.restorePendingInput(turnID, userMsg.ID); err != nil {
+		return "", e.failTurn(turnID, err)
+	}
 
 	prepared, err := e.prepareTurnContextLocked(turnCtx, turnID, userMsg)
 	if err != nil {
@@ -359,6 +403,9 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
 	if err := e.Session.Append(userMsg); err != nil {
 		return fmt.Errorf("session append user: %w", err)
+	}
+	if err := e.markPendingInputMessageProcessed(userMsg); err != nil {
+		return fmt.Errorf("mark pending input user processed: %w", err)
 	}
 	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: TurnStartedPayload{
 		Input: userMsg.FirstText(),
@@ -593,6 +640,89 @@ func (e *Engine) effectiveMaxPendingInputs() int {
 	return DefaultMaxPendingInput
 }
 
+func (e *Engine) effectivePendingInputTTL() time.Duration {
+	if e.PendingInputTTL > 0 {
+		return e.PendingInputTTL
+	}
+	return DefaultPendingInputTTL
+}
+
+func (e *Engine) effectiveExternalEventTTL() time.Duration {
+	if e.ExternalEventTTL > 0 {
+		return e.ExternalEventTTL
+	}
+	return DefaultExternalEventTTL
+}
+
+func (e *Engine) defaultPendingInputOptions(msg llm.Message, opts PendingInputOptions) PendingInputOptions {
+	if opts.TTL <= 0 {
+		if msg.Kind == llm.MessageKindMCPEvent {
+			opts.TTL = e.effectiveExternalEventTTL()
+		} else {
+			opts.TTL = e.effectivePendingInputTTL()
+		}
+	}
+	return opts
+}
+
+func (e *Engine) pendingInputQueueLocked() *PendingInputQueue {
+	if e == nil {
+		return nil
+	}
+	if e.PendingInputQueue != nil {
+		return e.PendingInputQueue
+	}
+	if e.Session == nil || e.Session.Dir == "" {
+		return nil
+	}
+	e.PendingInputQueue = NewPendingInputQueue(e.Session.Dir, PendingInputQueueOptions{})
+	return e.PendingInputQueue
+}
+
+func (e *Engine) hasPendingRecordLocked(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, item := range e.pendingInput {
+		if item.RecordID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) sessionHasMessageIDLocked(id string) bool {
+	if e == nil || e.Session == nil || id == "" {
+		return false
+	}
+	for _, msg := range e.Session.History {
+		if msg.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingRecordIDs(pending []queuedPendingInput) []string {
+	ids := make([]string, 0, len(pending))
+	seen := map[string]struct{}{}
+	for _, item := range pending {
+		if item.RecordID == "" {
+			continue
+		}
+		if _, ok := seen[item.RecordID]; ok {
+			continue
+		}
+		seen[item.RecordID] = struct{}{}
+		ids = append(ids, item.RecordID)
+	}
+	return ids
+}
+
+func isReplayablePendingState(state PendingInputState) bool {
+	return state == PendingInputStatePending || state == PendingInputStateAdmitted
+}
+
 func (e *Engine) beginActiveTurn(turnID string) string {
 	e.pendingMu.Lock()
 	if e.activeTurnID == "" {
@@ -603,19 +733,99 @@ func (e *Engine) beginActiveTurn(turnID string) string {
 	return turnID
 }
 
+func (e *Engine) restorePendingInput(turnID, skipMessageID string) error {
+	if e == nil || turnID == "" {
+		return nil
+	}
+	e.pendingMu.Lock()
+	queue := e.pendingInputQueueLocked()
+	if queue == nil {
+		e.pendingMu.Unlock()
+		return nil
+	}
+	max := e.effectiveMaxPendingInputs()
+	remaining := max - len(e.pendingInput)
+	if remaining <= 0 {
+		e.pendingMu.Unlock()
+		return nil
+	}
+	records, err := queue.Replayable(turnID, remaining)
+	if err != nil {
+		e.pendingMu.Unlock()
+		return err
+	}
+	var alreadyProcessed []string
+	for _, record := range records {
+		if e.hasPendingRecordLocked(record.ID) {
+			continue
+		}
+		if skipMessageID != "" && record.MessageID == skipMessageID {
+			continue
+		}
+		if e.sessionHasMessageIDLocked(record.MessageID) {
+			alreadyProcessed = append(alreadyProcessed, record.ID)
+			continue
+		}
+		e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: record.ID, Message: record.Message})
+	}
+	e.pendingMu.Unlock()
+	if len(alreadyProcessed) > 0 {
+		return queue.MarkProcessed(alreadyProcessed)
+	}
+	return nil
+}
+
+func (e *Engine) markPendingInputMessageProcessed(msg llm.Message) error {
+	if e == nil || msg.ID == "" {
+		return nil
+	}
+	e.pendingMu.Lock()
+	queue := e.pendingInputQueueLocked()
+	e.pendingMu.Unlock()
+	if queue == nil {
+		return nil
+	}
+	records, err := queue.Records()
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for _, record := range records {
+		if record.MessageID == msg.ID && isReplayablePendingState(record.State) {
+			ids = append(ids, record.ID)
+		}
+	}
+	return queue.MarkProcessed(ids)
+}
+
 func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	e.pendingMu.Lock()
-	pending := append([]llm.Message(nil), e.pendingInput...)
+	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
 	max := e.effectiveMaxPendingInputs()
+	queue := e.pendingInputQueueLocked()
 	e.pendingMu.Unlock()
 	if len(pending) == 0 {
 		return nil
 	}
-	for _, msg := range pending {
+	recordIDs := pendingRecordIDs(pending)
+	if queue != nil {
+		if err := queue.MarkAdmitted(recordIDs, turnID); err != nil {
+			return fmt.Errorf("mark pending input admitted: %w", err)
+		}
+	}
+	var processedIDs []string
+	for _, item := range pending {
+		msg := item.Message
+		if msg.ID != "" && e.sessionHasMessageIDLocked(msg.ID) {
+			if item.RecordID != "" {
+				processedIDs = append(processedIDs, item.RecordID)
+			}
+			continue
+		}
 		policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
 		projected, projection, err := e.projectMessageLocked(msg, policy)
 		if err != nil {
@@ -625,6 +835,14 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 		e.emitProjectionApplied(turnID, projection)
 		if err := e.Session.Append(msg); err != nil {
 			return fmt.Errorf("session append pending input: %w", err)
+		}
+		if item.RecordID != "" {
+			processedIDs = append(processedIDs, item.RecordID)
+		}
+	}
+	if queue != nil {
+		if err := queue.MarkProcessed(processedIDs); err != nil {
+			return fmt.Errorf("mark pending input processed: %w", err)
 		}
 	}
 	e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
@@ -663,12 +881,18 @@ func (e *Engine) finishActiveTurn(turnID string, dropPending bool) {
 	}
 	e.activeTurnID = ""
 	dropped := 0
+	var droppedIDs []string
+	queue := e.pendingInputQueueLocked()
 	if dropPending {
 		dropped = len(e.pendingInput)
+		droppedIDs = pendingRecordIDs(e.pendingInput)
 		e.pendingInput = nil
 	}
 	max := e.effectiveMaxPendingInputs()
 	e.pendingMu.Unlock()
+	if queue != nil && len(droppedIDs) > 0 {
+		_ = queue.MarkDropped(droppedIDs)
+	}
 	if dropped > 0 {
 		e.emit(events.Event{Type: "pending_input.dropped", TurnID: turnID, Payload: PendingInputDroppedPayload{
 			Count:            dropped,

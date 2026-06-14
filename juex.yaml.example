@@ -25,6 +25,11 @@ model: openai/gpt-4.1
 #   # args: ["-NoProfile", "-Command"]
 #   # path_style: windows
 
+# Optional runtime policy. Durations use Go duration syntax.
+# runtime:
+#   pending_input_ttl: 15m
+#   external_event_ttl: 24h
+
 # Optional lifecycle command hooks. User-global hooks in ~/.juex/juex.yaml are
 # trusted by location. Project-local hooks must set trusted: true before Juex
 # will execute them.

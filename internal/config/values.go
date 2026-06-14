@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
 )
@@ -124,13 +125,17 @@ func (c Config) ResourcePaths() ResourcePaths {
 
 // RuntimeLimits contains runtime policy values after config resolution.
 type RuntimeLimits struct {
-	ContextWindow int
-	Compaction    CompactionConfig
+	ContextWindow    int
+	Compaction       CompactionConfig
+	PendingInputTTL  time.Duration
+	ExternalEventTTL time.Duration
 }
 
 func (c Config) RuntimeLimits() RuntimeLimits {
 	return RuntimeLimits{
-		ContextWindow: c.ContextWindow,
-		Compaction:    c.Compaction,
+		ContextWindow:    c.ContextWindow,
+		Compaction:       c.Compaction,
+		PendingInputTTL:  c.PendingInputTTL,
+		ExternalEventTTL: c.ExternalEventTTL,
 	}
 }

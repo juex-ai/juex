@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -35,6 +36,8 @@ type Config struct {
 	ProviderCapabilities      llm.CapabilityOverrides
 	ProviderCompat            llm.CompatOptions
 	Compaction                CompactionConfig
+	PendingInputTTL           time.Duration
+	ExternalEventTTL          time.Duration
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
 	EnableUserGlobalResources bool
@@ -167,13 +170,50 @@ type compactionConfig struct {
 	MaxAutoFailures            int   `yaml:"max_auto_failures"`
 }
 
-type runtimeConfig struct{}
+type runtimeConfig struct {
+	PendingInputTTL     time.Duration
+	PendingInputTTLSet  bool
+	ExternalEventTTL    time.Duration
+	ExternalEventTTLSet bool
+}
 
-func (*runtimeConfig) UnmarshalYAML(*yaml.Node) error {
+func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
+	if node == nil || node.Kind == 0 || node.Tag == "!!null" {
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("runtime must be a mapping")
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := strings.TrimSpace(node.Content[i].Value)
+		value := node.Content[i+1]
+		switch key {
+		case "pending_input_ttl":
+			d, err := parseRuntimeDuration(key, value)
+			if err != nil {
+				return err
+			}
+			c.PendingInputTTL = d
+			c.PendingInputTTLSet = true
+		case "external_event_ttl":
+			d, err := parseRuntimeDuration(key, value)
+			if err != nil {
+				return err
+			}
+			c.ExternalEventTTL = d
+			c.ExternalEventTTLSet = true
+		default:
+			// Legacy runtime budget keys were accepted before runtime had
+			// configurable policy; keep ignoring unknown runtime keys so old
+			// workspace configs do not fail to load.
+		}
+	}
 	return nil
 }
 
 const DefaultContextWindow = runtimepolicy.DefaultContextWindowTokens
+const DefaultPendingInputTTL = 15 * time.Minute
+const DefaultExternalEventTTL = 24 * time.Hour
 
 var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
@@ -226,6 +266,8 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
+		PendingInputTTL:           DefaultPendingInputTTL,
+		ExternalEventTTL:          DefaultExternalEventTTL,
 		EnableUserGlobalResources: true,
 		providerConfigs:           map[string]providerConfig{},
 	}
@@ -425,6 +467,7 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, 
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
+	applyRuntimeConfig(cfg, fc.Runtime)
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
 	}
@@ -466,6 +509,27 @@ func ParseBoolValue(value string) (bool, error) {
 	default:
 		return false, fmt.Errorf("expected boolean value true/false or 1/0, got %q", value)
 	}
+}
+
+func parseRuntimeDuration(field string, node *yaml.Node) (time.Duration, error) {
+	if node == nil || node.Tag == "!!null" {
+		return 0, nil
+	}
+	if node.Kind != yaml.ScalarNode {
+		return 0, fmt.Errorf("runtime.%s must be a duration string", field)
+	}
+	value := strings.TrimSpace(node.Value)
+	if value == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("runtime.%s: %w", field, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("runtime.%s must be positive", field)
+	}
+	return d, nil
 }
 
 func DefaultCompactionConfig() CompactionConfig {
@@ -736,6 +800,15 @@ func applyCompactionConfig(cfg *Config, c compactionConfig) {
 	}
 	if c.MaxAutoFailures > 0 {
 		cfg.Compaction.MaxAutoFailures = c.MaxAutoFailures
+	}
+}
+
+func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
+	if c.PendingInputTTLSet {
+		cfg.PendingInputTTL = c.PendingInputTTL
+	}
+	if c.ExternalEventTTLSet {
+		cfg.ExternalEventTTL = c.ExternalEventTTL
 	}
 }
 
