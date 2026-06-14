@@ -67,7 +67,7 @@ func TestRootHelpListsSubcommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := out.String()
-	for _, want := range []string{"run", "repl", "sessions", "serve", "version", "Available Commands"} {
+	for _, want := range []string{"run", "repl", "sessions", "bundle", "serve", "version", "Available Commands"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("help missing %q in:\n%s", want, body)
 		}
@@ -143,6 +143,9 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "list"`,
 		`"name": "show"`,
 		`"name": "serve"`,
+		`"name": "bundle"`,
+		`"name": "include-artifacts"`,
+		`"name": "include-worktree-summary"`,
 		`"name": "addr"`,
 		`"name": "unsafe-bind-any"`,
 		`"name": "resume"`,  // flag

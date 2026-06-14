@@ -26,6 +26,7 @@ mise exec -- go test ./tests/e2e -count=1
 | CLI model override | `TestLiveBinary_ModelFlagUsesUserGlobalProvider` | The compiled binary can select a model from user-global provider config with root `--model` from an empty workdir. |
 | Provider protocols | `TestLiveBinary_ProviderProtocolAndThinkingMatrix` | The compiled binary routes config to OpenAI Responses, custom OpenAI Chat, and DeepSeek-compatible Chat, including thinking-effort capability gates. |
 | CLI exec tool | `TestLiveBinary_CLIRunExecCommandTool` | The compiled binary runs `juex run --debug --json`, receives an OpenAI Chat `exec_command` tool call from a fake provider, executes it, replays the tool result, and persists the transcript plus debug artifacts. |
+| Debug bundle CLI | `TestLiveBinary_BundleCreatesRedactedArchive` | The compiled binary runs `juex bundle --session ... --out ...`, writes a tar.gz archive, and verifies session/env secrets are redacted. |
 | Lifecycle hooks | `TestEndToEnd_CommandLifecycleHooks` | Command hooks compose across app, config, runtime, sessions, tools, and event JSONL for prompt context injection, pre-tool denial, and stop continuation. |
 | CLI schema | `TestLiveBinary_SchemaIncludesAllSubcommands` | The compiled binary exposes the documented command tree. |
 | Web turn API | `TestWeb_TurnRoundTripPersists` | Web session creation, turn submission, async completion, and persisted transcript reads. |

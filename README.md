@@ -75,6 +75,7 @@ If you built from source without installing, use `./dist/juex` instead of
 | `juex sessions context <id>` | Print the active provider context for a session. |
 | `juex sessions compact <id> --instructions "<focus>"` | Append a manual compact summary marker to a session. |
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
+| `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 | `juex serve` | Start the React web UI and JSON/SSE API. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |
 
@@ -158,6 +159,12 @@ Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop
 checks. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
 project-local hooks must set `hooks.trusted: true` before Juex executes them.
+
+`juex bundle --session <id> --out <file.tar.gz>` creates a local archive for
+debugging one session. The archive includes a manifest, runtime snapshot,
+conversation, events, observability files, and logs when present. Redaction is
+enabled by default for secret-like values; use `--include-artifacts` or
+`--include-worktree-summary` to add optional context.
 
 `--debug` enables detailed session-local observability. `--log-level` accepts
 `debug`, `info`, `warn`, or `error`; the default is `info`, and `--debug`
