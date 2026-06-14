@@ -70,7 +70,9 @@ export function Sessions() {
                   state:
                     turn.command && !turn.turn_id
                       ? { commandInput: text, command: turn.command }
-                      : undefined,
+                      : turn.turn_id
+                        ? { activeTurnID: turn.turn_id }
+                        : undefined,
                 });
               } catch (e) {
                 const message =
