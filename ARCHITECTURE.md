@@ -907,6 +907,16 @@ emitted as warning-style compaction error events and do not fail or roll back
 the persisted compaction. `Stop` can block turn completion by queuing a
 `continue_prompt`.
 
+Tool failures are also tracked in a per-turn unresolved-failure ledger inside
+`internal/runtime`. The ledger classifies each failed tool result as
+`recoverable`, `external_blocked`, `runtime_fatal`, `repeated_stuck`, or
+`nonblocking_exploratory`, records fingerprints and bounded output previews,
+and emits `tool.failure.*` events. Recoverable or repeated unresolved failures
+can inject one provider-visible runtime observation before finish, while later
+successful checks or related file writes/edits mark records `resolved` or
+`stale`. This keeps ordinary tool errors in the model loop without introducing
+a generic max-iteration stop.
+
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine
 exists. User-global hooks in `~/.juex/juex.yaml` are trusted by location;

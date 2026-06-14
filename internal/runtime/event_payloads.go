@@ -77,6 +77,70 @@ type FinishAttemptedPayload struct {
 	OutputLen  int            `json:"output_len"`
 }
 
+type ToolFailureClassification string
+
+const (
+	ToolFailureRecoverable            ToolFailureClassification = "recoverable"
+	ToolFailureExternalBlocked        ToolFailureClassification = "external_blocked"
+	ToolFailureRuntimeFatal           ToolFailureClassification = "runtime_fatal"
+	ToolFailureRepeatedStuck          ToolFailureClassification = "repeated_stuck"
+	ToolFailureNonblockingExploratory ToolFailureClassification = "nonblocking_exploratory"
+)
+
+type ToolFailureStatus string
+
+const (
+	ToolFailureStatusUnresolved ToolFailureStatus = "unresolved"
+	ToolFailureStatusResolved   ToolFailureStatus = "resolved"
+	ToolFailureStatusStale      ToolFailureStatus = "stale"
+	ToolFailureStatusSuperseded ToolFailureStatus = "superseded"
+)
+
+type ToolFailureRecordedPayload struct {
+	Fingerprint     string                    `json:"fingerprint"`
+	Name            string                    `json:"name"`
+	ToolUseID       string                    `json:"tool_use_id"`
+	Classification  ToolFailureClassification `json:"classification"`
+	Status          ToolFailureStatus         `json:"status"`
+	Blocking        bool                      `json:"blocking"`
+	Occurrences     int                       `json:"occurrences"`
+	Error           string                    `json:"error,omitempty"`
+	ExitCode        *int                      `json:"exit_code,omitempty"`
+	OutputLen       int                       `json:"output_len,omitempty"`
+	OutputPreview   string                    `json:"output_preview,omitempty"`
+	RelatedPaths    []string                  `json:"related_paths,omitempty"`
+	LatestModUnixMS int64                     `json:"latest_mod_unix_ms,omitempty"`
+}
+
+type ToolFailureResolvedPayload struct {
+	Fingerprint   string            `json:"fingerprint"`
+	Name          string            `json:"name"`
+	ToolUseID     string            `json:"tool_use_id"`
+	Status        ToolFailureStatus `json:"status"`
+	Reason        string            `json:"reason"`
+	ResolverName  string            `json:"resolver_name"`
+	ResolverUseID string            `json:"resolver_tool_use_id"`
+}
+
+type ToolFailureStalePayload struct {
+	Fingerprint     string            `json:"fingerprint"`
+	Name            string            `json:"name"`
+	ToolUseID       string            `json:"tool_use_id"`
+	Status          ToolFailureStatus `json:"status"`
+	Reason          string            `json:"reason"`
+	ResolverName    string            `json:"resolver_name"`
+	ResolverUseID   string            `json:"resolver_tool_use_id"`
+	RelatedPaths    []string          `json:"related_paths,omitempty"`
+	LatestModUnixMS int64             `json:"latest_mod_unix_ms,omitempty"`
+}
+
+type ToolFailureContinuedPayload struct {
+	FailureCount          int      `json:"failure_count"`
+	Fingerprints          []string `json:"fingerprints"`
+	Repeated              bool     `json:"repeated"`
+	ContinuationPromptLen int      `json:"continuation_prompt_len"`
+}
+
 type ToolCallPayload struct {
 	ToolUseID      string         `json:"tool_use_id"`
 	Name           string         `json:"name"`
@@ -117,6 +181,7 @@ type ToolErroredPayload struct {
 	Len            int    `json:"len,omitempty"`
 	Preview        string `json:"preview,omitempty"`
 	TimedOut       bool   `json:"timed_out,omitempty"`
+	ExitCode       *int   `json:"exit_code,omitempty"`
 }
 
 type PendingInputQueuedPayload struct {

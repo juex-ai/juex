@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1990,6 +1991,269 @@ func TestTurn_UnknownToolName(t *testing.T) {
 	tr := eng.Session.History[2]
 	if !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "unknown tool") {
 		t.Fatalf("expected unknown-tool error in result; got %+v", tr.Blocks[0])
+	}
+}
+
+func TestToolFailureClassificationMappings(t *testing.T) {
+	cases := []struct {
+		name     string
+		obs      toolFailureObservation
+		want     ToolFailureClassification
+		blocking bool
+	}{
+		{
+			name: "shell_exit_recoverable",
+			obs: toolFailureObservation{
+				ToolName: "exec_command",
+				Input:    map[string]any{"cmd": "go test ./..."},
+				Content:  "Process exited with code 1\nOutput:\nFAIL",
+				ExitCode: intPtr(1),
+			},
+			want:     ToolFailureRecoverable,
+			blocking: true,
+		},
+		{
+			name: "timeout_external_blocked",
+			obs: toolFailureObservation{
+				ToolName: "exec_command",
+				Content:  "[tool error]\ntools: exec_command timed out after 1s",
+				TimedOut: true,
+			},
+			want:     ToolFailureExternalBlocked,
+			blocking: true,
+		},
+		{
+			name: "unknown_tool_runtime_fatal",
+			obs: toolFailureObservation{
+				ToolName: "missing_tool",
+				Content:  `tools: unknown tool "missing_tool"`,
+			},
+			want:     ToolFailureRuntimeFatal,
+			blocking: true,
+		},
+		{
+			name: "grep_no_matches_nonblocking",
+			obs: toolFailureObservation{
+				ToolName: "grep",
+				Content:  "(no matches)",
+			},
+			want:     ToolFailureNonblockingExploratory,
+			blocking: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyToolFailure(tc.obs)
+			if got.Classification != tc.want || got.Blocking != tc.blocking {
+				t.Fatalf("classifyToolFailure() = %+v, want %s blocking=%t", got, tc.want, tc.blocking)
+			}
+		})
+	}
+}
+
+func TestTurn_ContinuesAfterUnresolvedBlockingToolFailure(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "blocked after observation"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "check_ready",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "artifact is not ready", fmt.Errorf("check failed")
+		},
+	})
+
+	var recorded ToolFailureRecordedPayload
+	var continued ToolFailureContinuedPayload
+	bus.Subscribe("tool.failure.recorded", func(e events.Event) {
+		recorded, _ = e.Payload.(ToolFailureRecordedPayload)
+	})
+	bus.Subscribe("tool.failure.continued", func(e events.Event) {
+		continued, _ = e.Payload.(ToolFailureContinuedPayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "finish the artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "blocked after observation" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(prov.histories) != 3 {
+		t.Fatalf("provider calls = %d, want continuation call", len(prov.histories))
+	}
+	observation := prov.histories[2][len(prov.histories[2])-1].FirstText()
+	for _, want := range []string{"Runtime observation", "unresolved tool failure", "check_ready", "check failed"} {
+		if !strings.Contains(observation, want) {
+			t.Fatalf("continuation observation missing %q:\n%s", want, observation)
+		}
+	}
+	if recorded.Classification != ToolFailureRecoverable || recorded.Fingerprint == "" || !recorded.Blocking {
+		t.Fatalf("recorded payload = %+v", recorded)
+	}
+	if continued.FailureCount != 1 || continued.ContinuationPromptLen == 0 {
+		t.Fatalf("continued payload = %+v", continued)
+	}
+}
+
+func TestTurn_SuccessfulCheckResolvesToolFailure(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_2", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "verified"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	var attempts int
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "check_ready",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			attempts++
+			if attempts == 1 {
+				return "artifact is not ready", fmt.Errorf("check failed")
+			}
+			return "artifact is ready", nil
+		},
+	})
+
+	var resolved ToolFailureResolvedPayload
+	bus.Subscribe("tool.failure.resolved", func(e events.Event) {
+		resolved, _ = e.Payload.(ToolFailureResolvedPayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "verify the artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "verified" {
+		t.Fatalf("out = %q", out)
+	}
+	if resolved.Status != ToolFailureStatusResolved || resolved.Fingerprint == "" || resolved.Reason == "" {
+		t.Fatalf("resolved payload = %+v", resolved)
+	}
+}
+
+func TestTurn_FileMutationMarksToolFailureStale(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "artifact.txt")
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": target}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "write_1", ToolName: "write", Input: map[string]any{"path": target, "content": "ready\n"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "updated"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, true)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "check_ready",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "artifact is not ready", fmt.Errorf("check failed")
+		},
+	})
+
+	var stale ToolFailureStalePayload
+	bus.Subscribe("tool.failure.stale", func(e events.Event) {
+		stale, _ = e.Payload.(ToolFailureStalePayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "update the artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "updated" {
+		t.Fatalf("out = %q", out)
+	}
+	if stale.Status != ToolFailureStatusStale || stale.Fingerprint == "" || stale.Reason == "" {
+		t.Fatalf("stale payload = %+v", stale)
+	}
+}
+
+func TestToolFailureLedgerReopensStaleFingerprintOnNewFailure(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "artifact.txt")
+	ledger := newToolFailureLedger()
+	fail := toolFailureObservation{
+		ToolName:  "check_ready",
+		ToolUseID: "check_1",
+		Input:     map[string]any{"path": target},
+		Content:   "artifact is not ready\n[tool error]\ncheck failed",
+		Error:     "check failed",
+	}
+	recorded := ledger.recordFailure(fail)
+	if recorded.Status != ToolFailureStatusUnresolved || recorded.Occurrences != 1 {
+		t.Fatalf("recorded = %+v", recorded)
+	}
+	if err := os.WriteFile(target, []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stale := ledger.recordSuccess(toolFailureObservation{
+		ToolName:  "write",
+		ToolUseID: "write_1",
+		Input:     map[string]any{"path": target},
+		Content:   "ok",
+	})
+	if len(stale) != 1 || stale[0].Status != ToolFailureStatusStale {
+		t.Fatalf("stale = %+v", stale)
+	}
+
+	reopened := ledger.recordFailure(fail)
+	if reopened.Status != ToolFailureStatusUnresolved || reopened.Occurrences != 1 {
+		t.Fatalf("reopened = %+v", reopened)
+	}
+}
+
+func TestTurn_RepeatedFailureUsesRepeatedStuckContinuation(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_2", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "changed approach or blocked"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "check_ready",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "artifact is not ready", fmt.Errorf("check failed")
+		},
+	})
+
+	var lastRecorded ToolFailureRecordedPayload
+	bus.Subscribe("tool.failure.recorded", func(e events.Event) {
+		lastRecorded, _ = e.Payload.(ToolFailureRecordedPayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "finish the artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "changed approach or blocked" {
+		t.Fatalf("out = %q", out)
+	}
+	if lastRecorded.Classification != ToolFailureRepeatedStuck || lastRecorded.Occurrences != 2 {
+		t.Fatalf("last recorded payload = %+v", lastRecorded)
+	}
+	observation := prov.histories[3][len(prov.histories[3])-1].FirstText()
+	for _, want := range []string{"repeated_stuck", "different approach"} {
+		if !strings.Contains(observation, want) {
+			t.Fatalf("repeated continuation missing %q:\n%s", want, observation)
+		}
 	}
 }
 

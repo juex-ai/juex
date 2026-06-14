@@ -161,6 +161,11 @@ func TestShellHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stdout, "declined")
 		os.Exit(1)
 	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "fail" {
+		fmt.Fprintln(os.Stdout, "before failure stdout")
+		fmt.Fprintln(os.Stderr, "before failure stderr")
+		os.Exit(7)
+	}
 	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "tty" {
 		fmt.Fprintf(os.Stdout, "stdin_tty:%t stdout_tty:%t stderr_tty:%t\n", isCharDevice(os.Stdin), isCharDevice(os.Stdout), isCharDevice(os.Stderr))
 		fmt.Fprint(os.Stdout, "enter value: ")
@@ -611,6 +616,38 @@ func TestBuiltins_ExecCommand(t *testing.T) {
 	}
 	if !strings.Contains(out, "Original token count:") {
 		t.Fatalf("exec output = %q, want original token count", out)
+	}
+}
+
+func TestBuiltins_ExecCommandNonZeroExitReturnsError(t *testing.T) {
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "fail")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":     "fail",
+		"timeout": 2,
+	})
+	if err == nil {
+		t.Fatalf("exec_command err = nil, output = %q", out)
+	}
+	if code, ok := ExitCodeFromError(err); !ok || code != 7 {
+		t.Fatalf("exec_command err = %v, want shell exit code 7", err)
+	}
+	if !strings.Contains(out, "Process exited with code 7") {
+		t.Fatalf("exec output = %q, want exit code", out)
+	}
+	if !strings.Contains(out, "before failure stdout") || !strings.Contains(out, "before failure stderr") {
+		t.Fatalf("exec output = %q, want captured stdout/stderr", out)
 	}
 }
 

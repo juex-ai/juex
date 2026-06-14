@@ -84,6 +84,7 @@ type Engine struct {
 	pendingInput []queuedPendingInput
 
 	autoCompactFailures int
+	toolFailures        *toolFailureLedger
 }
 
 type HookRunner interface {
@@ -259,8 +260,11 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		turnID = newID()
 	}
 	turnID = e.beginActiveTurn(turnID)
+	previousFailures := e.toolFailures
+	e.toolFailures = newToolFailureLedger()
 	activeClosed := false
 	defer func() {
+		e.toolFailures = previousFailures
 		if !activeClosed {
 			e.finishActiveTurn(turnID, err != nil)
 		}
@@ -318,6 +322,17 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 				StopReason: recorded.stopReason,
 				OutputLen:  len(lastText),
 			}})
+			if prompt, payload, ok := e.toolFailureContinuation(); ok {
+				if _, err := e.EnqueuePendingInput(turnCtx, prompt); err != nil {
+					return "", e.failTurn(turnID, err)
+				}
+				e.emit(events.Event{Type: "tool.failure.continued", TurnID: turnID, Payload: payload})
+				if !e.finishActiveTurnIfNoPending(turnID) {
+					continue
+				}
+				activeClosed = true
+				break
+			}
 			stopReq := e.newHookRequest(hooks.EventStop, turnID)
 			stopReq.UserInput = prepared.userMessage.FirstText()
 			stopResults, err := e.runHooks(turnCtx, stopReq)
@@ -479,6 +494,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
 	results := e.runToolCalls(ctx, turnID, toolCalls)
+	e.recordToolFailureBatch(turnID, toolCalls, results)
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 	if err != nil {
@@ -604,6 +620,11 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		}
 		if info.TimedOut {
 			payload.TimedOut = true
+		}
+		if code, ok := tools.ExitCodeFromError(err); ok {
+			payload.ExitCode = intPtr(code)
+		} else if code := firstExitCode(nil, block.Content); code != nil {
+			payload.ExitCode = code
 		}
 		e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: payload})
 		return

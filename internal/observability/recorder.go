@@ -332,6 +332,18 @@ func classify(ev events.Event) eventMeta {
 		meta.Status = "error"
 		meta.ErrorKind = classifyErrorKind(stringValue(payload["error"]))
 	}
+	if ev.Type == "tool.failure.recorded" {
+		meta.Level = LevelWarn
+		meta.Status = "unresolved"
+		meta.ErrorKind = stringValue(payload["classification"])
+	}
+	if ev.Type == "tool.failure.continued" {
+		meta.Level = LevelWarn
+		meta.Status = "continued"
+	}
+	if ev.Type == "tool.failure.resolved" || ev.Type == "tool.failure.stale" {
+		meta.Status = stringValue(payload["status"])
+	}
 	if ev.Type == "context.compact.errored" {
 		meta.Level = LevelWarn
 	}
@@ -451,6 +463,32 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("chunk_id")
 		add("stream")
 		add("text")
+	case "tool.failure.recorded":
+		add("name")
+		add("tool_use_id")
+		add("fingerprint")
+		add("classification")
+		add("status")
+		add("blocking")
+		add("occurrences")
+		add("exit_code")
+		add("error")
+		add("output_preview")
+		add("related_paths")
+	case "tool.failure.resolved", "tool.failure.stale":
+		add("name")
+		add("tool_use_id")
+		add("fingerprint")
+		add("status")
+		add("reason")
+		add("resolver_name")
+		add("resolver_tool_use_id")
+		add("related_paths")
+	case "tool.failure.continued":
+		add("failure_count")
+		add("fingerprints")
+		add("repeated")
+		add("continuation_prompt_len")
 	case "context.compact.started", "context.compact.completed", "context.compact.errored", "context.compact.skipped":
 		add("reason")
 		add("auto")

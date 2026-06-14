@@ -91,6 +91,23 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 	return p.steps[idx], nil
 }
 
+type bareScriptProvider struct {
+	steps   []llm.Response
+	called  atomic.Int32
+	history [][]llm.Message
+}
+
+func (p *bareScriptProvider) Name() string { return "script" }
+
+func (p *bareScriptProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	idx := int(p.called.Add(1) - 1)
+	p.history = append(p.history, append([]llm.Message{}, hist...))
+	if idx >= len(p.steps) {
+		return llm.Response{}, fmt.Errorf("script exhausted at call %d", idx)
+	}
+	return p.steps[idx], nil
+}
+
 func keys(m map[string]bool) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -371,6 +388,136 @@ func TestEndToEnd_FullStack(t *testing.T) {
 
 	// -- MCP integration: tool.completed for the echo call should have been emitted. --
 	// (Already implied by toolErrs == 0; this is a stronger check on payload size.)
+}
+
+func TestEndToEnd_ToolFailureLedgerContinuation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("e2e is slow")
+	}
+
+	root := t.TempDir()
+	target := filepath.Join(root, "artifact.txt")
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	bus := events.NewBus()
+	sess.SubscribeBus(bus)
+
+	reg := tools.NewRegistry()
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: root, Shell: tools.DefaultShellProfile()})
+	reg.MustRegister(tools.Tool{
+		Name:        "check_ready",
+		Description: "test-only readiness check",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"path": map[string]any{"type": "string"}},
+			"required":   []string{"path"},
+		},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			path, _ := in["path"].(string)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "artifact is missing", fmt.Errorf("check failed: %w", err)
+			}
+			if !strings.Contains(string(data), "ready") {
+				return "artifact is not ready", errors.New("check failed: marker missing")
+			}
+			return "artifact ready", nil
+		},
+	})
+
+	prov := &bareScriptProvider{
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": target}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "done too early"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "write_1", ToolName: "write", Input: map[string]any{"path": target, "content": "ready\n"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "check_2", ToolName: "check_ready", Input: map[string]any{"path": target}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: artifact verified"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+
+	eng := &runtime.Engine{
+		Provider: prov,
+		Tools:    reg,
+		Bus:      bus,
+		Session:  sess,
+		Prompt: &prompt.Builder{
+			AgentsMDDirs: []string{root},
+			Now:          func() time.Time { return time.Date(2026, 6, 14, 9, 0, 0, 0, time.UTC) },
+		},
+	}
+
+	out, err := eng.Turn(context.Background(), "make the artifact ready")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "TASK COMPLETE: artifact verified" {
+		t.Fatalf("out = %q", out)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "ready\n" {
+		t.Fatalf("artifact data=%q err=%v", data, err)
+	}
+	if got := int(prov.called.Load()); got != 5 {
+		t.Fatalf("provider calls = %d, want 5", got)
+	}
+	observation := messagesText(prov.history[2])
+	for _, want := range []string{"Runtime observation", "unresolved tool failure", "check_ready", "check failed"} {
+		if !strings.Contains(observation, want) {
+			t.Fatalf("provider did not receive continuation observation %q:\n%s", want, observation)
+		}
+	}
+
+	convText := strings.Join(readLines(t, filepath.Join(sess.Dir, "conversation.jsonl")), "\n")
+	if !strings.Contains(convText, "Runtime observation") {
+		t.Fatalf("conversation missing runtime observation:\n%s", convText)
+	}
+
+	eventLines := readLines(t, filepath.Join(sess.Dir, "events.jsonl"))
+	seen := map[string]bool{}
+	var payloadText strings.Builder
+	for i, line := range eventLines {
+		var ev events.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("event line %d: %v\n%s", i+1, err, line)
+		}
+		seen[ev.Type] = true
+		payload, _ := json.Marshal(ev.Payload)
+		payloadText.Write(payload)
+		payloadText.WriteByte('\n')
+	}
+	for _, want := range []string{"tool.failure.recorded", "tool.failure.continued", "tool.failure.stale"} {
+		if !seen[want] {
+			t.Fatalf("events missing %q; seen=%v", want, seen)
+		}
+	}
+	for _, want := range []string{"recoverable", "artifact.txt", "check_ready"} {
+		if !strings.Contains(payloadText.String(), want) {
+			t.Fatalf("event payloads missing %q:\n%s", want, payloadText.String())
+		}
+	}
 }
 
 func TestEndToEnd_FullStackPortable(t *testing.T) {
