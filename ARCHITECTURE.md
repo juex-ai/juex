@@ -615,10 +615,15 @@ re-attached to history in the original order.
 
 While a turn is active, user messages and critical external events may be
 queued as pending input. The queue is bounded (`MaxPendingInputs`), rejects
-overflow loudly, and drains only before the next provider call. That keeps
-assistant `tool_use` and user `tool_result` adjacency intact while still
-allowing steering messages to join the active turn without mid-stream
-interrupts or rollback.
+overflow loudly, and drains only before the next provider call. Accepted
+records are also appended to session-local `pending_input.jsonl` with stable
+record/message ids, state, timestamps, attempts, and expiry. On restart, the
+runtime reloads unexpired `pending` or `admitted` records, skips records whose
+stable message id is already present in conversation history, and marks
+processed records so the same user input or external event is not executed
+twice. That keeps assistant `tool_use` and user `tool_result` adjacency intact
+while still allowing steering messages to join the active turn without
+mid-stream interrupts or rollback.
 
 ### 3.7 CLI (cobra)
 

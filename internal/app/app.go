@@ -11,6 +11,8 @@ package app
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -231,6 +233,14 @@ func New(opts Options) (*App, error) {
 		closeSessionResources()
 		return nil, err
 	}
+	pendingInputTTL := runtimeLimits.PendingInputTTL
+	if pendingInputTTL <= 0 {
+		pendingInputTTL = runtime.DefaultPendingInputTTL
+	}
+	externalEventTTL := runtimeLimits.ExternalEventTTL
+	if externalEventTTL <= 0 {
+		externalEventTTL = runtime.DefaultExternalEventTTL
+	}
 
 	eng := &runtime.Engine{
 		Provider: provider,
@@ -247,8 +257,11 @@ func New(opts Options) (*App, error) {
 			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
 			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
 		},
-		ContextWindow: runtimeLimits.ContextWindow,
-		Compaction:    runtimeLimits.Compaction,
+		PendingInputQueue: runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
+		PendingInputTTL:   pendingInputTTL,
+		ExternalEventTTL:  externalEventTTL,
+		ContextWindow:     runtimeLimits.ContextWindow,
+		Compaction:        runtimeLimits.Compaction,
 	}
 
 	a := &App{
@@ -370,6 +383,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	a.sessionLock = sessLock
 	if a.Engine != nil {
 		a.Engine.Session = sess
+		a.Engine.PendingInputQueue = runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{})
 	}
 	a.sessionUnsubscribe = sess.SubscribeBus(a.Bus)
 	if err := a.attachObservability(sess); err != nil {
@@ -458,13 +472,37 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	}
 	msg := llm.TextMessage(llm.RoleUser, formatMCPNotificationText(n, eventType))
 	msg.Kind = llm.MessageKindMCPEvent
-	if _, err := a.Engine.EnqueuePendingMessage(ctx, msg); err == nil {
+	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
+		ID:  mcpNotificationPendingInputID(n, eventType),
+		TTL: a.Engine.ExternalEventTTL,
+	}); err == nil {
 		return nil
 	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
 		return err
 	}
 	_, err := a.Engine.TurnMessage(ctx, msg)
 	return err
+}
+
+func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string {
+	body, err := json.Marshal(struct {
+		ServerName string         `json:"server_name"`
+		Method     string         `json:"method,omitempty"`
+		EventType  string         `json:"event_type,omitempty"`
+		Content    string         `json:"content,omitempty"`
+		Params     map[string]any `json:"params,omitempty"`
+	}{
+		ServerName: n.ServerName,
+		Method:     n.Method,
+		EventType:  eventType,
+		Content:    n.Content,
+		Params:     n.Params,
+	})
+	if err != nil {
+		body = []byte(n.ServerName + ":" + eventType + ":" + n.Method + ":" + n.Content)
+	}
+	sum := sha256.Sum256(body)
+	return "mcp-" + hex.EncodeToString(sum[:8])
 }
 
 func formatMCPNotificationText(n mcp.Notification, eventType string) string {

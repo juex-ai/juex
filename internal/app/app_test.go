@@ -122,12 +122,14 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	compaction.ReserveTokens = 123
 	a, err := New(Options{
 		Config: config.Config{
-			ProviderID:    "openai",
-			APIKey:        "x",
-			Model:         "m",
-			WorkDir:       dir,
-			ContextWindow: 2048,
-			Compaction:    compaction,
+			ProviderID:       "openai",
+			APIKey:           "x",
+			Model:            "m",
+			WorkDir:          dir,
+			ContextWindow:    2048,
+			Compaction:       compaction,
+			PendingInputTTL:  30 * time.Minute,
+			ExternalEventTTL: 48 * time.Hour,
 		},
 		Provider: &stubProvider{replies: []llm.Response{}},
 		WorkDir:  dir,
@@ -141,6 +143,9 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	}
 	if a.Engine.Compaction.ReserveTokens != 123 {
 		t.Fatalf("Engine.Compaction.ReserveTokens = %d, want 123", a.Engine.Compaction.ReserveTokens)
+	}
+	if a.Engine.PendingInputTTL != 30*time.Minute || a.Engine.ExternalEventTTL != 48*time.Hour {
+		t.Fatalf("Engine pending TTLs = %s/%s", a.Engine.PendingInputTTL, a.Engine.ExternalEventTTL)
 	}
 }
 
@@ -484,6 +489,17 @@ func TestApp_MCPNotificationQueuesDuringActiveTurn(t *testing.T) {
 	case <-prov.started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("provider did not start")
+	}
+	if err := a.HandleMCPNotification(context.Background(), mcp.Notification{
+		ServerName: "local",
+		EventType:  "message",
+		Content:    "queued",
+		Params: map[string]any{
+			"content": "queued",
+			"meta":    map[string]any{"event_type": "message", "topic": "ops"},
+		},
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if err := a.HandleMCPNotification(context.Background(), mcp.Notification{
 		ServerName: "local",
