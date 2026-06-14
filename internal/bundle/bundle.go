@@ -409,7 +409,7 @@ func safeExtraArchivePath(archivePath string) (string, error) {
 		return "", fmt.Errorf("bundle: invalid extra archive path %q", archivePath)
 	}
 	clean := path.Clean(strings.ReplaceAll(trimmed, `\`, "/"))
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
 		return "", fmt.Errorf("bundle: invalid extra archive path %q", archivePath)
 	}
 	return clean, nil

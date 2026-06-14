@@ -295,6 +295,7 @@ func TestRedactionHandlesQuotedSecretsAndPreservesJSONLBlankLines(t *testing.T) 
 func TestSafeExtraArchivePathRejectsAbsoluteAndTraversalPaths(t *testing.T) {
 	for _, path := range []string{
 		"/tmp/debug.txt",
+		`\tmp\debug.txt`,
 		`C:\debug\log.txt`,
 		`\\server\share\log.txt`,
 		"../debug.txt",
