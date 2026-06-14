@@ -67,9 +67,23 @@ func TestWorkingStateStoreMergeConfidenceSeverityAndResolvedAt(t *testing.T) {
 	if strings.Join(rec.RelatedPaths, ",") != "a.go,b.go" {
 		t.Fatalf("related paths = %+v", rec.RelatedPaths)
 	}
+	data, err := os.ReadFile(filepath.Join(store.SessionDir, "working_state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "0001-01-01T00:00:00Z") {
+		t.Fatalf("zero timestamps should be omitted from JSON:\n%s", string(data))
+	}
 	rendered, ok := state.RenderProviderContext()
 	if ok || strings.Contains(rendered, "run validation before final") {
 		t.Fatalf("resolved record should be omitted from provider context:\n%s", rendered)
+	}
+}
+
+func TestNormalizeWorkingStatePathsUsesPortableSeparators(t *testing.T) {
+	got := normalizeWorkingStatePaths([]string{`dir\artifact.txt`, "dir/artifact.txt"})
+	if len(got) != 1 || got[0] != "dir/artifact.txt" {
+		t.Fatalf("paths = %+v", got)
 	}
 }
 

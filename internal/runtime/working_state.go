@@ -55,7 +55,7 @@ func (r WorkingStateRecord) MarshalJSON() ([]byte, error) {
 		Confidence   float64              `json:"confidence,omitempty"`
 		Severity     WorkingStateSeverity `json:"severity,omitempty"`
 		RelatedPaths []string             `json:"related_paths,omitempty"`
-		CreatedAt    time.Time            `json:"created_at,omitempty"`
+		CreatedAt    *time.Time           `json:"created_at,omitempty"`
 		ResolvedAt   *time.Time           `json:"resolved_at,omitempty"`
 	}
 	out := recordJSON{
@@ -65,7 +65,10 @@ func (r WorkingStateRecord) MarshalJSON() ([]byte, error) {
 		Confidence:   r.Confidence,
 		Severity:     r.Severity,
 		RelatedPaths: r.RelatedPaths,
-		CreatedAt:    r.CreatedAt,
+	}
+	if !r.CreatedAt.IsZero() {
+		created := r.CreatedAt
+		out.CreatedAt = &created
 	}
 	if !r.ResolvedAt.IsZero() {
 		resolved := r.ResolvedAt
@@ -82,7 +85,7 @@ func (r *WorkingStateRecord) UnmarshalJSON(data []byte) error {
 		Confidence   float64              `json:"confidence,omitempty"`
 		Severity     WorkingStateSeverity `json:"severity,omitempty"`
 		RelatedPaths []string             `json:"related_paths,omitempty"`
-		CreatedAt    time.Time            `json:"created_at,omitempty"`
+		CreatedAt    *time.Time           `json:"created_at,omitempty"`
 		ResolvedAt   *time.Time           `json:"resolved_at,omitempty"`
 	}
 	var in recordJSON
@@ -95,7 +98,11 @@ func (r *WorkingStateRecord) UnmarshalJSON(data []byte) error {
 	r.Confidence = in.Confidence
 	r.Severity = in.Severity
 	r.RelatedPaths = in.RelatedPaths
-	r.CreatedAt = in.CreatedAt
+	if in.CreatedAt != nil {
+		r.CreatedAt = *in.CreatedAt
+	} else {
+		r.CreatedAt = time.Time{}
+	}
 	if in.ResolvedAt != nil {
 		r.ResolvedAt = *in.ResolvedAt
 	} else {
@@ -375,6 +382,9 @@ func (s *WorkingStateStore) saveLocked(state WorkingState) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("working state write: %w", err)
 	}
+	defer func() {
+		_ = os.Remove(tmp)
+	}()
 	if err := os.Rename(tmp, s.Path); err != nil {
 		return fmt.Errorf("working state replace: %w", err)
 	}
@@ -760,7 +770,8 @@ func normalizeWorkingStatePaths(paths []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
-		path = filepath.Clean(strings.TrimSpace(path))
+		path = strings.ReplaceAll(strings.TrimSpace(path), `\`, string(filepath.Separator))
+		path = filepath.ToSlash(filepath.Clean(path))
 		if path == "" || path == "." || seen[path] {
 			continue
 		}
