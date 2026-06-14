@@ -13,6 +13,7 @@ import (
 )
 
 const unresolvedFailureGateName = "unresolved-failure-gate"
+const goalCompletionGateName = "goal-completion-gate"
 
 func (e *Engine) newHookRequest(event hooks.EventName, turnID string) hooks.Request {
 	req := e.HookContext
@@ -20,6 +21,9 @@ func (e *Engine) newHookRequest(event hooks.EventName, turnID string) hooks.Requ
 	req.TurnID = turnID
 	if req.SessionID == "" && e.Session != nil {
 		req.SessionID = e.Session.ID
+	}
+	if state, ok := e.goalStateRawLocked(); ok {
+		req.GoalState = state
 	}
 	req.Observer = hookObserver{engine: e, turnID: turnID}
 	return req
@@ -34,6 +38,9 @@ func (e *Engine) runHooks(ctx context.Context, req hooks.Request) ([]hooks.Resul
 		return results, err
 	}
 	if err := e.applyWorkingStateHookResults(results); err != nil {
+		return results, err
+	}
+	if err := e.applyGoalStateHookResults(req.TurnID, results); err != nil {
 		return results, err
 	}
 	return results, nil
@@ -56,6 +63,31 @@ func (e *Engine) applyWorkingStateHookResults(results []hooks.Result) error {
 		if err := store.ApplyPatch(patch); err != nil {
 			return fmt.Errorf("hooks: %s working_state: %w", result.Hook.Name, err)
 		}
+	}
+	return nil
+}
+
+func (e *Engine) applyGoalStateHookResults(turnID string, results []hooks.Result) error {
+	store := e.goalStateStoreLocked()
+	if store == nil {
+		return nil
+	}
+	changed := false
+	for _, result := range results {
+		if len(result.Output.GoalState) == 0 || strings.TrimSpace(string(result.Output.GoalState)) == "null" {
+			continue
+		}
+		var patch GoalStatePatch
+		if err := json.Unmarshal(result.Output.GoalState, &patch); err != nil {
+			return fmt.Errorf("hooks: %s goal_state: %w", result.Hook.Name, err)
+		}
+		if err := store.ApplyPatch(patch); err != nil {
+			return fmt.Errorf("hooks: %s goal_state: %w", result.Hook.Name, err)
+		}
+		changed = true
+	}
+	if changed {
+		e.emitGoalUpdated(turnID)
 	}
 	return nil
 }
@@ -85,6 +117,88 @@ func (e *Engine) runUnresolvedFailureGate(turnID string) (string, ToolFailureCon
 		ContinuePromptLen: len(prompt),
 	}})
 	return prompt, payload, ok
+}
+
+func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayload, bool, error) {
+	store := e.goalStateStoreLocked()
+	if store == nil {
+		return "", GoalContinuedPayload{}, false, nil
+	}
+	start := time.Now()
+	e.emit(events.Event{Type: "hook.started", TurnID: turnID, Payload: HookStartedPayload{
+		Name:      goalCompletionGateName,
+		Source:    "builtin",
+		EventName: string(hooks.EventStop),
+	}})
+	decision, err := store.CompletionGateDecision()
+	if err != nil {
+		e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: HookErroredPayload{
+			Name:       goalCompletionGateName,
+			Source:     "builtin",
+			EventName:  string(hooks.EventStop),
+			DurationMS: time.Since(start).Milliseconds(),
+			Error:      err.Error(),
+		}})
+		return "", GoalContinuedPayload{}, false, err
+	}
+	if decision.Status == GoalStatusInProgress {
+		if err := store.MarkUnchecked(); err != nil {
+			return "", GoalContinuedPayload{}, false, err
+		}
+		e.emitGoalUpdated(turnID)
+		decision.Status = GoalStatusUnchecked
+	}
+	if !decision.BlockStop && (decision.Reason == "continuation_budget_exhausted" || decision.Reason == "blocked_details_missing_budget_exhausted") {
+		if err := store.ApplyPatch(GoalStatePatch{
+			Status:        GoalStatusBlocked,
+			BlockedReason: "goal completion gate exhausted its continuation budget",
+			NextUserInput: "Provide new instructions or increase the goal continuation budget.",
+			CompletionCheck: &CompletionCheck{
+				Status:  GoalStatusBlocked,
+				Summary: decision.Reason,
+				Source:  "runtime",
+			},
+		}); err != nil {
+			return "", GoalContinuedPayload{}, false, err
+		}
+		e.emitGoalUpdated(turnID)
+	}
+	if decision.BlockStop {
+		if strings.TrimSpace(decision.ContinuePrompt) == "" {
+			err := fmt.Errorf("goal state: completion gate requested block_stop without continue_prompt")
+			e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: HookErroredPayload{
+				Name:       goalCompletionGateName,
+				Source:     "builtin",
+				EventName:  string(hooks.EventStop),
+				DurationMS: time.Since(start).Milliseconds(),
+				Error:      err.Error(),
+			}})
+			return "", GoalContinuedPayload{}, false, err
+		}
+		if err := store.RecordContinuation(decision); err != nil {
+			return "", GoalContinuedPayload{}, false, err
+		}
+		snapshot, _ := store.StatusSnapshot()
+		payload := goalContinuedPayload(decision, snapshot)
+		e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: HookCompletedPayload{
+			Name:              goalCompletionGateName,
+			Source:            "builtin",
+			EventName:         string(hooks.EventStop),
+			DurationMS:        time.Since(start).Milliseconds(),
+			BlockStop:         true,
+			ContinuePromptLen: len(decision.ContinuePrompt),
+		}})
+		e.emitGoalUpdated(turnID)
+		return decision.ContinuePrompt, payload, true, nil
+	}
+	e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: HookCompletedPayload{
+		Name:       goalCompletionGateName,
+		Source:     "builtin",
+		EventName:  string(hooks.EventStop),
+		DurationMS: time.Since(start).Milliseconds(),
+		Decision:   string(hooks.DecisionAllow),
+	}})
+	return "", GoalContinuedPayload{}, false, nil
 }
 
 func (e *Engine) RunSessionStartHooks(ctx context.Context) error {

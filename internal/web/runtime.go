@@ -10,15 +10,17 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 )
 
 type runtimeStatusResponse struct {
-	WorkDir      string              `json:"work_dir"`
-	Provider     providerStatus      `json:"provider"`
-	Shell        config.ShellProfile `json:"shell"`
-	SystemPrompt systemPromptStatus  `json:"system_prompt"`
-	MCP          mcpStatus           `json:"mcp"`
-	Skills       skillsStatus        `json:"skills"`
+	WorkDir      string                          `json:"work_dir"`
+	Provider     providerStatus                  `json:"provider"`
+	Shell        config.ShellProfile             `json:"shell"`
+	SystemPrompt systemPromptStatus              `json:"system_prompt"`
+	MCP          mcpStatus                       `json:"mcp"`
+	Skills       skillsStatus                    `json:"skills"`
+	Goal         *juexruntime.GoalStatusSnapshot `json:"goal,omitempty"`
 }
 
 type providerStatus struct {
@@ -105,10 +107,10 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	return runtimeStatusResponseFromApp(status), nil
+	return runtimeStatusResponseFromApp(status, s.activeGoalStatus()), nil
 }
 
-func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusResponse {
+func runtimeStatusResponseFromApp(status app.RuntimeStatus, goal *juexruntime.GoalStatusSnapshot) runtimeStatusResponse {
 	return runtimeStatusResponse{
 		WorkDir:      status.WorkDir,
 		Provider:     providerStatusFromApp(status.Provider),
@@ -116,7 +118,28 @@ func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusRespons
 		SystemPrompt: systemPromptStatusFromApp(status.SystemPrompt),
 		MCP:          mcpStatusFromApp(status.MCP),
 		Skills:       skillsStatusFromApp(status.Skills),
+		Goal:         goal,
 	}
+}
+
+func (s *Server) activeGoalStatus() *juexruntime.GoalStatusSnapshot {
+	id, ok, err := s.activePrimarySessionID()
+	if err != nil || !ok {
+		return nil
+	}
+	v, ok := s.sessions.Load(id)
+	if !ok {
+		return nil
+	}
+	as := v.(*activeSession)
+	if as.app == nil || as.app.Engine == nil {
+		return nil
+	}
+	goal, err := as.app.Engine.GoalStatusSnapshot()
+	if err != nil {
+		return nil
+	}
+	return goal
 }
 
 func providerStatusFromApp(status app.RuntimeProviderStatus) providerStatus {

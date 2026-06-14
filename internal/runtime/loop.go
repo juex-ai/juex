@@ -67,6 +67,8 @@ type Engine struct {
 	// WorkingState persists generic session working memory in the session
 	// directory. When omitted, the engine creates it lazily unless disabled.
 	WorkingState *WorkingStateStore
+	// GoalState persists the current session goal and latest completion check.
+	GoalState *GoalStateStore
 	// DisableWorkingState prevents sidecar persistence, updates, and provider
 	// context injection.
 	DisableWorkingState bool
@@ -272,6 +274,9 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		sessionDir = e.Session.Dir
 	}
 	e.toolFailures = newToolFailureLedger(sessionDir)
+	if err := e.beginGoalTurnLocked(turnID, userMsg.FirstText()); err != nil {
+		return "", e.failTurn(turnID, err)
+	}
 	activeClosed := false
 	defer func() {
 		e.toolFailures = previousFailures
@@ -348,6 +353,19 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			stopResults, err := e.runHooks(turnCtx, stopReq)
 			if err != nil {
 				return "", e.failTurn(turnID, err)
+			}
+			if prompt, payload, ok, err := e.runGoalCompletionGate(turnID); err != nil {
+				return "", e.failTurn(turnID, err)
+			} else if ok {
+				if _, err := e.EnqueuePendingInput(turnCtx, prompt); err != nil {
+					return "", e.failTurn(turnID, err)
+				}
+				e.emit(events.Event{Type: "goal.continued", TurnID: turnID, Payload: payload})
+				if !e.finishActiveTurnIfNoPending(turnID) {
+					continue
+				}
+				activeClosed = true
+				break
 			}
 			if prompt, ok := stopContinuation(stopResults); ok {
 				if strings.TrimSpace(prompt) == "" {

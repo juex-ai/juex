@@ -141,6 +141,23 @@ type ToolFailureContinuedPayload struct {
 	ContinuationPromptLen int      `json:"continuation_prompt_len"`
 }
 
+type GoalUpdatedPayload struct {
+	Objective     string           `json:"objective,omitempty"`
+	Status        GoalStatus       `json:"status,omitempty"`
+	LastProgress  string           `json:"last_progress,omitempty"`
+	BlockedReason string           `json:"blocked_reason,omitempty"`
+	NextUserInput string           `json:"next_user_input,omitempty"`
+	LastCheck     *CompletionCheck `json:"last_check,omitempty"`
+}
+
+type GoalContinuedPayload struct {
+	Status                GoalStatus `json:"status"`
+	Reason                string     `json:"reason,omitempty"`
+	ContinuationsUsed     int        `json:"continuations_used"`
+	MaxContinuations      int        `json:"max_continuations"`
+	ContinuationPromptLen int        `json:"continuation_prompt_len"`
+}
+
 type ToolCallPayload struct {
 	ToolUseID      string         `json:"tool_use_id"`
 	Name           string         `json:"name"`

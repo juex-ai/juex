@@ -317,3 +317,31 @@ func TestApp_REPLProcessesStatusSlash(t *testing.T) {
 		t.Fatalf("provider calls = %d, want 0", prov.calls)
 	}
 }
+
+func TestAppStatusIncludesGoalState(t *testing.T) {
+	a, _ := newStubApp(t)
+	if err := a.Engine.GoalState.BeginTurn("finish goal-state hooks"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Engine.GoalState.ApplyPatch(runtime.GoalStatePatch{
+		Status:       runtime.GoalStatusContinue,
+		LastProgress: "implementation started",
+		CompletionCheck: &runtime.CompletionCheck{
+			Status:  runtime.GoalStatusContinue,
+			Summary: "tests missing",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	status := a.StatusSnapshot(time.Now().UTC())
+	if status.Goal == nil || status.Goal.Objective != "finish goal-state hooks" || status.Goal.LastCheck == nil {
+		t.Fatalf("goal status = %+v", status.Goal)
+	}
+	text := status.Text()
+	for _, want := range []string{"goal: continue", "finish goal-state hooks", "completion: continue"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("status text missing %q:\n%s", want, text)
+		}
+	}
+}
