@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -104,7 +105,7 @@ type archiveEntry struct {
 }
 
 func Create(opts Options) (Result, error) {
-	now := time.Now().UTC
+	now := func() time.Time { return time.Now().UTC() }
 	if opts.Now != nil {
 		now = func() time.Time { return opts.Now().UTC() }
 	}
@@ -112,30 +113,38 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if strings.TrimSpace(opts.SessionID) == "" {
-		return Result{}, fmt.Errorf("%w: empty session id", ErrSessionNotFound)
+	sessionID := strings.TrimSpace(opts.SessionID)
+	if sessionID == "" || sessionID == "." || sessionID == ".." || strings.ContainsAny(sessionID, `/\`) || filepath.Clean(sessionID) != sessionID {
+		return Result{}, fmt.Errorf("%w: invalid session id format", ErrSessionNotFound)
 	}
-	outPath, err := filepath.Abs(strings.TrimSpace(opts.OutPath))
+	opts.SessionID = sessionID
+	trimmedOut := strings.TrimSpace(opts.OutPath)
+	if trimmedOut == "" {
+		return Result{}, fmt.Errorf("bundle: output path required")
+	}
+	outPath, err := filepath.Abs(trimmedOut)
 	if err != nil {
 		return Result{}, err
 	}
-	if outPath == "" {
-		return Result{}, fmt.Errorf("bundle: output path required")
-	}
-	if _, err := os.Stat(outPath); err == nil && !opts.Force {
-		return Result{}, fmt.Errorf("%w: %s", ErrOutputExists, outPath)
+	if st, err := os.Stat(outPath); err == nil {
+		if st.IsDir() {
+			return Result{}, fmt.Errorf("bundle: output path is a directory: %s", outPath)
+		}
+		if !opts.Force {
+			return Result{}, fmt.Errorf("%w: %s", ErrOutputExists, outPath)
+		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Result{}, err
 	}
 
-	sessionDir := filepath.Join(workDir, ".juex", "sessions", opts.SessionID)
+	sessionDir := filepath.Join(workDir, ".juex", "sessions", sessionID)
 	if st, err := os.Stat(sessionDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Result{}, fmt.Errorf("%w: %s", ErrSessionNotFound, opts.SessionID)
+			return Result{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 		}
 		return Result{}, err
 	} else if !st.IsDir() {
-		return Result{}, fmt.Errorf("%w: %s", ErrSessionNotFound, opts.SessionID)
+		return Result{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
 
 	entries, err := collectEntries(opts, workDir, sessionDir, now())
@@ -165,7 +174,7 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Path: outPath, SessionID: opts.SessionID, Files: len(entries), Bytes: st.Size(), Redacted: opts.Redact}, nil
+	return Result{Path: outPath, SessionID: sessionID, Files: len(entries), Bytes: st.Size(), Redacted: opts.Redact}, nil
 }
 
 func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]archiveEntry, error) {
@@ -323,14 +332,17 @@ func writeArchive(outPath string, entries []archiveEntry, now time.Time, force b
 		return err
 	}
 	tmpPath := tmp.Name()
+	gz := gzip.NewWriter(tmp)
+	tw := tar.NewWriter(gz)
 	cleanup := true
 	defer func() {
 		if cleanup {
+			_ = tw.Close()
+			_ = gz.Close()
+			_ = tmp.Close()
 			_ = os.Remove(tmpPath)
 		}
 	}()
-	gz := gzip.NewWriter(tmp)
-	tw := tar.NewWriter(gz)
 	for _, entry := range entries {
 		header := &tar.Header{
 			Name:    entry.Path,
@@ -339,25 +351,16 @@ func writeArchive(outPath string, entries []archiveEntry, now time.Time, force b
 			ModTime: now,
 		}
 		if err := tw.WriteHeader(header); err != nil {
-			_ = tw.Close()
-			_ = gz.Close()
-			_ = tmp.Close()
 			return err
 		}
 		if _, err := tw.Write(entry.Data); err != nil {
-			_ = tw.Close()
-			_ = gz.Close()
-			_ = tmp.Close()
 			return err
 		}
 	}
 	if err := tw.Close(); err != nil {
-		_ = gz.Close()
-		_ = tmp.Close()
 		return err
 	}
 	if err := gz.Close(); err != nil {
-		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -400,16 +403,27 @@ func pathInBundle(path string) string {
 	return filepath.ToSlash(filepath.Join(archiveRoot, filepath.Clean(path)))
 }
 
-func safeExtraArchivePath(path string) (string, error) {
-	path = strings.TrimSpace(filepath.ToSlash(path))
-	if path == "" || strings.HasPrefix(path, "/") {
-		return "", fmt.Errorf("bundle: invalid extra archive path %q", path)
+func safeExtraArchivePath(archivePath string) (string, error) {
+	trimmed := strings.TrimSpace(archivePath)
+	if trimmed == "" || filepath.IsAbs(trimmed) || isWindowsAbsolutePath(trimmed) {
+		return "", fmt.Errorf("bundle: invalid extra archive path %q", archivePath)
 	}
-	clean := filepath.ToSlash(filepath.Clean(path))
+	clean := path.Clean(strings.ReplaceAll(trimmed, `\`, "/"))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
-		return "", fmt.Errorf("bundle: invalid extra archive path %q", path)
+		return "", fmt.Errorf("bundle: invalid extra archive path %q", archivePath)
 	}
 	return clean, nil
+}
+
+func isWindowsAbsolutePath(path string) bool {
+	if strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, "//") {
+		return true
+	}
+	if len(path) < 2 || path[1] != ':' {
+		return false
+	}
+	drive := path[0]
+	return (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z')
 }
 
 func envMap(env []string) map[string]string {
@@ -470,11 +484,14 @@ func redactJSON(data []byte) ([]byte, bool) {
 }
 
 func redactJSONLines(data []byte) ([]byte, bool) {
-	lines := bytes.Split(data, []byte("\n"))
+	hasTrailingNewline := bytes.HasSuffix(data, []byte("\n"))
+	trimmed := bytes.TrimSuffix(data, []byte("\n"))
+	lines := bytes.Split(trimmed, []byte("\n"))
 	out := make([][]byte, 0, len(lines))
 	parsed := false
 	for _, line := range lines {
 		if len(bytes.TrimSpace(line)) == 0 {
+			out = append(out, line)
 			continue
 		}
 		redacted, ok := redactJSON(line)
@@ -487,7 +504,11 @@ func redactJSONLines(data []byte) ([]byte, bool) {
 	if !parsed {
 		return nil, false
 	}
-	return append(bytes.Join(out, []byte("\n")), '\n'), true
+	joined := bytes.Join(out, []byte("\n"))
+	if hasTrailingNewline {
+		joined = append(joined, '\n')
+	}
+	return joined, true
 }
 
 func redactValue(key string, v any) any {
@@ -528,7 +549,7 @@ func isSecretKey(key string) bool {
 }
 
 var (
-	secretAssignmentPattern = regexp.MustCompile(`(?i)(api[_-]?key|secret|password|authorization|cookie|token)[A-Za-z0-9_-]*\s*[:=]\s*[^ \n\r\t]+`)
+	secretAssignmentPattern = regexp.MustCompile(`(?i)(api[_-]?key|secret|password|authorization|cookie|token)[A-Za-z0-9_-]*\s*[:=]\s*("[^"\n\r]*"|'[^'\n\r]*'|[^ \n\r\t]+)`)
 	bearerPattern           = regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._-]+`)
 	openAIKeyPattern        = regexp.MustCompile(`sk-[A-Za-z0-9_-]{6,}`)
 )

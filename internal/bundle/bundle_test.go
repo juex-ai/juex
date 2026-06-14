@@ -148,6 +148,42 @@ func TestCreateFailsForMissingSessionAndRequiredFiles(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsBlankOutputPath(t *testing.T) {
+	work := t.TempDir()
+	sessionID := "20260614T120000-blankout"
+	seedBundleSession(t, work, sessionID, map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n",
+		"events.jsonl":       `{"type":"x"}` + "\n",
+	})
+
+	_, err := Create(Options{WorkDir: work, SessionID: sessionID, OutPath: "   ", Redact: true})
+	if err == nil || !strings.Contains(err.Error(), "output path required") {
+		t.Fatalf("err = %v, want output path required", err)
+	}
+}
+
+func TestCreateRejectsTraversalSessionID(t *testing.T) {
+	work := t.TempDir()
+	escapedSessionDir := filepath.Join(work, ".juex", "evil")
+	for name, body := range map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n",
+		"events.jsonl":       `{"type":"x"}` + "\n",
+	} {
+		writeBundleFile(t, filepath.Join(escapedSessionDir, name), body)
+	}
+
+	out := filepath.Join(work, "debug.tar.gz")
+	_, err := Create(Options{WorkDir: work, SessionID: "../evil", OutPath: out, Redact: true})
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("err = %v, want ErrSessionNotFound", err)
+	}
+	if _, statErr := os.Stat(out); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("partial bundle exists: %v", statErr)
+	}
+}
+
 func TestCreateFailsWhenOutputExistsUnlessForced(t *testing.T) {
 	work := t.TempDir()
 	sessionID := "20260614T120000-force001"
@@ -178,6 +214,28 @@ func TestCreateFailsWhenOutputExistsUnlessForced(t *testing.T) {
 	}
 	if files := readBundleArchive(t, out); files["juex-debug-bundle/manifest.json"] == nil {
 		t.Fatalf("forced archive missing manifest")
+	}
+}
+
+func TestCreateRejectsDirectoryOutputPath(t *testing.T) {
+	work := t.TempDir()
+	sessionID := "20260614T120000-dirout"
+	seedBundleSession(t, work, sessionID, map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n",
+		"events.jsonl":       `{"type":"x"}` + "\n",
+	})
+	outDir := filepath.Join(work, "debug-out")
+	if err := os.Mkdir(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Create(Options{WorkDir: work, SessionID: sessionID, OutPath: outDir, Redact: true, Force: true})
+	if err == nil || !strings.Contains(err.Error(), "output path is a directory") {
+		t.Fatalf("err = %v, want output path is a directory", err)
+	}
+	if st, statErr := os.Stat(outDir); statErr != nil || !st.IsDir() {
+		t.Fatalf("output directory was replaced: stat=%v err=%v", st, statErr)
 	}
 }
 
@@ -214,6 +272,39 @@ func TestCreateIncludesExtraFilesAndArtifactsWhenRequested(t *testing.T) {
 	}
 	if _, ok := files["juex-debug-bundle/worktree/summary.json"]; !ok {
 		t.Fatalf("worktree summary missing: %v", sortedBundleKeys(files))
+	}
+}
+
+func TestRedactionHandlesQuotedSecretsAndPreservesJSONLBlankLines(t *testing.T) {
+	input := []byte(`{"text":"password=\"my secret value\" and token='single secret value'"}` + "\n\n" + `{"text":"ok"}` + "\n")
+
+	got := string(redactBytes(input))
+	for _, leaked := range []string{"my secret value", "single secret value"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("redaction leaked %q:\n%s", leaked, got)
+		}
+	}
+	if strings.Count(got, "\n") != strings.Count(string(input), "\n") {
+		t.Fatalf("JSONL newline count changed: got %q", got)
+	}
+	if !strings.Contains(got, "\n\n") {
+		t.Fatalf("JSONL blank line not preserved: %q", got)
+	}
+}
+
+func TestSafeExtraArchivePathRejectsAbsoluteAndTraversalPaths(t *testing.T) {
+	for _, path := range []string{
+		"/tmp/debug.txt",
+		`C:\debug\log.txt`,
+		`\\server\share\log.txt`,
+		"../debug.txt",
+	} {
+		if got, err := safeExtraArchivePath(path); err == nil {
+			t.Fatalf("safeExtraArchivePath(%q) = %q, want error", path, got)
+		}
+	}
+	if got, err := safeExtraArchivePath("verifier/log.txt"); err != nil || got != "verifier/log.txt" {
+		t.Fatalf("safeExtraArchivePath(valid) = %q, %v", got, err)
 	}
 }
 
