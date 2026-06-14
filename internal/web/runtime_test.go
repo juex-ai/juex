@@ -64,6 +64,53 @@ body`)
 	}
 }
 
+func TestRuntimeStatusIncludesActiveGoal(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := as.app.Engine.GoalState.BeginTurn("ship runtime goal status"); err != nil {
+		t.Fatal(err)
+	}
+	if err := as.app.Engine.GoalState.ApplyPatch(runtime.GoalStatePatch{
+		Status:       runtime.GoalStatusContinue,
+		LastProgress: "waiting on e2e",
+		CompletionCheck: &runtime.CompletionCheck{
+			Status:  runtime.GoalStatusContinue,
+			Summary: "e2e still missing",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Goal == nil || got.Goal.Objective != "ship runtime goal status" || got.Goal.LastCheck == nil {
+		t.Fatalf("goal = %+v", got.Goal)
+	}
+}
+
+func TestRuntimeStatusIgnoresUnexpectedActiveSessionValue(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, ok := srv.sessions.Load(as.app.Session.ID)
+	if !ok {
+		t.Fatal("active session not stored")
+	}
+	defer srv.sessions.Store(as.app.Session.ID, original)
+	srv.sessions.Store(as.app.Session.ID, "unexpected")
+
+	if got := srv.activeGoalStatus(); got != nil {
+		t.Fatalf("goal = %+v, want nil", got)
+	}
+}
+
 func TestGetRuntimeStatus_IgnoresMissingMCPConfig(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())

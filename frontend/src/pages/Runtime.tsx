@@ -66,6 +66,54 @@ export function Runtime() {
           </div>
         </section>
 
+        {data.goal ? (
+          <section className="space-y-3">
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+              <h1 className="font-serif text-2xl italic leading-none text-primary">
+                Goal
+              </h1>
+              <Badge variant={goalStatusVariant(data.goal.status)} className="font-mono text-[11px]">
+                {data.goal.status || "unknown"}
+              </Badge>
+            </div>
+            <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+              <dl className="grid gap-0 text-sm sm:grid-cols-[9rem_minmax(0,1fr)]">
+                <dt className="border-b bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:border-b-0">
+                  Objective
+                </dt>
+                <dd className="break-words px-3 py-2">
+                  {data.goal.objective || "-"}
+                </dd>
+                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Progress
+                </dt>
+                <dd className="border-t break-words px-3 py-2">
+                  {data.goal.last_progress || "-"}
+                </dd>
+                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Check
+                </dt>
+                <dd className="border-t px-3 py-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <Badge variant={goalStatusVariant(data.goal.last_check?.status)} className="font-mono text-[11px]">
+                      {data.goal.last_check?.status || "none"}
+                    </Badge>
+                    <span className="min-w-0 break-words">
+                      {data.goal.last_check?.summary || "-"}
+                    </span>
+                  </div>
+                </dd>
+                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Budget
+                </dt>
+                <dd className="border-t px-3 py-2 font-mono text-xs">
+                  {goalBudgetLabel(data)}
+                </dd>
+              </dl>
+            </div>
+          </section>
+        ) : null}
+
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <h1 className="font-serif text-2xl italic leading-none text-primary">
@@ -346,4 +394,18 @@ function mcpStatusVariant(status: string): "secondary" | "outline" | "destructiv
   if (status === "connected") return "secondary";
   if (status === "error") return "destructive";
   return "outline";
+}
+
+function goalStatusVariant(status?: string): "secondary" | "outline" | "destructive" {
+  if (status === "complete") return "secondary";
+  if (status === "blocked") return "destructive";
+  return "outline";
+}
+
+function goalBudgetLabel(data: RuntimeStatusResponse): string {
+  const budget = data.goal?.budget;
+  if (!budget) return "-";
+  const used = budget.continuations_used ?? 0;
+  const max = budget.max_continuations ?? 0;
+  return max > 0 ? `${used}/${max} continuations` : `${used} continuations`;
 }

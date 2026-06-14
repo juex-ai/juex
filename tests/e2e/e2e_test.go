@@ -1228,6 +1228,71 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	}
 }
 
+func TestEndToEnd_GoalCompletionHookContinuesThenCompletes(t *testing.T) {
+	work := t.TempDir()
+	prov := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "done too early"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "verified final"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a, err := app.New(app.Options{
+		Config: config.Config{
+			ProviderProtocol: "openai/chat",
+			WorkDir:          work,
+			Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+				Name:    "goal-check",
+				Events:  []hooks.EventName{hooks.EventStop},
+				Command: e2eHookCommand("goal"),
+			}}},
+		},
+		Provider: prov,
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	out, err := a.Run(context.Background(), "ship goal state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "verified final" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(prov.history) != 2 {
+		t.Fatalf("provider calls = %d", len(prov.history))
+	}
+	if got := prov.history[1][len(prov.history[1])-1].FirstText(); got != "run the completion checks before finishing" {
+		t.Fatalf("goal continuation = %q", got)
+	}
+	goalData, err := os.ReadFile(filepath.Join(a.Session.Dir, "goal_state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"status": "complete"`, `"summary": "completion checks passed"`} {
+		if !strings.Contains(string(goalData), want) {
+			t.Fatalf("goal_state.json missing %s:\n%s", want, goalData)
+		}
+	}
+	eventsData, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type":"goal.continued"`, `"type":"goal.updated"`, `"goal-completion-gate"`} {
+		if !strings.Contains(string(eventsData), want) {
+			t.Fatalf("events missing %s:\n%s", want, eventsData)
+		}
+	}
+}
+
 func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
 	work := t.TempDir()
 	if err := os.WriteFile(filepath.Join(work, "ok.txt"), []byte("visible\n"), 0o644); err != nil {
@@ -1333,6 +1398,15 @@ func TestE2EHookHelperProcess(t *testing.T) {
 		_, _ = os.Stdout.WriteString(`{"additional_context":"hook-context: visible"}`)
 	case "deny":
 		_, _ = os.Stdout.WriteString(`{"decision":"deny","additional_context":"policy denied write"}`)
+	case "goal":
+		wd, _ := os.Getwd()
+		counterPath := filepath.Join(wd, ".juex-hook-goal-count")
+		if _, err := os.Stat(counterPath); os.IsNotExist(err) {
+			_ = os.WriteFile(counterPath, []byte("1"), 0o644)
+			_, _ = os.Stdout.WriteString(`{"goal_state":{"status":"continue","last_progress":"code changed but checks missing","completion_check":{"status":"continue","summary":"completion checks missing","continue_prompt":"run the completion checks before finishing"},"evidence":[{"kind":"missing_check","text":"test report missing","source":"hook"}]}}`)
+			break
+		}
+		_, _ = os.Stdout.WriteString(`{"goal_state":{"status":"complete","last_progress":"checks passed","completion_check":{"status":"complete","summary":"completion checks passed"},"evidence":[{"kind":"check","text":"tests passed","source":"hook"}]}}`)
 	case "stop":
 		wd, _ := os.Getwd()
 		counterPath := filepath.Join(wd, ".juex-hook-stop-count")

@@ -427,6 +427,41 @@ export interface RuntimeStatusResponse {
     count: number;
     items: SkillInfo[];
   };
+  goal?: GoalStatusSnapshot;
+}
+
+export interface GoalStatusSnapshot {
+  objective?: string;
+  status?: string;
+  evidence?: GoalEvidence[];
+  budget?: GoalBudget;
+  blocked_reason?: string;
+  next_user_input?: string;
+  last_progress?: string;
+  last_check?: CompletionCheck;
+  updated_at?: string;
+}
+
+export interface GoalEvidence {
+  id?: string;
+  kind?: string;
+  text?: string;
+  source?: string;
+  related_paths?: string[];
+  created_at?: string;
+}
+
+export interface GoalBudget {
+  max_continuations?: number;
+  continuations_used?: number;
+}
+
+export interface CompletionCheck {
+  status?: string;
+  summary?: string;
+  continue_prompt?: string;
+  source?: string;
+  checked_at?: string;
 }
 
 export interface SystemPromptEntry {

@@ -97,6 +97,7 @@ Juex keeps runtime state in the current work directory:
     ├── events.jsonl
     ├── pending_input.jsonl
     ├── working_state.json
+    ├── goal_state.json
     ├── trace.jsonl
     ├── spans.jsonl
     └── tools.jsonl
@@ -144,6 +145,14 @@ last successful checks, and stale checks. Non-empty sidecars are injected into
 provider context as an advisory runtime working-state block; empty sidecars do
 not change ordinary runs. Set `runtime.working_state_enabled: false` to disable
 sidecar persistence, updates, and injection.
+
+Juex also keeps a session-local `goal_state.json` for the current objective,
+completion status, evidence, continuation budget, blocked reason, last
+progress, and latest completion check. Command hooks can read this state and
+return a `goal_state` patch, especially from `Stop` hooks. The built-in
+`goal-completion-gate` blocks finish only when the persisted completion check
+asks for continuation or lacks required blocked details; project-specific
+hooks own domain checks such as tests, PRs, or tracker updates.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop

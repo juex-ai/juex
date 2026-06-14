@@ -138,6 +138,23 @@ func TestParseOutputCarriesWorkingStatePatch(t *testing.T) {
 	}
 }
 
+func TestParseOutputCarriesGoalStatePatch(t *testing.T) {
+	out, err := ParseOutput([]byte(`{"goal_state":{"status":"continue","completion_check":{"status":"continue","summary":"tests missing","continue_prompt":"run tests"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var patch map[string]any
+	if err := json.Unmarshal(out.GoalState, &patch); err != nil {
+		t.Fatal(err)
+	}
+	if patch["status"] != "continue" {
+		t.Fatalf("goal_state status = %+v", patch["status"])
+	}
+	if _, ok := patch["completion_check"]; !ok {
+		t.Fatalf("goal_state missing completion_check: %+v", patch)
+	}
+}
+
 func helperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=TestHookHelperProcess", "--", mode}
 }

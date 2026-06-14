@@ -261,6 +261,7 @@ func New(opts Options) (*App, error) {
 		PendingInputTTL:     pendingInputTTL,
 		ExternalEventTTL:    externalEventTTL,
 		WorkingState:        workingStateStore(sess, runtimeLimits.WorkingStateEnabled),
+		GoalState:           goalStateStore(sess),
 		DisableWorkingState: !runtimeLimits.WorkingStateEnabled,
 		ContextWindow:       runtimeLimits.ContextWindow,
 		Compaction:          runtimeLimits.Compaction,
@@ -347,6 +348,13 @@ func workingStateStore(sess *session.Session, enabled bool) *runtime.WorkingStat
 	return runtime.NewWorkingStateStore(sess.Dir, runtime.WorkingStateOptions{})
 }
 
+func goalStateStore(sess *session.Session) *runtime.GoalStateStore {
+	if sess == nil || sess.Dir == "" {
+		return nil
+	}
+	return runtime.NewGoalStateStore(sess.Dir, runtime.GoalStateOptions{})
+}
+
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 	return tools.ShellProfile{
 		Profile:       p.Profile,
@@ -396,6 +404,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 		limits := a.cfg.RuntimeLimits()
 		a.Engine.DisableWorkingState = !limits.WorkingStateEnabled
 		a.Engine.WorkingState = workingStateStore(sess, limits.WorkingStateEnabled)
+		a.Engine.GoalState = goalStateStore(sess)
 	}
 	a.sessionUnsubscribe = sess.SubscribeBus(a.Bus)
 	if err := a.attachObservability(sess); err != nil {

@@ -892,10 +892,10 @@ Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
 Lifecycle hooks are trusted command hooks executed by the runtime. They are
 configured in `hooks.commands` and receive one JSON object on stdin with the
 event name, session id, turn id, cwd, workspace roots, permission/sandbox
-labels, conversation/event log paths, and event-specific fields such as tool
-input/result or compaction reason. Hook stdout may be empty or a JSON object
-containing `decision`, `additional_context`, `block_stop`, and
-`continue_prompt`.
+labels, conversation/event log paths, current `goal_state`, and event-specific
+fields such as tool input/result or compaction reason. Hook stdout may be empty
+or a JSON object containing `decision`, `additional_context`, `block_stop`,
+`continue_prompt`, `working_state`, and `goal_state`.
 
 The runtime emits `hook.started`, `hook.completed`, and `hook.errored` events;
 the existing session bus persists those events to `events.jsonl`.
@@ -921,6 +921,19 @@ blocker repeats or the failure is external/runtime-fatal. Later successful
 checks or related file writes/edits mark records `resolved` or `stale`. This
 keeps ordinary tool errors in the model loop without introducing a generic
 max-iteration stop.
+
+Finish attempts also pass through the built-in `goal-completion-gate` after
+user-configured Stop command hooks. The runtime stores a session-local
+`goal_state.json` with objective, status, evidence, continuation budget,
+blocked reason, next user input, last progress, and latest completion check.
+Command hooks can return `goal_state` patches; project-specific hooks decide
+whether tests, PRs, tracker docs, or other workflow requirements are complete.
+The runtime gate only enforces generic statuses: `complete` allows finish,
+`continue` queues the completion check's continuation prompt within the budget,
+and `blocked` requires both a concrete blocked reason and next user input
+before allowing finish. Goal state is exposed through `/status` and
+`/api/runtime`; it is not injected into provider context as an advisory
+message.
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine
@@ -957,6 +970,10 @@ patch for project-specific extraction. The provider receives a short advisory
 working-state block only when active sidecar records exist; the block is not
 persisted into `conversation.jsonl`, and low-confidence records do not gate
 final answers.
+The separate `goal_state.json` sidecar carries operational completion state
+instead of advisory context. It is updated by lifecycle hook output and the
+goal-completion gate, appears in runtime status surfaces, and preserves
+continuation budget so a repeated incomplete check cannot loop forever.
 Manual compact and active-context inspection are available through
 `juex sessions compact --instructions`, `juex sessions context`, local
 `/compact [instructions]` and `/status` slash commands, and matching Web API
@@ -1010,6 +1027,7 @@ Resources split between user-global and work-local:
         ├── conversation.jsonl
         ├── events.jsonl
         ├── working_state.json   # generic sidecar injected into provider context when non-empty
+        ├── goal_state.json      # current goal, completion check, budget, and blocked details
         ├── trace.jsonl          # structured event trace derived from the bus
         ├── spans.jsonl          # start/end/error/instant spans by turn
         └── tools.jsonl          # sanitized tool input/output/error summaries

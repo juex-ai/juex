@@ -1256,6 +1256,51 @@ func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 	}
 }
 
+func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	hookRunner := &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventStop: {
+			{GoalState: mustRawMessage(t, `{"status":"continue","completion_check":{"status":"continue","summary":"tests missing","continue_prompt":"run tests before finishing"}}`)},
+			{GoalState: mustRawMessage(t, `{"status":"complete","completion_check":{"status":"complete","summary":"tests passed"}}`)},
+		},
+	}}
+	eng.Hooks = hookRunner
+	var continued int32
+	bus.Subscribe("goal.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
+
+	out, err := eng.Turn(context.Background(), "ship this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "final" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d", len(prov.histories))
+	}
+	if got := prov.histories[1][len(prov.histories[1])-1].FirstText(); got != "run tests before finishing" {
+		t.Fatalf("goal continuation = %q", got)
+	}
+	if atomic.LoadInt32(&continued) != 1 {
+		t.Fatalf("goal.continued events = %d", continued)
+	}
+	if len(hookRunner.requests) < 3 || !strings.Contains(string(hookRunner.requests[2].GoalState), `"status":"continue"`) {
+		t.Fatalf("second stop hook request missing current goal state: %+v", hookRunner.requests)
+	}
+	state, err := eng.GoalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != GoalStatusComplete || state.Budget.ContinuationsUsed != 1 {
+		t.Fatalf("goal state = %+v", state)
+	}
+}
+
 func TestTurn_DrainsPendingInputAfterToolResults(t *testing.T) {
 	prov := &mockProvider{
 		delay: 50 * time.Millisecond,

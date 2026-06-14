@@ -124,22 +124,23 @@ func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (
 }
 
 type StatusSnapshot struct {
-	SessionID    string                     `json:"session_id"`
-	SessionDir   string                     `json:"session_dir,omitempty"`
-	SessionKind  string                     `json:"session_kind,omitempty"`
-	Active       bool                       `json:"active"`
-	WorkDir      string                     `json:"work_dir"`
-	Turns        int                        `json:"turns"`
-	LastActiveAt time.Time                  `json:"last_active_at"`
-	Provider     ProviderStatusSnapshot     `json:"provider"`
-	MCP          MCPStatus                  `json:"mcp"`
-	SkillCount   int                        `json:"skill_count"`
-	TokenUsage   llm.Usage                  `json:"token_usage"`
-	TokenTotal   int                        `json:"token_total"`
-	ContextUsage *llm.ContextUsage          `json:"context_usage,omitempty"`
-	Compaction   StatusCompactionSnapshot   `json:"compaction"`
-	SuccessRates StatusSuccessRatesSnapshot `json:"success_rates"`
-	PendingInput runtime.PendingInputStatus `json:"pending_input"`
+	SessionID    string                      `json:"session_id"`
+	SessionDir   string                      `json:"session_dir,omitempty"`
+	SessionKind  string                      `json:"session_kind,omitempty"`
+	Active       bool                        `json:"active"`
+	WorkDir      string                      `json:"work_dir"`
+	Turns        int                         `json:"turns"`
+	LastActiveAt time.Time                   `json:"last_active_at"`
+	Provider     ProviderStatusSnapshot      `json:"provider"`
+	MCP          MCPStatus                   `json:"mcp"`
+	SkillCount   int                         `json:"skill_count"`
+	TokenUsage   llm.Usage                   `json:"token_usage"`
+	TokenTotal   int                         `json:"token_total"`
+	ContextUsage *llm.ContextUsage           `json:"context_usage,omitempty"`
+	Compaction   StatusCompactionSnapshot    `json:"compaction"`
+	SuccessRates StatusSuccessRatesSnapshot  `json:"success_rates"`
+	PendingInput runtime.PendingInputStatus  `json:"pending_input"`
+	Goal         *runtime.GoalStatusSnapshot `json:"goal,omitempty"`
 }
 
 type ProviderStatusSnapshot struct {
@@ -175,6 +176,7 @@ const (
 	statusIconSuccess     = "\U0001F4C8"
 	statusIconTurn        = "\u2699\ufe0f"
 	statusIconQueuedInput = "\U0001F4E5"
+	statusIconGoal        = "\U0001F3AF"
 )
 
 func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
@@ -214,8 +216,12 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		successRates = successRatesFromSessionStats(a.Session.RuntimeStats())
 	}
 	pending := runtime.PendingInputStatus{}
+	var goal *runtime.GoalStatusSnapshot
 	if a.Engine != nil {
 		pending = a.Engine.PendingInputStatus()
+		if snapshot, err := a.Engine.GoalStatusSnapshot(); err == nil {
+			goal = snapshot
+		}
 	}
 	return StatusSnapshot{
 		SessionID:    sessionID,
@@ -234,6 +240,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		Compaction:   compaction,
 		SuccessRates: successRates,
 		PendingInput: pending,
+		Goal:         goal,
 	}
 }
 
@@ -277,6 +284,12 @@ func (s StatusSnapshot) Text() string {
 	}
 	lines = append(lines, statusLabel(statusIconCompact, formatCompactionStatus(s.Compaction)))
 	lines = append(lines, statusLabel(statusIconSuccess, formatSuccessRates(s.SuccessRates)))
+	if s.Goal != nil {
+		lines = append(lines, statusLabel(statusIconGoal, formatGoalStatus(s.Goal)))
+		if s.Goal.LastCheck != nil {
+			lines = append(lines, statusLabel(statusIconGoal, formatCompletionCheckStatus(s.Goal.LastCheck)))
+		}
+	}
 	turnState := "idle"
 	if s.PendingInput.TurnID != "" {
 		turnState = "running"
@@ -288,6 +301,36 @@ func (s StatusSnapshot) Text() string {
 		lines = append(lines, statusLabel(statusIconQueuedInput, fmt.Sprintf("queued input: %d", s.PendingInput.PendingCount)))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func formatGoalStatus(goal *runtime.GoalStatusSnapshot) string {
+	if goal == nil {
+		return "goal: none"
+	}
+	status := string(goal.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	objective := strings.TrimSpace(goal.Objective)
+	if objective == "" {
+		return "goal: " + status
+	}
+	return fmt.Sprintf("goal: %s - %s", status, objective)
+}
+
+func formatCompletionCheckStatus(check *runtime.CompletionCheck) string {
+	if check == nil {
+		return "completion: none"
+	}
+	status := string(check.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	summary := strings.TrimSpace(check.Summary)
+	if summary == "" {
+		return "completion: " + status
+	}
+	return fmt.Sprintf("completion: %s - %s", status, summary)
 }
 
 func statusLabel(icon, text string) string {
