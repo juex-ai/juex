@@ -139,7 +139,7 @@ def provider_smoke(argv: list[str]) -> int:
     if parsed.all_models and parsed.all_config_models:
         raise ValueError("--all-models and --all-config-models are mutually exclusive")
     if not parsed.juex:
-        raise ValueError("juex binary not found; run 'mise exec -- make build' or pass --juex")
+        raise ValueError("juex binary not found; run 'make build' or pass --juex")
     if not os.access(parsed.juex, os.X_OK):
         raise ValueError(f"juex binary is not executable: {parsed.juex}")
     config_path = pathlib.Path(parsed.config).expanduser()

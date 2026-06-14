@@ -21,14 +21,14 @@ The Go server owns the JSON/SSE API and embeds the production bundle from
 Build the embedded bundle at least once, then run the Go server in one shell:
 
 ```bash
-mise exec -- make web
-mise exec -- go run ./cmd/juex serve
+make web
+go run ./cmd/juex serve
 ```
 
 Run Vite in another shell:
 
 ```bash
-mise exec -- pnpm --dir frontend dev
+pnpm --dir frontend dev
 ```
 
 Vite proxies `/api` and session event requests to the Go server.
@@ -38,8 +38,8 @@ Vite proxies `/api` and session event requests to the Go server.
 From the repository root:
 
 ```bash
-mise exec -- make web
-mise exec -- make build
+make web
+make build
 ```
 
 `make web` runs `pnpm install && pnpm build`, then copies `frontend/dist/`
