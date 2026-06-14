@@ -488,7 +488,7 @@ func (s *Server) writeTurnAdmissionResult(w http.ResponseWriter, result app.Turn
 			MaxPendingInputs: result.MaxPendingInputs,
 		})
 	case app.TurnAdmissionCommandCompleted:
-		writeJSON(w, http.StatusOK, startTurnResponse{Command: result.Command})
+		writeJSON(w, http.StatusOK, startTurnResponse{TurnID: result.TurnID, Command: result.Command})
 	case app.TurnAdmissionRejected:
 		status := http.StatusBadRequest
 		if result.Error.Kind == "pending_input_full" {

@@ -164,7 +164,7 @@ func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAl
 		}
 		return commandResult(result, nil)
 	case SlashNew:
-		return a.admitNewSlash(ctx, cmd)
+		return a.admitNewSlash(ctx, cmd, ids)
 	case SlashCompact:
 		return a.admitCompactSlash(ctx, cmd, ids)
 	default:
@@ -172,17 +172,26 @@ func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAl
 	}
 }
 
-func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand) TurnAdmissionResult {
+func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {
 	if !a.beginExclusiveCommand() {
 		return conflictResult("session busy", errTurnAdmissionBusy, runtime.PendingInputStatus{})
 	}
 	oldID := a.Session.ID
 	result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
-	a.finishExclusiveCommand()
 	if err != nil {
+		a.finishExclusiveCommand()
 		return errorResult(err, nil)
 	}
-	admitted := commandResult(result, nil)
+
+	turnID := ids.NextTurnID("turn")
+	if err := a.Engine.ReserveTurnID(turnID); err != nil {
+		a.finishExclusiveCommand()
+		return errorResult(err, nil)
+	}
+	start := &AdmittedTurn{TurnID: turnID, Message: NewSessionGreetingMessage()}
+	a.finishExclusiveCommandAsRunning(turnID)
+
+	admitted := commandResult(result, start)
 	if a.Session.ID != oldID {
 		admitted.SessionChanged = &TurnAdmissionSessionChange{OldID: oldID, NewID: a.Session.ID}
 	}
@@ -261,6 +270,18 @@ func (a *App) finishExclusiveCommand() {
 	if a.turnAdmission.phase == turnAdmissionCommand {
 		a.turnAdmission.phase = turnAdmissionIdle
 		a.turnAdmission.turnID = ""
+	}
+}
+
+func (a *App) finishExclusiveCommandAsRunning(turnID string) {
+	if a == nil {
+		return
+	}
+	a.turnAdmission.mu.Lock()
+	defer a.turnAdmission.mu.Unlock()
+	if a.turnAdmission.phase == turnAdmissionCommand {
+		a.turnAdmission.phase = turnAdmissionRunning
+		a.turnAdmission.turnID = turnID
 	}
 }
 

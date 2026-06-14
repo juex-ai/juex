@@ -460,9 +460,16 @@ func (a *App) detachObservability() error {
 
 // Run drives a single turn synchronously.
 func (a *App) Run(ctx context.Context, prompt string) (string, error) {
-	if result, handled, err := a.ExecuteSlashCommand(ctx, prompt); handled || err != nil {
+	if cmd, handled, err := ParseSlashCommand(prompt); handled || err != nil {
 		if err != nil {
 			return "", err
+		}
+		result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
+		if err != nil {
+			return "", err
+		}
+		if cmd.Name == SlashNew {
+			return a.Engine.TurnMessage(ctx, NewSessionGreetingMessage())
 		}
 		return result.Text, nil
 	}

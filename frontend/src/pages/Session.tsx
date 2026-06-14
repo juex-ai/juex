@@ -441,7 +441,9 @@ export function Session() {
           navigate(
             `/sessions/${encodeURIComponent(turn.command.status.session_id)}`,
             {
-              state: { commandInput: prompt, command: turn.command },
+              state: turn.turn_id
+                ? undefined
+                : { commandInput: prompt, command: turn.command },
             },
           );
           return;

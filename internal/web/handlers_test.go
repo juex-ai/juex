@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/session"
@@ -437,6 +438,7 @@ func TestPostTurn_NewSlashCreatesActivePrimary(t *testing.T) {
 				Active      bool   `json:"active"`
 			} `json:"status"`
 		} `json:"command"`
+		TurnID string `json:"turn_id"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
@@ -446,6 +448,9 @@ func TestPostTurn_NewSlashCreatesActivePrimary(t *testing.T) {
 	}
 	if parsed.Command.Status.SessionKind != session.KindPrimary || !parsed.Command.Status.Active {
 		t.Fatalf("status = %+v, want active primary", parsed.Command.Status)
+	}
+	if parsed.TurnID == "" {
+		t.Fatalf("turn_id = empty, parsed = %+v", parsed)
 	}
 	if _, ok := srv.sessions.Load(c.ID); ok {
 		t.Fatalf("old session %s still registered", c.ID)
@@ -460,6 +465,10 @@ func TestPostTurn_NewSlashCreatesActivePrimary(t *testing.T) {
 	if h.Active == nil || h.Active.ID != parsed.Command.Status.SessionID {
 		t.Fatalf("history active = %+v, want %s", h.Active, parsed.Command.Status.SessionID)
 	}
+	waitForHTTPTranscript(t, ts.URL, parsed.Command.Status.SessionID, parsed.TurnID, 30*time.Second, "new slash greeting", func(messages []testTranscriptMessage) bool {
+		return transcriptContainsRoleText(messages, "user", app.NewSessionGreetingPrompt()) &&
+			transcriptContainsRoleText(messages, "assistant", "ack")
+	})
 }
 
 func TestPostTurn_UnknownSlashStartsAgentTurn(t *testing.T) {

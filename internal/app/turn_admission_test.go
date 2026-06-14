@@ -130,8 +130,8 @@ func TestAdmitTurnNewSlashRejectsWhileBusy(t *testing.T) {
 	}
 }
 
-func TestAdmitTurnNewSlashReportsSessionChangeWhenIdle(t *testing.T) {
-	a, prov := newStubApp(t)
+func TestAdmitTurnNewSlashStartsGreetingTurnWhenIdle(t *testing.T) {
+	a, _ := newStubApp(t)
 	oldID := a.Session.ID
 
 	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
@@ -148,8 +148,14 @@ func TestAdmitTurnNewSlashReportsSessionChangeWhenIdle(t *testing.T) {
 	if result.Command == nil || result.Command.Name != SlashNew {
 		t.Fatalf("command = %+v", result.Command)
 	}
-	if prov.calls != 0 {
-		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	if result.TurnID != "turn-1" || result.Start == nil {
+		t.Fatalf("started turn = %+v, turn_id=%q", result.Start, result.TurnID)
+	}
+	if result.Start.Message.FirstText() != NewSessionGreetingPrompt() {
+		t.Fatalf("start message = %q, want greeting prompt", result.Start.Message.FirstText())
+	}
+	if status := a.Engine.PendingInputStatus(); status.TurnID != "turn-1" {
+		t.Fatalf("runtime active turn = %+v, want turn-1", status)
 	}
 }
 
