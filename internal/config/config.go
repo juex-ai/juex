@@ -119,11 +119,12 @@ func (r ModelRef) String() string {
 // provider_id/model_id grammar as the top-level YAML model field.
 func (c *Config) ApplyModelOverride(ref string) error {
 	trimmed := strings.TrimSpace(ref)
-	if _, err := ParseModelRef(trimmed); err != nil {
+	modelRef, err := ParseModelRef(trimmed)
+	if err != nil {
 		return err
 	}
 	c.modelRef = trimmed
-	return resolveSelectedProvider(c)
+	return resolveSelectedProviderRef(c, modelRef)
 }
 
 // ModelOverrideError marks a failure caused by an explicit model override,
@@ -601,6 +602,10 @@ func resolveSelectedProvider(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	return resolveSelectedProviderRef(cfg, ref)
+}
+
+func resolveSelectedProviderRef(cfg *Config, ref ModelRef) error {
 	p, ok := cfg.providerConfigs[ref.ProviderID]
 	if !ok {
 		return fmt.Errorf("config: model %q references unknown provider %q", ref.String(), ref.ProviderID)
