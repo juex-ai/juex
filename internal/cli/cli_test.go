@@ -151,6 +151,8 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
 		`"name": "model"`,
 		`"name": "enable-user-global-resources"`,
+		`"name": "debug"`,
+		`"name": "log-level"`,
 		`"shorthand": "C"`,
 		`"persistent": true`,
 	} {
@@ -239,6 +241,19 @@ func TestRunCmd_ModelFlagRejectsEmptyValue(t *testing.T) {
 	var usageErr *usageError
 	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--model:") {
 		t.Fatalf("err = %T %v, want usage error for empty --model", err, err)
+	}
+}
+
+func TestRoot_LogLevelRejectsInvalidValue(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--log-level", "chatty", "version"})
+	err := root.Execute()
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--log-level:") {
+		t.Fatalf("err = %T %v, want usage error for --log-level", err, err)
 	}
 }
 

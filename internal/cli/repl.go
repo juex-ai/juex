@@ -32,6 +32,8 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			a, err := app.New(app.Options{
 				Config:      cfg,
 				Verbose:     flags.verbose,
+				Debug:       flags.debug,
+				LogLevel:    flags.logLevel,
 				WorkDir:     cfg.WorkDir,
 				Stderr:      cmd.ErrOrStderr(),
 				ResumeDir:   resumeDir,

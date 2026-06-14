@@ -44,6 +44,8 @@ and the server flushes session jsonl before exit.`,
 				Addr:         addr,
 				AllowAnyBind: unsafeBindAny,
 				Verbose:      flags.verbose,
+				Debug:        flags.debug,
+				LogLevel:     flags.logLevel,
 				Stderr:       cmd.ErrOrStderr(),
 			})
 

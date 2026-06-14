@@ -270,6 +270,10 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}
 		if len(recorded.toolCalls) == 0 {
 			lastText = recorded.finalText
+			e.emit(events.Event{Type: "finish.attempted", TurnID: turnID, Payload: FinishAttemptedPayload{
+				StopReason: recorded.stopReason,
+				OutputLen:  len(lastText),
+			}})
 			stopReq := e.newHookRequest(hooks.EventStop, turnID)
 			stopReq.UserInput = prepared.userMessage.FirstText()
 			stopResults, err := e.runHooks(turnCtx, stopReq)
@@ -309,12 +313,14 @@ type preparedTurnContext struct {
 }
 
 type providerTurnRequest struct {
+	iter    int
 	history []llm.Message
 }
 
 type recordedProviderResponse struct {
-	finalText string
-	toolCalls []llm.Block
+	finalText  string
+	stopReason llm.StopReason
+	toolCalls  []llm.Block
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
@@ -376,7 +382,7 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 	e.emitProjectionApplied(turnID, projection)
 	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
 	e.emitProjectionApplied(turnID, projection)
-	return providerTurnRequest{history: projectedHistory}, nil
+	return providerTurnRequest{iter: iter, history: projectedHistory}, nil
 }
 
 func (e *Engine) requestProviderTurnLocked(ctx context.Context, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
@@ -404,6 +410,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	// the conversation log. Bounded by what the LLM returned in this
 	// single turn, so payload size is reasonable.
 	payload := LLMRespondedPayload{
+		Iter:         request.iter,
 		StopReason:   resp.StopReason,
 		Usage:        resp.Usage,
 		TokenUsage:   totalUsage,
@@ -420,7 +427,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	if err := e.Session.Append(msg); err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("session append assistant: %w", err)
 	}
-	return recordedProviderResponse{finalText: msg.FirstText(), toolCalls: toolCalls}, nil
+	return recordedProviderResponse{finalText: msg.FirstText(), stopReason: resp.StopReason, toolCalls: toolCalls}, nil
 }
 
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {

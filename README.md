@@ -44,6 +44,7 @@ Fill in provider settings, then run:
 ```bash
 juex run "summarize this repository"
 juex --model openai/gpt-4.1 run "summarize this repository"
+juex --debug run --json "summarize this repository"
 juex repl
 juex serve
 ```
@@ -63,6 +64,7 @@ If you built from source without installing, use `./dist/juex` instead of
 | --- | --- |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
 | `juex --model <provider>/<model> run "<prompt>"` | Override the configured model for this invocation. |
+| `juex --debug run --json "<prompt>"` | Write detailed session logs, trace, span, and tool summary JSONL while emitting the normal run result. |
 | `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
 | `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |
 | `juex repl` | Start an interactive CLI session attached to the active primary session. |
@@ -87,9 +89,15 @@ Juex keeps runtime state in the current work directory:
 ├── history.json
 ├── memory/
 └── sessions/<id>/
+    ├── logs/
+    │   ├── juex.log
+    │   └── debug.log
     ├── session.json
     ├── conversation.jsonl
-    └── events.jsonl
+    ├── events.jsonl
+    ├── trace.jsonl
+    ├── spans.jsonl
+    └── tools.jsonl
 ```
 
 User-global resources that can affect the agent live under `~/.agents/`. By
@@ -116,6 +124,12 @@ Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop
 checks. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
 project-local hooks must set `hooks.trusted: true` before Juex executes them.
+
+`--debug` enables detailed session-local observability. `--log-level` accepts
+`debug`, `info`, `warn`, or `error`; the default is `info`, and `--debug`
+records debug-level events such as streaming tool output deltas. These files
+are derived from runtime events and do not change the compatibility contract of
+`conversation.jsonl` or `events.jsonl`.
 
 ## Development
 

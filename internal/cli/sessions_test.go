@@ -340,7 +340,7 @@ func TestSessionsCompact(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	}}
 
-	result, err := compactSession(context.Background(), cfg, id, "manual", "focus on API changes", prov)
+	result, err := compactSession(context.Background(), cfg, id, "manual", "focus on API changes", prov, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -895,6 +895,98 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	}
 }
 
+func TestEndToEnd_DebugObservabilityArtifacts(t *testing.T) {
+	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "ok.txt"), []byte("visible\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prov := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "read-ok", ToolName: "read", Input: map[string]any{"path": "ok.txt"}},
+					{Type: llm.BlockToolUse, ToolUseID: "read-missing", ToolName: "read", Input: map[string]any{"path": "missing.txt"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "observed done"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "summary of observed run"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	compaction := config.DefaultCompactionConfig()
+	compaction.TailTurns = 0
+	compaction.KeepRecentTokens = 0
+	a, err := app.New(app.Options{
+		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
+		Provider: prov,
+		WorkDir:  work,
+		Debug:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := a.Run(context.Background(), "inspect files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "observed done" {
+		t.Fatalf("out = %q", out)
+	}
+	compact, err := a.CompactWithInstructions(context.Background(), "manual", false, "summarize observability")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compact.MessageID == "" {
+		t.Fatalf("manual compaction did not run: %+v", compact)
+	}
+	sessionDir := a.Session.Dir
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rel := range []string{"logs/juex.log", "logs/debug.log", "trace.jsonl", "spans.jsonl", "tools.jsonl"} {
+		if _, err := os.Stat(filepath.Join(sessionDir, rel)); err != nil {
+			t.Fatalf("%s missing: %v", rel, err)
+		}
+	}
+	trace := readJSONLObjects(t, filepath.Join(sessionDir, "trace.jsonl"))
+	for _, want := range []string{"tool.completed", "tool.errored", "context.compact.completed", "finish.attempted"} {
+		if !jsonlHasString(trace, "event", want) {
+			t.Fatalf("trace missing event %q: %+v", want, trace)
+		}
+	}
+	spans := readJSONLObjects(t, filepath.Join(sessionDir, "spans.jsonl"))
+	for _, want := range [][2]string{
+		{"tool", "end"},
+		{"tool", "error"},
+		{"compaction", "end"},
+		{"finish", "instant"},
+	} {
+		if !jsonlHasNameEvent(spans, want[0], want[1]) {
+			t.Fatalf("spans missing %s/%s: %+v", want[0], want[1], spans)
+		}
+	}
+	tools := readJSONLObjects(t, filepath.Join(sessionDir, "tools.jsonl"))
+	for _, want := range []string{"tool.completed", "tool.errored"} {
+		if !jsonlHasString(tools, "event", want) {
+			t.Fatalf("tools missing event %q: %+v", want, tools)
+		}
+	}
+	debugLog, err := os.ReadFile(filepath.Join(sessionDir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(debugLog), "finish.attempted") {
+		t.Fatalf("debug log missing finish attempt:\n%s", debugLog)
+	}
+}
+
 func e2eHookCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=TestE2EHookHelperProcess", "--", mode}
 }
@@ -942,4 +1034,43 @@ func messagesText(messages []llm.Message) string {
 		}
 	}
 	return b.String()
+}
+
+func readJSONLObjects(t *testing.T, path string) []map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	out := make([]map[string]any, 0, len(lines))
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Fatalf("parse %s line %d: %v\n%s", path, i+1, err, line)
+		}
+		out = append(out, obj)
+	}
+	return out
+}
+
+func jsonlHasString(rows []map[string]any, key, want string) bool {
+	for _, row := range rows {
+		if row[key] == want {
+			return true
+		}
+	}
+	return false
+}
+
+func jsonlHasNameEvent(rows []map[string]any, name, event string) bool {
+	for _, row := range rows {
+		if row["name"] == name && row["event"] == event {
+			return true
+		}
+	}
+	return false
 }

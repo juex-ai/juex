@@ -164,6 +164,8 @@ execution is printed and the process exits with code 10.`,
 			a, err := app.New(app.Options{
 				Config:      cfg,
 				Verbose:     flags.verbose,
+				Debug:       flags.debug,
+				LogLevel:    flags.logLevel,
 				WorkDir:     cfg.WorkDir,
 				Stderr:      cmd.ErrOrStderr(),
 				ResumeDir:   resumeDir,
@@ -226,6 +228,8 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	a, err := app.New(app.Options{
 		Config:              cfg,
 		Provider:            noopProvider{},
+		Debug:               flags.debug,
+		LogLevel:            flags.logLevel,
 		WorkDir:             cfg.WorkDir,
 		Stderr:              cmd.ErrOrStderr(),
 		SuppressMCPWarnings: jsonOut,
