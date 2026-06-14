@@ -1,7 +1,11 @@
 package e2e
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -179,10 +183,70 @@ func TestLiveBinary_SchemaIncludesAllSubcommands(t *testing.T) {
 		`"name": "repl"`,
 		`"name": "version"`,
 		`"name": "schema"`,
+		`"name": "bundle"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("schema missing %q. full output:\n%s", want, body)
 		}
+	}
+}
+
+func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
+	bin := buildJuex(t)
+	work := t.TempDir()
+	home := t.TempDir()
+	sessionID := "20260614T120000-e2ebundle"
+	sessionDir := filepath.Join(work, ".juex", "sessions", sessionID)
+	for name, body := range map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"api_key=sk-e2e-secret"}]}` + "\n",
+		"events.jsonl":       `{"type":"x","payload":{"token_usage":{"input_tokens":1}}}` + "\n",
+		"logs/juex.log":      "Bearer e2e-token\n",
+	} {
+		path := filepath.Join(sessionDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outPath := filepath.Join(work, "debug.tar.gz")
+	cmd := exec.Command(bin, "-C", work, "bundle", "--session", sessionID, "--out", outPath)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
+		"PROVIDER_API_KEY=sk-env-secret",
+	)
+	stdout, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			t.Fatalf("juex bundle: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, ee.Stderr)
+		}
+		t.Fatal(err)
+	}
+	var result struct {
+		Path      string `json:"path"`
+		SessionID string `json:"session_id"`
+		Files     int    `json:"files"`
+		Redacted  bool   `json:"redacted"`
+	}
+	if err := json.Unmarshal(stdout, &result); err != nil {
+		t.Fatalf("parse result: %v\n%s", err, stdout)
+	}
+	if result.Path != outPath || result.SessionID != sessionID || result.Files == 0 || !result.Redacted {
+		t.Fatalf("result = %+v", result)
+	}
+	files := readE2EBundleArchive(t, outPath)
+	body := string(files["juex-debug-bundle/session/conversation.jsonl"]) + string(files["juex-debug-bundle/session/logs/juex.log"]) + string(files["juex-debug-bundle/runtime.json"])
+	for _, leaked := range []string{"sk-e2e-secret", "e2e-token", "sk-env-secret"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("bundle leaked %q:\n%s", leaked, body)
+		}
+	}
+	if !strings.Contains(body, "[REDACTED]") {
+		t.Fatalf("bundle missing redaction marker:\n%s", body)
 	}
 }
 
@@ -204,6 +268,40 @@ func buildJuex(t *testing.T) string {
 		t.Fatalf("build juex: %v\n%s", err, buildOut)
 	}
 	return out
+}
+
+func readE2EBundleArchive(t *testing.T, path string) map[string][]byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	files := map[string][]byte{}
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.FileInfo().IsDir() {
+			continue
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[h.Name] = body
+	}
+	return files
 }
 
 // pythonMCPScript returns the absolute path to the fake MCP server script.

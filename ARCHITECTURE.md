@@ -41,6 +41,7 @@ juex/
 │   │   ├── slash.go
 │   │   └── turn_admission.go
 │   ├── cli/                      # cobra-based CLI surface
+│   │   ├── bundle.go
 │   │   ├── root.go
 │   │   ├── run.go
 │   │   ├── repl.go
@@ -55,6 +56,7 @@ juex/
 │   │   ├── values.go             # resolved ProviderSelection, paths, and limits
 │   │   ├── shell.go
 │   │   └── codex_auth.go
+│   ├── bundle/                   # portable debug bundle tar.gz creation
 │   ├── events/     bus.go        # in-process EventBus (glob)
 │   ├── hooks/                    # trusted lifecycle command hook execution
 │   ├── observability/            # session-local logs, traces, spans, tool summaries
@@ -639,9 +641,17 @@ juex
 │   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
 ├── serve [--addr <host:port>] [--unsafe-bind-any]
+├── bundle --session <id> --out <file.tar.gz> [--redact=true] [--force]
 ├── schema
 └── version [-v]
 ```
+
+`bundle` is implemented as a thin CLI wrapper over `internal/bundle`. The
+package owns session file collection, tar.gz writing, manifest hashes,
+runtime/config/env snapshots, optional artifacts, and conservative text
+redaction. The manifest lists every bundled payload file except
+`manifest.json` itself because the manifest hash would otherwise be
+self-referential.
 
 Persistent flags inherited by all subcommands:
 
