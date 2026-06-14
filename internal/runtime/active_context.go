@@ -59,5 +59,14 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 	if e == nil || e.Session == nil {
 		return ActiveContextSnapshot{}
 	}
-	return assembleActiveContext(e.Session.History, incoming)
+	snap := assembleActiveContext(e.Session.History, incoming)
+	if text, ok := e.workingStateContextLocked(); ok {
+		msg := workingStateContextMessage(text)
+		out := make([]llm.Message, 0, len(snap.Messages)+1)
+		out = append(out, msg)
+		out = append(out, snap.Messages...)
+		snap.Messages = out
+		snap.EstimatedTokens = estimateMessageTokens(out)
+	}
+	return snap
 }

@@ -585,6 +585,123 @@ func TestEndToEnd_UnresolvedFailureGateWithUserGlobalDisabled(t *testing.T) {
 	}
 }
 
+func TestEndToEnd_WorkingStateSurvivesCompaction(t *testing.T) {
+	work := t.TempDir()
+	compaction := config.DefaultCompactionConfig()
+	compaction.TailTurns = 0
+	compaction.KeepRecentTokens = 0
+	prov := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "first answer"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "compact summary"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "second answer"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a, err := app.New(app.Options{
+		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Compaction: compaction},
+		Provider: prov,
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	if a.Engine.WorkingState == nil {
+		t.Fatal("app did not initialize working state store")
+	}
+	if err := a.Engine.WorkingState.ApplyPatch(runtime.WorkingStatePatch{
+		HardConstraints: []runtime.WorkingStateRecord{{
+			ID:           "hc-bind",
+			Text:         "bind local services to 0.0.0.0",
+			Source:       runtime.WorkingStateSourceUserInput,
+			Confidence:   0.96,
+			Severity:     runtime.WorkingStateSeverityHigh,
+			RelatedPaths: []string{"cmd/serve.go"},
+		}},
+		OpenIssues: []runtime.WorkingStateRecord{{
+			ID:           "issue-ci",
+			Text:         "CI status still needs confirmation",
+			Source:       runtime.WorkingStateSourceHookExtraction,
+			Confidence:   0.84,
+			Severity:     runtime.WorkingStateSeverityMedium,
+			RelatedPaths: []string{".github/workflows/ci.yml"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := a.Run(context.Background(), "first turn"); err != nil || out != "first answer" {
+		t.Fatalf("first run out=%q err=%v", out, err)
+	}
+	if _, err := a.CompactWithInstructions(context.Background(), "manual", false, "keep working state"); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := a.Run(context.Background(), "second turn"); err != nil || out != "second answer" {
+		t.Fatalf("second run out=%q err=%v", out, err)
+	}
+	if len(prov.history) != 3 {
+		t.Fatalf("provider calls = %d", len(prov.history))
+	}
+	afterCompact := messagesText(prov.history[2])
+	for _, want := range []string{"Runtime working state", "bind local services to 0.0.0.0", "CI status still needs confirmation"} {
+		if !strings.Contains(afterCompact, want) {
+			t.Fatalf("post-compaction provider history missing %q:\n%s", want, afterCompact)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(a.Session.Dir, "working_state.json")); err != nil {
+		t.Fatalf("working_state.json missing: %v", err)
+	}
+}
+
+func TestEndToEnd_WorkingStateDisabledLeavesRunUnchanged(t *testing.T) {
+	work := t.TempDir()
+	prov := &recordingProvider{
+		steps: []llm.Response{{
+			Message:    llm.TextMessage(llm.RoleAssistant, "plain answer"),
+			StopReason: llm.StopEndTurn,
+		}},
+	}
+	a, err := app.New(app.Options{
+		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, DisableWorkingState: true},
+		Provider: prov,
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	if a.Engine.WorkingState != nil {
+		t.Fatal("disabled working state should not initialize a store")
+	}
+	out, err := a.Run(context.Background(), "plain turn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "plain answer" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(prov.history) != 1 || len(prov.history[0]) != 1 {
+		t.Fatalf("history shape changed: %+v", prov.history)
+	}
+	if got := messagesText(prov.history[0]); strings.Contains(got, "Runtime working state") || !strings.Contains(got, "plain turn") {
+		t.Fatalf("unexpected provider context:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(a.Session.Dir, "working_state.json")); !os.IsNotExist(err) {
+		t.Fatalf("working_state.json should not exist, err=%v", err)
+	}
+}
+
 func TestEndToEnd_FullStackPortable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e is slow")

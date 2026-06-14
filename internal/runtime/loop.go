@@ -64,6 +64,12 @@ type Engine struct {
 	// directory. When omitted, the engine creates a session-local queue on
 	// first use.
 	PendingInputQueue *PendingInputQueue
+	// WorkingState persists generic session working memory in the session
+	// directory. When omitted, the engine creates it lazily unless disabled.
+	WorkingState *WorkingStateStore
+	// DisableWorkingState prevents sidecar persistence, updates, and provider
+	// context injection.
+	DisableWorkingState bool
 	// PendingInputTTL controls generated-id user steer records.
 	PendingInputTTL time.Duration
 	// ExternalEventTTL controls MCP/external event records when the caller
@@ -499,6 +505,9 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
 	results := e.runToolCalls(ctx, turnID, toolCalls)
 	e.recordToolFailureBatch(turnID, toolCalls, results)
+	if err := e.recordWorkingStateToolBatch(toolCalls, results); err != nil {
+		return err
+	}
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 	if err != nil {

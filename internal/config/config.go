@@ -38,6 +38,7 @@ type Config struct {
 	Compaction                CompactionConfig
 	PendingInputTTL           time.Duration
 	ExternalEventTTL          time.Duration
+	DisableWorkingState       bool
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
 	EnableUserGlobalResources bool
@@ -171,10 +172,12 @@ type compactionConfig struct {
 }
 
 type runtimeConfig struct {
-	PendingInputTTL     time.Duration
-	PendingInputTTLSet  bool
-	ExternalEventTTL    time.Duration
-	ExternalEventTTLSet bool
+	PendingInputTTL        time.Duration
+	PendingInputTTLSet     bool
+	ExternalEventTTL       time.Duration
+	ExternalEventTTLSet    bool
+	WorkingStateEnabled    bool
+	WorkingStateEnabledSet bool
 }
 
 func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -202,6 +205,13 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			}
 			c.ExternalEventTTL = d
 			c.ExternalEventTTLSet = true
+		case "working_state_enabled":
+			enabled, err := ParseBoolValue(value.Value)
+			if err != nil {
+				return fmt.Errorf("runtime.%s: %w", key, err)
+			}
+			c.WorkingStateEnabled = enabled
+			c.WorkingStateEnabledSet = true
 		default:
 			// Legacy runtime budget keys were accepted before runtime had
 			// configurable policy; keep ignoring unknown runtime keys so old
@@ -809,6 +819,9 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	}
 	if c.ExternalEventTTLSet {
 		cfg.ExternalEventTTL = c.ExternalEventTTL
+	}
+	if c.WorkingStateEnabledSet {
+		cfg.DisableWorkingState = !c.WorkingStateEnabled
 	}
 }
 

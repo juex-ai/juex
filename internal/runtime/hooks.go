@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -28,7 +29,35 @@ func (e *Engine) runHooks(ctx context.Context, req hooks.Request) ([]hooks.Resul
 	if e.Hooks == nil {
 		return nil, nil
 	}
-	return e.Hooks.Run(ctx, req)
+	results, err := e.Hooks.Run(ctx, req)
+	if err != nil {
+		return results, err
+	}
+	if err := e.applyWorkingStateHookResults(results); err != nil {
+		return results, err
+	}
+	return results, nil
+}
+
+func (e *Engine) applyWorkingStateHookResults(results []hooks.Result) error {
+	store := e.workingStateStoreLocked()
+	if store == nil {
+		return nil
+	}
+	for _, result := range results {
+		if len(result.Output.WorkingState) == 0 || strings.TrimSpace(string(result.Output.WorkingState)) == "null" {
+			continue
+		}
+		var patch WorkingStatePatch
+		if err := json.Unmarshal(result.Output.WorkingState, &patch); err != nil {
+			return fmt.Errorf("hooks: %s working_state: %w", result.Hook.Name, err)
+		}
+		defaultWorkingStatePatchSource(&patch, WorkingStateSourceHookExtraction)
+		if err := store.ApplyPatch(patch); err != nil {
+			return fmt.Errorf("hooks: %s working_state: %w", result.Hook.Name, err)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) runUnresolvedFailureGate(turnID string) (string, ToolFailureContinuedPayload, bool) {

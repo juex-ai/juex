@@ -838,6 +838,7 @@ compaction:
 | `hooks.commands[].command` | command argv executed with hook input JSON on stdin |
 | `hooks.commands[].timeout_seconds` | optional command timeout; defaults to 10 seconds and cannot exceed 300 seconds |
 | `hooks.commands[].max_output_bytes` | optional stdout/stderr byte cap per stream; defaults to 65536 |
+| `runtime.working_state_enabled` | enables the session-local generic working-state sidecar; defaults to true |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
@@ -945,6 +946,17 @@ Compaction summary input keeps readable reasoning summaries when providers
 expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
+The runtime also maintains an optional session-local `working_state.json`
+sidecar. It stores generic records for goal, hard constraints, artifacts,
+checks, open issues, last successful checks, and stale checks, each with
+source, confidence, severity, related paths, created time, and resolved time.
+Tool results update only generic runtime facts: failures become open issues,
+write/edit successes mark related checks stale, and later successful checks
+refresh `last_successful_checks`. Command hooks can output a `working_state`
+patch for project-specific extraction. The provider receives a short advisory
+working-state block only when active sidecar records exist; the block is not
+persisted into `conversation.jsonl`, and low-confidence records do not gate
+final answers.
 Manual compact and active-context inspection are available through
 `juex sessions compact --instructions`, `juex sessions context`, local
 `/compact [instructions]` and `/status` slash commands, and matching Web API
@@ -997,6 +1009,7 @@ Resources split between user-global and work-local:
         ├── session.lock         # held while an app owns the session
         ├── conversation.jsonl
         ├── events.jsonl
+        ├── working_state.json   # generic sidecar injected into provider context when non-empty
         ├── trace.jsonl          # structured event trace derived from the bus
         ├── spans.jsonl          # start/end/error/instant spans by turn
         └── tools.jsonl          # sanitized tool input/output/error summaries
