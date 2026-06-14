@@ -7,7 +7,7 @@
 //   - Skill loading (path appears in system prompt; model loads body via `read`)
 //   - Work-local memory entries -> system prompt + memory_write/search round-trip
 //   - MCP stdio client -> registered as mcp__<server>__<tool> in the registry
-//   - Builtin tools end-to-end: write, read, edit, shell, grep
+//   - Builtin tools end-to-end: write, read, edit, grep, exec_command
 //   - Parallel tool calls in a single response
 //   - Event emission landing in events.jsonl
 //   - Conversation messages landing in conversation.jsonl
