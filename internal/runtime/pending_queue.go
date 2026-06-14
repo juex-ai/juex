@@ -128,6 +128,7 @@ func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInput
 	now := q.now().UTC()
 	ordered := orderedPendingInputRecords(records)
 	out := make([]PendingInputRecord, 0, len(ordered))
+	var expiredRecords []PendingInputRecord
 	for _, record := range ordered {
 		if record.State != PendingInputStatePending && record.State != PendingInputStateAdmitted {
 			continue
@@ -135,15 +136,16 @@ func (q *PendingInputQueue) Replayable(turnID string, limit int) ([]PendingInput
 		if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) {
 			record.State = PendingInputStateExpired
 			record.TurnID = turnID
-			if err := q.appendLocked(record); err != nil {
-				return nil, err
-			}
+			expiredRecords = append(expiredRecords, record)
 			continue
 		}
 		if limit > 0 && len(out) >= limit {
 			break
 		}
 		out = append(out, record)
+	}
+	if err := q.appendManyLocked(expiredRecords); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -202,6 +204,7 @@ func (q *PendingInputQueue) updateStates(ids []string, update func(PendingInputR
 		return err
 	}
 	now := q.now().UTC()
+	var updatedRecords []PendingInputRecord
 	for _, id := range ids {
 		record, ok := records[id]
 		if !ok {
@@ -211,12 +214,10 @@ func (q *PendingInputQueue) updateStates(ids []string, update func(PendingInputR
 		if !changed {
 			continue
 		}
-		if err := q.appendLocked(updated); err != nil {
-			return err
-		}
+		updatedRecords = append(updatedRecords, updated)
 		records[id] = updated
 	}
-	return nil
+	return q.appendManyLocked(updatedRecords)
 }
 
 func (q *PendingInputQueue) loadLatestLocked() (map[string]PendingInputRecord, error) {
@@ -262,6 +263,13 @@ func (q *PendingInputQueue) loadLatestLocked() (map[string]PendingInputRecord, e
 }
 
 func (q *PendingInputQueue) appendLocked(record PendingInputRecord) error {
+	return q.appendManyLocked([]PendingInputRecord{record})
+}
+
+func (q *PendingInputQueue) appendManyLocked(records []PendingInputRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(q.path), 0o755); err != nil {
 		return err
 	}
@@ -270,13 +278,17 @@ func (q *PendingInputQueue) appendLocked(record PendingInputRecord) error {
 		return err
 	}
 	defer file.Close()
-	body, err := json.Marshal(record)
-	if err != nil {
-		return err
+	for _, record := range records {
+		body, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		body = append(body, '\n')
+		if _, err := file.Write(body); err != nil {
+			return err
+		}
 	}
-	body = append(body, '\n')
-	_, err = file.Write(body)
-	return err
+	return nil
 }
 
 func orderedPendingInputRecords(records map[string]PendingInputRecord) []PendingInputRecord {
