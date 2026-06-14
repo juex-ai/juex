@@ -1490,6 +1490,7 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { sess.Close() })
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
