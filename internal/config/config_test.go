@@ -71,6 +71,87 @@ func TestParseModelRef(t *testing.T) {
 	}
 }
 
+func TestConfigApplyModelOverride(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-default
+providers:
+  - id: openai
+    base_url: https://openai.example
+    api_key: sk-openai
+    models:
+      - id: gpt-default
+  - id: local-proxy
+    protocol: openai/chat
+    base_url: https://local.example
+    api_key: sk-local
+    models:
+      - id: meta-llama/Llama-3-8b-chat
+        context_window: 32000
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.ApplyModelOverride(" local-proxy/meta-llama/Llama-3-8b-chat "); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "local-proxy" || cfg.ProviderProtocol != "openai/chat" || cfg.BaseURL != "https://local.example" || cfg.APIKey != "sk-local" || cfg.Model != "meta-llama/Llama-3-8b-chat" || cfg.ContextWindow != 32000 {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestConfigApplyModelOverrideRejectsUnknownModel(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	writeJuexConfig(t, configPath, "openai", "https://example.com", "sk-x", "gpt-4")
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.ApplyModelOverride("openai/missing")
+	if err == nil || !strings.Contains(err.Error(), `model "openai/missing" references unknown model "missing" for provider "openai"`) {
+		t.Fatalf("err = %v, want unknown model error", err)
+	}
+}
+
+func TestLoadFromFileWithModelOverrideKeepsNonSelectorEnv(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-default
+providers:
+  - id: openai
+    base_url: https://openai.example
+    api_key: sk-openai
+    models:
+      - id: gpt-default
+  - id: anthropic
+    base_url: https://anthropic.example
+    api_key: sk-anthropic
+    models:
+      - id: claude-sonnet
+`
+	writeTextFile(t, configPath, body)
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_MODEL", "gpt-default")
+	t.Setenv("PROVIDER_API_BASE", "https://env.example")
+	t.Setenv("PROVIDER_API_KEY", "sk-env")
+
+	cfg, err := LoadFromFileForWorkDirWithModelOverride(configPath, dir, "anthropic/claude-sonnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "anthropic" || cfg.Model != "claude-sonnet" || cfg.BaseURL != "https://env.example" || cfg.APIKey != "sk-env" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
 func TestLoadFromFile_RejectsLegacyProviderConfig(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

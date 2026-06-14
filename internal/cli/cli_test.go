@@ -149,6 +149,7 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "session"`, // flag
 		`"name": "config"`,  // persistent flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
+		`"name": "model"`,
 		`"name": "enable-user-global-resources"`,
 		`"shorthand": "C"`,
 		`"persistent": true`,
@@ -156,6 +157,88 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("schema missing %q in:\n%s", want, body)
 		}
+	}
+}
+
+func TestLoadConfig_ModelFlagOverridesConfig(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body := `model: openai/gpt-default
+providers:
+  - id: openai
+    base_url: https://openai.example
+    api_key: sk-openai
+    models:
+      - id: gpt-default
+  - id: anthropic
+    base_url: https://anthropic.example
+    api_key: sk-anthropic
+    models:
+      - id: claude-sonnet
+`
+	if err := writeTextFile(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "anthropic/claude-sonnet"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "anthropic" || cfg.BaseURL != "https://anthropic.example" || cfg.APIKey != "sk-anthropic" || cfg.Model != "claude-sonnet" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadConfig_ModelFlagUsesUserGlobalProviderFromEmptyWorkdir(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	body := `model: openai/gpt-default
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-default
+      - id: gpt-global
+`
+	if err := writeTextFile(filepath.Join(home, ".juex", "juex.yaml"), body); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "openai/gpt-global"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.BaseURL != "https://global.example" || cfg.APIKey != "sk-global" || cfg.Model != "gpt-global" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadConfig_ModelFlagRejectsUnknownModelAsUsageError(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadConfig(&persistentFlags{cwd: work, model: "openai/missing"})
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--model:") {
+		t.Fatalf("err = %T %v, want usage error for --model", err, err)
+	}
+}
+
+func TestRunCmd_ModelFlagRejectsEmptyValue(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--model", "", "run", "--dry-run", "--json", "hello"})
+	err := root.Execute()
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--model:") {
+		t.Fatalf("err = %T %v, want usage error for empty --model", err, err)
 	}
 }
 
@@ -237,6 +320,44 @@ body`); err != nil {
 	body := out.String()
 	if !strings.Contains(body, `"skill_count": 1`) || !strings.Contains(body, `"name": "global"`) {
 		t.Fatalf("dry-run should include user-global skill after bare enable flag:\n%s", body)
+	}
+}
+
+func TestRunCmd_DryRunModelFlagOverridesConfig(t *testing.T) {
+	setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := dir + "/juex.yaml"
+	body := `model: openai/gpt-default
+providers:
+  - id: openai
+    base_url: https://openai.example
+    api_key: sk-openai
+    models:
+      - id: gpt-default
+  - id: anthropic
+    base_url: https://anthropic.example
+    api_key: sk-anthropic
+    models:
+      - id: claude-sonnet
+`
+	if err := writeTextFile(configFile, body); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "--model", "anthropic/claude-sonnet", "run", "--dry-run", "--json", "hello"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.ProviderID != "anthropic" || plan.Model != "claude-sonnet" || plan.BaseURL != "https://anthropic.example" {
+		t.Fatalf("plan = %+v", plan)
 	}
 }
 

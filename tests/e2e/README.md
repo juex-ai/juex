@@ -18,6 +18,7 @@ mise exec -- go test ./tests/e2e -count=1
 | Portable runtime loop | `TestEndToEnd_FullStackPortable` | Cross-platform prompt, skills, memory tools, MCP stdio, read/write/edit/grep, event JSONL, and conversation JSONL with an injected fake shell profile. |
 | Session resume | `TestEndToEnd_ResumeRoundTrip` | A resumed app session reuses the same session id and replays prior user/assistant history before the next prompt. |
 | Binary loading | `TestLiveBinary_LoadsSkillsAndMCP` | The compiled `juex` binary loads project skills and a realistic Python MCP server through `juex run --dry-run --json`. |
+| CLI model override | `TestLiveBinary_ModelFlagUsesUserGlobalProvider` | The compiled binary can select a model from user-global provider config with root `--model` from an empty workdir. |
 | Provider protocols | `TestLiveBinary_ProviderProtocolAndThinkingMatrix` | The compiled binary routes config to OpenAI Responses, custom OpenAI Chat, and DeepSeek-compatible Chat, including thinking-effort capability gates. |
 | CLI exec tool | `TestLiveBinary_CLIRunExecCommandTool` | The compiled binary runs `juex run --json`, receives an OpenAI Chat `exec_command` tool call from a fake provider, executes it, replays the tool result, and persists the transcript. |
 | CLI schema | `TestLiveBinary_SchemaIncludesAllSubcommands` | The compiled binary exposes the documented command tree. |

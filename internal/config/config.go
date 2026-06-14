@@ -115,6 +115,39 @@ func (r ModelRef) String() string {
 	return r.ProviderID + "/" + r.ModelID
 }
 
+// ApplyModelOverride selects a configured provider/model using the same
+// provider_id/model_id grammar as the top-level YAML model field.
+func (c *Config) ApplyModelOverride(ref string) error {
+	trimmed := strings.TrimSpace(ref)
+	modelRef, err := ParseModelRef(trimmed)
+	if err != nil {
+		return err
+	}
+	c.modelRef = trimmed
+	return resolveSelectedProviderRef(c, modelRef)
+}
+
+// ModelOverrideError marks a failure caused by an explicit model override,
+// allowing CLI callers to map it to usage errors without misclassifying
+// unrelated config load failures.
+type ModelOverrideError struct {
+	Err error
+}
+
+func (e *ModelOverrideError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *ModelOverrideError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 type compactionConfig struct {
 	Enabled                    *bool `yaml:"enabled"`
 	ReserveTokens              int   `yaml:"reserve_tokens"`
@@ -163,17 +196,30 @@ func Load() (Config, error) {
 
 // LoadForWorkDir is Load with an explicit working directory.
 func LoadForWorkDir(workDir string) (Config, error) {
-	cfg, err := loadForWorkDir(workDir)
+	cfg, err := loadConfigFilesForWorkDir(workDir)
 	if err != nil {
 		return cfg, err
 	}
-	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+	if err := finalizeConfigLoad(&cfg, "", true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
 }
 
-func loadForWorkDir(workDir string) (Config, error) {
+// LoadForWorkDirWithModelOverride is LoadForWorkDir with an explicit model
+// selector that wins over YAML and PROVIDER_API_MODEL.
+func LoadForWorkDirWithModelOverride(workDir, modelRef string) (Config, error) {
+	cfg, err := loadConfigFilesForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	if err := finalizeConfigLoad(&cfg, modelRef, true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
@@ -204,12 +250,6 @@ func loadForWorkDir(workDir string) (Config, error) {
 	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true); err != nil {
 		return cfg, err
 	}
-	if err := resolveSelectedProvider(&cfg); err != nil {
-		return cfg, err
-	}
-	if err := applyOSEnv(&cfg); err != nil {
-		return cfg, err
-	}
 	return cfg, nil
 }
 
@@ -221,15 +261,7 @@ func LoadFromFile(path string) (Config, error) {
 
 // LoadFromFileForWorkDir is LoadFromFile with an explicit working directory.
 func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
-	var (
-		cfg Config
-		err error
-	)
-	if workDir != "" {
-		cfg, err = loadForWorkDir(workDir)
-	} else {
-		cfg, err = loadForWorkDir("")
-	}
+	cfg, err := loadConfigFilesForWorkDir(workDir)
 	if err != nil {
 		return cfg, err
 	}
@@ -237,16 +269,50 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := resolveSelectedProvider(&cfg); err != nil {
-		return cfg, err
-	}
-	if err := applyOSEnv(&cfg); err != nil {
-		return cfg, err
-	}
-	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+	if err := finalizeConfigLoad(&cfg, "", true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// LoadFromFileForWorkDirWithModelOverride is LoadFromFileForWorkDir with an
+// explicit model selector that wins over YAML and PROVIDER_API_MODEL.
+func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Config, error) {
+	cfg, err := loadConfigFilesForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	err = applyYAMLFile(&cfg, path, false)
+	if err != nil {
+		return cfg, err
+	}
+	if err := finalizeConfigLoad(&cfg, modelRef, true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
+	if strings.TrimSpace(modelRef) != "" {
+		if err := cfg.ApplyModelOverride(modelRef); err != nil {
+			return &ModelOverrideError{Err: err}
+		}
+		if err := applyOSEnvExcept(cfg, map[string]struct{}{
+			"PROVIDER_API_ID":       {},
+			"PROVIDER_API_PROTOCOL": {},
+			"PROVIDER_API_MODEL":    {},
+		}); err != nil {
+			return err
+		}
+		return finalizeLoadedConfig(cfg, resolveAuth)
+	}
+	if err := resolveSelectedProvider(cfg); err != nil {
+		return err
+	}
+	if err := applyOSEnv(cfg); err != nil {
+		return err
+	}
+	return finalizeLoadedConfig(cfg, resolveAuth)
 }
 
 func finalizeLoadedConfig(cfg *Config, resolveAuth bool) error {
@@ -536,6 +602,10 @@ func resolveSelectedProvider(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	return resolveSelectedProviderRef(cfg, ref)
+}
+
+func resolveSelectedProviderRef(cfg *Config, ref ModelRef) error {
 	p, ok := cfg.providerConfigs[ref.ProviderID]
 	if !ok {
 		return fmt.Errorf("config: model %q references unknown provider %q", ref.String(), ref.ProviderID)
@@ -666,8 +736,15 @@ func normalizeThinkingEffort(value string) (string, error) {
 }
 
 func applyOSEnv(cfg *Config) error {
+	return applyOSEnvExcept(cfg, nil)
+}
+
+func applyOSEnvExcept(cfg *Config, excluded map[string]struct{}) error {
 	values := map[string]string{}
 	for _, key := range providerEnvKeys {
+		if _, skip := excluded[key]; skip {
+			continue
+		}
 		if v, ok := os.LookupEnv(key); ok && v != "" {
 			values[key] = v
 		}
