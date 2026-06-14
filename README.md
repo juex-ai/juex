@@ -119,7 +119,16 @@ configured explicitly. `exec_command` accepts `yield_time_ms` and returns a
 numeric `session_id` only when the process is still running. Set `tty: true`
 for interactive commands that need a real terminal and follow-up input;
 `write_stdin` polls running sessions or writes `chars` only to TTY sessions
-while live output is streamed through runtime events.
+while live output is streamed through runtime events. A completed command with
+a non-zero exit code is returned as an error tool result with the captured
+output preserved.
+
+During a turn, Juex records failed tool results in a runtime-visible failure
+ledger. Recoverable or repeated unresolved failures can cause the runtime to add
+one provider-visible continuation observation before allowing the model to
+finish; later successful checks or related file mutations can mark those
+failures resolved or stale. The ledger state is emitted through `tool.failure.*`
+events and debug `tools.jsonl` records.
 
 Pending input accepted while a turn is already running is persisted in the
 session's `pending_input.jsonl` and replayed after restart when still safe and

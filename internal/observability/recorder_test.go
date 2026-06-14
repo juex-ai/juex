@@ -220,6 +220,51 @@ func TestRecorderRedactsSecretsAndClassifiesErrors(t *testing.T) {
 	}
 }
 
+func TestRecorderCapturesToolFailureLedgerEvents(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("tool.failure.recorded", "t1", map[string]any{
+		"name":           "exec_command",
+		"tool_use_id":    "tu1",
+		"fingerprint":    "abc123",
+		"classification": "recoverable",
+		"status":         "unresolved",
+		"blocking":       true,
+		"occurrences":    1,
+		"exit_code":      1,
+		"error":          "process exited with code 1",
+		"output_preview": "FAIL",
+		"related_paths":  []string{"go.mod"},
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("tool.failure.continued", "t1", map[string]any{
+		"failure_count":           1,
+		"fingerprints":            []string{"abc123"},
+		"continuation_prompt_len": 120,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
+	if len(trace) != 2 || trace[0].Event != "tool.failure.recorded" || trace[0].Level != "warn" || trace[0].Status != "unresolved" {
+		t.Fatalf("trace = %+v", trace)
+	}
+	tools := readJSONLines[ToolRecord](t, filepath.Join(dir, "tools.jsonl"))
+	body := mustMarshal(t, tools)
+	for _, want := range []string{"tool.failure.recorded", "abc123", "recoverable", "continuation_prompt_len"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("tools record missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func event(typ, turnID string, payload map[string]any) events.Event {
 	return events.Event{
 		Type:      typ,

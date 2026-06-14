@@ -300,7 +300,11 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 			if err != nil {
 				return "", err
 			}
-			return formatShellSessionResult(result), nil
+			out := formatShellSessionResult(result)
+			if err := shellSessionExitError("exec_command", result); err != nil {
+				return out, err
+			}
+			return out, nil
 		},
 	}
 }
@@ -352,10 +356,14 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 				MaxOutputTokens: maxOutputTokens,
 				CallContext:     ctx,
 			})
+			out := formatShellSessionResult(result)
 			if err != nil {
-				return formatShellSessionResult(result), err
+				return out, err
 			}
-			return formatShellSessionResult(result), nil
+			if err := shellSessionExitError("write_stdin", result); err != nil {
+				return out, err
+			}
+			return out, nil
 		},
 	}
 }
