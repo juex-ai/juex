@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,17 +76,17 @@ func (r CapabilityResult) Report() string {
 }
 
 type capabilityProvider struct {
-	t       *testing.T
 	workDir string
 	steps   []CapabilityStep
-	called  atomic.Int32
+	called  int
 	snaps   []ProviderSnapshot
 }
 
 func (p *capabilityProvider) Name() string { return "capability-script" }
 
 func (p *capabilityProvider) Complete(ctx context.Context, sys string, hist []llm.Message, specs []llm.ToolSpec) (llm.Response, error) {
-	idx := int(p.called.Add(1) - 1)
+	idx := p.called
+	p.called++
 	history := append([]llm.Message(nil), hist...)
 	toolNames := make([]string, 0, len(specs))
 	for _, spec := range specs {
@@ -149,7 +148,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 		hookRunner = runner
 	}
 
-	provider := &capabilityProvider{t: t, workDir: workDir, steps: tc.Script}
+	provider := &capabilityProvider{workDir: workDir, steps: tc.Script}
 	engine := &runtime.Engine{
 		Provider: provider,
 		Tools:    reg,
@@ -191,7 +190,7 @@ func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText 
 	result := CapabilityResult{
 		Name:           name,
 		Success:        strings.Contains(finalText, "TASK COMPLETE"),
-		ProviderCalls:  int(provider.called.Load()),
+		ProviderCalls:  provider.called,
 		ContextBytes:   len(transcriptText),
 		Elapsed:        elapsed,
 		ElapsedMS:      elapsed.Milliseconds(),
@@ -285,6 +284,7 @@ func readCapabilityLines(t *testing.T, path string) []string {
 	defer f.Close()
 	var lines []string
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}

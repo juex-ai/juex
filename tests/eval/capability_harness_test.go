@@ -211,6 +211,19 @@ func TestCapabilityHarnessReportShapeIsStable(t *testing.T) {
 	}
 }
 
+func TestReadCapabilityLinesAllowsLargeJSONLLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	longLine := strings.Repeat("x", 70*1024)
+	if err := os.WriteFile(path, []byte(longLine+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := readCapabilityLines(t, path)
+	if len(lines) != 1 || lines[0] != longLine {
+		t.Fatalf("large JSONL read mismatch: lines=%d line_bytes=%d", len(lines), len(lines[0]))
+	}
+}
+
 func TestMain(m *testing.M) {
 	if idx := capabilityHookArgIndex(os.Args); idx >= 0 {
 		os.Exit(runCapabilityHookHelper(os.Args[idx+1:]))
