@@ -25,6 +25,18 @@ model: openai/gpt-4.1
 #   # args: ["-NoProfile", "-Command"]
 #   # path_style: windows
 
+# Optional lifecycle command hooks. User-global hooks in ~/.juex/juex.yaml are
+# trusted by location. Project-local hooks must set trusted: true before Juex
+# will execute them.
+# hooks:
+#   trusted: true
+#   commands:
+#     - name: add-ticket-context
+#       events: [UserPromptSubmit]
+#       command: ["bash", "-lc", "jq -n '{additional_context:\"ticket: ABC-123\"}'"]
+#       timeout_seconds: 5
+#       max_output_bytes: 65536
+
 providers:
   # Known preset provider ids: openai, openai-codex, anthropic, deepseek.
   # Known presets fix the protocol and default base URL. Custom providers must

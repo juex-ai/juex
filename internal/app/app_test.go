@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
@@ -143,6 +144,60 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	}
 }
 
+func TestApp_NewRunsSessionStartHooks(t *testing.T) {
+	dir := t.TempDir()
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    dir,
+			Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+				Name:    "startup",
+				Events:  []hooks.EventName{hooks.EventSessionStart},
+				Command: appHookCommand("allow"),
+			}}},
+		},
+		Provider: &stubProvider{replies: []llm.Response{}},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	data, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, `"type":"hook.completed"`) || !strings.Contains(body, `"event_name":"SessionStart"`) {
+		t.Fatalf("events missing SessionStart hook:\n%s", body)
+	}
+}
+
+func TestApp_NewSessionStartHookDenyFailsStartup(t *testing.T) {
+	dir := t.TempDir()
+	_, err := New(Options{
+		Config: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    dir,
+			Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+				Name:    "startup",
+				Events:  []hooks.EventName{hooks.EventSessionStart},
+				Command: appHookCommand("deny"),
+			}}},
+		},
+		Provider: &stubProvider{replies: []llm.Response{}},
+		WorkDir:  dir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "SessionStart denied: startup blocked") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestApp_NewSideDoesNotChangeActive(t *testing.T) {
 	dir := t.TempDir()
 	primary, err := New(Options{
@@ -186,6 +241,25 @@ func TestApp_NewSideDoesNotChangeActive(t *testing.T) {
 	if h.Active.ID == sideID {
 		t.Fatalf("side session became active: %+v", h.Active)
 	}
+}
+
+func appHookCommand(mode string) []string {
+	return []string{os.Args[0], "-test.run=TestAppHookHelperProcess", "--", mode}
+}
+
+func TestAppHookHelperProcess(t *testing.T) {
+	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "--" {
+		return
+	}
+	switch os.Args[len(os.Args)-1] {
+	case "allow":
+		_, _ = os.Stdout.WriteString(`{"decision":"allow"}`)
+	case "deny":
+		_, _ = os.Stdout.WriteString(`{"decision":"deny","additional_context":"startup blocked"}`)
+	default:
+		_, _ = os.Stdout.WriteString(`{}`)
+	}
+	os.Exit(0)
 }
 
 func TestApp_RunSingleTurn(t *testing.T) {

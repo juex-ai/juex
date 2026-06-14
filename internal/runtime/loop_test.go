@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/session"
@@ -79,6 +80,27 @@ func (m *mockProviderWithErrors) Complete(ctx context.Context, sys string, histo
 		return llm.Response{}, fmt.Errorf("mockProviderWithErrors: out of script (called=%d)", m.called)
 	}
 	return m.responses[idx], nil
+}
+
+type fakeHookRunner struct {
+	responses map[hooks.EventName][]hooks.Output
+	requests  []hooks.Request
+}
+
+func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	r.requests = append(r.requests, req)
+	outputs := r.responses[req.EventName]
+	if len(outputs) == 0 {
+		return nil, nil
+	}
+	out := outputs[0]
+	r.responses[req.EventName] = outputs[1:]
+	return []hooks.Result{{
+		Hook:      hooks.CommandHook{Name: "fake", Events: []hooks.EventName{req.EventName}},
+		EventName: req.EventName,
+		ToolName:  req.ToolName,
+		Output:    out,
+	}}, nil
 }
 
 func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *events.Bus) {
@@ -792,6 +814,42 @@ func TestTurn_CompactsWhenProjectedContextExceedsThreshold(t *testing.T) {
 	}
 }
 
+func TestCompactRunsPreAndPostHooks(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventPreCompact:  {{}},
+		hooks.EventPostCompact: {{}},
+	}}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID == "" {
+		t.Fatalf("result = %+v", result)
+	}
+	runner := eng.Hooks.(*fakeHookRunner)
+	got := []hooks.EventName{runner.requests[0].EventName, runner.requests[1].EventName}
+	want := []hooks.EventName{hooks.EventPreCompact, hooks.EventPostCompact}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hook order = %+v, want %+v", got, want)
+		}
+	}
+}
+
 func TestTurn_AutoCompactionBoundsOversizedSummaryRequest(t *testing.T) {
 	prov := &budgetedCompactionProvider{compactionLimit: 800}
 	eng, _ := newEngine(t, prov, false)
@@ -925,6 +983,141 @@ func TestTurn_OneToolCallThenEnd(t *testing.T) {
 	}
 	if atomic.LoadInt32(&toolEvents) < 2 {
 		t.Errorf("expected requested+errored events, got %d", toolEvents)
+	}
+}
+
+func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventUserPromptSubmit: {{AdditionalContext: "ticket: ABC-123"}},
+	}}
+
+	out, err := eng.Turn(context.Background(), "summarize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "answer" {
+		t.Fatalf("out = %q", out)
+	}
+	if got := messagesText(prov.histories[0]); !strings.Contains(got, "ticket: ABC-123") {
+		t.Fatalf("provider history missing hook context:\n%s", got)
+	}
+	first := eng.Session.History[0]
+	if len(first.Blocks) != 2 || !strings.Contains(first.Blocks[1].Text, "ticket: ABC-123") {
+		t.Fatalf("session user message missing hook context: %+v", first)
+	}
+}
+
+func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventUserPromptSubmit: {{Decision: hooks.DecisionDeny, AdditionalContext: "missing approval"}},
+	}}
+
+	_, err := eng.Turn(context.Background(), "summarize")
+	if err == nil || !strings.Contains(err.Error(), "UserPromptSubmit denied: missing approval") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(prov.histories) != 0 {
+		t.Fatalf("provider should not be called, calls = %d", len(prov.histories))
+	}
+}
+
+func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "danger", Input: map[string]any{"path": "x"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "danger",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			t.Fatal("tool should not run when denied")
+			return "", nil
+		},
+	})
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventPreToolUse: {{Decision: hooks.DecisionDeny, AdditionalContext: "policy denied"}},
+	}}
+
+	out, err := eng.Turn(context.Background(), "run danger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "recovered" {
+		t.Fatalf("out = %q", out)
+	}
+	tr := eng.Session.History[2]
+	if len(tr.Blocks) != 1 || !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "policy denied") {
+		t.Fatalf("tool result = %+v", tr)
+	}
+}
+
+func TestTurn_PostToolUseHookDenyReturnsToolError(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "audit", Input: map[string]any{"path": "x"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "audit",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "sensitive output", nil
+		},
+	})
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventPreToolUse:  {{}},
+		hooks.EventPostToolUse: {{Decision: hooks.DecisionDeny, AdditionalContext: "redaction required"}},
+	}}
+
+	out, err := eng.Turn(context.Background(), "run audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "recovered" {
+		t.Fatalf("out = %q", out)
+	}
+	tr := eng.Session.History[2]
+	if len(tr.Blocks) != 1 || !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "redaction required") {
+		t.Fatalf("tool result = %+v", tr)
+	}
+}
+
+func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventStop: {
+			{BlockStop: true, ContinuePrompt: "continue until done"},
+			{},
+		},
+	}}
+
+	out, err := eng.Turn(context.Background(), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "final" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d", len(prov.histories))
+	}
+	if got := prov.histories[1][len(prov.histories[1])-1].FirstText(); got != "continue until done" {
+		t.Fatalf("continued prompt = %q", got)
 	}
 }
 

@@ -112,6 +112,11 @@ for interactive commands that need a real terminal and follow-up input;
 `write_stdin` polls running sessions or writes `chars` only to TTY sessions
 while live output is streamed through runtime events.
 
+Lifecycle command hooks can be configured under `hooks.commands` to observe or
+gate session start, user prompt submission, tool use, compaction, and stop
+checks. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
+project-local hooks must set `hooks.trusted: true` before Juex executes them.
+
 ## Development
 
 Use the project toolchain wrapper when available:

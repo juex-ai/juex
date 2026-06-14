@@ -17,6 +17,42 @@ type TurnErroredPayload struct {
 	Error string `json:"error"`
 }
 
+type HookStartedPayload struct {
+	Name      string `json:"name"`
+	Source    string `json:"source,omitempty"`
+	EventName string `json:"event_name"`
+	ToolName  string `json:"tool_name,omitempty"`
+}
+
+type HookCompletedPayload struct {
+	Name                 string `json:"name"`
+	Source               string `json:"source,omitempty"`
+	EventName            string `json:"event_name"`
+	ToolName             string `json:"tool_name,omitempty"`
+	DurationMS           int64  `json:"duration_ms"`
+	Decision             string `json:"decision,omitempty"`
+	AdditionalContextLen int    `json:"additional_context_len,omitempty"`
+	BlockStop            bool   `json:"block_stop,omitempty"`
+	ContinuePromptLen    int    `json:"continue_prompt_len,omitempty"`
+	StdoutLen            int    `json:"stdout_len,omitempty"`
+	StderrLen            int    `json:"stderr_len,omitempty"`
+	StdoutPreview        string `json:"stdout_preview,omitempty"`
+	StderrPreview        string `json:"stderr_preview,omitempty"`
+}
+
+type HookErroredPayload struct {
+	Name          string `json:"name"`
+	Source        string `json:"source,omitempty"`
+	EventName     string `json:"event_name"`
+	ToolName      string `json:"tool_name,omitempty"`
+	DurationMS    int64  `json:"duration_ms"`
+	Error         string `json:"error"`
+	StdoutLen     int    `json:"stdout_len,omitempty"`
+	StderrLen     int    `json:"stderr_len,omitempty"`
+	StdoutPreview string `json:"stdout_preview,omitempty"`
+	StderrPreview string `json:"stderr_preview,omitempty"`
+}
+
 type LLMRequestedPayload struct {
 	Iter       int `json:"iter"`
 	HistoryLen int `json:"history_len"`

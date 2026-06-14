@@ -56,6 +56,7 @@ juex/
 │   │   ├── shell.go
 │   │   └── codex_auth.go
 │   ├── events/     bus.go        # in-process EventBus (glob)
+│   ├── hooks/                    # trusted lifecycle command hook execution
 │   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
 │   │   ├── provider.go
@@ -767,6 +768,14 @@ providers:
       - id: gpt-4.1
         context_window: 256000
         thinking_effort: ""
+hooks:
+  trusted: true
+  commands:
+    - name: add-ticket-context
+      events: [UserPromptSubmit]
+      command: ["bash", "-lc", "jq -n '{additional_context:\"ticket: ABC-123\"}'"]
+      timeout_seconds: 5
+      max_output_bytes: 65536
 compaction:
   enabled: true
   reserve_tokens: 16384
@@ -808,6 +817,13 @@ compaction:
 | `providers[].models[].capabilities` | optional model-level capability overrides |
 | `providers[].models[].compat.reasoning_replay_fields` | optional model-level compatibility overrides |
 | `providers[].models[].compat.codex_transport` | optional model-level override for `providers[].compat.codex_transport` |
+| `hooks.trusted` | required for project-local or explicit config command hooks; user-global hooks are trusted by location |
+| `hooks.commands[].name` | stable hook name used in `hook.*` events |
+| `hooks.commands[].events` | lifecycle events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop` |
+| `hooks.commands[].tools` | optional tool-name filter for tool hook events |
+| `hooks.commands[].command` | command argv executed with hook input JSON on stdin |
+| `hooks.commands[].timeout_seconds` | optional command timeout; defaults to 10 seconds |
+| `hooks.commands[].max_output_bytes` | optional stdout/stderr byte cap per stream; defaults to 65536 |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
@@ -855,6 +871,30 @@ wsl` is configured explicitly.
 Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
 `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_API_MODEL`,
 `PROVIDER_THINKING_EFFORT`, and `PROVIDER_CONTEXT_WINDOW`.
+
+### Lifecycle Hooks
+
+Lifecycle hooks are trusted command hooks executed by the runtime. They are
+configured in `hooks.commands` and receive one JSON object on stdin with the
+event name, session id, turn id, cwd, workspace roots, permission/sandbox
+labels, conversation/event log paths, and event-specific fields such as tool
+input/result or compaction reason. Hook stdout may be empty or a JSON object
+containing `decision`, `additional_context`, `block_stop`, and
+`continue_prompt`.
+
+The runtime emits `hook.started`, `hook.completed`, and `hook.errored` events;
+the existing session bus persists those events to `events.jsonl`.
+`UserPromptSubmit` hooks can add context to the user message before projection
+and provider submission. `PreToolUse` hooks can deny a tool call, producing an
+error tool result so the model can recover. `PostToolUse` hook failures are
+folded into the tool result. `PreCompact` can deny compaction, `PostCompact`
+runs after a successful compact summary append, and `Stop` can block turn
+completion by queuing a `continue_prompt`.
+
+Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
+and `PermissionRequest` is intentionally deferred until the permission engine
+exists. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
+project-local and explicit config hooks require `hooks.trusted: true`.
 Codex auth is not configurable. When provider id `openai-codex` is selected and
 `providers[].api_key` is empty, Juex loads the Codex CLI/app auth cache from
 `$CODEX_HOME/auth.json` or `~/.codex/auth.json`. API-key Codex logins use the
