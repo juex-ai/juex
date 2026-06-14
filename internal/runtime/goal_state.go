@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -151,6 +152,7 @@ func (s *GoalStateStore) BeginTurn(objective string) error {
 	state.Objective = objective
 	state.Status = GoalStatusInProgress
 	state.Budget = defaultGoalBudget(state.Budget)
+	state.Budget.ContinuationsUsed = 0
 	state.BlockedReason = ""
 	state.NextUserInput = ""
 	state.LastProgress = "turn started"
@@ -289,7 +291,7 @@ func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
 			prompt = strings.TrimSpace(state.LastCheck.ContinuePrompt)
 		}
 		if prompt == "" {
-			return GoalGateDecision{}, fmt.Errorf("goal state: continue status requires completion_check.continue_prompt")
+			prompt = "Please continue working toward the current objective and record concrete progress before finishing."
 		}
 		decision.BlockStop = true
 		decision.ContinuePrompt = prompt
@@ -384,7 +386,7 @@ func (s *GoalStateStore) loadLocked() (GoalState, error) {
 		}
 		return state, fmt.Errorf("goal state read: %w", err)
 	}
-	if len(strings.TrimSpace(string(data))) == 0 {
+	if len(bytes.TrimSpace(data)) == 0 {
 		return state, nil
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
@@ -508,13 +510,6 @@ func (e *Engine) goalStateStoreLocked() *GoalStateStore {
 	if e == nil {
 		return nil
 	}
-	if e.GoalState != nil {
-		return e.GoalState
-	}
-	if e.Session == nil || e.Session.Dir == "" {
-		return nil
-	}
-	e.GoalState = NewGoalStateStore(e.Session.Dir, GoalStateOptions{})
 	return e.GoalState
 }
 
@@ -609,8 +604,12 @@ func redactGoalState(state GoalState) GoalState {
 	state.BlockedReason = sanitizeGoalText(state.BlockedReason)
 	state.NextUserInput = sanitizeGoalText(state.NextUserInput)
 	state.LastProgress = sanitizeGoalText(state.LastProgress)
-	for i := range state.Evidence {
-		state.Evidence[i] = normalizeGoalEvidence(state.Evidence[i], state.Evidence[i].CreatedAt)
+	if len(state.Evidence) > 0 {
+		evidence := make([]GoalEvidence, len(state.Evidence))
+		for i, ev := range state.Evidence {
+			evidence[i] = normalizeGoalEvidence(ev, ev.CreatedAt)
+		}
+		state.Evidence = evidence
 	}
 	if state.LastCheck != nil {
 		check := normalizeCompletionCheck(*state.LastCheck, state.LastCheck.CheckedAt)

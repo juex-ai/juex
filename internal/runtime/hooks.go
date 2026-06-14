@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -52,7 +53,7 @@ func (e *Engine) applyWorkingStateHookResults(results []hooks.Result) error {
 		return nil
 	}
 	for _, result := range results {
-		if len(result.Output.WorkingState) == 0 || strings.TrimSpace(string(result.Output.WorkingState)) == "null" {
+		if len(result.Output.WorkingState) == 0 || bytes.Equal(bytes.TrimSpace(result.Output.WorkingState), []byte("null")) {
 			continue
 		}
 		var patch WorkingStatePatch
@@ -74,7 +75,7 @@ func (e *Engine) applyGoalStateHookResults(turnID string, results []hooks.Result
 	}
 	changed := false
 	for _, result := range results {
-		if len(result.Output.GoalState) == 0 || strings.TrimSpace(string(result.Output.GoalState)) == "null" {
+		if len(result.Output.GoalState) == 0 || bytes.Equal(bytes.TrimSpace(result.Output.GoalState), []byte("null")) {
 			continue
 		}
 		var patch GoalStatePatch

@@ -131,8 +131,8 @@ func (s *Server) activeGoalStatus() *juexruntime.GoalStatusSnapshot {
 	if !ok {
 		return nil
 	}
-	as := v.(*activeSession)
-	if as.app == nil || as.app.Engine == nil {
+	as, ok := v.(*activeSession)
+	if !ok || as == nil || as.app == nil || as.app.Engine == nil {
 		return nil
 	}
 	goal, err := as.app.Engine.GoalStatusSnapshot()

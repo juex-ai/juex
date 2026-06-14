@@ -168,3 +168,59 @@ func TestGoalStateGateDecisions(t *testing.T) {
 		t.Fatalf("budget exhausted decision = %+v", decision)
 	}
 }
+
+func TestGoalStateBeginTurnResetsContinuationBudget(t *testing.T) {
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	if err := store.BeginTurn("first goal"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ApplyPatch(GoalStatePatch{
+		Status: GoalStatusContinue,
+		Budget: &GoalBudget{MaxContinuations: 3, ContinuationsUsed: 2},
+		CompletionCheck: &CompletionCheck{
+			Status:         GoalStatusContinue,
+			ContinuePrompt: "keep going",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ApplyPatch(GoalStatePatch{
+		Status:          GoalStatusComplete,
+		CompletionCheck: &CompletionCheck{Status: GoalStatusComplete},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BeginTurn("second goal"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Objective != "second goal" {
+		t.Fatalf("objective = %q", state.Objective)
+	}
+	if state.Budget.ContinuationsUsed != 0 {
+		t.Fatalf("continuations used = %d, want 0", state.Budget.ContinuationsUsed)
+	}
+}
+
+func TestGoalStateContinueWithoutPromptFallsBack(t *testing.T) {
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	if err := store.BeginTurn("finish goal"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ApplyPatch(GoalStatePatch{
+		Status:          GoalStatusContinue,
+		CompletionCheck: &CompletionCheck{Status: GoalStatusContinue},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := store.CompletionGateDecision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.BlockStop || decision.ContinuePrompt == "" {
+		t.Fatalf("continue decision = %+v", decision)
+	}
+}

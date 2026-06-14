@@ -93,6 +93,24 @@ func TestRuntimeStatusIncludesActiveGoal(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusIgnoresUnexpectedActiveSessionValue(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, ok := srv.sessions.Load(as.app.Session.ID)
+	if !ok {
+		t.Fatal("active session not stored")
+	}
+	defer srv.sessions.Store(as.app.Session.ID, original)
+	srv.sessions.Store(as.app.Session.ID, "unexpected")
+
+	if got := srv.activeGoalStatus(); got != nil {
+		t.Fatalf("goal = %+v, want nil", got)
+	}
+}
+
 func TestGetRuntimeStatus_IgnoresMissingMCPConfig(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
