@@ -5,7 +5,6 @@ import json
 import os
 import pathlib
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -153,9 +152,7 @@ def run_development(args: argparse.Namespace) -> int:
     commands_file = report_dir / "commands.jsonl"
     commands_file.write_text("", encoding="utf-8")
 
-    mise_path = shutil.which("mise")
-    tool_prefix = [mise_path, "exec", "--"] if mise_path else []
-    steps, provider_report_dir, compaction_report_dir = development_steps(args, report_dir, tool_prefix)
+    steps, provider_report_dir, compaction_report_dir = development_steps(args, report_dir)
 
     overall = 0
     for label, command in steps:
@@ -184,7 +181,7 @@ def validate_development_args(args: argparse.Namespace) -> None:
         raise ValueError("--compaction-all-models cannot be combined with --compaction-only")
 
 
-def development_steps(args: argparse.Namespace, report_dir: pathlib.Path, tool_prefix: list[str]) -> tuple[list[tuple[str, list[str]]], pathlib.Path, str]:
+def development_steps(args: argparse.Namespace, report_dir: pathlib.Path) -> tuple[list[tuple[str, list[str]]], pathlib.Path, str]:
     provider_report_dir = report_dir / "provider-model-smoke"
     compaction_report_dir = report_dir / "compaction-eval" if args.compaction_eval else None
 
@@ -192,11 +189,11 @@ def development_steps(args: argparse.Namespace, report_dir: pathlib.Path, tool_p
     if not args.skip_tests:
         steps.extend(
             [
-                ("go-test-e2e", [*tool_prefix, "go", "test", "./tests/e2e", "-count=1"]),
-                ("go-test-all", [*tool_prefix, "go", "test", "./...", "-count=1"]),
+                ("go-test-e2e", ["go", "test", "./tests/e2e", "-count=1"]),
+                ("go-test-all", ["go", "test", "./...", "-count=1"]),
             ]
         )
-    steps.append(("make-build", [*tool_prefix, "make", "build"]))
+    steps.append(("make-build", ["make", "build"]))
 
     if not args.no_provider_smoke:
         steps.append(("provider-model-smoke", provider_smoke_development_command(args, provider_report_dir)))

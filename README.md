@@ -27,7 +27,7 @@ iwr -UseBasicParsing https://raw.githubusercontent.com/juex-ai/juex/main/scripts
 Or build from source:
 
 ```bash
-mise exec -- make build
+make build
 ```
 
 Create runtime config in the work directory where you want the agent to run,
@@ -174,15 +174,15 @@ are derived from runtime events and do not change the compatibility contract of
 
 ## Development
 
-Use the project toolchain wrapper when available:
+From the repository root, run the project Make targets and Go tests directly:
 
 ```bash
-mise exec -- make test
-mise exec -- make integration
-mise exec -- make provider-smoke
-mise exec -- make development-eval
-mise exec -- make build
-mise exec -- go test ./... -race -count=1
+make test
+make integration
+make provider-smoke
+make development-eval
+make build
+go test ./... -race -count=1
 ```
 
 The frontend lives in `frontend/`; `make build` runs the frontend build,

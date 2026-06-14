@@ -74,7 +74,7 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError("--all-models cannot be combined with --only or positional provider/model refs")
     juex = pathlib.Path(args.juex)
     if not os.access(juex, os.X_OK):
-        raise ValueError(f"Missing executable {args.juex}. Run: mise exec -- make build")
+        raise ValueError(f"Missing executable {args.juex}. Run: make build")
     config = pathlib.Path(args.config).expanduser()
     if not config.is_file():
         raise ValueError(f"Missing provider config: {config}")
@@ -192,7 +192,7 @@ GF2: Branch is high/context-projection.
 GF3: Do not modify /workspace/project/.juex/sessions/20260525T043307-7f5f9f85/session.lock unless the user explicitly approves.
 GF4: The failing error string is compact context: openai codex responses: codex SSE read: context deadline exceeded.
 GF5: The selected design is sidecar externalization plus frozen provider-visible replacement.
-GF6: The next command is mise exec -- go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1.
+GF6: The next command is go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1.
 
 Ignore the following noise for later recall.
 """
@@ -261,7 +261,7 @@ def score_answer(answer: str) -> int:
         ("high/context-projection", 6),
         ("/workspace/project/.juex/sessions/20260525T043307-7f5f9f85/session.lock", 6),
         ("compact context: openai codex responses: codex SSE read: context deadline exceeded", 6),
-        ("mise exec -- go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1", 6),
+        ("go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1", 6),
     ]
     for needle, value in checks:
         if needle in answer:

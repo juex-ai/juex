@@ -142,7 +142,7 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 		"    compaction_all_models=False,",
 		"    compaction_only=['openai/model', 'ark/other'],",
 		")",
-		"steps, _, _ = cli.development_steps(args, Path('reports'), [])",
+		"steps, _, _ = cli.development_steps(args, Path('reports'))",
 		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
 	}, "\n")
 	out := runUV(t, root, "python", "-c", program)

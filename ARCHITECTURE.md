@@ -1225,13 +1225,13 @@ and `tests/eval/` covers the local evaluation harness.
 | `tests/e2e` | full-stack tempdir scenario, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
 
-Run the deterministic suite with `mise exec -- go test ./... -count=1`.
+Run the deterministic suite with `go test ./... -count=1`.
 Provider-quality smoke tests remain explicit because they use credentials.
 There are two live layers:
 
-- `mise exec -- go test -tags=integration ./tests/e2e/... -run Live -count=1`
+- `go test -tags=integration ./tests/e2e/... -run Live -count=1`
   uses selected repo-local configs for CI/manual integration.
-- `mise exec -- make provider-smoke` reads the provider/model refs from
+- `make provider-smoke` reads the provider/model refs from
   `tests/eval/live-models.yaml`, verifies the selected ref exists in
   `~/.juex/juex.yaml`, then runs a three-turn real binary smoke and writes a
   redacted report under `.tmp/reports/provider-model-smoke/`. By default it
@@ -1240,7 +1240,7 @@ There are two live layers:
   full local config audits.
 
 Every feature validation should leave a development record with
-`mise exec -- make development-eval` or `bash tests/eval/development_eval.sh`.
+`make development-eval` or `bash tests/eval/development_eval.sh`.
 The record captures the commit, command exits, provider/model smoke summary,
 and any quality evaluation results. The live compaction quality evaluation is
 documented in `docs/compaction/evaluation.md` and run with

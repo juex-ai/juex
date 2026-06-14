@@ -13,28 +13,24 @@ the user before running these commands; they are non-destructive.
 
 ## Execution Steps
 
-Use the project toolchain wrapper when available:
-
-```bash
-mise exec -- <command>
-```
+Run commands directly from the repository root.
 
 1. **Focused tests first** - run
-   `mise exec -- go test -v ./path/to/package/...` for each changed Go package
+   `go test -v ./path/to/package/...` for each changed Go package
    that has `*_test.go` files. For cross-package CLI,
    runtime, session, provider, web, MCP, shell, or eval behavior, include
    `./tests/e2e/...`.
-2. **Full deterministic suite** - `mise exec -- make test` runs
+2. **Full deterministic suite** - `make test` runs
    `go test ./... -count=1`, including non-live e2e tests.
-3. **Frontend and embedded binary build** - `mise exec -- make build` runs the
+3. **Frontend and embedded binary build** - `make build` runs the
    frontend build, copies it into `internal/web/dist`, and builds `dist/juex`.
-4. **Live integration entrypoint** - `mise exec -- make integration` runs
+4. **Live integration entrypoint** - `make integration` runs
    `go test -tags=integration ./tests/e2e/... -count=1`. It reads selected
    repo-local configs from `.juex/qwen.juex.yaml` and
    `.juex/minimax.juex.yaml`; missing or incomplete configs should skip the
    affected live cases, not be replaced with fake credentials.
 5. **Race parity when risky** - run
-   `mise exec -- go test ./... -race -count=1` after changes to concurrency,
+   `go test ./... -race -count=1` after changes to concurrency,
    server shutdown, runtime turn loops, MCP, tools, events, sessions, web
    request handling, or shared mutable state.
 
@@ -49,13 +45,13 @@ There is no local service startup step for the current suite. Web tests use
   example:
 
   ```bash
-  GOOS=windows GOARCH=amd64 mise exec -- go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
+  GOOS=windows GOARCH=amd64 go test -c ./internal/tools -o /tmp/juex-tools-windows.test.exe
   ```
 - **Eval harness changes** - run the eval module help checks plus
-  `mise exec -- go test ./tests/eval -count=1`.
+  `go test ./tests/eval -count=1`.
 - **Docs or skill-only changes** - run `git diff --check`, stale-reference
   searches, and the smallest focused tests for affected command examples.
-- **Web-visible changes** - run `mise exec -- make build` and a browser/API
+- **Web-visible changes** - run `make build` and a browser/API
   smoke against a rebuilt binary when behavior is visible in the UI.
 
 ## Live Provider/Model Sweep
@@ -64,7 +60,7 @@ When the user asks to "test all provider/model" or a provider compatibility
 change needs live coverage, build the current binary and run the smoke script:
 
 ```bash
-mise exec -- make build
+make build
 bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 ```
 

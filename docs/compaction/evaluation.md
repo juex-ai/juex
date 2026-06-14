@@ -43,7 +43,7 @@ Gold facts:
 | GF3 | Do not modify `/workspace/project/.juex/sessions/20260525T043307-7f5f9f85/session.lock` unless the user explicitly approves. |
 | GF4 | The failing error string is `compact context: openai codex responses: codex SSE read: context deadline exceeded`. |
 | GF5 | The selected design is sidecar externalization plus frozen provider-visible replacement. |
-| GF6 | The next command is `mise exec -- go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1`. |
+| GF6 | The next command is `go test ./internal/runtime -run TestTurn_AutoCompactionBoundsOversizedSummaryRequest -count=1`. |
 
 Scoring:
 
@@ -85,7 +85,7 @@ that predate this plumbing remain marked as `not captured`.
 Build the current binary:
 
 ```bash
-mise exec -- make build
+make build
 ```
 
 Run one rotated model from `tests/eval/live-models.yaml`:

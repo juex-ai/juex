@@ -17,7 +17,7 @@ checks the Python module help surface, shell wrapper help, live-model rotation,
 development-step flags, and default report locations:
 
 ```bash
-mise exec -- go test ./tests/eval -count=1
+go test ./tests/eval -count=1
 ```
 
 The shell scripts are thin wrappers around the Python module:
@@ -37,7 +37,7 @@ stable report from `conversation.jsonl` and `events.jsonl`.
 Run it with:
 
 ```bash
-mise exec -- go test ./tests/eval -run 'Capability' -count=1
+go test ./tests/eval -run 'Capability' -count=1
 ```
 
 The initial cases cover:
@@ -100,7 +100,7 @@ Report kinds are:
 Run the rotating local provider/model smoke after building the binary:
 
 ```bash
-mise exec -- make build
+make build
 bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 ```
 
@@ -139,7 +139,7 @@ provider config audits. Local rotation success is stored in
 The compaction evaluation is operator-triggered:
 
 ```bash
-mise exec -- make build
+make build
 tests/eval/compaction_eval.sh
 ```
 

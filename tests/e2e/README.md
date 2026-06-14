@@ -9,7 +9,7 @@ provider adapters, sessions, tools, MCP, and web API still compose correctly.
 Run with:
 
 ```bash
-mise exec -- go test ./tests/e2e -count=1
+go test ./tests/e2e -count=1
 ```
 
 | Area | Test | What it protects |
@@ -43,7 +43,7 @@ Build-tagged live integration tests are opt-in because they use credentials
 and real providers:
 
 ```bash
-mise exec -- go test -tags=integration ./tests/e2e/... -run Live -count=1
+go test -tags=integration ./tests/e2e/... -run Live -count=1
 ```
 
 They read selected local configs from `.juex/*.yaml` and currently exercise:
@@ -72,9 +72,9 @@ Use the smallest run set that still covers the changed behavior:
 
 | Layer | Case set | When to run |
 | --- | --- | --- |
-| Go unit/package tests | `mise exec -- go test ./... -count=1` | Every production code change. |
-| Non-live e2e | `mise exec -- go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
-| Live integration build tag | `mise exec -- make integration` | Manual credential-backed checks against the repo-local `.juex/*.yaml` fixtures. |
+| Go unit/package tests | `go test ./... -count=1` | Every production code change. |
+| Non-live e2e | `go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
+| Live integration build tag | `make integration` | Manual credential-backed checks against the repo-local `.juex/*.yaml` fixtures. |
 
 Run evaluation-layer checks from `tests/eval` when the change affects the eval
 harness, provider smoke, compaction quality, or development validation records.
