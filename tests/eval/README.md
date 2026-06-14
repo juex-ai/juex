@@ -26,6 +26,52 @@ The shell scripts are thin wrappers around the Python module:
 uv run --project . python -m tests.eval.juex_eval --help
 ```
 
+## Deterministic Capability Harness
+
+`capability_harness.go` provides a CI-safe scripted-provider eval for core
+agent capabilities. It does not call real providers. Each `CapabilityCase`
+creates an isolated workdir, registers the real builtin tools, optionally adds
+eval-only tools and command hooks, runs `runtime.Engine.Turn`, then computes a
+stable report from `conversation.jsonl` and `events.jsonl`.
+
+Run it with:
+
+```bash
+mise exec -- go test ./tests/eval -run 'Capability' -count=1
+```
+
+The initial cases cover:
+
+- file tools: `read`, `write`, and `edit`
+- search: `grep`
+- shell: `exec_command`
+- permission/sandbox-style denial and recovery through an eval-only guarded tool
+- lifecycle hooks: `UserPromptSubmit` context injection and `Stop` continuation
+
+To add a case, create a `CapabilityCase` with:
+
+- `Files` for fixture files relative to the isolated workdir
+- `Script` steps that return deterministic `llm.Response` values
+- optional `ExtraTools` for eval-only probes such as permission gates
+- optional `Hooks(workDir)` for command hooks that must run through the real hook runner
+- `Assert` checks for filesystem side effects, event counts, tool metrics, and transcript text
+
+Each `CapabilityResult` exposes:
+
+- `success`: final text contained `TASK COMPLETE`
+- `provider_calls`: scripted provider turns required to finish
+- `tool_calls` and `error_tool_calls`: model-requested tool usage from the transcript
+- `context_bytes`: persisted conversation JSONL bytes, a cheap context-pollution proxy
+- `tool_bytes`: tool-result bytes persisted into conversation history
+- `elapsed_ms`: wall-clock duration for the deterministic case
+- `events`: event type counts from `events.jsonl`
+- `tool_names`: per-tool call counts
+
+Use these metrics for before/after comparisons when changing tool contracts,
+sandbox or permission behavior, hooks, stop gates, or context projection. Keep
+cases deterministic and credential-free; live model behavior belongs in the
+provider smoke and compaction eval commands below.
+
 `live-models.yaml` controls the bounded live-model scope:
 
 - `provider_smoke_models` rotates routine provider/tool/exec/thinking smoke tests.
