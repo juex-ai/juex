@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 )
+
+const unresolvedFailureGateName = "unresolved-failure-gate"
 
 func (e *Engine) newHookRequest(event hooks.EventName, turnID string) hooks.Request {
 	req := e.HookContext
@@ -26,6 +29,33 @@ func (e *Engine) runHooks(ctx context.Context, req hooks.Request) ([]hooks.Resul
 		return nil, nil
 	}
 	return e.Hooks.Run(ctx, req)
+}
+
+func (e *Engine) runUnresolvedFailureGate(turnID string) (string, ToolFailureContinuedPayload, bool) {
+	if e == nil || e.toolFailures == nil {
+		return "", ToolFailureContinuedPayload{}, false
+	}
+	start := time.Now()
+	e.emit(events.Event{Type: "hook.started", TurnID: turnID, Payload: HookStartedPayload{
+		Name:      unresolvedFailureGateName,
+		Source:    "builtin",
+		EventName: string(hooks.EventStop),
+	}})
+	prompt, payload, ok := e.toolFailures.continuationPrompt()
+	decision := ""
+	if !ok {
+		decision = string(hooks.DecisionAllow)
+	}
+	e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: HookCompletedPayload{
+		Name:              unresolvedFailureGateName,
+		Source:            "builtin",
+		EventName:         string(hooks.EventStop),
+		DurationMS:        time.Since(start).Milliseconds(),
+		Decision:          decision,
+		BlockStop:         ok,
+		ContinuePromptLen: len(prompt),
+	}})
+	return prompt, payload, ok
 }
 
 func (e *Engine) RunSessionStartHooks(ctx context.Context) error {

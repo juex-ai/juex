@@ -53,17 +53,19 @@ type toolFailureRecord struct {
 }
 
 type toolFailureLedger struct {
-	records       map[string]*toolFailureRecord
-	order         []string
-	continuedSets map[string]bool
-	workDir       string
+	records           map[string]*toolFailureRecord
+	order             []string
+	continuedSets     map[string]bool
+	blockedReasonSets map[string]bool
+	workDir           string
 }
 
 func newToolFailureLedger(sessionDir string) *toolFailureLedger {
 	return &toolFailureLedger{
-		records:       map[string]*toolFailureRecord{},
-		continuedSets: map[string]bool{},
-		workDir:       workDirFromSessionDir(sessionDir),
+		records:           map[string]*toolFailureRecord{},
+		continuedSets:     map[string]bool{},
+		blockedReasonSets: map[string]bool{},
+		workDir:           workDirFromSessionDir(sessionDir),
 	}
 }
 
@@ -104,13 +106,6 @@ func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, result
 			e.emit(events.Event{Type: "tool.failure.stale", TurnID: turnID, Payload: payload})
 		}
 	}
-}
-
-func (e *Engine) toolFailureContinuation() (string, ToolFailureContinuedPayload, bool) {
-	if e == nil || e.toolFailures == nil {
-		return "", ToolFailureContinuedPayload{}, false
-	}
-	return e.toolFailures.continuationPrompt()
 }
 
 func classifyToolFailure(obs toolFailureObservation) toolFailureClassificationResult {
@@ -235,24 +230,48 @@ func (l *toolFailureLedger) continuationPrompt() (string, ToolFailureContinuedPa
 	if l == nil {
 		return "", ToolFailureContinuedPayload{}, false
 	}
-	failures := l.unresolvedContinuable()
+	failures := l.unresolvedBlocking()
 	if len(failures) == 0 {
 		return "", ToolFailureContinuedPayload{}, false
 	}
 	fingerprints := make([]string, 0, len(failures))
 	repeated := false
+	needsBlockedReason := false
 	for _, rec := range failures {
 		fingerprints = append(fingerprints, rec.Fingerprint)
 		if rec.Classification == ToolFailureRepeatedStuck {
 			repeated = true
 		}
+		if failureNeedsBlockedReason(rec.Classification) {
+			needsBlockedReason = true
+		}
 	}
 	sort.Strings(fingerprints)
 	setKey := strings.Join(fingerprints, ",")
 	if l.continuedSets[setKey] {
-		return "", ToolFailureContinuedPayload{}, false
+		if l.blockedReasonSets[setKey] {
+			return "", ToolFailureContinuedPayload{}, false
+		}
+		l.blockedReasonSets[setKey] = true
+		prompt := l.blockedReasonPrompt(failures, repeated)
+		return prompt, ToolFailureContinuedPayload{
+			FailureCount:          len(failures),
+			Fingerprints:          fingerprints,
+			Repeated:              repeated,
+			ContinuationPromptLen: len(prompt),
+		}, true
 	}
 	l.continuedSets[setKey] = true
+	if needsBlockedReason {
+		l.blockedReasonSets[setKey] = true
+		prompt := l.blockedReasonPrompt(failures, repeated)
+		return prompt, ToolFailureContinuedPayload{
+			FailureCount:          len(failures),
+			Fingerprints:          fingerprints,
+			Repeated:              repeated,
+			ContinuationPromptLen: len(prompt),
+		}, true
+	}
 
 	var b strings.Builder
 	b.WriteString("Runtime observation: unresolved tool failure(s) remain from this turn. Do not finish yet unless you can explicitly explain why the task is blocked. Continue by fixing the issue, running a verifying check, or choosing a safer approach.\n")
@@ -290,22 +309,47 @@ func (l *toolFailureLedger) continuationPrompt() (string, ToolFailureContinuedPa
 	}, true
 }
 
-func (l *toolFailureLedger) unresolvedContinuable() []*toolFailureRecord {
+func (l *toolFailureLedger) blockedReasonPrompt(failures []*toolFailureRecord, repeated bool) string {
+	var b strings.Builder
+	b.WriteString("Runtime observation: the same unresolved failure set is still blocking finish. Do not repeat the previous failing action. Continue only if you can fix and verify it; otherwise explicitly explain why the task is blocked.\n")
+	if repeated {
+		b.WriteString("At least one failure is classified as repeated_stuck; use a different approach before retrying.\n")
+	}
+	b.WriteString("Blocking failures:\n")
+	for i, rec := range failures {
+		if i >= 5 {
+			fmt.Fprintf(&b, "- %d additional failure(s) omitted\n", len(failures)-i)
+			break
+		}
+		fmt.Fprintf(&b, "- tool=%s tool_use_id=%s classification=%s fingerprint=%s occurrences=%d",
+			rec.ToolName, rec.ToolUseID, rec.Classification, rec.Fingerprint, rec.Occurrences)
+		if len(rec.RelatedPaths) > 0 {
+			fmt.Fprintf(&b, " related_paths=%s", strings.Join(rec.RelatedPaths, ","))
+		}
+		if rec.Error != "" {
+			fmt.Fprintf(&b, " error=%q", rec.Error)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func (l *toolFailureLedger) unresolvedBlocking() []*toolFailureRecord {
 	if l == nil {
 		return nil
 	}
 	out := make([]*toolFailureRecord, 0, len(l.records))
 	for _, fp := range l.order {
 		rec := l.records[fp]
-		if rec != nil && rec.Status == ToolFailureStatusUnresolved && rec.Blocking && failureNeedsContinuation(rec.Classification) {
+		if rec != nil && rec.Status == ToolFailureStatusUnresolved && rec.Blocking {
 			out = append(out, rec)
 		}
 	}
 	return out
 }
 
-func failureNeedsContinuation(class ToolFailureClassification) bool {
-	return class == ToolFailureRecoverable || class == ToolFailureRepeatedStuck
+func failureNeedsBlockedReason(class ToolFailureClassification) bool {
+	return class == ToolFailureExternalBlocked || class == ToolFailureRuntimeFatal
 }
 
 func (r *toolFailureRecord) recordedPayload() ToolFailureRecordedPayload {

@@ -124,11 +124,13 @@ a non-zero exit code is returned as an error tool result with the captured
 output preserved.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
-ledger. Recoverable or repeated unresolved failures can cause the runtime to add
-one provider-visible continuation observation before allowing the model to
-finish; later successful checks or related file mutations can mark those
-failures resolved or stale. The ledger state is emitted through `tool.failure.*`
-events and debug `tools.jsonl` records.
+ledger. A built-in `unresolved-failure-gate` Stop hook blocks final answers
+while unresolved blocking failures remain, adds provider-visible observations
+for the model to fix, verify, or explain a blocker, and asks for an explicit
+blocked reason after the same blocker repeats. Nonblocking exploratory failures
+do not block finish. Later successful checks or related file mutations can mark
+failures resolved or stale. The ledger and gate state are emitted through
+`tool.failure.*`, `hook.*`, and debug `tools.jsonl` records.
 
 Pending input accepted while a turn is already running is persisted in the
 session's `pending_input.jsonl` and replayed after restart when still safe and
