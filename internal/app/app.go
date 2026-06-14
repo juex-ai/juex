@@ -16,12 +16,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
@@ -216,13 +218,27 @@ func New(opts Options) (*App, error) {
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
 	}
+	hookRunner, err := hooks.NewRunner(cfg.Hooks)
+	if err != nil {
+		closeSessionResources()
+		return nil, err
+	}
 
 	eng := &runtime.Engine{
-		Provider:      provider,
-		Tools:         reg,
-		Bus:           bus,
-		Session:       sess,
-		Prompt:        pb,
+		Provider: provider,
+		Tools:    reg,
+		Bus:      bus,
+		Session:  sess,
+		Prompt:   pb,
+		Hooks:    hookRunner,
+		HookContext: hooks.Request{
+			CWD:              runtimePaths.WorkDir,
+			WorkspaceRoots:   []string{runtimePaths.WorkDir},
+			PermissionMode:   "unrestricted",
+			SandboxMode:      "none",
+			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
+			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
+		},
 		ContextWindow: runtimeLimits.ContextWindow,
 		Compaction:    runtimeLimits.Compaction,
 	}
@@ -278,6 +294,10 @@ func New(opts Options) (*App, error) {
 		}
 		a.mcp = buildMCPStatus(mergedMCP.MCPServers, mgr.ToolCounts(), startupErrors)
 		a.cleanup = append(a.cleanup, mgr.Close)
+	}
+	if err := eng.RunSessionStartHooks(appCtx); err != nil {
+		_ = a.Close()
+		return nil, err
 	}
 	appContextTransferred = true
 	return a, nil

@@ -32,6 +32,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
@@ -823,4 +824,122 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 			t.Errorf("third (new user) message = %q", prov2.history[0][2].FirstText())
 		}
 	}
+}
+
+func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
+	work := t.TempDir()
+	prov := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "blocked", ToolName: "write", Input: map[string]any{"path": "blocked.txt", "content": "x"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "first answer"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "final answer"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a, err := app.New(app.Options{
+		Config: config.Config{
+			ProviderProtocol: "openai/chat",
+			WorkDir:          work,
+			Hooks: hooks.Config{Commands: []hooks.CommandHook{
+				{Name: "inject", Events: []hooks.EventName{hooks.EventUserPromptSubmit}, Command: e2eHookCommand("inject")},
+				{Name: "deny-write", Events: []hooks.EventName{hooks.EventPreToolUse}, Tools: []string{"write"}, Command: e2eHookCommand("deny")},
+				{Name: "continue-once", Events: []hooks.EventName{hooks.EventStop}, Command: e2eHookCommand("stop")},
+			}},
+		},
+		Provider: prov,
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	out, err := a.Run(context.Background(), "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "final answer" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(prov.history) != 3 {
+		t.Fatalf("provider calls = %d", len(prov.history))
+	}
+	if got := messagesText(prov.history[0]); !strings.Contains(got, "hook-context: visible") {
+		t.Fatalf("first provider history missing injected context:\n%s", got)
+	}
+	if got := prov.history[2][len(prov.history[2])-1].FirstText(); got != "continue from hook" {
+		t.Fatalf("stop continuation = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(work, "blocked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("denied write should not create file, stat err=%v", err)
+	}
+	eventsData, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsBody := string(eventsData)
+	for _, want := range []string{`"type":"hook.completed"`, `"type":"tool.errored"`} {
+		if !strings.Contains(eventsBody, want) {
+			t.Fatalf("events missing %s:\n%s", want, eventsBody)
+		}
+	}
+}
+
+func e2eHookCommand(mode string) []string {
+	return []string{os.Args[0], "-test.run=TestE2EHookHelperProcess", "--", mode}
+}
+
+func TestE2EHookHelperProcess(t *testing.T) {
+	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "--" {
+		return
+	}
+	switch os.Args[len(os.Args)-1] {
+	case "inject":
+		_, _ = os.Stdout.WriteString(`{"additional_context":"hook-context: visible"}`)
+	case "deny":
+		_, _ = os.Stdout.WriteString(`{"decision":"deny","additional_context":"policy denied write"}`)
+	case "stop":
+		wd, _ := os.Getwd()
+		counterPath := filepath.Join(wd, ".juex-hook-stop-count")
+		if _, err := os.Stat(counterPath); os.IsNotExist(err) {
+			_ = os.WriteFile(counterPath, []byte("1"), 0o644)
+			_, _ = os.Stdout.WriteString(`{"block_stop":true,"continue_prompt":"continue from hook"}`)
+			break
+		}
+		_, _ = os.Stdout.WriteString(`{"decision":"allow"}`)
+	default:
+		_, _ = os.Stdout.WriteString(`{}`)
+	}
+	os.Exit(0)
+}
+
+func messagesText(messages []llm.Message) string {
+	var b strings.Builder
+	for _, msg := range messages {
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockText {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(block.Text)
+			}
+			if block.Type == llm.BlockToolResult {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(block.Content)
+			}
+		}
+	}
+	return b.String()
 }

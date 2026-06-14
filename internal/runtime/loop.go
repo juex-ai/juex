@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/session"
@@ -49,6 +50,10 @@ type Engine struct {
 	Bus      *events.Bus
 	Session  *session.Session
 	Prompt   *prompt.Builder
+	Hooks    HookRunner
+	// HookContext carries process/session metadata included in every hook
+	// command input. Event-specific fields are filled by the runtime.
+	HookContext hooks.Request
 	// MaxPendingInputs caps user or external event messages that can be
 	// queued while a turn is active. When omitted, DefaultMaxPendingInput is
 	// used. A full queue rejects new input instead of silently dropping it.
@@ -68,6 +73,10 @@ type Engine struct {
 	pendingInput []llm.Message
 
 	autoCompactFailures int
+}
+
+type HookRunner interface {
+	Run(context.Context, hooks.Request) ([]hooks.Result, error)
 }
 
 var (
@@ -261,6 +270,20 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		}
 		if len(recorded.toolCalls) == 0 {
 			lastText = recorded.finalText
+			stopReq := e.newHookRequest(hooks.EventStop, turnID)
+			stopReq.UserInput = prepared.userMessage.FirstText()
+			stopResults, err := e.runHooks(turnCtx, stopReq)
+			if err != nil {
+				return "", e.failTurn(turnID, err)
+			}
+			if prompt, ok := stopContinuation(stopResults); ok {
+				if strings.TrimSpace(prompt) == "" {
+					return "", e.failTurn(turnID, fmt.Errorf("hooks: Stop hook requested block_stop without continue_prompt"))
+				}
+				if _, err := e.EnqueuePendingInput(turnCtx, prompt); err != nil {
+					return "", e.failTurn(turnID, err)
+				}
+			}
 			if !e.finishActiveTurnIfNoPending(turnID) {
 				continue
 			}
@@ -295,6 +318,17 @@ type recordedProviderResponse struct {
 }
 
 func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, userMsg llm.Message) (preparedTurnContext, error) {
+	userHookReq := e.newHookRequest(hooks.EventUserPromptSubmit, turnID)
+	userHookReq.UserInput = userMsg.FirstText()
+	userHookResults, err := e.runHooks(ctx, userHookReq)
+	if err != nil {
+		return preparedTurnContext{}, err
+	}
+	if denied, reason := hookDenied(userHookResults); denied {
+		return preparedTurnContext{}, hookDeniedError(hooks.EventUserPromptSubmit, reason)
+	}
+	userMsg = appendHookAdditionalContext(userMsg, userHookResults)
+
 	prepared := preparedTurnContext{
 		promptSections: e.Prompt.Sections(),
 		tools:          e.Tools.Specs(),
@@ -429,6 +463,17 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Bl
 }
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) llm.Block {
+	preReq := e.newHookRequest(hooks.EventPreToolUse, turnID)
+	preReq.ToolName = call.ToolName
+	preReq.ToolInput = call.Input
+	preResults, err := e.runHooks(ctx, preReq)
+	if err != nil {
+		return e.hookToolErrorBlock(turnID, call, err)
+	}
+	if denied, reason := hookDenied(preResults); denied {
+		return e.hookToolErrorBlock(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
+	}
+
 	e.emit(events.Event{Type: "tool.requested", TurnID: turnID, Payload: ToolRequestedPayload{
 		Name:           call.ToolName,
 		Input:          call.Input,
@@ -460,14 +505,44 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	})
 	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
+	var toolErr error
 	if err != nil {
 		block.Content = toolErrorContent(out, err)
 		block.IsError = true
+		toolErr = err
+	} else {
+		block.Content = out
+	}
+
+	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
+	postReq.ToolName = call.ToolName
+	postReq.ToolInput = call.Input
+	postReq.ToolResult = block.Content
+	postResults, postErr := e.runHooks(ctx, postReq)
+	if postErr != nil {
+		block.Content = toolErrorContent(block.Content, postErr)
+		block.IsError = true
+		toolErr = postErr
+	}
+	if denied, reason := hookDenied(postResults); denied {
+		toolErr = fmt.Errorf("hooks: tool %q denied after use%s", call.ToolName, hookReasonSuffix(reason))
+		block.Content = toolErrorContent(block.Content, toolErr)
+		block.IsError = true
+	}
+	e.emitToolFinished(turnID, call, block, out, info, toolErr)
+	return block
+}
+
+func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, out string, info tools.CallInfo, err error) {
+	if block.IsError {
 		payload := ToolErroredPayload{
 			Name:           call.ToolName,
 			ToolUseID:      call.ToolUseID,
-			Error:          err.Error(),
+			Error:          "tool errored",
 			TimeoutSeconds: info.TimeoutSeconds,
+		}
+		if err != nil {
+			payload.Error = err.Error()
 		}
 		if out != "" {
 			payload.Len = len(out)
@@ -477,18 +552,29 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 			payload.TimedOut = true
 		}
 		e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: payload})
-		return block
+		return
 	}
-
-	block.Content = out
 	e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: ToolCompletedPayload{
 		Name:           call.ToolName,
 		ToolUseID:      call.ToolUseID,
 		TimeoutSeconds: info.TimeoutSeconds,
 		Len:            len(out),
-		// Truncated preview so events.jsonl stays readable for tools that
-		// return many KB.
-		Preview: truncate(out, 200),
+		Preview:        truncate(out, 200),
+	}})
+}
+
+func (e *Engine) hookToolErrorBlock(turnID string, call llm.Block, err error) llm.Block {
+	block := llm.Block{
+		Type:      llm.BlockToolResult,
+		ToolUseID: call.ToolUseID,
+		ToolName:  call.ToolName,
+		Content:   err.Error(),
+		IsError:   true,
+	}
+	e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: ToolErroredPayload{
+		Name:      call.ToolName,
+		ToolUseID: call.ToolUseID,
+		Error:     err.Error(),
 	}})
 	return block
 }

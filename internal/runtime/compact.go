@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 )
@@ -74,6 +75,28 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	selection := ensureCompactionProgress(selectCompactionInput(e.Session.History, policy))
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
+	}
+	preReq := e.newHookRequest(hooks.EventPreCompact, turnID)
+	preReq.CompactReason = reason
+	preReq.CompactAuto = auto
+	preResults, err := e.runHooks(ctx, preReq)
+	if err != nil {
+		compactErr := fmt.Errorf("compact context: %w", err)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
+	if denied, denyReason := hookDenied(preResults); denied {
+		err := fmt.Errorf("compact context: denied by hook%s", hookReasonSuffix(denyReason))
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  err.Error(),
+		}})
+		return CompactionResult{}, err
 	}
 
 	contextWindow := e.ContextWindow
@@ -175,6 +198,23 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 		},
 	}
 	e.Session.RecordResponseUsage(resp.Usage, &contextUsage)
+	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
+	postReq.CompactReason = reason
+	postReq.CompactAuto = auto
+	postResults, err := e.runHooks(ctx, postReq)
+	if err != nil {
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  fmt.Sprintf("compact context: post hook failed: %v", err),
+		}})
+	} else if denied, denyReason := hookDenied(postResults); denied {
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  fmt.Sprintf("compact context: post hook denied%s", hookReasonSuffix(denyReason)),
+		}})
+	}
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,

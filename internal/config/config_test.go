@@ -307,6 +307,99 @@ runtime:
 	}
 }
 
+func TestLoad_GlobalHooksDoNotRequireTrust(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	body := `model: openai/gpt-global
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+hooks:
+  commands:
+    - name: global-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), body)
+
+	cfg, err := LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "user" {
+		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
+	}
+}
+
+func TestLoad_ProjectHooksRequireTrust(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `model: openai/gpt-local
+providers:
+  - id: openai
+    base_url: https://local.example
+    api_key: sk-local
+    models:
+      - id: gpt-local
+hooks:
+  commands:
+    - name: project-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(work)
+	if err == nil || !strings.Contains(err.Error(), "hooks.trusted: true") {
+		t.Fatalf("err = %v, want project trust error", err)
+	}
+}
+
+func TestLoad_HooksMergeInConfigOrder(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	global := `model: openai/gpt-global
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+hooks:
+  commands:
+    - name: global-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`
+	local := `model: openai/gpt-global
+hooks:
+  trusted: true
+  commands:
+    - name: project-guard
+      events: [PreToolUse]
+      command: ["echo", "{}"]
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+
+	cfg, err := LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 2 {
+		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
+	}
+	if cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "user" {
+		t.Fatalf("first hook = %+v", cfg.Hooks.Commands[0])
+	}
+	if cfg.Hooks.Commands[1].Name != "project-guard" || cfg.Hooks.Commands[1].Source != "project" {
+		t.Fatalf("second hook = %+v", cfg.Hooks.Commands[1])
+	}
+}
+
 func TestLoad_WorkShellEmptyResetsGlobalShell(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()

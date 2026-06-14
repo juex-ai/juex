@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 	"gopkg.in/yaml.v3"
@@ -34,6 +35,7 @@ type Config struct {
 	ProviderCapabilities      llm.CapabilityOverrides
 	ProviderCompat            llm.CompatOptions
 	Compaction                CompactionConfig
+	Hooks                     hooks.Config
 	Shell                     ShellProfile
 	EnableUserGlobalResources bool
 
@@ -51,6 +53,7 @@ type fileConfig struct {
 	EnableUserGlobalResources optionalBool     `yaml:"enable_user_global_resources"`
 	Providers                 []providerConfig `yaml:"providers"`
 	Compaction                compactionConfig `yaml:"compaction"`
+	Hooks                     hooks.FileConfig `yaml:"hooks"`
 	Runtime                   runtimeConfig    `yaml:"runtime"`
 	Shell                     *ShellConfig     `yaml:"shell"`
 }
@@ -243,11 +246,11 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 		cfg.HomeJuexDir = filepath.Join(home, ".juex")
 	}
 
-	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true); err != nil {
+	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true, "user", false); err != nil {
 		return cfg, err
 	}
 
-	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true); err != nil {
+	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true, "project", true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -265,7 +268,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, path, false)
+	err = applyYAMLFile(&cfg, path, false, "project", true)
 	if err != nil {
 		return cfg, err
 	}
@@ -282,7 +285,7 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, path, false)
+	err = applyYAMLFile(&cfg, path, false, "project", true)
 	if err != nil {
 		return cfg, err
 	}
@@ -392,7 +395,7 @@ func (c Config) MCPConfigPaths() []string {
 	return c.ResourcePaths().MCPConfigPaths
 }
 
-func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
+func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, requireHookTrust bool) error {
 	if path == "" {
 		return nil
 	}
@@ -418,10 +421,22 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool) error {
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
+	if err := applyHooksConfig(cfg, fc.Hooks, hookSource, requireHookTrust); err != nil {
+		return fmt.Errorf("config: parse %s: %w", path, err)
+	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
 	}
+	return nil
+}
+
+func applyHooksConfig(cfg *Config, fileHooks hooks.FileConfig, source string, requireTrust bool) error {
+	resolved, err := hooks.ResolveFileConfig(fileHooks, source, requireTrust)
+	if err != nil {
+		return err
+	}
+	cfg.Hooks.Commands = append(cfg.Hooks.Commands, resolved.Commands...)
 	return nil
 }
 
