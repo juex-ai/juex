@@ -86,6 +86,15 @@ func TestRunnerRunTimeout(t *testing.T) {
 	}
 }
 
+func TestNewRunnerRejectsTimeoutAboveMax(t *testing.T) {
+	_, err := NewRunner(Config{Commands: []CommandHook{
+		{Name: "too-slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("allow"), TimeoutSeconds: MaxTimeoutSeconds + 1},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "timeout_seconds cannot exceed 300 seconds") {
+		t.Fatalf("err = %v, want max timeout error", err)
+	}
+}
+
 func TestRunnerRunOutputLimit(t *testing.T) {
 	r, err := NewRunner(Config{Commands: []CommandHook{
 		{Name: "large", Events: []EventName{EventPostToolUse}, Command: helperCommand("large"), MaxOutputBytes: 8},

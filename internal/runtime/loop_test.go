@@ -84,11 +84,15 @@ func (m *mockProviderWithErrors) Complete(ctx context.Context, sys string, histo
 
 type fakeHookRunner struct {
 	responses map[hooks.EventName][]hooks.Output
+	errors    map[hooks.EventName]error
 	requests  []hooks.Request
 }
 
 func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 	r.requests = append(r.requests, req)
+	if err := r.errors[req.EventName]; err != nil {
+		return nil, err
+	}
 	outputs := r.responses[req.EventName]
 	if len(outputs) == 0 {
 		return nil, nil
@@ -101,6 +105,28 @@ func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Re
 		ToolName:  req.ToolName,
 		Output:    out,
 	}}, nil
+}
+
+func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
+	blocks := make([]llm.Block, 1, 2)
+	blocks[0] = llm.Block{Type: llm.BlockText, Text: "original"}
+	msg := llm.Message{Role: llm.RoleUser, Blocks: blocks}
+
+	out := appendHookAdditionalContext(msg, []hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "context"},
+		Output: hooks.Output{AdditionalContext: "extra"},
+	}})
+
+	if len(msg.Blocks) != 1 || msg.Blocks[0].Text != "original" {
+		t.Fatalf("input message mutated: %+v", msg.Blocks)
+	}
+	if len(out.Blocks) != 2 || !strings.Contains(out.Blocks[1].Text, "extra") {
+		t.Fatalf("output blocks = %+v", out.Blocks)
+	}
+	extendedOriginal := msg.Blocks[:cap(msg.Blocks)]
+	if extendedOriginal[1].Text != "" {
+		t.Fatalf("input backing array mutated: %+v", extendedOriginal)
+	}
 }
 
 func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *events.Bus) {
@@ -847,6 +873,73 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("hook order = %+v, want %+v", got, want)
 		}
+	}
+}
+
+func TestCompactPostHookFailuresAreObservational(t *testing.T) {
+	cases := []struct {
+		name   string
+		runner *fakeHookRunner
+	}{
+		{
+			name: "error",
+			runner: &fakeHookRunner{
+				responses: map[hooks.EventName][]hooks.Output{hooks.EventPreCompact: {{}}},
+				errors:    map[hooks.EventName]error{hooks.EventPostCompact: errors.New("audit sink unavailable")},
+			},
+		},
+		{
+			name: "deny",
+			runner: &fakeHookRunner{
+				responses: map[hooks.EventName][]hooks.Output{
+					hooks.EventPreCompact:  {{}},
+					hooks.EventPostCompact: {{Decision: hooks.DecisionDeny, AdditionalContext: "audit failed"}},
+				},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prov := &mockProvider{script: []llm.Response{
+				{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+			}}
+			eng, bus := newEngine(t, prov, false)
+			var eventTypes []string
+			unsub := bus.Subscribe("context.compact.*", func(ev events.Event) {
+				eventTypes = append(eventTypes, ev.Type)
+			})
+			defer unsub()
+			eng.Compaction = DefaultCompactionPolicy()
+			eng.Compaction.KeepRecentTokens = 1
+			eng.Compaction.TailTurns = 0
+			eng.Hooks = tc.runner
+			if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+				t.Fatal(err)
+			}
+			if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+				t.Fatal(err)
+			}
+
+			result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.MessageID == "" {
+				t.Fatalf("result = %+v", result)
+			}
+			var sawErrored, sawCompleted bool
+			for _, typ := range eventTypes {
+				if typ == "context.compact.errored" {
+					sawErrored = true
+				}
+				if typ == "context.compact.completed" {
+					sawCompleted = true
+				}
+			}
+			if !sawErrored || !sawCompleted {
+				t.Fatalf("events = %+v, want errored and completed", eventTypes)
+			}
+		})
 	}
 }
 

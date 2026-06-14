@@ -822,7 +822,7 @@ compaction:
 | `hooks.commands[].events` | lifecycle events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop` |
 | `hooks.commands[].tools` | optional tool-name filter for tool hook events |
 | `hooks.commands[].command` | command argv executed with hook input JSON on stdin |
-| `hooks.commands[].timeout_seconds` | optional command timeout; defaults to 10 seconds |
+| `hooks.commands[].timeout_seconds` | optional command timeout; defaults to 10 seconds and cannot exceed 300 seconds |
 | `hooks.commands[].max_output_bytes` | optional stdout/stderr byte cap per stream; defaults to 65536 |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
@@ -887,9 +887,11 @@ the existing session bus persists those events to `events.jsonl`.
 `UserPromptSubmit` hooks can add context to the user message before projection
 and provider submission. `PreToolUse` hooks can deny a tool call, producing an
 error tool result so the model can recover. `PostToolUse` hook failures are
-folded into the tool result. `PreCompact` can deny compaction, `PostCompact`
-runs after a successful compact summary append, and `Stop` can block turn
-completion by queuing a `continue_prompt`.
+folded into the tool result. `PreCompact` can deny compaction. `PostCompact`
+runs after a successful compact summary append; failures or deny decisions are
+emitted as warning-style compaction error events and do not fail or roll back
+the persisted compaction. `Stop` can block turn completion by queuing a
+`continue_prompt`.
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine

@@ -41,10 +41,15 @@ func (e *Engine) RunSessionStartHooks(ctx context.Context) error {
 }
 
 func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
+	copied := false
 	for _, result := range results {
 		contextText := strings.TrimSpace(result.Output.AdditionalContext)
 		if contextText == "" {
 			continue
+		}
+		if !copied {
+			msg.Blocks = append([]llm.Block(nil), msg.Blocks...)
+			copied = true
 		}
 		label := result.Hook.Name
 		if label == "" {

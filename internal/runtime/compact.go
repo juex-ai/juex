@@ -203,22 +203,17 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	postReq.CompactAuto = auto
 	postResults, err := e.runHooks(ctx, postReq)
 	if err != nil {
-		compactErr := fmt.Errorf("compact context: post hook failed: %w", err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
-			Error:  compactErr.Error(),
+			Error:  fmt.Sprintf("compact context: post hook failed: %v", err),
 		}})
-		return CompactionResult{}, compactErr
-	}
-	if denied, denyReason := hookDenied(postResults); denied {
-		err := fmt.Errorf("compact context: post hook denied%s", hookReasonSuffix(denyReason))
+	} else if denied, denyReason := hookDenied(postResults); denied {
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
-			Error:  err.Error(),
+			Error:  fmt.Sprintf("compact context: post hook denied%s", hookReasonSuffix(denyReason)),
 		}})
-		return CompactionResult{}, err
 	}
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,

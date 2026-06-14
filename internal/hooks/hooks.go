@@ -14,6 +14,7 @@ import (
 
 const (
 	DefaultTimeoutSeconds = 10
+	MaxTimeoutSeconds     = 300
 	DefaultMaxOutputBytes = 64 * 1024
 )
 
@@ -281,6 +282,9 @@ func validateHook(h CommandHook) error {
 	}
 	if h.TimeoutSeconds < 0 {
 		return fmt.Errorf("hooks: %s: timeout_seconds must be >= 0", h.Name)
+	}
+	if h.TimeoutSeconds > MaxTimeoutSeconds {
+		return fmt.Errorf("hooks: %s: timeout_seconds cannot exceed %d seconds", h.Name, MaxTimeoutSeconds)
 	}
 	if h.MaxOutputBytes < 0 {
 		return fmt.Errorf("hooks: %s: max_output_bytes must be >= 0", h.Name)
