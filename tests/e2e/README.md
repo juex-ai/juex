@@ -15,7 +15,8 @@ mise exec -- go test ./tests/e2e -count=1
 | Area | Test | What it protects |
 | --- | --- | --- |
 | Full runtime loop | `TestEndToEnd_FullStack` | Prompt sources, skills, work-local memory tools, MCP stdio tools, builtin read/write/edit/exec_command/grep, parallel tool calls, event JSONL, conversation JSONL. |
-| Tool failure ledger | `TestEndToEnd_ToolFailureLedgerContinuation` | A failed check is recorded in the runtime ledger, an early final receives a continuation observation, a related file mutation marks the failure stale, and conversation/events JSONL persist the flow. |
+| Tool failure ledger | `TestEndToEnd_ToolFailureLedgerContinuation` | A failed check is recorded in the runtime ledger, the built-in unresolved-failure gate blocks an early final, a related file mutation marks the failure stale, and conversation/events JSONL persist the flow. |
+| Unresolved failure gate | `TestEndToEnd_UnresolvedFailureGateWithUserGlobalDisabled` | The app-level runtime keeps the built-in finish gate active with `enable_user_global_resources=false`, blocks an early final after a failed builtin command, resolves after a successful check, and persists gate/failure events. |
 | Portable runtime loop | `TestEndToEnd_FullStackPortable` | Cross-platform prompt, skills, memory tools, MCP stdio, read/write/edit/grep, event JSONL, and conversation JSONL with an injected fake shell profile. |
 | Session resume | `TestEndToEnd_ResumeRoundTrip` | A resumed app session reuses the same session id and replays prior user/assistant history before the next prompt. |
 | Debug observability | `TestEndToEnd_DebugObservabilityArtifacts` | Debug session artifacts are written and parseable for tool success, tool failure, manual compaction, and finish attempts. |

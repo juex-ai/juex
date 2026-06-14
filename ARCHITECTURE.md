@@ -911,11 +911,15 @@ Tool failures are also tracked in a per-turn unresolved-failure ledger inside
 `internal/runtime`. The ledger classifies each failed tool result as
 `recoverable`, `external_blocked`, `runtime_fatal`, `repeated_stuck`, or
 `nonblocking_exploratory`, records fingerprints and bounded output previews,
-and emits `tool.failure.*` events. Recoverable or repeated unresolved failures
-can inject one provider-visible runtime observation before finish, while later
-successful checks or related file writes/edits mark records `resolved` or
-`stale`. This keeps ordinary tool errors in the model loop without introducing
-a generic max-iteration stop.
+and emits `tool.failure.*` events. Finish attempts pass through the built-in
+`unresolved-failure-gate` Stop hook before user-configured Stop command hooks.
+The gate blocks unresolved blocking failures, allows exploratory nonblocking
+failures, injects provider-visible observations for recoverable failures, and
+asks the model to change approach or explicitly explain a blocker when the same
+blocker repeats or the failure is external/runtime-fatal. Later successful
+checks or related file writes/edits mark records `resolved` or `stale`. This
+keeps ordinary tool errors in the model loop without introducing a generic
+max-iteration stop.
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine

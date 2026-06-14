@@ -508,14 +508,79 @@ func TestEndToEnd_ToolFailureLedgerContinuation(t *testing.T) {
 		payloadText.Write(payload)
 		payloadText.WriteByte('\n')
 	}
-	for _, want := range []string{"tool.failure.recorded", "tool.failure.continued", "tool.failure.stale"} {
+	for _, want := range []string{"tool.failure.recorded", "tool.failure.continued", "tool.failure.stale", "hook.completed"} {
 		if !seen[want] {
 			t.Fatalf("events missing %q; seen=%v", want, seen)
 		}
 	}
-	for _, want := range []string{"recoverable", "artifact.txt", "check_ready"} {
+	for _, want := range []string{"recoverable", "artifact.txt", "check_ready", "unresolved-failure-gate"} {
 		if !strings.Contains(payloadText.String(), want) {
 			t.Fatalf("event payloads missing %q:\n%s", want, payloadText.String())
+		}
+	}
+}
+
+func TestEndToEnd_UnresolvedFailureGateWithUserGlobalDisabled(t *testing.T) {
+	work := t.TempDir()
+	prov := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "exec_fail", ToolName: "exec_command", Input: map[string]any{"cmd": "exit 1"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "done too early"),
+				StopReason: llm.StopEndTurn,
+			},
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "exec_ok", ToolName: "exec_command", Input: map[string]any{"cmd": "exit 0"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: command recovered"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a, err := app.New(app.Options{
+		Config: config.Config{
+			ProviderProtocol:          "openai/chat",
+			WorkDir:                   work,
+			EnableUserGlobalResources: false,
+		},
+		Provider:   prov,
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	out, err := a.Run(context.Background(), "recover from the command failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "TASK COMPLETE: command recovered" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(prov.history) != 4 {
+		t.Fatalf("provider calls = %d, want gate continuation and recovery", len(prov.history))
+	}
+	observation := messagesText(prov.history[2])
+	for _, want := range []string{"Runtime observation", "unresolved tool failure", "exec_command"} {
+		if !strings.Contains(observation, want) {
+			t.Fatalf("provider did not receive gate observation %q:\n%s", want, observation)
+		}
+	}
+	eventsText := strings.Join(readLines(t, filepath.Join(a.Session.Dir, "events.jsonl")), "\n")
+	for _, want := range []string{"tool.failure.recorded", "tool.failure.continued", "tool.failure.resolved", "unresolved-failure-gate"} {
+		if !strings.Contains(eventsText, want) {
+			t.Fatalf("events missing %q:\n%s", want, eventsText)
 		}
 	}
 }
@@ -991,6 +1056,10 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 				Message:    llm.TextMessage(llm.RoleAssistant, "final answer"),
 				StopReason: llm.StopEndTurn,
 			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "final answer"),
+				StopReason: llm.StopEndTurn,
+			},
 		},
 	}
 	a, err := app.New(app.Options{
@@ -1018,13 +1087,13 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	if out != "final answer" {
 		t.Fatalf("out = %q", out)
 	}
-	if len(prov.history) != 3 {
+	if len(prov.history) != 4 {
 		t.Fatalf("provider calls = %d", len(prov.history))
 	}
 	if got := messagesText(prov.history[0]); !strings.Contains(got, "hook-context: visible") {
 		t.Fatalf("first provider history missing injected context:\n%s", got)
 	}
-	if got := prov.history[2][len(prov.history[2])-1].FirstText(); got != "continue from hook" {
+	if got := prov.history[3][len(prov.history[3])-1].FirstText(); got != "continue from hook" {
 		t.Fatalf("stop continuation = %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(work, "blocked.txt")); !os.IsNotExist(err) {

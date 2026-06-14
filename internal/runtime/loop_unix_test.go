@@ -20,6 +20,7 @@ func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testin
 				"timeout": 1,
 			}},
 		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)

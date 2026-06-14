@@ -326,7 +326,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 				StopReason: recorded.stopReason,
 				OutputLen:  len(lastText),
 			}})
-			if prompt, payload, ok := e.toolFailureContinuation(); ok {
+			if prompt, payload, ok := e.runUnresolvedFailureGate(turnID); ok {
 				if _, err := e.EnqueuePendingInput(turnCtx, prompt); err != nil {
 					return "", e.failTurn(turnID, err)
 				}
