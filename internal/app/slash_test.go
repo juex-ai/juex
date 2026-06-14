@@ -238,14 +238,17 @@ func TestApp_RunStatusSlashSkipsProvider(t *testing.T) {
 }
 
 func TestApp_RunNewSlashSwitchesActivePrimary(t *testing.T) {
-	a, prov := newStubApp(t)
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "Hello, I can help with coding tasks. What would you like to do next?"),
+		StopReason: llm.StopEndTurn,
+	})
 	oldID := a.Session.ID
 	out, err := a.Run(context.Background(), "/new")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prov.calls != 0 {
-		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
 	}
 	if a.Session.ID == oldID {
 		t.Fatalf("session id did not change: %s", oldID)
@@ -253,8 +256,17 @@ func TestApp_RunNewSlashSwitchesActivePrimary(t *testing.T) {
 	if a.Session.Kind != session.KindPrimary || !a.Session.Active {
 		t.Fatalf("session kind/active = %q/%v, want primary active", a.Session.Kind, a.Session.Active)
 	}
-	if !strings.Contains(out, "New primary session: "+a.Session.ID) {
+	if !strings.Contains(out, "What would you like to do next?") {
 		t.Fatalf("output = %q", out)
+	}
+	if len(a.Session.History) < 2 {
+		t.Fatalf("history len = %d, want at least 2", len(a.Session.History))
+	}
+	if got := a.Session.History[0].FirstText(); got != NewSessionGreetingPrompt() {
+		t.Fatalf("first history text = %q, want greeting prompt", got)
+	}
+	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != NewSessionGreetingPrompt() {
+		t.Fatalf("provider prompt = %q, want greeting prompt", got)
 	}
 	h, err := session.LoadHistory(filepath.Join(a.cfg.WorkDir, ".juex", "history.json"))
 	if err != nil {

@@ -17,6 +17,8 @@ const (
 	SlashStatus  = "/status"
 )
 
+const newSessionGreetingPrompt = "Please greet me briefly, introduce what you can help with in one concise sentence, and ask what I want to do next. You may suggest a concrete place to start."
+
 var slashCommandNames = []string{SlashCompact, SlashNew, SlashStatus}
 
 type SlashCommand struct {
@@ -54,6 +56,14 @@ func SlashCommandNames() []string {
 
 func AvailableSlashCommandsText() string {
 	return strings.Join(slashCommandNames, ", ")
+}
+
+func NewSessionGreetingPrompt() string {
+	return newSessionGreetingPrompt
+}
+
+func NewSessionGreetingMessage() llm.Message {
+	return llm.TextMessage(llm.RoleUser, newSessionGreetingPrompt)
 }
 
 func ParseSlashCommand(input string) (SlashCommand, bool, error) {

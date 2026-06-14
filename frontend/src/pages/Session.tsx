@@ -90,6 +90,7 @@ import {
 import {
   getSession,
   getSessionContext,
+  getTurnStatus,
   interrupt,
   startTurn,
   subscribeEvents,
@@ -115,6 +116,7 @@ import type {
 } from "@/types";
 
 type InitialCommandState = {
+  activeTurnID?: string;
   commandInput?: string;
   command?: SlashCommandResponse;
 } | null;
@@ -174,19 +176,6 @@ export function Session() {
     latestRouteRef.current = { id };
   }, [id]);
 
-  useEffect(() => {
-    const next = createQueuedInputState();
-    queuedInputStateRef.current = next;
-    setQueuedInputState(next);
-    setTurnActiveControllerState(false);
-    setCompactActiveControllerState(false);
-    setDraft("");
-    setComposerHint(null);
-    setLoadingOlderMessages(false);
-    setOlderMessagesError(null);
-    setCompactCommandInputs({});
-  }, [id]);
-
   // refresh is stable per route mode and session id.
   const refresh = useCallback(async (
     opts?: { preserveLiveMessages?: boolean },
@@ -220,6 +209,65 @@ export function Session() {
       }
     }
   }, [id]);
+
+  useEffect(() => {
+    const next = createQueuedInputState();
+    queuedInputStateRef.current = next;
+    setQueuedInputState(next);
+    const state = location.state as InitialCommandState;
+    const activeTurnID = state?.activeTurnID;
+    setTurnActiveControllerState(Boolean(activeTurnID));
+    setStatus(activeTurnID ? { kind: "running" } : { kind: "idle" });
+    setCompactActiveControllerState(false);
+    setDraft("");
+    setComposerHint(null);
+    setLoadingOlderMessages(false);
+    setOlderMessagesError(null);
+    setCompactCommandInputs({});
+    if (!activeTurnID) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+    const reconcile = async () => {
+      try {
+        const turn = await getTurnStatus(id, activeTurnID);
+        if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
+        if (turn.state === "running") {
+          setTurnActiveControllerState(true);
+          setStatus(
+            turn.pending_count && turn.pending_count > 0
+              ? { kind: "pending", count: turn.pending_count }
+              : { kind: "running" },
+          );
+          timer = window.setTimeout(() => void reconcile(), 1000);
+          return;
+        }
+
+        await refresh();
+        if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
+        if (queuedInputStateRef.current.items.length > 0) {
+          const emptyQueue = createQueuedInputState();
+          queuedInputStateRef.current = emptyQueue;
+          setQueuedInputState(emptyQueue);
+        }
+        setTurnActiveControllerState(false);
+        if (turn.state === "errored") {
+          setStatus({ kind: "error", detail: turn.error });
+        } else {
+          markDoneSoon();
+        }
+      } catch (e) {
+        if (!cancelled && isLatestRoute(latestRouteRef.current, id)) {
+          console.error("getTurnStatus failed", e);
+        }
+      }
+    };
+    void reconcile();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [id, location.state, refresh]);
 
   useEffect(() => {
     if (!id) return;
@@ -441,7 +489,9 @@ export function Session() {
           navigate(
             `/sessions/${encodeURIComponent(turn.command.status.session_id)}`,
             {
-              state: { commandInput: prompt, command: turn.command },
+              state: turn.turn_id
+                ? { activeTurnID: turn.turn_id }
+                : { commandInput: prompt, command: turn.command },
             },
           );
           return;

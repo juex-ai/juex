@@ -19,9 +19,10 @@ import (
 )
 
 type stubProvider struct {
-	replies []llm.Response
-	calls   int
-	systems []string
+	replies   []llm.Response
+	calls     int
+	systems   []string
+	histories [][]llm.Message
 }
 
 func (s *stubProvider) Name() string { return "stub" }
@@ -30,6 +31,7 @@ func (s *stubProvider) Complete(ctx context.Context, sys string, h []llm.Message
 		return llm.Response{}, errors.New("stub exhausted")
 	}
 	s.systems = append(s.systems, sys)
+	s.histories = append(s.histories, append([]llm.Message(nil), h...))
 	r := s.replies[s.calls]
 	s.calls++
 	return r, nil

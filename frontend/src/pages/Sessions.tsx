@@ -61,10 +61,18 @@ export function Sessions() {
               try {
                 const session = await createSession();
                 const turn = await startTurn(session.id, text);
-                navigate(`/sessions/${encodeURIComponent(session.id)}`, {
-                  state: turn.command
-                    ? { commandInput: text, command: turn.command }
-                    : undefined,
+                const targetSessionID =
+                  turn.command?.name === "/new" &&
+                  turn.command.status?.session_id
+                    ? turn.command.status.session_id
+                    : session.id;
+                navigate(`/sessions/${encodeURIComponent(targetSessionID)}`, {
+                  state:
+                    turn.command && !turn.turn_id
+                      ? { commandInput: text, command: turn.command }
+                      : turn.turn_id
+                        ? { activeTurnID: turn.turn_id }
+                        : undefined,
                 });
               } catch (e) {
                 const message =
