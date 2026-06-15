@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 type RuntimeStats struct {
@@ -53,9 +54,9 @@ func LoadRuntimeStats(dir string) (RuntimeStats, error) {
 			stats.LLMRequests++
 		case "llm.responded":
 			stats.LLMSuccesses++
-		case "tool.requested":
+		case toolevents.RequestedType:
 			stats.ToolRequests++
-		case "tool.completed":
+		case toolevents.CompletedType:
 			stats.ToolSuccesses++
 		}
 	}

@@ -341,7 +341,7 @@ func (s *shellSession) appendOutput(p []byte) {
 		}
 		s.chunkID++
 		deltas = append(deltas, OutputDelta{
-			Tool:      eventToolName(s.events),
+			Name:      eventToolName(s.events),
 			ToolUseID: s.events.ToolUseID,
 			SessionID: fmt.Sprint(s.id),
 			ChunkID:   s.chunkID,
@@ -532,8 +532,8 @@ func cloneIntPtr(v *int) *int {
 }
 
 func eventToolName(events ToolCallEvents) string {
-	if events.Tool != "" {
-		return events.Tool
+	if events.Name != "" {
+		return events.Name
 	}
 	return "exec_command"
 }

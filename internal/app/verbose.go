@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimeevents "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 // verbosePrinter formats lifecycle events into a human-readable transcript
@@ -78,14 +79,14 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		if payloadFieldPresent(e.Payload, "token_usage") {
 			vp.printlnDim("  " + FormatTokenUsage(payload.TokenUsage))
 		}
-	case "tool.requested":
-		payload, _ := payloadAs[runtimeevents.ToolRequestedPayload](e.Payload)
+	case toolevents.RequestedType:
+		payload, _ := payloadAs[toolevents.RequestedPayload](e.Payload)
 		vp.printlnDim("  → " + payload.Name + "(" + oneLineJSON(payload.Input) + ")")
-	case "tool.completed":
-		payload, _ := payloadAs[runtimeevents.ToolCompletedPayload](e.Payload)
+	case toolevents.CompletedType:
+		payload, _ := payloadAs[toolevents.CompletedPayload](e.Payload)
 		vp.printlnDim(fmt.Sprintf("  ← %s: ok (%d bytes)", payload.Name, payload.Len))
-	case "tool.errored":
-		payload, _ := payloadAs[runtimeevents.ToolErroredPayload](e.Payload)
+	case toolevents.ErroredType:
+		payload, _ := payloadAs[toolevents.ErroredPayload](e.Payload)
 		vp.printlnRed(fmt.Sprintf("  ← %s: ERROR %s", payload.Name, payload.Error))
 	case "pending_input.queued":
 		payload, _ := payloadAs[runtimeevents.PendingInputQueuedPayload](e.Payload)

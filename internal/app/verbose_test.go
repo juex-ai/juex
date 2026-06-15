@@ -9,6 +9,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimeevents "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 // emitAll feeds a sequence of events through a verbosePrinter and returns
@@ -52,8 +53,8 @@ func TestVerbose_TurnLifecycle(t *testing.T) {
 			"text":     "I'll find them.",
 			"thinking": "Need to use grep or find.",
 		}},
-		{Type: "tool.requested", Payload: map[string]any{"name": "shell", "input": map[string]any{"cmd": "find . -name '*.go'"}}},
-		{Type: "tool.completed", Payload: map[string]any{"name": "shell", "len": 1234}},
+		{Type: toolevents.RequestedType, Payload: map[string]any{"name": "shell", "input": map[string]any{"cmd": "find . -name '*.go'"}}},
+		{Type: toolevents.CompletedType, Payload: map[string]any{"name": "shell", "len": 1234}},
 		{Type: "llm.requested", Payload: map[string]any{"iter": 1}},
 		{Type: "llm.responded", Payload: map[string]any{"text": "Found 14 files."}},
 		{Type: "turn.completed", Payload: map[string]any{}},
@@ -88,8 +89,8 @@ func TestVerbose_TypedPayloads(t *testing.T) {
 			},
 			TokenUsage: llm.Usage{InputTokens: 9, OutputTokens: 3},
 		}},
-		{Type: "tool.requested", Payload: runtimeevents.ToolRequestedPayload{Name: "read", Input: map[string]any{"path": "README.md"}}},
-		{Type: "tool.completed", Payload: runtimeevents.ToolCompletedPayload{Name: "read", Len: 42}},
+		{Type: toolevents.RequestedType, Payload: toolevents.RequestedPayload{Name: "read", Input: map[string]any{"path": "README.md"}}},
+		{Type: toolevents.CompletedType, Payload: toolevents.CompletedPayload{Name: "read", Len: 42}},
 		{Type: "pending_input.queued", Payload: runtimeevents.PendingInputQueuedPayload{PendingCount: 1, MaxPendingInputs: 4}},
 		{Type: "pending_input.drained", Payload: runtimeevents.PendingInputDrainedPayload{Count: 1}},
 		{Type: "turn.errored", Payload: runtimeevents.TurnErroredPayload{Error: "typed failure"}},
@@ -114,8 +115,8 @@ func TestVerbose_TypedPayloads(t *testing.T) {
 
 func TestVerbose_ToolError(t *testing.T) {
 	out := emitAll([]events.Event{
-		{Type: "tool.requested", Payload: map[string]any{"name": "read", "input": map[string]any{"path": "/no/such"}}},
-		{Type: "tool.errored", Payload: map[string]any{"name": "read", "error": "open /no/such: no such file or directory"}},
+		{Type: toolevents.RequestedType, Payload: map[string]any{"name": "read", "input": map[string]any{"path": "/no/such"}}},
+		{Type: toolevents.ErroredType, Payload: map[string]any{"name": "read", "error": "open /no/such: no such file or directory"}},
 	})
 	if !strings.Contains(out, "← read: ERROR open /no/such") {
 		t.Fatalf("missing error line in:\n%s", out)

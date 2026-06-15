@@ -73,6 +73,7 @@ juex/
 │   │   ├── openai_responses.go   # OpenAI Responses adapter
 │   │   ├── openai_codex_responses.go
 │   │   └── stream_error.go
+│   ├── toolevents/               # live tool event names, payload contracts, and constructors
 │   ├── tools/                    # tool registry + builtin tools
 │   │   ├── registry.go
 │   │   └── builtin.go
@@ -433,8 +434,12 @@ Standard event families include `turn.started/completed/errored`,
 `pending_input.*`, `context.compact.*`, and `context.projection.applied`.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary
 fields (`text`, `thinking`, `tool_calls`) for older consumers.
-Stable runtime event families use typed payload structs next to their emitters
-while the bus and JSONL/SSE wire shape stay generic through `Payload any`.
+The live tool event family is owned by `internal/toolevents`: event name
+constants, payload shapes, and constructor helpers live there so runtime,
+tools, observability, SSE tests, frontend fixtures, and eval smoke helpers use
+one field vocabulary. Other stable runtime event families use typed payload
+structs next to their emitters while the bus and JSONL/SSE wire shape stay
+generic through `Payload any`.
 
 ### 3.4 Memory
 
@@ -773,7 +778,7 @@ Routes:
                           no               yes ---> parallel:
                           v                          for each:
                   Session.Append                     | Registry.Call
-                  emit turn.completed                | emit tool.requested/output_delta/completed
+                  emit turn.completed                | emit toolevents requested/delta/completed/errored
                   return text                        v
                                                history.append(tool_result)
                                                     |

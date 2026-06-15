@@ -14,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestParseSlashCommand(t *testing.T) {
@@ -184,16 +185,16 @@ func TestStatusSnapshotIncludesSessionCompactionAndSuccessRates(t *testing.T) {
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if err := a.Session.AppendEvent(events.Event{Type: "tool.requested"}); err != nil {
+		if err := a.Session.AppendEvent(events.Event{Type: toolevents.RequestedType}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 4; i++ {
-		if err := a.Session.AppendEvent(events.Event{Type: "tool.completed"}); err != nil {
+		if err := a.Session.AppendEvent(events.Event{Type: toolevents.CompletedType}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := a.Session.AppendEvent(events.Event{Type: "tool.errored"}); err != nil {
+	if err := a.Session.AppendEvent(events.Event{Type: toolevents.ErroredType}); err != nil {
 		t.Fatal(err)
 	}
 

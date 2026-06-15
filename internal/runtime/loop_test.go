@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -1851,13 +1852,13 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 		},
 	})
 
-	var requestedPayload ToolRequestedPayload
-	var erroredPayload ToolErroredPayload
-	bus.Subscribe("tool.requested", func(e events.Event) {
-		requestedPayload, _ = e.Payload.(ToolRequestedPayload)
+	var requestedPayload toolevents.RequestedPayload
+	var erroredPayload toolevents.ErroredPayload
+	bus.Subscribe(toolevents.RequestedType, func(e events.Event) {
+		requestedPayload, _ = e.Payload.(toolevents.RequestedPayload)
 	})
-	bus.Subscribe("tool.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(ToolErroredPayload)
+	bus.Subscribe(toolevents.ErroredType, func(e events.Event) {
+		erroredPayload, _ = e.Payload.(toolevents.ErroredPayload)
 	})
 
 	out, err := eng.Turn(context.Background(), "run slow")
@@ -1915,7 +1916,7 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
 			events := tools.ToolCallEventsFromContext(ctx)
 			events.Emit(tools.OutputDelta{
-				Tool:      "streamer",
+				Name:      "streamer",
 				ToolUseID: "stream_1",
 				SessionID: "sh_test",
 				ChunkID:   7,
@@ -1926,9 +1927,9 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 		},
 	})
 
-	var deltaPayload ToolOutputDeltaPayload
-	bus.Subscribe("tool.output_delta", func(e events.Event) {
-		deltaPayload, _ = e.Payload.(ToolOutputDeltaPayload)
+	var deltaPayload toolevents.OutputDeltaPayload
+	bus.Subscribe(toolevents.OutputDeltaType, func(e events.Event) {
+		deltaPayload, _ = e.Payload.(toolevents.OutputDeltaPayload)
 	})
 
 	out, err := eng.Turn(context.Background(), "stream")
@@ -1957,9 +1958,9 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, true)
 
-	var requestedPayload ToolRequestedPayload
-	bus.Subscribe("tool.requested", func(e events.Event) {
-		requestedPayload, _ = e.Payload.(ToolRequestedPayload)
+	var requestedPayload toolevents.RequestedPayload
+	bus.Subscribe(toolevents.RequestedType, func(e events.Event) {
+		requestedPayload, _ = e.Payload.(toolevents.RequestedPayload)
 	})
 	var respondedPayload LLMRespondedPayload
 	bus.Subscribe("llm.responded", func(e events.Event) {
@@ -2044,7 +2045,7 @@ func TestTurn_UnknownToolName(t *testing.T) {
 	}}
 	eng, bus := newEngine(t, prov, true)
 	var errs int32
-	bus.Subscribe("tool.errored", func(e events.Event) { atomic.AddInt32(&errs, 1) })
+	bus.Subscribe(toolevents.ErroredType, func(e events.Event) { atomic.AddInt32(&errs, 1) })
 
 	out, err := eng.Turn(context.Background(), "x")
 	if err != nil {

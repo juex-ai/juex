@@ -1,21 +1,17 @@
 package tools
 
-import "context"
+import (
+	"context"
 
-type OutputDelta struct {
-	Tool      string
-	ToolUseID string
-	SessionID string
-	ChunkID   int
-	Stream    string
-	Text      string
-	Truncated bool
-}
+	"github.com/juex-ai/juex/internal/toolevents"
+)
+
+type OutputDelta = toolevents.OutputDelta
 
 type OutputEmitter func(OutputDelta)
 
 type ToolCallEvents struct {
-	Tool      string
+	Name      string
 	ToolUseID string
 	Emit      OutputEmitter
 }

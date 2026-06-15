@@ -120,6 +120,8 @@ and parses `events.jsonl`. A passing run requires:
 - no legacy `shell` or `shell_input` tool use;
 - an `exec_command` call with `tty:true`;
 - incremental `tool.output_delta` events, including carriage-return progress;
+  the event names and payload fields are the live tool event contract owned by
+  `internal/toolevents`;
 - a mid-command `write_stdin` interaction that resumes the running process;
 - successful command completion and verification output containing the run
   token;

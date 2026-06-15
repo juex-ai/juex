@@ -10,6 +10,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
@@ -25,9 +26,9 @@ func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testin
 	}}
 	eng, bus := newEngine(t, prov, true)
 
-	var erroredPayload ToolErroredPayload
-	bus.Subscribe("tool.errored", func(e events.Event) {
-		erroredPayload, _ = e.Payload.(ToolErroredPayload)
+	var erroredPayload toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(e events.Event) {
+		erroredPayload, _ = e.Payload.(toolevents.ErroredPayload)
 	})
 
 	start := time.Now()
