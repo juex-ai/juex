@@ -279,7 +279,6 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	}
 	lifecycle := turnLifecycle{
 		engine:  e,
-		ctx:     ctx,
 		turnID:  turnID,
 		userMsg: userMsg,
 		start:   time.Now(),
@@ -290,7 +289,8 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 			e.finishActiveTurn(turnID, err != nil)
 		}
 	}()
-	result, err := lifecycle.runLocked()
+	var result turnLifecycleResult
+	result, err = lifecycle.runLocked(ctx)
 	if err != nil {
 		return "", e.failTurn(turnID, err)
 	}

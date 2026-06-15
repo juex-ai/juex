@@ -13,7 +13,6 @@ import (
 
 type turnLifecycle struct {
 	engine  *Engine
-	ctx     context.Context
 	turnID  string
 	userMsg llm.Message
 	start   time.Time
@@ -45,12 +44,12 @@ func (o turnFinishOutcome) shouldContinue() bool {
 	return o.action == turnFinishContinue
 }
 
-func (l *turnLifecycle) runLocked() (turnLifecycleResult, error) {
+func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, error) {
 	if err := l.engine.restorePendingInput(l.turnID, l.userMsg.ID); err != nil {
 		return turnLifecycleResult{}, err
 	}
 
-	prepared, err := l.engine.prepareTurnContextLocked(l.ctx, l.turnID, l.userMsg)
+	prepared, err := l.engine.prepareTurnContextLocked(ctx, l.turnID, l.userMsg)
 	if err != nil {
 		return turnLifecycleResult{}, err
 	}
@@ -61,7 +60,7 @@ func (l *turnLifecycle) runLocked() (turnLifecycleResult, error) {
 	}
 
 	for iter := 0; ; iter++ {
-		if err := l.runProviderIterationLocked(iter); err != nil {
+		if err := l.runProviderIterationLocked(ctx, iter); err != nil {
 			return turnLifecycleResult{}, err
 		}
 		if l.activeClosed {
@@ -73,11 +72,11 @@ func (l *turnLifecycle) runLocked() (turnLifecycleResult, error) {
 	return turnLifecycleResult{output: l.lastText}, nil
 }
 
-func (l *turnLifecycle) runProviderIterationLocked(iter int) error {
-	if err := l.ctx.Err(); err != nil {
+func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := l.engine.drainPendingInputLocked(l.ctx, l.turnID); err != nil {
+	if err := l.engine.drainPendingInputLocked(ctx, l.turnID); err != nil {
 		return err
 	}
 
@@ -85,10 +84,10 @@ func (l *turnLifecycle) runProviderIterationLocked(iter int) error {
 	if err != nil {
 		return err
 	}
-	resp, err := l.engine.requestProviderTurnLocked(l.ctx, l.prepared, request)
+	resp, err := l.engine.requestProviderTurnLocked(ctx, l.prepared, request)
 	if err != nil {
 		if llm.IsContextOverflowError(err) && !l.retriedOverflow {
-			if _, compactErr := l.engine.compactLocked(l.ctx, l.turnID, l.prepared.systemPrompt, "overflow_retry", true, ""); compactErr != nil {
+			if _, compactErr := l.engine.compactLocked(ctx, l.turnID, l.prepared.systemPrompt, "overflow_retry", true, ""); compactErr != nil {
 				return fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr)
 			}
 			l.retriedOverflow = true
@@ -102,9 +101,9 @@ func (l *turnLifecycle) runProviderIterationLocked(iter int) error {
 		return err
 	}
 	if len(recorded.toolCalls) > 0 {
-		return l.engine.recordToolBatchLocked(l.ctx, l.turnID, l.prepared.policy, recorded.toolCalls)
+		return l.engine.recordToolBatchLocked(ctx, l.turnID, l.prepared.policy, recorded.toolCalls)
 	}
-	outcome, err := l.applyFinishPolicyLocked(recorded)
+	outcome, err := l.applyFinishPolicyLocked(ctx, recorded)
 	if err != nil {
 		return err
 	}
@@ -116,7 +115,7 @@ func (l *turnLifecycle) runProviderIterationLocked(iter int) error {
 	return nil
 }
 
-func (l *turnLifecycle) applyFinishPolicyLocked(recorded recordedProviderResponse) (turnFinishOutcome, error) {
+func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded recordedProviderResponse) (turnFinishOutcome, error) {
 	e := l.engine
 	finalText := recorded.finalText
 	e.emit(events.Event{Type: "finish.attempted", TurnID: l.turnID, Payload: FinishAttemptedPayload{
@@ -125,14 +124,14 @@ func (l *turnLifecycle) applyFinishPolicyLocked(recorded recordedProviderRespons
 	}})
 
 	if prompt, payload, ok := e.runUnresolvedFailureGate(l.turnID); ok {
-		if err := l.enqueueContinuationLocked(prompt); err != nil {
+		if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
 			return turnFinishOutcome{}, err
 		}
 		e.emit(events.Event{Type: "tool.failure.continued", TurnID: l.turnID, Payload: payload})
 		return l.finishOrContinueLocked(finalText), nil
 	}
 
-	stopResults, err := l.runStopHooksLocked()
+	stopResults, err := l.runStopHooksLocked(ctx)
 	if err != nil {
 		return turnFinishOutcome{}, err
 	}
@@ -140,7 +139,7 @@ func (l *turnLifecycle) applyFinishPolicyLocked(recorded recordedProviderRespons
 	if prompt, payload, ok, err := e.runGoalCompletionGate(l.turnID); err != nil {
 		return turnFinishOutcome{}, err
 	} else if ok {
-		if err := l.enqueueContinuationLocked(prompt); err != nil {
+		if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
 			return turnFinishOutcome{}, err
 		}
 		e.emit(events.Event{Type: "goal.continued", TurnID: l.turnID, Payload: payload})
@@ -151,21 +150,21 @@ func (l *turnLifecycle) applyFinishPolicyLocked(recorded recordedProviderRespons
 		if strings.TrimSpace(prompt) == "" {
 			return turnFinishOutcome{}, fmt.Errorf("hooks: Stop hook requested block_stop without continue_prompt")
 		}
-		if err := l.enqueueContinuationLocked(prompt); err != nil {
+		if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
 			return turnFinishOutcome{}, err
 		}
 	}
 	return l.finishOrContinueLocked(finalText), nil
 }
 
-func (l *turnLifecycle) runStopHooksLocked() ([]hooks.Result, error) {
+func (l *turnLifecycle) runStopHooksLocked(ctx context.Context) ([]hooks.Result, error) {
 	stopReq := l.engine.newHookRequest(hooks.EventStop, l.turnID)
 	stopReq.UserInput = l.prepared.userMessage.FirstText()
-	return l.engine.runHooks(l.ctx, stopReq)
+	return l.engine.runHooks(ctx, stopReq)
 }
 
-func (l *turnLifecycle) enqueueContinuationLocked(prompt string) error {
-	_, err := l.engine.EnqueuePendingInput(l.ctx, prompt)
+func (l *turnLifecycle) enqueueContinuationLocked(ctx context.Context, prompt string) error {
+	_, err := l.engine.EnqueuePendingInput(ctx, prompt)
 	return err
 }
 
