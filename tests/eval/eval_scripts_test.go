@@ -250,7 +250,8 @@ func TestEvalAgentSmokeToolEventContract(t *testing.T) {
 		"        {'type': 'tool.output_delta', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'session_id': '1', 'chunk_id': 1, 'stream': 'combined', 'text': 'INSTALL 10%\\r', 'truncated': True}},",
 		"        {'type': 'tool.output_delta', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'session_id': '1', 'chunk_id': 2, 'stream': 'combined', 'text': 'PROMPT approve install?'}},",
 		"        {'type': 'tool.output_delta', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'session_id': '1', 'chunk_id': 3, 'stream': 'combined', 'text': f'TTY-DONE {token}'}},",
-		"        {'type': 'tool.completed', 'payload': {'name': 'write_stdin', 'tool_use_id': 'call_2', 'timeout_seconds': 5, 'len': 2, 'preview': 'ok'}},",
+		"        {'type': 'tool.completed', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'timeout_seconds': 5, 'len': 10, 'preview': 'prompt', 'result': {'session_id': 3, 'running': True, 'chunk_id': 2, 'output': 'PROMPT approve install?', 'original_bytes': 23, 'original_token_count': 6}}},",
+		"        {'type': 'tool.completed', 'payload': {'name': 'write_stdin', 'tool_use_id': 'call_2', 'timeout_seconds': 5, 'len': 2, 'preview': 'ok', 'result': {'running': False, 'exit_code': 0, 'chunk_id': 5, 'output': f'TTY-DONE {token}', 'original_bytes': 18, 'original_token_count': 5}}},",
 		"    ]",
 		"    events.write_text('\\n'.join(json.dumps(row) for row in rows) + '\\n', encoding='utf-8')",
 		"    ok, msg = helper.events_have_agent_smoke_deltas(events, token)",
@@ -261,6 +262,11 @@ func TestEvalAgentSmokeToolEventContract(t *testing.T) {
 		"    broken.write_text('\\n'.join(json.dumps(row) for row in broken_rows) + '\\n', encoding='utf-8')",
 		"    ok, msg = helper.events_have_agent_smoke_deltas(broken, token)",
 		"    assert not ok and 'TTY-DONE token' in msg, msg",
+		"    broken_rows = [dict(row) for row in rows]",
+		"    broken_rows[-1] = {'type': 'tool.completed', 'payload': {'name': 'write_stdin', 'tool_use_id': 'call_2'}}",
+		"    broken.write_text('\\n'.join(json.dumps(row) for row in broken_rows) + '\\n', encoding='utf-8')",
+		"    ok, msg = helper.events_have_agent_smoke_deltas(broken, token)",
+		"    assert not ok and 'structured write_stdin result' in msg, msg",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

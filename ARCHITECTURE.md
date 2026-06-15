@@ -345,10 +345,16 @@ overriding the provider default. DeepSeek uses the OpenAI Chat
 ```go
 // internal/tools/registry.go
 type Tool struct {
-    Name        string
-    Description string
-    Schema      map[string]any
-    Handler     func(ctx context.Context, input map[string]any) (string, error)
+    Name          string
+    Description   string
+    Schema        map[string]any
+    Handler       func(ctx context.Context, input map[string]any) (string, error)
+    ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
+}
+
+type Result struct {
+    Text       string
+    Structured any
 }
 
 type Registry struct { ... }
@@ -399,6 +405,13 @@ allocates a pseudo-terminal on supported platforms so interactive programs can
 prompt and receive follow-up input. Session transcripts and SSE deltas are
 bounded, completed sessions are pruned, and sessions are not durable across
 Juex process restart.
+
+Shell tools also return a structured `tools.ShellResult` through
+`CallInfo.StructuredResult`. The provider-facing text remains the model-reading
+adapter, but runtime events expose the same shell result under
+`tool.completed.payload.result` or `tool.errored.payload.result` so consumers
+can read `session_id`, `running`, `exit_code`, `chunk_id`, truncation, and
+output sizing without scraping prose.
 
 Provider adapters should normally return structured tool input. The registry
 still normalizes leaked OpenAI-compatible `_raw_arguments` payloads, including

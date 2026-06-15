@@ -595,6 +595,8 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
     saw_done = False
     saw_carriage_return = False
     saw_write_stdin_completed = False
+    saw_structured_exec_running = False
+    saw_structured_write_stdin_result = False
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError as exc:
@@ -616,8 +618,21 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
             saw_prompt = saw_prompt or "PROMPT approve install" in text
             saw_done = saw_done or f"TTY-DONE {token}" in text
             saw_carriage_return = saw_carriage_return or "\r" in text
-        if event.get("type") == "tool.completed" and payload.get("name") == "write_stdin":
-            saw_write_stdin_completed = True
+        if event.get("type") == "tool.completed":
+            result = payload.get("result")
+            if payload.get("name") == "exec_command" and isinstance(result, dict):
+                session_id = result.get("session_id")
+                saw_structured_exec_running = saw_structured_exec_running or (
+                    result.get("running") is True and isinstance(session_id, (int, float)) and session_id > 0
+                )
+            if payload.get("name") == "write_stdin":
+                saw_write_stdin_completed = True
+                if isinstance(result, dict):
+                    saw_structured_write_stdin_result = saw_structured_write_stdin_result or (
+                        result.get("running") is False
+                        and result.get("exit_code") == 0
+                        and f"TTY-DONE {token}" in str(result.get("output") or "")
+                    )
     if delta_count < 3:
         return False, f"expected at least 3 tool.output_delta events, saw {delta_count}"
     missing = []
@@ -631,6 +646,10 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
         missing.append("carriage-return progress update")
     if not saw_write_stdin_completed:
         missing.append("write_stdin completion")
+    if not saw_structured_exec_running:
+        missing.append("structured exec_command running result")
+    if not saw_structured_write_stdin_result:
+        missing.append("structured write_stdin result")
     if missing:
         return False, "events missing " + ", ".join(missing)
     return True, ""

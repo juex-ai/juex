@@ -268,10 +268,10 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 			},
 			"required": []string{"cmd"},
 		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
 			cmd, _ := in["cmd"].(string)
 			if cmd == "" {
-				return "", fmt.Errorf("exec_command: missing cmd")
+				return Result{}, fmt.Errorf("exec_command: missing cmd")
 			}
 			workdir, _ := in["workdir"].(string)
 			if workdir == "" {
@@ -298,9 +298,9 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 				Events:          ToolCallEventsFromContext(ctx),
 			})
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
-			out := formatShellSessionResult(result)
+			out := shellToolResult(result)
 			if err := shellSessionExitError("exec_command", result); err != nil {
 				return out, err
 			}
@@ -335,10 +335,10 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 			},
 			"required": []string{"session_id"},
 		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
 			sessionID, ok := toInt(in["session_id"])
 			if !ok || sessionID <= 0 {
-				return "", fmt.Errorf("write_stdin: missing session_id")
+				return Result{}, fmt.Errorf("write_stdin: missing session_id")
 			}
 			input, _ := in["chars"].(string)
 			yield := defaultShellInputPollYield
@@ -356,7 +356,7 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 				MaxOutputTokens: maxOutputTokens,
 				CallContext:     ctx,
 			})
-			out := formatShellSessionResult(result)
+			out := shellToolResult(result)
 			if err != nil {
 				return out, err
 			}
@@ -365,6 +365,13 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 			}
 			return out, nil
 		},
+	}
+}
+
+func shellToolResult(result ShellSessionResult) Result {
+	return Result{
+		Text:       formatShellSessionResult(result),
+		Structured: NewShellResult(result),
 	}
 }
 

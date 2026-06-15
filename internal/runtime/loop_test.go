@@ -1947,6 +1947,44 @@ func TestTurn_ToolOutputDeltaEvent(t *testing.T) {
 	}
 }
 
+func TestTurn_BuiltinShellCompletedEventIncludesStructuredResult(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "exec_1", ToolName: "exec_command", Input: map[string]any{
+				"cmd": "echo structured-shell",
+			}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, true)
+
+	var completedPayload toolevents.CompletedPayload
+	bus.Subscribe(toolevents.CompletedType, func(e events.Event) {
+		payload, _ := e.Payload.(toolevents.CompletedPayload)
+		if payload.Name == "exec_command" {
+			completedPayload = payload
+		}
+	})
+
+	out, err := eng.Turn(context.Background(), "run shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	result, ok := completedPayload.Result.(tools.ShellResult)
+	if !ok {
+		t.Fatalf("completed result = %#v, want tools.ShellResult", completedPayload.Result)
+	}
+	if result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
+		t.Fatalf("shell event result = %+v, want completed exit 0", result)
+	}
+	if !strings.Contains(result.Output, "structured-shell") {
+		t.Fatalf("shell event result output = %q, want structured-shell", result.Output)
+	}
+}
+
 func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{

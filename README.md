@@ -124,7 +124,9 @@ for interactive commands that need a real terminal and follow-up input;
 `write_stdin` polls running sessions or writes `chars` only to TTY sessions
 while live output is streamed through runtime events. A completed command with
 a non-zero exit code is returned as an error tool result with the captured
-output preserved.
+output preserved. Shell execution metadata is also emitted as structured
+runtime event data so consumers can read session, running, exit-code, chunk,
+and truncation state without parsing the provider-facing text.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. A built-in `unresolved-failure-gate` Stop hook blocks final answers

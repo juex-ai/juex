@@ -451,6 +451,7 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("tool_use_id")
 		add("len")
 		add("preview")
+		add("result")
 	case toolevents.ErroredType:
 		add("name")
 		add("tool_use_id")
@@ -458,6 +459,7 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("timed_out")
 		add("preview")
 		add("exit_code")
+		add("result")
 	case toolevents.OutputDeltaType:
 		add("name")
 		add("tool_use_id")

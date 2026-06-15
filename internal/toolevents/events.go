@@ -47,6 +47,7 @@ type CompletedPayload struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	Len            int    `json:"len"`
 	Preview        string `json:"preview"`
+	Result         any    `json:"result,omitempty"`
 }
 
 type ErroredPayload struct {
@@ -58,6 +59,7 @@ type ErroredPayload struct {
 	Preview        string `json:"preview,omitempty"`
 	TimedOut       bool   `json:"timed_out,omitempty"`
 	ExitCode       *int   `json:"exit_code,omitempty"`
+	Result         any    `json:"result,omitempty"`
 }
 
 type ErroredOptions struct {
@@ -67,6 +69,7 @@ type ErroredOptions struct {
 	Preview        string
 	TimedOut       bool
 	ExitCode       *int
+	Result         any
 }
 
 func Requested(call ToolCallPayload) RequestedPayload {
@@ -98,13 +101,14 @@ func Delta(call ToolCallPayload, delta OutputDelta) OutputDeltaPayload {
 	}
 }
 
-func Completed(call ToolCallPayload, timeoutSeconds int, outputLen int, preview string) CompletedPayload {
+func Completed(call ToolCallPayload, timeoutSeconds int, outputLen int, preview string, result any) CompletedPayload {
 	return CompletedPayload{
 		Name:           call.Name,
 		ToolUseID:      call.ToolUseID,
 		TimeoutSeconds: timeoutSeconds,
 		Len:            outputLen,
 		Preview:        preview,
+		Result:         result,
 	}
 }
 
@@ -118,5 +122,6 @@ func Errored(call ToolCallPayload, opts ErroredOptions) ErroredPayload {
 		Preview:        opts.Preview,
 		TimedOut:       opts.TimedOut,
 		ExitCode:       opts.ExitCode,
+		Result:         opts.Result,
 	}
 }
