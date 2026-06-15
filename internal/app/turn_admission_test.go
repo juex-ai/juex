@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 )
 
@@ -38,6 +39,31 @@ func TestAdmitTurnStartsWhenIdle(t *testing.T) {
 		t.Fatalf("start = %+v", result.Start)
 	}
 	if status := a.Engine.PendingInputStatus(); status.TurnID != "turn-1" {
+		t.Fatalf("runtime active turn = %+v", status)
+	}
+}
+
+func TestCompleteAdmittedTurnAllowsNextTurn(t *testing.T) {
+	a, _ := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	})
+	ids := &testTurnIDs{}
+
+	first := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "first", IDs: ids})
+	if first.Kind != TurnAdmissionStarted || first.TurnID != "turn-1" {
+		t.Fatalf("first = %+v", first)
+	}
+
+	if _, err := a.Engine.TurnMessageWithID(context.Background(), first.Start.Message, first.TurnID); err != nil {
+		t.Fatal(err)
+	}
+	a.CompleteAdmittedTurn("turn-1")
+	second := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "second", IDs: ids})
+	if second.Kind != TurnAdmissionStarted || second.TurnID != "turn-2" {
+		t.Fatalf("second = %+v", second)
+	}
+	if status := a.Engine.PendingInputStatus(); status.TurnID != "turn-2" || status.PendingCount != 0 {
 		t.Fatalf("runtime active turn = %+v", status)
 	}
 }
