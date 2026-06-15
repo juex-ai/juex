@@ -190,6 +190,7 @@ func TestRecorderRedactsSecretsAndClassifiesErrors(t *testing.T) {
 		"name":        "exec_command",
 		"tool_use_id": "tu1",
 		"error":       "permission denied",
+		"exit_code":   126,
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -214,6 +215,9 @@ func TestRecorderRedactsSecretsAndClassifiesErrors(t *testing.T) {
 	}
 	if tools[len(tools)-1].ErrorKind != "permission" {
 		t.Fatalf("error kind = %q", tools[len(tools)-1].ErrorKind)
+	}
+	if tools[len(tools)-1].Summary["exit_code"] != float64(126) {
+		t.Fatalf("tool summary exit_code = %#v", tools[len(tools)-1].Summary)
 	}
 	traceBody := mustMarshal(t, readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl")))
 	if strings.Contains(traceBody, `"token_usage":"[REDACTED]"`) || !strings.Contains(traceBody, "input_tokens") {
