@@ -229,6 +229,42 @@ func TestEvalDefaultReportDirsUseTmpRoot(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestEvalAgentSmokeToolEventContract(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"token = 'contract-token'",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    events = Path(tmp) / 'events.jsonl'",
+		"    rows = [",
+		"        {'type': 'tool.output_delta', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'session_id': '1', 'chunk_id': 1, 'stream': 'combined', 'text': 'INSTALL 10%\\r', 'truncated': True}},",
+		"        {'type': 'tool.output_delta', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'session_id': '1', 'chunk_id': 2, 'stream': 'combined', 'text': 'PROMPT approve install?'}},",
+		"        {'type': 'tool.output_delta', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'session_id': '1', 'chunk_id': 3, 'stream': 'combined', 'text': f'TTY-DONE {token}'}},",
+		"        {'type': 'tool.completed', 'payload': {'name': 'write_stdin', 'tool_use_id': 'call_2', 'timeout_seconds': 5, 'len': 2, 'preview': 'ok'}},",
+		"    ]",
+		"    events.write_text('\\n'.join(json.dumps(row) for row in rows) + '\\n', encoding='utf-8')",
+		"    ok, msg = helper.events_have_agent_smoke_deltas(events, token)",
+		"    assert ok, msg",
+		"    broken = Path(tmp) / 'broken-events.jsonl'",
+		"    broken_rows = [dict(row) for row in rows]",
+		"    broken_rows[2] = {'type': 'tool.output_delta', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'session_id': '1', 'chunk_id': 3, 'stream': 'combined', 'chunk_text': f'TTY-DONE {token}'}}",
+		"    broken.write_text('\\n'.join(json.dumps(row) for row in broken_rows) + '\\n', encoding='utf-8')",
+		"    ok, msg = helper.events_have_agent_smoke_deltas(broken, token)",
+		"    assert not ok and 'TTY-DONE token' in msg, msg",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func runRotation(t *testing.T, root, modelList, state string, args ...string) string {
 	t.Helper()
 	baseArgs := []string{

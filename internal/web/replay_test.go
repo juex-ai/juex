@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestReplaySince_ReturnsEventsAfterID(t *testing.T) {
 	var buf bytes.Buffer
 	for _, e := range []events.Event{
 		{ID: "1", Type: "turn.started"},
-		{ID: "2", Type: "tool.requested"},
+		{ID: "2", Type: toolevents.RequestedType},
 		{ID: "3", Type: "turn.completed"},
 	} {
 		b, _ := json.Marshal(e)
@@ -24,7 +25,7 @@ func TestReplaySince_ReturnsEventsAfterID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].Type != "tool.requested" || got[1].Type != "turn.completed" {
+	if len(got) != 2 || got[0].Type != toolevents.RequestedType || got[1].Type != "turn.completed" {
 		t.Errorf("unexpected slice: %+v", got)
 	}
 }

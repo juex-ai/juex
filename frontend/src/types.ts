@@ -274,6 +274,7 @@ export interface ToolErroredPayload {
   len?: number;
   preview?: string;
   timed_out?: boolean;
+  exit_code?: number;
 }
 
 export interface PendingInputQueuedPayload {

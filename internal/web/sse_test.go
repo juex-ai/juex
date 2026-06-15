@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
-	runtimeevents "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
@@ -54,8 +54,8 @@ func TestWriteSSEFrame_MarshalsTypedPayload(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeSSEFrame(&buf, events.Event{
 		ID:   "tool-1",
-		Type: "tool.completed",
-		Payload: runtimeevents.ToolCompletedPayload{
+		Type: toolevents.CompletedType,
+		Payload: toolevents.CompletedPayload{
 			Name:           "shell",
 			ToolUseID:      "tu1",
 			TimeoutSeconds: 2,

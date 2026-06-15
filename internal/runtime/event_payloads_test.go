@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
@@ -30,37 +31,6 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 			},
 		},
 		{
-			name:    "tool error omits optional output fields",
-			payload: ToolErroredPayload{Name: "read", ToolUseID: "tu1", Error: "missing", TimeoutSeconds: 0},
-			want: map[string]any{
-				"name":            "read",
-				"tool_use_id":     "tu1",
-				"error":           "missing",
-				"timeout_seconds": float64(0),
-			},
-		},
-		{
-			name: "tool error includes output fields when present",
-			payload: ToolErroredPayload{
-				Name:           "exec_command",
-				ToolUseID:      "tu2",
-				Error:          "timeout",
-				TimeoutSeconds: 1,
-				Len:            6,
-				Preview:        "stdout",
-				TimedOut:       true,
-			},
-			want: map[string]any{
-				"name":            "exec_command",
-				"tool_use_id":     "tu2",
-				"error":           "timeout",
-				"timeout_seconds": float64(1),
-				"len":             float64(6),
-				"preview":         "stdout",
-				"timed_out":       true,
-			},
-		},
-		{
 			name: "llm responded omits nil context usage",
 			payload: LLMRespondedPayload{
 				StopReason: llm.StopToolUse,
@@ -74,7 +44,7 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 				}},
 				Text:      "",
 				Thinking:  "inspect",
-				ToolCalls: []ToolCallPayload{{ToolUseID: "tu3", Name: "read", Input: map[string]any{"path": "README.md"}}},
+				ToolCalls: []toolevents.ToolCallPayload{{ToolUseID: "tu3", Name: "read", Input: map[string]any{"path": "README.md"}}},
 				Model:     "mock:model",
 			},
 			want: map[string]any{

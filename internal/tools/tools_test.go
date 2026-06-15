@@ -894,7 +894,7 @@ func TestBuiltins_ExecCommandYieldEmitsOutputDeltas(t *testing.T) {
 	})
 	deltas := make(chan OutputDelta, 10)
 	ctx := WithToolCallEvents(context.Background(), ToolCallEvents{
-		Tool:      "exec_command",
+		Name:      "exec_command",
 		ToolUseID: "tool-1",
 		Emit: func(delta OutputDelta) {
 			deltas <- delta
@@ -914,7 +914,7 @@ func TestBuiltins_ExecCommandYieldEmitsOutputDeltas(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected output delta")
 	}
-	if delta.Tool != "exec_command" || delta.ToolUseID != "tool-1" || delta.SessionID == "" {
+	if delta.Name != "exec_command" || delta.ToolUseID != "tool-1" || delta.SessionID == "" {
 		t.Fatalf("delta metadata = %+v", delta)
 	}
 	if !strings.Contains(delta.Text, "first chunk") {

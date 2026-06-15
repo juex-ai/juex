@@ -36,6 +36,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/toolevents"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -481,33 +482,13 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		return e.hookToolErrorBlock(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
 	}
 
-	e.emit(events.Event{Type: "tool.requested", TurnID: turnID, Payload: ToolRequestedPayload{
-		Name:           call.ToolName,
-		Input:          call.Input,
-		ToolUseID:      call.ToolUseID,
-		TimeoutSeconds: call.TimeoutSeconds,
-	}})
+	callPayload := toolCallPayload(call)
+	e.emit(events.Event{Type: toolevents.RequestedType, TurnID: turnID, Payload: toolevents.Requested(callPayload)})
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
-		Tool:      call.ToolName,
+		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
 		Emit: func(delta tools.OutputDelta) {
-			name := delta.Tool
-			if name == "" {
-				name = call.ToolName
-			}
-			toolUseID := delta.ToolUseID
-			if toolUseID == "" {
-				toolUseID = call.ToolUseID
-			}
-			e.emit(events.Event{Type: "tool.output_delta", TurnID: turnID, Payload: ToolOutputDeltaPayload{
-				Name:      name,
-				ToolUseID: toolUseID,
-				SessionID: delta.SessionID,
-				ChunkID:   delta.ChunkID,
-				Stream:    delta.Stream,
-				Text:      delta.Text,
-				Truncated: delta.Truncated,
-			}})
+			e.emit(events.Event{Type: toolevents.OutputDeltaType, TurnID: turnID, Payload: toolevents.Delta(callPayload, delta)})
 		},
 	})
 	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
@@ -542,37 +523,29 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 
 func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, out string, info tools.CallInfo, err error) {
 	if block.IsError {
-		payload := ToolErroredPayload{
-			Name:           call.ToolName,
-			ToolUseID:      call.ToolUseID,
+		opts := toolevents.ErroredOptions{
 			Error:          "tool errored",
 			TimeoutSeconds: info.TimeoutSeconds,
 		}
 		if err != nil {
-			payload.Error = err.Error()
+			opts.Error = err.Error()
 		}
 		if out != "" {
-			payload.Len = len(out)
-			payload.Preview = truncate(out, 200)
+			opts.Len = len(out)
+			opts.Preview = truncate(out, 200)
 		}
 		if info.TimedOut {
-			payload.TimedOut = true
+			opts.TimedOut = true
 		}
 		if code, ok := tools.ExitCodeFromError(err); ok {
-			payload.ExitCode = intPtr(code)
+			opts.ExitCode = intPtr(code)
 		} else if code := firstExitCode(nil, block.Content); code != nil {
-			payload.ExitCode = code
+			opts.ExitCode = code
 		}
-		e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: payload})
+		e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
 		return
 	}
-	e.emit(events.Event{Type: "tool.completed", TurnID: turnID, Payload: ToolCompletedPayload{
-		Name:           call.ToolName,
-		ToolUseID:      call.ToolUseID,
-		TimeoutSeconds: info.TimeoutSeconds,
-		Len:            len(out),
-		Preview:        truncate(out, 200),
-	}})
+	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(out), truncate(out, 200))})
 }
 
 func (e *Engine) hookToolErrorBlock(turnID string, call llm.Block, err error) llm.Block {
@@ -583,11 +556,9 @@ func (e *Engine) hookToolErrorBlock(turnID string, call llm.Block, err error) ll
 		Content:   err.Error(),
 		IsError:   true,
 	}
-	e.emit(events.Event{Type: "tool.errored", TurnID: turnID, Payload: ToolErroredPayload{
-		Name:      call.ToolName,
-		ToolUseID: call.ToolUseID,
-		Error:     err.Error(),
-	}})
+	e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), toolevents.ErroredOptions{
+		Error: err.Error(),
+	})})
 	return block
 }
 
@@ -910,19 +881,23 @@ func responseThinking(m llm.Message) string {
 
 // responseToolCalls returns one summary entry per tool_use block in the
 // assistant message: name + input map. Used by verbose UIs.
-func responseToolCalls(m llm.Message) []ToolCallPayload {
-	var out []ToolCallPayload
+func responseToolCalls(m llm.Message) []toolevents.ToolCallPayload {
+	var out []toolevents.ToolCallPayload
 	for _, b := range m.Blocks {
 		if b.Type == llm.BlockToolUse {
-			out = append(out, ToolCallPayload{
-				ToolUseID:      b.ToolUseID,
-				Name:           b.ToolName,
-				Input:          b.Input,
-				TimeoutSeconds: b.TimeoutSeconds,
-			})
+			out = append(out, toolCallPayload(b))
 		}
 	}
 	return out
+}
+
+func toolCallPayload(call llm.Block) toolevents.ToolCallPayload {
+	return toolevents.ToolCallPayload{
+		ToolUseID:      call.ToolUseID,
+		Name:           call.ToolName,
+		Input:          call.Input,
+		TimeoutSeconds: call.TimeoutSeconds,
+	}
 }
 
 func prepareToolInputs(blocks []llm.Block) []llm.Block {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestParseLevel(t *testing.T) {
@@ -40,7 +41,7 @@ func TestRecorderCreatesStableFilesAndFiltersDebug(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Record(event("tool.output_delta", "t1", map[string]any{"name": "exec_command", "text": "chunk"})); err != nil {
+	if err := rec.Record(event(toolevents.OutputDeltaType, "t1", map[string]any{"name": "exec_command", "text": "chunk"})); err != nil {
 		t.Fatal(err)
 	}
 	if err := rec.Record(event("turn.started", "t1", map[string]any{"input": "hello"})); err != nil {
@@ -74,14 +75,14 @@ func TestRecorderDebugRecordsDebugEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Record(event("tool.output_delta", "t1", map[string]any{"name": "exec_command", "text": "chunk"})); err != nil {
+	if err := rec.Record(event(toolevents.OutputDeltaType, "t1", map[string]any{"name": "exec_command", "text": "chunk"})); err != nil {
 		t.Fatal(err)
 	}
 	if err := rec.Close(); err != nil {
 		t.Fatal(err)
 	}
 	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
-	if len(trace) != 1 || trace[0].Event != "tool.output_delta" || trace[0].Level != "debug" {
+	if len(trace) != 1 || trace[0].Event != toolevents.OutputDeltaType || trace[0].Level != "debug" {
 		t.Fatalf("trace = %+v", trace)
 	}
 	debugData, err := os.ReadFile(filepath.Join(dir, "logs", "debug.log"))
@@ -128,8 +129,8 @@ func TestRecorderWritesSpanSchemaAndParents(t *testing.T) {
 		event("turn.started", "turn-a", map[string]any{"input": "hi"}),
 		event("llm.requested", "turn-a", map[string]any{"iter": 0, "history_len": 1, "tool_count": 1}),
 		event("llm.responded", "turn-a", map[string]any{"stop_reason": "tool_use", "duration_ms": 7}),
-		event("tool.requested", "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "input": map[string]any{"path": "README.md"}}),
-		event("tool.completed", "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "len": 42, "preview": "ok"}),
+		event(toolevents.RequestedType, "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "input": map[string]any{"path": "README.md"}}),
+		event(toolevents.CompletedType, "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "len": 42, "preview": "ok"}),
 		event("context.compact.started", "turn-a", map[string]any{"reason": "manual", "auto": false}),
 		event("context.compact.completed", "turn-a", map[string]any{"reason": "manual", "auto": false, "tokens_before": 100, "tokens_after": 20}),
 		event("hook.started", "turn-a", map[string]any{"name": "stop-check", "event_name": "Stop"}),
@@ -172,7 +173,7 @@ func TestRecorderRedactsSecretsAndClassifiesErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Record(event("tool.requested", "t1", map[string]any{
+	if err := rec.Record(event(toolevents.RequestedType, "t1", map[string]any{
 		"name":        "exec_command",
 		"tool_use_id": "tu1",
 		"input": map[string]any{
@@ -185,10 +186,11 @@ func TestRecorderRedactsSecretsAndClassifiesErrors(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Record(event("tool.errored", "t1", map[string]any{
+	if err := rec.Record(event(toolevents.ErroredType, "t1", map[string]any{
 		"name":        "exec_command",
 		"tool_use_id": "tu1",
 		"error":       "permission denied",
+		"exit_code":   126,
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -213,6 +215,9 @@ func TestRecorderRedactsSecretsAndClassifiesErrors(t *testing.T) {
 	}
 	if tools[len(tools)-1].ErrorKind != "permission" {
 		t.Fatalf("error kind = %q", tools[len(tools)-1].ErrorKind)
+	}
+	if tools[len(tools)-1].Summary["exit_code"] != float64(126) {
+		t.Fatalf("tool summary exit_code = %#v", tools[len(tools)-1].Summary)
 	}
 	traceBody := mustMarshal(t, readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl")))
 	if strings.Contains(traceBody, `"token_usage":"[REDACTED]"`) || !strings.Contains(traceBody, "input_tokens") {

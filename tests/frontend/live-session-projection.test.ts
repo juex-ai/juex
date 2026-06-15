@@ -74,9 +74,14 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
       chunk_id: 1,
       stream: "stdout",
       text: "hi",
+      truncated: true,
     },
   });
-  assert.equal(state.messages.at(-1)?.blocks?.[0]?.type, "tool_result");
+  let liveResult = state.messages.at(-1)?.blocks?.[0];
+  assert.equal(liveResult?.type, "tool_result");
+  if (liveResult?.type === "tool_result") {
+    assert.equal(liveResult.content, "hi");
+  }
 
   state = apply(state, {
     id: "e5",
@@ -92,6 +97,10 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
     },
   });
   assert.deepEqual(state.status, { kind: "running" });
+  liveResult = state.messages.at(-1)?.blocks?.[0];
+  if (liveResult?.type === "tool_result") {
+    assert.equal(liveResult.content, "hi");
+  }
 
   const completed = projectLiveSessionEvent(state, {
     id: "e6",
@@ -294,6 +303,52 @@ test("projectLiveSessionEvent uses pending_input.rejected reason", () => {
     kind: "error",
     detail: "queue disabled for this session",
   });
+});
+
+test("projectLiveSessionEvent accepts errored tool contract fields", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-1",
+    payload: { input: "run failing command" },
+  });
+  state = apply(state, {
+    id: "e2",
+    type: "tool.requested",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      input: { cmd: "exit 7" },
+      timeout_seconds: 5,
+    },
+  });
+  state = apply(state, {
+    id: "e3",
+    type: "tool.errored",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      error: "exit status 7",
+      timeout_seconds: 5,
+      len: 14,
+      preview: "partial output",
+      timed_out: false,
+      exit_code: 7,
+    },
+  });
+
+  const result = state.messages.at(-1)?.blocks?.at(-1);
+  assert.equal(result?.type, "tool_result");
+  assert.equal(result?.tool_use_id, "tool-1");
+  assert.equal(result?.content, "exit status 7");
+  assert.equal(result?.is_error, true);
+  assert.deepEqual(state.status, { kind: "running" });
 });
 
 function apply(state: LiveSessionProjection, event: BusEvent): LiveSessionProjection {

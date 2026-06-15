@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 const (
@@ -113,7 +114,7 @@ func (r *Recorder) Record(ev events.Event) error {
 	if r == nil || r.sessionDir == "" {
 		return nil
 	}
-	if ev.Type == "tool.output_delta" && !r.shouldRecord(LevelDebug) {
+	if ev.Type == toolevents.OutputDeltaType && !r.shouldRecord(LevelDebug) {
 		return nil
 	}
 	meta := classify(ev)
@@ -347,7 +348,7 @@ func classify(ev events.Event) eventMeta {
 	if ev.Type == "context.compact.errored" {
 		meta.Level = LevelWarn
 	}
-	if ev.Type == "tool.output_delta" {
+	if ev.Type == toolevents.OutputDeltaType {
 		meta.Level = LevelDebug
 	}
 	if strings.HasPrefix(ev.Type, "tool.") {
@@ -438,25 +439,26 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("usage")
 		add("token_usage")
 		add("text")
-	case "tool.requested":
+	case toolevents.RequestedType:
 		add("name")
 		add("tool_use_id")
 		add("timeout_seconds")
 		if input, ok := p["input"]; ok {
 			out["input"] = sanitize("input", input, 0)
 		}
-	case "tool.completed":
+	case toolevents.CompletedType:
 		add("name")
 		add("tool_use_id")
 		add("len")
 		add("preview")
-	case "tool.errored":
+	case toolevents.ErroredType:
 		add("name")
 		add("tool_use_id")
 		add("error")
 		add("timed_out")
 		add("preview")
-	case "tool.output_delta":
+		add("exit_code")
+	case toolevents.OutputDeltaType:
 		add("name")
 		add("tool_use_id")
 		add("session_id")
@@ -559,7 +561,7 @@ func spanID(event, turnID string, p map[string]any) string {
 			iter = "0"
 		}
 		return "llm:" + turnID + ":" + iter
-	case "tool.requested", "tool.completed", "tool.errored":
+	case toolevents.RequestedType, toolevents.CompletedType, toolevents.ErroredType:
 		return "tool:" + turnID + ":" + firstNonEmpty(stringValue(p["tool_use_id"]), stringValue(p["name"]))
 	case "context.compact.started", "context.compact.completed", "context.compact.errored":
 		return "compact:" + turnID + ":" + firstNonEmpty(stringValue(p["reason"]), "context")
@@ -579,7 +581,7 @@ func parentID(event, turnID string) string {
 	switch event {
 	case "turn.started", "turn.completed", "turn.errored":
 		return ""
-	case "llm.requested", "llm.responded", "tool.requested", "tool.completed", "tool.errored", "context.compact.started", "context.compact.completed", "context.compact.errored", "hook.started", "hook.completed", "hook.errored", "finish.attempted":
+	case "llm.requested", "llm.responded", toolevents.RequestedType, toolevents.CompletedType, toolevents.ErroredType, "context.compact.started", "context.compact.completed", "context.compact.errored", "hook.started", "hook.completed", "hook.errored", "finish.attempted":
 		return "turn:" + turnID
 	default:
 		return ""
@@ -588,11 +590,11 @@ func parentID(event, turnID string) string {
 
 func spanEvent(event string) string {
 	switch event {
-	case "turn.started", "llm.requested", "tool.requested", "context.compact.started", "hook.started":
+	case "turn.started", "llm.requested", toolevents.RequestedType, "context.compact.started", "hook.started":
 		return "start"
-	case "turn.completed", "llm.responded", "tool.completed", "context.compact.completed", "hook.completed":
+	case "turn.completed", "llm.responded", toolevents.CompletedType, "context.compact.completed", "hook.completed":
 		return "end"
-	case "turn.errored", "tool.errored", "context.compact.errored", "hook.errored":
+	case "turn.errored", toolevents.ErroredType, "context.compact.errored", "hook.errored":
 		return "error"
 	case "finish.attempted":
 		return "instant"

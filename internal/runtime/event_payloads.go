@@ -1,6 +1,9 @@
 package runtime
 
-import "github.com/juex-ai/juex/internal/llm"
+import (
+	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/toolevents"
+)
 
 type TurnStartedPayload struct {
 	Input string `json:"input"`
@@ -60,16 +63,16 @@ type LLMRequestedPayload struct {
 }
 
 type LLMRespondedPayload struct {
-	Iter         int               `json:"iter,omitempty"`
-	StopReason   llm.StopReason    `json:"stop_reason"`
-	Usage        llm.Usage         `json:"usage"`
-	TokenUsage   llm.Usage         `json:"token_usage"`
-	Blocks       []llm.Block       `json:"blocks"`
-	Text         string            `json:"text"`
-	Thinking     string            `json:"thinking"`
-	ToolCalls    []ToolCallPayload `json:"tool_calls"`
-	Model        string            `json:"model"`
-	ContextUsage *llm.ContextUsage `json:"context_usage,omitempty"`
+	Iter         int                          `json:"iter,omitempty"`
+	StopReason   llm.StopReason               `json:"stop_reason"`
+	Usage        llm.Usage                    `json:"usage"`
+	TokenUsage   llm.Usage                    `json:"token_usage"`
+	Blocks       []llm.Block                  `json:"blocks"`
+	Text         string                       `json:"text"`
+	Thinking     string                       `json:"thinking"`
+	ToolCalls    []toolevents.ToolCallPayload `json:"tool_calls"`
+	Model        string                       `json:"model"`
+	ContextUsage *llm.ContextUsage            `json:"context_usage,omitempty"`
 }
 
 type FinishAttemptedPayload struct {
@@ -156,49 +159,6 @@ type GoalContinuedPayload struct {
 	ContinuationsUsed     int        `json:"continuations_used"`
 	MaxContinuations      int        `json:"max_continuations"`
 	ContinuationPromptLen int        `json:"continuation_prompt_len"`
-}
-
-type ToolCallPayload struct {
-	ToolUseID      string         `json:"tool_use_id"`
-	Name           string         `json:"name"`
-	Input          map[string]any `json:"input"`
-	TimeoutSeconds int            `json:"timeout_seconds"`
-}
-
-type ToolRequestedPayload struct {
-	Name           string         `json:"name"`
-	Input          map[string]any `json:"input"`
-	ToolUseID      string         `json:"tool_use_id"`
-	TimeoutSeconds int            `json:"timeout_seconds"`
-}
-
-type ToolCompletedPayload struct {
-	Name           string `json:"name"`
-	ToolUseID      string `json:"tool_use_id"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	Len            int    `json:"len"`
-	Preview        string `json:"preview"`
-}
-
-type ToolOutputDeltaPayload struct {
-	Name      string `json:"name"`
-	ToolUseID string `json:"tool_use_id"`
-	SessionID string `json:"session_id"`
-	ChunkID   int    `json:"chunk_id"`
-	Stream    string `json:"stream"`
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated,omitempty"`
-}
-
-type ToolErroredPayload struct {
-	Name           string `json:"name"`
-	ToolUseID      string `json:"tool_use_id"`
-	Error          string `json:"error"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	Len            int    `json:"len,omitempty"`
-	Preview        string `json:"preview,omitempty"`
-	TimedOut       bool   `json:"timed_out,omitempty"`
-	ExitCode       *int   `json:"exit_code,omitempty"`
 }
 
 type PendingInputQueuedPayload struct {
