@@ -74,11 +74,12 @@ provider/model into a temp config, and runs Juex with a temp `HOME` so global
 MCP servers and skills are not loaded; it also passes
 `--enable-user-global-resources=false`. The temp config contains credentials and
 is deleted after success unless `--keep` is passed.
-Each case runs a three-turn session: a setup turn, a `read` tool-call turn that
-must return a unique smoke token, and a short reasoning prompt. The result line
-reports whether a `tool_use` block was recorded and whether reasoning/thinking
-blocks were exposed by that provider. A redacted report is written under
-`.tmp/reports/provider-model-smoke/<run-id>/` unless `--report-dir` is passed.
+Each case runs one live agent workflow that must use `read`, `write`, `edit`,
+`grep`, `exec_command`, and `write_stdin`, including a `tty:true` command with
+incremental output and a mid-command stdin reply. The result line reports tool
+use, `exec_command`, TTY, stdin, filesystem, event-delta, and thinking coverage.
+A redacted report is written under `.tmp/reports/provider-model-smoke/<run-id>/`
+unless `--report-dir` is passed.
 
 Useful options:
 
