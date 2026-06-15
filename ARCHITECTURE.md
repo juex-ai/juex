@@ -590,6 +590,12 @@ type Engine struct {
 func (e *Engine) Turn(ctx, userInput) (string, error)
 ```
 
+`TurnMessageWithID` is the stable runtime entrypoint. The internal
+`turn_lifecycle.go` runner owns the phase ordering for context preparation,
+provider iterations, tool batches, finish-policy gates, and active-turn
+closure so the public `Engine` interface stays small while the turn lifecycle
+remains named and testable inside `internal/runtime`.
+
 Turns are Codex-aligned long-running loops: the runtime does not enforce a
 per-turn provider-request count or wall-clock duration cap. A turn stops when
 the assistant finishes without queued input, the parent context/user stop

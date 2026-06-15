@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -2171,6 +2172,56 @@ func TestTurn_FinishGateAllowsCleanFinish(t *testing.T) {
 	}
 	if gateCompleted.EventName != string(hooks.EventStop) || gateCompleted.Source != "builtin" || gateCompleted.BlockStop || gateCompleted.ContinuePromptLen != 0 || gateCompleted.Decision != string(hooks.DecisionAllow) {
 		t.Fatalf("gate completed payload = %+v", gateCompleted)
+	}
+}
+
+func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+		Name:    "stop-ok",
+		Events:  []hooks.EventName{hooks.EventStop},
+		Command: runtimeHookCommand("ok"),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.Hooks = runner
+
+	var order []string
+	bus.Subscribe("finish.attempted", func(e events.Event) {
+		order = append(order, "finish.attempted")
+	})
+	bus.Subscribe("hook.started", func(e events.Event) {
+		payload, _ := e.Payload.(HookStartedPayload)
+		order = append(order, "start:"+payload.Name)
+	})
+	bus.Subscribe("hook.completed", func(e events.Event) {
+		payload, _ := e.Payload.(HookCompletedPayload)
+		order = append(order, "done:"+payload.Name)
+	})
+
+	out, err := eng.Turn(context.Background(), "finish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" {
+		t.Fatalf("out = %q", out)
+	}
+	want := []string{
+		"finish.attempted",
+		"start:unresolved-failure-gate",
+		"done:unresolved-failure-gate",
+		"start:stop-ok",
+		"done:stop-ok",
+		"start:goal-completion-gate",
+		"done:goal-completion-gate",
+	}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("finish policy order = %#v, want %#v", order, want)
 	}
 }
 

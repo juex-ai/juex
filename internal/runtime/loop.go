@@ -277,118 +277,24 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	if err := e.beginGoalTurnLocked(turnID, userMsg.FirstText()); err != nil {
 		return "", e.failTurn(turnID, err)
 	}
-	activeClosed := false
+	lifecycle := turnLifecycle{
+		engine:  e,
+		ctx:     ctx,
+		turnID:  turnID,
+		userMsg: userMsg,
+		start:   time.Now(),
+	}
 	defer func() {
 		e.toolFailures = previousFailures
-		if !activeClosed {
+		if !lifecycle.activeClosed {
 			e.finishActiveTurn(turnID, err != nil)
 		}
 	}()
-	start := time.Now()
-	turnCtx := ctx
-	if err := e.restorePendingInput(turnID, userMsg.ID); err != nil {
-		return "", e.failTurn(turnID, err)
-	}
-
-	prepared, err := e.prepareTurnContextLocked(turnCtx, turnID, userMsg)
+	result, err := lifecycle.runLocked()
 	if err != nil {
 		return "", e.failTurn(turnID, err)
 	}
-
-	if err := e.recordTurnStartLocked(turnID, prepared.userMessage); err != nil {
-		return "", e.failTurn(turnID, err)
-	}
-
-	var lastText string
-	retriedOverflow := false
-	for iter := 0; ; iter++ {
-		if err := turnCtx.Err(); err != nil {
-			return "", e.failTurn(turnID, err)
-		}
-
-		if err := e.drainPendingInputLocked(turnCtx, turnID); err != nil {
-			return "", e.failTurn(turnID, err)
-		}
-
-		request, err := e.prepareProviderRequestLocked(turnID, iter, prepared)
-		if err != nil {
-			return "", e.failTurn(turnID, err)
-		}
-
-		resp, err := e.requestProviderTurnLocked(turnCtx, prepared, request)
-		if err != nil {
-			if llm.IsContextOverflowError(err) && !retriedOverflow {
-				if _, compactErr := e.compactLocked(turnCtx, turnID, prepared.systemPrompt, "overflow_retry", true, ""); compactErr != nil {
-					return "", e.failTurn(turnID, fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr))
-				}
-				retriedOverflow = true
-				continue
-			}
-			return "", e.failTurn(turnID, fmt.Errorf("llm: %w", err))
-		}
-
-		recorded, err := e.recordProviderResponseLocked(turnID, prepared, request, resp)
-		if err != nil {
-			return "", e.failTurn(turnID, err)
-		}
-		if len(recorded.toolCalls) == 0 {
-			lastText = recorded.finalText
-			e.emit(events.Event{Type: "finish.attempted", TurnID: turnID, Payload: FinishAttemptedPayload{
-				StopReason: recorded.stopReason,
-				OutputLen:  len(lastText),
-			}})
-			if prompt, payload, ok := e.runUnresolvedFailureGate(turnID); ok {
-				if _, err := e.EnqueuePendingInput(turnCtx, prompt); err != nil {
-					return "", e.failTurn(turnID, err)
-				}
-				e.emit(events.Event{Type: "tool.failure.continued", TurnID: turnID, Payload: payload})
-				if !e.finishActiveTurnIfNoPending(turnID) {
-					continue
-				}
-				activeClosed = true
-				break
-			}
-			stopReq := e.newHookRequest(hooks.EventStop, turnID)
-			stopReq.UserInput = prepared.userMessage.FirstText()
-			stopResults, err := e.runHooks(turnCtx, stopReq)
-			if err != nil {
-				return "", e.failTurn(turnID, err)
-			}
-			if prompt, payload, ok, err := e.runGoalCompletionGate(turnID); err != nil {
-				return "", e.failTurn(turnID, err)
-			} else if ok {
-				if _, err := e.EnqueuePendingInput(turnCtx, prompt); err != nil {
-					return "", e.failTurn(turnID, err)
-				}
-				e.emit(events.Event{Type: "goal.continued", TurnID: turnID, Payload: payload})
-				if !e.finishActiveTurnIfNoPending(turnID) {
-					continue
-				}
-				activeClosed = true
-				break
-			}
-			if prompt, ok := stopContinuation(stopResults); ok {
-				if strings.TrimSpace(prompt) == "" {
-					return "", e.failTurn(turnID, fmt.Errorf("hooks: Stop hook requested block_stop without continue_prompt"))
-				}
-				if _, err := e.EnqueuePendingInput(turnCtx, prompt); err != nil {
-					return "", e.failTurn(turnID, err)
-				}
-			}
-			if !e.finishActiveTurnIfNoPending(turnID) {
-				continue
-			}
-			activeClosed = true
-			break
-		}
-
-		if err := e.recordToolBatchLocked(turnCtx, turnID, prepared.policy, recorded.toolCalls); err != nil {
-			return "", e.failTurn(turnID, err)
-		}
-	}
-
-	e.recordTurnCompletionLocked(turnID, start, lastText)
-	return lastText, nil
+	return result.output, nil
 }
 
 type preparedTurnContext struct {
