@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -74,8 +73,6 @@ const (
 	turnAdmissionCommand    turnAdmissionPhase = "command"
 )
 
-var errTurnAdmissionBusy = errors.New("app: session busy")
-
 type turnAdmission struct {
 	mu     sync.Mutex
 	phase  turnAdmissionPhase
@@ -108,15 +105,7 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 }
 
 func (a *App) CompleteAdmittedTurn(turnID string) {
-	if a == nil || turnID == "" {
-		return
-	}
-	a.turnAdmission.mu.Lock()
-	defer a.turnAdmission.mu.Unlock()
-	if a.turnAdmission.phase == turnAdmissionRunning && a.turnAdmission.turnID == turnID {
-		a.turnAdmission.phase = turnAdmissionIdle
-		a.turnAdmission.turnID = ""
-	}
+	a.admissionQueue().complete(turnID)
 }
 
 func (a *App) BeginCompactAdmission(turnID string) error {
@@ -128,31 +117,7 @@ func (a *App) FinishCompactAdmission(compactTurnID string, ids TurnIDAllocator) 
 }
 
 func (a *App) admitUserTurn(ctx context.Context, prompt string, ids TurnIDAllocator) TurnAdmissionResult {
-	phase, activeTurnID := a.admissionSnapshot()
-	if phase != turnAdmissionIdle {
-		return a.queuePendingAdmission(ctx, prompt, activeTurnID)
-	}
-
-	turnID := ids.NextTurnID("turn")
-	a.turnAdmission.mu.Lock()
-	if a.turnAdmission.phase != turnAdmissionIdle {
-		activeTurnID = a.turnAdmission.turnID
-		a.turnAdmission.mu.Unlock()
-		return a.queuePendingAdmission(ctx, prompt, activeTurnID)
-	}
-	if err := a.Engine.ReserveTurnID(turnID); err != nil {
-		a.turnAdmission.mu.Unlock()
-		return conflictResult(err.Error(), err, runtime.PendingInputStatus{})
-	}
-	a.turnAdmission.phase = turnAdmissionRunning
-	a.turnAdmission.turnID = turnID
-	a.turnAdmission.mu.Unlock()
-	msg := llm.TextMessage(llm.RoleUser, prompt)
-	return TurnAdmissionResult{
-		Kind:   TurnAdmissionStarted,
-		TurnID: turnID,
-		Start:  &AdmittedTurn{TurnID: turnID, Message: msg},
-	}
+	return a.admissionQueue().admitUser(ctx, prompt, ids)
 }
 
 func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {
@@ -212,110 +177,23 @@ func (a *App) admitCompactSlash(ctx context.Context, cmd SlashCommand, ids TurnI
 }
 
 func (a *App) beginCompactAdmission(turnID string) error {
-	if a == nil || a.Engine == nil {
-		return runtime.ErrNoActiveTurn
-	}
-	a.turnAdmission.mu.Lock()
-	defer a.turnAdmission.mu.Unlock()
-	if a.turnAdmission.phase != turnAdmissionIdle {
-		return errTurnAdmissionBusy
-	}
-	if err := a.Engine.ReserveTurnID(turnID); err != nil {
-		return err
-	}
-	a.turnAdmission.phase = turnAdmissionCompacting
-	a.turnAdmission.turnID = turnID
-	return nil
+	return a.admissionQueue().beginCompact(turnID)
 }
 
 func (a *App) finishCompactAdmission(compactTurnID string, ids TurnIDAllocator) *AdmittedTurn {
-	if a == nil || a.Engine == nil || ids == nil {
-		return nil
-	}
-	nextTurnID := ids.NextTurnID("turn")
-	msg, _, promoted := a.Engine.PromotePendingInputTurn(compactTurnID, nextTurnID)
-	a.turnAdmission.mu.Lock()
-	defer a.turnAdmission.mu.Unlock()
-	if promoted {
-		a.turnAdmission.phase = turnAdmissionRunning
-		a.turnAdmission.turnID = nextTurnID
-		return &AdmittedTurn{TurnID: nextTurnID, Message: msg}
-	}
-	if a.turnAdmission.phase == turnAdmissionCompacting && a.turnAdmission.turnID == compactTurnID {
-		a.turnAdmission.phase = turnAdmissionIdle
-		a.turnAdmission.turnID = ""
-	}
-	return nil
+	return a.admissionQueue().finishCompact(compactTurnID, ids)
 }
 
 func (a *App) beginExclusiveCommand() bool {
-	if a == nil {
-		return false
-	}
-	a.turnAdmission.mu.Lock()
-	defer a.turnAdmission.mu.Unlock()
-	if a.turnAdmission.phase != turnAdmissionIdle {
-		return false
-	}
-	a.turnAdmission.phase = turnAdmissionCommand
-	return true
+	return a.admissionQueue().beginExclusiveCommand()
 }
 
 func (a *App) finishExclusiveCommand() {
-	if a == nil {
-		return
-	}
-	a.turnAdmission.mu.Lock()
-	defer a.turnAdmission.mu.Unlock()
-	if a.turnAdmission.phase == turnAdmissionCommand {
-		a.turnAdmission.phase = turnAdmissionIdle
-		a.turnAdmission.turnID = ""
-	}
+	a.admissionQueue().finishExclusiveCommand()
 }
 
 func (a *App) finishExclusiveCommandAsRunning(turnID string) {
-	if a == nil {
-		return
-	}
-	a.turnAdmission.mu.Lock()
-	defer a.turnAdmission.mu.Unlock()
-	if a.turnAdmission.phase == turnAdmissionCommand {
-		a.turnAdmission.phase = turnAdmissionRunning
-		a.turnAdmission.turnID = turnID
-	}
-}
-
-func (a *App) admissionSnapshot() (turnAdmissionPhase, string) {
-	if a == nil {
-		return turnAdmissionIdle, ""
-	}
-	a.turnAdmission.mu.Lock()
-	defer a.turnAdmission.mu.Unlock()
-	return a.turnAdmission.phase, a.turnAdmission.turnID
-}
-
-func (a *App) queuePendingAdmission(ctx context.Context, prompt, fallbackTurnID string) TurnAdmissionResult {
-	status, err := a.Engine.EnqueuePendingInput(ctx, prompt)
-	if status.TurnID == "" {
-		status.TurnID = fallbackTurnID
-	}
-	switch {
-	case err == nil:
-		return queuedResult(status)
-	case errors.Is(err, runtime.ErrPendingInputQueueFull):
-		return rejectedResult(
-			"pending_input_full",
-			fmt.Sprintf("pending input queue full (%d/%d)", status.PendingCount, status.MaxPendingInputs),
-			"wait for the active turn to drain pending input before sending more",
-			true,
-			err,
-			status,
-		)
-	case errors.Is(err, runtime.ErrNoActiveTurn):
-		return conflictResult("turn is not accepting pending input", err, status)
-	default:
-		return errorResult(err, nil)
-	}
+	a.admissionQueue().finishExclusiveCommandAsRunning(turnID)
 }
 
 func queuedResult(status runtime.PendingInputStatus) TurnAdmissionResult {

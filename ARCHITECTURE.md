@@ -39,7 +39,8 @@ juex/
 │   │   ├── runtime_status.go
 │   │   ├── session_attachment.go
 │   │   ├── slash.go
-│   │   └── turn_admission.go
+│   │   ├── turn_admission.go
+│   │   └── turn_admission_queue.go
 │   ├── cli/                      # cobra-based CLI surface
 │   │   ├── bundle.go
 │   │   ├── root.go
@@ -569,11 +570,13 @@ subprocesses.
 
 `internal/app` also owns turn admission for transports that need a domain
 decision before starting work. `App.AdmitTurn` classifies user input into
-started, queued, command-completed, conflict, rejected, or error outcomes. It
-parses slash commands, coordinates runtime pending-input admission, reserves
-turn ids, and promotes queued input after compact commands. Transports render
-that result and start any returned turn message; they should not duplicate
-busy, compact, pending-input, or slash-command policy.
+started, queued, command-completed, conflict, rejected, or error outcomes.
+`turn_admission.go` keeps the stable app-facing contract and slash-command
+entrypoint, while the unexported `turn_admission_queue.go` domain service owns
+admission phase transitions, runtime pending-input coordination, turn id
+reservation, and compact-command promotion. Transports render that result and
+start any returned turn message; they should not duplicate busy, compact,
+pending-input, or slash-command policy.
 
 ```go
 // internal/runtime/loop.go
