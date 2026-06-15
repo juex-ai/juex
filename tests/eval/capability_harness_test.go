@@ -41,6 +41,12 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 					return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: file-search-shell"), StopReason: llm.StopEndTurn}
 				},
 			},
+			Contract: ContractExpectations{
+				RequiredTools: []string{"read", "write", "edit", "grep", "exec_command"},
+				Events: EventContractExpectations{
+					RequireStructuredExecCompleted: true,
+				},
+			},
 			Assert: func(t *testing.T, result CapabilityResult) {
 				t.Helper()
 				assertCapabilityFile(t, result, "input.txt", "needle-updated")
@@ -106,6 +112,9 @@ func TestCapabilityHarnessRunsDeterministicCases(t *testing.T) {
 				func(state CapabilityState) llm.Response {
 					return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: recovered from denial"), StopReason: llm.StopEndTurn}
 				},
+			},
+			Contract: ContractExpectations{
+				RequiredTools: []string{"guarded_read", "write"},
 			},
 			Assert: func(t *testing.T, result CapabilityResult) {
 				t.Helper()
@@ -201,6 +210,7 @@ func TestCapabilityHarnessReportShapeIsStable(t *testing.T) {
 		`"elapsed_ms"`,
 		`"events"`,
 		`"tool_names"`,
+		`"contract"`,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %s:\n%s", want, report)
