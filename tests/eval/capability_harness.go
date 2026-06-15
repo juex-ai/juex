@@ -27,6 +27,7 @@ type CapabilityCase struct {
 	Hooks      func(workDir string) hooks.Config
 	ExtraTools []tools.Tool
 	Script     []CapabilityStep
+	Contract   ContractExpectations
 	Assert     func(*testing.T, CapabilityResult)
 }
 
@@ -58,6 +59,7 @@ type CapabilityResult struct {
 	ElapsedMS      int64              `json:"elapsed_ms"`
 	Events         map[string]int     `json:"events"`
 	ToolNames      map[string]int     `json:"tool_names"`
+	Contract       ContractReport     `json:"contract"`
 	FinalText      string             `json:"final_text"`
 	Error          string             `json:"error,omitempty"`
 	WorkDir        string             `json:"-"`
@@ -172,7 +174,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 	start := time.Now()
 	finalText, turnErr := engine.Turn(context.Background(), tc.Prompt)
 	elapsed := time.Since(start)
-	result := collectCapabilityResult(t, tc.Name, workDir, sess.Dir, finalText, elapsed, provider)
+	result := collectCapabilityResult(t, tc.Name, workDir, sess.Dir, finalText, elapsed, provider, tc.Contract)
 	if turnErr != nil {
 		result.Success = false
 		result.Error = turnErr.Error()
@@ -180,7 +182,7 @@ func RunCapabilityCase(t *testing.T, tc CapabilityCase) CapabilityResult {
 	return result
 }
 
-func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText string, elapsed time.Duration, provider *capabilityProvider) CapabilityResult {
+func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText string, elapsed time.Duration, provider *capabilityProvider, contract ContractExpectations) CapabilityResult {
 	t.Helper()
 	convPath := filepath.Join(sessionDir, "conversation.jsonl")
 	eventPath := filepath.Join(sessionDir, "events.jsonl")
@@ -201,6 +203,14 @@ func collectCapabilityResult(t *testing.T, name, workDir, sessionDir, finalText 
 		SessionDir:     sessionDir,
 		TranscriptText: transcriptText,
 		Snapshots:      append([]ProviderSnapshot(nil), provider.snaps...),
+	}
+	result.Contract = ValidateContractArtifacts(ContractArtifacts{
+		ConversationPath: convPath,
+		EventsPath:       eventPath,
+	}, contract)
+	if !result.Contract.Passed {
+		result.Success = false
+		result.Error = "contract oracle failed: " + result.Contract.Summary()
 	}
 	for _, line := range convLines {
 		var msg llm.Message

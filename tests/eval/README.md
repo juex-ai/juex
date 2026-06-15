@@ -34,6 +34,13 @@ creates an isolated workdir, registers the real builtin tools, optionally adds
 eval-only tools and command hooks, runs `runtime.Engine.Turn`, then computes a
 stable report from `conversation.jsonl` and `events.jsonl`.
 
+`contract_oracle.go` owns deterministic artifact contract checks for the Go
+harness. It parses conversation and event JSONL artifacts and reports stable
+pass/fail issues for required tool use, forbidden legacy shell tool names,
+TTY exec usage, tool output deltas, and structured shell result events. The
+capability harness is an adapter that supplies artifact paths and case-specific
+expectations; the oracle does not change production runtime behavior.
+
 Run it with:
 
 ```bash
@@ -66,6 +73,7 @@ Each `CapabilityResult` exposes:
 - `elapsed_ms`: wall-clock duration for the deterministic case
 - `events`: event type counts from `events.jsonl`
 - `tool_names`: per-tool call counts
+- `contract`: pass/fail details from the eval contract oracle
 
 Use these metrics for before/after comparisons when changing tool contracts,
 sandbox or permission behavior, hooks, stop gates, or context projection. Keep
@@ -114,7 +122,9 @@ case-local files and a deterministic interactive installer command.
 
 The smoke is intentionally stricter than a simple provider connectivity check.
 It parses the persisted `conversation.jsonl`, checks filesystem side effects,
-and parses `events.jsonl`. A passing run requires:
+and parses `events.jsonl`. Its Python adapter calls
+`juex_eval.contract_oracle` for the conversation and event contract checks. A
+passing run requires:
 
 - all required tool-use blocks to be present;
 - no legacy `shell` or `shell_input` tool use;

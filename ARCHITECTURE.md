@@ -1263,7 +1263,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
-| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
+| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracle for conversation/event/tool artifacts; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
 
 Run the deterministic suite with `go test ./... -count=1`.
 Provider-quality smoke tests remain explicit because they use credentials.
