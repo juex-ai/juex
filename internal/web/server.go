@@ -63,19 +63,8 @@ type activeSession struct {
 	bcast     *broadcaster
 	StartedAt time.Time
 
-	cancelMu   sync.Mutex
-	cancel     context.CancelFunc // nil when no turn is running
-	activeTurn string
-	turnWG     sync.WaitGroup
-
-	turnsMu sync.Mutex
-	turns   map[string]*turnState
-}
-
-type turnState struct {
-	ID    string
-	State string // "running" | "done" | "errored"
-	Err   string
+	turns  *webTurnTransport
+	workWG sync.WaitGroup
 }
 
 func NewServer(opts Options) *Server {
@@ -240,12 +229,8 @@ func (s *Server) Close() {
 	s.closeMCPManager()
 	s.sessions.Range(func(_, v any) bool {
 		as := v.(*activeSession)
-		as.cancelMu.Lock()
-		if as.cancel != nil {
-			as.cancel()
-		}
-		as.cancelMu.Unlock()
-		as.turnWG.Wait()
+		as.turns.close()
+		as.workWG.Wait()
 		as.bcast.close()
 		as.app.Close()
 		return true
@@ -258,12 +243,8 @@ func (s *Server) closeActiveSession(id string) bool {
 		return false
 	}
 	as := v.(*activeSession)
-	as.cancelMu.Lock()
-	if as.cancel != nil {
-		as.cancel()
-	}
-	as.cancelMu.Unlock()
-	as.turnWG.Wait()
+	as.turns.close()
+	as.workWG.Wait()
 	as.bcast.close()
 	as.app.Close()
 	return true
@@ -329,8 +310,8 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		app:       a,
 		bcast:     newBroadcaster(),
 		StartedAt: time.Now(),
-		turns:     map[string]*turnState{},
 	}
+	as.turns = newWebTurnTransport(a)
 	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
 	s.sessions.Store(a.Session.ID, as)
 	return as, nil
@@ -497,9 +478,9 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 		s.createMu.Unlock()
 		return context.Canceled
 	}
-	as.turnWG.Add(1)
+	as.workWG.Add(1)
 	s.createMu.Unlock()
-	defer as.turnWG.Done()
+	defer as.workWG.Done()
 	return as.app.HandleMCPNotification(ctx, n)
 }
 

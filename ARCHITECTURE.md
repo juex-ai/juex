@@ -705,7 +705,14 @@ sessions must be activated first, and side sessions are read-only in the Web UI.
 The web handler is a transport adapter over app-level turn admission: it
 validates HTTP/session access, decodes request JSON, renders admission results,
 updates its in-memory session cache when `/new` switches sessions, and owns
-SSE/cancel/turn-status bookkeeping for goroutines it starts.
+SSE wiring.
+
+Within an active web session, the unexported `webTurnTransport` module owns
+browser-session turn mechanics: running/done/errored status projection,
+pending-count forwarding while a turn is running, idempotent interrupt
+handling, turn goroutine cleanup, and reset after `/new` changes the in-memory
+session id. This keeps HTTP handlers focused on parse/render work while app
+turn admission and runtime turn execution remain outside the web layer.
 
 Routes:
 

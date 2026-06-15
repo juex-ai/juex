@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -333,7 +332,7 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 	}
 	result, err := as.app.CompactWithInstructions(r.Context(), req.Reason, false, req.Instructions)
 	if start := as.app.FinishCompactAdmission(compactTurnID, app.TurnIDFunc(s.nextTurnID)); start != nil {
-		s.startTurnMessage(as, start.TurnID, start.Message)
+		as.turns.start(start.TurnID, start.Message)
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -466,13 +465,11 @@ func (s *Server) applyTurnAdmissionResult(as *activeSession, result app.TurnAdmi
 	if change := result.SessionChanged; change != nil && change.OldID != "" && change.NewID != "" {
 		s.sessions.Delete(change.OldID)
 		as.StartedAt = time.Now()
-		as.turnsMu.Lock()
-		as.turns = map[string]*turnState{}
-		as.turnsMu.Unlock()
+		as.turns.reset()
 		s.sessions.Store(change.NewID, as)
 	}
 	if result.Start != nil {
-		s.startTurnMessage(as, result.Start.TurnID, result.Start.Message)
+		as.turns.start(result.Start.TurnID, result.Start.Message)
 	}
 }
 
@@ -522,22 +519,16 @@ func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, tu
 		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 		return
 	}
-	as.turnsMu.Lock()
-	t, ok := as.turns[turnID]
-	var state, errStr string
-	if ok {
-		state, errStr = t.State, t.Err
-	}
-	as.turnsMu.Unlock()
+	status, ok := as.turns.status(turnID)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "not_found", "turn not found: "+turnID)
 		return
 	}
-	resp := turnStatusResponse{State: state, Error: errStr}
-	if state == "running" {
-		pending := as.app.Engine.PendingInputStatus()
-		resp.PendingCount = &pending.PendingCount
-		resp.MaxPendingInputs = &pending.MaxPendingInputs
+	resp := turnStatusResponse{
+		State:            status.State,
+		Error:            status.Err,
+		PendingCount:     status.PendingCount,
+		MaxPendingInputs: status.MaxPendingInputs,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -548,17 +539,7 @@ func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id stri
 		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 		return
 	}
-	as.cancelMu.Lock()
-	cancelled := false
-	if as.cancel != nil {
-		as.cancel()
-		as.app.CompleteAdmittedTurn(as.activeTurn)
-		as.cancel = nil
-		as.activeTurn = ""
-		cancelled = true
-	}
-	as.cancelMu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"cancelled": cancelled})
+	writeJSON(w, http.StatusOK, map[string]any{"cancelled": as.turns.interrupt()})
 }
 
 func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id string) {
@@ -616,43 +597,4 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 	}
-}
-
-func (s *Server) startTurnMessage(as *activeSession, turnID string, msg llm.Message) {
-	as.cancelMu.Lock()
-	defer as.cancelMu.Unlock()
-	s.startTurnMessageLocked(as, turnID, msg)
-}
-
-func (s *Server) startTurnMessageLocked(as *activeSession, turnID string, msg llm.Message) {
-	ctx, cancel := context.WithCancel(context.Background())
-	as.cancel = cancel
-	as.activeTurn = turnID
-	as.turnsMu.Lock()
-	as.turns[turnID] = &turnState{ID: turnID, State: "running"}
-	as.turnsMu.Unlock()
-	as.turnWG.Add(1)
-	go s.runTurnMessage(ctx, as, turnID, msg)
-}
-
-// runTurnMessage executes one engine turn and updates state machine + cancel
-// bookkeeping when it finishes.
-func (s *Server) runTurnMessage(ctx context.Context, as *activeSession, turnID string, msg llm.Message) {
-	defer as.turnWG.Done()
-	defer as.app.CompleteAdmittedTurn(turnID)
-	_, err := as.app.Engine.TurnMessageWithID(ctx, msg, turnID)
-	as.cancelMu.Lock()
-	as.cancel = nil
-	as.activeTurn = ""
-	as.cancelMu.Unlock()
-	as.turnsMu.Lock()
-	if t, ok := as.turns[turnID]; ok {
-		if err != nil {
-			t.State = "errored"
-			t.Err = err.Error()
-		} else {
-			t.State = "done"
-		}
-	}
-	as.turnsMu.Unlock()
 }
