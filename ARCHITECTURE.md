@@ -714,6 +714,12 @@ handling, turn goroutine cleanup, and reset after `/new` changes the in-memory
 session id. This keeps HTTP handlers focused on parse/render work while app
 turn admission and runtime turn execution remain outside the web layer.
 
+On the browser side, `frontend/src/lib/live-session-projection.ts` owns the
+live-session read model for SSE `BusEvent` facts, optimistic turns, pending
+input, compact markers, tool output deltas, usage snapshots, and turn-status
+reconciliation. `frontend/src/pages/Session.tsx` remains the route adapter for
+fetching, EventSource subscription, timers, navigation, and rendering.
+
 Routes:
 
 | Method | Path | Purpose |

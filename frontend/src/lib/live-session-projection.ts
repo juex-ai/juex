@@ -1,0 +1,628 @@
+import { assistantBlocksFromEventPayload } from "./assistant-blocks.ts";
+import {
+  isLocalCompactMessage,
+  LOCAL_COMPACT_COMMAND_ID,
+  LOCAL_COMPACT_PENDING_ID,
+  LOCAL_COMPACT_PENDING_KIND,
+  PENDING_COMPACT_LABEL,
+} from "./compact-ui.ts";
+import {
+  applyToolOutputDeltaToMessages,
+  applyToolRequestedToMessages,
+} from "./live-tool-events.ts";
+import {
+  createQueuedInputState,
+  drainQueuedInputs as drainQueuedInputState,
+  dropQueuedInputs as dropQueuedInputState,
+  enqueueQueuedInput as enqueueQueuedInputState,
+  type QueuedInput,
+  type QueuedInputState,
+} from "./queued-inputs.ts";
+import type {
+  BusEvent,
+  ContextUsage,
+  Message,
+  TokenUsage,
+  TurnStatusResponse,
+} from "../types.ts";
+
+export type LiveSessionStatus =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "pending"; count: number }
+  | { kind: "tool"; name: string }
+  | { kind: "done" }
+  | { kind: "error"; detail?: string };
+
+export type LiveSessionProjection = {
+  messages: Message[];
+  tokenUsage: TokenUsage | null;
+  contextUsage: ContextUsage | null;
+  queuedInput: QueuedInputState;
+  turnActive: boolean;
+  compactActive: boolean;
+  compactCommandInputs: Record<string, string>;
+  status: LiveSessionStatus;
+};
+
+export type LiveSessionProjectionEffect =
+  | { type: "refresh"; preserveLiveMessages?: boolean }
+  | { type: "scheduleIdleStatus" };
+
+export type LiveSessionProjectionResult = {
+  state: LiveSessionProjection;
+  effects: LiveSessionProjectionEffect[];
+};
+
+export function createLiveSessionProjection(): LiveSessionProjection {
+  return {
+    messages: [],
+    tokenUsage: null,
+    contextUsage: null,
+    queuedInput: createQueuedInputState(),
+    turnActive: false,
+    compactActive: false,
+    compactCommandInputs: {},
+    status: { kind: "idle" },
+  };
+}
+
+export function resetLiveSessionProjection(opts?: {
+  activeTurnID?: string;
+}): LiveSessionProjection {
+  return {
+    ...createLiveSessionProjection(),
+    turnActive: Boolean(opts?.activeTurnID),
+    status: opts?.activeTurnID ? { kind: "running" } : { kind: "idle" },
+  };
+}
+
+export function clearLiveSessionTranscript(
+  state: LiveSessionProjection,
+): LiveSessionProjection {
+  return { ...state, messages: [], tokenUsage: null, contextUsage: null };
+}
+
+export function clearQueuedInputs(
+  state: LiveSessionProjection,
+): LiveSessionProjection {
+  if (state.queuedInput.items.length === 0) return state;
+  return { ...state, queuedInput: createQueuedInputState() };
+}
+
+export function clearLocalCompactMessages(
+  state: LiveSessionProjection,
+): LiveSessionProjection {
+  return {
+    ...state,
+    messages: state.messages.filter((message) => !isLocalCompactMessage(message)),
+  };
+}
+
+export function markProjectionDone(
+  state: LiveSessionProjection,
+): LiveSessionProjection {
+  return { ...state, status: { kind: "done" } };
+}
+
+export function markProjectionIdle(
+  state: LiveSessionProjection,
+): LiveSessionProjection {
+  return { ...state, status: { kind: "idle" } };
+}
+
+export function markProjectionError(
+  state: LiveSessionProjection,
+  detail?: string,
+): LiveSessionProjection {
+  return { ...state, status: { kind: "error", detail } };
+}
+
+export function projectCompactCommand(
+  state: LiveSessionProjection,
+  messageID: string | undefined,
+  input: string,
+): LiveSessionProjection {
+  if (!messageID) return state;
+  return {
+    ...state,
+    compactCommandInputs: { ...state.compactCommandInputs, [messageID]: input },
+  };
+}
+
+export function projectCommandResult(
+  state: LiveSessionProjection,
+  input: string,
+  output: string,
+): LiveSessionProjection {
+  return {
+    ...state,
+    messages: [
+      ...state.messages,
+      {
+        role: "user",
+        kind: "slash_command",
+        blocks: [{ type: "text", text: input }],
+      },
+      {
+        role: "assistant",
+        kind: "slash_command",
+        blocks: [{ type: "text", text: output }],
+      },
+    ],
+  };
+}
+
+export function projectOptimisticTurn(
+  state: LiveSessionProjection,
+  turnID: string | undefined,
+  input: string | undefined,
+  kind?: string,
+): LiveSessionProjection {
+  return {
+    ...state,
+    messages: appendLiveTurnToMessages(state.messages, turnID, input, kind, "optimistic"),
+    turnActive: true,
+    status: { kind: "running" },
+  };
+}
+
+export function projectQueuedInput(
+  state: LiveSessionProjection,
+  input: string | undefined,
+  kind: string | undefined,
+  pendingCount: number,
+): LiveSessionProjection {
+  return {
+    ...state,
+    queuedInput: enqueueQueuedInputState(
+      state.queuedInput,
+      input,
+      kind,
+      pendingCount,
+    ),
+    turnActive: true,
+    status: { kind: "pending", count: pendingCount },
+  };
+}
+
+export function projectPendingCompact(
+  state: LiveSessionProjection,
+  commandInput?: string,
+): LiveSessionProjection {
+  let messages = state.messages;
+  if (
+    commandInput &&
+    !messages.some((message) => message.id === LOCAL_COMPACT_COMMAND_ID)
+  ) {
+    messages = [
+      ...messages,
+      {
+        id: LOCAL_COMPACT_COMMAND_ID,
+        role: "user",
+        kind: "slash_command",
+        blocks: [{ type: "text", text: commandInput }],
+      },
+    ];
+  }
+  if (!messages.some((message) => message.id === LOCAL_COMPACT_PENDING_ID)) {
+    messages = [
+      ...messages,
+      {
+        id: LOCAL_COMPACT_PENDING_ID,
+        role: "user",
+        kind: LOCAL_COMPACT_PENDING_KIND,
+        pending: true,
+        blocks: [{ type: "text", text: PENDING_COMPACT_LABEL }],
+      },
+    ];
+  }
+  return {
+    ...state,
+    messages,
+    compactActive: true,
+    status: { kind: "running" },
+  };
+}
+
+export function projectLiveSessionEvent(
+  state: LiveSessionProjection,
+  event: BusEvent,
+): LiveSessionProjectionResult {
+  let next = state;
+  const effects: LiveSessionProjectionEffect[] = [];
+
+  switch (event.type) {
+    case "turn.started":
+      next = consumeQueuedInput(next, event.payload.input, event.payload.kind);
+      next = {
+        ...next,
+        messages: appendLiveTurnToMessages(
+          next.messages,
+          event.turn_id,
+          event.payload.input,
+          event.payload.kind,
+          "event",
+        ),
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
+    case "llm.requested":
+      next = { ...next, turnActive: true, status: { kind: "running" } };
+      break;
+    case "llm.responded":
+      next = {
+        ...applyAssistantResponse(next, event),
+        tokenUsage: tokenUsageFromEvent(event) ?? next.tokenUsage,
+        contextUsage: event.payload.context_usage ?? next.contextUsage,
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
+    case "tool.requested": {
+      const name = event.payload.name || "?";
+      next = {
+        ...next,
+        messages: applyToolRequestedToMessages(next.messages, {
+          turnID: event.turn_id,
+          toolUseID: event.payload.tool_use_id,
+          toolName: name,
+          input: event.payload.input ?? undefined,
+          timeoutSeconds: event.payload.timeout_seconds,
+        }),
+        turnActive: true,
+        status: { kind: "tool", name },
+      };
+      break;
+    }
+    case "tool.completed":
+      next = {
+        ...appendToolResult(next, event, false),
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
+    case "tool.output_delta":
+      next = {
+        ...next,
+        messages: applyToolOutputDeltaToMessages(next.messages, {
+          turnID: event.turn_id,
+          toolUseID: event.payload.tool_use_id,
+          text: event.payload.text,
+        }),
+        turnActive: true,
+        status: { kind: "tool", name: event.payload.name || "exec_command" },
+      };
+      break;
+    case "tool.errored":
+      next = {
+        ...appendToolResult(next, event, true),
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
+    case "pending_input.queued":
+      next = projectQueuedInput(
+        next,
+        event.payload.input,
+        event.payload.kind,
+        event.payload.pending_count,
+      );
+      break;
+    case "pending_input.drained":
+      next = drainQueuedInputs(next, event.payload.count, event.turn_id);
+      next = { ...next, turnActive: true, status: { kind: "running" } };
+      break;
+    case "pending_input.dropped":
+      next = dropQueuedInputs(next, event.payload.count);
+      next = markProjectionError(
+        next,
+        `${event.payload.count} pending input(s) dropped`,
+      );
+      break;
+    case "pending_input.rejected":
+      next = {
+        ...markProjectionError(
+          next,
+          event.payload.reason || "pending input queue full",
+        ),
+        turnActive: true,
+      };
+      break;
+    case "turn.completed":
+      next = {
+        ...markProjectionDone(clearQueuedInputs(next)),
+        turnActive: false,
+      };
+      effects.push({ type: "refresh" }, { type: "scheduleIdleStatus" });
+      break;
+    case "turn.errored":
+      next = {
+        ...markProjectionError(clearQueuedInputs(next), event.payload.error),
+        turnActive: false,
+      };
+      effects.push({ type: "refresh" });
+      break;
+    case "context.compact.started":
+      next = projectPendingCompact(next);
+      break;
+    case "context.compact.completed":
+      next = {
+        ...clearLocalCompactMessages(next),
+        compactActive: false,
+      };
+      effects.push({ type: "refresh", preserveLiveMessages: true });
+      if (!next.turnActive && next.queuedInput.items.length === 0) {
+        next = markProjectionDone(next);
+        effects.push({ type: "scheduleIdleStatus" });
+      }
+      break;
+    case "context.compact.errored":
+      next = {
+        ...markProjectionError(
+          clearLocalCompactMessages(next),
+          event.payload.error,
+        ),
+        compactActive: false,
+      };
+      effects.push({ type: "refresh", preserveLiveMessages: true });
+      break;
+    case "context.compact.skipped":
+    case "context.projection.applied":
+      break;
+  }
+
+  return { state: next, effects };
+}
+
+export function projectTurnStatusReconcile(
+  state: LiveSessionProjection,
+  turn: TurnStatusResponse,
+): LiveSessionProjectionResult {
+  if (turn.state === "running") {
+    return {
+      state: {
+        ...state,
+        turnActive: true,
+        status:
+          turn.pending_count && turn.pending_count > 0
+            ? { kind: "pending", count: turn.pending_count }
+            : { kind: "running" },
+      },
+      effects: [],
+    };
+  }
+  if (turn.state === "errored") {
+    return {
+      state: {
+        ...markProjectionError(clearQueuedInputs(state), turn.error),
+        turnActive: false,
+      },
+      effects: [{ type: "refresh" }],
+    };
+  }
+  return {
+    state: {
+      ...markProjectionDone(clearQueuedInputs(state)),
+      turnActive: false,
+    },
+    effects: [{ type: "refresh" }, { type: "scheduleIdleStatus" }],
+  };
+}
+
+function consumeQueuedInput(
+  state: LiveSessionProjection,
+  input: string | undefined,
+  kind: string | undefined,
+): LiveSessionProjection {
+  if (!input) return state;
+  const index = state.queuedInput.items.findIndex(
+    (item) => item.input === input && item.kind === kind,
+  );
+  if (index < 0) return state;
+  return {
+    ...state,
+    queuedInput: {
+      ...state.queuedInput,
+      items: [
+        ...state.queuedInput.items.slice(0, index),
+        ...state.queuedInput.items.slice(index + 1),
+      ],
+    },
+  };
+}
+
+function drainQueuedInputs(
+  state: LiveSessionProjection,
+  count: number,
+  turnID: string | undefined,
+): LiveSessionProjection {
+  const result = drainQueuedInputState(state.queuedInput, count);
+  return {
+    ...state,
+    queuedInput: result.state,
+    messages: appendDrainedInputs(state.messages, result.drained, turnID),
+  };
+}
+
+function dropQueuedInputs(
+  state: LiveSessionProjection,
+  count: number,
+): LiveSessionProjection {
+  return {
+    ...state,
+    queuedInput: dropQueuedInputState(state.queuedInput, count),
+  };
+}
+
+function appendDrainedInputs(
+  messages: Message[],
+  items: QueuedInput[],
+  turnID: string | undefined,
+): Message[] {
+  if (!items.length) return messages;
+  const additions: Message[] = items.map((item) => ({
+    role: "user",
+    turn_id: turnID,
+    kind: item.kind || "pending_input",
+    blocks: [{ type: "text", text: item.input }],
+  }));
+  if (!turnID) return [...messages, ...additions];
+  const insertAt = messages.findIndex(
+    (message) =>
+      message.turn_id === turnID &&
+      message.role === "assistant" &&
+      message.pending,
+  );
+  if (insertAt < 0) return [...messages, ...additions];
+  return [
+    ...messages.slice(0, insertAt),
+    ...additions,
+    ...messages.slice(insertAt),
+  ];
+}
+
+function appendLiveTurnToMessages(
+  messages: Message[],
+  turnID: string | undefined,
+  input: string | undefined,
+  kind: string | undefined,
+  source: "event" | "optimistic",
+): Message[] {
+  if (!turnID || !input) return messages;
+  if (messages.some((message) => message.turn_id === turnID)) return messages;
+  const existingTurnID = findPendingTurnForInput(messages, input);
+  if (existingTurnID) {
+    if (source === "optimistic") return messages;
+    return messages.map((message) =>
+      message.turn_id === existingTurnID ? { ...message, turn_id: turnID } : message,
+    );
+  }
+  return [
+    ...messages,
+    {
+      role: "user",
+      turn_id: turnID,
+      kind,
+      blocks: [{ type: "text", text: input }],
+    },
+    {
+      role: "assistant",
+      turn_id: turnID,
+      pending: true,
+      blocks: [],
+    },
+  ];
+}
+
+function findPendingTurnForInput(
+  messages: Message[],
+  input: string,
+): string | undefined {
+  for (const message of messages) {
+    if (message.role !== "user" || messageText(message) !== input) continue;
+    const turnID = message.turn_id;
+    if (
+      turnID &&
+      messages.some(
+        (candidate) =>
+          candidate.role === "assistant" &&
+          candidate.turn_id === turnID &&
+          candidate.pending,
+      )
+    ) {
+      return turnID;
+    }
+  }
+  return undefined;
+}
+
+function messageText(message: Message): string | undefined {
+  const block = message.blocks?.find((candidate) => candidate.type === "text");
+  return block && "text" in block && typeof block.text === "string"
+    ? block.text
+    : undefined;
+}
+
+function applyAssistantResponse(
+  state: LiveSessionProjection,
+  event: Extract<BusEvent, { type: "llm.responded" }>,
+): LiveSessionProjection {
+  if (!event.turn_id) return state;
+  const blocks = assistantBlocksFromEventPayload(event.payload);
+  const model = event.payload.model;
+  let found = false;
+  const messages = state.messages.map((message) => {
+    if (
+      message.turn_id === event.turn_id &&
+      message.role === "assistant" &&
+      message.pending
+    ) {
+      found = true;
+      return { ...message, pending: false, blocks, model };
+    }
+    return message;
+  });
+  if (found) return { ...state, messages };
+  return {
+    ...state,
+    messages: [
+      ...messages,
+      { role: "assistant", turn_id: event.turn_id, pending: false, blocks, model },
+    ],
+  };
+}
+
+function appendToolResult(
+  state: LiveSessionProjection,
+  event: Extract<BusEvent, { type: "tool.completed" | "tool.errored" }>,
+  isError: boolean,
+): LiveSessionProjection {
+  if (!event.turn_id) return state;
+  const content =
+    event.type === "tool.errored"
+      ? event.payload.error || event.payload.preview || ""
+      : event.payload.preview || "";
+  const toolUseID = event.payload.tool_use_id;
+  if (!toolUseID && !content) return state;
+  const block: NonNullable<Message["blocks"]>[number] = {
+    type: "tool_result",
+    tool_use_id: toolUseID,
+    content,
+    is_error: isError,
+  };
+  const last = state.messages[state.messages.length - 1];
+  if (
+    last?.role === "user" &&
+    last.turn_id === event.turn_id &&
+    last.blocks?.every((candidate) => candidate.type === "tool_result")
+  ) {
+    return {
+      ...state,
+      messages: [
+        ...state.messages.slice(0, -1),
+        { ...last, blocks: [...(last.blocks ?? []), block] },
+      ],
+    };
+  }
+  return {
+    ...state,
+    messages: [
+      ...state.messages,
+      {
+        role: "user",
+        turn_id: event.turn_id,
+        blocks: [block],
+      },
+    ],
+  };
+}
+
+function tokenUsageFromEvent(
+  event: Extract<BusEvent, { type: "llm.responded" }>,
+): TokenUsage | null {
+  const usage = event.payload.token_usage ?? event.payload.usage;
+  if (!usage) return null;
+  return usage;
+}

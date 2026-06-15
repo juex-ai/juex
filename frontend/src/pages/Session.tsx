@@ -45,11 +45,6 @@ import {
   toolState,
   type MessageGroup,
 } from "@/lib/display-units";
-import { assistantBlocksFromEventPayload } from "@/lib/assistant-blocks";
-import {
-  applyToolOutputDeltaToMessages,
-  applyToolRequestedToMessages,
-} from "@/lib/live-tool-events";
 import {
   COMPACTING_SUBMIT_HINT,
   composerSubmitAction,
@@ -57,9 +52,6 @@ import {
 } from "@/lib/composer-submit";
 import {
   isCompactCommandInput,
-  isLocalCompactMessage,
-  LOCAL_COMPACT_COMMAND_ID,
-  LOCAL_COMPACT_PENDING_ID,
   LOCAL_COMPACT_PENDING_KIND,
   PENDING_COMPACT_LABEL,
 } from "@/lib/compact-ui";
@@ -80,13 +72,23 @@ import { cn } from "@/lib/utils";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
 import {
-  createQueuedInputState,
-  drainQueuedInputs as drainQueuedInputState,
-  dropQueuedInputs as dropQueuedInputState,
-  enqueueQueuedInput as enqueueQueuedInputState,
-  type QueuedInput,
-  type QueuedInputState,
-} from "@/lib/queued-inputs";
+  clearLiveSessionTranscript,
+  clearLocalCompactMessages,
+  createLiveSessionProjection,
+  markProjectionDone,
+  markProjectionError,
+  markProjectionIdle,
+  projectCommandResult,
+  projectCompactCommand,
+  projectLiveSessionEvent,
+  projectOptimisticTurn,
+  projectPendingCompact,
+  projectQueuedInput,
+  projectTurnStatusReconcile,
+  resetLiveSessionProjection,
+  type LiveSessionProjection,
+  type LiveSessionProjectionEffect,
+} from "@/lib/live-session-projection";
 import {
   getSession,
   getSessionContext,
@@ -121,14 +123,6 @@ type InitialCommandState = {
   command?: SlashCommandResponse;
 } | null;
 
-type SessionStatus =
-  | { kind: "idle" }
-  | { kind: "running" }
-  | { kind: "pending"; count: number }
-  | { kind: "tool"; name: string }
-  | { kind: "done" }
-  | { kind: "error"; detail?: string };
-
 type SessionRouteSnapshot = {
   id: string;
 };
@@ -142,33 +136,22 @@ export function Session() {
   const location = useLocation();
   const navigate = useNavigate();
   const [data, setData] = useState<SessionShowResponse | null>(null);
-  const [liveMessages, setLiveMessages] = useState<ChatMessage[]>([]);
-  const [liveTokenUsage, setLiveTokenUsage] = useState<TokenUsage | null>(null);
-  const [liveContextUsage, setLiveContextUsage] =
-    useState<ContextUsage | null>(null);
+  const [projection, setProjection] = useState<LiveSessionProjection>(() =>
+    createLiveSessionProjection(),
+  );
   const [activeContext, setActiveContext] =
     useState<ActiveContextSnapshot | null>(null);
-  const [status, setStatus] = useState<SessionStatus>({ kind: "idle" });
-  const [turnActive, setTurnActive] = useState(false);
-  const [compactActive, setCompactActive] = useState(false);
   const [draft, setDraft] = useState("");
   const [composerHint, setComposerHint] = useState<string | null>(null);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [olderMessagesError, setOlderMessagesError] = useState<string | null>(
     null,
   );
-  const [compactCommandInputs, setCompactCommandInputs] = useState<
-    Record<string, string>
-  >({});
-  const [queuedInputState, setQueuedInputState] = useState<QueuedInputState>(
-    () => createQueuedInputState(),
-  );
   const doneTimerRef = useRef<number | null>(null);
   const composerHintTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
-  const turnActiveRef = useRef(false);
-  const queuedInputStateRef = useRef<QueuedInputState>(
-    createQueuedInputState(),
+  const projectionRef = useRef<LiveSessionProjection>(
+    createLiveSessionProjection(),
   );
   const latestRouteRef = useRef({ id });
 
@@ -188,9 +171,9 @@ export function Session() {
       }
       setData(r);
       setOlderMessagesError(null);
-      if (!opts?.preserveLiveMessages) setLiveMessages([]);
-      setLiveTokenUsage(null);
-      setLiveContextUsage(null);
+      if (!opts?.preserveLiveMessages) {
+        updateProjection(clearLiveSessionTranscript);
+      }
       try {
         const context = await getSessionContext(requestId);
         if (!isLatestRoute(latestRouteRef.current, requestId)) {
@@ -208,22 +191,18 @@ export function Session() {
         console.error("getSession failed", e);
       }
     }
+    // updateProjection writes through projectionRef and React's stable setter.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
-    const next = createQueuedInputState();
-    queuedInputStateRef.current = next;
-    setQueuedInputState(next);
     const state = location.state as InitialCommandState;
     const activeTurnID = state?.activeTurnID;
-    setTurnActiveControllerState(Boolean(activeTurnID));
-    setStatus(activeTurnID ? { kind: "running" } : { kind: "idle" });
-    setCompactActiveControllerState(false);
+    setProjectionControllerState(resetLiveSessionProjection({ activeTurnID }));
     setDraft("");
     setComposerHint(null);
     setLoadingOlderMessages(false);
     setOlderMessagesError(null);
-    setCompactCommandInputs({});
     if (!activeTurnID) return;
 
     let cancelled = false;
@@ -232,29 +211,11 @@ export function Session() {
       try {
         const turn = await getTurnStatus(id, activeTurnID);
         if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
+        const result = projectTurnStatusReconcile(projectionRef.current, turn);
+        setProjectionControllerState(result.state);
+        runProjectionEffects(result.effects);
         if (turn.state === "running") {
-          setTurnActiveControllerState(true);
-          setStatus(
-            turn.pending_count && turn.pending_count > 0
-              ? { kind: "pending", count: turn.pending_count }
-              : { kind: "running" },
-          );
           timer = window.setTimeout(() => void reconcile(), 1000);
-          return;
-        }
-
-        await refresh();
-        if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
-        if (queuedInputStateRef.current.items.length > 0) {
-          const emptyQueue = createQueuedInputState();
-          queuedInputStateRef.current = emptyQueue;
-          setQueuedInputState(emptyQueue);
-        }
-        setTurnActiveControllerState(false);
-        if (turn.state === "errored") {
-          setStatus({ kind: "error", detail: turn.error });
-        } else {
-          markDoneSoon();
         }
       } catch (e) {
         if (!cancelled && isLatestRoute(latestRouteRef.current, id)) {
@@ -267,7 +228,11 @@ export function Session() {
       cancelled = true;
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [id, location.state, refresh]);
+    // Projection effect helpers read current state from refs; including them
+    // would restart the polling loop on every render. location.state is read
+    // only on session entry; clearing it later must not reset live projection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, refresh]);
 
   useEffect(() => {
     if (!id) return;
@@ -281,9 +246,6 @@ export function Session() {
         }
         setData(r);
         setOlderMessagesError(null);
-        setLiveMessages([]);
-        setLiveTokenUsage(null);
-        setLiveContextUsage(null);
         try {
           const context = await getSessionContext(requestId);
           if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
@@ -311,18 +273,27 @@ export function Session() {
     if (!data) return;
     const state = location.state as InitialCommandState;
     if (!state?.command || !state.commandInput) return;
-    const key = `${id}:${state.commandInput}:${state.command.name}:${state.command.text}`;
+    const command = state.command;
+    const commandInput = state.commandInput;
+    const key = `${id}:${commandInput}:${command.name}:${command.text}`;
     if (initialCommandRef.current === key) return;
     initialCommandRef.current = key;
-    if (state.command.name === "/compact" && state.command.compact?.message_id) {
-      const messageID = state.command.compact.message_id;
-      const commandInput = state.commandInput;
-      void refresh().then(() => rememberCompactCommand(messageID, commandInput));
+    if (command.name === "/compact" && command.compact?.message_id) {
+      const messageID = command.compact.message_id;
+      void refresh().then(() =>
+        updateProjection((prev) =>
+          projectCompactCommand(prev, messageID, commandInput),
+        ),
+      );
     } else {
-      appendCommandResult(state.commandInput, state.command.text);
+      updateProjection((prev) =>
+        projectCommandResult(prev, commandInput, command.text),
+      );
     }
     markDoneSoon();
     navigate(location.pathname, { replace: true, state: null });
+    // markDoneSoon only schedules local status decay through refs/timers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     data,
     id,
@@ -337,130 +308,9 @@ export function Session() {
     if (!id || !data || !sessionCanSend(data)) return;
     const unsub = subscribeEvents(id, {
       onEvent: (e) => {
-        switch (e.type) {
-          case "turn.started":
-            consumeQueuedInput(eventInput(e), eventKind(e));
-            appendLiveTurn(e.turn_id, eventInput(e), eventKind(e), "event");
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "running" });
-            break;
-          case "llm.requested":
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "running" });
-            break;
-          case "llm.responded":
-            applyAssistantResponse(e);
-            applyTokenUsage(e);
-            applyContextUsage(e);
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "running" });
-            break;
-          case "tool.requested": {
-            const name =
-              eventString(e, "name") ?? eventString(e, "tool_name") ?? "?";
-            setLiveMessages((prev) =>
-              applyToolRequestedToMessages(prev, {
-                turnID: e.turn_id,
-                toolUseID: eventString(e, "tool_use_id"),
-                toolName: name,
-                input: eventRecord(e, "input"),
-                timeoutSeconds: eventNumberFromPayload(e, "timeout_seconds"),
-              }),
-            );
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "tool", name });
-            break;
-          }
-          case "tool.completed":
-            appendToolResult(e, false);
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "running" });
-            break;
-          case "tool.output_delta":
-            setLiveMessages((prev) =>
-              applyToolOutputDeltaToMessages(prev, {
-                turnID: e.turn_id,
-                toolUseID: eventString(e, "tool_use_id"),
-                text: eventString(e, "text"),
-              }),
-            );
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "tool", name: eventString(e, "name") ?? "exec_command" });
-            break;
-          case "tool.errored":
-            appendToolResult(e, true);
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "running" });
-            break;
-          case "pending_input.queued":
-            enqueueQueuedInput(eventInput(e), eventKind(e), eventPendingCount(e));
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "pending", count: eventPendingCount(e) });
-            break;
-          case "pending_input.drained":
-            drainQueuedInputs(eventDeltaCount(e), e.turn_id);
-            setTurnActiveControllerState(true);
-            setStatus({ kind: "running" });
-            break;
-          case "pending_input.dropped":
-            dropQueuedInputs(eventDeltaCount(e));
-            setStatus({
-              kind: "error",
-              detail: `${eventDeltaCount(e)} pending input(s) dropped`,
-            });
-            break;
-          case "pending_input.rejected":
-            setTurnActiveControllerState(true);
-            setStatus({
-              kind: "error",
-              detail: "pending input queue full",
-            });
-            break;
-          case "turn.completed":
-            refresh().then(() => {
-              clearQueuedInputs();
-              setTurnActiveControllerState(false);
-              setStatus({ kind: "done" });
-              if (doneTimerRef.current)
-                window.clearTimeout(doneTimerRef.current);
-              doneTimerRef.current = window.setTimeout(
-                () => setStatus({ kind: "idle" }),
-                1500,
-              );
-            });
-            break;
-          case "turn.errored":
-            refresh().then(() => {
-              clearQueuedInputs();
-              setTurnActiveControllerState(false);
-              setStatus({ kind: "error", detail: eventErrorDetail(e) });
-            });
-            break;
-          case "context.compact.started":
-            setCompactActiveControllerState(true);
-            appendPendingCompact();
-            setStatus({ kind: "running" });
-            break;
-          case "context.compact.completed":
-            refresh({ preserveLiveMessages: true }).then(() => {
-              clearLocalCompactMessages();
-              setCompactActiveControllerState(false);
-              if (
-                !turnActiveRef.current &&
-                queuedInputStateRef.current.items.length === 0
-              ) {
-                markDoneSoon();
-              }
-            });
-            break;
-          case "context.compact.errored":
-            refresh({ preserveLiveMessages: true }).then(() => {
-              clearLocalCompactMessages();
-              setCompactActiveControllerState(false);
-              setStatus({ kind: "error", detail: eventErrorDetail(e) });
-            });
-            break;
-        }
+        const result = projectLiveSessionEvent(projectionRef.current, e);
+        setProjectionControllerState(result.state);
+        runProjectionEffects(result.effects);
       },
     });
     return () => {
@@ -469,17 +319,15 @@ export function Session() {
       if (composerHintTimerRef.current)
         window.clearTimeout(composerHintTimerRef.current);
     };
-    // Queue helpers read from refs; resubscribing on every local queue change
-    // would reopen the EventSource during active turns.
+    // Projection reads from refs; resubscribing on every live-state change would
+    // reopen the EventSource during active turns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.kind, data?.active, id, refresh]);
 
   async function handleSend(prompt: string) {
     const compactCommand = isCompactCommandInput(prompt);
     if (compactCommand) {
-      appendPendingCompact(prompt);
-      setCompactActiveControllerState(true);
-      setStatus({ kind: "running" });
+      updateProjection((prev) => projectPendingCompact(prev, prompt));
     }
     try {
       const turn = await startTurn(id, prompt);
@@ -498,46 +346,55 @@ export function Session() {
         }
         if (turn.command.name === "/compact") {
           await refresh({ preserveLiveMessages: true });
-          clearLocalCompactMessages();
-          setCompactActiveControllerState(false);
+          updateProjection((prev) => ({
+            ...clearLocalCompactMessages(prev),
+            compactActive: false,
+          }));
           if (turn.command.compact?.message_id) {
-            rememberCompactCommand(turn.command.compact.message_id, prompt);
+            updateProjection((prev) =>
+              projectCompactCommand(prev, turn.command?.compact?.message_id, prompt),
+            );
           } else {
-            appendCommandResult(prompt, turn.command.text);
+            updateProjection((prev) =>
+              projectCommandResult(prev, prompt, turn.command?.text ?? ""),
+            );
           }
           if (
-            !turnActiveRef.current &&
-            queuedInputStateRef.current.items.length === 0
+            !projectionRef.current.turnActive &&
+            projectionRef.current.queuedInput.items.length === 0
           ) {
             markDoneSoon();
           }
           return;
         } else {
-          appendCommandResult(prompt, turn.command.text);
+          updateProjection((prev) =>
+            projectCommandResult(prev, prompt, turn.command?.text ?? ""),
+          );
         }
         markDoneSoon();
         return;
       }
       if (turn.queued) {
-        enqueueQueuedInput(prompt, undefined, turn.pending_count ?? 0);
-        setTurnActiveControllerState(true);
-        setStatus({ kind: "pending", count: turn.pending_count ?? 0 });
+        updateProjection((prev) =>
+          projectQueuedInput(prev, prompt, undefined, turn.pending_count ?? 0),
+        );
       } else {
         if (!turn.turn_id) throw new Error("turn response missing turn_id");
-        appendLiveTurn(turn.turn_id, prompt, undefined, "optimistic");
-        setTurnActiveControllerState(true);
-        setStatus({ kind: "running" });
+        updateProjection((prev) =>
+          projectOptimisticTurn(prev, turn.turn_id, prompt),
+        );
       }
     } catch (e) {
       console.error("startTurn failed", e);
       if (compactCommand) {
-        clearLocalCompactMessages();
-        setCompactActiveControllerState(false);
+        updateProjection((prev) => ({
+          ...clearLocalCompactMessages(prev),
+          compactActive: false,
+        }));
       }
-      setStatus({
-        kind: "error",
-        detail: e instanceof Error ? e.message : String(e),
-      });
+      updateProjection((prev) =>
+        markProjectionError(prev, e instanceof Error ? e.message : String(e)),
+      );
     }
   }
 
@@ -558,14 +415,14 @@ export function Session() {
     return <LoadingState label="Loading conversation" />;
   }
 
-  const messages: ChatMessage[] = [...(data.messages ?? []), ...liveMessages];
+  const messages: ChatMessage[] = [...(data.messages ?? []), ...projection.messages];
   const groups = messagesToGroups(messages);
-  const tokenUsage = liveTokenUsage ?? data.token_usage;
-  const contextUsage = liveContextUsage ?? data.context_usage;
+  const tokenUsage = projection.tokenUsage ?? data.token_usage;
+  const contextUsage = projection.contextUsage ?? data.context_usage;
   const canSend = sessionCanSend(data);
   const submitAction = composerSubmitAction({
-    turnActive,
-    compactActive,
+    turnActive: projection.turnActive,
+    compactActive: projection.compactActive,
     text: draft,
   });
 
@@ -588,7 +445,7 @@ export function Session() {
               key={group.key}
               group={group}
               compactCommand={
-                group.id ? compactCommandInputs[group.id] : undefined
+                group.id ? projection.compactCommandInputs[group.id] : undefined
               }
             />
           ))}
@@ -597,7 +454,7 @@ export function Session() {
       </Conversation>
       <div className="border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
         <div className="mx-auto w-full max-w-[760px]">
-          <QueuedInputStack items={queuedInputState.items} />
+          <QueuedInputStack items={projection.queuedInput.items} />
           {canSend ? (
             <PromptInput
               onSubmit={async (msg) => {
@@ -614,7 +471,9 @@ export function Session() {
                 onChange={(event) => {
                   setDraft(event.currentTarget.value);
                   if (composerHint) setComposerHint(null);
-                  if (status.kind === "error") setStatus({ kind: "idle" });
+                  if (projection.status.kind === "error") {
+                    updateProjection(markProjectionIdle);
+                  }
                 }}
                 placeholder="Ask juex anything..."
               />
@@ -626,9 +485,9 @@ export function Session() {
                         {composerHint}
                       </ComposerFeedback>
                     ) : null}
-                    {status.kind === "error" ? (
+                    {projection.status.kind === "error" ? (
                       <ComposerFeedback tone="error">
-                        {status.detail ?? "Something went wrong"}
+                        {projection.status.detail ?? "Something went wrong"}
                       </ComposerFeedback>
                     ) : null}
                     <ContextUsageLabel
@@ -683,135 +542,33 @@ export function Session() {
     }
   }
 
-  function setTurnActiveControllerState(next: boolean) {
-    turnActiveRef.current = next;
-    setTurnActive(next);
+  function setProjectionControllerState(next: LiveSessionProjection) {
+    projectionRef.current = next;
+    setProjection(next);
   }
 
-  function setCompactActiveControllerState(next: boolean) {
-    setCompactActive(next);
-  }
-
-  function appendPendingCompact(commandInput?: string) {
-    setLiveMessages((prev) => {
-      let next = prev;
-      if (
-        commandInput &&
-        !next.some((m) => m.id === LOCAL_COMPACT_COMMAND_ID)
-      ) {
-        next = [
-          ...next,
-          {
-            id: LOCAL_COMPACT_COMMAND_ID,
-            role: "user",
-            kind: "slash_command",
-            blocks: [{ type: "text", text: commandInput }],
-          },
-        ];
-      }
-      if (next.some((m) => m.id === LOCAL_COMPACT_PENDING_ID)) return next;
-      return [
-        ...next,
-        {
-          id: LOCAL_COMPACT_PENDING_ID,
-          role: "user",
-          kind: LOCAL_COMPACT_PENDING_KIND,
-          pending: true,
-          blocks: [{ type: "text", text: PENDING_COMPACT_LABEL }],
-        },
-      ];
-    });
-  }
-
-  function clearLocalCompactMessages() {
-    setLiveMessages((prev) => prev.filter((m) => !isLocalCompactMessage(m)));
-  }
-
-  function consumeQueuedInput(input: string | undefined, kind: string | undefined) {
-    if (!input) return;
-    const current = queuedInputStateRef.current;
-    const index = current.items.findIndex(
-      (item) => item.input === input && item.kind === kind,
-    );
-    if (index < 0) return;
-    setQueuedInputControllerState({
-      ...current,
-      items: [
-        ...current.items.slice(0, index),
-        ...current.items.slice(index + 1),
-      ],
-    });
-  }
-
-  function appendLiveTurn(
-    turnID: string | undefined,
-    input: string | undefined,
-    kind: string | undefined,
-    source: "event" | "optimistic",
+  function updateProjection(
+    project: (state: LiveSessionProjection) => LiveSessionProjection,
   ) {
-    if (!turnID || !input) return;
-    setLiveMessages((prev) => {
-      if (prev.some((m) => m.turn_id === turnID)) return prev;
-      const existingTurnID = findPendingTurnForInput(prev, input);
-      if (existingTurnID) {
-        if (source === "optimistic") return prev;
-        return prev.map((m) =>
-          m.turn_id === existingTurnID ? { ...m, turn_id: turnID } : m,
-        );
+    setProjectionControllerState(project(projectionRef.current));
+  }
+
+  function runProjectionEffects(effects: LiveSessionProjectionEffect[]) {
+    for (const effect of effects) {
+      if (effect.type === "refresh") {
+        void refresh({ preserveLiveMessages: effect.preserveLiveMessages });
+        continue;
       }
-      return [
-        ...prev,
-        {
-          role: "user",
-          turn_id: turnID,
-          kind,
-          blocks: [{ type: "text", text: input }],
-        },
-        {
-          role: "assistant",
-          turn_id: turnID,
-          pending: true,
-          blocks: [],
-        },
-      ];
-    });
+      scheduleIdleStatus();
+    }
   }
 
-  function enqueueQueuedInput(
-    input: string | undefined,
-    kind: string | undefined,
-    pendingCount: number,
-  ) {
-    setQueuedInputControllerState(
-      enqueueQueuedInputState(
-        queuedInputStateRef.current,
-        input,
-        kind,
-        pendingCount,
-      ),
+  function scheduleIdleStatus() {
+    if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
+    doneTimerRef.current = window.setTimeout(
+      () => updateProjection(markProjectionIdle),
+      1500,
     );
-  }
-
-  function drainQueuedInputs(count: number, turnID: string | undefined) {
-    const result = drainQueuedInputState(queuedInputStateRef.current, count);
-    setQueuedInputControllerState(result.state);
-    appendDrainedInputs(result.drained, turnID);
-  }
-
-  function dropQueuedInputs(count: number) {
-    setQueuedInputControllerState(
-      dropQueuedInputState(queuedInputStateRef.current, count),
-    );
-  }
-
-  function setQueuedInputControllerState(next: QueuedInputState) {
-    queuedInputStateRef.current = next;
-    setQueuedInputState(next);
-  }
-
-  function clearQueuedInputs() {
-    if (queuedInputStateRef.current.items.length === 0) return;
-    setQueuedInputControllerState(createQueuedInputState());
   }
 
   function showComposerHint(message: string) {
@@ -825,125 +582,9 @@ export function Session() {
     );
   }
 
-  function rememberCompactCommand(messageID: string | undefined, input: string) {
-    if (!messageID) return;
-    setCompactCommandInputs((prev) => ({ ...prev, [messageID]: input }));
-  }
-
-  function appendDrainedInputs(items: QueuedInput[], turnID: string | undefined) {
-    if (!items.length) return;
-    const additions: ChatMessage[] = items.map((item) => ({
-      role: "user",
-      turn_id: turnID,
-      kind: item.kind || "pending_input",
-      blocks: [{ type: "text", text: item.input }],
-    }));
-    setLiveMessages((prev) => {
-      if (!turnID) return [...prev, ...additions];
-      const insertAt = prev.findIndex(
-        (m) => m.turn_id === turnID && m.role === "assistant" && m.pending,
-      );
-      if (insertAt < 0) return [...prev, ...additions];
-      return [
-        ...prev.slice(0, insertAt),
-        ...additions,
-        ...prev.slice(insertAt),
-      ];
-    });
-  }
-
-  function appendCommandResult(input: string, output: string) {
-    setLiveMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        kind: "slash_command",
-        blocks: [{ type: "text", text: input }],
-      },
-      {
-        role: "assistant",
-        kind: "slash_command",
-        blocks: [{ type: "text", text: output }],
-      },
-    ]);
-  }
-
   function markDoneSoon() {
-    setStatus({ kind: "done" });
-    if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
-    doneTimerRef.current = window.setTimeout(
-      () => setStatus({ kind: "idle" }),
-      1500,
-    );
-  }
-
-  function applyAssistantResponse(e: { turn_id?: string; payload?: unknown }) {
-    if (!e.turn_id) return;
-    const blocks = assistantBlocksFromEventPayload(e.payload);
-    const model = eventString(e, "model");
-    setLiveMessages((prev) => {
-      let found = false;
-      const next = prev.map((m) => {
-        if (m.turn_id === e.turn_id && m.role === "assistant" && m.pending) {
-          found = true;
-          return { ...m, pending: false, blocks, model };
-        }
-        return m;
-      });
-      if (found) return next;
-      return [
-        ...next,
-        { role: "assistant", turn_id: e.turn_id, pending: false, blocks, model },
-      ];
-    });
-  }
-
-  function applyTokenUsage(e: { payload?: unknown }) {
-    const usage = eventTokenUsage(e);
-    if (usage) setLiveTokenUsage(usage);
-  }
-
-  function applyContextUsage(e: { payload?: unknown }) {
-    const usage = eventContextUsage(e);
-    if (usage) setLiveContextUsage(usage);
-  }
-
-  function appendToolResult(e: { turn_id?: string; payload?: unknown }, isError: boolean) {
-    if (!e.turn_id) return;
-    const toolUseID = eventString(e, "tool_use_id");
-    const content =
-      eventString(e, isError ? "error" : "preview") ??
-      eventString(e, "error") ??
-      eventString(e, "preview") ??
-      "";
-    if (!toolUseID && !content) return;
-    const block: NonNullable<ChatMessage["blocks"]>[number] = {
-      type: "tool_result",
-      tool_use_id: toolUseID,
-      content,
-      is_error: isError,
-    };
-    setLiveMessages((prev) => {
-      const last = prev[prev.length - 1];
-      if (
-        last?.role === "user" &&
-        last.turn_id === e.turn_id &&
-        last.blocks?.every((b) => b.type === "tool_result")
-      ) {
-        return [
-          ...prev.slice(0, -1),
-          { ...last, blocks: [...(last.blocks ?? []), block] },
-        ];
-      }
-      return [
-        ...prev,
-        {
-          role: "user",
-          turn_id: e.turn_id,
-          blocks: [block],
-        },
-      ];
-    });
+    updateProjection(markProjectionDone);
+    scheduleIdleStatus();
   }
 }
 
@@ -981,147 +622,6 @@ function LoadOlderMessagesControl({
       ) : null}
     </div>
   );
-}
-
-function findPendingTurnForInput(
-  messages: ChatMessage[],
-  input: string,
-): string | undefined {
-  for (const message of messages) {
-    if (message.role !== "user" || messageText(message) !== input) continue;
-    const turnID = message.turn_id;
-    if (
-      turnID &&
-      messages.some(
-        (m) => m.role === "assistant" && m.turn_id === turnID && m.pending,
-      )
-    ) {
-      return turnID;
-    }
-  }
-  return undefined;
-}
-
-function messageText(message: ChatMessage): string | undefined {
-  const block = message.blocks?.find((b) => b.type === "text");
-  return block && "text" in block && typeof block.text === "string"
-    ? block.text
-    : undefined;
-}
-
-function eventErrorDetail(e: { payload?: unknown }): string | undefined {
-  if (
-    e.payload &&
-    typeof e.payload === "object" &&
-    "error" in e.payload &&
-    typeof (e.payload as Record<string, unknown>).error === "string"
-  ) {
-    return (e.payload as Record<string, string>).error;
-  }
-  return undefined;
-}
-
-function eventInput(e: { payload?: unknown }): string | undefined {
-  return eventString(e, "input");
-}
-
-function eventKind(e: { payload?: unknown }): string | undefined {
-  return eventString(e, "kind") || undefined;
-}
-
-function eventPendingCount(e: { payload?: unknown }): number {
-  if (!e.payload || typeof e.payload !== "object") return 0;
-  const payload = e.payload as Record<string, unknown>;
-  return eventNumber(payload.pending_count) ?? eventNumber(payload.count) ?? 0;
-}
-
-function eventDeltaCount(e: { payload?: unknown }): number {
-  if (!e.payload || typeof e.payload !== "object") return 0;
-  // Drained/dropped events use count for the affected item count; pending_count
-  // is the remaining queue size and is normally zero.
-  return eventNumber((e.payload as Record<string, unknown>).count) ?? 0;
-}
-
-function eventTokenUsage(e: { payload?: unknown }): TokenUsage | undefined {
-  if (!e.payload || typeof e.payload !== "object") return undefined;
-  const payload = e.payload as Record<string, unknown>;
-  const raw = payload.token_usage;
-  if (!raw || typeof raw !== "object") return undefined;
-  const usage = raw as Record<string, unknown>;
-  const input = eventNumber(usage.input_tokens);
-  const output = eventNumber(usage.output_tokens);
-  if (input === undefined || output === undefined) return undefined;
-  return { input_tokens: input, output_tokens: output };
-}
-
-function eventContextUsage(e: { payload?: unknown }): ContextUsage | undefined {
-  if (!e.payload || typeof e.payload !== "object") return undefined;
-  const payload = e.payload as Record<string, unknown>;
-  const raw = payload.context_usage;
-  if (!raw || typeof raw !== "object") return undefined;
-  const usage = raw as Record<string, unknown>;
-  const input = eventNumber(usage.input_tokens);
-  const output = eventNumber(usage.output_tokens);
-  const total = eventNumber(usage.total_tokens);
-  if (input === undefined || output === undefined || total === undefined) {
-    return undefined;
-  }
-  const contextWindow = eventNumber(usage.context_window);
-  const model = typeof usage.model === "string" ? usage.model : undefined;
-  const breakdown = Array.isArray(usage.breakdown)
-    ? usage.breakdown.flatMap((part) => {
-        if (!part || typeof part !== "object") return [];
-        const record = part as Record<string, unknown>;
-        const key = typeof record.key === "string" ? record.key : "";
-        const label = typeof record.label === "string" ? record.label : "";
-        const tokens = eventNumber(record.tokens);
-        if (!key || !label || tokens === undefined) return [];
-        return [{ key, label, tokens }];
-      })
-    : undefined;
-  return {
-    model,
-    context_window: contextWindow,
-    input_tokens: input,
-    output_tokens: output,
-    total_tokens: total,
-    breakdown,
-  };
-}
-
-function eventNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
-function eventNumberFromPayload(e: { payload?: unknown }, key: string): number | undefined {
-  if (!e.payload || typeof e.payload !== "object") return undefined;
-  return eventNumber((e.payload as Record<string, unknown>)[key]);
-}
-
-function eventString(e: { payload?: unknown }, key: string): string | undefined {
-  if (
-    e.payload &&
-    typeof e.payload === "object" &&
-    key in e.payload &&
-    typeof (e.payload as Record<string, unknown>)[key] === "string"
-  ) {
-    return (e.payload as Record<string, string>)[key];
-  }
-  return undefined;
-}
-
-function eventRecord(
-  e: { payload?: unknown },
-  key: string,
-): Record<string, unknown> | undefined {
-  if (!e.payload || typeof e.payload !== "object") return undefined;
-  const value = (e.payload as Record<string, unknown>)[key];
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
 }
 
 function TokenUsageLabel({ usage }: { usage: TokenUsage }) {

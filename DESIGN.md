@@ -370,9 +370,11 @@ Redacted reasoning is rendered with trigger text `Thinking [redacted]` and body
 ### 7.8 Tool
 
 `<Tool>` is a single collapsible card that represents a `tool_use` +
-`tool_result` pair. The render layer in `pages/Session.tsx` calls
-`toDisplayUnits` from `src/lib/display-units.ts` to fold the two blocks
-into one display unit (see §13).
+`tool_result` pair. Live tool event projection happens in
+`src/lib/live-session-projection.ts`, using `src/lib/live-tool-events.ts` for
+the transcript block updates. The render layer in `pages/Session.tsx` calls
+`toDisplayUnits` from `src/lib/display-units.ts` to fold the two blocks into
+one display unit (see §13).
 
 | `use` | `result` | `result.is_error` | state passed to `<ToolHeader>` |
 |---|---|---|---|
@@ -556,18 +558,25 @@ fast, local, and device-friendly.
 The transcript is fetched as JSON from `/api/sessions/:id` and rendered with
 React state. The first fetch uses the server's default message window; clicking
 `Load older messages` fetches `/api/sessions/:id?before=<oldest_message_id>`
-and prepends the returned page. On `turn.completed` / `turn.errored` the SSE
-listener calls a `refetch()` that swaps the active window atomically. The
-composer keeps a local `turnActive` flag so the submit button can switch
-between send, queue, and stop behavior:
+and prepends the returned page.
+
+Live facts from the JSON/SSE API are projected through
+`src/lib/live-session-projection.ts`. That module owns the browser-side read
+model for live messages, optimistic turns, pending input, compact progress,
+tool output deltas, usage snapshots, active flags, and status. `pages/Session.tsx`
+owns the route adapter work: fetching, EventSource subscription, timers,
+navigation, and rendering projection effects such as refetching after terminal
+turn events. The composer reads projection state so the submit button can
+switch between send, queue, and stop behavior:
 
 | Event | Effect |
 |---|---|
-| `turn.started`, `llm.*`, `tool.*` | `turnActive` → true |
-| `pending_input.queued`, `pending_input.drained` | update queue stack; `turnActive` stays true |
-| `pending_input.rejected`, `pending_input.dropped` | show compact error feedback |
-| `turn.completed` | refetch, clear queue stack, `turnActive` → false |
-| `turn.errored` | refetch, clear queue stack, `turnActive` → false, show error feedback |
+| `turn.started`, `llm.*`, `tool.*` | projection marks the turn active and updates live transcript/status |
+| `pending_input.queued`, `pending_input.drained` | projection updates the queue stack and keeps the turn active |
+| `pending_input.rejected`, `pending_input.dropped` | projection shows compact error feedback |
+| `turn.completed` | projection clears queue/active state and asks the page to refetch |
+| `turn.errored` | projection clears queue/active state, records the error, and asks the page to refetch |
+| `context.compact.*` | projection owns optimistic compact markers and asks the page to refetch when terminal |
 
 We never inject HTML over SSE. JSON is the source of truth; SSE is the
 notification channel.
