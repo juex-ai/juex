@@ -254,6 +254,7 @@ export interface ToolCompletedPayload {
   timeout_seconds: number;
   len: number;
   preview: string;
+  result?: Record<string, unknown>;
 }
 
 export interface ToolOutputDeltaPayload {
@@ -275,6 +276,7 @@ export interface ToolErroredPayload {
   preview?: string;
   timed_out?: boolean;
   exit_code?: number;
+  result?: Record<string, unknown>;
 }
 
 export interface PendingInputQueuedPayload {

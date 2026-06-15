@@ -21,16 +21,25 @@ const (
 
 type Handler func(ctx context.Context, input map[string]any) (string, error)
 
+type Result struct {
+	Text       string
+	Structured any
+}
+
+type ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
+
 type Tool struct {
-	Name        string
-	Description string
-	Schema      map[string]any
-	Handler     Handler
+	Name          string
+	Description   string
+	Schema        map[string]any
+	Handler       Handler
+	ResultHandler ResultHandler
 }
 
 type CallInfo struct {
-	TimeoutSeconds int  `json:"timeout_seconds"`
-	TimedOut       bool `json:"timed_out,omitempty"`
+	TimeoutSeconds   int  `json:"timeout_seconds"`
+	TimedOut         bool `json:"timed_out,omitempty"`
+	StructuredResult any  `json:"structured_result,omitempty"`
 }
 
 type Registry struct {
@@ -47,7 +56,7 @@ func (r *Registry) Register(t Tool) error {
 	if t.Name == "" {
 		return fmt.Errorf("tools: empty name")
 	}
-	if t.Handler == nil {
+	if t.Handler == nil && t.ResultHandler == nil {
 		return fmt.Errorf("tools: %s: nil handler", t.Name)
 	}
 	t.Schema = normalizeInputSchema(t.Schema)
@@ -123,12 +132,22 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	}
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
-	out, err := t.Handler(callCtx, callInput)
+	result, err := callToolHandler(callCtx, t, callInput)
+	out := result.Text
+	info.StructuredResult = result.Structured
 	if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		info.TimedOut = true
 		return out, info, fmt.Errorf("tools: %s timed out after %ds", name, timeoutSeconds)
 	}
 	return out, info, err
+}
+
+func callToolHandler(ctx context.Context, t Tool, input map[string]any) (Result, error) {
+	if t.ResultHandler != nil {
+		return t.ResultHandler(ctx, input)
+	}
+	out, err := t.Handler(ctx, input)
+	return Result{Text: out}, err
 }
 
 // NormalizeCallInput decodes OpenAI-compatible fallback arguments before a

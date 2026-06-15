@@ -542,10 +542,11 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		} else if code := firstExitCode(nil, block.Content); code != nil {
 			opts.ExitCode = code
 		}
+		opts.Result = info.StructuredResult
 		e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
 		return
 	}
-	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(out), truncate(out, 200))})
+	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(out), truncate(out, 200), info.StructuredResult)})
 }
 
 func (e *Engine) hookToolErrorBlock(turnID string, call llm.Block, err error) llm.Block {

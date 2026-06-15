@@ -73,6 +73,34 @@ type ShellSessionResult struct {
 	Truncated          bool
 }
 
+type ShellResult struct {
+	SessionID          int    `json:"session_id,omitempty"`
+	Output             string `json:"output"`
+	ExitCode           *int   `json:"exit_code,omitempty"`
+	Running            bool   `json:"running"`
+	TimedOut           bool   `json:"timed_out,omitempty"`
+	WallTimeMS         int64  `json:"wall_time_ms"`
+	ChunkID            int    `json:"chunk_id,omitempty"`
+	OriginalBytes      int    `json:"original_bytes"`
+	OriginalTokenCount int    `json:"original_token_count"`
+	Truncated          bool   `json:"truncated,omitempty"`
+}
+
+func NewShellResult(result ShellSessionResult) ShellResult {
+	return ShellResult{
+		SessionID:          result.SessionID,
+		Output:             result.Output,
+		ExitCode:           cloneIntPtr(result.ExitCode),
+		Running:            result.Running,
+		TimedOut:           result.TimedOut,
+		WallTimeMS:         result.WallTime.Milliseconds(),
+		ChunkID:            result.ChunkID,
+		OriginalBytes:      result.OriginalBytes,
+		OriginalTokenCount: result.OriginalTokenCount,
+		Truncated:          result.Truncated,
+	}
+}
+
 type shellSession struct {
 	id            int
 	started       time.Time

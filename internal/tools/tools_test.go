@@ -604,9 +604,19 @@ func TestBuiltins_EditExpectedReplacementsNullIsIgnored(t *testing.T) {
 func TestBuiltins_ExecCommand(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, "")
-	out, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "echo hello"})
+	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{"cmd": "echo hello"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	result := shellResultFromInfo(t, info)
+	if result.Running || result.SessionID != 0 {
+		t.Fatalf("shell result running/session = %+v, want completed without session id", result)
+	}
+	if result.ExitCode == nil || *result.ExitCode != 0 {
+		t.Fatalf("shell result exit code = %+v, want 0", result.ExitCode)
+	}
+	if !strings.Contains(result.Output, "hello") {
+		t.Fatalf("shell structured output = %q, want hello", result.Output)
 	}
 	if !strings.Contains(out, "hello") {
 		t.Fatalf("shell output: %q", out)
@@ -633,12 +643,16 @@ func TestBuiltins_ExecCommandNonZeroExitReturnsError(t *testing.T) {
 		},
 	})
 
-	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
 		"cmd":     "fail",
 		"timeout": 2,
 	})
 	if err == nil {
 		t.Fatalf("exec_command err = nil, output = %q", out)
+	}
+	result := shellResultFromInfo(t, info)
+	if result.ExitCode == nil || *result.ExitCode != 7 {
+		t.Fatalf("shell result exit code = %+v, want 7", result.ExitCode)
 	}
 	if code, ok := ExitCodeFromError(err); !ok || code != 7 {
 		t.Fatalf("exec_command err = %v, want shell exit code 7", err)
@@ -665,7 +679,7 @@ func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T
 		},
 	})
 
-	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
 		"cmd":           "delayed",
 		"yield_time_ms": 250,
 		"timeout":       2,
@@ -673,7 +687,14 @@ func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionID := sessionIDFromOutput(t, out)
+	initialResult := shellResultFromInfo(t, info)
+	if !initialResult.Running || initialResult.SessionID <= 0 {
+		t.Fatalf("initial shell result = %+v, want running session", initialResult)
+	}
+	if initialResult.ChunkID <= 0 {
+		t.Fatalf("initial shell result chunk id = %+v, want positive", initialResult)
+	}
+	sessionID := initialResult.SessionID
 	if !strings.Contains(out, "Process running with session ID") {
 		t.Fatalf("initial output = %q, want running status", out)
 	}
@@ -681,12 +702,19 @@ func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T
 		t.Fatalf("initial output = %q, want first chunk", out)
 	}
 
-	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+	out, info, err = r.CallWithInfo(context.Background(), "write_stdin", map[string]any{
 		"session_id":    sessionID,
 		"yield_time_ms": 800,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	continuedResult := shellResultFromInfo(t, info)
+	if continuedResult.Running || continuedResult.SessionID != 0 {
+		t.Fatalf("continued shell result = %+v, want completed", continuedResult)
+	}
+	if continuedResult.ExitCode == nil || *continuedResult.ExitCode != 0 {
+		t.Fatalf("continued exit code = %+v, want 0", continuedResult.ExitCode)
 	}
 	if !strings.Contains(out, "Process exited with code 0") {
 		t.Fatalf("poll output = %q, want exited status", out)
@@ -696,6 +724,34 @@ func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T
 	}
 	if !strings.Contains(out, "second chunk") {
 		t.Fatalf("poll output = %q, want second chunk", out)
+	}
+}
+
+func TestRegistryCallWithInfoKeepsStructuredResult(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(Tool{
+		Name:   "structured",
+		Schema: map[string]any{"type": "object"},
+		ResultHandler: func(ctx context.Context, input map[string]any) (Result, error) {
+			return Result{
+				Text:       "ok",
+				Structured: map[string]any{"answer": 42},
+			}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, info, err := r.CallWithInfo(context.Background(), "structured", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" {
+		t.Fatalf("out = %q, want ok", out)
+	}
+	structured, ok := info.StructuredResult.(map[string]any)
+	if !ok || structured["answer"] != 42 {
+		t.Fatalf("structured result = %#v", info.StructuredResult)
 	}
 }
 
@@ -1176,4 +1232,13 @@ func sessionIDFromOutput(t *testing.T, out string) int {
 	}
 	t.Fatalf("missing session id in output:\n%s", out)
 	return 0
+}
+
+func shellResultFromInfo(t *testing.T, info CallInfo) ShellResult {
+	t.Helper()
+	result, ok := info.StructuredResult.(ShellResult)
+	if !ok {
+		t.Fatalf("structured result = %#v, want ShellResult", info.StructuredResult)
+	}
+	return result
 }

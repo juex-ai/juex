@@ -37,8 +37,17 @@ func TestPayloadGoldenJSON(t *testing.T) {
 		},
 		{
 			name:    "completed",
-			payload: Completed(call, 5, 9, "ok output"),
+			payload: Completed(call, 5, 9, "ok output", nil),
 			want:    `{"name":"exec_command","tool_use_id":"call_1","timeout_seconds":5,"len":9,"preview":"ok output"}`,
+		},
+		{
+			name: "completed includes structured result",
+			payload: Completed(call, 5, 9, "ok output", map[string]any{
+				"running":    false,
+				"exit_code":  float64(0),
+				"session_id": float64(3),
+			}),
+			want: `{"name":"exec_command","tool_use_id":"call_1","timeout_seconds":5,"len":9,"preview":"ok output","result":{"exit_code":0,"running":false,"session_id":3}}`,
 		},
 		{
 			name: "errored",

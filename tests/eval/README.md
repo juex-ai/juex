@@ -122,6 +122,8 @@ and parses `events.jsonl`. A passing run requires:
 - incremental `tool.output_delta` events, including carriage-return progress;
   the event names and payload fields are the live tool event contract owned by
   `internal/toolevents`;
+- structured shell results on `tool.completed.payload.result` for both the
+  running `exec_command` and the completing `write_stdin`;
 - a mid-command `write_stdin` interaction that resumes the running process;
 - successful command completion and verification output containing the run
   token;
