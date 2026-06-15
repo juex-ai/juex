@@ -72,6 +72,28 @@ func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestWebTurnTransportStartCancelsExistingTurn(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+	)
+	_, as := newTurnTransportTestSession(t, prov)
+
+	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "first"))
+	waitForProviderStart(t, prov)
+	as.turns.start("turn-2", llm.TextMessage(llm.RoleUser, "second"))
+	as.turns.wait()
+
+	first, ok := as.turns.status("turn-1")
+	if !ok || first.State != "errored" {
+		t.Fatalf("first status = %+v, ok=%v", first, ok)
+	}
+	second, ok := as.turns.status("turn-2")
+	if !ok || second.State != "done" || second.Err != "" {
+		t.Fatalf("second status = %+v, ok=%v", second, ok)
+	}
+}
+
 func TestWebTurnTransportResetClearsTurnStates(t *testing.T) {
 	_, as := newTurnTransportTestSession(t, stubProvider{})
 

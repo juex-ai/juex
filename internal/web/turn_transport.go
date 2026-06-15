@@ -24,9 +24,10 @@ type webTurnTransport struct {
 }
 
 type webTurnState struct {
-	ID    string
-	State string // "running" | "done" | "errored"
-	Err   string
+	ID                 string
+	State              string // "running" | "done" | "errored"
+	Err                string
+	AdmissionCompleted bool
 }
 
 type webTurnStatus struct {
@@ -54,7 +55,11 @@ func (t *webTurnTransport) start(turnID string, msg llm.Message) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
+	var previousCancel context.CancelFunc
+	var previousTurnID string
 	t.cancelMu.Lock()
+	previousCancel = t.cancel
+	previousTurnID = t.activeTurn
 	t.cancel = cancel
 	t.activeTurn = turnID
 	t.cancelMu.Unlock()
@@ -65,6 +70,10 @@ func (t *webTurnTransport) start(turnID string, msg llm.Message) {
 
 	t.wg.Add(1)
 	t.lifecycleMu.Unlock()
+	if previousCancel != nil {
+		previousCancel()
+		t.completeAdmission(previousTurnID)
+	}
 	go t.run(ctx, turnID, msg)
 }
 
@@ -106,9 +115,7 @@ func (t *webTurnTransport) interrupt() bool {
 		return false
 	}
 	cancel()
-	if t.app != nil {
-		t.app.CompleteAdmittedTurn(turnID)
-	}
+	t.completeAdmission(turnID)
 	return true
 }
 
@@ -146,7 +153,7 @@ func (t *webTurnTransport) wait() {
 
 func (t *webTurnTransport) run(ctx context.Context, turnID string, msg llm.Message) {
 	defer t.wg.Done()
-	defer t.app.CompleteAdmittedTurn(turnID)
+	defer t.completeAdmission(turnID)
 	_, err := t.app.Engine.TurnMessageWithID(ctx, msg, turnID)
 
 	t.cancelMu.Lock()
@@ -167,4 +174,20 @@ func (t *webTurnTransport) run(ctx context.Context, turnID string, msg llm.Messa
 		}
 	}
 	t.statesMu.Unlock()
+}
+
+func (t *webTurnTransport) completeAdmission(turnID string) {
+	if t == nil || t.app == nil || turnID == "" {
+		return
+	}
+	t.statesMu.Lock()
+	if state, ok := t.states[turnID]; ok {
+		if state.AdmissionCompleted {
+			t.statesMu.Unlock()
+			return
+		}
+		state.AdmissionCompleted = true
+	}
+	t.statesMu.Unlock()
+	t.app.CompleteAdmittedTurn(turnID)
 }
