@@ -229,9 +229,10 @@ export function Session() {
       if (timer !== null) window.clearTimeout(timer);
     };
     // Projection effect helpers read current state from refs; including them
-    // would restart the polling loop on every render.
+    // would restart the polling loop on every render. location.state is read
+    // only on session entry; clearing it later must not reset live projection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, location.state, refresh]);
+  }, [id, refresh]);
 
   useEffect(() => {
     if (!id) return;
@@ -245,7 +246,6 @@ export function Session() {
         }
         setData(r);
         setOlderMessagesError(null);
-        updateProjection(clearLiveSessionTranscript);
         try {
           const context = await getSessionContext(requestId);
           if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
@@ -267,8 +267,6 @@ export function Session() {
     return () => {
       cancelled = true;
     };
-    // updateProjection writes through projectionRef and React's stable setter.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {

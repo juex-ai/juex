@@ -323,7 +323,10 @@ export function projectLiveSessionEvent(
       break;
     case "pending_input.rejected":
       next = {
-        ...markProjectionError(next, "pending input queue full"),
+        ...markProjectionError(
+          next,
+          event.payload.reason || "pending input queue full",
+        ),
         turnActive: true,
       };
       break;

@@ -275,6 +275,27 @@ test("projectLiveSessionEvent keeps duplicate tool.requested and queue drops sta
   });
 });
 
+test("projectLiveSessionEvent uses pending_input.rejected reason", () => {
+  const state = apply(createLiveSessionProjection(), {
+    id: "e1",
+    type: "pending_input.rejected",
+    ts: "2026-06-15T00:00:00Z",
+    payload: {
+      input: "queued",
+      kind: "user",
+      pending_count: 4,
+      max_pending_inputs: 4,
+      reason: "queue disabled for this session",
+    },
+  });
+
+  assert.equal(state.turnActive, true);
+  assert.deepEqual(state.status, {
+    kind: "error",
+    detail: "queue disabled for this session",
+  });
+});
+
 function apply(state: LiveSessionProjection, event: BusEvent): LiveSessionProjection {
   return projectLiveSessionEvent(state, event).state;
 }
