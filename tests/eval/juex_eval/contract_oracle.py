@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import pathlib
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -47,7 +48,9 @@ def conversation_has_agent_smoke_tools(path: pathlib.Path, token: str) -> tuple[
             message = json.loads(line)
         except json.JSONDecodeError as exc:
             return False, f"conversation line {line_number} is invalid JSON: {exc}"
-        blocks = message.get("blocks") if isinstance(message, dict) else None
+        if not isinstance(message, dict):
+            continue
+        blocks = message.get("blocks")
         if not isinstance(blocks, list):
             continue
         for block in blocks:
@@ -110,7 +113,9 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
             event = json.loads(line)
         except json.JSONDecodeError as exc:
             return False, f"events line {line_number} is invalid JSON: {exc}"
-        payload = event.get("payload") if isinstance(event, dict) else None
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload")
         if not isinstance(payload, dict):
             continue
         if event.get("type") == "tool.output_delta":
@@ -125,14 +130,16 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
             if payload.get("name") == "exec_command" and isinstance(result, dict):
                 session_id = result.get("session_id")
                 saw_structured_exec_running = saw_structured_exec_running or (
-                    result.get("running") is True and isinstance(session_id, (int, float)) and session_id > 0
+                    result.get("running") is True and _number_not_bool(session_id) and session_id > 0
                 )
             if payload.get("name") == "write_stdin":
                 saw_write_stdin_completed = True
                 if isinstance(result, dict):
+                    exit_code = result.get("exit_code")
                     saw_structured_write_stdin_result = saw_structured_write_stdin_result or (
                         result.get("running") is False
-                        and result.get("exit_code") == 0
+                        and _number_not_bool(exit_code)
+                        and exit_code == 0
                         and f"TTY-DONE {token}" in str(result.get("output") or "")
                     )
     if delta_count < 3:
@@ -155,3 +162,7 @@ def events_have_agent_smoke_deltas(path: pathlib.Path, token: str) -> tuple[bool
     if missing:
         return False, "events missing " + ", ".join(missing)
     return True, ""
+
+
+def _number_not_bool(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)

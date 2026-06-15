@@ -282,6 +282,16 @@ func TestEvalAgentSmokeToolEventContract(t *testing.T) {
 		"    broken.write_text('\\n'.join(json.dumps(row) for row in broken_rows) + '\\n', encoding='utf-8')",
 		"    ok, msg = helper.events_have_agent_smoke_deltas(broken, token)",
 		"    assert not ok and 'structured write_stdin result' in msg, msg",
+		"    broken_rows = [dict(row) for row in rows]",
+		"    broken_rows[-2] = {'type': 'tool.completed', 'payload': {'name': 'exec_command', 'tool_use_id': 'call_1', 'result': {'running': True, 'session_id': True}}}",
+		"    broken.write_text('\\n'.join(json.dumps(row) for row in broken_rows) + '\\n', encoding='utf-8')",
+		"    ok, msg = contract_oracle.events_have_agent_smoke_deltas(broken, token)",
+		"    assert not ok and 'structured exec_command running result' in msg, msg",
+		"    broken_rows = [dict(row) for row in rows]",
+		"    broken_rows[-1] = {'type': 'tool.completed', 'payload': {'name': 'write_stdin', 'tool_use_id': 'call_2', 'result': {'running': False, 'exit_code': False, 'output': f'TTY-DONE {token}'}}}",
+		"    broken.write_text('\\n'.join(json.dumps(row) for row in broken_rows) + '\\n', encoding='utf-8')",
+		"    ok, msg = contract_oracle.events_have_agent_smoke_deltas(broken, token)",
+		"    assert not ok and 'structured write_stdin result' in msg, msg",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
