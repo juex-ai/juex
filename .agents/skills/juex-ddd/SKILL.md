@@ -67,7 +67,7 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Compaction | Policy-driven summary marker insertion that preserves active context while reducing token pressure | `internal/runtime` |
 | Context projection | Artifact-backed truncation/projection of large user input or tool result blocks before provider submission | `internal/runtime`, `internal/llm` |
 | Event | Stable runtime fact emitted on the bus and persisted to `events.jsonl` | `internal/events`, `internal/session` |
-| Evaluation run | Deterministic or live-provider validation that records development evidence under `docs/reports/` | `tests/eval` |
+| Evaluation run | Deterministic or live-provider validation that records development evidence under `.tmp/reports/` | `tests/eval` |
 
 If a change introduces a concept not listed here, first ask whether it is a new
 JueX domain term or merely an implementation detail. Add domain terms to this
