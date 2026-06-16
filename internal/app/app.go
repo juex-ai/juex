@@ -163,11 +163,15 @@ func New(opts Options) (*App, error) {
 			appCancel()
 		}
 	}()
-	reg := tools.NewRegistry()
+	toolTimeoutSeconds := durationSeconds(runtimeLimits.ToolTimeout)
+	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{
+		DefaultTimeoutSeconds: toolTimeoutSeconds,
+	})
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
-		WorkDir:       runtimePaths.WorkDir,
-		Shell:         toolsShellProfile(cfg.Shell),
-		ShellSessions: shellSessions,
+		WorkDir:            runtimePaths.WorkDir,
+		Shell:              toolsShellProfile(cfg.Shell),
+		ShellSessions:      shellSessions,
+		ToolTimeoutSeconds: toolTimeoutSeconds,
 	})
 
 	skillLoader := skills.NewLoader(resourcePaths.SkillDirs...)
@@ -628,6 +632,21 @@ func writeMCPStartupWarnings(w io.Writer, startupErrors map[string]string) {
 	for _, name := range names {
 		fmt.Fprintf(w, "juex: warning: optional MCP server %q is unavailable: %s\n", name, startupErrors[name])
 	}
+}
+
+func durationSeconds(d time.Duration) int {
+	if d <= 0 {
+		return 0
+	}
+	max := time.Duration(tools.MaxTimeoutSeconds) * time.Second
+	if d >= max {
+		return tools.MaxTimeoutSeconds
+	}
+	seconds := d / time.Second
+	if d%time.Second > 0 {
+		seconds++
+	}
+	return int(seconds)
 }
 
 // REPL reads stdin lines, runs Turn for each non-empty line, prints the

@@ -196,8 +196,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 			firstBody = body
 			mu.Unlock()
 			writeJSON(t, w, chatToolCallResponse("call_exec_cli", "exec_command", map[string]any{
-				"cmd":     "echo " + marker,
-				"timeout": 5,
+				"cmd": "echo " + marker,
 			}))
 		case 2:
 			mu.Lock()

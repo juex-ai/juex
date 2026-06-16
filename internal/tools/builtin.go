@@ -13,9 +13,10 @@ import (
 )
 
 type BuiltinOptions struct {
-	WorkDir       string
-	Shell         ShellProfile
-	ShellSessions *ShellSessionManager
+	WorkDir            string
+	Shell              ShellProfile
+	ShellSessions      *ShellSessionManager
+	ToolTimeoutSeconds int
 }
 
 type ShellProfile struct {
@@ -47,10 +48,15 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	if shellSessions == nil {
 		shellSessions = NewShellSessionManager(context.Background())
 	}
+	toolTimeoutSeconds := opts.ToolTimeoutSeconds
+	if toolTimeoutSeconds <= 0 && r != nil {
+		toolTimeoutSeconds = r.defaultTimeoutSeconds
+	}
+	toolTimeoutSeconds = normalizedTimeoutSeconds(toolTimeoutSeconds)
 	r.MustRegister(readTool(workDir))
 	r.MustRegister(writeTool(workDir))
 	r.MustRegister(editTool(workDir))
-	r.MustRegister(execCommandTool(workDir, shell, shellSessions))
+	r.MustRegister(execCommandTool(workDir, shell, shellSessions, toolTimeoutSeconds))
 	r.MustRegister(writeStdinTool(shellSessions))
 	r.MustRegister(grepTool(workDir))
 }
@@ -235,10 +241,11 @@ func resolveWorkPath(workDir, path string) string {
 
 // ----- exec_command / write_stdin -----
 
-func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager) Tool {
+func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager, timeoutSeconds int) Tool {
 	return Tool{
-		Name:        "exec_command",
-		Description: execCommandToolDescription(profile),
+		Name:           "exec_command",
+		Description:    execCommandToolDescription(profile),
+		TimeoutSeconds: timeoutSeconds,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -258,12 +265,6 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 				"tty": map[string]any{
 					"type":        "boolean",
 					"description": "Allocate a pseudo-terminal for interactive commands. Use write_stdin chars to continue the session.",
-				},
-				"timeout": map[string]any{
-					"type":        "integer",
-					"description": "Seconds to allow this command to run. Defaults to 60 and is capped at 300.",
-					"minimum":     1,
-					"maximum":     MaxTimeoutSeconds,
 				},
 			},
 			"required": []string{"cmd"},
@@ -290,7 +291,7 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 				Args:            profile.Args,
 				Command:         cmd,
 				Cwd:             workdir,
-				Timeout:         time.Duration(CallTimeoutSeconds(in)) * time.Second,
+				Timeout:         time.Duration(timeoutSeconds) * time.Second,
 				Yield:           yield,
 				MaxOutputTokens: maxOutputTokens,
 				TTY:             tty,

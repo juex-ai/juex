@@ -17,14 +17,13 @@ func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testin
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "exec_timeout", ToolName: "exec_command", Input: map[string]any{
-				"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
-				"timeout": 1,
+				"cmd": "printf 'child still owns pipe\\n'; sleep 5 & wait",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
-	eng, bus := newEngine(t, prov, true)
+	eng, bus := newEngineWithToolTimeout(t, prov, true, 1)
 
 	var erroredPayload toolevents.ErroredPayload
 	bus.Subscribe(toolevents.ErroredType, func(e events.Event) {

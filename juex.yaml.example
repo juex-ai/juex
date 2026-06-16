@@ -29,6 +29,7 @@ model: openai/gpt-4.1
 # runtime:
 #   pending_input_ttl: 15m
 #   external_event_ttl: 24h
+#   tool_timeout: 60s
 #   working_state_enabled: true
 
 # Optional lifecycle command hooks. User-global hooks in ~/.juex/juex.yaml are

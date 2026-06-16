@@ -29,11 +29,12 @@ type Result struct {
 type ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
 
 type Tool struct {
-	Name          string
-	Description   string
-	Schema        map[string]any
-	Handler       Handler
-	ResultHandler ResultHandler
+	Name           string
+	Description    string
+	Schema         map[string]any
+	TimeoutSeconds int
+	Handler        Handler
+	ResultHandler  ResultHandler
 }
 
 type CallInfo struct {
@@ -43,12 +44,24 @@ type CallInfo struct {
 }
 
 type Registry struct {
-	mu    sync.RWMutex
-	tools map[string]Tool
+	mu                    sync.RWMutex
+	tools                 map[string]Tool
+	defaultTimeoutSeconds int
+}
+
+type RegistryOptions struct {
+	DefaultTimeoutSeconds int
 }
 
 func NewRegistry() *Registry {
-	return &Registry{tools: make(map[string]Tool)}
+	return NewRegistryWithOptions(RegistryOptions{})
+}
+
+func NewRegistryWithOptions(opts RegistryOptions) *Registry {
+	return &Registry{
+		tools:                 make(map[string]Tool),
+		defaultTimeoutSeconds: normalizedTimeoutSeconds(opts.DefaultTimeoutSeconds),
+	}
 }
 
 // Register adds t. Returns an error if a tool with the same name already exists.
@@ -83,6 +96,17 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return t, ok
 }
 
+func (r *Registry) TimeoutSecondsFor(name string) int {
+	if r == nil {
+		return DefaultTimeoutSeconds
+	}
+	t, ok := r.Get(name)
+	if !ok {
+		return normalizedTimeoutSeconds(r.defaultTimeoutSeconds)
+	}
+	return r.timeoutSecondsFor(t)
+}
+
 // List returns every registered tool, sorted by name for determinism.
 func (r *Registry) List() []Tool {
 	r.mu.RLock()
@@ -103,7 +127,7 @@ func (r *Registry) Specs() []llm.ToolSpec {
 		out = append(out, llm.ToolSpec{
 			Name:        t.Name,
 			Description: t.Description,
-			Schema:      schemaWithReservedTimeout(t.Schema),
+			Schema:      normalizeInputSchema(t.Schema),
 		})
 	}
 	return out
@@ -118,18 +142,14 @@ func (r *Registry) Call(ctx context.Context, name string, input map[string]any) 
 
 func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[string]any) (string, CallInfo, error) {
 	input = NormalizeCallInput(input)
-	timeoutSeconds := CallTimeoutSeconds(input)
-	info := CallInfo{TimeoutSeconds: timeoutSeconds}
 	t, ok := r.Get(name)
 	if !ok {
+		info := CallInfo{TimeoutSeconds: normalizedTimeoutSeconds(r.defaultTimeoutSeconds)}
 		return "", info, fmt.Errorf("tools: unknown tool %q", name)
 	}
+	timeoutSeconds := r.timeoutSecondsFor(t)
+	info := CallInfo{TimeoutSeconds: timeoutSeconds}
 	callInput := cloneCallInput(input)
-	if schemaDeclaresProperty(t.Schema, "timeout") {
-		callInput["timeout"] = timeoutSeconds
-	} else {
-		delete(callInput, "timeout")
-	}
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	result, err := callToolHandler(callCtx, t, callInput)
@@ -194,9 +214,15 @@ func decodeRawArguments(raw string) (map[string]any, bool) {
 	return decoded, true
 }
 
-func CallTimeoutSeconds(input map[string]any) int {
-	timeoutSeconds, ok := toInt(input["timeout"])
-	if !ok || timeoutSeconds <= 0 {
+func (r *Registry) timeoutSecondsFor(t Tool) int {
+	if t.TimeoutSeconds > 0 {
+		return normalizedTimeoutSeconds(t.TimeoutSeconds)
+	}
+	return normalizedTimeoutSeconds(r.defaultTimeoutSeconds)
+}
+
+func normalizedTimeoutSeconds(timeoutSeconds int) int {
+	if timeoutSeconds <= 0 {
 		return DefaultTimeoutSeconds
 	}
 	if timeoutSeconds > MaxTimeoutSeconds {

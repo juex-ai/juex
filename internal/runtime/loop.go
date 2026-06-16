@@ -394,7 +394,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	if msg.Model == "" && e.Provider != nil {
 		msg.Model = e.Provider.Name()
 	}
-	msg.Blocks = prepareToolInputs(msg.Blocks)
+	msg.Blocks = prepareToolInputs(msg.Blocks, e.Tools)
 	var contextUsage *llm.ContextUsage
 	if !resp.Usage.IsZero() {
 		snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, prepared.promptSections, prepared.tools, request.history)
@@ -901,7 +901,7 @@ func toolCallPayload(call llm.Block) toolevents.ToolCallPayload {
 	}
 }
 
-func prepareToolInputs(blocks []llm.Block) []llm.Block {
+func prepareToolInputs(blocks []llm.Block, registry *tools.Registry) []llm.Block {
 	if len(blocks) == 0 {
 		return blocks
 	}
@@ -909,7 +909,10 @@ func prepareToolInputs(blocks []llm.Block) []llm.Block {
 	for i := range out {
 		if out[i].Type == llm.BlockToolUse {
 			out[i].Input = tools.NormalizeCallInput(out[i].Input)
-			out[i].TimeoutSeconds = tools.CallTimeoutSeconds(out[i].Input)
+			out[i].TimeoutSeconds = tools.DefaultTimeoutSeconds
+			if registry != nil {
+				out[i].TimeoutSeconds = registry.TimeoutSecondsFor(out[i].ToolName)
+			}
 		}
 	}
 	return out
