@@ -85,12 +85,13 @@ func (m *Manager) RegisterTools(reg *tools.Registry) error {
 			}
 			cli := client
 			descName := d.Name
+			descSchema := schema
 			if err := reg.Register(tools.Tool{
 				Name:        toolName,
 				Description: d.Description,
 				Schema:      schema,
 				Handler: func(ctx context.Context, in map[string]any) (string, error) {
-					return cli.CallTool(ctx, descName, in)
+					return cli.CallTool(ctx, descName, normalizeToolArgumentsForSchema(in, descSchema))
 				},
 			}); err != nil {
 				return &ServerError{Server: serverName, Op: "register tool " + toolName, Err: err}
