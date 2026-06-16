@@ -345,11 +345,12 @@ overriding the provider default. DeepSeek uses the OpenAI Chat
 ```go
 // internal/tools/registry.go
 type Tool struct {
-    Name          string
-    Description   string
-    Schema        map[string]any
-    Handler       func(ctx context.Context, input map[string]any) (string, error)
-    ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
+    Name           string
+    Description    string
+    Schema         map[string]any
+    TimeoutSeconds int
+    Handler        func(ctx context.Context, input map[string]any) (string, error)
+    ResultHandler  func(ctx context.Context, input map[string]any) (Result, error)
 }
 
 type Result struct {
@@ -381,7 +382,7 @@ with the standard `read` builtin against the path printed there.
 | `memory_search` | substring match |
 | `memory_delete` | remove an entry by name |
 
-`tools.RegisterBuiltins(reg, BuiltinOptions{WorkDir, Shell, ShellSessions})` injects
+`tools.RegisterBuiltins(reg, BuiltinOptions{WorkDir, Shell, ShellSessions, ToolTimeoutSeconds})` injects
 `workDir` so `read`, `write`, and `edit` resolve relative paths against the
 agent workspace, and `exec_command` / `grep` fall back to it when the model
 does not pass an explicit `workdir` / `path`.
