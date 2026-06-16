@@ -25,6 +25,15 @@ type stubProvider struct {
 	histories [][]llm.Message
 }
 
+func TestDurationSecondsCeilAndCap(t *testing.T) {
+	if got := durationSeconds(1500 * time.Millisecond); got != 2 {
+		t.Fatalf("durationSeconds(1.5s) = %d, want 2", got)
+	}
+	if got := durationSeconds(10 * time.Minute); got != 300 {
+		t.Fatalf("durationSeconds(10m) = %d, want cap 300", got)
+	}
+}
+
 func (s *stubProvider) Name() string { return "stub" }
 func (s *stubProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
 	if s.calls >= len(s.replies) {

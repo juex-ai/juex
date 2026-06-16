@@ -152,9 +152,17 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 
 func newEngine(t *testing.T, prov llm.Provider, builtinTools bool) (*Engine, *events.Bus) {
 	t.Helper()
-	reg := tools.NewRegistry()
+	return newEngineWithToolTimeout(t, prov, builtinTools, 0)
+}
+
+func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool, toolTimeoutSeconds int) (*Engine, *events.Bus) {
+	t.Helper()
+	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{DefaultTimeoutSeconds: toolTimeoutSeconds})
 	if builtinTools {
-		tools.RegisterBuiltins(reg, tools.BuiltinOptions{Shell: tools.DefaultShellProfile()})
+		tools.RegisterBuiltins(reg, tools.BuiltinOptions{
+			Shell:              tools.DefaultShellProfile(),
+			ToolTimeoutSeconds: toolTimeoutSeconds,
+		})
 	}
 	bus := events.NewBus()
 	sess, err := session.New(t.TempDir())
@@ -1837,15 +1845,16 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "slow_1", ToolName: "slow", Input: map[string]any{"timeout": 1}},
+			{Type: llm.BlockToolUse, ToolUseID: "slow_1", ToolName: "slow", Input: map[string]any{}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.Tools.MustRegister(tools.Tool{
-		Name:   "slow",
-		Schema: map[string]any{"type": "object"},
+		Name:           "slow",
+		Schema:         map[string]any{"type": "object"},
+		TimeoutSeconds: 1,
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
 			<-ctx.Done()
 			return "partial stdout\npartial stderr\n", ctx.Err()
@@ -2025,8 +2034,8 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if _, ok := input["_raw_arguments"]; ok {
 		t.Fatalf("assistant tool input kept raw arguments: %+v", input)
 	}
-	if assistant.Blocks[0].TimeoutSeconds != 2 {
-		t.Fatalf("assistant timeout = %d, want 2", assistant.Blocks[0].TimeoutSeconds)
+	if assistant.Blocks[0].TimeoutSeconds != tools.DefaultTimeoutSeconds {
+		t.Fatalf("assistant timeout = %d, want runtime default", assistant.Blocks[0].TimeoutSeconds)
 	}
 	respondedCalls := respondedPayload.ToolCalls
 	if len(respondedCalls) != 1 {
@@ -2036,15 +2045,15 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if respondedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("responded tool input = %+v, want normalized command", respondedInput)
 	}
-	if got := respondedCalls[0].TimeoutSeconds; got != 2 {
-		t.Fatalf("responded timeout = %v, want 2", got)
+	if got := respondedCalls[0].TimeoutSeconds; got != tools.DefaultTimeoutSeconds {
+		t.Fatalf("responded timeout = %v, want runtime default", got)
 	}
 	requestedInput := requestedPayload.Input
 	if requestedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("requested input = %+v, want normalized command", requestedInput)
 	}
-	if got := requestedPayload.TimeoutSeconds; got != 2 {
-		t.Fatalf("requested timeout = %v, want 2", got)
+	if got := requestedPayload.TimeoutSeconds; got != tools.DefaultTimeoutSeconds {
+		t.Fatalf("requested timeout = %v, want runtime default", got)
 	}
 	result := eng.Session.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {

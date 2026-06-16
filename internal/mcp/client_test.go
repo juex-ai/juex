@@ -133,6 +133,7 @@ func runFakeServer() {
 			params, _ := req["params"].(map[string]any)
 			name, _ := params["name"].(string)
 			args, _ := params["arguments"].(map[string]any)
+			_, hasArguments := params["arguments"]
 			// "fail" tool always returns isError: true.
 			if name == "fail" {
 				enc.Encode(map[string]any{
@@ -146,6 +147,17 @@ func runFakeServer() {
 				continue
 			}
 			if name == "noargs" {
+				if os.Getenv("JUEX_FAKE_MCP_REJECT_NOARG_ARGUMENTS_FIELD") == "1" && hasArguments {
+					enc.Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      responseID,
+						"error": map[string]any{
+							"code":    -32602,
+							"message": fmt.Sprintf("unexpected noargs arguments field: %v", args),
+						},
+					})
+					continue
+				}
 				if len(args) != 0 {
 					enc.Encode(map[string]any{
 						"jsonrpc": "2.0",
@@ -420,7 +432,7 @@ func TestMCPRegisterAll(t *testing.T) {
 	}
 }
 
-func TestMCPRegisterAll_StripsPlaceholderForStrictNoArgTool(t *testing.T) {
+func TestMCPRegisterAll_OmitsArgumentsForStrictNoArgTool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -429,8 +441,9 @@ func TestMCPRegisterAll_StripsPlaceholderForStrictNoArgTool(t *testing.T) {
 			"fake": {
 				Command: os.Args[0],
 				Env: map[string]string{
-					"JUEX_FAKE_MCP":                   "1",
-					"JUEX_FAKE_MCP_STRICT_NOARG_TOOL": "1",
+					"JUEX_FAKE_MCP":                              "1",
+					"JUEX_FAKE_MCP_STRICT_NOARG_TOOL":            "1",
+					"JUEX_FAKE_MCP_REJECT_NOARG_ARGUMENTS_FIELD": "1",
 				},
 			},
 		},
@@ -446,7 +459,7 @@ func TestMCPRegisterAll_StripsPlaceholderForStrictNoArgTool(t *testing.T) {
 		}
 	}()
 
-	out, _, err := r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true, "timeout": 2})
+	out, _, err := r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,9 +467,9 @@ func TestMCPRegisterAll_StripsPlaceholderForStrictNoArgTool(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 
-	_, _, err = r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true, "unexpected": "x"})
+	_, _, err = r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true})
 	if err == nil {
-		t.Fatal("expected strict no-argument MCP tool to reject real extra arguments")
+		t.Fatal("expected strict no-argument MCP tool to reject placeholder arguments")
 	}
 	if !strings.Contains(err.Error(), "unexpected noargs arguments") {
 		t.Fatalf("error = %v", err)
@@ -800,7 +813,7 @@ func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T
 	}
 }
 
-func TestManagerRegisterTools_StripsPlaceholderForStrictNoArgTool(t *testing.T) {
+func TestManagerRegisterTools_StrictNoArgToolRejectsPlaceholder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -827,12 +840,19 @@ func TestManagerRegisterTools_StripsPlaceholderForStrictNoArgTool(t *testing.T) 
 	if err := mgr.RegisterTools(reg); err != nil {
 		t.Fatal(err)
 	}
-	out, _, err := reg.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true})
+	out, _, err := reg.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out != "noargs ok" {
 		t.Fatalf("got %q", out)
+	}
+	_, _, err = reg.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true})
+	if err == nil {
+		t.Fatal("expected strict no-argument MCP tool to reject placeholder arguments")
+	}
+	if !strings.Contains(err.Error(), "unexpected noargs arguments") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

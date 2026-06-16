@@ -374,7 +374,7 @@ with the standard `read` builtin against the path printed there.
 | `read` | read file (offset/limit) |
 | `write` | overwrite file |
 | `edit` | old -> new in-place replace; unique by default, optional replace_all / expected_replacements |
-| `exec_command` | run a command through the resolved workspace shell (timeout, workdir; defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
+| `exec_command` | run a command through the resolved workspace shell (workdir defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
 | `write_stdin` | poll a running command session or write `chars` to a TTY session using the numeric `session_id` returned by `exec_command` |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
 | `memory_write` | persist a memory entry |
@@ -385,15 +385,15 @@ with the standard `read` builtin against the path printed there.
 `workDir` so `read`, `write`, and `edit` resolve relative paths against the
 agent workspace, and `exec_command` / `grep` fall back to it when the model
 does not pass an explicit `workdir` / `path`.
-All LLM-facing tool schemas include an optional `timeout` field in seconds.
-The registry applies a per-call timeout context, caps it at 300 seconds, and
-strips the reserved field before invoking tools that do not declare their own
-`timeout` input. Tool timeouts are returned as ordinary error tool results so
-the agent can recover in the next model round. When a timed-out tool captured
-stdout or stderr before failing, a bounded copy of that output is preserved in
-the error tool result before the timeout detail. On Unix, `exec_command` runs in its
-own process group so a timeout terminates descendant processes that still hold
-stdout or stderr pipes open.
+Tool hard timeouts are runtime policy rather than model-visible parameters.
+The registry applies a per-call timeout context from its default policy or from
+an individual tool's registration metadata, caps it at 300 seconds, and leaves
+tool input schemas unchanged. Tool timeouts are returned as ordinary error tool
+results so the agent can recover in the next model round. When a timed-out tool
+captured stdout or stderr before failing, a bounded copy of that output is
+preserved in the error tool result before the timeout detail. On Unix,
+`exec_command` runs in its own process group so a timeout terminates descendant
+processes that still hold stdout or stderr pipes open.
 
 `exec_command` always starts the process through a shared in-memory session
 manager and waits only for the bounded yield window. If the process is still
@@ -415,9 +415,8 @@ output sizing without scraping prose.
 
 Provider adapters should normally return structured tool input. The registry
 still normalizes leaked OpenAI-compatible `_raw_arguments` payloads, including
-double-encoded JSON strings, before timeout handling and before calling the
-tool handler. This keeps builtin tools working when an endpoint exposes raw
-argument text instead of parsed JSON.
+double-encoded JSON strings, before calling the tool handler. This keeps builtin
+tools working when an endpoint exposes raw argument text instead of parsed JSON.
 
 MCP servers are optional runtime extensions. Startup is attempted per
 configured server: servers that connect successfully register
@@ -840,6 +839,11 @@ hooks:
       command: ["bash", "-lc", "jq -n '{additional_context:\"ticket: ABC-123\"}'"]
       timeout_seconds: 5
       max_output_bytes: 65536
+runtime:
+  pending_input_ttl: 15m
+  external_event_ttl: 24h
+  tool_timeout: 60s
+  working_state_enabled: true
 compaction:
   enabled: true
   reserve_tokens: 16384
@@ -888,6 +892,9 @@ compaction:
 | `hooks.commands[].command` | command argv executed with hook input JSON on stdin |
 | `hooks.commands[].timeout_seconds` | optional command timeout; defaults to 10 seconds and cannot exceed 300 seconds |
 | `hooks.commands[].max_output_bytes` | optional stdout/stderr byte cap per stream; defaults to 65536 |
+| `runtime.pending_input_ttl` | duration for queued user steer messages while a turn is running; defaults to 15m |
+| `runtime.external_event_ttl` | duration for queued MCP/external event messages while a turn is running; defaults to 24h |
+| `runtime.tool_timeout` | default hard timeout for tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
 | `runtime.working_state_enabled` | enables the session-local generic working-state sidecar; defaults to true |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |

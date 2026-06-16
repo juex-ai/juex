@@ -247,7 +247,7 @@ func TestRegistry_NormalizesNullSchemaEntries(t *testing.T) {
 	}
 }
 
-func TestRegistry_SpecsExposeReservedTimeout(t *testing.T) {
+func TestRegistry_SpecsPreserveToolSchema(t *testing.T) {
 	r := NewRegistry()
 	if err := r.Register(Tool{
 		Name: "slow",
@@ -269,20 +269,13 @@ func TestRegistry_SpecsExposeReservedTimeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("properties = %+v", specs[0].Schema["properties"])
 	}
-	timeout, ok := props["timeout"].(map[string]any)
-	if !ok {
-		t.Fatalf("timeout property missing from schema: %+v", props)
-	}
-	if timeout["type"] != "integer" {
-		t.Fatalf("timeout schema = %+v, want integer", timeout)
-	}
-	if _, required := timeout["required"]; required {
-		t.Fatalf("timeout property should not be required: %+v", timeout)
+	if _, ok := props["timeout"]; ok {
+		t.Fatalf("runtime timeout should not be injected into model schema: %+v", props)
 	}
 }
 
-func TestRegistry_CallWithInfoAppliesTimeoutAndStripsReservedInput(t *testing.T) {
-	r := NewRegistry()
+func TestRegistry_CallWithInfoAppliesConfiguredTimeout(t *testing.T) {
+	r := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: 1})
 	seen := make(chan map[string]any, 1)
 	if err := r.Register(Tool{
 		Name:   "slow",
@@ -297,7 +290,7 @@ func TestRegistry_CallWithInfoAppliesTimeoutAndStripsReservedInput(t *testing.T)
 	}
 
 	start := time.Now()
-	out, info, err := r.CallWithInfo(context.Background(), "slow", map[string]any{"timeout": 1, "value": "x"})
+	out, info, err := r.CallWithInfo(context.Background(), "slow", map[string]any{"timeout": 9, "value": "x"})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -314,11 +307,45 @@ func TestRegistry_CallWithInfoAppliesTimeoutAndStripsReservedInput(t *testing.T)
 		t.Fatalf("timeout took too long: %s", elapsed)
 	}
 	input := <-seen
-	if _, ok := input["timeout"]; ok {
-		t.Fatalf("reserved timeout leaked to handler: %+v", input)
+	if input["timeout"] != 9 {
+		t.Fatalf("model input timeout should not be interpreted as runtime policy: %+v", input)
 	}
 	if input["value"] != "x" {
 		t.Fatalf("handler input = %+v", input)
+	}
+}
+
+func TestRegistry_CallWithInfoUsesToolTimeoutOverride(t *testing.T) {
+	r := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: 5})
+	if err := r.Register(Tool{
+		Name:           "quick",
+		Schema:         map[string]any{"type": "object"},
+		TimeoutSeconds: 2,
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "ok", nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, info, err := r.CallWithInfo(context.Background(), "quick", map[string]any{"timeout": 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" {
+		t.Fatalf("out = %q, want ok", out)
+	}
+	if info.TimeoutSeconds != 2 {
+		t.Fatalf("timeout = %d, want tool override 2", info.TimeoutSeconds)
+	}
+}
+
+func TestRegisterBuiltinsExecCommandInheritsRegistryTimeout(t *testing.T) {
+	r := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: 2})
+	RegisterBuiltins(r, BuiltinOptions{Shell: DefaultShellProfile()})
+
+	if got := r.TimeoutSecondsFor("exec_command"); got != 2 {
+		t.Fatalf("exec_command timeout = %d, want registry default 2", got)
 	}
 }
 
@@ -350,8 +377,8 @@ func TestRegistry_CallWithInfoParsesRawArgumentsBeforeDispatch(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("out = %q, want ok", out)
 	}
-	if info.TimeoutSeconds != 2 {
-		t.Fatalf("timeout = %d, want 2", info.TimeoutSeconds)
+	if info.TimeoutSeconds != DefaultTimeoutSeconds {
+		t.Fatalf("timeout = %d, want default", info.TimeoutSeconds)
 	}
 	input := <-seen
 	timeout, ok := toInt(input["timeout"])
@@ -644,8 +671,7 @@ func TestBuiltins_ExecCommandNonZeroExitReturnsError(t *testing.T) {
 	})
 
 	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
-		"cmd":     "fail",
-		"timeout": 2,
+		"cmd": "fail",
 	})
 	if err == nil {
 		t.Fatalf("exec_command err = nil, output = %q", out)
@@ -682,7 +708,6 @@ func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T
 	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
 		"cmd":           "delayed",
 		"yield_time_ms": 250,
-		"timeout":       2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -776,7 +801,6 @@ func TestBuiltins_ExecCommandTTYWritesStdin(t *testing.T) {
 		"cmd":           "stdin",
 		"tty":           true,
 		"yield_time_ms": 250,
-		"timeout":       2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -820,7 +844,6 @@ func TestBuiltins_WriteStdinCanAnswerInteractivePrompt(t *testing.T) {
 		"cmd":           "confirm",
 		"tty":           true,
 		"yield_time_ms": 250,
-		"timeout":       2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -866,7 +889,6 @@ func TestBuiltins_WriteStdinRejectsNonTTYInput(t *testing.T) {
 	out, err := r.Call(context.Background(), "exec_command", map[string]any{
 		"cmd":           "delayed",
 		"yield_time_ms": 250,
-		"timeout":       2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -907,7 +929,6 @@ func TestBuiltins_ExecCommandTTYAllocatesTerminalAndAcceptsChars(t *testing.T) {
 		"cmd":           "tty",
 		"tty":           true,
 		"yield_time_ms": 250,
-		"timeout":       2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -960,7 +981,6 @@ func TestBuiltins_ExecCommandYieldEmitsOutputDeltas(t *testing.T) {
 	if _, err := r.Call(ctx, "exec_command", map[string]any{
 		"cmd":           "delayed",
 		"yield_time_ms": 250,
-		"timeout":       2,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1028,10 +1048,10 @@ func TestBuiltins_ExecCommandTimeout(t *testing.T) {
 			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
 			PathStyle: "posix",
 		},
+		ToolTimeoutSeconds: 1,
 	})
 	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
-		"cmd":     "ignored by fake shell",
-		"timeout": 1,
+		"cmd": "ignored by fake shell",
 	})
 	if err == nil {
 		t.Fatal("expected timeout error")
@@ -1177,20 +1197,26 @@ func TestBuiltinSchemas_ExecCommandAndWriteStdinShape(t *testing.T) {
 	}
 
 	execProps := schemaProperties(t, byName["exec_command"])
-	for _, want := range []string{"cmd", "workdir", "tty", "yield_time_ms", "max_output_tokens", "timeout"} {
+	for _, want := range []string{"cmd", "workdir", "tty", "yield_time_ms", "max_output_tokens"} {
 		if _, ok := execProps[want]; !ok {
 			t.Fatalf("exec_command schema missing %q: %+v", want, execProps)
 		}
+	}
+	if _, ok := execProps["timeout"]; ok {
+		t.Fatalf("exec_command schema should not expose runtime timeout: %+v", execProps)
 	}
 	if _, ok := execProps["cwd"]; ok {
 		t.Fatalf("exec_command schema exposes legacy cwd: %+v", execProps)
 	}
 
 	stdinProps := schemaProperties(t, byName["write_stdin"])
-	for _, want := range []string{"session_id", "chars", "yield_time_ms", "max_output_tokens", "timeout"} {
+	for _, want := range []string{"session_id", "chars", "yield_time_ms", "max_output_tokens"} {
 		if _, ok := stdinProps[want]; !ok {
 			t.Fatalf("write_stdin schema missing %q: %+v", want, stdinProps)
 		}
+	}
+	if _, ok := stdinProps["timeout"]; ok {
+		t.Fatalf("write_stdin schema should not expose runtime timeout: %+v", stdinProps)
 	}
 	if _, ok := stdinProps["stdin"]; ok {
 		t.Fatalf("write_stdin schema exposes legacy stdin: %+v", stdinProps)

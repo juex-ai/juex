@@ -38,6 +38,7 @@ type Config struct {
 	Compaction                CompactionConfig
 	PendingInputTTL           time.Duration
 	ExternalEventTTL          time.Duration
+	ToolTimeout               time.Duration
 	DisableWorkingState       bool
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
@@ -176,6 +177,8 @@ type runtimeConfig struct {
 	PendingInputTTLSet     bool
 	ExternalEventTTL       time.Duration
 	ExternalEventTTLSet    bool
+	ToolTimeout            time.Duration
+	ToolTimeoutSet         bool
 	WorkingStateEnabled    bool
 	WorkingStateEnabledSet bool
 }
@@ -205,6 +208,13 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			}
 			c.ExternalEventTTL = d
 			c.ExternalEventTTLSet = true
+		case "tool_timeout":
+			d, err := parseRuntimeDuration(key, value)
+			if err != nil {
+				return err
+			}
+			c.ToolTimeout = d
+			c.ToolTimeoutSet = true
 		case "working_state_enabled":
 			enabled, err := ParseBoolValue(value.Value)
 			if err != nil {
@@ -224,6 +234,7 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 const DefaultContextWindow = runtimepolicy.DefaultContextWindowTokens
 const DefaultPendingInputTTL = 15 * time.Minute
 const DefaultExternalEventTTL = 24 * time.Hour
+const DefaultToolTimeout = 60 * time.Second
 
 var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
@@ -278,6 +289,7 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 		Compaction:                DefaultCompactionConfig(),
 		PendingInputTTL:           DefaultPendingInputTTL,
 		ExternalEventTTL:          DefaultExternalEventTTL,
+		ToolTimeout:               DefaultToolTimeout,
 		EnableUserGlobalResources: true,
 		providerConfigs:           map[string]providerConfig{},
 	}
@@ -819,6 +831,9 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	}
 	if c.ExternalEventTTLSet {
 		cfg.ExternalEventTTL = c.ExternalEventTTL
+	}
+	if c.ToolTimeoutSet {
+		cfg.ToolTimeout = c.ToolTimeout
 	}
 	if c.WorkingStateEnabledSet {
 		cfg.DisableWorkingState = !c.WorkingStateEnabled

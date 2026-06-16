@@ -1105,6 +1105,7 @@ providers:
 runtime:
   pending_input_ttl: 30m
   external_event_ttl: 48h
+  tool_timeout: 2m
   working_state_enabled: false
 `
 	writeTextFile(t, configPath, body)
@@ -1114,7 +1115,7 @@ runtime:
 		t.Fatal(err)
 	}
 	limits := cfg.RuntimeLimits()
-	if limits.PendingInputTTL != 30*time.Minute || limits.ExternalEventTTL != 48*time.Hour {
+	if limits.PendingInputTTL != 30*time.Minute || limits.ExternalEventTTL != 48*time.Hour || limits.ToolTimeout != 2*time.Minute {
 		t.Fatalf("runtime TTLs = %+v", limits)
 	}
 	if limits.WorkingStateEnabled {
@@ -1141,6 +1142,28 @@ runtime:
 	_, err := LoadFromFile(configPath)
 	if err == nil || !strings.Contains(err.Error(), "pending_input_ttl") {
 		t.Fatalf("err = %v, want pending_input_ttl parse error", err)
+	}
+}
+
+func TestLoadFromFile_InvalidToolTimeout(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai/gpt-4
+providers:
+  - id: openai
+    base_url: https://example.com
+    api_key: sk-x
+    models:
+      - id: gpt-4
+runtime:
+  tool_timeout: soon
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), "tool_timeout") {
+		t.Fatalf("err = %v, want tool_timeout parse error", err)
 	}
 }
 

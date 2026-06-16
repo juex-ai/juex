@@ -129,6 +129,7 @@ type RuntimeLimits struct {
 	Compaction          CompactionConfig
 	PendingInputTTL     time.Duration
 	ExternalEventTTL    time.Duration
+	ToolTimeout         time.Duration
 	WorkingStateEnabled bool
 }
 
@@ -138,6 +139,7 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		Compaction:          c.Compaction,
 		PendingInputTTL:     c.PendingInputTTL,
 		ExternalEventTTL:    c.ExternalEventTTL,
+		ToolTimeout:         c.ToolTimeout,
 		WorkingStateEnabled: !c.DisableWorkingState,
 	}
 }

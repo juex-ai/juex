@@ -212,10 +212,11 @@ func (c *Client) ListTools(ctx context.Context) ([]ToolDescriptor, error) {
 // CallTool invokes one tool and returns the textual result.
 // Server responses can have multiple content blocks; we concatenate text blocks.
 func (c *Client) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
-	resp, err := c.call(ctx, "tools/call", map[string]any{
-		"name":      name,
-		"arguments": args,
-	})
+	params := map[string]any{"name": name}
+	if len(args) > 0 {
+		params["arguments"] = args
+	}
+	resp, err := c.call(ctx, "tools/call", params)
 	if err != nil {
 		return "", err
 	}
@@ -282,13 +283,12 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 			}
 			cli := client
 			descName := d.Name
-			descSchema := schema
 			err := reg.Register(tools.Tool{
 				Name:        toolName,
 				Description: d.Description,
 				Schema:      schema,
 				Handler: func(ctx context.Context, in map[string]any) (string, error) {
-					return cli.CallTool(ctx, descName, normalizeToolArgumentsForSchema(in, descSchema))
+					return cli.CallTool(ctx, descName, in)
 				},
 			})
 			if err != nil {
@@ -304,37 +304,6 @@ func closeAll(clients []*Client) {
 	for _, c := range clients {
 		c.Close()
 	}
-}
-
-func normalizeToolArgumentsForSchema(args map[string]any, schema map[string]any) map[string]any {
-	if !strictNoArgumentSchema(schema) || !solePlaceholderArgument(args) {
-		return args
-	}
-	return map[string]any{}
-}
-
-func strictNoArgumentSchema(schema map[string]any) bool {
-	if schema == nil {
-		return false
-	}
-	if typ, ok := schema["type"].(string); ok && typ != "" && typ != "object" {
-		return false
-	}
-	if props, ok := schema["properties"].(map[string]any); ok {
-		if len(props) != 0 {
-			return false
-		}
-	}
-	additional, ok := schema["additionalProperties"].(bool)
-	return ok && !additional
-}
-
-func solePlaceholderArgument(args map[string]any) bool {
-	if len(args) != 1 {
-		return false
-	}
-	_, ok := args["_"]
-	return ok
 }
 
 func (c *Client) Close() error {

@@ -11,12 +11,11 @@ import (
 
 func TestBuiltins_ShellTimeoutKillsChildProcessGroup(t *testing.T) {
 	r := NewRegistry()
-	registerTestBuiltins(r, "")
+	RegisterBuiltins(r, BuiltinOptions{ToolTimeoutSeconds: 1})
 
 	start := time.Now()
 	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
-		"cmd":     "printf 'child still owns pipe\\n'; sleep 5 & wait",
-		"timeout": 1,
+		"cmd": "printf 'child still owns pipe\\n'; sleep 5 & wait",
 	})
 	elapsed := time.Since(start)
 	if err == nil {
