@@ -282,12 +282,13 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 			}
 			cli := client
 			descName := d.Name
+			descSchema := schema
 			err := reg.Register(tools.Tool{
 				Name:        toolName,
 				Description: d.Description,
 				Schema:      schema,
 				Handler: func(ctx context.Context, in map[string]any) (string, error) {
-					return cli.CallTool(ctx, descName, in)
+					return cli.CallTool(ctx, descName, normalizeToolArgumentsForSchema(in, descSchema))
 				},
 			})
 			if err != nil {
@@ -303,6 +304,37 @@ func closeAll(clients []*Client) {
 	for _, c := range clients {
 		c.Close()
 	}
+}
+
+func normalizeToolArgumentsForSchema(args map[string]any, schema map[string]any) map[string]any {
+	if !strictNoArgumentSchema(schema) || !solePlaceholderArgument(args) {
+		return args
+	}
+	return map[string]any{}
+}
+
+func strictNoArgumentSchema(schema map[string]any) bool {
+	if schema == nil {
+		return false
+	}
+	if typ, ok := schema["type"].(string); ok && typ != "" && typ != "object" {
+		return false
+	}
+	if props, ok := schema["properties"].(map[string]any); ok {
+		if len(props) != 0 {
+			return false
+		}
+	}
+	additional, ok := schema["additionalProperties"].(bool)
+	return ok && !additional
+}
+
+func solePlaceholderArgument(args map[string]any) bool {
+	if len(args) != 1 {
+		return false
+	}
+	_, ok := args["_"]
+	return ok
 }
 
 func (c *Client) Close() error {

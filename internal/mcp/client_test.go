@@ -103,6 +103,17 @@ func runFakeServer() {
 					},
 				})
 			}
+			if os.Getenv("JUEX_FAKE_MCP_STRICT_NOARG_TOOL") == "1" {
+				tools = append(tools, map[string]any{
+					"name":        "noargs",
+					"description": "Tool that rejects every argument",
+					"inputSchema": map[string]any{
+						"type":                 "object",
+						"properties":           map[string]any{},
+						"additionalProperties": false,
+					},
+				})
+			}
 			enc.Encode(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      responseID,
@@ -130,6 +141,27 @@ func runFakeServer() {
 					"result": map[string]any{
 						"content": []map[string]any{{"type": "text", "text": "intentional failure"}},
 						"isError": true,
+					},
+				})
+				continue
+			}
+			if name == "noargs" {
+				if len(args) != 0 {
+					enc.Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      responseID,
+						"error": map[string]any{
+							"code":    -32602,
+							"message": fmt.Sprintf("unexpected noargs arguments: %v", args),
+						},
+					})
+					continue
+				}
+				enc.Encode(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      responseID,
+					"result": map[string]any{
+						"content": []map[string]any{{"type": "text", "text": "noargs ok"}},
 					},
 				})
 				continue
@@ -385,6 +417,49 @@ func TestMCPRegisterAll(t *testing.T) {
 	}
 	if out != "got: x" {
 		t.Fatalf("got %q", out)
+	}
+}
+
+func TestMCPRegisterAll_StripsPlaceholderForStrictNoArgTool(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := Config{
+		MCPServers: map[string]ServerSpec{
+			"fake": {
+				Command: os.Args[0],
+				Env: map[string]string{
+					"JUEX_FAKE_MCP":                   "1",
+					"JUEX_FAKE_MCP_STRICT_NOARG_TOOL": "1",
+				},
+			},
+		},
+	}
+	r := tools.NewRegistry()
+	clients, err := RegisterAll(ctx, cfg, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for _, c := range clients {
+			c.Close()
+		}
+	}()
+
+	out, _, err := r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true, "timeout": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "noargs ok" {
+		t.Fatalf("got %q", out)
+	}
+
+	_, _, err = r.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true, "unexpected": "x"})
+	if err == nil {
+		t.Fatal("expected strict no-argument MCP tool to reject real extra arguments")
+	}
+	if !strings.Contains(err.Error(), "unexpected noargs arguments") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -722,6 +797,42 @@ func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T
 	}
 	if _, ok := reg.Get("mcp__beta__echo"); ok {
 		t.Fatalf("unexpected beta tool, have %+v", reg.List())
+	}
+}
+
+func TestManagerRegisterTools_StripsPlaceholderForStrictNoArgTool(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cfg := Config{MCPServers: map[string]ServerSpec{
+		"fake": {
+			Command: os.Args[0],
+			Env: map[string]string{
+				"JUEX_FAKE_MCP":                   "1",
+				"JUEX_FAKE_MCP_STRICT_NOARG_TOOL": "1",
+			},
+		},
+	}}
+	mgr, err := NewManagerLayeredSoft(ctx, []Config{cfg}, ConnectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := mgr.Close(); err != nil {
+			t.Errorf("close manager: %v", err)
+		}
+	}()
+
+	reg := tools.NewRegistry()
+	if err := mgr.RegisterTools(reg); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := reg.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "noargs ok" {
+		t.Fatalf("got %q", out)
 	}
 }
 
