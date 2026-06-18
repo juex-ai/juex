@@ -752,6 +752,12 @@ func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T
 	}
 }
 
+type timedOutStructuredTestResult struct{}
+
+func (timedOutStructuredTestResult) ToolCallTimedOut() bool {
+	return true
+}
+
 func TestRegistryCallWithInfoKeepsStructuredResult(t *testing.T) {
 	r := NewRegistry()
 	if err := r.Register(Tool{
@@ -777,6 +783,36 @@ func TestRegistryCallWithInfoKeepsStructuredResult(t *testing.T) {
 	structured, ok := info.StructuredResult.(map[string]any)
 	if !ok || structured["answer"] != 42 {
 		t.Fatalf("structured result = %#v", info.StructuredResult)
+	}
+}
+
+func TestRegistryCallWithInfoHonorsStructuredTimeout(t *testing.T) {
+	r := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: 1})
+	if err := r.Register(Tool{
+		Name:   "structured_timeout",
+		Schema: map[string]any{"type": "object"},
+		ResultHandler: func(ctx context.Context, input map[string]any) (Result, error) {
+			return Result{
+				Text:       "partial output",
+				Structured: timedOutStructuredTestResult{},
+			}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, info, err := r.CallWithInfo(context.Background(), "structured_timeout", nil)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if out != "partial output" {
+		t.Fatalf("out = %q, want partial output", out)
+	}
+	if !info.TimedOut || info.TimeoutSeconds != 1 {
+		t.Fatalf("info = %+v, want structured timeout after 1s", info)
+	}
+	if !strings.Contains(err.Error(), "timed out after 1s") {
+		t.Fatalf("err = %v, want timed out after 1s", err)
 	}
 }
 
