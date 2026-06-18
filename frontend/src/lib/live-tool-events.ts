@@ -160,6 +160,7 @@ function ensureToolUseBeforeResult(
   );
   let assistantBeforeResult = -1;
   let matchingAssistantBeforeResult = -1;
+  let matchingToolUse: ToolUseBlock | undefined;
   for (let index = 0; index < messages.length; index++) {
     if (firstResultIndex >= 0 && index >= firstResultIndex) break;
     const message = messages[index];
@@ -167,15 +168,19 @@ function ensureToolUseBeforeResult(
       continue;
     }
     assistantBeforeResult = index;
-    const hasMatchingToolUse = message.blocks?.some(
+    const existingToolUse = message.blocks?.find(
       (candidate) =>
         candidate.type === "tool_use" &&
         candidate.tool_use_id === update.toolUseID,
     );
-    if (hasMatchingToolUse) matchingAssistantBeforeResult = index;
+    if (existingToolUse?.type === "tool_use") {
+      matchingAssistantBeforeResult = index;
+      matchingToolUse = existingToolUse;
+    }
   }
 
   if (matchingAssistantBeforeResult >= 0) {
+    if (!toolUseNeedsMetadataUpdate(matchingToolUse, update)) return messages;
     const block = toolUseBlockFromUpdate({
       turnID: update.turnID,
       toolUseID: update.toolUseID,
@@ -221,6 +226,20 @@ function ensureToolUseBeforeResult(
     },
     ...messages.slice(insertAt),
   ];
+}
+
+function toolUseNeedsMetadataUpdate(
+  current: ToolUseBlock | undefined,
+  update: ToolUsePlaceholderUpdate,
+): boolean {
+  if (!current) return true;
+  if (update.toolName && current.tool_name !== update.toolName) return true;
+  return (
+    Number.isFinite(update.timeoutSeconds) &&
+    update.timeoutSeconds !== undefined &&
+    update.timeoutSeconds > 0 &&
+    current.timeout_seconds !== update.timeoutSeconds
+  );
 }
 
 function toolUpdateTargetIndex(

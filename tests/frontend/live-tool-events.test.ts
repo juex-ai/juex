@@ -271,6 +271,70 @@ test("applyToolResultToMessages finalizes an existing live result without duplic
   ]);
 });
 
+test("applyToolResultToMessages enriches a streamed placeholder with timeout metadata", () => {
+  const streamed = applyToolOutputDeltaToMessages([], {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "exec_command",
+    text: "first\n",
+  });
+
+  const next = applyToolResultToMessages(streamed, {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "exec_command",
+    content: "first\n",
+    timeoutSeconds: 30,
+  });
+
+  assert.deepEqual(next[0].blocks?.[0], {
+    type: "tool_use",
+    tool_use_id: "tool-1",
+    tool_name: "exec_command",
+    timeout_seconds: 30,
+  });
+  assert.equal(next[1].blocks?.length, 1);
+});
+
+test("applyToolResultToMessages leaves existing complete tool metadata untouched", () => {
+  const messages: Message[] = [
+    {
+      role: "assistant",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "tool-1",
+          tool_name: "exec_command",
+          input: { cmd: "printf hi" },
+          timeout_seconds: 30,
+        },
+      ],
+    },
+    {
+      role: "user",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool-1",
+          content: "hi",
+        },
+      ],
+    },
+  ];
+
+  const next = applyToolResultToMessages(messages, {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "exec_command",
+    content: "hi",
+    timeoutSeconds: 30,
+  });
+
+  assert.equal(next[0], messages[0]);
+});
+
 test("applyToolResultToMessages creates a named placeholder for missed completions", () => {
   const next = applyToolResultToMessages([], {
     turnID: "t1",

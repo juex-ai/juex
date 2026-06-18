@@ -591,7 +591,7 @@ function appendToolResult(
     messages: applyToolResultToMessages(state.messages, {
       turnID: event.turn_id,
       toolUseID: event.payload.tool_use_id,
-      toolName: event.payload.name,
+      toolName: event.payload.name || "exec_command",
       content,
       isError,
       timeoutSeconds: event.payload.timeout_seconds,
