@@ -73,6 +73,9 @@ type Engine struct {
 	// DisableWorkingState prevents sidecar persistence, updates, and provider
 	// context injection.
 	DisableWorkingState bool
+	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
+	// trace messages. Command hook traces are always shown.
+	ShowBuiltinHookTraces bool
 	// PendingInputTTL controls generated-id user steer records.
 	PendingInputTTL time.Duration
 	// ExternalEventTTL controls MCP/external event records when the caller

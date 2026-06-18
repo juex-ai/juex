@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   formatRuntimeTokenCount,
+  runtimeGoalBadgeLabel,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
+  runtimeWorkingStateBadgeLabel,
   workingStatePresenceLabel,
+  workingStateRecordCount,
   workingStateSectionCounts,
 } from "../../frontend/src/lib/runtime-display.ts";
 
@@ -42,6 +45,11 @@ test("runtimeHookCommandLabel joins command argv", () => {
   assert.equal(runtimeHookCommandLabel([]), "-");
 });
 
+test("runtimeGoalBadgeLabel summarizes goal status", () => {
+  assert.equal(runtimeGoalBadgeLabel(undefined), "goal none");
+  assert.equal(runtimeGoalBadgeLabel({ status: "continue" }), "goal continue");
+});
+
 test("workingStatePresenceLabel describes active sidecar state", () => {
   assert.equal(workingStatePresenceLabel(undefined), "no active session");
   assert.equal(
@@ -72,4 +80,18 @@ test("workingStateSectionCounts summarizes sidecar records", () => {
   assert.equal(counts.find((item) => item.key === "hard_constraints")?.count, 1);
   assert.equal(counts.find((item) => item.key === "open_issues")?.count, 2);
   assert.equal(counts.find((item) => item.key === "stale_checks")?.count, 0);
+  assert.equal(workingStateRecordCount({ present: true, state: countsState() }), 4);
+  assert.equal(
+    runtimeWorkingStateBadgeLabel({ present: true, state: countsState() }),
+    "state 4",
+  );
 });
+
+function countsState() {
+  return {
+    version: 1,
+    goal: { text: "ship it" },
+    hard_constraints: [{ text: "test first" }],
+    open_issues: [{ text: "missing e2e" }, { text: "missing docs" }],
+  };
+}

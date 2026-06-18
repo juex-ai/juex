@@ -1,4 +1,5 @@
 import type {
+  GoalStatusSnapshot,
   RuntimeHooksStatus,
   WorkingState,
   WorkingStateRecord,
@@ -51,6 +52,10 @@ export function runtimeHookCommandLabel(command?: string[]): string {
   return command.join(" ");
 }
 
+export function runtimeGoalBadgeLabel(goal?: GoalStatusSnapshot): string {
+  return `goal ${goal?.status || "none"}`;
+}
+
 export function workingStatePresenceLabel(
   snapshot?: WorkingStateStatusSnapshot,
 ): string {
@@ -69,6 +74,20 @@ export function workingStateSectionCounts(snapshot?: WorkingStateStatusSnapshot)
     ...section,
     count: workingStateRecords(snapshot?.state, section.key).length,
   }));
+}
+
+export function workingStateRecordCount(snapshot?: WorkingStateStatusSnapshot): number {
+  return workingStateSectionCounts(snapshot).reduce((sum, item) => sum + item.count, 0);
+}
+
+export function runtimeWorkingStateBadgeLabel(
+  snapshot?: WorkingStateStatusSnapshot,
+): string {
+  const count = workingStateRecordCount(snapshot);
+  if (count > 0) return `state ${count}`;
+  if (snapshot?.disabled) return "state off";
+  if (!snapshot) return "state none";
+  return `state ${workingStatePresenceLabel(snapshot)}`;
 }
 
 export function workingStateRecords(

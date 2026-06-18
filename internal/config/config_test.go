@@ -1107,6 +1107,7 @@ runtime:
   external_event_ttl: 48h
   tool_timeout: 2m
   working_state_enabled: false
+  show_builtin_hook_traces: true
 `
 	writeTextFile(t, configPath, body)
 
@@ -1120,6 +1121,9 @@ runtime:
 	}
 	if limits.WorkingStateEnabled {
 		t.Fatalf("working state should be disabled: %+v", limits)
+	}
+	if !limits.ShowBuiltinHookTraces {
+		t.Fatalf("builtin hook traces should be enabled: %+v", limits)
 	}
 }
 

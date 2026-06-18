@@ -23,3 +23,21 @@ func TestActiveContext_AssemblesSummaryBeforeRetainedTail(t *testing.T) {
 		t.Fatalf("active order = %+v", got.Messages)
 	}
 }
+
+func TestActiveContext_SkipsHookEventMessages(t *testing.T) {
+	hookTrace := testMsg("hook-1", llm.RoleSystem, "hook check allow UserPromptSubmit in 1ms")
+	hookTrace.Kind = llm.MessageKindHookEvent
+	h := []llm.Message{
+		testMsg("user-1", llm.RoleUser, "start"),
+		hookTrace,
+		testMsg("assistant-1", llm.RoleAssistant, "ok"),
+	}
+
+	got := assembleActiveContext(h, nil)
+	if len(got.Messages) != 2 {
+		t.Fatalf("active len = %d, want 2: %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[0].ID != "user-1" || got.Messages[1].ID != "assistant-1" {
+		t.Fatalf("active order = %+v", got.Messages)
+	}
+}

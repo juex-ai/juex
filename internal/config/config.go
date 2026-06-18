@@ -40,6 +40,7 @@ type Config struct {
 	ExternalEventTTL          time.Duration
 	ToolTimeout               time.Duration
 	DisableWorkingState       bool
+	ShowBuiltinHookTraces     bool
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
 	EnableUserGlobalResources bool
@@ -173,14 +174,16 @@ type compactionConfig struct {
 }
 
 type runtimeConfig struct {
-	PendingInputTTL        time.Duration
-	PendingInputTTLSet     bool
-	ExternalEventTTL       time.Duration
-	ExternalEventTTLSet    bool
-	ToolTimeout            time.Duration
-	ToolTimeoutSet         bool
-	WorkingStateEnabled    bool
-	WorkingStateEnabledSet bool
+	PendingInputTTL          time.Duration
+	PendingInputTTLSet       bool
+	ExternalEventTTL         time.Duration
+	ExternalEventTTLSet      bool
+	ToolTimeout              time.Duration
+	ToolTimeoutSet           bool
+	WorkingStateEnabled      bool
+	WorkingStateEnabledSet   bool
+	ShowBuiltinHookTraces    bool
+	ShowBuiltinHookTracesSet bool
 }
 
 func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -222,6 +225,13 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			}
 			c.WorkingStateEnabled = enabled
 			c.WorkingStateEnabledSet = true
+		case "show_builtin_hook_traces":
+			enabled, err := ParseBoolValue(value.Value)
+			if err != nil {
+				return fmt.Errorf("runtime.%s: %w", key, err)
+			}
+			c.ShowBuiltinHookTraces = enabled
+			c.ShowBuiltinHookTracesSet = true
 		default:
 			// Legacy runtime budget keys were accepted before runtime had
 			// configurable policy; keep ignoring unknown runtime keys so old
@@ -837,6 +847,9 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	}
 	if c.WorkingStateEnabledSet {
 		cfg.DisableWorkingState = !c.WorkingStateEnabled
+	}
+	if c.ShowBuiltinHookTracesSet {
+		cfg.ShowBuiltinHookTraces = c.ShowBuiltinHookTraces
 	}
 }
 

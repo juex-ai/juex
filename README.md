@@ -163,6 +163,8 @@ Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop
 checks. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
 project-local hooks must set `hooks.trusted: true` before Juex executes them.
+Set `runtime.show_builtin_hook_traces: true` to mirror built-in hook/gate
+completions and failures into the conversation as UI-only hook trace rows.
 
 `juex bundle --session <id> --out <file.tar.gz>` creates a local archive for
 debugging one session. The archive includes a manifest, runtime snapshot,

@@ -304,6 +304,21 @@ export function projectLiveSessionEvent(
         status: { kind: "running" },
       };
       break;
+    case "hook.started":
+      next = { ...next, turnActive: true, status: { kind: "running" } };
+      break;
+    case "hook.completed":
+    case "hook.errored":
+      next = { ...next, turnActive: true, status: { kind: "running" } };
+      break;
+    case "hook.trace":
+      next = {
+        ...next,
+        messages: appendHookTraceMessage(next.messages, event),
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
     case "pending_input.queued":
       next = projectQueuedInput(
         next,
@@ -597,6 +612,26 @@ function appendToolResult(
       timeoutSeconds: event.payload.timeout_seconds,
     }),
   };
+}
+
+function appendHookTraceMessage(
+  messages: Message[],
+  event: Extract<BusEvent, { type: "hook.trace" }>,
+): Message[] {
+  const text = event.payload.text;
+  if (!text) return messages;
+  const id = event.id ? `hook-${event.id}` : undefined;
+  if (id && messages.some((message) => message.id === id)) return messages;
+  return [
+    ...messages,
+    {
+      id,
+      role: "system",
+      kind: "hook_event",
+      turn_id: event.turn_id,
+      blocks: [{ type: "text", text }],
+    },
+  ];
 }
 
 function tokenUsageFromEvent(

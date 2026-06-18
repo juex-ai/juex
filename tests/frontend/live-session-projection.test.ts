@@ -390,6 +390,41 @@ test("projectLiveSessionEvent accepts errored tool contract fields", () => {
   assert.deepEqual(state.status, { kind: "running" });
 });
 
+test("projectLiveSessionEvent projects hook.trace as weak messages", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "hook-1",
+    type: "hook.trace",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-1",
+    payload: {
+      text: "hook extract-state allow UserPromptSubmit in 12ms",
+    },
+  });
+
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0].kind, "hook_event");
+  assert.equal(state.messages[0].role, "system");
+  assert.equal(state.messages[0].blocks?.[0]?.type, "text");
+  if (state.messages[0].blocks?.[0]?.type === "text") {
+    assert.equal(
+      state.messages[0].blocks[0].text,
+      "hook extract-state allow UserPromptSubmit in 12ms",
+    );
+  }
+
+  state = apply(state, {
+    id: "hook-1",
+    type: "hook.trace",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-1",
+    payload: {
+      text: "hook extract-state allow UserPromptSubmit in 12ms",
+    },
+  });
+  assert.equal(state.messages.length, 1);
+});
+
 function apply(state: LiveSessionProjection, event: BusEvent): LiveSessionProjection {
   return projectLiveSessionEvent(state, event).state;
 }
