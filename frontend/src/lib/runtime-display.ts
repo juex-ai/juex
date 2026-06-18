@@ -56,6 +56,19 @@ export function runtimeGoalBadgeLabel(goal?: GoalStatusSnapshot): string {
   return `goal ${goal?.status || "none"}`;
 }
 
+export function runtimeGoalIsActive(goal?: GoalStatusSnapshot): boolean {
+  return Boolean(goal?.status && goal.status !== "none");
+}
+
+export function runtimeGoalBudgetLabel(goal?: GoalStatusSnapshot): string {
+  const budget = goal?.budget;
+  if (!budget) return "-";
+  const used = budget.continuations_used ?? 0;
+  const max = budget.max_continuations ?? 0;
+  if (max > 0) return `${used}/${max}`;
+  return String(used);
+}
+
 export function workingStatePresenceLabel(
   snapshot?: WorkingStateStatusSnapshot,
 ): string {

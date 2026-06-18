@@ -335,11 +335,17 @@ func hookErroredPayload(result hooks.Result, err error) HookErroredPayload {
 }
 
 func (e *Engine) emitHookCompleted(turnID string, payload HookCompletedPayload) {
+	if e == nil {
+		return
+	}
 	e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: payload})
 	e.appendHookTraceMessage(turnID, hookCompletedTraceText(payload, e.ShowBuiltinHookTraces))
 }
 
 func (e *Engine) emitHookErrored(turnID string, payload HookErroredPayload) {
+	if e == nil {
+		return
+	}
 	e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: payload})
 	e.appendHookTraceMessage(turnID, hookErroredTraceText(payload, e.ShowBuiltinHookTraces))
 }

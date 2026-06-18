@@ -73,6 +73,8 @@ import {
   WORKING_STATE_SECTIONS,
   formatRuntimeTimestamp,
   runtimeGoalBadgeLabel,
+  runtimeGoalBudgetLabel,
+  runtimeGoalIsActive,
   runtimeWorkingStateBadgeLabel,
   workingStatePresenceLabel,
   workingStateRecords,
@@ -640,7 +642,10 @@ function LoadOlderMessagesControl({
 function SessionRuntimeStateBadges({ data }: { data: SessionShowResponse }) {
   return (
     <>
-      <SessionStateBadge label={runtimeGoalBadgeLabel(data.goal)} tone={data.goal ? "active" : "muted"}>
+      <SessionStateBadge
+        label={runtimeGoalBadgeLabel(data.goal)}
+        tone={runtimeGoalIsActive(data.goal) ? "active" : "muted"}
+      >
         <GoalStateTooltip goal={data.goal} />
       </SessionStateBadge>
       <SessionStateBadge
@@ -703,7 +708,7 @@ function GoalStateTooltip({ goal }: { goal?: GoalStatusSnapshot }) {
       <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(goal.updated_at)} />
       <RuntimeTooltipRow
         label="budget"
-        value={`${goal.budget?.continuations_used ?? 0}/${goal.budget?.max_continuations ?? 0}`}
+        value={runtimeGoalBudgetLabel(goal)}
       />
       {goal.last_check ? (
         <>
@@ -815,7 +820,7 @@ function RuntimeTooltipRecords({
             <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
               {record.source ? <span>source: {record.source}</span> : null}
               {record.severity ? <span>severity: {record.severity}</span> : null}
-              {record.confidence !== undefined ? (
+              {record.confidence != null ? (
                 <span>confidence: {formatConfidence(record.confidence)}</span>
               ) : null}
               {record.related_paths && record.related_paths.length > 0 ? (
