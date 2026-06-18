@@ -9,6 +9,7 @@ import {
 import {
   applyToolOutputDeltaToMessages,
   applyToolRequestedToMessages,
+  applyToolResultToMessages,
 } from "./live-tool-events.ts";
 import {
   createQueuedInputState,
@@ -289,6 +290,7 @@ export function projectLiveSessionEvent(
         messages: applyToolOutputDeltaToMessages(next.messages, {
           turnID: event.turn_id,
           toolUseID: event.payload.tool_use_id,
+          toolName: event.payload.name || "exec_command",
           text: event.payload.text,
         }),
         turnActive: true,
@@ -584,38 +586,16 @@ function appendToolResult(
     event.type === "tool.errored"
       ? event.payload.error || event.payload.preview || ""
       : event.payload.preview || "";
-  const toolUseID = event.payload.tool_use_id;
-  if (!toolUseID && !content) return state;
-  const block: NonNullable<Message["blocks"]>[number] = {
-    type: "tool_result",
-    tool_use_id: toolUseID,
-    content,
-    is_error: isError,
-  };
-  const last = state.messages[state.messages.length - 1];
-  if (
-    last?.role === "user" &&
-    last.turn_id === event.turn_id &&
-    last.blocks?.every((candidate) => candidate.type === "tool_result")
-  ) {
-    return {
-      ...state,
-      messages: [
-        ...state.messages.slice(0, -1),
-        { ...last, blocks: [...(last.blocks ?? []), block] },
-      ],
-    };
-  }
   return {
     ...state,
-    messages: [
-      ...state.messages,
-      {
-        role: "user",
-        turn_id: event.turn_id,
-        blocks: [block],
-      },
-    ],
+    messages: applyToolResultToMessages(state.messages, {
+      turnID: event.turn_id,
+      toolUseID: event.payload.tool_use_id,
+      toolName: event.payload.name,
+      content,
+      isError,
+      timeoutSeconds: event.payload.timeout_seconds,
+    }),
   };
 }
 
