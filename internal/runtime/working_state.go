@@ -123,6 +123,13 @@ type WorkingState struct {
 	StaleChecks          []WorkingStateRecord `json:"stale_checks,omitempty"`
 }
 
+type WorkingStateStatusSnapshot struct {
+	Path     string       `json:"path,omitempty"`
+	Disabled bool         `json:"disabled,omitempty"`
+	Present  bool         `json:"present"`
+	State    WorkingState `json:"state"`
+}
+
 type WorkingStatePatch struct {
 	Goal                 *WorkingStateRecord  `json:"goal,omitempty"`
 	HardConstraints      []WorkingStateRecord `json:"hard_constraints,omitempty"`
@@ -450,6 +457,39 @@ func (e *Engine) workingStateStoreLocked() *WorkingStateStore {
 	}
 	e.WorkingState = NewWorkingStateStore(e.Session.Dir, WorkingStateOptions{})
 	return e.WorkingState
+}
+
+func (e *Engine) WorkingStateStatusSnapshot() (*WorkingStateStatusSnapshot, error) {
+	if e == nil {
+		return nil, nil
+	}
+	if e.DisableWorkingState {
+		return &WorkingStateStatusSnapshot{
+			Disabled: true,
+			State:    WorkingState{Version: 1},
+		}, nil
+	}
+	store := e.workingStateStoreLocked()
+	if store == nil {
+		return nil, nil
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	present := false
+	if store.Path != "" {
+		if _, err := os.Stat(store.Path); err == nil {
+			present = true
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	return &WorkingStateStatusSnapshot{
+		Path:    store.Path,
+		Present: present,
+		State:   state,
+	}, nil
 }
 
 func (e *Engine) workingStateContextLocked() (string, bool) {

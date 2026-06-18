@@ -13,6 +13,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/tools"
@@ -21,6 +22,12 @@ import (
 func TestGetRuntimeStatus_ReturnsConfiguredMCPAndSkills(t *testing.T) {
 	srv := newTestServer(t)
 	work := srv.opts.Cfg.WorkDir
+	srv.opts.Cfg.Hooks = hooks.Config{Commands: []hooks.CommandHook{{
+		Name:    "guard",
+		Events:  []hooks.EventName{hooks.EventPreToolUse},
+		Command: []string{"python3", "guard.py"},
+		Source:  "project",
+	}}}
 	mustWriteWebFakeMCPConfig(t, work, false)
 	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "skills", "review", "SKILL.md"), `---
 name: review
@@ -53,6 +60,9 @@ body`)
 	if got.Skills.Count != 1 || got.Skills.Items[0].Name != "review" {
 		t.Fatalf("skills = %+v", got.Skills)
 	}
+	if got.Hooks.Configured != 1 || len(got.Hooks.Commands) != 1 || got.Hooks.Commands[0].Name != "guard" {
+		t.Fatalf("hooks = %+v", got.Hooks)
+	}
 	if got.SystemPrompt.Count == 0 || len(got.SystemPrompt.Items) != got.SystemPrompt.Count {
 		t.Fatalf("system prompt = %+v", got.SystemPrompt)
 	}
@@ -83,6 +93,19 @@ func TestRuntimeStatusIncludesActiveGoal(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := as.app.Engine.WorkingState.ApplyPatch(runtime.WorkingStatePatch{
+		Goal: &runtime.WorkingStateRecord{
+			Text:   "show runtime state in the UI",
+			Source: runtime.WorkingStateSourceUserInput,
+		},
+		HardConstraints: []runtime.WorkingStateRecord{{
+			Text:     "do not read sidecar files from the frontend",
+			Source:   runtime.WorkingStateSourceHookExtraction,
+			Severity: runtime.WorkingStateSeverityHigh,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := srv.runtimeStatus()
 	if err != nil {
@@ -90,6 +113,15 @@ func TestRuntimeStatusIncludesActiveGoal(t *testing.T) {
 	}
 	if got.Goal == nil || got.Goal.Objective != "ship runtime goal status" || got.Goal.LastCheck == nil {
 		t.Fatalf("goal = %+v", got.Goal)
+	}
+	if got.WorkingState == nil || !got.WorkingState.Present || filepath.Base(got.WorkingState.Path) != "working_state.json" {
+		t.Fatalf("working_state = %+v", got.WorkingState)
+	}
+	if got.WorkingState.State.Goal == nil || got.WorkingState.State.Goal.Text != "show runtime state in the UI" {
+		t.Fatalf("working_state goal = %+v", got.WorkingState.State.Goal)
+	}
+	if len(got.WorkingState.State.HardConstraints) != 1 {
+		t.Fatalf("hard constraints = %+v", got.WorkingState.State.HardConstraints)
 	}
 }
 
@@ -108,6 +140,9 @@ func TestRuntimeStatusIgnoresUnexpectedActiveSessionValue(t *testing.T) {
 
 	if got := srv.activeGoalStatus(); got != nil {
 		t.Fatalf("goal = %+v, want nil", got)
+	}
+	if got := srv.activeWorkingStateStatus(); got != nil {
+		t.Fatalf("working state = %+v, want nil", got)
 	}
 }
 

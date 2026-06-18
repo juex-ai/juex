@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
@@ -53,6 +54,7 @@ type RuntimeStatus struct {
 	Shell        config.ShellProfile
 	SystemPrompt RuntimeSystemPromptStatus
 	MCP          RuntimeMCPStatus
+	Hooks        RuntimeHooksStatus
 	Skills       RuntimeSkillsStatus
 }
 
@@ -96,6 +98,21 @@ type RuntimeMCPServerStatus struct {
 	Error     string
 }
 
+type RuntimeHooksStatus struct {
+	Configured int
+	Commands   []RuntimeHookInfo
+}
+
+type RuntimeHookInfo struct {
+	Name           string
+	Source         string
+	Events         []string
+	Tools          []string
+	Command        []string
+	TimeoutSeconds int
+	MaxOutputBytes int
+}
+
 type RuntimeSkillsStatus struct {
 	Count int
 	Items []RuntimeSkillInfo
@@ -128,8 +145,37 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 		Shell:        s.cfg.Shell,
 		SystemPrompt: systemPrompt,
 		MCP:          mcpStatus,
+		Hooks:        s.hooksStatus(),
 		Skills:       skillStatus,
 	}, nil
+}
+
+func (s RuntimeStatusService) hooksStatus() RuntimeHooksStatus {
+	commands := make([]RuntimeHookInfo, 0, len(s.cfg.Hooks.Commands))
+	for _, command := range s.cfg.Hooks.Commands {
+		events := make([]string, 0, len(command.Events))
+		for _, event := range command.Events {
+			events = append(events, string(event))
+		}
+		timeoutSeconds := command.TimeoutSeconds
+		if timeoutSeconds <= 0 {
+			timeoutSeconds = hooks.DefaultTimeoutSeconds
+		}
+		maxOutputBytes := command.MaxOutputBytes
+		if maxOutputBytes <= 0 {
+			maxOutputBytes = hooks.DefaultMaxOutputBytes
+		}
+		commands = append(commands, RuntimeHookInfo{
+			Name:           command.Name,
+			Source:         command.Source,
+			Events:         events,
+			Tools:          append([]string(nil), command.Tools...),
+			Command:        append([]string(nil), command.Command...),
+			TimeoutSeconds: timeoutSeconds,
+			MaxOutputBytes: maxOutputBytes,
+		})
+	}
+	return RuntimeHooksStatus{Configured: len(commands), Commands: commands}
 }
 
 func (s RuntimeStatusService) systemPromptStatus(skillLoader *skills.Loader) (RuntimeSystemPromptStatus, error) {

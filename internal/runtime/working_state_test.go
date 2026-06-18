@@ -87,6 +87,39 @@ func TestNormalizeWorkingStatePathsUsesPortableSeparators(t *testing.T) {
 	}
 }
 
+func TestWorkingStateStatusSnapshotReportsPresenceAndDisabled(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.WorkingState = NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})
+
+	snapshot, err := eng.WorkingStateStatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot == nil || snapshot.Present || snapshot.Path == "" || snapshot.State.Version != 1 {
+		t.Fatalf("empty snapshot = %+v", snapshot)
+	}
+
+	if err := eng.WorkingState.ApplyPatch(WorkingStatePatch{Goal: &WorkingStateRecord{Text: "keep runtime visible"}}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = eng.WorkingStateStatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Present || filepath.Base(snapshot.Path) != "working_state.json" || snapshot.State.Goal == nil {
+		t.Fatalf("present snapshot = %+v", snapshot)
+	}
+
+	eng.DisableWorkingState = true
+	snapshot, err = eng.WorkingStateStatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot == nil || !snapshot.Disabled || snapshot.Present {
+		t.Fatalf("disabled snapshot = %+v", snapshot)
+	}
+}
+
 func TestWorkingStateStoreStalesAndRefreshesRelatedChecks(t *testing.T) {
 	now := time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC)
 	store := NewWorkingStateStore(t.TempDir(), WorkingStateOptions{Now: func() time.Time { return now }})

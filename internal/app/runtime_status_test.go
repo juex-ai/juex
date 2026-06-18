@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 )
@@ -109,6 +110,40 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	}
 	if zeta.Name != "zeta" || zeta.Source != "user" || zeta.Status != "error" || zeta.Error != "boom" {
 		t.Fatalf("zeta = %+v", zeta)
+	}
+}
+
+func TestRuntimeStatusServiceIncludesHookStatus(t *testing.T) {
+	cfg := config.Config{
+		WorkDir: t.TempDir(),
+		Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+			Name:    "protect-write",
+			Events:  []hooks.EventName{hooks.EventPreToolUse, hooks.EventStop},
+			Tools:   []string{"write"},
+			Command: []string{"python3", "hooks/protect.py"},
+			Source:  "project",
+		}}},
+	}
+
+	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Hooks.Configured != 1 || len(status.Hooks.Commands) != 1 {
+		t.Fatalf("hooks = %+v", status.Hooks)
+	}
+	hook := status.Hooks.Commands[0]
+	if hook.Name != "protect-write" || hook.Source != "project" {
+		t.Fatalf("hook identity = %+v", hook)
+	}
+	if strings.Join(hook.Events, ",") != "PreToolUse,Stop" {
+		t.Fatalf("events = %+v", hook.Events)
+	}
+	if strings.Join(hook.Tools, ",") != "write" || strings.Join(hook.Command, " ") != "python3 hooks/protect.py" {
+		t.Fatalf("hook command = %+v tools=%+v", hook.Command, hook.Tools)
+	}
+	if hook.TimeoutSeconds != hooks.DefaultTimeoutSeconds || hook.MaxOutputBytes != hooks.DefaultMaxOutputBytes {
+		t.Fatalf("effective limits = timeout %d output %d", hook.TimeoutSeconds, hook.MaxOutputBytes)
 	}
 }
 

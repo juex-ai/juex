@@ -14,13 +14,15 @@ import (
 )
 
 type runtimeStatusResponse struct {
-	WorkDir      string                          `json:"work_dir"`
-	Provider     providerStatus                  `json:"provider"`
-	Shell        config.ShellProfile             `json:"shell"`
-	SystemPrompt systemPromptStatus              `json:"system_prompt"`
-	MCP          mcpStatus                       `json:"mcp"`
-	Skills       skillsStatus                    `json:"skills"`
-	Goal         *juexruntime.GoalStatusSnapshot `json:"goal,omitempty"`
+	WorkDir      string                                  `json:"work_dir"`
+	Provider     providerStatus                          `json:"provider"`
+	Shell        config.ShellProfile                     `json:"shell"`
+	SystemPrompt systemPromptStatus                      `json:"system_prompt"`
+	MCP          mcpStatus                               `json:"mcp"`
+	Hooks        hooksStatus                             `json:"hooks"`
+	Skills       skillsStatus                            `json:"skills"`
+	Goal         *juexruntime.GoalStatusSnapshot         `json:"goal,omitempty"`
+	WorkingState *juexruntime.WorkingStateStatusSnapshot `json:"working_state,omitempty"`
 }
 
 type providerStatus struct {
@@ -61,6 +63,21 @@ type mcpServerInfo struct {
 	Connected bool     `json:"connected"`
 	ToolCount int      `json:"tool_count"`
 	Error     string   `json:"error,omitempty"`
+}
+
+type hooksStatus struct {
+	Configured int        `json:"configured"`
+	Commands   []hookInfo `json:"commands"`
+}
+
+type hookInfo struct {
+	Name           string   `json:"name"`
+	Source         string   `json:"source,omitempty"`
+	Events         []string `json:"events"`
+	Tools          []string `json:"tools,omitempty"`
+	Command        []string `json:"command"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	MaxOutputBytes int      `json:"max_output_bytes"`
 }
 
 type skillsStatus struct {
@@ -107,18 +124,20 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	return runtimeStatusResponseFromApp(status, s.activeGoalStatus()), nil
+	return runtimeStatusResponseFromApp(status, s.activeGoalStatus(), s.activeWorkingStateStatus()), nil
 }
 
-func runtimeStatusResponseFromApp(status app.RuntimeStatus, goal *juexruntime.GoalStatusSnapshot) runtimeStatusResponse {
+func runtimeStatusResponseFromApp(status app.RuntimeStatus, goal *juexruntime.GoalStatusSnapshot, workingState *juexruntime.WorkingStateStatusSnapshot) runtimeStatusResponse {
 	return runtimeStatusResponse{
 		WorkDir:      status.WorkDir,
 		Provider:     providerStatusFromApp(status.Provider),
 		Shell:        status.Shell,
 		SystemPrompt: systemPromptStatusFromApp(status.SystemPrompt),
 		MCP:          mcpStatusFromApp(status.MCP),
+		Hooks:        hooksStatusFromApp(status.Hooks),
 		Skills:       skillsStatusFromApp(status.Skills),
 		Goal:         goal,
+		WorkingState: workingState,
 	}
 }
 
@@ -140,6 +159,26 @@ func (s *Server) activeGoalStatus() *juexruntime.GoalStatusSnapshot {
 		return nil
 	}
 	return goal
+}
+
+func (s *Server) activeWorkingStateStatus() *juexruntime.WorkingStateStatusSnapshot {
+	id, ok, err := s.activePrimarySessionID()
+	if err != nil || !ok {
+		return nil
+	}
+	v, ok := s.sessions.Load(id)
+	if !ok {
+		return nil
+	}
+	as, ok := v.(*activeSession)
+	if !ok || as == nil || as.app == nil || as.app.Engine == nil {
+		return nil
+	}
+	workingState, err := as.app.Engine.WorkingStateStatusSnapshot()
+	if err != nil {
+		return nil
+	}
+	return workingState
 }
 
 func providerStatusFromApp(status app.RuntimeProviderStatus) providerStatus {
@@ -187,6 +226,22 @@ func mcpStatusFromApp(status app.RuntimeMCPStatus) mcpStatus {
 		Errors:     status.Errors,
 		Servers:    servers,
 	}
+}
+
+func hooksStatusFromApp(status app.RuntimeHooksStatus) hooksStatus {
+	commands := make([]hookInfo, 0, len(status.Commands))
+	for _, command := range status.Commands {
+		commands = append(commands, hookInfo{
+			Name:           command.Name,
+			Source:         command.Source,
+			Events:         append([]string(nil), command.Events...),
+			Tools:          append([]string(nil), command.Tools...),
+			Command:        append([]string(nil), command.Command...),
+			TimeoutSeconds: command.TimeoutSeconds,
+			MaxOutputBytes: command.MaxOutputBytes,
+		})
+	}
+	return hooksStatus{Configured: status.Configured, Commands: commands}
 }
 
 func skillsStatusFromApp(status app.RuntimeSkillsStatus) skillsStatus {
