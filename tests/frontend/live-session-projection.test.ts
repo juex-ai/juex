@@ -8,6 +8,7 @@ import {
   projectQueuedInput,
   type LiveSessionProjection,
 } from "../../frontend/src/lib/live-session-projection.ts";
+import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
 import type { BusEvent } from "../../frontend/src/types.ts";
 
 test("projectLiveSessionEvent projects a live turn with tool deltas and completion effects", () => {
@@ -101,6 +102,15 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
   if (liveResult?.type === "tool_result") {
     assert.equal(liveResult.content, "hi");
   }
+  assert.equal(
+    state.messages
+      .at(-1)
+      ?.blocks?.filter(
+        (block) =>
+          block.type === "tool_result" && block.tool_use_id === "tool-1",
+      ).length,
+    1,
+  );
 
   const completed = projectLiveSessionEvent(state, {
     id: "e6",
@@ -119,6 +129,35 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
     { type: "refresh" },
     { type: "scheduleIdleStatus" },
   ]);
+});
+
+test("projectLiveSessionEvent keeps streamed output paired when requested was missed", () => {
+  let state = createLiveSessionProjection();
+
+  state = apply(state, {
+    id: "e1",
+    type: "tool.output_delta",
+    ts: "2026-06-15T00:00:03Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      session_id: "shell-1",
+      chunk_id: 1,
+      stream: "stdout",
+      text: "pulling layer\n",
+    },
+  });
+
+  const groups = messagesToGroups(state.messages);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].role, "assistant");
+  const unit = groups[0].units[0];
+  assert.equal(unit?.kind, "tool");
+  if (unit?.kind === "tool") {
+    assert.equal(unit.use?.tool_name, "exec_command");
+    assert.equal(unit.result?.content, "pulling layer\n");
+  }
 });
 
 test("projectOptimisticTurn is replaced by the canonical turn.started event", () => {

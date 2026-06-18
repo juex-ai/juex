@@ -13,7 +13,24 @@ export type ToolRequestedUpdate = {
 export type ToolOutputDeltaUpdate = {
   turnID: string | undefined;
   toolUseID: string | undefined;
+  toolName?: string;
   text: string | undefined;
+};
+
+export type ToolResultUpdate = {
+  turnID: string | undefined;
+  toolUseID: string | undefined;
+  toolName?: string;
+  content: string | undefined;
+  isError?: boolean;
+  timeoutSeconds?: number;
+};
+
+type ToolUsePlaceholderUpdate = {
+  turnID: string | undefined;
+  toolUseID: string | undefined;
+  toolName?: string;
+  timeoutSeconds?: number;
 };
 
 export function applyToolRequestedToMessages(
@@ -61,11 +78,36 @@ export function applyToolOutputDeltaToMessages(
   update: ToolOutputDeltaUpdate,
 ): Message[] {
   if (!update.turnID || !update.toolUseID || !update.text) return messages;
+  messages = ensureToolUseBeforeResult(messages, update);
   const block: ToolResultBlock = {
     type: "tool_result",
     tool_use_id: update.toolUseID,
     content: update.text,
   };
+  return upsertToolResultBlock(messages, update, block, "append");
+}
+
+export function applyToolResultToMessages(
+  messages: Message[],
+  update: ToolResultUpdate,
+): Message[] {
+  if (!update.turnID || !update.toolUseID) return messages;
+  messages = ensureToolUseBeforeResult(messages, update);
+  const block: ToolResultBlock = {
+    type: "tool_result",
+    tool_use_id: update.toolUseID,
+    content: update.content ?? "",
+  };
+  if (update.isError) block.is_error = true;
+  return upsertToolResultBlock(messages, update, block, "final");
+}
+
+function upsertToolResultBlock(
+  messages: Message[],
+  update: Pick<ToolResultUpdate, "turnID" | "toolUseID">,
+  block: ToolResultBlock,
+  mode: "append" | "final",
+): Message[] {
   const targetIndex = toolResultTargetIndex(messages, update);
   if (targetIndex >= 0) {
     return messages.map((message, index) => {
@@ -83,10 +125,7 @@ export function applyToolOutputDeltaToMessages(
             if (blockIndex !== existingIndex || candidate.type !== "tool_result") {
               return candidate;
             }
-            return {
-              ...candidate,
-              content: capLiveToolOutput(candidate.content + update.text),
-            };
+            return mergeToolResultBlock(candidate, block, mode);
           }),
         };
       }
@@ -101,6 +140,106 @@ export function applyToolOutputDeltaToMessages(
       blocks: [block],
     },
   ];
+}
+
+function ensureToolUseBeforeResult(
+  messages: Message[],
+  update: ToolUsePlaceholderUpdate,
+): Message[] {
+  if (!update.turnID || !update.toolUseID || !update.toolName) return messages;
+
+  const firstResultIndex = messages.findIndex(
+    (message) =>
+      message.turn_id === update.turnID &&
+      message.role === "user" &&
+      message.blocks?.some(
+        (candidate) =>
+          candidate.type === "tool_result" &&
+          candidate.tool_use_id === update.toolUseID,
+      ),
+  );
+  let assistantBeforeResult = -1;
+  let matchingAssistantBeforeResult = -1;
+  let matchingToolUse: ToolUseBlock | undefined;
+  for (let index = 0; index < messages.length; index++) {
+    if (firstResultIndex >= 0 && index >= firstResultIndex) break;
+    const message = messages[index];
+    if (message.turn_id !== update.turnID || message.role !== "assistant") {
+      continue;
+    }
+    assistantBeforeResult = index;
+    const existingToolUse = message.blocks?.find(
+      (candidate) =>
+        candidate.type === "tool_use" &&
+        candidate.tool_use_id === update.toolUseID,
+    );
+    if (existingToolUse?.type === "tool_use") {
+      matchingAssistantBeforeResult = index;
+      matchingToolUse = existingToolUse;
+    }
+  }
+
+  if (matchingAssistantBeforeResult >= 0) {
+    if (!toolUseNeedsMetadataUpdate(matchingToolUse, update)) return messages;
+    const block = toolUseBlockFromUpdate({
+      turnID: update.turnID,
+      toolUseID: update.toolUseID,
+      toolName: update.toolName,
+      timeoutSeconds: update.timeoutSeconds,
+    });
+    return messages.map((message, index) => {
+      if (index !== matchingAssistantBeforeResult) return message;
+      return {
+        ...message,
+        blocks: (message.blocks ?? []).map((candidate) =>
+          candidate.type === "tool_use" &&
+          candidate.tool_use_id === update.toolUseID
+            ? { ...candidate, ...block }
+            : candidate,
+        ),
+      };
+    });
+  }
+
+  const block = toolUseBlockFromUpdate({
+    turnID: update.turnID,
+    toolUseID: update.toolUseID,
+    toolName: update.toolName,
+    timeoutSeconds: update.timeoutSeconds,
+  });
+  if (assistantBeforeResult >= 0) {
+    return messages.map((message, index) =>
+      index === assistantBeforeResult
+        ? { ...message, blocks: [...(message.blocks ?? []), block] }
+        : message,
+    );
+  }
+
+  const insertAt = firstResultIndex >= 0 ? firstResultIndex : messages.length;
+  return [
+    ...messages.slice(0, insertAt),
+    {
+      role: "assistant",
+      turn_id: update.turnID,
+      pending: true,
+      blocks: [block],
+    },
+    ...messages.slice(insertAt),
+  ];
+}
+
+function toolUseNeedsMetadataUpdate(
+  current: ToolUseBlock | undefined,
+  update: ToolUsePlaceholderUpdate,
+): boolean {
+  if (!current) return true;
+  if (update.toolName && current.tool_name !== update.toolName) return true;
+  return (
+    Number.isFinite(update.timeoutSeconds) &&
+    update.timeoutSeconds !== undefined &&
+    update.timeoutSeconds > 0 &&
+    current.timeout_seconds !== update.timeoutSeconds
+  );
 }
 
 function toolUpdateTargetIndex(
@@ -132,7 +271,7 @@ function toolUpdateTargetIndex(
 
 function toolResultTargetIndex(
   messages: Message[],
-  update: ToolOutputDeltaUpdate,
+  update: Pick<ToolResultUpdate, "turnID" | "toolUseID">,
 ): number {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
@@ -145,6 +284,28 @@ function toolResultTargetIndex(
     }
   }
   return -1;
+}
+
+function mergeToolResultBlock(
+  current: ToolResultBlock,
+  incoming: ToolResultBlock,
+  mode: "append" | "final",
+): ToolResultBlock {
+  if (mode === "append") {
+    return {
+      ...current,
+      content: capLiveToolOutput(current.content + incoming.content),
+    };
+  }
+  if (incoming.is_error) {
+    return { ...current, content: incoming.content, is_error: true };
+  }
+  const next = {
+    ...current,
+    content: current.content || incoming.content,
+  };
+  delete next.is_error;
+  return next;
 }
 
 function toolUseBlockFromUpdate(update: ToolRequestedUpdate): ToolUseBlock {
