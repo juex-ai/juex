@@ -426,11 +426,13 @@ export interface RuntimeStatusResponse {
     errors: number;
     servers: MCPServerInfo[];
   };
+  hooks: RuntimeHooksStatus;
   skills: {
     count: number;
     items: SkillInfo[];
   };
   goal?: GoalStatusSnapshot;
+  working_state?: WorkingStateStatusSnapshot;
 }
 
 export interface GoalStatusSnapshot {
@@ -465,6 +467,51 @@ export interface CompletionCheck {
   continue_prompt?: string;
   source?: string;
   checked_at?: string;
+}
+
+export interface RuntimeHooksStatus {
+  configured: number;
+  commands: RuntimeHookInfo[];
+}
+
+export interface RuntimeHookInfo {
+  name: string;
+  source?: string;
+  events: string[];
+  tools?: string[];
+  command: string[];
+  timeout_seconds: number;
+  max_output_bytes: number;
+}
+
+export interface WorkingStateStatusSnapshot {
+  path?: string;
+  disabled?: boolean;
+  present: boolean;
+  state: WorkingState;
+}
+
+export interface WorkingState {
+  version: number;
+  updated_at?: string;
+  goal?: WorkingStateRecord;
+  hard_constraints?: WorkingStateRecord[];
+  artifacts?: WorkingStateRecord[];
+  checks?: WorkingStateRecord[];
+  open_issues?: WorkingStateRecord[];
+  last_successful_checks?: WorkingStateRecord[];
+  stale_checks?: WorkingStateRecord[];
+}
+
+export interface WorkingStateRecord {
+  id?: string;
+  text?: string;
+  source?: string;
+  confidence?: number;
+  severity?: string;
+  related_paths?: string[];
+  created_at?: string;
+  resolved_at?: string;
 }
 
 export interface SystemPromptEntry {
