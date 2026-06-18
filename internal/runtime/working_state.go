@@ -463,13 +463,20 @@ func (e *Engine) WorkingStateStatusSnapshot() (*WorkingStateStatusSnapshot, erro
 	if e == nil {
 		return nil, nil
 	}
-	if e.DisableWorkingState {
+	e.mu.Lock()
+	disabled := e.DisableWorkingState
+	var store *WorkingStateStore
+	if !disabled {
+		store = e.workingStateStoreLocked()
+	}
+	e.mu.Unlock()
+
+	if disabled {
 		return &WorkingStateStatusSnapshot{
 			Disabled: true,
 			State:    WorkingState{Version: 1},
 		}, nil
 	}
-	store := e.workingStateStoreLocked()
 	if store == nil {
 		return nil, nil
 	}

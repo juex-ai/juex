@@ -28,6 +28,7 @@ export function Runtime() {
 
   useEffect(() => {
     let live = true;
+    let timer: number | undefined;
     const load = () => {
       getRuntimeStatus()
         .then((status) => {
@@ -39,13 +40,15 @@ export function Runtime() {
         .catch((e) => {
           console.error("getRuntimeStatus failed", e);
           if (live) setError(e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          if (live) timer = window.setTimeout(load, 3000);
         });
     };
     load();
-    const interval = window.setInterval(load, 3000);
     return () => {
       live = false;
-      window.clearInterval(interval);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, []);
 
@@ -55,6 +58,8 @@ export function Runtime() {
 
   const systemPrompt = data.system_prompt ?? { count: 0, items: [] };
   const systemPromptItems = systemPrompt.items ?? [];
+  const hooks = data.hooks ?? { configured: 0, commands: [] };
+  const hookCommands = hooks.commands ?? [];
   const workingState = data.working_state;
   const workingStateCounts = workingStateSectionCounts(workingState);
 
@@ -117,7 +122,7 @@ export function Runtime() {
               Hooks
             </h1>
             <Badge variant="secondary" className="font-mono text-[11px]">
-              {runtimeHooksSummaryLabel(data.hooks)}
+              {runtimeHooksSummaryLabel(hooks)}
             </Badge>
           </div>
           <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
@@ -133,14 +138,14 @@ export function Runtime() {
                 </tr>
               </thead>
               <tbody>
-                {data.hooks.commands.length === 0 ? (
+                {hookCommands.length === 0 ? (
                   <tr>
                     <td className="text-muted-foreground px-3 py-3" colSpan={6}>
                       No hooks configured.
                     </td>
                   </tr>
                 ) : (
-                  data.hooks.commands.map((hook, index) => (
+                  hookCommands.map((hook, index) => (
                     <HookRow hook={hook} key={`${hook.name}:${index}`} />
                   ))
                 )}

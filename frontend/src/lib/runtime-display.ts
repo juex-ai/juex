@@ -76,8 +76,22 @@ export function workingStateRecords(
   key: WorkingStateSectionKey,
 ): WorkingStateRecord[] {
   if (!state) return [];
-  if (key === "goal") return state.goal ? [state.goal] : [];
-  return state[key] ?? [];
+  switch (key) {
+    case "goal":
+      return state.goal ? [state.goal] : [];
+    case "hard_constraints":
+      return state.hard_constraints ?? [];
+    case "artifacts":
+      return state.artifacts ?? [];
+    case "checks":
+      return state.checks ?? [];
+    case "open_issues":
+      return state.open_issues ?? [];
+    case "last_successful_checks":
+      return state.last_successful_checks ?? [];
+    case "stale_checks":
+      return state.stale_checks ?? [];
+  }
 }
 
 export function formatRuntimeTimestamp(value?: string): string {
