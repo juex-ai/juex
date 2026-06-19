@@ -108,7 +108,7 @@ func (e *Engine) runUnresolvedFailureGate(turnID string) (string, ToolFailureCon
 	if !ok {
 		decision = string(hooks.DecisionAllow)
 	}
-	e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: HookCompletedPayload{
+	e.emitHookCompleted(turnID, HookCompletedPayload{
 		Name:              unresolvedFailureGateName,
 		Source:            "builtin",
 		EventName:         string(hooks.EventStop),
@@ -116,7 +116,7 @@ func (e *Engine) runUnresolvedFailureGate(turnID string) (string, ToolFailureCon
 		Decision:          decision,
 		BlockStop:         ok,
 		ContinuePromptLen: len(prompt),
-	}})
+	})
 	return prompt, payload, ok
 }
 
@@ -133,13 +133,13 @@ func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayl
 	}})
 	decision, err := store.CompletionGateDecision()
 	if err != nil {
-		e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: HookErroredPayload{
+		e.emitHookErrored(turnID, HookErroredPayload{
 			Name:       goalCompletionGateName,
 			Source:     "builtin",
 			EventName:  string(hooks.EventStop),
 			DurationMS: time.Since(start).Milliseconds(),
 			Error:      err.Error(),
-		}})
+		})
 		return "", GoalContinuedPayload{}, false, err
 	}
 	if decision.Status == GoalStatusInProgress {
@@ -167,13 +167,13 @@ func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayl
 	if decision.BlockStop {
 		if strings.TrimSpace(decision.ContinuePrompt) == "" {
 			err := fmt.Errorf("goal state: completion gate requested block_stop without continue_prompt")
-			e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: HookErroredPayload{
+			e.emitHookErrored(turnID, HookErroredPayload{
 				Name:       goalCompletionGateName,
 				Source:     "builtin",
 				EventName:  string(hooks.EventStop),
 				DurationMS: time.Since(start).Milliseconds(),
 				Error:      err.Error(),
-			}})
+			})
 			return "", GoalContinuedPayload{}, false, err
 		}
 		if err := store.RecordContinuation(decision); err != nil {
@@ -181,24 +181,24 @@ func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayl
 		}
 		snapshot, _ := store.StatusSnapshot()
 		payload := goalContinuedPayload(decision, snapshot)
-		e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: HookCompletedPayload{
+		e.emitHookCompleted(turnID, HookCompletedPayload{
 			Name:              goalCompletionGateName,
 			Source:            "builtin",
 			EventName:         string(hooks.EventStop),
 			DurationMS:        time.Since(start).Milliseconds(),
 			BlockStop:         true,
 			ContinuePromptLen: len(decision.ContinuePrompt),
-		}})
+		})
 		e.emitGoalUpdated(turnID)
 		return decision.ContinuePrompt, payload, true, nil
 	}
-	e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: HookCompletedPayload{
+	e.emitHookCompleted(turnID, HookCompletedPayload{
 		Name:       goalCompletionGateName,
 		Source:     "builtin",
 		EventName:  string(hooks.EventStop),
 		DurationMS: time.Since(start).Milliseconds(),
 		Decision:   string(hooks.DecisionAllow),
-	}})
+	})
 	return "", GoalContinuedPayload{}, false, nil
 }
 
@@ -288,7 +288,8 @@ func (o hookObserver) HookCompleted(result hooks.Result) {
 	if o.engine == nil {
 		return
 	}
-	o.engine.emit(events.Event{Type: "hook.completed", TurnID: o.turnID, Payload: hookCompletedPayload(result)})
+	payload := hookCompletedPayload(result)
+	o.engine.emitHookCompleted(o.turnID, payload)
 }
 
 func (o hookObserver) HookErrored(result hooks.Result, err error) {
@@ -296,7 +297,7 @@ func (o hookObserver) HookErrored(result hooks.Result, err error) {
 		return
 	}
 	payload := hookErroredPayload(result, err)
-	o.engine.emit(events.Event{Type: "hook.errored", TurnID: o.turnID, Payload: payload})
+	o.engine.emitHookErrored(o.turnID, payload)
 }
 
 func hookCompletedPayload(result hooks.Result) HookCompletedPayload {
@@ -331,6 +332,83 @@ func hookErroredPayload(result hooks.Result, err error) HookErroredPayload {
 		StderrPreview: truncate(result.Stderr, 200),
 	}
 	return payload
+}
+
+func (e *Engine) emitHookCompleted(turnID string, payload HookCompletedPayload) {
+	if e == nil {
+		return
+	}
+	e.emit(events.Event{Type: "hook.completed", TurnID: turnID, Payload: payload})
+	e.appendHookTraceMessage(turnID, hookCompletedTraceText(payload, e.ShowBuiltinHookTraces))
+}
+
+func (e *Engine) emitHookErrored(turnID string, payload HookErroredPayload) {
+	if e == nil {
+		return
+	}
+	e.emit(events.Event{Type: "hook.errored", TurnID: turnID, Payload: payload})
+	e.appendHookTraceMessage(turnID, hookErroredTraceText(payload, e.ShowBuiltinHookTraces))
+}
+
+func (e *Engine) appendHookTraceMessage(turnID, text string) {
+	if e == nil || e.Session == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	msg := llm.TextMessage(llm.RoleSystem, text)
+	msg.Kind = llm.MessageKindHookEvent
+	_ = e.Session.Append(msg)
+	e.emit(events.Event{Type: "hook.trace", TurnID: turnID, Payload: HookTracePayload{Text: text}})
+}
+
+func hookCompletedTraceText(payload HookCompletedPayload, includeBuiltin bool) string {
+	if payload.Source == "builtin" && !includeBuiltin {
+		return ""
+	}
+	status := "completed"
+	if payload.BlockStop {
+		status = "blocked stop"
+	} else if payload.Decision != "" {
+		status = payload.Decision
+	}
+	return fmt.Sprintf(
+		"hook %s %s %s in %dms",
+		hookTraceName(payload.Name),
+		status,
+		hookTraceTarget(payload.EventName, payload.ToolName),
+		payload.DurationMS,
+	)
+}
+
+func hookErroredTraceText(payload HookErroredPayload, includeBuiltin bool) string {
+	if payload.Source == "builtin" && !includeBuiltin {
+		return ""
+	}
+	return fmt.Sprintf(
+		"hook %s failed %s in %dms: %s",
+		hookTraceName(payload.Name),
+		hookTraceTarget(payload.EventName, payload.ToolName),
+		payload.DurationMS,
+		payload.Error,
+	)
+}
+
+func hookTraceName(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return "unnamed"
+	}
+	return name
+}
+
+func hookTraceTarget(eventName, toolName string) string {
+	eventName = strings.TrimSpace(eventName)
+	toolName = strings.TrimSpace(toolName)
+	if eventName == "" {
+		eventName = "event"
+	}
+	if toolName == "" {
+		return eventName
+	}
+	return eventName + "/" + toolName
 }
 
 func resultEventName(result hooks.Result) string {

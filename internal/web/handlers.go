@@ -109,10 +109,12 @@ func sessionPathID(p string) (id, rest string) {
 
 type sessionShowResponse struct {
 	session.Info
-	Messages        []llm.Message `json:"messages"`
-	Model           string        `json:"model,omitempty"`
-	HasMoreBefore   bool          `json:"has_more_before"`
-	OldestMessageID string        `json:"oldest_message_id,omitempty"`
+	Messages        []llm.Message                       `json:"messages"`
+	Model           string                              `json:"model,omitempty"`
+	HasMoreBefore   bool                                `json:"has_more_before"`
+	OldestMessageID string                              `json:"oldest_message_id,omitempty"`
+	Goal            *runtime.GoalStatusSnapshot         `json:"goal,omitempty"`
+	WorkingState    *runtime.WorkingStateStatusSnapshot `json:"working_state,omitempty"`
 }
 
 const (
@@ -157,12 +159,15 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
+		goal, workingState := s.sessionStateStatus(as.app.Session.Dir, as)
 		writeJSON(w, http.StatusOK, sessionShowResponse{
 			Info:            info,
 			Messages:        messagesForSessionResponse(page.Messages),
 			Model:           s.opts.Cfg.Model,
 			HasMoreBefore:   page.HasMoreBefore,
 			OldestMessageID: page.OldestMessageID,
+			Goal:            goal,
+			WorkingState:    workingState,
 		})
 		return
 	}
@@ -186,13 +191,33 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
+	goal, workingState := s.sessionStateStatus(dir, nil)
 	writeJSON(w, http.StatusOK, sessionShowResponse{
 		Info:            info,
 		Messages:        messagesForSessionResponse(page.Messages),
 		Model:           s.opts.Cfg.Model,
 		HasMoreBefore:   page.HasMoreBefore,
 		OldestMessageID: page.OldestMessageID,
+		Goal:            goal,
+		WorkingState:    workingState,
 	})
+}
+
+func (s *Server) sessionStateStatus(dir string, as *activeSession) (*runtime.GoalStatusSnapshot, *runtime.WorkingStateStatusSnapshot) {
+	if as != nil && as.app != nil && as.app.Engine != nil {
+		goal, _ := as.app.Engine.GoalStatusSnapshot()
+		workingState, _ := as.app.Engine.WorkingStateStatusSnapshot()
+		return goal, workingState
+	}
+	goal, _ := runtime.NewGoalStateStore(dir, runtime.GoalStateOptions{}).StatusSnapshot()
+	if !s.opts.Cfg.RuntimeLimits().WorkingStateEnabled {
+		return goal, &runtime.WorkingStateStatusSnapshot{
+			Disabled: true,
+			State:    runtime.WorkingState{Version: 1},
+		}
+	}
+	workingState, _ := runtime.NewWorkingStateStore(dir, runtime.WorkingStateOptions{}).StatusSnapshot()
+	return goal, workingState
 }
 
 func parseSessionMessageWindow(r *http.Request) (sessionMessageWindow, error) {

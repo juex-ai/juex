@@ -1,4 +1,5 @@
 import type {
+  GoalStatusSnapshot,
   RuntimeHooksStatus,
   WorkingState,
   WorkingStateRecord,
@@ -51,6 +52,23 @@ export function runtimeHookCommandLabel(command?: string[]): string {
   return command.join(" ");
 }
 
+export function runtimeGoalBadgeLabel(goal?: GoalStatusSnapshot): string {
+  return `goal ${goal?.status || "none"}`;
+}
+
+export function runtimeGoalIsActive(goal?: GoalStatusSnapshot): boolean {
+  return Boolean(goal?.status && goal.status !== "none");
+}
+
+export function runtimeGoalBudgetLabel(goal?: GoalStatusSnapshot): string {
+  const budget = goal?.budget;
+  if (!budget) return "-";
+  const used = budget.continuations_used ?? 0;
+  const max = budget.max_continuations ?? 0;
+  if (max > 0) return `${used}/${max}`;
+  return String(used);
+}
+
 export function workingStatePresenceLabel(
   snapshot?: WorkingStateStatusSnapshot,
 ): string {
@@ -69,6 +87,20 @@ export function workingStateSectionCounts(snapshot?: WorkingStateStatusSnapshot)
     ...section,
     count: workingStateRecords(snapshot?.state, section.key).length,
   }));
+}
+
+export function workingStateRecordCount(snapshot?: WorkingStateStatusSnapshot): number {
+  return workingStateSectionCounts(snapshot).reduce((sum, item) => sum + item.count, 0);
+}
+
+export function runtimeWorkingStateBadgeLabel(
+  snapshot?: WorkingStateStatusSnapshot,
+): string {
+  const count = workingStateRecordCount(snapshot);
+  if (count > 0) return `state ${count}`;
+  if (snapshot?.disabled) return "state off";
+  if (!snapshot) return "state none";
+  return `state ${workingStatePresenceLabel(snapshot)}`;
 }
 
 export function workingStateRecords(

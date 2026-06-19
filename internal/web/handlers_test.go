@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -162,6 +163,65 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	}
 	if parsed.Model != "m" {
 		t.Errorf("model = %q", parsed.Model)
+	}
+}
+
+func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-state1"
+	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
+	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
+	dir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
+	if err := juexruntime.NewGoalStateStore(dir, juexruntime.GoalStateOptions{}).ApplyPatch(juexruntime.GoalStatePatch{
+		Objective:    "show session state near composer",
+		Status:       juexruntime.GoalStatusContinue,
+		LastProgress: "state seeded",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := juexruntime.NewWorkingStateStore(dir, juexruntime.WorkingStateOptions{}).ApplyPatch(juexruntime.WorkingStatePatch{
+		Goal: &juexruntime.WorkingStateRecord{Text: "keep state visible"},
+		HardConstraints: []juexruntime.WorkingStateRecord{{
+			Text:     "session DTO owns this state",
+			Severity: juexruntime.WorkingStateSeverityHigh,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Goal struct {
+			Objective string `json:"objective"`
+			Status    string `json:"status"`
+		} `json:"goal"`
+		WorkingState struct {
+			Present bool `json:"present"`
+			State   struct {
+				Goal            *juexruntime.WorkingStateRecord  `json:"goal"`
+				HardConstraints []juexruntime.WorkingStateRecord `json:"hard_constraints"`
+			} `json:"state"`
+		} `json:"working_state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Goal.Objective != "show session state near composer" || parsed.Goal.Status != string(juexruntime.GoalStatusContinue) {
+		t.Fatalf("goal = %+v", parsed.Goal)
+	}
+	if !parsed.WorkingState.Present || parsed.WorkingState.State.Goal == nil || len(parsed.WorkingState.State.HardConstraints) != 1 {
+		t.Fatalf("working_state = %+v", parsed.WorkingState)
 	}
 }
 

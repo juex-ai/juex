@@ -846,6 +846,7 @@ runtime:
   external_event_ttl: 24h
   tool_timeout: 60s
   working_state_enabled: true
+  show_builtin_hook_traces: false
 compaction:
   enabled: true
   reserve_tokens: 16384
@@ -898,6 +899,7 @@ compaction:
 | `runtime.external_event_ttl` | duration for queued MCP/external event messages while a turn is running; defaults to 24h |
 | `runtime.tool_timeout` | default hard timeout for tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
 | `runtime.working_state_enabled` | enables the session-local generic working-state sidecar; defaults to true |
+| `runtime.show_builtin_hook_traces` | mirrors built-in runtime hook/gate completions and failures into conversation-visible UI-only hook traces; defaults to false |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
@@ -956,8 +958,11 @@ fields such as tool input/result or compaction reason. Hook stdout may be empty
 or a JSON object containing `decision`, `additional_context`, `block_stop`,
 `continue_prompt`, `working_state`, and `goal_state`.
 
-The runtime emits `hook.started`, `hook.completed`, and `hook.errored` events;
-the existing session bus persists those events to `events.jsonl`.
+The runtime emits `hook.started`, `hook.completed`, `hook.errored`, and
+conversation-visible `hook.trace` events; the existing session bus persists
+those events to `events.jsonl`. Command hooks always produce UI-only hook trace
+rows. Built-in runtime hook/gate completions and failures only produce those
+rows when `runtime.show_builtin_hook_traces` is true.
 `UserPromptSubmit` hooks can add context to the user message before projection
 and provider submission. `PreToolUse` hooks can deny a tool call, producing an
 error tool result so the model can recover. `PostToolUse` hook failures are

@@ -101,6 +101,10 @@ func NewShellResult(result ShellSessionResult) ShellResult {
 	}
 }
 
+func (r ShellResult) ToolCallTimedOut() bool {
+	return r.TimedOut
+}
+
 type shellSession struct {
 	id            int
 	started       time.Time

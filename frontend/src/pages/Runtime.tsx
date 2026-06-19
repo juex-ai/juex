@@ -5,19 +5,13 @@ import type {
   RuntimeHookInfo,
   RuntimeStatusResponse,
   SystemPromptEntry,
-  WorkingStateRecord,
 } from "@/types";
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import {
-  WORKING_STATE_SECTIONS,
-  formatRuntimeTimestamp,
   formatRuntimeTokenCount,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
-  workingStatePresenceLabel,
-  workingStateRecords,
-  workingStateSectionCounts,
 } from "@/lib/runtime-display";
 
 export function Runtime() {
@@ -60,8 +54,6 @@ export function Runtime() {
   const systemPromptItems = systemPrompt.items ?? [];
   const hooks = data.hooks ?? { configured: 0, commands: [] };
   const hookCommands = hooks.commands ?? [];
-  const workingState = data.working_state;
-  const workingStateCounts = workingStateSectionCounts(workingState);
 
   return (
     <div className="min-h-0 flex-1 overflow-auto bg-background">
@@ -154,191 +146,6 @@ export function Runtime() {
           </div>
         </section>
 
-        {data.goal ? (
-          <section className="space-y-3">
-            <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-              <h1 className="font-serif text-2xl italic leading-none text-primary">
-                Goal
-              </h1>
-              <Badge variant={goalStatusVariant(data.goal.status)} className="font-mono text-[11px]">
-                {data.goal.status || "unknown"}
-              </Badge>
-            </div>
-            <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
-              <dl className="grid gap-0 text-sm sm:grid-cols-[9rem_minmax(0,1fr)]">
-                <dt className="border-b bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:border-b-0">
-                  Objective
-                </dt>
-                <dd className="break-words px-3 py-2">
-                  {data.goal.objective || "-"}
-                </dd>
-                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Updated
-                </dt>
-                <dd className="border-t px-3 py-2 font-mono text-xs">
-                  {formatRuntimeTimestamp(data.goal.updated_at)}
-                </dd>
-                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Progress
-                </dt>
-                <dd className="border-t break-words px-3 py-2">
-                  {data.goal.last_progress || "-"}
-                </dd>
-                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Check
-                </dt>
-                <dd className="border-t px-3 py-2">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <Badge variant={goalStatusVariant(data.goal.last_check?.status)} className="font-mono text-[11px]">
-                      {data.goal.last_check?.status || "none"}
-                    </Badge>
-                    <span className="min-w-0 break-words">
-                      {data.goal.last_check?.summary || "-"}
-                    </span>
-                  </div>
-                </dd>
-                {data.goal.last_check?.continue_prompt ? (
-                  <>
-                    <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                      Continue
-                    </dt>
-                    <dd className="border-t break-words px-3 py-2">
-                      {data.goal.last_check.continue_prompt}
-                    </dd>
-                  </>
-                ) : null}
-                {data.goal.blocked_reason ? (
-                  <>
-                    <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                      Blocked
-                    </dt>
-                    <dd className="border-t break-words px-3 py-2">
-                      {data.goal.blocked_reason}
-                    </dd>
-                  </>
-                ) : null}
-                {data.goal.next_user_input ? (
-                  <>
-                    <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                      User input
-                    </dt>
-                    <dd className="border-t break-words px-3 py-2">
-                      {data.goal.next_user_input}
-                    </dd>
-                  </>
-                ) : null}
-                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Budget
-                </dt>
-                <dd className="border-t px-3 py-2 font-mono text-xs">
-                  {goalBudgetLabel(data)}
-                </dd>
-                <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                  Evidence
-                </dt>
-                <dd className="border-t px-3 py-2">
-                  {data.goal.evidence && data.goal.evidence.length > 0 ? (
-                    <ul className="space-y-2">
-                      {data.goal.evidence.map((item, index) => (
-                        <li
-                          key={item.id || index}
-                          className="border-t py-2 first:border-t-0"
-                        >
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
-                            {item.kind ? (
-                              <Badge variant="outline" className="font-mono text-[11px]">
-                                {item.kind}
-                              </Badge>
-                            ) : null}
-                            {item.source ? (
-                              <Badge variant="secondary" className="font-mono text-[11px]">
-                                {item.source}
-                              </Badge>
-                            ) : null}
-                            <span className="min-w-0 break-words text-sm">
-                              {item.text || "-"}
-                            </span>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <span className="text-muted-foreground">No evidence.</span>
-                  )}
-                </dd>
-              </dl>
-            </div>
-          </section>
-        ) : null}
-
-        <section className="space-y-3">
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
-              Working State
-            </h1>
-            <Badge
-              variant={workingState?.disabled ? "destructive" : "secondary"}
-              className="font-mono text-[11px]"
-            >
-              {workingStatePresenceLabel(workingState)}
-            </Badge>
-          </div>
-          <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
-            {workingState ? (
-              <>
-                <dl className="grid gap-0 text-sm sm:grid-cols-[9rem_minmax(0,1fr)]">
-                  <dt className="border-b bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:border-b-0">
-                    Path
-                  </dt>
-                  <dd className="break-all px-3 py-2 font-mono text-xs">
-                    {workingState.path || "-"}
-                  </dd>
-                  <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    Updated
-                  </dt>
-                  <dd className="border-t px-3 py-2 font-mono text-xs">
-                    {formatRuntimeTimestamp(workingState.state.updated_at)}
-                  </dd>
-                  <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                    Version
-                  </dt>
-                  <dd className="border-t px-3 py-2 font-mono text-xs">
-                    {workingState.state.version || 1}
-                  </dd>
-                </dl>
-                <div className="border-t bg-muted/20 px-3 py-3">
-                  <div className="grid gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-                    {workingStateCounts.map((item) => (
-                      <div
-                        key={item.key}
-                        className="border-l px-3 first:border-l-0 sm:[&:nth-child(2n+1)]:border-l-0 lg:[&:nth-child(2n+1)]:border-l lg:[&:nth-child(4n+1)]:border-l-0"
-                      >
-                        <div className="text-muted-foreground text-[11px] uppercase tracking-[0.14em]">
-                          {item.label}
-                        </div>
-                        <div className="mt-1 font-mono text-lg leading-none">
-                          {item.count}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                {WORKING_STATE_SECTIONS.map((section) => (
-                  <WorkingStateSection
-                    key={section.key}
-                    label={section.label}
-                    records={workingStateRecords(workingState.state, section.key)}
-                  />
-                ))}
-              </>
-            ) : (
-              <div className="text-muted-foreground px-3 py-3 text-sm">
-                No active primary session.
-              </div>
-            )}
-          </div>
-        </section>
-
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <h1 className="font-serif text-2xl italic leading-none text-primary">
@@ -369,9 +176,6 @@ export function Runtime() {
             <h1 className="font-serif text-2xl italic leading-none text-primary">
               Provider
             </h1>
-            <Badge variant="secondary" className="font-mono text-[11px]">
-              {data.provider.protocol || data.provider.id || "-"}
-            </Badge>
           </div>
           <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
             <table className="w-full min-w-[34rem] text-left text-sm">
@@ -382,6 +186,14 @@ export function Runtime() {
                   </th>
                   <td className="px-3 py-2 font-mono text-xs">
                     {data.provider.id || "-"}
+                  </td>
+                </tr>
+                <tr className="border-t">
+                  <th className="bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                    Protocol
+                  </th>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {data.provider.protocol || "-"}
                   </td>
                 </tr>
                 <tr className="border-t">
@@ -583,78 +395,6 @@ function BadgeList({ items, empty = "-" }: { items: string[]; empty?: string }) 
   );
 }
 
-function WorkingStateSection({
-  label,
-  records,
-}: {
-  label: string;
-  records: WorkingStateRecord[];
-}) {
-  if (records.length === 0) return null;
-  return (
-    <div className="border-t px-3 py-3">
-      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-2">
-        <span className="text-sm font-medium">{label}</span>
-        <Badge variant="secondary" className="font-mono text-[11px]">
-          {records.length}
-        </Badge>
-      </div>
-      <ul className="space-y-2">
-        {records.slice(0, 4).map((record, index) => (
-          <WorkingStateRecordRow record={record} key={record.id || index} />
-        ))}
-      </ul>
-      {records.length > 4 ? (
-        <div className="text-muted-foreground mt-2 text-xs">
-          {records.length - 4} more records
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function WorkingStateRecordRow({ record }: { record: WorkingStateRecord }) {
-  return (
-    <li className="border-t py-2 first:border-t-0">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        {record.severity ? (
-          <Badge
-            variant={record.severity === "critical" || record.severity === "high" ? "destructive" : "outline"}
-            className="font-mono text-[11px]"
-          >
-            {record.severity}
-          </Badge>
-        ) : null}
-        {record.source ? (
-          <Badge variant="outline" className="font-mono text-[11px]">
-            {record.source}
-          </Badge>
-        ) : null}
-        {record.confidence ? (
-          <Badge variant="secondary" className="font-mono text-[11px]">
-            {Math.round(record.confidence * 100)}%
-          </Badge>
-        ) : null}
-        <span className="min-w-0 break-words text-sm">
-          {record.text || record.id || "-"}
-        </span>
-      </div>
-      {record.related_paths && record.related_paths.length > 0 ? (
-        <div className="text-muted-foreground mt-2 break-all font-mono text-xs">
-          {record.related_paths.join(", ")}
-        </div>
-      ) : null}
-      {record.created_at || record.resolved_at ? (
-        <div className="text-muted-foreground mt-2 font-mono text-xs">
-          {record.created_at ? `created ${formatRuntimeTimestamp(record.created_at)}` : ""}
-          {record.created_at && record.resolved_at ? " · " : ""}
-          {record.resolved_at ? `resolved ${formatRuntimeTimestamp(record.resolved_at)}` : ""}
-        </div>
-      ) : null}
-    </li>
-  );
-}
-
 function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
   return (
     <details className="group border-t first:border-t-0">
@@ -735,18 +475,4 @@ function mcpStatusVariant(status: string): "secondary" | "outline" | "destructiv
   if (status === "connected") return "secondary";
   if (status === "error") return "destructive";
   return "outline";
-}
-
-function goalStatusVariant(status?: string): "secondary" | "outline" | "destructive" {
-  if (status === "complete") return "secondary";
-  if (status === "blocked") return "destructive";
-  return "outline";
-}
-
-function goalBudgetLabel(data: RuntimeStatusResponse): string {
-  const budget = data.goal?.budget;
-  if (!budget) return "-";
-  const used = budget.continuations_used ?? 0;
-  const max = budget.max_continuations ?? 0;
-  return max > 0 ? `${used}/${max} continuations` : `${used} continuations`;
 }

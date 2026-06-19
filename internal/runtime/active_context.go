@@ -8,6 +8,8 @@ type ActiveContextSnapshot struct {
 }
 
 func assembleActiveContext(history []llm.Message, incoming []llm.Message) ActiveContextSnapshot {
+	history = providerVisibleMessages(history)
+	incoming = providerVisibleMessages(incoming)
 	latestCompact := -1
 	for i := range history {
 		if history[i].Kind == llm.MessageKindCompact {
@@ -44,6 +46,29 @@ func indexMessageID(history []llm.Message, id string) int {
 
 func ActiveContextFromHistory(history []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {
 	return assembleActiveContext(history, incoming)
+}
+
+func providerVisibleMessages(msgs []llm.Message) []llm.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	var filtered []llm.Message
+	for i, msg := range msgs {
+		if msg.Kind != llm.MessageKindHookEvent {
+			if filtered != nil {
+				filtered = append(filtered, msg)
+			}
+			continue
+		}
+		if filtered == nil {
+			filtered = make([]llm.Message, 0, len(msgs)-1)
+			filtered = append(filtered, msgs[:i]...)
+		}
+	}
+	if filtered == nil {
+		return msgs
+	}
+	return filtered
 }
 
 func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {

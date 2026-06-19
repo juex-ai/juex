@@ -69,6 +69,17 @@ import { sessionPreviewTitle } from "@/lib/session-title";
 import { mergeOlderSessionPage } from "@/lib/session-messages";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
+import {
+  WORKING_STATE_SECTIONS,
+  formatRuntimeTimestamp,
+  runtimeGoalBadgeLabel,
+  runtimeGoalBudgetLabel,
+  runtimeGoalIsActive,
+  runtimeWorkingStateBadgeLabel,
+  workingStatePresenceLabel,
+  workingStateRecords,
+  workingStateSectionCounts,
+} from "@/lib/runtime-display";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -111,10 +122,13 @@ import {
 import type {
   ActiveContextSnapshot,
   ContextUsage,
+  GoalStatusSnapshot,
   Message as ChatMessage,
   SessionShowResponse,
   SlashCommandResponse,
   TokenUsage,
+  WorkingStateRecord,
+  WorkingStateStatusSnapshot,
 } from "@/types";
 
 type InitialCommandState = {
@@ -495,6 +509,7 @@ export function Session() {
                       activeContext={activeContext}
                     />
                     <TokenUsageLabel usage={tokenUsage} />
+                    <SessionRuntimeStateBadges data={data} />
                   </PromptInputTools>
                   <div className="flex shrink-0 items-center gap-1">
                     <ComposerSubmitButton
@@ -622,6 +637,206 @@ function LoadOlderMessagesControl({
       ) : null}
     </div>
   );
+}
+
+function SessionRuntimeStateBadges({ data }: { data: SessionShowResponse }) {
+  return (
+    <>
+      <SessionStateBadge
+        label={runtimeGoalBadgeLabel(data.goal)}
+        tone={runtimeGoalIsActive(data.goal) ? "active" : "muted"}
+      >
+        <GoalStateTooltip goal={data.goal} />
+      </SessionStateBadge>
+      <SessionStateBadge
+        label={runtimeWorkingStateBadgeLabel(data.working_state)}
+        tone={data.working_state?.present ? "active" : "muted"}
+      >
+        <WorkingStateTooltip snapshot={data.working_state} />
+      </SessionStateBadge>
+    </>
+  );
+}
+
+function SessionStateBadge({
+  children,
+  label,
+  tone,
+}: {
+  children: ReactNode;
+  label: string;
+  tone: "active" | "muted";
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          className={cn(
+            "inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 font-mono text-[11px]",
+            tone === "active"
+              ? "border-primary/30 bg-primary/10 text-primary"
+              : "border-transparent bg-muted text-muted-foreground",
+          )}
+          type="button"
+        >
+          {label}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        hideArrow
+        className="block !w-[min(34rem,calc(100vw-2rem))] !max-w-[calc(100vw-2rem)] max-h-[24rem] overflow-auto border border-border bg-popover px-3 py-2 text-left text-xs text-popover-foreground shadow-lg"
+      >
+        {children}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function GoalStateTooltip({ goal }: { goal?: GoalStatusSnapshot }) {
+  if (!goal) {
+    return (
+      <RuntimeTooltipPanel title="Goal">
+        <div className="text-muted-foreground">No goal state for this session.</div>
+      </RuntimeTooltipPanel>
+    );
+  }
+  return (
+    <RuntimeTooltipPanel title="Goal">
+      <RuntimeTooltipRow label="status" value={goal.status || "unknown"} />
+      <RuntimeTooltipRow label="objective" value={goal.objective || "-"} />
+      <RuntimeTooltipRow label="progress" value={goal.last_progress || "-"} />
+      <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(goal.updated_at)} />
+      <RuntimeTooltipRow
+        label="budget"
+        value={runtimeGoalBudgetLabel(goal)}
+      />
+      {goal.last_check ? (
+        <>
+          <RuntimeTooltipRow label="check" value={goal.last_check.status || "unknown"} />
+          <RuntimeTooltipRow label="summary" value={goal.last_check.summary || "-"} />
+          {goal.last_check.continue_prompt ? (
+            <RuntimeTooltipRow label="continue" value={goal.last_check.continue_prompt} />
+          ) : null}
+        </>
+      ) : null}
+      {goal.blocked_reason ? (
+        <RuntimeTooltipRow label="blocked" value={goal.blocked_reason} />
+      ) : null}
+      {goal.next_user_input ? (
+        <RuntimeTooltipRow label="user input" value={goal.next_user_input} />
+      ) : null}
+      {goal.evidence && goal.evidence.length > 0 ? (
+        <RuntimeTooltipRecords
+          title="evidence"
+          records={goal.evidence.map((item) => ({
+            text: item.text,
+            source: item.source || item.kind,
+            related_paths: item.related_paths,
+          }))}
+        />
+      ) : null}
+    </RuntimeTooltipPanel>
+  );
+}
+
+function WorkingStateTooltip({
+  snapshot,
+}: {
+  snapshot?: WorkingStateStatusSnapshot;
+}) {
+  if (!snapshot) {
+    return (
+      <RuntimeTooltipPanel title="Working State">
+        <div className="text-muted-foreground">No active working-state snapshot for this session.</div>
+      </RuntimeTooltipPanel>
+    );
+  }
+  const counts = workingStateSectionCounts(snapshot);
+  const state = snapshot.state;
+  return (
+    <RuntimeTooltipPanel title="Working State">
+      <RuntimeTooltipRow label="status" value={workingStatePresenceLabel(snapshot)} />
+      <RuntimeTooltipRow label="path" value={snapshot.path || "-"} />
+      <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(state.updated_at)} />
+      <RuntimeTooltipRow
+        label="counts"
+        value={counts.map((item) => `${item.label}: ${item.count}`).join(", ")}
+      />
+      {WORKING_STATE_SECTIONS.map((section) => {
+        const records = workingStateRecords(state, section.key);
+        if (records.length === 0) return null;
+        return (
+          <RuntimeTooltipRecords
+            key={section.key}
+            title={section.label}
+            records={records}
+          />
+        );
+      })}
+    </RuntimeTooltipPanel>
+  );
+}
+
+function RuntimeTooltipPanel({
+  children,
+  title,
+}: {
+  children: ReactNode;
+  title: string;
+}) {
+  return (
+    <div className="min-w-[18rem] max-w-xl space-y-2">
+      <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {title}
+      </div>
+      <div className="space-y-1.5">{children}</div>
+    </div>
+  );
+}
+
+function RuntimeTooltipRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-[6rem_minmax(0,1fr)]">
+      <span className="font-mono text-[11px] text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-words text-popover-foreground">{value}</span>
+    </div>
+  );
+}
+
+function RuntimeTooltipRecords({
+  records,
+  title,
+}: {
+  records: WorkingStateRecord[];
+  title: string;
+}) {
+  return (
+    <div className="border-t border-border/60 pt-2">
+      <div className="mb-1 font-mono text-[11px] text-muted-foreground">{title}</div>
+      <div className="space-y-1.5">
+        {records.map((record, index) => (
+          <div key={record.id || `${title}:${index}`} className="rounded border border-border/60 bg-background/70 px-2 py-1.5">
+            <div className="break-words text-foreground">{record.text || "-"}</div>
+            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
+              {record.source ? <span>source: {record.source}</span> : null}
+              {record.severity ? <span>severity: {record.severity}</span> : null}
+              {record.confidence != null ? (
+                <span>confidence: {formatConfidence(record.confidence)}</span>
+              ) : null}
+              {record.related_paths && record.related_paths.length > 0 ? (
+                <span>paths: {record.related_paths.join(", ")}</span>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatConfidence(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  return `${Math.round(value * 100)}%`;
 }
 
 function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
@@ -861,6 +1076,7 @@ function MessageGroupView({
   // already shows the current session-level model in that case.
   const showModel = group.role === "assistant" && !!group.model;
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
+  const isHookEvent = group.kind === "hook_event";
   const isCompact = group.kind === "compact";
   const isPendingCompact = group.kind === LOCAL_COMPACT_PENDING_KIND;
   const copyText = messageGroupCopyText(group);
@@ -868,6 +1084,10 @@ function MessageGroupView({
 
   if (isMCPEvent) {
     return <MCPEventGroup group={group} />;
+  }
+
+  if (isHookEvent) {
+    return <HookEventGroup group={group} />;
   }
 
   if (isCompact) {
@@ -989,6 +1209,25 @@ function MCPEventGroup({ group }: { group: MessageGroup }) {
         {group.pending && isEmpty ? (
           <div className="text-center text-sm text-muted-foreground">...</div>
         ) : null}
+      </div>
+    </div>
+  );
+}
+
+function HookEventGroup({ group }: { group: MessageGroup }) {
+  const text = group.units
+    .filter((unit) => unit.kind === "text")
+    .map((unit) => (unit.kind === "text" ? unit.block.text : ""))
+    .filter(Boolean)
+    .join("\n");
+  if (!text && !group.pending) return null;
+  return (
+    <div className="flex w-full justify-center px-2 py-0.5">
+      <div
+        className="max-w-full truncate rounded-full bg-muted/60 px-2.5 py-1 font-mono text-[11px] text-muted-foreground"
+        title={text}
+      >
+        {text || "..."}
       </div>
     </div>
   );

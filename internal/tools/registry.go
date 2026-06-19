@@ -43,6 +43,10 @@ type CallInfo struct {
 	StructuredResult any  `json:"structured_result,omitempty"`
 }
 
+type structuredTimeoutResult interface {
+	ToolCallTimedOut() bool
+}
+
 type Registry struct {
 	mu                    sync.RWMutex
 	tools                 map[string]Tool
@@ -155,9 +159,13 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	result, err := callToolHandler(callCtx, t, callInput)
 	out := result.Text
 	info.StructuredResult = result.Structured
+	if structuredResultTimedOut(result.Structured) && ctx.Err() == nil {
+		info.TimedOut = true
+		return out, info, toolTimeoutError(name, timeoutSeconds)
+	}
 	if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		info.TimedOut = true
-		return out, info, fmt.Errorf("tools: %s timed out after %ds", name, timeoutSeconds)
+		return out, info, toolTimeoutError(name, timeoutSeconds)
 	}
 	return out, info, err
 }
@@ -168,6 +176,15 @@ func callToolHandler(ctx context.Context, t Tool, input map[string]any) (Result,
 	}
 	out, err := t.Handler(ctx, input)
 	return Result{Text: out}, err
+}
+
+func structuredResultTimedOut(result any) bool {
+	reporter, ok := result.(structuredTimeoutResult)
+	return ok && reporter.ToolCallTimedOut()
+}
+
+func toolTimeoutError(name string, timeoutSeconds int) error {
+	return fmt.Errorf("tools: %s timed out after %ds", name, timeoutSeconds)
 }
 
 // NormalizeCallInput decodes OpenAI-compatible fallback arguments before a

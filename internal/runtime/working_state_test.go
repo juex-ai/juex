@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/tools"
@@ -120,6 +121,29 @@ func TestWorkingStateStatusSnapshotReportsPresenceAndDisabled(t *testing.T) {
 	}
 }
 
+func TestWorkingStateStoreStatusSnapshotReportsPresence(t *testing.T) {
+	store := NewWorkingStateStore(t.TempDir(), WorkingStateOptions{})
+	snapshot, err := store.StatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot == nil || snapshot.Present || snapshot.State.Version != 1 {
+		t.Fatalf("empty snapshot = %+v", snapshot)
+	}
+	if err := store.ApplyPatch(WorkingStatePatch{
+		Goal: &WorkingStateRecord{Text: "show session state"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = store.StatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Present || snapshot.State.Goal == nil || snapshot.State.Goal.Text != "show session state" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+}
+
 func TestWorkingStateStoreStalesAndRefreshesRelatedChecks(t *testing.T) {
 	now := time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC)
 	store := NewWorkingStateStore(t.TempDir(), WorkingStateOptions{Now: func() time.Time { return now }})
@@ -209,6 +233,111 @@ func TestWorkingStateHookOutputMergesPatch(t *testing.T) {
 	}
 	if len(state.HardConstraints) != 1 || state.HardConstraints[0].Source != WorkingStateSourceHookExtraction {
 		t.Fatalf("hook working state = %+v", state.HardConstraints)
+	}
+}
+
+func TestHookTraceMessageIsUIOnly(t *testing.T) {
+	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+		Name:    "fake",
+		Events:  []hooks.EventName{hooks.EventUserPromptSubmit},
+		Command: runtimeHookCommand("ok"),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prov := &mockProvider{script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn}}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Hooks = runner
+	var traceEvent HookTracePayload
+	bus.Subscribe("hook.trace", func(e events.Event) {
+		payload, _ := e.Payload.(HookTracePayload)
+		traceEvent = payload
+	})
+
+	if _, err := eng.Turn(context.Background(), "start"); err != nil {
+		t.Fatal(err)
+	}
+	var trace *llm.Message
+	for i := range eng.Session.History {
+		msg := &eng.Session.History[i]
+		if msg.Kind == llm.MessageKindHookEvent {
+			trace = msg
+			break
+		}
+	}
+	if trace == nil {
+		t.Fatalf("missing hook trace message in history: %+v", eng.Session.History)
+	}
+	if trace.Role != llm.RoleSystem || !strings.Contains(trace.FirstText(), "hook fake completed UserPromptSubmit") {
+		t.Fatalf("hook trace message = %+v", *trace)
+	}
+	if !strings.Contains(traceEvent.Text, "hook fake completed UserPromptSubmit") {
+		t.Fatalf("hook trace event = %+v", traceEvent)
+	}
+	for _, history := range prov.histories {
+		for _, msg := range history {
+			if msg.Kind == llm.MessageKindHookEvent {
+				t.Fatalf("hook trace leaked into provider context: %+v", history)
+			}
+		}
+	}
+}
+
+func TestBuiltinHookTraceTextRequiresPolicy(t *testing.T) {
+	payload := HookCompletedPayload{
+		Name:       goalCompletionGateName,
+		Source:     "builtin",
+		EventName:  string(hooks.EventStop),
+		DurationMS: 3,
+		Decision:   string(hooks.DecisionAllow),
+	}
+	if got := hookCompletedTraceText(payload, false); got != "" {
+		t.Fatalf("builtin trace without policy = %q", got)
+	}
+	got := hookCompletedTraceText(payload, true)
+	if !strings.Contains(got, "hook goal-completion-gate allow Stop in 3ms") {
+		t.Fatalf("builtin trace with policy = %q", got)
+	}
+}
+
+func TestBuiltinHookTraceMessageRequiresPolicy(t *testing.T) {
+	payload := HookCompletedPayload{
+		Name:       goalCompletionGateName,
+		Source:     "builtin",
+		EventName:  string(hooks.EventStop),
+		DurationMS: 3,
+		Decision:   string(hooks.DecisionAllow),
+	}
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	var traces []HookTracePayload
+	bus.Subscribe("hook.trace", func(e events.Event) {
+		payload, _ := e.Payload.(HookTracePayload)
+		traces = append(traces, payload)
+	})
+
+	eng.emitHookCompleted("turn-1", payload)
+	if len(traces) != 0 {
+		t.Fatalf("builtin trace should be hidden by default: %+v", traces)
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindHookEvent {
+			t.Fatalf("builtin trace leaked without policy: %+v", msg)
+		}
+	}
+
+	eng.ShowBuiltinHookTraces = true
+	eng.emitHookCompleted("turn-2", payload)
+	if len(traces) != 1 || !strings.Contains(traces[0].Text, "hook goal-completion-gate allow Stop in 3ms") {
+		t.Fatalf("builtin trace event with policy = %+v", traces)
+	}
+	var hookEvents int
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindHookEvent {
+			hookEvents++
+		}
+	}
+	if hookEvents != 1 {
+		t.Fatalf("hook event messages = %d, history = %+v", hookEvents, eng.Session.History)
 	}
 }
 

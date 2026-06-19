@@ -29,6 +29,9 @@ const (
 const (
 	// MessageKindMCPEvent marks user-visible MCP notification turns.
 	MessageKindMCPEvent = "mcp_event"
+	// MessageKindHookEvent marks user-visible command hook traces. These are
+	// UI-only runtime diagnostics and must not be sent back to providers.
+	MessageKindHookEvent = "hook_event"
 	// MessageKindCompact marks an automatic context compaction summary. The
 	// persisted transcript keeps the original messages; provider calls only
 	// include the latest compact summary plus later messages.

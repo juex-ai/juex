@@ -56,6 +56,10 @@ type HookErroredPayload struct {
 	StderrPreview string `json:"stderr_preview,omitempty"`
 }
 
+type HookTracePayload struct {
+	Text string `json:"text"`
+}
+
 type LLMRequestedPayload struct {
 	Iter       int `json:"iter"`
 	HistoryLen int `json:"history_len"`

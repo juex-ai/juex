@@ -119,6 +119,8 @@ export interface SessionShowResponse extends SessionInfo {
   model?: string;
   has_more_before?: boolean;
   oldest_message_id?: string;
+  goal?: GoalStatusSnapshot;
+  working_state?: WorkingStateStatusSnapshot;
 }
 
 export interface SessionsListResponse {
@@ -279,6 +281,38 @@ export interface ToolErroredPayload {
   result?: Record<string, unknown>;
 }
 
+export interface HookStartedPayload {
+  name: string;
+  source?: string;
+  event_name: string;
+  tool_name?: string;
+}
+
+export interface HookCompletedPayload extends HookStartedPayload {
+  duration_ms: number;
+  decision?: string;
+  additional_context_len?: number;
+  block_stop?: boolean;
+  continue_prompt_len?: number;
+  stdout_len?: number;
+  stderr_len?: number;
+  stdout_preview?: string;
+  stderr_preview?: string;
+}
+
+export interface HookErroredPayload extends HookStartedPayload {
+  duration_ms: number;
+  error: string;
+  stdout_len?: number;
+  stderr_len?: number;
+  stdout_preview?: string;
+  stderr_preview?: string;
+}
+
+export interface HookTracePayload {
+  text: string;
+}
+
 export interface PendingInputQueuedPayload {
   input: string;
   kind: string;
@@ -360,6 +394,10 @@ export type BusEvent =
   | (BusEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
   | (BusEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })
   | (BusEventBase<"tool.errored"> & { payload: ToolErroredPayload })
+  | (BusEventBase<"hook.started"> & { payload: HookStartedPayload })
+  | (BusEventBase<"hook.completed"> & { payload: HookCompletedPayload })
+  | (BusEventBase<"hook.errored"> & { payload: HookErroredPayload })
+  | (BusEventBase<"hook.trace"> & { payload: HookTracePayload })
   | (BusEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
   | (BusEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
   | (BusEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })

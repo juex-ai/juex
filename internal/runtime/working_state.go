@@ -189,6 +189,29 @@ func (s *WorkingStateStore) Snapshot() (WorkingState, error) {
 	return s.loadLocked()
 }
 
+func (s *WorkingStateStore) StatusSnapshot() (*WorkingStateStatusSnapshot, error) {
+	if s == nil {
+		return nil, nil
+	}
+	state, err := s.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	present := false
+	if s.Path != "" {
+		if _, err := os.Stat(s.Path); err == nil {
+			present = true
+		} else if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	return &WorkingStateStatusSnapshot{
+		Path:    s.Path,
+		Present: present,
+		State:   state,
+	}, nil
+}
+
 func (s *WorkingStateStore) ApplyPatch(patch WorkingStatePatch) error {
 	if s == nil || patch.empty() {
 		return nil
@@ -480,23 +503,7 @@ func (e *Engine) WorkingStateStatusSnapshot() (*WorkingStateStatusSnapshot, erro
 	if store == nil {
 		return nil, nil
 	}
-	state, err := store.Snapshot()
-	if err != nil {
-		return nil, err
-	}
-	present := false
-	if store.Path != "" {
-		if _, err := os.Stat(store.Path); err == nil {
-			present = true
-		} else if !os.IsNotExist(err) {
-			return nil, err
-		}
-	}
-	return &WorkingStateStatusSnapshot{
-		Path:    store.Path,
-		Present: present,
-		State:   state,
-	}, nil
+	return store.StatusSnapshot()
 }
 
 func (e *Engine) workingStateContextLocked() (string, bool) {

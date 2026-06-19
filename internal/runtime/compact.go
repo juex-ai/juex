@@ -72,7 +72,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	if !policy.Enabled {
 		return CompactionResult{}, nil
 	}
-	selection := ensureCompactionProgress(selectCompactionInput(e.Session.History, policy))
+	selection := ensureCompactionProgress(selectCompactionInput(providerVisibleMessages(e.Session.History), policy))
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}

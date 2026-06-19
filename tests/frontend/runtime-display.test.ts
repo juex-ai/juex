@@ -3,9 +3,14 @@ import assert from "node:assert/strict";
 
 import {
   formatRuntimeTokenCount,
+  runtimeGoalBadgeLabel,
+  runtimeGoalBudgetLabel,
+  runtimeGoalIsActive,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
+  runtimeWorkingStateBadgeLabel,
   workingStatePresenceLabel,
+  workingStateRecordCount,
   workingStateSectionCounts,
 } from "../../frontend/src/lib/runtime-display.ts";
 
@@ -42,6 +47,37 @@ test("runtimeHookCommandLabel joins command argv", () => {
   assert.equal(runtimeHookCommandLabel([]), "-");
 });
 
+test("runtimeGoalBadgeLabel summarizes goal status", () => {
+  assert.equal(runtimeGoalBadgeLabel(undefined), "goal none");
+  assert.equal(runtimeGoalBadgeLabel({ status: "continue" }), "goal continue");
+});
+
+test("runtimeGoalIsActive only highlights real goal statuses", () => {
+  assert.equal(runtimeGoalIsActive(undefined), false);
+  assert.equal(runtimeGoalIsActive({ status: "" }), false);
+  assert.equal(runtimeGoalIsActive({ status: "none" }), false);
+  assert.equal(runtimeGoalIsActive({ status: "continue" }), true);
+});
+
+test("runtimeGoalBudgetLabel handles missing and unbounded budgets", () => {
+  assert.equal(runtimeGoalBudgetLabel(undefined), "-");
+  assert.equal(runtimeGoalBudgetLabel({ status: "continue" }), "-");
+  assert.equal(
+    runtimeGoalBudgetLabel({
+      status: "continue",
+      budget: { continuations_used: 2, max_continuations: 5 },
+    }),
+    "2/5",
+  );
+  assert.equal(
+    runtimeGoalBudgetLabel({
+      status: "continue",
+      budget: { continuations_used: 2, max_continuations: 0 },
+    }),
+    "2",
+  );
+});
+
 test("workingStatePresenceLabel describes active sidecar state", () => {
   assert.equal(workingStatePresenceLabel(undefined), "no active session");
   assert.equal(
@@ -72,4 +108,18 @@ test("workingStateSectionCounts summarizes sidecar records", () => {
   assert.equal(counts.find((item) => item.key === "hard_constraints")?.count, 1);
   assert.equal(counts.find((item) => item.key === "open_issues")?.count, 2);
   assert.equal(counts.find((item) => item.key === "stale_checks")?.count, 0);
+  assert.equal(workingStateRecordCount({ present: true, state: countsState() }), 4);
+  assert.equal(
+    runtimeWorkingStateBadgeLabel({ present: true, state: countsState() }),
+    "state 4",
+  );
 });
+
+function countsState() {
+  return {
+    version: 1,
+    goal: { text: "ship it" },
+    hard_constraints: [{ text: "test first" }],
+    open_issues: [{ text: "missing e2e" }, { text: "missing docs" }],
+  };
+}

@@ -261,14 +261,15 @@ func New(opts Options) (*App, error) {
 			ConversationPath: filepath.Join(sess.Dir, "conversation.jsonl"),
 			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
 		},
-		PendingInputQueue:   runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
-		PendingInputTTL:     pendingInputTTL,
-		ExternalEventTTL:    externalEventTTL,
-		WorkingState:        workingStateStore(sess, runtimeLimits.WorkingStateEnabled),
-		GoalState:           goalStateStore(sess),
-		DisableWorkingState: !runtimeLimits.WorkingStateEnabled,
-		ContextWindow:       runtimeLimits.ContextWindow,
-		Compaction:          runtimeLimits.Compaction,
+		PendingInputQueue:     runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
+		PendingInputTTL:       pendingInputTTL,
+		ExternalEventTTL:      externalEventTTL,
+		WorkingState:          workingStateStore(sess, runtimeLimits.WorkingStateEnabled),
+		GoalState:             goalStateStore(sess),
+		DisableWorkingState:   !runtimeLimits.WorkingStateEnabled,
+		ShowBuiltinHookTraces: runtimeLimits.ShowBuiltinHookTraces,
+		ContextWindow:         runtimeLimits.ContextWindow,
+		Compaction:            runtimeLimits.Compaction,
 	}
 
 	a := &App{
