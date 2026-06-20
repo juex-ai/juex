@@ -469,8 +469,6 @@ export interface RuntimeStatusResponse {
     count: number;
     items: SkillInfo[];
   };
-  goal?: GoalStatusSnapshot;
-  working_state?: WorkingStateStatusSnapshot;
 }
 
 export interface GoalStatusSnapshot {

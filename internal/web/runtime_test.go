@@ -74,7 +74,7 @@ body`)
 	}
 }
 
-func TestRuntimeStatusIncludesActiveGoal(t *testing.T) {
+func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 	srv := newTestServer(t)
 	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
 	if err != nil {
@@ -111,38 +111,19 @@ func TestRuntimeStatusIncludesActiveGoal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Goal == nil || got.Goal.Objective != "ship runtime goal status" || got.Goal.LastCheck == nil {
-		t.Fatalf("goal = %+v", got.Goal)
-	}
-	if got.WorkingState == nil || !got.WorkingState.Present || filepath.Base(got.WorkingState.Path) != "working_state.json" {
-		t.Fatalf("working_state = %+v", got.WorkingState)
-	}
-	if got.WorkingState.State.Goal == nil || got.WorkingState.State.Goal.Text != "show runtime state in the UI" {
-		t.Fatalf("working_state goal = %+v", got.WorkingState.State.Goal)
-	}
-	if len(got.WorkingState.State.HardConstraints) != 1 {
-		t.Fatalf("hard constraints = %+v", got.WorkingState.State.HardConstraints)
-	}
-}
-
-func TestRuntimeStatusIgnoresUnexpectedActiveSessionValue(t *testing.T) {
-	srv := newTestServer(t)
-	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	encoded, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, ok := srv.sessions.Load(as.app.Session.ID)
-	if !ok {
-		t.Fatal("active session not stored")
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
 	}
-	defer srv.sessions.Store(as.app.Session.ID, original)
-	srv.sessions.Store(as.app.Session.ID, "unexpected")
-
-	if got := srv.activeGoalStatus(); got != nil {
-		t.Fatalf("goal = %+v, want nil", got)
+	if _, ok := fields["goal"]; ok {
+		t.Fatalf("runtime status leaked session goal: %s", encoded)
 	}
-	if got := srv.activeWorkingStateStatus(); got != nil {
-		t.Fatalf("working state = %+v, want nil", got)
+	if _, ok := fields["working_state"]; ok {
+		t.Fatalf("runtime status leaked session working state: %s", encoded)
 	}
 }
 
