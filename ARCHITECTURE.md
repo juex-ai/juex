@@ -762,7 +762,7 @@ Routes:
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
-| GET | `/api/runtime` | app-assembled system prompt, MCP, provider, shell, and skills status translated to the web DTO |
+| GET | `/api/runtime` | app-assembled system prompt, provider, shell, hooks, MCP, and skills status translated to the web DTO |
 
 ---
 
@@ -996,7 +996,7 @@ The runtime gate only enforces generic statuses: `complete` allows finish,
 `continue` queues the completion check's continuation prompt within the budget,
 and `blocked` requires both a concrete blocked reason and next user input
 before allowing finish. Goal state is exposed through `/status` and
-`/api/runtime`; it is not injected into provider context as an advisory
+`/api/sessions/<id>`; it is not injected into provider context as an advisory
 message.
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
@@ -1036,7 +1036,7 @@ persisted into `conversation.jsonl`, and low-confidence records do not gate
 final answers.
 The separate `goal_state.json` sidecar carries operational completion state
 instead of advisory context. It is updated by lifecycle hook output and the
-goal-completion gate, appears in runtime status surfaces, and preserves
+goal-completion gate, appears in session status surfaces, and preserves
 continuation budget so a repeated incomplete check cannot loop forever.
 Manual compact and active-context inspection are available through
 `juex sessions compact --instructions`, `juex sessions context`, local
@@ -1135,10 +1135,10 @@ notification targets.
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.
 The app runtime status service assembles read-only runtime facts for
-`/api/runtime`: provider, shell, system prompt sections, skills, and configured
-MCP servers. The web layer keeps serve-process observations, such as the latest
-per-server MCP connection error and connected tool counts, then translates the
-app status into the browser DTO.
+`/api/runtime`: provider, shell, system prompt sections, hooks, skills, and
+configured MCP servers. The web layer keeps serve-process observations, such as
+the latest per-server MCP connection error and connected tool counts, then
+translates the app status into the browser DTO.
 
 Production paths load user-global and project MCP configs in later-wins order,
 then start a best-effort process manager with
