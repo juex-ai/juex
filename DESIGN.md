@@ -555,9 +555,9 @@ fast, local, and device-friendly.
 
 ## 10. Live updates
 
-The transcript is fetched as JSON from `/api/sessions/:id` and rendered with
+The transcript is fetched as JSON from `/api/sessions/<id>` and rendered with
 React state. The first fetch uses the server's default message window; clicking
-`Load older messages` fetches `/api/sessions/:id?before=<oldest_message_id>`
+`Load older messages` fetches `/api/sessions/<id>?before=<oldest_message_id>`
 and prepends the returned page.
 
 Live facts from the JSON/SSE API are projected through
