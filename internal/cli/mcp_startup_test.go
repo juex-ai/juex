@@ -102,6 +102,77 @@ func TestRunCmd_DryRunExpandsMCPWorkDirForDifferentCWDs(t *testing.T) {
 	}
 }
 
+func TestRunCmd_DryRunLoadsExtensionMCPAndSkills(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	extDir := filepath.Join(dir, ".juex", "extensions", "demo")
+	marker := filepath.Join(dir, "mcp-started")
+	body, err := json.MarshalIndent(map[string]any{
+		"mcpServers": map[string]any{
+			"alpha": map[string]any{
+				"command": os.Args[0],
+				"args":    []string{"--ext", "$JUEX_EXT_DIR"},
+				"env": map[string]string{
+					"JUEX_CLI_FAKE_MCP":               "1",
+					"JUEX_CLI_FAKE_MCP_MARKER":        marker,
+					"JUEX_CLI_FAKE_MCP_MARKER_DETAIL": "1",
+				},
+			},
+		},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteCLITestFile(t, filepath.Join(extDir, "mcp.json"), string(body))
+	mustWriteCLITestFile(t, filepath.Join(extDir, "skills", "ext-skill", "SKILL.md"), `---
+name: ext-skill
+description: Extension skill
+---
+body`)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
+	err = root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode dry-run JSON: %v\n%s", err, out.String())
+	}
+	haveTool := false
+	for _, tool := range plan.Tools {
+		if tool == "mcp__alpha__echo" {
+			haveTool = true
+		}
+	}
+	if !haveTool {
+		t.Fatalf("dry-run tools missing extension MCP tool: %+v", plan.Tools)
+	}
+	haveSkill := false
+	for _, skill := range plan.Skills {
+		if skill.Name == "ext-skill" && skill.Path == filepath.Join(extDir, "skills", "ext-skill", "SKILL.md") {
+			haveSkill = true
+		}
+	}
+	if !haveSkill {
+		t.Fatalf("dry-run skills missing extension skill: %+v", plan.Skills)
+	}
+	markerBody, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(markerBody), "ext_dir="+extDir) || !strings.Contains(string(markerBody), "args=--ext|"+extDir) {
+		t.Fatalf("marker missing extension dir:\n%s", markerBody)
+	}
+}
+
 func TestRunCmd_DryRunReportsMCPStartupErrors(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "juex.yaml")
@@ -341,6 +412,7 @@ func writeMarkerFromEnv(envName string) {
 			body = strings.Join([]string{
 				"workdir=" + os.Getenv("WORKDIR"),
 				"juex_workdir=" + os.Getenv("JUEX_WORKDIR"),
+				"ext_dir=" + os.Getenv("JUEX_EXT_DIR"),
 				"workspace=" + os.Getenv("WORKSPACE"),
 				"args=" + strings.Join(os.Args[1:], "|"),
 			}, "\n") + "\n"

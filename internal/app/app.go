@@ -130,6 +130,10 @@ func New(opts Options) (*App, error) {
 	runtimePaths := cfg.RuntimePaths()
 	resourcePaths := cfg.ResourcePaths()
 	runtimeLimits := cfg.RuntimeLimits()
+	resourceRefs, err := resolveAppResourceRefs(cfg)
+	if err != nil {
+		return nil, err
+	}
 	stderr := opts.Stderr
 	if stderr == nil {
 		stderr = os.Stderr
@@ -174,7 +178,7 @@ func New(opts Options) (*App, error) {
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 	})
 
-	skillLoader := skills.NewLoader(resourcePaths.SkillDirs...)
+	skillLoader := skills.NewLoaderFromDirs(resourceRefs.SkillDirs)
 	if err := skillLoader.Load(); err != nil {
 		return nil, err
 	}
@@ -190,17 +194,11 @@ func New(opts Options) (*App, error) {
 	var mcpConfigs []mcp.Config
 	var mergedMCP mcp.Config
 	if !opts.DisableMCP && opts.MCPManager == nil {
-		for _, path := range resourcePaths.MCPConfigPaths {
-			mcpCfg, err := mcp.LoadConfig(path)
-			if err != nil {
-				return nil, err
-			}
-			mcpCfg = mcp.PrepareConfig(mcpCfg, runtimePaths.WorkDir)
-			if len(mcpCfg.MCPServers) > 0 {
-				mcpConfigs = append(mcpConfigs, mcpCfg)
-			}
+		var err error
+		mcpConfigs, mergedMCP, _, err = loadMCPConfigRefs(resourceRefs.MCPConfigs, runtimePaths.WorkDir)
+		if err != nil {
+			return nil, err
 		}
-		mergedMCP = mcp.MergeConfigs(mcpConfigs)
 	}
 
 	attachment, err := AttachWorkspaceSession(cfg, SessionAttachmentRequest{
@@ -232,7 +230,7 @@ func New(opts Options) (*App, error) {
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
 	}
-	hookRunner, err := hooks.NewRunner(cfg.Hooks)
+	hookRunner, err := hooks.NewRunner(resourceRefs.Hooks)
 	if err != nil {
 		closeSessionResources()
 		return nil, err

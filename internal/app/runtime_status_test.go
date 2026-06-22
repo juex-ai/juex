@@ -176,6 +176,67 @@ body`)
 	}
 }
 
+func TestRuntimeStatusServiceRejectsExtensionResourceDuplicates(t *testing.T) {
+	t.Run("mcp", func(t *testing.T) {
+		work := t.TempDir()
+		mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "shared": { "command": "project" }
+  }
+}`)
+		mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "demo", "mcp.json"), `{
+  "mcpServers": {
+    "shared": { "command": "extension" }
+  }
+}`)
+		_, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
+		if err == nil || !strings.Contains(err.Error(), `duplicate MCP server "shared"`) {
+			t.Fatalf("err = %v, want duplicate MCP error", err)
+		}
+	})
+
+	t.Run("skill", func(t *testing.T) {
+		work := t.TempDir()
+		mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "skills", "shared", "SKILL.md"), `---
+name: shared
+description: project
+---
+body`)
+		mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "demo", "skills", "shared", "SKILL.md"), `---
+name: shared
+description: extension
+---
+body`)
+		_, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
+		if err == nil || !strings.Contains(err.Error(), `duplicate skill "shared"`) {
+			t.Fatalf("err = %v, want duplicate skill error", err)
+		}
+	})
+
+	t.Run("hook", func(t *testing.T) {
+		work := t.TempDir()
+		mustWriteRuntimeStatusFile(t, filepath.Join(work, ".juex", "extensions", "demo", "hooks.yaml"), `trusted: true
+commands:
+  - name: shared
+    events: [Stop]
+    command: ["python3", "x.py"]
+`)
+		cfg := config.Config{
+			WorkDir: work,
+			Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+				Name:    "shared",
+				Events:  []hooks.EventName{hooks.EventStop},
+				Command: []string{"python3", "base.py"},
+				Source:  "project",
+			}}},
+		}
+		_, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+		if err == nil || !strings.Contains(err.Error(), `duplicate hook "shared"`) {
+			t.Fatalf("err = %v, want duplicate hook error", err)
+		}
+	})
+}
+
 func mustWriteRuntimeStatusFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

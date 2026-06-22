@@ -866,7 +866,7 @@ compaction:
 | Field | Description |
 |---|---|
 | `model` | active model reference in `provider_id/model_id` form |
-| `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json` |
+| `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `~/.juex/extensions` |
 | `shell` | optional object; omitted or `{}` means `profile: auto`; scalar values are rejected |
 | `shell.profile` | `auto`, `powershell`, `cmd`, `bash`, `zsh`, `sh`, `git-bash`, `wsl`, or `custom`; auto uses the Juex process runtime OS |
 | `shell.binary` | optional executable override for built-in profiles; validated before startup and never silently falls back |
@@ -931,7 +931,7 @@ workspace `shell: {}` resets any user-global shell config back to auto.
 
 After loading, `internal/config` exposes narrower value objects for composition:
 `ProviderSelection` for profile resolution, `RuntimePaths` for work-local
-runtime storage, `ResourcePaths` for AGENTS/skills/MCP inputs, and
+runtime storage, `ResourcePaths` for AGENTS/skills/MCP/extension inputs, and
 `RuntimeLimits` for context window and compaction policy. The older `Config`
 path/profile methods remain compatibility delegates. Config does not construct
 providers; app resolves the profile and asks `internal/llm` to build the
@@ -1071,6 +1071,11 @@ Resources split between user-global and work-local:
 ├── mcp.json                     # global MCP servers (project may override)
 └── skills/<name>/SKILL.md       # global skills (project may override)
 
+~/.juex/extensions/<name>/        # optional user-global extension bundle
+├── hooks.yaml                    # lifecycle command hooks, trusted by location
+├── mcp.json                      # extension MCP servers
+└── skills/<skill>/SKILL.md       # extension skills
+
 <WorkDir>/                       # the agent's working directory (--cwd or $PWD)
 ├── AGENTS.md                    # project rules (concatenated, not overriding)
 ├── juex.yaml.example            # template for .juex/juex.yaml
@@ -1079,6 +1084,10 @@ Resources split between user-global and work-local:
 │   ├── mcp.json                 # project MCP (project wins on duplicate names)
 │   └── skills/<name>/SKILL.md   # project skills (project overrides user)
 └── .juex/
+    ├── extensions/<name>/       # work-local extension bundle
+    │   ├── hooks.yaml           # must set trusted: true before execution
+    │   ├── mcp.json
+    │   └── skills/<skill>/SKILL.md
     ├── juex.yaml                # local runtime provider config
     ├── history.json             # session index + active primary object
     ├── memory/                  # work-local memory entries
@@ -1099,8 +1108,13 @@ Resources split between user-global and work-local:
         └── tools.jsonl          # sanitized tool input/output/error summaries
 ```
 
-The user-global `~/.agents` resources are read-only from Juex's view and are
-loaded only when user-global resources are enabled.
+The user-global `~/.agents` and `~/.juex/extensions` resources are read-only
+from Juex's view and are loaded only when user-global resources are enabled.
+Work-local extension bundles are always discovered from
+`<WorkDir>/.juex/extensions`. Extension names are global within one run; a
+duplicate extension name is a startup error. Extension-provided MCP server,
+skill, or hook names must not collide with existing resources or another
+extension. Runtime status reports extension resources as `ext:<name>`.
 
 **Migration from earlier prototype:** sessions and memory used to live under
 `.agents/` or `~/.agents/`. The runtime now reads / writes project-local
@@ -1142,13 +1156,14 @@ configured MCP servers. The web layer keeps serve-process observations, such as
 the latest per-server MCP connection error and connected tool counts, then
 translates the app status into the browser DTO.
 
-Production paths load user-global and project MCP configs in later-wins order,
-then start a best-effort process manager with
+Production paths load user-global MCP configs, extension MCP configs, and
+project MCP configs, then start a best-effort process manager with
 `mcp.NewManagerLayeredSoft(ctx, configs, opts)`. Each app/session registry gets
 MCP proxy tools through `Manager.RegisterTools(reg)`. Project `mcp.json`
-entries override user-level servers with the same name; the user server is not
-started in that case. Tests that cover layered config behavior exercise the same
-manager API instead of a separate layered registration helper.
+entries override user-level servers with the same name; extension MCP server
+names must be unique and reject collisions instead of overriding. Tests that
+cover layered config behavior exercise the same manager API instead of a
+separate layered registration helper.
 
 Before MCP subprocess startup, Juex prepares each loaded server config for the
 active work directory. It injects `WORKDIR` and `JUEX_WORKDIR` into every MCP
@@ -1156,6 +1171,8 @@ server environment, using the absolute runtime `<WorkDir>` value. The same
 variables are expanded in MCP `command`, `args`, and `env` values using
 `${WORKDIR}`, `$WORKDIR`, `${JUEX_WORKDIR}`, or `$JUEX_WORKDIR`. Explicit
 server `env` entries still win over injected defaults after expansion.
+Extension MCP servers also receive and may expand `JUEX_EXT_DIR`, the absolute
+path to the extension bundle root.
 
 ---
 
@@ -1178,12 +1195,17 @@ type: model-invocable
 
 Loading flow:
 
-1. on startup, scan user + project skill dirs (project last → overrides)
+1. on startup, scan user, extension, and project skill dirs
 2. parse each SKILL.md frontmatter -> `name + description + body`
 3. emit a `## Available Skills` section in the system prompt; each entry
    shows the skill's **absolute SKILL.md path** alongside its description
 4. when the model decides a skill applies, it calls the standard `read`
    builtin against that path — no dedicated `read_skill` tool
+
+Project skills still override user-global skills. Extension skill names must be
+unique and reject collisions with user-global, project, or other extension
+skills. Runtime status uses `user`, `project`, or `ext:<name>` as the skill
+source.
 
 No embedding retrieval / auto-activation yet — the LLM picks via description
 and reads the file path when it wants the body. Dropping the

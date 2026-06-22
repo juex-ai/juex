@@ -8,16 +8,35 @@ import (
 const (
 	workDirEnvKey     = "WORKDIR"
 	juexWorkDirEnvKey = "JUEX_WORKDIR"
+	extDirEnvKey      = "JUEX_EXT_DIR"
 )
+
+type PrepareOptions struct {
+	WorkDir      string
+	ExtensionDir string
+}
 
 // PrepareConfig returns a runtime-ready copy of cfg for a specific Juex work
 // directory. It injects workdir env defaults and expands those variables in
 // command, args, and env values before MCP subprocesses are launched.
 func PrepareConfig(cfg Config, workDir string) Config {
+	return PrepareConfigWithOptions(cfg, PrepareOptions{WorkDir: workDir})
+}
+
+// PrepareConfigWithOptions returns a runtime-ready copy of cfg and optionally
+// injects extension-specific env such as JUEX_EXT_DIR.
+func PrepareConfigWithOptions(cfg Config, opts PrepareOptions) Config {
 	if len(cfg.MCPServers) == 0 {
 		return Config{}
 	}
-	runtimeEnv := RuntimeEnv(workDir)
+	runtimeEnv := RuntimeEnv(opts.WorkDir)
+	if opts.ExtensionDir != "" {
+		extDir := opts.ExtensionDir
+		if abs, err := filepath.Abs(extDir); err == nil {
+			extDir = abs
+		}
+		runtimeEnv[extDirEnvKey] = extDir
+	}
 	out := Config{MCPServers: make(map[string]ServerSpec, len(cfg.MCPServers))}
 	for name, spec := range cfg.MCPServers {
 		prepared := ServerSpec{
@@ -52,7 +71,7 @@ func RuntimeEnv(workDir string) map[string]string {
 }
 
 func expandRuntimeEnvRefs(s string, env map[string]string) string {
-	for _, key := range []string{juexWorkDirEnvKey, workDirEnvKey} {
+	for _, key := range []string{extDirEnvKey, juexWorkDirEnvKey, workDirEnvKey} {
 		value := env[key]
 		s = strings.ReplaceAll(s, "${"+key+"}", value)
 		s = replaceUnbracedEnvRef(s, key, value)

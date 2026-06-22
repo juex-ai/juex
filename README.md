@@ -2,8 +2,8 @@
 
 Juex is a small Go agent runtime packaged as one binary. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
-tools, MCP stdio tools, project skills, work-local memory, and resumable
-session history.
+tools, MCP stdio tools, skills and hooks from local resource bundles,
+work-local memory, and resumable session history.
 
 The project is intentionally narrow: it is a runtime for experimenting with
 agent loops, not a hosted service or a framework with plugins for every
@@ -86,6 +86,10 @@ Juex keeps runtime state in the current work directory:
 ```text
 .juex/
 ├── artifacts/
+├── extensions/<name>/
+│   ├── hooks.yaml
+│   ├── mcp.json
+│   └── skills/<skill>/SKILL.md
 ├── juex.yaml
 ├── history.json
 ├── memory/
@@ -104,15 +108,22 @@ Juex keeps runtime state in the current work directory:
     └── tools.jsonl
 ```
 
-User-global resources that can affect the agent live under `~/.agents/`. By
-default, Juex loads `~/.agents/AGENTS.md` before work-local AGENTS.md files,
-and also reads user-global skills and MCP servers from `~/.agents/skills` and
-`~/.agents/mcp.json`. Set `enable_user_global_resources: false` in
-`juex.yaml`, or pass `--enable-user-global-resources=false`, to ignore those
-user-global resources for a run. Project-local AGENTS.md, skills, and MCP
-servers still come from `.agents/`. Runtime state lives under `.juex/` so it
-can stay uncommitted. User-global provider fallback configuration lives at
-`~/.juex/juex.yaml`.
+User-global resources that can affect the agent live under `~/.agents/` and
+`~/.juex/extensions/`. By default, Juex loads `~/.agents/AGENTS.md` before
+work-local AGENTS.md files, reads user-global skills and MCP servers from
+`~/.agents/skills` and `~/.agents/mcp.json`, and discovers user-global
+extension bundles under `~/.juex/extensions/<name>/`. Set
+`enable_user_global_resources: false` in `juex.yaml`, or pass
+`--enable-user-global-resources=false`, to ignore those user-global resources
+for a run. Project-local AGENTS.md, skills, and MCP servers still come from
+`.agents/`, and project extension bundles still come from
+`.juex/extensions/<name>/`. Extension bundles may provide `skills/`,
+`mcp.json`, and `hooks.yaml`; runtime status reports them with source
+`ext:<name>`. Work-local extension hooks must set `trusted: true`; user-global
+extension hooks are trusted by location. Extension MCP servers receive
+`JUEX_EXT_DIR` alongside `WORKDIR` and `JUEX_WORKDIR`. Runtime state lives
+under `.juex/` so it can stay uncommitted. User-global provider fallback
+configuration lives at `~/.juex/juex.yaml`.
 
 The builtin command tools are `exec_command` and `write_stdin`. Juex resolves
 a `ShellProfile` from the process runtime OS: Windows binaries default to

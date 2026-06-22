@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -202,7 +204,7 @@ func ResolveFileConfig(fc FileConfig, source string, requireTrust bool) (Config,
 		return Config{}, nil
 	}
 	if requireTrust && !fc.Trusted {
-		return Config{}, fmt.Errorf("hooks: project command hooks require hooks.trusted: true")
+		return Config{}, fmt.Errorf("hooks: file command hooks require hooks.trusted: true")
 	}
 	cfg := Config{Commands: append([]CommandHook(nil), fc.Commands...)}
 	for i := range cfg.Commands {
@@ -212,6 +214,23 @@ func ResolveFileConfig(fc FileConfig, source string, requireTrust bool) (Config,
 		}
 	}
 	return cfg, nil
+}
+
+func LoadFileConfig(path, source string, requireTrust bool) (Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Config{}, nil
+		}
+		return Config{}, err
+	}
+	var fc FileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&fc); err != nil {
+		return Config{}, fmt.Errorf("hooks: parse %s: %w", path, err)
+	}
+	return ResolveFileConfig(fc, source, requireTrust)
 }
 
 func runCommandHook(parent context.Context, hook CommandHook, req Request) (Result, error) {

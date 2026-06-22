@@ -377,6 +377,51 @@ body`)
 	}
 }
 
+func TestRuntimeStatusIncludesExtensionSources(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	extDir := filepath.Join(work, ".juex", "extensions", "demo")
+	mustWriteRuntimeFile(t, filepath.Join(extDir, "mcp.json"), `{
+  "mcpServers": {
+    "extsrv": {
+      "command": "${JUEX_EXT_DIR}/bin/server",
+      "args": ["--ext", "$JUEX_EXT_DIR"]
+    }
+  }
+}`)
+	mustWriteRuntimeFile(t, filepath.Join(extDir, "skills", "ext-skill", "SKILL.md"), `---
+name: ext-skill
+description: extension skill
+---
+body`)
+	mustWriteRuntimeFile(t, filepath.Join(extDir, "hooks.yaml"), `trusted: true
+commands:
+  - name: ext-stop
+    events: [Stop]
+    command: ["python3", "hooks/check.py"]
+`)
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "extsrv" || got.MCP.Servers[0].Source != "ext:demo" {
+		t.Fatalf("mcp servers = %+v", got.MCP.Servers)
+	}
+	if filepath.ToSlash(got.MCP.Servers[0].Command) != filepath.ToSlash(filepath.Join(extDir, "bin", "server")) {
+		t.Fatalf("mcp command = %q", got.MCP.Servers[0].Command)
+	}
+	if len(got.MCP.Servers[0].Args) != 2 || got.MCP.Servers[0].Args[1] != extDir {
+		t.Fatalf("mcp args = %+v", got.MCP.Servers[0].Args)
+	}
+	if len(got.Skills.Items) != 1 || got.Skills.Items[0].Name != "ext-skill" || got.Skills.Items[0].Source != "ext:demo" {
+		t.Fatalf("skills = %+v", got.Skills.Items)
+	}
+	if got.Hooks.Configured != 1 || got.Hooks.Commands[0].Name != "ext-stop" || got.Hooks.Commands[0].Source != "ext:demo" {
+		t.Fatalf("hooks = %+v", got.Hooks)
+	}
+}
+
 func TestRuntimeStatusSkipsUserGlobalResourcesWhenDisabled(t *testing.T) {
 	srv := newTestServer(t)
 	homeAgents := t.TempDir()

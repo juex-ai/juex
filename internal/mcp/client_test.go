@@ -633,6 +633,33 @@ func TestPrepareConfig_ExpandsWorkDirAndInjectsEnv(t *testing.T) {
 	}
 }
 
+func TestPrepareConfigWithOptions_InjectsExtensionDir(t *testing.T) {
+	workDir := t.TempDir()
+	extDir := filepath.Join(t.TempDir(), "demo")
+	cfg := Config{MCPServers: map[string]ServerSpec{
+		"alpha": {
+			Command: "${JUEX_EXT_DIR}/bin/server",
+			Args:    []string{"--ext", "$JUEX_EXT_DIR", "--workdir", "$WORKDIR"},
+			Env: map[string]string{
+				"EXT_ROOT": "${JUEX_EXT_DIR}",
+			},
+		},
+	}}
+
+	got := PrepareConfigWithOptions(cfg, PrepareOptions{WorkDir: workDir, ExtensionDir: extDir})
+	alpha := got.MCPServers["alpha"]
+	if alpha.Command != extDir+"/bin/server" {
+		t.Fatalf("command = %q", alpha.Command)
+	}
+	wantArgs := []string{"--ext", extDir, "--workdir", workDir}
+	if strings.Join(alpha.Args, "\n") != strings.Join(wantArgs, "\n") {
+		t.Fatalf("args = %#v, want %#v", alpha.Args, wantArgs)
+	}
+	if alpha.Env["JUEX_EXT_DIR"] != extDir || alpha.Env["EXT_ROOT"] != extDir {
+		t.Fatalf("env = %+v", alpha.Env)
+	}
+}
+
 func TestMCPClient_WorkDirExpansionReachesServer(t *testing.T) {
 	for _, workDir := range []string{t.TempDir(), t.TempDir()} {
 		workDir, err := filepath.Abs(workDir)

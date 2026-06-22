@@ -665,6 +665,9 @@ func TestLoad_EnableUserGlobalResourcesDefaultsAndOverrides(t *testing.T) {
 	if cfg.GlobalAgentsMDPath() != "" {
 		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
 	}
+	if cfg.HomeExtensionsDir() != "" {
+		t.Fatalf("HomeExtensionsDir = %q, want empty", cfg.HomeExtensionsDir())
+	}
 	if got := cfg.SkillDirs(); len(got) != 1 || got[0] != filepath.Join(work, ".agents", "skills") {
 		t.Fatalf("SkillDirs = %v", got)
 	}
@@ -759,6 +762,8 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 	}
 	wantUserSkills := filepath.Join("/u", ".agents", "skills")
 	wantProjSkills := filepath.Join("/proj", ".agents", "skills")
+	wantUserExtensions := filepath.Join("/u", ".juex", "extensions")
+	wantProjExtensions := filepath.Join("/proj", ".juex", "extensions")
 	skills := cfg.SkillDirs()
 	if len(skills) != 2 || skills[0] != wantUserSkills || skills[1] != wantProjSkills {
 		t.Fatalf("skills = %v", skills)
@@ -792,12 +797,15 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 	if cfg.ProjectAgentsDir() != wantProjAgents {
 		t.Fatalf("project agents dir = %q, want %q", cfg.ProjectAgentsDir(), wantProjAgents)
 	}
+	if cfg.HomeExtensionsDir() != wantUserExtensions || cfg.ProjectExtensionsDir() != wantProjExtensions {
+		t.Fatalf("extension dirs = home %q project %q", cfg.HomeExtensionsDir(), cfg.ProjectExtensionsDir())
+	}
 	runtimePaths := cfg.RuntimePaths()
 	if runtimePaths.WorkDir != filepath.Join("/proj") || runtimePaths.MemoryDir != cfg.MemoryDir() || runtimePaths.HistoryPath != cfg.HistoryPath() {
 		t.Fatalf("runtime paths = %+v", runtimePaths)
 	}
 	resourcePaths := cfg.ResourcePaths()
-	if resourcePaths.ProjectAgentsDir != wantProjAgents || len(resourcePaths.SkillDirs) != 2 || len(resourcePaths.MCPConfigPaths) != 2 {
+	if resourcePaths.ProjectAgentsDir != wantProjAgents || resourcePaths.HomeExtensionsDir != wantUserExtensions || resourcePaths.ProjectExtensionsDir != wantProjExtensions || len(resourcePaths.SkillDirs) != 2 || len(resourcePaths.MCPConfigPaths) != 2 {
 		t.Fatalf("resource paths = %+v", resourcePaths)
 	}
 }
@@ -807,8 +815,14 @@ func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
+	if cfg.ProjectExtensionsDir() != "" {
+		t.Fatalf("empty WorkDir should yield empty project extension dir: %q", cfg.ProjectExtensionsDir())
+	}
 	if cfg.HomeRuntimeConfigPath() != filepath.Join("/u", ".juex", "juex.yaml") {
 		t.Fatalf("home runtime config = %q", cfg.HomeRuntimeConfigPath())
+	}
+	if cfg.HomeExtensionsDir() != filepath.Join("/u", ".juex", "extensions") {
+		t.Fatalf("home extension dir = %q", cfg.HomeExtensionsDir())
 	}
 	if len(cfg.AgentsMDDirs()) != 0 {
 		t.Fatalf("expected empty AgentsMDDirs, got %v", cfg.AgentsMDDirs())
@@ -834,6 +848,12 @@ func TestPaths_DisabledUserGlobalResourcesOmitsHomeResources(t *testing.T) {
 	}
 	if cfg.GlobalAgentsMDPath() != "" {
 		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
+	}
+	if cfg.HomeExtensionsDir() != "" {
+		t.Fatalf("HomeExtensionsDir = %q, want empty", cfg.HomeExtensionsDir())
+	}
+	if cfg.ProjectExtensionsDir() != filepath.Join("/proj", ".juex", "extensions") {
+		t.Fatalf("ProjectExtensionsDir = %q", cfg.ProjectExtensionsDir())
 	}
 	if got := cfg.SkillDirs(); len(got) != 1 || got[0] != filepath.Join("/proj", ".agents", "skills") {
 		t.Fatalf("SkillDirs = %v", got)
