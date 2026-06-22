@@ -373,6 +373,8 @@ func runtimeSourceRank(source string) int {
 	switch source {
 	case "project":
 		return 0
+	case "user":
+		return 2
 	default:
 		if extensions.IsExtensionSource(source) {
 			return 1
@@ -381,8 +383,6 @@ func runtimeSourceRank(source string) int {
 			return 4
 		}
 		return 3
-	case "user":
-		return 2
 	}
 }
 
