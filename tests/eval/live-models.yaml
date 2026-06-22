@@ -7,7 +7,6 @@ provider_smoke_models:
   - ark/doubao-seed-2.0-pro
   - ark-anthropic/minimax-m3
   - ollama-local/qwen3.6
-  - clip-local/gemini-3.1-pro-preview
   - clip-local/gemini-3.5-flash-low
   - clip-local-responses/gpt-5.3-codex-spark
 
