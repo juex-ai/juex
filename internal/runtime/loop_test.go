@@ -1178,7 +1178,6 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "danger", Input: map[string]any{"path": "x"}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.Tools.MustRegister(tools.Tool{
@@ -1196,8 +1195,11 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "recovered" {
+	if out != "done too early" {
 		t.Fatalf("out = %q", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
 	tr := eng.Session.History[2]
 	if len(tr.Blocks) != 1 || !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "policy denied") {
@@ -1211,7 +1213,6 @@ func TestTurn_PostToolUseHookDenyReturnsToolError(t *testing.T) {
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "audit", Input: map[string]any{"path": "x"}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.Tools.MustRegister(tools.Tool{
@@ -1229,8 +1230,11 @@ func TestTurn_PostToolUseHookDenyReturnsToolError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "recovered" {
+	if out != "done too early" {
 		t.Fatalf("out = %q", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
 	tr := eng.Session.History[2]
 	if len(tr.Blocks) != 1 || !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "redaction required") {
@@ -1842,13 +1846,12 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 	}
 }
 
-func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
+func TestTurn_ToolTimeoutPersistsErrorWithoutFailureLedgerContinuation(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "slow_1", ToolName: "slow", Input: map[string]any{}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.Tools.MustRegister(tools.Tool{
@@ -1874,8 +1877,11 @@ func TestTurn_ToolTimeoutPersistsErrorAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "recovered" {
-		t.Fatalf("out = %q, want recovered", out)
+	if out != "done too early" {
+		t.Fatalf("out = %q, want final answer without failure-ledger continuation", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
 	result := eng.Session.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
@@ -2088,7 +2094,6 @@ func TestTurn_UnknownToolName(t *testing.T) {
 			{Type: llm.BlockToolUse, ToolUseID: "x1", ToolName: "does_not_exist", Input: map[string]any{}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, true)
 	var errs int32
@@ -2098,8 +2103,11 @@ func TestTurn_UnknownToolName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "recovered" {
+	if out != "done too early" {
 		t.Fatalf("got %q", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
 	if errs != 1 {
 		t.Fatalf("expected 1 tool error event, got %d", errs)
@@ -2197,17 +2205,17 @@ func TestToolFailureClassificationMappings(t *testing.T) {
 	}
 }
 
-func TestTurn_FinishGateAllowsCleanFinish(t *testing.T) {
+func TestTurn_FinishPolicyAllowsCleanFinishWithoutFailureGate(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
 
-	var gateCompleted HookCompletedPayload
+	var failureGateHooks int32
 	bus.Subscribe("hook.completed", func(e events.Event) {
 		payload, _ := e.Payload.(HookCompletedPayload)
 		if payload.Name == "unresolved-failure-gate" {
-			gateCompleted = payload
+			atomic.AddInt32(&failureGateHooks, 1)
 		}
 	})
 
@@ -2218,8 +2226,8 @@ func TestTurn_FinishGateAllowsCleanFinish(t *testing.T) {
 	if out != "ok" {
 		t.Fatalf("out = %q", out)
 	}
-	if gateCompleted.EventName != string(hooks.EventStop) || gateCompleted.Source != "builtin" || gateCompleted.BlockStop || gateCompleted.ContinuePromptLen != 0 || gateCompleted.Decision != string(hooks.DecisionAllow) {
-		t.Fatalf("gate completed payload = %+v", gateCompleted)
+	if atomic.LoadInt32(&failureGateHooks) != 0 {
+		t.Fatalf("unresolved-failure-gate should not run")
 	}
 }
 
@@ -2261,8 +2269,6 @@ func TestTurn_FinishPolicyOrdersBuiltInGatesAndStopHooks(t *testing.T) {
 	}
 	want := []string{
 		"finish.attempted",
-		"start:unresolved-failure-gate",
-		"done:unresolved-failure-gate",
 		"start:stop-ok",
 		"done:stop-ok",
 		"start:goal-completion-gate",
@@ -2309,14 +2315,12 @@ func TestTurn_FinishGateAllowsNonblockingExploratoryFailure(t *testing.T) {
 	}
 }
 
-func TestTurn_ContinuesAfterUnresolvedBlockingToolFailure(t *testing.T) {
+func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuation(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "blocked after observation"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "blocked reason explained"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.Tools.MustRegister(tools.Tool{
@@ -2328,25 +2332,24 @@ func TestTurn_ContinuesAfterUnresolvedBlockingToolFailure(t *testing.T) {
 	})
 
 	var recorded ToolFailureRecordedPayload
-	var continued ToolFailureContinuedPayload
+	var continued int32
 	bus.Subscribe("tool.failure.recorded", func(e events.Event) {
 		recorded, _ = e.Payload.(ToolFailureRecordedPayload)
 	})
 	bus.Subscribe("tool.failure.continued", func(e events.Event) {
-		continued, _ = e.Payload.(ToolFailureContinuedPayload)
+		atomic.AddInt32(&continued, 1)
 	})
-	var gateStarted HookStartedPayload
-	var gateCompleted HookCompletedPayload
+	var failureGateHooks int32
 	bus.Subscribe("hook.started", func(e events.Event) {
 		payload, _ := e.Payload.(HookStartedPayload)
 		if payload.Name == "unresolved-failure-gate" {
-			gateStarted = payload
+			atomic.AddInt32(&failureGateHooks, 1)
 		}
 	})
 	bus.Subscribe("hook.completed", func(e events.Event) {
 		payload, _ := e.Payload.(HookCompletedPayload)
-		if payload.Name == "unresolved-failure-gate" && payload.BlockStop {
-			gateCompleted = payload
+		if payload.Name == "unresolved-failure-gate" {
+			atomic.AddInt32(&failureGateHooks, 1)
 		}
 	})
 
@@ -2354,29 +2357,20 @@ func TestTurn_ContinuesAfterUnresolvedBlockingToolFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "blocked reason explained" {
+	if out != "done too early" {
 		t.Fatalf("out = %q", out)
 	}
-	if len(prov.histories) != 4 {
-		t.Fatalf("provider calls = %d, want continuation call", len(prov.histories))
-	}
-	observation := prov.histories[2][len(prov.histories[2])-1].FirstText()
-	for _, want := range []string{"Runtime observation", "unresolved tool failure", "check_ready", "check failed"} {
-		if !strings.Contains(observation, want) {
-			t.Fatalf("continuation observation missing %q:\n%s", want, observation)
-		}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
 	if recorded.Classification != ToolFailureRecoverable || recorded.Fingerprint == "" || !recorded.Blocking {
 		t.Fatalf("recorded payload = %+v", recorded)
 	}
-	if continued.FailureCount != 1 || continued.ContinuationPromptLen == 0 {
-		t.Fatalf("continued payload = %+v", continued)
+	if atomic.LoadInt32(&continued) != 0 {
+		t.Fatalf("failure ledger should not continue finish")
 	}
-	if gateStarted.EventName != string(hooks.EventStop) || gateStarted.Source != "builtin" {
-		t.Fatalf("gate started payload = %+v", gateStarted)
-	}
-	if gateCompleted.EventName != string(hooks.EventStop) || gateCompleted.Source != "builtin" || !gateCompleted.BlockStop || gateCompleted.ContinuePromptLen == 0 {
-		t.Fatalf("gate completed payload = %+v", gateCompleted)
+	if atomic.LoadInt32(&failureGateHooks) != 0 {
+		t.Fatalf("unresolved-failure-gate should not emit hook events")
 	}
 }
 
@@ -2566,7 +2560,7 @@ func TestToolFailureLedgerResolvesRelativePathsFromSessionDir(t *testing.T) {
 	}
 }
 
-func TestTurn_RepeatedFailureUsesRepeatedStuckContinuation(t *testing.T) {
+func TestTurn_RepeatedFailureRecordsRepeatedStuckWithoutContinuation(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
@@ -2575,8 +2569,6 @@ func TestTurn_RepeatedFailureUsesRepeatedStuckContinuation(t *testing.T) {
 			{Type: llm.BlockToolUse, ToolUseID: "check_2", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "changed approach or blocked"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "blocked reason explained"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.Tools.MustRegister(tools.Tool{
@@ -2588,36 +2580,38 @@ func TestTurn_RepeatedFailureUsesRepeatedStuckContinuation(t *testing.T) {
 	})
 
 	var lastRecorded ToolFailureRecordedPayload
+	var continued int32
 	bus.Subscribe("tool.failure.recorded", func(e events.Event) {
 		lastRecorded, _ = e.Payload.(ToolFailureRecordedPayload)
+	})
+	bus.Subscribe("tool.failure.continued", func(e events.Event) {
+		atomic.AddInt32(&continued, 1)
 	})
 
 	out, err := eng.Turn(context.Background(), "finish the artifact")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "blocked reason explained" {
+	if out != "done too early" {
 		t.Fatalf("out = %q", out)
 	}
 	if lastRecorded.Classification != ToolFailureRepeatedStuck || lastRecorded.Occurrences != 2 {
 		t.Fatalf("last recorded payload = %+v", lastRecorded)
 	}
-	observation := prov.histories[3][len(prov.histories[3])-1].FirstText()
-	for _, want := range []string{"repeated_stuck", "different approach"} {
-		if !strings.Contains(observation, want) {
-			t.Fatalf("repeated continuation missing %q:\n%s", want, observation)
-		}
+	if len(prov.histories) != 3 {
+		t.Fatalf("provider calls = %d, want no repeated-failure continuation", len(prov.histories))
+	}
+	if atomic.LoadInt32(&continued) != 0 {
+		t.Fatalf("repeated failure should not emit continuation")
 	}
 }
 
-func TestTurn_FinishGateRequestsBlockedReasonOnRepeatedFinishAttempt(t *testing.T) {
+func TestTurn_FailureLedgerDoesNotRequestBlockedReasonOnRepeatedFinishAttempt(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "still done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "blocked reason explained"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.Tools.MustRegister(tools.Tool{
@@ -2632,45 +2626,47 @@ func TestTurn_FinishGateRequestsBlockedReasonOnRepeatedFinishAttempt(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "blocked reason explained" {
+	if out != "done too early" {
 		t.Fatalf("out = %q", out)
 	}
-	if len(prov.histories) != 4 {
-		t.Fatalf("provider calls = %d, want second finish blocker continuation", len(prov.histories))
-	}
-	observation := prov.histories[3][len(prov.histories[3])-1].FirstText()
-	for _, want := range []string{"Runtime observation", "same unresolved failure", "explicitly explain why the task is blocked"} {
-		if !strings.Contains(observation, want) {
-			t.Fatalf("blocked-reason observation missing %q:\n%s", want, observation)
-		}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no blocked-reason continuation", len(prov.histories))
 	}
 }
 
-func TestTurn_FinishGateBlocksRuntimeFatalToolFailure(t *testing.T) {
+func TestTurn_RuntimeFatalToolFailureRecordsWithoutContinuation(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "missing_1", ToolName: "does_not_exist", Input: map[string]any{}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "blocked reason explained"), StopReason: llm.StopEndTurn},
 	}}
-	eng, _ := newEngine(t, prov, false)
+	eng, bus := newEngine(t, prov, false)
+
+	var recorded ToolFailureRecordedPayload
+	var continued int32
+	bus.Subscribe("tool.failure.recorded", func(e events.Event) {
+		recorded, _ = e.Payload.(ToolFailureRecordedPayload)
+	})
+	bus.Subscribe("tool.failure.continued", func(e events.Event) {
+		atomic.AddInt32(&continued, 1)
+	})
 
 	out, err := eng.Turn(context.Background(), "finish with tool")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "blocked reason explained" {
+	if out != "done too early" {
 		t.Fatalf("out = %q", out)
 	}
-	if len(prov.histories) != 3 {
-		t.Fatalf("provider calls = %d, want runtime fatal blocker continuation", len(prov.histories))
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no runtime fatal continuation", len(prov.histories))
 	}
-	observation := prov.histories[2][len(prov.histories[2])-1].FirstText()
-	for _, want := range []string{"runtime_fatal", "explicitly explain why the task is blocked", "does_not_exist"} {
-		if !strings.Contains(observation, want) {
-			t.Fatalf("runtime-fatal observation missing %q:\n%s", want, observation)
-		}
+	if recorded.Classification != ToolFailureRuntimeFatal || !recorded.Blocking || recorded.Fingerprint == "" {
+		t.Fatalf("recorded payload = %+v", recorded)
+	}
+	if atomic.LoadInt32(&continued) != 0 {
+		t.Fatalf("runtime fatal failure should not emit continuation")
 	}
 }
 

@@ -123,14 +123,6 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 		OutputLen:  len(finalText),
 	}})
 
-	if prompt, payload, ok := e.runUnresolvedFailureGate(l.turnID); ok {
-		if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
-			return turnFinishOutcome{}, err
-		}
-		e.emit(events.Event{Type: "tool.failure.continued", TurnID: l.turnID, Payload: payload})
-		return l.finishOrContinueLocked(finalText), nil
-	}
-
 	stopResults, err := l.runStopHooksLocked(ctx)
 	if err != nil {
 		return turnFinishOutcome{}, err

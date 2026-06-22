@@ -13,7 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
-func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testing.T) {
+func TestTurn_BuiltinExecCommandTimeoutFinishesWhenChildKeepsPipeOpen(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "exec_timeout", ToolName: "exec_command", Input: map[string]any{
@@ -21,7 +21,6 @@ func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testin
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
-		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngineWithToolTimeout(t, prov, true, 1)
 
@@ -36,8 +35,11 @@ func TestTurn_BuiltinExecCommandTimeoutContinuesWhenChildKeepsPipeOpen(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "recovered" {
-		t.Fatalf("out = %q, want recovered", out)
+	if out != "done too early" {
+		t.Fatalf("out = %q, want final answer without failure-ledger continuation", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("turn waited for child process to exit: %s", elapsed)

@@ -141,13 +141,6 @@ type ToolFailureStalePayload struct {
 	LatestModUnixMS int64             `json:"latest_mod_unix_ms,omitempty"`
 }
 
-type ToolFailureContinuedPayload struct {
-	FailureCount          int      `json:"failure_count"`
-	Fingerprints          []string `json:"fingerprints"`
-	Repeated              bool     `json:"repeated"`
-	ContinuationPromptLen int      `json:"continuation_prompt_len"`
-}
-
 type GoalUpdatedPayload struct {
 	Objective     string           `json:"objective,omitempty"`
 	Status        GoalStatus       `json:"status,omitempty"`

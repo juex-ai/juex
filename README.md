@@ -131,13 +131,13 @@ data so consumers can read session, running, exit-code, chunk, and truncation
 state without parsing the provider-facing text.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
-ledger. A built-in `unresolved-failure-gate` Stop hook blocks final answers
-while unresolved blocking failures remain, adds provider-visible observations
-for the model to fix, verify, or explain a blocker, and asks for an explicit
-blocked reason after the same blocker repeats. Nonblocking exploratory failures
-do not block finish. Later successful checks or related file mutations can mark
-failures resolved or stale. The ledger and gate state are emitted through
-`tool.failure.*`, `hook.*`, and debug `tools.jsonl` records.
+ledger. The ledger classifies failures, records bounded previews and related
+paths, emits `tool.failure.recorded`, and lets later successful checks or
+related file mutations emit `tool.failure.resolved` or `tool.failure.stale`.
+It also feeds `working_state.open_issues` when working state is enabled. Tool
+failures are state input, not an independent finish authority; final-answer
+continuation or blocked decisions belong to `goal_state`,
+`goal-completion-gate`, and configured Stop hooks.
 
 Pending input accepted while a turn is already running is persisted in the
 session's `pending_input.jsonl` and replayed after restart when still safe and

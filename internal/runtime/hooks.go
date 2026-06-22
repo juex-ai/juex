@@ -13,7 +13,6 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 )
 
-const unresolvedFailureGateName = "unresolved-failure-gate"
 const goalCompletionGateName = "goal-completion-gate"
 
 func (e *Engine) newHookRequest(event hooks.EventName, turnID string) hooks.Request {
@@ -91,33 +90,6 @@ func (e *Engine) applyGoalStateHookResults(turnID string, results []hooks.Result
 		e.emitGoalUpdated(turnID)
 	}
 	return nil
-}
-
-func (e *Engine) runUnresolvedFailureGate(turnID string) (string, ToolFailureContinuedPayload, bool) {
-	if e == nil || e.toolFailures == nil {
-		return "", ToolFailureContinuedPayload{}, false
-	}
-	start := time.Now()
-	e.emit(events.Event{Type: "hook.started", TurnID: turnID, Payload: HookStartedPayload{
-		Name:      unresolvedFailureGateName,
-		Source:    "builtin",
-		EventName: string(hooks.EventStop),
-	}})
-	prompt, payload, ok := e.toolFailures.continuationPrompt()
-	decision := ""
-	if !ok {
-		decision = string(hooks.DecisionAllow)
-	}
-	e.emitHookCompleted(turnID, HookCompletedPayload{
-		Name:              unresolvedFailureGateName,
-		Source:            "builtin",
-		EventName:         string(hooks.EventStop),
-		DurationMS:        time.Since(start).Milliseconds(),
-		Decision:          decision,
-		BlockStop:         ok,
-		ContinuePromptLen: len(prompt),
-	})
-	return prompt, payload, ok
 }
 
 func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayload, bool, error) {
