@@ -29,6 +29,8 @@ func TestParseSlashCommand(t *testing.T) {
 		{input: " /status ", handled: true, name: SlashStatus},
 		{input: "/compact", handled: true, name: SlashCompact},
 		{input: "/compact focus on API changes", handled: true, name: SlashCompact, args: "focus on API changes"},
+		{input: "/goal", handled: true, name: SlashGoal},
+		{input: "/goal finish the PR", handled: true, name: SlashGoal, args: "finish the PR"},
 		{input: "/new", handled: true, name: SlashNew},
 		{input: "/status now", handled: true, wantErr: true},
 		{input: "/status\tnow", handled: true, wantErr: true},
@@ -333,26 +335,16 @@ func TestApp_REPLProcessesStatusSlash(t *testing.T) {
 
 func TestAppStatusIncludesGoalState(t *testing.T) {
 	a, _ := newStubApp(t)
-	if err := a.Engine.GoalState.BeginTurn("finish goal-state hooks"); err != nil {
-		t.Fatal(err)
-	}
-	if err := a.Engine.GoalState.ApplyPatch(runtime.GoalStatePatch{
-		Status:       runtime.GoalStatusContinue,
-		LastProgress: "implementation started",
-		CompletionCheck: &runtime.CompletionCheck{
-			Status:  runtime.GoalStatusContinue,
-			Summary: "tests missing",
-		},
-	}); err != nil {
+	if _, err := a.Engine.GoalState.Create("finish goal tools", "tests pass"); err != nil {
 		t.Fatal(err)
 	}
 
 	status := a.StatusSnapshot(time.Now().UTC())
-	if status.Goal == nil || status.Goal.Objective != "finish goal-state hooks" || status.Goal.LastCheck == nil {
+	if status.Goal == nil || status.Goal.Description != "finish goal tools" || status.Goal.Status != runtime.GoalStatusInProgress {
 		t.Fatalf("goal status = %+v", status.Goal)
 	}
 	text := status.Text()
-	for _, want := range []string{"goal: continue", "finish goal-state hooks", "completion: continue"} {
+	for _, want := range []string{"goal: in_progress", "finish goal tools"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
 		}

@@ -8,97 +8,60 @@ import (
 	"time"
 )
 
-func TestGoalStateStoreBeginsTurnAndAppliesCompletionPatch(t *testing.T) {
-	now := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
+	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
 	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{Now: func() time.Time { return now }})
 
-	if err := store.BeginTurn("ship feature with api_key=secret"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status:       GoalStatusContinue,
-		LastProgress: "implementation exists",
-		Evidence: []GoalEvidence{{
-			ID:     "tests-missing",
-			Kind:   "missing_check",
-			Text:   "token=abc123 tests have not run",
-			Source: "hook",
-		}},
-		CompletionCheck: &CompletionCheck{
-			Status:         GoalStatusContinue,
-			Summary:        "tests are still missing",
-			ContinuePrompt: "Run the focused tests before finishing.",
-			Source:         "hook",
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	state, err := store.Snapshot()
+	state, err := store.Create("ship feature with api_key=secret", "run focused tests")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusContinue {
+	if state.Status != GoalStatusInProgress || state.Description == "" {
+		t.Fatalf("created state = %+v", state)
+	}
+	if strings.Contains(state.Description, "secret") {
+		t.Fatalf("description not redacted: %q", state.Description)
+	}
+
+	state, err = store.Update(GoalStateUpdate{Status: GoalStatusSuccess})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != GoalStatusSuccess {
 		t.Fatalf("status = %q", state.Status)
 	}
-	if state.Objective == "" || strings.Contains(state.Objective, "secret") {
-		t.Fatalf("objective not stored/redacted: %q", state.Objective)
-	}
-	if state.Budget.MaxContinuations != DefaultGoalMaxContinuations {
-		t.Fatalf("max continuations = %d", state.Budget.MaxContinuations)
-	}
-	if state.LastCheck == nil || state.LastCheck.ContinuePrompt == "" {
-		t.Fatalf("last check = %+v", state.LastCheck)
-	}
-	if len(state.Evidence) != 1 || strings.Contains(state.Evidence[0].Text, "abc123") {
-		t.Fatalf("evidence not stored/redacted: %+v", state.Evidence)
-	}
+
 	data, err := os.ReadFile(filepath.Join(store.SessionDir, "goal_state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "secret") || strings.Contains(string(data), "abc123") {
-		t.Fatalf("goal_state.json leaked secret-like text:\n%s", data)
-	}
-
-	if err := store.ApplyPatch(GoalStatePatch{CompletionCheck: &CompletionCheck{
-		Status:  GoalStatusComplete,
-		Summary: "checked complete",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	state, err = store.Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.Status != GoalStatusComplete {
-		t.Fatalf("status from completion_check = %q", state.Status)
+	text := string(data)
+	for _, forbidden := range []string{"objective", "evidence", "budget", "blocked_reason", "next_user_input", "last_progress", "last_check", "secret"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("goal_state.json contains old or unredacted field %q:\n%s", forbidden, text)
+		}
 	}
 }
 
-func TestGoalStateGateDecisions(t *testing.T) {
-	now := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
-	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{Now: func() time.Time { return now }})
-	if err := store.BeginTurn("finish task"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status: GoalStatusContinue,
-		CompletionCheck: &CompletionCheck{
-			Status:         GoalStatusContinue,
-			Summary:        "verification missing",
-			ContinuePrompt: "Run verification.",
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
+func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	decision, err := store.CompletionGateDecision()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !decision.BlockStop || decision.ContinuePrompt != "Run verification." {
-		t.Fatalf("continue decision = %+v", decision)
+	if decision.BlockStop {
+		t.Fatalf("no goal should not block: %+v", decision)
+	}
+
+	if _, err := store.Create("finish task", "tests pass"); err != nil {
+		t.Fatal(err)
+	}
+	decision, err = store.CompletionGateDecision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decision.BlockStop || decision.Reason != "goal_in_progress" || !strings.Contains(decision.ContinuePrompt, "finish task") {
+		t.Fatalf("in-progress decision = %+v", decision)
 	}
 	if err := store.RecordContinuation(decision); err != nil {
 		t.Fatal(err)
@@ -107,19 +70,11 @@ func TestGoalStateGateDecisions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Budget.ContinuationsUsed != 1 {
-		t.Fatalf("continuations used = %d", state.Budget.ContinuationsUsed)
+	if state.ContinuationCount != 1 {
+		t.Fatalf("continuation_count = %d", state.ContinuationCount)
 	}
 
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status:        GoalStatusBlocked,
-		BlockedReason: "CI provider is unavailable",
-		NextUserInput: "Retry after CI recovers.",
-		CompletionCheck: &CompletionCheck{
-			Status:  GoalStatusBlocked,
-			Summary: "external CI unavailable",
-		},
-	}); err != nil {
+	if _, err := store.Update(GoalStateUpdate{Status: GoalStatusFailure}); err != nil {
 		t.Fatal(err)
 	}
 	decision, err = store.CompletionGateDecision()
@@ -127,100 +82,26 @@ func TestGoalStateGateDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if decision.BlockStop {
-		t.Fatalf("blocked with reason should allow finish: %+v", decision)
-	}
-
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status:        GoalStatusBlocked,
-		BlockedReason: "",
-		NextUserInput: "",
-		CompletionCheck: &CompletionCheck{
-			Status:  GoalStatusBlocked,
-			Summary: "blocked but incomplete",
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	decision, err = store.CompletionGateDecision()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !decision.BlockStop || !strings.Contains(decision.ContinuePrompt, "blocked_reason") {
-		t.Fatalf("blocked without reason decision = %+v", decision)
-	}
-
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status: GoalStatusContinue,
-		Budget: &GoalBudget{MaxContinuations: 1, ContinuationsUsed: 1},
-		CompletionCheck: &CompletionCheck{
-			Status:         GoalStatusContinue,
-			Summary:        "still missing",
-			ContinuePrompt: "try again",
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	decision, err = store.CompletionGateDecision()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.BlockStop || decision.Reason != "continuation_budget_exhausted" {
-		t.Fatalf("budget exhausted decision = %+v", decision)
+		t.Fatalf("terminal failure should allow finish: %+v", decision)
 	}
 }
 
-func TestGoalStateBeginTurnResetsContinuationBudget(t *testing.T) {
-	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
-	if err := store.BeginTurn("first goal"); err != nil {
+func TestGoalStateStoreReadsLegacyGoalStateDefensively(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "goal_state.json"), []byte(`{
+  "version": 1,
+  "objective": "legacy objective",
+  "status": "complete",
+  "budget": {"continuations_used": 2},
+  "last_progress": "old"
+}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status: GoalStatusContinue,
-		Budget: &GoalBudget{MaxContinuations: 3, ContinuationsUsed: 2},
-		CompletionCheck: &CompletionCheck{
-			Status:         GoalStatusContinue,
-			ContinuePrompt: "keep going",
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status:          GoalStatusComplete,
-		CompletionCheck: &CompletionCheck{Status: GoalStatusComplete},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.BeginTurn("second goal"); err != nil {
-		t.Fatal(err)
-	}
-	state, err := store.Snapshot()
+	state, err := NewGoalStateStore(dir, GoalStateOptions{}).Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Objective != "second goal" {
-		t.Fatalf("objective = %q", state.Objective)
-	}
-	if state.Budget.ContinuationsUsed != 0 {
-		t.Fatalf("continuations used = %d, want 0", state.Budget.ContinuationsUsed)
-	}
-}
-
-func TestGoalStateContinueWithoutPromptFallsBack(t *testing.T) {
-	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
-	if err := store.BeginTurn("finish goal"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ApplyPatch(GoalStatePatch{
-		Status:          GoalStatusContinue,
-		CompletionCheck: &CompletionCheck{Status: GoalStatusContinue},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	decision, err := store.CompletionGateDecision()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !decision.BlockStop || decision.ContinuePrompt == "" {
-		t.Fatalf("continue decision = %+v", decision)
+	if state.Description != "legacy objective" || state.Status != GoalStatusSuccess || state.ContinuationCount != 2 {
+		t.Fatalf("legacy state = %+v", state)
 	}
 }

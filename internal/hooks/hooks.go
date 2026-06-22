@@ -107,7 +107,6 @@ type Output struct {
 	BlockStop         bool            `json:"block_stop,omitempty"`
 	ContinuePrompt    string          `json:"continue_prompt,omitempty"`
 	WorkingState      json.RawMessage `json:"working_state,omitempty"`
-	GoalState         json.RawMessage `json:"goal_state,omitempty"`
 }
 
 type Result struct {

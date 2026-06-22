@@ -285,6 +285,11 @@ func New(opts Options) (*App, error) {
 		debug:              opts.Debug,
 		logLevel:           opts.LogLevel,
 	}
+	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
+		_ = a.detachObservability()
+		closeSessionResources()
+		return nil, err
+	}
 	if err := a.attachObservability(sess); err != nil {
 		closeSessionResources()
 		return nil, err
@@ -468,6 +473,9 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	if cmd, handled, err := ParseSlashCommand(prompt); handled || err != nil {
 		if err != nil {
 			return "", err
+		}
+		if cmd.Name == SlashGoal {
+			return a.Engine.Turn(ctx, GoalInstructionPrompt(cmd.Args))
 		}
 		result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
 		if err != nil {

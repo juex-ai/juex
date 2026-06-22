@@ -172,11 +172,7 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	body := `{"role":"user","blocks":[{"type":"text","text":"hi"}]}` + "\n"
 	seedSession(t, srv.opts.Cfg.WorkDir, id, body)
 	dir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
-	if err := juexruntime.NewGoalStateStore(dir, juexruntime.GoalStateOptions{}).ApplyPatch(juexruntime.GoalStatePatch{
-		Objective:    "show session state near composer",
-		Status:       juexruntime.GoalStatusContinue,
-		LastProgress: "state seeded",
-	}); err != nil {
+	if _, err := juexruntime.NewGoalStateStore(dir, juexruntime.GoalStateOptions{}).Create("show session state near composer", "visible near composer"); err != nil {
 		t.Fatal(err)
 	}
 	if err := juexruntime.NewWorkingStateStore(dir, juexruntime.WorkingStateOptions{}).ApplyPatch(juexruntime.WorkingStatePatch{
@@ -203,8 +199,8 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	}
 	var parsed struct {
 		Goal struct {
-			Objective string `json:"objective"`
-			Status    string `json:"status"`
+			Description string `json:"description"`
+			Status      string `json:"status"`
 		} `json:"goal"`
 		WorkingState struct {
 			Present bool `json:"present"`
@@ -217,7 +213,7 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Goal.Objective != "show session state near composer" || parsed.Goal.Status != string(juexruntime.GoalStatusContinue) {
+	if parsed.Goal.Description != "show session state near composer" || parsed.Goal.Status != string(juexruntime.GoalStatusInProgress) {
 		t.Fatalf("goal = %+v", parsed.Goal)
 	}
 	if !parsed.WorkingState.Present || parsed.WorkingState.State.Goal == nil || len(parsed.WorkingState.State.HardConstraints) != 1 {

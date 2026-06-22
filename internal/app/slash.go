@@ -13,13 +13,14 @@ import (
 
 const (
 	SlashCompact = "/compact"
+	SlashGoal    = "/goal"
 	SlashNew     = "/new"
 	SlashStatus  = "/status"
 )
 
 const newSessionGreetingPrompt = "Please greet me briefly, introduce what you can help with in one concise sentence, and ask what I want to do next. You may suggest a concrete place to start."
 
-var slashCommandNames = []string{SlashCompact, SlashNew, SlashStatus}
+var slashCommandNames = []string{SlashCompact, SlashGoal, SlashNew, SlashStatus}
 
 type SlashCommand struct {
 	Name string `json:"name"`
@@ -66,6 +67,14 @@ func NewSessionGreetingMessage() llm.Message {
 	return llm.TextMessage(llm.RoleUser, newSessionGreetingPrompt)
 }
 
+func GoalInstructionPrompt(args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return "The user wants to inspect or update the session goal. Use get_goal first, then create_goal or update_goal if a goal should be created, changed, marked success, or marked failure. Do not treat this slash command text itself as the goal description."
+	}
+	return "The user wants to create or update the session goal. Use get_goal first, then call create_goal or update_goal as appropriate. Do not write goal state directly; use the goal tools only.\n\nUser goal request:\n" + args
+}
+
 func ParseSlashCommand(input string) (SlashCommand, bool, error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "/") {
@@ -76,7 +85,7 @@ func ParseSlashCommand(input string) (SlashCommand, bool, error) {
 	if !isSlashCommandName(commandName) {
 		return SlashCommand{}, false, nil
 	}
-	if commandName == SlashCompact {
+	if commandName == SlashCompact || commandName == SlashGoal {
 		args := strings.TrimSpace(strings.TrimPrefix(trimmed, commandName))
 		return SlashCommand{Name: commandName, Args: args}, true, nil
 	}
@@ -296,9 +305,6 @@ func (s StatusSnapshot) Text() string {
 	lines = append(lines, statusLabel(statusIconSuccess, formatSuccessRates(s.SuccessRates)))
 	if s.Goal != nil {
 		lines = append(lines, statusLabel(statusIconGoal, formatGoalStatus(s.Goal)))
-		if s.Goal.LastCheck != nil {
-			lines = append(lines, statusLabel(statusIconGoal, formatCompletionCheckStatus(s.Goal.LastCheck)))
-		}
 	}
 	turnState := "idle"
 	if s.PendingInput.TurnID != "" {
@@ -321,26 +327,11 @@ func formatGoalStatus(goal *runtime.GoalStatusSnapshot) string {
 	if status == "" {
 		status = "unknown"
 	}
-	objective := strings.TrimSpace(goal.Objective)
-	if objective == "" {
+	description := strings.TrimSpace(goal.Description)
+	if description == "" {
 		return "goal: " + status
 	}
-	return fmt.Sprintf("goal: %s - %s", status, objective)
-}
-
-func formatCompletionCheckStatus(check *runtime.CompletionCheck) string {
-	if check == nil {
-		return "completion: none"
-	}
-	status := string(check.Status)
-	if status == "" {
-		status = "unknown"
-	}
-	summary := strings.TrimSpace(check.Summary)
-	if summary == "" {
-		return "completion: " + status
-	}
-	return fmt.Sprintf("completion: %s - %s", status, summary)
+	return fmt.Sprintf("goal: %s - %s", status, description)
 }
 
 func statusLabel(icon, text string) string {

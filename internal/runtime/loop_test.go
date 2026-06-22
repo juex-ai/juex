@@ -122,6 +122,9 @@ func TestRuntimeHookHelperProcess(t *testing.T) {
 	case "fail":
 		_, _ = os.Stderr.WriteString("stop hook failed")
 		os.Exit(1)
+	case "goal-output":
+		_, _ = os.Stdout.WriteString(`{"goal_state":{"description":"hook should not write","status":"success"}}`)
+		os.Exit(0)
 	default:
 		_, _ = os.Stdout.WriteString(`{}`)
 		os.Exit(0)
@@ -1272,18 +1275,25 @@ func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 
 func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_create_1", ToolName: GoalToolCreate, Input: map[string]any{
+				"description":         "ship this",
+				"verification_method": "tests pass",
+			}},
+		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "goal_update_1", ToolName: GoalToolUpdate, Input: map[string]any{
+				"status": string(GoalStatusSuccess),
+			}},
+		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
-	hookRunner := &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
-		hooks.EventStop: {
-			{GoalState: mustRawMessage(t, `{"status":"continue","completion_check":{"status":"continue","summary":"tests missing","continue_prompt":"run tests before finishing"}}`)},
-			{GoalState: mustRawMessage(t, `{"status":"complete","completion_check":{"status":"complete","summary":"tests passed"}}`)},
-		},
-	}}
-	eng.Hooks = hookRunner
+	if err := RegisterGoalTools(eng.Tools, eng); err != nil {
+		t.Fatal(err)
+	}
 	var continued int32
 	bus.Subscribe("goal.continued", func(e events.Event) { atomic.AddInt32(&continued, 1) })
 
@@ -1294,24 +1304,76 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if out != "final" {
 		t.Fatalf("out = %q", out)
 	}
-	if len(prov.histories) != 2 {
+	if len(prov.histories) != 4 {
 		t.Fatalf("provider calls = %d", len(prov.histories))
 	}
-	if got := prov.histories[1][len(prov.histories[1])-1].FirstText(); got != "run tests before finishing" {
+	if got := prov.histories[2][len(prov.histories[2])-1].FirstText(); !strings.Contains(got, "current session goal is still in progress") {
 		t.Fatalf("goal continuation = %q", got)
 	}
 	if atomic.LoadInt32(&continued) != 1 {
 		t.Fatalf("goal.continued events = %d", continued)
 	}
-	if len(hookRunner.requests) < 3 || !strings.Contains(string(hookRunner.requests[2].GoalState), `"status":"continue"`) {
-		t.Fatalf("second stop hook request missing current goal state: %+v", hookRunner.requests)
-	}
 	state, err := eng.GoalState.Snapshot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusComplete || state.Budget.ContinuationsUsed != 1 {
+	if state.Status != GoalStatusSuccess || state.ContinuationCount != 1 {
 		t.Fatalf("goal state = %+v", state)
+	}
+}
+
+func TestTurn_UserMessageDoesNotCreateGoalState(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+
+	out, err := eng.Turn(context.Background(), "this is normal context, not a goal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" {
+		t.Fatalf("out = %q", out)
+	}
+	snapshot, err := eng.GoalState.StatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot != nil {
+		t.Fatalf("ordinary turn created goal: %+v", snapshot)
+	}
+}
+
+func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "ok"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+		Name:    "legacy-goal-output",
+		Events:  []hooks.EventName{hooks.EventStop},
+		Command: runtimeHookCommand("goal-output"),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.Hooks = runner
+
+	out, err := eng.Turn(context.Background(), "finish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "ok" {
+		t.Fatalf("out = %q", out)
+	}
+	snapshot, err := eng.GoalState.StatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot != nil {
+		t.Fatalf("hook goal_state output mutated goal: %+v", snapshot)
 	}
 }
 

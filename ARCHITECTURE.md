@@ -956,7 +956,8 @@ event name, session id, turn id, cwd, workspace roots, permission/sandbox
 labels, conversation/event log paths, current `goal_state`, and event-specific
 fields such as tool input/result or compaction reason. Hook stdout may be empty
 or a JSON object containing `decision`, `additional_context`, `block_stop`,
-`continue_prompt`, `working_state`, and `goal_state`.
+`continue_prompt`, and `working_state`. Hook requests may include the current
+goal as read-only context, but hook output is not a goal write contract.
 
 The runtime emits `hook.started`, `hook.completed`, `hook.errored`, and
 conversation-visible `hook.trace` events; the existing session bus persists
@@ -987,14 +988,16 @@ completion gate.
 
 Finish attempts also pass through the built-in `goal-completion-gate` after
 user-configured Stop command hooks. The runtime stores a session-local
-`goal_state.json` with objective, status, evidence, continuation budget,
-blocked reason, next user input, last progress, and latest completion check.
-Command hooks can return `goal_state` patches; project-specific hooks decide
-whether tests, PRs, tracker docs, or other workflow requirements are complete.
-The runtime gate only enforces generic statuses: `complete` allows finish,
-`continue` queues the completion check's continuation prompt within the budget,
-and `blocked` requires both a concrete blocked reason and next user input
-before allowing finish. Goal state is exposed through `/status` and
+`goal_state.json` owned by model-facing goal tools. Its public contract is
+`description`, `verification_method`, `continuation_count`, `status`, and
+`updated_at`; statuses are `in_progress`, `success`, and `failure`. Ordinary
+user messages do not create or overwrite goals. Command hooks cannot return
+goal patches; project-specific hooks decide whether tests, PRs, tracker docs,
+or other workflow requirements should add context, update `working_state`, or
+block stop with a `continue_prompt`. The runtime gate reads only the persisted
+goal status: `success` and `failure` allow finish, while `in_progress` records a
+continuation and asks the model to keep working or call `update_goal` with a
+terminal status. Goal state is exposed through `/status` and
 `/api/sessions/<id>`; it is not injected into provider context as an advisory
 message.
 
@@ -1033,10 +1036,10 @@ patch for project-specific extraction. The provider receives a short advisory
 working-state block only when active sidecar records exist; the block is not
 persisted into `conversation.jsonl`, and low-confidence records do not gate
 final answers.
-The separate `goal_state.json` sidecar carries operational completion state
-instead of advisory context. It is updated by lifecycle hook output and the
-goal-completion gate, appears in session status surfaces, and preserves
-continuation budget so a repeated incomplete check cannot loop forever.
+The separate `goal_state.json` sidecar carries model-owned operational goal
+state instead of advisory context. It is updated through `create_goal` and
+`update_goal`, appears in session status surfaces, and records
+`continuation_count` when the goal-completion gate asks the model to continue.
 Manual compact and active-context inspection are available through
 `juex sessions compact --instructions`, `juex sessions context`, local
 `/compact [instructions]` and `/status` slash commands, and matching Web API
@@ -1090,7 +1093,7 @@ Resources split between user-global and work-local:
         ├── conversation.jsonl
         ├── events.jsonl
         ├── working_state.json   # generic sidecar injected into provider context when non-empty
-        ├── goal_state.json      # current goal, completion check, budget, and blocked details
+        ├── goal_state.json      # model-owned goal description, verification, status, and continuation count
         ├── trace.jsonl          # structured event trace derived from the bus
         ├── spans.jsonl          # start/end/error/instant spans by turn
         └── tools.jsonl          # sanitized tool input/output/error summaries
