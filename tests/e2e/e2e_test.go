@@ -390,7 +390,7 @@ func TestEndToEnd_FullStack(t *testing.T) {
 	// (Already implied by toolErrs == 0; this is a stronger check on payload size.)
 }
 
-func TestEndToEnd_ToolFailureLedgerContinuation(t *testing.T) {
+func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("e2e is slow")
 	}
@@ -437,10 +437,6 @@ func TestEndToEnd_ToolFailureLedgerContinuation(t *testing.T) {
 				StopReason: llm.StopToolUse,
 			},
 			{
-				Message:    llm.TextMessage(llm.RoleAssistant, "done too early"),
-				StopReason: llm.StopEndTurn,
-			},
-			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "write_1", ToolName: "write", Input: map[string]any{"path": target, "content": "ready\n"}},
 				}},
@@ -480,19 +476,16 @@ func TestEndToEnd_ToolFailureLedgerContinuation(t *testing.T) {
 	if data, err := os.ReadFile(target); err != nil || string(data) != "ready\n" {
 		t.Fatalf("artifact data=%q err=%v", data, err)
 	}
-	if got := int(prov.called.Load()); got != 5 {
-		t.Fatalf("provider calls = %d, want 5", got)
+	if got := int(prov.called.Load()); got != 4 {
+		t.Fatalf("provider calls = %d, want 4", got)
 	}
-	observation := messagesText(prov.history[2])
-	for _, want := range []string{"Runtime observation", "unresolved tool failure", "check_ready", "check failed"} {
-		if !strings.Contains(observation, want) {
-			t.Fatalf("provider did not receive continuation observation %q:\n%s", want, observation)
-		}
+	if observation := messagesText(prov.history[2]); strings.Contains(observation, "Runtime observation") {
+		t.Fatalf("provider should not receive failure-ledger continuation observation:\n%s", observation)
 	}
 
 	convText := strings.Join(readLines(t, filepath.Join(sess.Dir, "conversation.jsonl")), "\n")
-	if !strings.Contains(convText, "Runtime observation") {
-		t.Fatalf("conversation missing runtime observation:\n%s", convText)
+	if strings.Contains(convText, "Runtime observation") {
+		t.Fatalf("conversation should not include runtime failure continuation:\n%s", convText)
 	}
 
 	eventLines := readLines(t, filepath.Join(sess.Dir, "events.jsonl"))
@@ -508,19 +501,24 @@ func TestEndToEnd_ToolFailureLedgerContinuation(t *testing.T) {
 		payloadText.Write(payload)
 		payloadText.WriteByte('\n')
 	}
-	for _, want := range []string{"tool.failure.recorded", "tool.failure.continued", "tool.failure.stale", "hook.completed"} {
+	for _, want := range []string{"tool.failure.recorded", "tool.failure.stale"} {
 		if !seen[want] {
 			t.Fatalf("events missing %q; seen=%v", want, seen)
 		}
 	}
-	for _, want := range []string{"recoverable", "artifact.txt", "check_ready", "unresolved-failure-gate"} {
+	for _, unwanted := range []string{"tool.failure.continued", "unresolved-failure-gate"} {
+		if seen[unwanted] {
+			t.Fatalf("events should not include %q; seen=%v", unwanted, seen)
+		}
+	}
+	for _, want := range []string{"recoverable", "artifact.txt", "check_ready"} {
 		if !strings.Contains(payloadText.String(), want) {
 			t.Fatalf("event payloads missing %q:\n%s", want, payloadText.String())
 		}
 	}
 }
 
-func TestEndToEnd_UnresolvedFailureGateWithUserGlobalDisabled(t *testing.T) {
+func TestEndToEnd_ToolFailureLedgerWithUserGlobalDisabledDoesNotHardBlock(t *testing.T) {
 	work := t.TempDir()
 	prov := &recordingProvider{
 		steps: []llm.Response{
@@ -531,17 +529,7 @@ func TestEndToEnd_UnresolvedFailureGateWithUserGlobalDisabled(t *testing.T) {
 				StopReason: llm.StopToolUse,
 			},
 			{
-				Message:    llm.TextMessage(llm.RoleAssistant, "done too early"),
-				StopReason: llm.StopEndTurn,
-			},
-			{
-				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-					{Type: llm.BlockToolUse, ToolUseID: "exec_ok", ToolName: "exec_command", Input: map[string]any{"cmd": "exit 0"}},
-				}},
-				StopReason: llm.StopToolUse,
-			},
-			{
-				Message:    llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: command recovered"),
+				Message:    llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: command failure recorded"),
 				StopReason: llm.StopEndTurn,
 			},
 		},
@@ -561,27 +549,42 @@ func TestEndToEnd_UnresolvedFailureGateWithUserGlobalDisabled(t *testing.T) {
 	}
 	defer a.Close()
 
-	out, err := a.Run(context.Background(), "recover from the command failure")
+	out, err := a.Run(context.Background(), "record the command failure")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "TASK COMPLETE: command recovered" {
+	if out != "TASK COMPLETE: command failure recorded" {
 		t.Fatalf("out = %q", out)
 	}
-	if len(prov.history) != 4 {
-		t.Fatalf("provider calls = %d, want gate continuation and recovery", len(prov.history))
+	if len(prov.history) != 2 {
+		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.history))
 	}
-	observation := messagesText(prov.history[2])
-	for _, want := range []string{"Runtime observation", "unresolved tool failure", "exec_command"} {
-		if !strings.Contains(observation, want) {
-			t.Fatalf("provider did not receive gate observation %q:\n%s", want, observation)
-		}
+	if observation := messagesText(prov.history[1]); strings.Contains(observation, "Runtime observation") {
+		t.Fatalf("provider should not receive failure-ledger continuation observation:\n%s", observation)
 	}
 	eventsText := strings.Join(readLines(t, filepath.Join(a.Session.Dir, "events.jsonl")), "\n")
-	for _, want := range []string{"tool.failure.recorded", "tool.failure.continued", "tool.failure.resolved", "unresolved-failure-gate"} {
+	for _, want := range []string{"tool.failure.recorded", "exec_command"} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
 		}
+	}
+	for _, unwanted := range []string{"tool.failure.continued", "unresolved-failure-gate"} {
+		if strings.Contains(eventsText, unwanted) {
+			t.Fatalf("events should not include %q:\n%s", unwanted, eventsText)
+		}
+	}
+	state, err := a.Engine.WorkingState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeIssueCount := 0
+	for _, issue := range state.OpenIssues {
+		if issue.ResolvedAt.IsZero() {
+			activeIssueCount++
+		}
+	}
+	if activeIssueCount == 0 {
+		t.Fatalf("working state missing tool failure open issue: %+v", state.OpenIssues)
 	}
 }
 
@@ -1173,10 +1176,6 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 				Message:    llm.TextMessage(llm.RoleAssistant, "final answer"),
 				StopReason: llm.StopEndTurn,
 			},
-			{
-				Message:    llm.TextMessage(llm.RoleAssistant, "final answer"),
-				StopReason: llm.StopEndTurn,
-			},
 		},
 	}
 	a, err := app.New(app.Options{
@@ -1204,13 +1203,13 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	if out != "final answer" {
 		t.Fatalf("out = %q", out)
 	}
-	if len(prov.history) != 4 {
+	if len(prov.history) != 3 {
 		t.Fatalf("provider calls = %d", len(prov.history))
 	}
 	if got := messagesText(prov.history[0]); !strings.Contains(got, "hook-context: visible") {
 		t.Fatalf("first provider history missing injected context:\n%s", got)
 	}
-	if got := prov.history[3][len(prov.history[3])-1].FirstText(); got != "continue from hook" {
+	if got := prov.history[2][len(prov.history[2])-1].FirstText(); got != "continue from hook" {
 		t.Fatalf("stop continuation = %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(work, "blocked.txt")); !os.IsNotExist(err) {

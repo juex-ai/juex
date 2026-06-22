@@ -976,15 +976,14 @@ Tool failures are also tracked in a per-turn unresolved-failure ledger inside
 `internal/runtime`. The ledger classifies each failed tool result as
 `recoverable`, `external_blocked`, `runtime_fatal`, `repeated_stuck`, or
 `nonblocking_exploratory`, records fingerprints and bounded output previews,
-and emits `tool.failure.*` events. Finish attempts pass through the built-in
-`unresolved-failure-gate` Stop hook before user-configured Stop command hooks.
-The gate blocks unresolved blocking failures, allows exploratory nonblocking
-failures, injects provider-visible observations for recoverable failures, and
-asks the model to change approach or explicitly explain a blocker when the same
-blocker repeats or the failure is external/runtime-fatal. Later successful
-checks or related file writes/edits mark records `resolved` or `stale`. This
-keeps ordinary tool errors in the model loop without introducing a generic
-max-iteration stop.
+and emits `tool.failure.recorded`, `tool.failure.resolved`, and
+`tool.failure.stale` events. Later successful checks or related file
+writes/edits mark records `resolved` or `stale`. When working state is enabled,
+the same failures are projected into `working_state.open_issues` with severity
+derived from the classification. The ledger is observability and state input;
+it does not independently block finish or inject provider-visible continuation
+prompts. Stop authority belongs to configured Stop hooks and the goal
+completion gate.
 
 Finish attempts also pass through the built-in `goal-completion-gate` after
 user-configured Stop command hooks. The runtime stores a session-local
