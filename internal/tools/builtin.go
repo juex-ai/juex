@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -179,7 +180,7 @@ func editTool(workDir string) Tool {
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
 			path, _ := in["path"].(string)
 			oldStr, _ := in["old"].(string)
-			newStr, _ := in["new"].(string)
+			newStr, newOK := in["new"].(string)
 			replaceAll, _ := in["replace_all"].(bool)
 			var expected int
 			var expectedSet bool
@@ -191,8 +192,8 @@ func editTool(workDir string) Tool {
 				}
 				expectedSet = true
 			}
-			if path == "" || oldStr == "" {
-				return "", fmt.Errorf("edit: path and old required")
+			if missing := missingEditRequiredArgs(path, oldStr, newOK); len(missing) > 0 {
+				return "", fmt.Errorf("edit: missing required argument(s): %s (expected keys: path, old, new; received keys: %s)", strings.Join(missing, ", "), receivedArgumentKeys(in))
 			}
 			path = resolveWorkPath(workDir, path)
 			if expectedSet && expected != 1 && !replaceAll {
@@ -230,6 +231,32 @@ func editTool(workDir string) Tool {
 			return fmt.Sprintf("edited %s (%d %s)", path, replacements, replacementLabel), nil
 		},
 	}
+}
+
+func missingEditRequiredArgs(path, oldStr string, newOK bool) []string {
+	missing := []string{}
+	if path == "" {
+		missing = append(missing, "path")
+	}
+	if oldStr == "" {
+		missing = append(missing, "old")
+	}
+	if !newOK {
+		missing = append(missing, "new")
+	}
+	return missing
+}
+
+func receivedArgumentKeys(in map[string]any) string {
+	if len(in) == 0 {
+		return "<none>"
+	}
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 func resolveWorkPath(workDir, path string) string {

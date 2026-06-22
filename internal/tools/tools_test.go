@@ -422,6 +422,35 @@ func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	}
 }
 
+func TestBuiltins_EditMissingRequiredArgumentsReportsReceivedKeys(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, "")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "foo.txt")
+	if err := os.WriteFile(path, []byte("source_ai: Claude"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := r.Call(context.Background(), "edit", map[string]any{
+		"path":       path,
+		"old_string": "source_ai: Claude",
+		"new_string": "source_ai: Juex",
+	})
+	if err == nil {
+		t.Fatal("expected missing required arguments error")
+	}
+	for _, want := range []string{
+		"missing required argument(s): old, new",
+		"expected keys: path, old, new",
+		"received keys: new_string, old_string, path",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want substring %q", err.Error(), want)
+		}
+	}
+}
+
 func TestBuiltins_FileToolsResolveRelativePathsFromWorkDir(t *testing.T) {
 	processDir := t.TempDir()
 	t.Chdir(processDir)
