@@ -278,9 +278,6 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 		sessionDir = e.Session.Dir
 	}
 	e.toolFailures = newToolFailureLedger(sessionDir)
-	if err := e.beginGoalTurnLocked(turnID, userMsg.FirstText()); err != nil {
-		return "", e.failTurn(turnID, err)
-	}
 	lifecycle := turnLifecycle{
 		engine:  e,
 		turnID:  turnID,

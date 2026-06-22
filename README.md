@@ -136,7 +136,7 @@ paths, emits `tool.failure.recorded`, and lets later successful checks or
 related file mutations emit `tool.failure.resolved` or `tool.failure.stale`.
 It also feeds `working_state.open_issues` when working state is enabled. Tool
 failures are state input, not an independent finish authority; final-answer
-continuation or blocked decisions belong to `goal_state`,
+continuation decisions belong to model-owned `goal_state`, the
 `goal-completion-gate`, and configured Stop hooks.
 
 Pending input accepted while a turn is already running is persisted in the
@@ -151,13 +151,15 @@ provider context as an advisory runtime working-state block; empty sidecars do
 not change ordinary runs. Set `runtime.working_state_enabled: false` to disable
 sidecar persistence, updates, and injection.
 
-Juex also keeps a session-local `goal_state.json` for the current objective,
-completion status, evidence, continuation budget, blocked reason, last
-progress, and latest completion check. Command hooks can read this state and
-return a `goal_state` patch, especially from `Stop` hooks. The built-in
-`goal-completion-gate` blocks finish only when the persisted completion check
-asks for continuation or lacks required blocked details; project-specific
-hooks own domain checks such as tests, PRs, or tracker updates.
+Juex also keeps a session-local `goal_state.json` for the model-owned current
+goal. The active contract is intentionally small: `description`,
+`verification_method`, `continuation_count`, `status` (`in_progress`,
+`success`, or `failure`), and `updated_at`. The model writes this state only
+through `get_goal`, `create_goal`, and `update_goal`; ordinary user messages
+do not create goals, and command hook output cannot mutate goals. The built-in
+`goal-completion-gate` reads the persisted status and queues one continuation
+when the goal is still `in_progress`; project-specific hooks can still add
+context, update `working_state`, or block stop with a `continue_prompt`.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   formatRuntimeTokenCount,
   runtimeGoalBadgeLabel,
-  runtimeGoalBudgetLabel,
+  runtimeGoalContinuationLabel,
   runtimeGoalIsActive,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
@@ -49,33 +49,20 @@ test("runtimeHookCommandLabel joins command argv", () => {
 
 test("runtimeGoalBadgeLabel summarizes goal status", () => {
   assert.equal(runtimeGoalBadgeLabel(undefined), "goal none");
-  assert.equal(runtimeGoalBadgeLabel({ status: "continue" }), "goal continue");
+  assert.equal(runtimeGoalBadgeLabel({ status: "in_progress" }), "goal in_progress");
 });
 
 test("runtimeGoalIsActive only highlights real goal statuses", () => {
   assert.equal(runtimeGoalIsActive(undefined), false);
   assert.equal(runtimeGoalIsActive({ status: "" }), false);
   assert.equal(runtimeGoalIsActive({ status: "none" }), false);
-  assert.equal(runtimeGoalIsActive({ status: "continue" }), true);
+  assert.equal(runtimeGoalIsActive({ status: "in_progress" }), true);
 });
 
-test("runtimeGoalBudgetLabel handles missing and unbounded budgets", () => {
-  assert.equal(runtimeGoalBudgetLabel(undefined), "-");
-  assert.equal(runtimeGoalBudgetLabel({ status: "continue" }), "-");
-  assert.equal(
-    runtimeGoalBudgetLabel({
-      status: "continue",
-      budget: { continuations_used: 2, max_continuations: 5 },
-    }),
-    "2/5",
-  );
-  assert.equal(
-    runtimeGoalBudgetLabel({
-      status: "continue",
-      budget: { continuations_used: 2, max_continuations: 0 },
-    }),
-    "2",
-  );
+test("runtimeGoalContinuationLabel reads simplified continuation count", () => {
+  assert.equal(runtimeGoalContinuationLabel(undefined), "-");
+  assert.equal(runtimeGoalContinuationLabel({ status: "in_progress" }), "0");
+  assert.equal(runtimeGoalContinuationLabel({ status: "in_progress", continuation_count: 2 }), "2");
 });
 
 test("workingStatePresenceLabel describes active sidecar state", () => {

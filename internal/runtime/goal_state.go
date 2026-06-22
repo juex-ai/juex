@@ -2,8 +2,6 @@ package runtime
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,66 +13,29 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 )
 
-const (
-	goalStateFile               = "goal_state.json"
-	DefaultGoalMaxContinuations = 3
-)
+const goalStateFile = "goal_state.json"
 
 type GoalStatus string
 
 const (
 	GoalStatusInProgress GoalStatus = "in_progress"
-	GoalStatusContinue   GoalStatus = "continue"
-	GoalStatusBlocked    GoalStatus = "blocked"
-	GoalStatusComplete   GoalStatus = "complete"
-	GoalStatusUnchecked  GoalStatus = "unchecked"
+	GoalStatusSuccess    GoalStatus = "success"
+	GoalStatusFailure    GoalStatus = "failure"
 )
 
 type GoalState struct {
-	Version       int              `json:"version"`
-	Objective     string           `json:"objective,omitempty"`
-	Status        GoalStatus       `json:"status,omitempty"`
-	Evidence      []GoalEvidence   `json:"evidence,omitempty"`
-	Budget        GoalBudget       `json:"budget,omitempty"`
-	BlockedReason string           `json:"blocked_reason,omitempty"`
-	NextUserInput string           `json:"next_user_input,omitempty"`
-	LastProgress  string           `json:"last_progress,omitempty"`
-	LastCheck     *CompletionCheck `json:"last_check,omitempty"`
-	UpdatedAt     time.Time        `json:"updated_at,omitempty"`
+	Version            int        `json:"version"`
+	Description        string     `json:"description,omitempty"`
+	VerificationMethod string     `json:"verification_method,omitempty"`
+	ContinuationCount  int        `json:"continuation_count,omitempty"`
+	Status             GoalStatus `json:"status,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
 }
 
-type GoalEvidence struct {
-	ID           string    `json:"id,omitempty"`
-	Kind         string    `json:"kind,omitempty"`
-	Text         string    `json:"text,omitempty"`
-	Source       string    `json:"source,omitempty"`
-	RelatedPaths []string  `json:"related_paths,omitempty"`
-	CreatedAt    time.Time `json:"created_at,omitempty"`
-}
-
-type GoalBudget struct {
-	MaxContinuations  int `json:"max_continuations,omitempty"`
-	ContinuationsUsed int `json:"continuations_used,omitempty"`
-}
-
-type CompletionCheck struct {
-	Status         GoalStatus `json:"status,omitempty"`
-	Summary        string     `json:"summary,omitempty"`
-	ContinuePrompt string     `json:"continue_prompt,omitempty"`
-	Source         string     `json:"source,omitempty"`
-	CheckedAt      time.Time  `json:"checked_at,omitempty"`
-}
-
-type GoalStatePatch struct {
-	Objective       string           `json:"objective,omitempty"`
-	Status          GoalStatus       `json:"status,omitempty"`
-	Evidence        []GoalEvidence   `json:"evidence,omitempty"`
-	Budget          *GoalBudget      `json:"budget,omitempty"`
-	BlockedReason   string           `json:"blocked_reason,omitempty"`
-	NextUserInput   string           `json:"next_user_input,omitempty"`
-	LastProgress    string           `json:"last_progress,omitempty"`
-	CompletionCheck *CompletionCheck `json:"completion_check,omitempty"`
-	ContinuePrompt  string           `json:"continue_prompt,omitempty"`
+type GoalStateUpdate struct {
+	Description        *string    `json:"description,omitempty"`
+	VerificationMethod *string    `json:"verification_method,omitempty"`
+	Status             GoalStatus `json:"status,omitempty"`
 }
 
 type GoalStateOptions struct {
@@ -94,20 +55,15 @@ type GoalGateDecision struct {
 	BlockStop         bool       `json:"block_stop,omitempty"`
 	ContinuePrompt    string     `json:"continue_prompt,omitempty"`
 	Reason            string     `json:"reason,omitempty"`
-	ContinuationsUsed int        `json:"continuations_used,omitempty"`
-	MaxContinuations  int        `json:"max_continuations,omitempty"`
+	ContinuationCount int        `json:"continuation_count,omitempty"`
 }
 
 type GoalStatusSnapshot struct {
-	Objective     string           `json:"objective,omitempty"`
-	Status        GoalStatus       `json:"status,omitempty"`
-	Evidence      []GoalEvidence   `json:"evidence,omitempty"`
-	Budget        GoalBudget       `json:"budget,omitempty"`
-	BlockedReason string           `json:"blocked_reason,omitempty"`
-	NextUserInput string           `json:"next_user_input,omitempty"`
-	LastProgress  string           `json:"last_progress,omitempty"`
-	LastCheck     *CompletionCheck `json:"last_check,omitempty"`
-	UpdatedAt     time.Time        `json:"updated_at,omitempty"`
+	Description        string     `json:"description,omitempty"`
+	VerificationMethod string     `json:"verification_method,omitempty"`
+	ContinuationCount  int        `json:"continuation_count,omitempty"`
+	Status             GoalStatus `json:"status,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
 }
 
 func NewGoalStateStore(sessionDir string, opts GoalStateOptions) *GoalStateStore {
@@ -131,132 +87,67 @@ func (s *GoalStateStore) Snapshot() (GoalState, error) {
 	return s.loadLocked()
 }
 
-func (s *GoalStateStore) BeginTurn(objective string) error {
+func (s *GoalStateStore) Create(description, verificationMethod string) (GoalState, error) {
 	if s == nil {
-		return nil
+		return GoalState{Version: 1}, nil
 	}
-	objective = sanitizeGoalText(strings.TrimSpace(objective))
-	if objective == "" {
-		return nil
+	description = sanitizeGoalText(description)
+	verificationMethod = sanitizeGoalText(verificationMethod)
+	if description == "" {
+		return GoalState{}, fmt.Errorf("goal description is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	state, err := s.loadLocked()
-	if err != nil {
-		return err
+	state := GoalState{
+		Version:            1,
+		Description:        description,
+		VerificationMethod: verificationMethod,
+		ContinuationCount:  0,
+		Status:             GoalStatusInProgress,
+		UpdatedAt:          s.now(),
 	}
-	if state.Objective != "" && state.Status != GoalStatusComplete && state.Status != GoalStatusBlocked && state.Status != GoalStatusUnchecked {
-		return nil
+	if err := s.saveLocked(state); err != nil {
+		return GoalState{}, err
 	}
-	now := s.now()
-	state.Objective = objective
-	state.Status = GoalStatusInProgress
-	state.Budget = defaultGoalBudget(state.Budget)
-	state.Budget.ContinuationsUsed = 0
-	state.BlockedReason = ""
-	state.NextUserInput = ""
-	state.LastProgress = "turn started"
-	state.LastCheck = nil
-	state.UpdatedAt = now
-	return s.saveLocked(state)
+	return state, nil
 }
 
-func (s *GoalStateStore) ApplyPatch(patch GoalStatePatch) error {
-	if s == nil || patch.empty() {
-		return nil
+func (s *GoalStateStore) Update(update GoalStateUpdate) (GoalState, error) {
+	if s == nil {
+		return GoalState{Version: 1}, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state, err := s.loadLocked()
 	if err != nil {
-		return err
+		return GoalState{}, err
 	}
-	now := s.now()
-	state.Budget = defaultGoalBudget(state.Budget)
-	if patch.Objective != "" {
-		state.Objective = sanitizeGoalText(patch.Objective)
+	if state.StatusSnapshot() == nil {
+		return GoalState{}, fmt.Errorf("goal is not set")
 	}
-	if patch.Status != "" {
-		state.Status = patch.Status
-	}
-	if patch.Budget != nil {
-		if patch.Budget.MaxContinuations > 0 {
-			state.Budget.MaxContinuations = patch.Budget.MaxContinuations
-		}
-		if patch.Budget.ContinuationsUsed >= 0 {
-			state.Budget.ContinuationsUsed = patch.Budget.ContinuationsUsed
+	if update.Description != nil {
+		state.Description = sanitizeGoalText(*update.Description)
+		if state.Description == "" {
+			return GoalState{}, fmt.Errorf("goal description cannot be empty")
 		}
 	}
-	if patch.LastProgress != "" {
-		state.LastProgress = sanitizeGoalText(patch.LastProgress)
+	if update.VerificationMethod != nil {
+		state.VerificationMethod = sanitizeGoalText(*update.VerificationMethod)
 	}
-	switch patch.Status {
-	case GoalStatusBlocked:
-		state.BlockedReason = sanitizeGoalText(patch.BlockedReason)
-		state.NextUserInput = sanitizeGoalText(patch.NextUserInput)
-	case GoalStatusComplete:
-		state.BlockedReason = ""
-		state.NextUserInput = ""
-	default:
-		if patch.BlockedReason != "" {
-			state.BlockedReason = sanitizeGoalText(patch.BlockedReason)
+	if update.Status != "" {
+		if err := validateGoalStatus(update.Status); err != nil {
+			return GoalState{}, err
 		}
-		if patch.NextUserInput != "" {
-			state.NextUserInput = sanitizeGoalText(patch.NextUserInput)
-		}
-	}
-	if len(patch.Evidence) > 0 {
-		state.Evidence = mergeGoalEvidence(state.Evidence, patch.Evidence, now)
-	}
-	if patch.CompletionCheck != nil || patch.ContinuePrompt != "" || patch.Status == GoalStatusContinue || patch.Status == GoalStatusComplete || patch.Status == GoalStatusBlocked {
-		check := CompletionCheck{Status: patch.Status, ContinuePrompt: patch.ContinuePrompt}
-		if patch.CompletionCheck != nil {
-			check = *patch.CompletionCheck
-			if check.ContinuePrompt == "" {
-				check.ContinuePrompt = patch.ContinuePrompt
-			}
-			if check.Status == "" {
-				check.Status = patch.Status
-			}
-		}
-		check = normalizeCompletionCheck(check, now)
-		if check.Status != "" || check.Summary != "" || check.ContinuePrompt != "" {
-			state.LastCheck = &check
-			if patch.Status == "" && check.Status != "" {
-				state.Status = check.Status
-			}
-		}
+		state.Status = update.Status
 	}
 	if state.Status == "" {
 		state.Status = GoalStatusInProgress
 	}
-	state.UpdatedAt = now
-	return s.saveLocked(state)
-}
-
-func (s *GoalStateStore) MarkUnchecked() error {
-	if s == nil {
-		return nil
+	state.UpdatedAt = s.now()
+	if err := s.saveLocked(state); err != nil {
+		return GoalState{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	state, err := s.loadLocked()
-	if err != nil {
-		return err
-	}
-	if state.Objective == "" || state.Status != GoalStatusInProgress {
-		return nil
-	}
-	now := s.now()
-	state.Status = GoalStatusUnchecked
-	state.LastCheck = &CompletionCheck{
-		Status:    GoalStatusUnchecked,
-		Summary:   "no completion check reported goal status",
-		Source:    "runtime",
-		CheckedAt: now,
-	}
-	state.UpdatedAt = now
-	return s.saveLocked(state)
+	return state, nil
 }
 
 func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
@@ -269,49 +160,27 @@ func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
 	if err != nil {
 		return GoalGateDecision{}, err
 	}
-	state.Budget = defaultGoalBudget(state.Budget)
-	status := state.Status
-	if status == "" && state.LastCheck != nil {
-		status = state.LastCheck.Status
+	if state.StatusSnapshot() == nil || state.Status == GoalStatusSuccess || state.Status == GoalStatusFailure {
+		return GoalGateDecision{Status: state.Status, ContinuationCount: state.ContinuationCount}, nil
 	}
-	decision := GoalGateDecision{
-		Status:            status,
-		ContinuationsUsed: state.Budget.ContinuationsUsed,
-		MaxContinuations:  state.Budget.MaxContinuations,
+	if state.Status != GoalStatusInProgress {
+		return GoalGateDecision{Status: state.Status, ContinuationCount: state.ContinuationCount}, nil
 	}
-	switch status {
-	case GoalStatusContinue:
-		if state.Budget.MaxContinuations > 0 && state.Budget.ContinuationsUsed >= state.Budget.MaxContinuations {
-			decision.Status = GoalStatusBlocked
-			decision.Reason = "continuation_budget_exhausted"
-			return decision, nil
+	prompt := "The current session goal is still in progress. Continue working toward the goal, or call update_goal with status success or failure when the goal is complete or cannot be completed."
+	if state.Description != "" || state.VerificationMethod != "" {
+		prompt = "The current session goal is still in progress.\n\nGoal: " + state.Description
+		if state.VerificationMethod != "" {
+			prompt += "\nVerification: " + state.VerificationMethod
 		}
-		prompt := ""
-		if state.LastCheck != nil {
-			prompt = strings.TrimSpace(state.LastCheck.ContinuePrompt)
-		}
-		if prompt == "" {
-			prompt = "Please continue working toward the current objective and record concrete progress before finishing."
-		}
-		decision.BlockStop = true
-		decision.ContinuePrompt = prompt
-		decision.Reason = "completion_check_continue"
-		return decision, nil
-	case GoalStatusBlocked:
-		if strings.TrimSpace(state.BlockedReason) != "" && strings.TrimSpace(state.NextUserInput) != "" {
-			return decision, nil
-		}
-		if state.Budget.MaxContinuations > 0 && state.Budget.ContinuationsUsed >= state.Budget.MaxContinuations {
-			decision.Reason = "blocked_details_missing_budget_exhausted"
-			return decision, nil
-		}
-		decision.BlockStop = true
-		decision.Reason = "blocked_details_missing"
-		decision.ContinuePrompt = "Runtime observation: completion check marked the goal blocked, but goal_state.blocked_reason and goal_state.next_user_input are not both set. Do not continue ordinary work. Explain the concrete blocker and the exact next user input needed before finishing."
-		return decision, nil
-	default:
-		return decision, nil
+		prompt += "\n\nContinue working, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	}
+	return GoalGateDecision{
+		Status:            state.Status,
+		BlockStop:         true,
+		ContinuePrompt:    prompt,
+		Reason:            "goal_in_progress",
+		ContinuationCount: state.ContinuationCount,
+	}, nil
 }
 
 func (s *GoalStateStore) RecordContinuation(decision GoalGateDecision) error {
@@ -324,8 +193,10 @@ func (s *GoalStateStore) RecordContinuation(decision GoalGateDecision) error {
 	if err != nil {
 		return err
 	}
-	state.Budget = defaultGoalBudget(state.Budget)
-	state.Budget.ContinuationsUsed++
+	if state.StatusSnapshot() == nil {
+		return nil
+	}
+	state.ContinuationCount++
 	state.UpdatedAt = s.now()
 	return s.saveLocked(state)
 }
@@ -342,24 +213,15 @@ func (s *GoalStateStore) StatusSnapshot() (*GoalStatusSnapshot, error) {
 }
 
 func (s GoalState) StatusSnapshot() *GoalStatusSnapshot {
-	if strings.TrimSpace(s.Objective) == "" && s.Status == "" && s.LastCheck == nil {
+	if strings.TrimSpace(s.Description) == "" && s.Status == "" {
 		return nil
 	}
-	s.Evidence = append([]GoalEvidence(nil), s.Evidence...)
-	if s.LastCheck != nil {
-		check := *s.LastCheck
-		s.LastCheck = &check
-	}
 	return &GoalStatusSnapshot{
-		Objective:     s.Objective,
-		Status:        s.Status,
-		Evidence:      s.Evidence,
-		Budget:        s.Budget,
-		BlockedReason: s.BlockedReason,
-		NextUserInput: s.NextUserInput,
-		LastProgress:  s.LastProgress,
-		LastCheck:     s.LastCheck,
-		UpdatedAt:     s.UpdatedAt,
+		Description:        s.Description,
+		VerificationMethod: s.VerificationMethod,
+		ContinuationCount:  s.ContinuationCount,
+		Status:             s.Status,
+		UpdatedAt:          s.UpdatedAt,
 	}
 }
 
@@ -375,7 +237,7 @@ func (s GoalState) RawMessage() json.RawMessage {
 }
 
 func (s *GoalStateStore) loadLocked() (GoalState, error) {
-	state := GoalState{Version: 1, Budget: GoalBudget{MaxContinuations: DefaultGoalMaxContinuations}}
+	state := GoalState{Version: 1}
 	if s == nil || s.Path == "" {
 		return state, nil
 	}
@@ -392,10 +254,11 @@ func (s *GoalStateStore) loadLocked() (GoalState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return state, fmt.Errorf("goal state parse: %w", err)
 	}
-	if state.Version == 0 {
-		state.Version = 1
+	var legacy legacyGoalState
+	if err := json.Unmarshal(data, &legacy); err == nil && shouldNormalizeLegacyGoalState(state, legacy) {
+		state = legacy.normalize()
 	}
-	state.Budget = defaultGoalBudget(state.Budget)
+	state = normalizeGoalState(state)
 	return state, nil
 }
 
@@ -403,8 +266,7 @@ func (s *GoalStateStore) saveLocked(state GoalState) error {
 	if s == nil || s.Path == "" {
 		return nil
 	}
-	state.Version = 1
-	state.Budget = defaultGoalBudget(state.Budget)
+	state = normalizeGoalState(state)
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
 		return fmt.Errorf("goal state mkdir: %w", err)
 	}
@@ -431,79 +293,86 @@ func (s *GoalStateStore) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (p GoalStatePatch) empty() bool {
-	return strings.TrimSpace(p.Objective) == "" &&
-		p.Status == "" &&
-		len(p.Evidence) == 0 &&
-		p.Budget == nil &&
-		strings.TrimSpace(p.BlockedReason) == "" &&
-		strings.TrimSpace(p.NextUserInput) == "" &&
-		strings.TrimSpace(p.LastProgress) == "" &&
-		p.CompletionCheck == nil &&
-		strings.TrimSpace(p.ContinuePrompt) == ""
-}
-
-func defaultGoalBudget(b GoalBudget) GoalBudget {
-	if b.MaxContinuations <= 0 {
-		b.MaxContinuations = DefaultGoalMaxContinuations
+func normalizeGoalState(state GoalState) GoalState {
+	state.Version = 1
+	state.Description = sanitizeGoalText(state.Description)
+	state.VerificationMethod = sanitizeGoalText(state.VerificationMethod)
+	if state.ContinuationCount < 0 {
+		state.ContinuationCount = 0
 	}
-	if b.ContinuationsUsed < 0 {
-		b.ContinuationsUsed = 0
-	}
-	return b
-}
-
-func mergeGoalEvidence(existing, incoming []GoalEvidence, now time.Time) []GoalEvidence {
-	out := append([]GoalEvidence(nil), existing...)
-	index := map[string]int{}
-	for i, item := range out {
-		if item.ID != "" {
-			index[item.ID] = i
+	if state.Description != "" || state.Status != "" {
+		if state.Status == "" {
+			state.Status = GoalStatusInProgress
+		}
+		if err := validateGoalStatus(state.Status); err != nil {
+			state.Status = GoalStatusInProgress
 		}
 	}
-	for _, item := range incoming {
-		item = normalizeGoalEvidence(item, now)
-		if item.ID == "" || item.Text == "" {
-			continue
-		}
-		if i, ok := index[item.ID]; ok {
-			out[i] = item
-			continue
-		}
-		index[item.ID] = len(out)
-		out = append(out, item)
-	}
-	return out
+	return state
 }
 
-func normalizeGoalEvidence(item GoalEvidence, now time.Time) GoalEvidence {
-	item.Kind = sanitizeGoalText(item.Kind)
-	item.Text = sanitizeGoalText(item.Text)
-	item.Source = sanitizeGoalText(item.Source)
-	item.RelatedPaths = normalizeWorkingStatePaths(item.RelatedPaths)
-	if item.CreatedAt.IsZero() && item.Text != "" {
-		item.CreatedAt = now
+func validateGoalStatus(status GoalStatus) error {
+	switch status {
+	case GoalStatusInProgress, GoalStatusSuccess, GoalStatusFailure:
+		return nil
+	default:
+		return fmt.Errorf("invalid goal status %q", status)
 	}
-	if strings.TrimSpace(item.ID) == "" && item.Text != "" {
-		item.ID = goalEvidenceID(item)
-	}
-	return item
 }
 
-func normalizeCompletionCheck(check CompletionCheck, now time.Time) CompletionCheck {
-	check.Summary = sanitizeGoalText(check.Summary)
-	check.ContinuePrompt = sanitizeGoalText(check.ContinuePrompt)
-	check.Source = sanitizeGoalText(check.Source)
-	if check.CheckedAt.IsZero() {
-		check.CheckedAt = now
-	}
-	return check
+func shouldNormalizeLegacyGoalState(state GoalState, legacy legacyGoalState) bool {
+	return (state.Description == "" && legacy.Objective != "") || isLegacyGoalStatus(legacy.Status)
 }
 
-func goalEvidenceID(item GoalEvidence) string {
-	body := item.Kind + "\x00" + item.Text + "\x00" + strings.Join(item.RelatedPaths, "\x00")
-	sum := sha256.Sum256([]byte(body))
-	return "evidence-" + hex.EncodeToString(sum[:6])
+func isLegacyGoalStatus(status GoalStatus) bool {
+	switch status {
+	case "continue", "blocked", "complete", "unchecked":
+		return true
+	default:
+		return false
+	}
+}
+
+type legacyGoalState struct {
+	Version            int        `json:"version"`
+	Objective          string     `json:"objective,omitempty"`
+	Description        string     `json:"description,omitempty"`
+	VerificationMethod string     `json:"verification_method,omitempty"`
+	Status             GoalStatus `json:"status,omitempty"`
+	ContinuationCount  int        `json:"continuation_count,omitempty"`
+	Budget             struct {
+		ContinuationsUsed int `json:"continuations_used,omitempty"`
+	} `json:"budget,omitempty"`
+	LastProgress string    `json:"last_progress,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+}
+
+func (s legacyGoalState) normalize() GoalState {
+	description := s.Description
+	if description == "" {
+		description = s.Objective
+	}
+	status := s.Status
+	switch status {
+	case "complete":
+		status = GoalStatusSuccess
+	case "blocked":
+		status = GoalStatusFailure
+	case "continue", "unchecked":
+		status = GoalStatusInProgress
+	}
+	count := s.ContinuationCount
+	if count == 0 {
+		count = s.Budget.ContinuationsUsed
+	}
+	return GoalState{
+		Version:            1,
+		Description:        description,
+		VerificationMethod: s.VerificationMethod,
+		ContinuationCount:  count,
+		Status:             status,
+		UpdatedAt:          s.UpdatedAt,
+	}
 }
 
 func (e *Engine) goalStateStoreLocked() *GoalStateStore {
@@ -511,18 +380,6 @@ func (e *Engine) goalStateStoreLocked() *GoalStateStore {
 		return nil
 	}
 	return e.GoalState
-}
-
-func (e *Engine) beginGoalTurnLocked(turnID, objective string) error {
-	store := e.goalStateStoreLocked()
-	if store == nil {
-		return nil
-	}
-	if err := store.BeginTurn(objective); err != nil {
-		return err
-	}
-	e.emitGoalUpdated(turnID)
-	return nil
 }
 
 func (e *Engine) goalStateRawLocked() (json.RawMessage, bool) {
@@ -568,53 +425,30 @@ func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
 	if snapshot == nil {
 		return GoalUpdatedPayload{}
 	}
-	var check *CompletionCheck
-	if snapshot.LastCheck != nil {
-		copied := *snapshot.LastCheck
-		check = &copied
-	}
 	return GoalUpdatedPayload{
-		Objective:     snapshot.Objective,
-		Status:        snapshot.Status,
-		LastProgress:  snapshot.LastProgress,
-		BlockedReason: snapshot.BlockedReason,
-		NextUserInput: snapshot.NextUserInput,
-		LastCheck:     check,
+		Description:        snapshot.Description,
+		VerificationMethod: snapshot.VerificationMethod,
+		ContinuationCount:  snapshot.ContinuationCount,
+		Status:             snapshot.Status,
 	}
 }
 
 func goalContinuedPayload(decision GoalGateDecision, snapshot *GoalStatusSnapshot) GoalContinuedPayload {
-	used := decision.ContinuationsUsed
-	max := decision.MaxContinuations
+	count := decision.ContinuationCount
 	if snapshot != nil {
-		used = snapshot.Budget.ContinuationsUsed
-		max = snapshot.Budget.MaxContinuations
+		count = snapshot.ContinuationCount
 	}
 	return GoalContinuedPayload{
 		Status:                decision.Status,
 		Reason:                decision.Reason,
-		ContinuationsUsed:     used,
-		MaxContinuations:      max,
+		ContinuationCount:     count,
 		ContinuationPromptLen: len(decision.ContinuePrompt),
 	}
 }
 
 func redactGoalState(state GoalState) GoalState {
-	state.Objective = sanitizeGoalText(state.Objective)
-	state.BlockedReason = sanitizeGoalText(state.BlockedReason)
-	state.NextUserInput = sanitizeGoalText(state.NextUserInput)
-	state.LastProgress = sanitizeGoalText(state.LastProgress)
-	if len(state.Evidence) > 0 {
-		evidence := make([]GoalEvidence, len(state.Evidence))
-		for i, ev := range state.Evidence {
-			evidence[i] = normalizeGoalEvidence(ev, ev.CreatedAt)
-		}
-		state.Evidence = evidence
-	}
-	if state.LastCheck != nil {
-		check := normalizeCompletionCheck(*state.LastCheck, state.LastCheck.CheckedAt)
-		state.LastCheck = &check
-	}
+	state.Description = sanitizeGoalText(state.Description)
+	state.VerificationMethod = sanitizeGoalText(state.VerificationMethod)
 	return state
 }
 

@@ -132,6 +132,8 @@ func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAl
 		return a.admitNewSlash(ctx, cmd, ids)
 	case SlashCompact:
 		return a.admitCompactSlash(ctx, cmd, ids)
+	case SlashGoal:
+		return a.admitUserTurn(ctx, GoalInstructionPrompt(cmd.Args), ids)
 	default:
 		return errorResult(&UnknownSlashCommandError{Input: cmd.Name}, nil)
 	}

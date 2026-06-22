@@ -80,17 +80,7 @@ func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := as.app.Engine.GoalState.BeginTurn("ship runtime goal status"); err != nil {
-		t.Fatal(err)
-	}
-	if err := as.app.Engine.GoalState.ApplyPatch(runtime.GoalStatePatch{
-		Status:       runtime.GoalStatusContinue,
-		LastProgress: "waiting on e2e",
-		CompletionCheck: &runtime.CompletionCheck{
-			Status:  runtime.GoalStatusContinue,
-			Summary: "e2e still missing",
-		},
-	}); err != nil {
+	if _, err := as.app.Engine.GoalState.Create("ship runtime goal status", "waiting on e2e"); err != nil {
 		t.Fatal(err)
 	}
 	if err := as.app.Engine.WorkingState.ApplyPatch(runtime.WorkingStatePatch{

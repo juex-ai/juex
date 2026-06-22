@@ -73,7 +73,7 @@ import {
   WORKING_STATE_SECTIONS,
   formatRuntimeTimestamp,
   runtimeGoalBadgeLabel,
-  runtimeGoalBudgetLabel,
+  runtimeGoalContinuationLabel,
   runtimeGoalIsActive,
   runtimeWorkingStateBadgeLabel,
   workingStatePresenceLabel,
@@ -703,38 +703,16 @@ function GoalStateTooltip({ goal }: { goal?: GoalStatusSnapshot }) {
   return (
     <RuntimeTooltipPanel title="Goal">
       <RuntimeTooltipRow label="status" value={goal.status || "unknown"} />
-      <RuntimeTooltipRow label="objective" value={goal.objective || "-"} />
-      <RuntimeTooltipRow label="progress" value={goal.last_progress || "-"} />
-      <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(goal.updated_at)} />
+      <RuntimeTooltipRow label="description" value={goal.description || "-"} />
       <RuntimeTooltipRow
-        label="budget"
-        value={runtimeGoalBudgetLabel(goal)}
+        label="verification"
+        value={goal.verification_method || "-"}
       />
-      {goal.last_check ? (
-        <>
-          <RuntimeTooltipRow label="check" value={goal.last_check.status || "unknown"} />
-          <RuntimeTooltipRow label="summary" value={goal.last_check.summary || "-"} />
-          {goal.last_check.continue_prompt ? (
-            <RuntimeTooltipRow label="continue" value={goal.last_check.continue_prompt} />
-          ) : null}
-        </>
-      ) : null}
-      {goal.blocked_reason ? (
-        <RuntimeTooltipRow label="blocked" value={goal.blocked_reason} />
-      ) : null}
-      {goal.next_user_input ? (
-        <RuntimeTooltipRow label="user input" value={goal.next_user_input} />
-      ) : null}
-      {goal.evidence && goal.evidence.length > 0 ? (
-        <RuntimeTooltipRecords
-          title="evidence"
-          records={goal.evidence.map((item) => ({
-            text: item.text,
-            source: item.source || item.kind,
-            related_paths: item.related_paths,
-          }))}
-        />
-      ) : null}
+      <RuntimeTooltipRow
+        label="continuations"
+        value={runtimeGoalContinuationLabel(goal)}
+      />
+      <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(goal.updated_at)} />
     </RuntimeTooltipPanel>
   );
 }
