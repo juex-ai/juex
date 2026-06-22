@@ -129,7 +129,7 @@ func (e *Engine) handleUpdateGoal(in map[string]any) (string, error) {
 }
 
 func marshalGoalToolResponse(value any) (string, error) {
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := json.Marshal(value)
 	if err != nil {
 		return "", err
 	}

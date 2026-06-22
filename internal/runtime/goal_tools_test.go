@@ -19,7 +19,7 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"present": false`) {
+	if !strings.Contains(out, `"present":false`) {
 		t.Fatalf("get before create = %s", out)
 	}
 
@@ -38,7 +38,7 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"present": true`, `"description": "finish the feature"`, `"status": "success"`} {
+	for _, want := range []string{`"present":true`, `"description":"finish the feature"`, `"status":"success"`} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("get missing %s:\n%s", want, out)
 		}
