@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -228,6 +230,9 @@ func LoadFileConfig(path, source string, requireTrust bool) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&fc); err != nil {
+		if errors.Is(err, io.EOF) {
+			return Config{}, nil
+		}
 		return Config{}, fmt.Errorf("hooks: parse %s: %w", path, err)
 	}
 	return ResolveFileConfig(fc, source, requireTrust)

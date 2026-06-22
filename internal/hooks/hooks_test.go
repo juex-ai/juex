@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -145,6 +146,21 @@ func TestParseOutputIgnoresGoalStatePatch(t *testing.T) {
 	}
 	if out.Decision != "" || len(out.WorkingState) > 0 || out.BlockStop || out.ContinuePrompt != "" || out.AdditionalContext != "" {
 		t.Fatalf("goal_state output should not be exposed as a hook write contract: %+v", out)
+	}
+}
+
+func TestLoadFileConfigEmptyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.yaml")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFileConfig(path, "ext:empty", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Commands) != 0 {
+		t.Fatalf("commands = %+v, want empty config", cfg.Commands)
 	}
 }
 

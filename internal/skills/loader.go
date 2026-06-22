@@ -71,6 +71,9 @@ func NewLoaderFromDirs(dirs []Dir) *Loader {
 func (l *Loader) Load() error {
 	l.skills = make(map[string]Skill)
 	for _, dir := range l.dirs {
+		if strings.TrimSpace(dir.Path) == "" {
+			continue
+		}
 		entries, err := os.ReadDir(dir.Path)
 		if err != nil {
 			if os.IsNotExist(err) {

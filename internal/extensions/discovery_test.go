@@ -77,6 +77,16 @@ func TestDiscoverRejectsDuplicateExtensionNames(t *testing.T) {
 	}
 }
 
+func TestDiscoverErrorsWhenSkillsResourceIsNotDirectory(t *testing.T) {
+	work := t.TempDir()
+	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "bad", "skills"), "not a directory")
+
+	_, err := Discover(DiscoverOptions{WorkDir: work})
+	if err == nil || !strings.Contains(err.Error(), "is not a directory") {
+		t.Fatalf("err = %v, want invalid skills resource error", err)
+	}
+}
+
 func writeExtensionFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -86,17 +86,23 @@ func Discover(opts DiscoverOptions) (Resources, error) {
 				ExtensionDir:  ext.Dir,
 				RequireTrust:  root.RequireTrust,
 			}
-			if pathExists(filepath.Join(ext.Dir, "skills")) {
+			if ok, err := skillDirExists(filepath.Join(ext.Dir, "skills")); err != nil {
+				return Resources{}, err
+			} else if ok {
 				skillRef := ref
 				skillRef.Path = filepath.Join(ext.Dir, "skills")
 				out.SkillDirs = append(out.SkillDirs, skillRef)
 			}
-			if pathExists(filepath.Join(ext.Dir, "mcp.json")) {
+			if ok, err := pathExists(filepath.Join(ext.Dir, "mcp.json")); err != nil {
+				return Resources{}, err
+			} else if ok {
 				mcpRef := ref
 				mcpRef.Path = filepath.Join(ext.Dir, "mcp.json")
 				out.MCPConfigs = append(out.MCPConfigs, mcpRef)
 			}
-			if pathExists(filepath.Join(ext.Dir, "hooks.yaml")) {
+			if ok, err := pathExists(filepath.Join(ext.Dir, "hooks.yaml")); err != nil {
+				return Resources{}, err
+			} else if ok {
 				hookRef := ref
 				hookRef.Path = filepath.Join(ext.Dir, "hooks.yaml")
 				out.HookFiles = append(out.HookFiles, hookRef)
@@ -167,7 +173,27 @@ func extensionDirPath(root string, entry os.DirEntry) (string, bool) {
 	return path, true
 }
 
-func pathExists(path string) bool {
+func skillDirExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("extensions: stat %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("extensions: %s is not a directory", path)
+	}
+	return true, nil
+}
+
+func pathExists(path string) (bool, error) {
 	_, err := os.Stat(path)
-	return err == nil
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("extensions: stat %s: %w", path, err)
+	}
+	return true, nil
 }

@@ -211,6 +211,16 @@ func TestLoader_DirectoryWithoutSkillMD(t *testing.T) {
 	}
 }
 
+func TestLoader_SkipsEmptyDirRef(t *testing.T) {
+	l := NewLoaderFromDirs([]Dir{{Path: "", Source: "empty"}})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.All()) != 0 {
+		t.Fatalf("loaded skills from empty dir ref: %+v", l.All())
+	}
+}
+
 func TestLoader_AllSortedByName(t *testing.T) {
 	// All() must return entries sorted by name for deterministic prompt assembly.
 	dir := t.TempDir()
