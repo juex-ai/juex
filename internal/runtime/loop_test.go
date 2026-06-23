@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -1860,6 +1861,9 @@ func TestTurn_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on cancellation")
 	}
+	if !errors.Is(err, cancellation.ErrUserCancelled) {
+		t.Fatalf("err = %v, want ErrUserCancelled", err)
+	}
 }
 
 func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
@@ -1868,7 +1872,11 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 			{Type: llm.BlockToolUse, ToolUseID: "cancel_me", ToolName: "slow", Input: map[string]any{}},
 		}}, StopReason: llm.StopToolUse},
 	}}
-	eng, _ := newEngine(t, prov, false)
+	eng, bus := newEngine(t, prov, false)
+	var erroredPayload toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(e events.Event) {
+		erroredPayload, _ = e.Payload.(toolevents.ErroredPayload)
+	})
 	toolStarted := make(chan struct{}, 1)
 	eng.Tools.MustRegister(tools.Tool{
 		Name:   "slow",
@@ -1892,6 +1900,9 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
+	if !errors.Is(err, cancellation.ErrUserCancelled) {
+		t.Fatalf("err = %v, want ErrUserCancelled", err)
+	}
 	if len(eng.Session.History) != 3 {
 		t.Fatalf("history len = %d, want user, assistant tool_use, user tool_result; history=%+v", len(eng.Session.History), eng.Session.History)
 	}
@@ -1903,8 +1914,11 @@ func TestTurn_CancellationDuringToolPersistsToolResult(t *testing.T) {
 	if block.Type != llm.BlockToolResult || block.ToolUseID != "cancel_me" || !block.IsError {
 		t.Fatalf("tool result block wrong: %+v", block)
 	}
-	if !strings.Contains(block.Content, "context canceled") {
-		t.Fatalf("tool result content = %q, want context canceled", block.Content)
+	if !strings.Contains(block.Content, "cancelled by user") {
+		t.Fatalf("tool result content = %q, want cancelled by user", block.Content)
+	}
+	if got := erroredPayload.Error; got != "cancelled by user" {
+		t.Fatalf("tool.errored error = %q, want cancelled by user", got)
 	}
 }
 

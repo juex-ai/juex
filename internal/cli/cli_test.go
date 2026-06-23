@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -708,6 +709,30 @@ func TestExitCodes_DistinctTypes(t *testing.T) {
 	}
 	if classifyForTest(&strErr{"foo"}) != ExitGeneralError {
 		t.Error("unknown err type should be ExitGeneralError")
+	}
+}
+
+func TestEmitRunError_CancelledJSON(t *testing.T) {
+	var stderr bytes.Buffer
+	err := emitRunError(true, &stderr, context.Canceled, nil, "/work")
+	if err == nil {
+		t.Fatal("expected emitted error")
+	}
+	var body errorJSON
+	if jsonErr := json.Unmarshal(stderr.Bytes(), &body); jsonErr != nil {
+		t.Fatalf("stderr is not error JSON: %v\n%s", jsonErr, stderr.String())
+	}
+	if body.Error != "cancelled" {
+		t.Fatalf("error = %q, want cancelled", body.Error)
+	}
+	if body.Message != "cancelled by user" {
+		t.Fatalf("message = %q, want cancelled by user", body.Message)
+	}
+	if body.Retryable {
+		t.Fatalf("retryable = true, want false")
+	}
+	if body.WorkDir != "/work" {
+		t.Fatalf("work_dir = %q, want /work", body.WorkDir)
 	}
 }
 

@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -293,7 +294,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	var result turnLifecycleResult
 	result, err = lifecycle.runLocked(ctx)
 	if err != nil {
-		return "", e.failTurn(turnID, err)
+		return "", e.failTurn(turnID, cancellation.NormalizeError(err))
 	}
 	return result.output, nil
 }
@@ -492,6 +493,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		},
 	})
 	out, info, err := e.Tools.CallWithInfo(toolCtx, call.ToolName, call.Input)
+	err = cancellation.NormalizeError(err)
 	block := llm.Block{Type: llm.BlockToolResult, ToolUseID: call.ToolUseID, ToolName: call.ToolName}
 	var toolErr error
 	if err != nil {
@@ -507,6 +509,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	postReq.ToolInput = call.Input
 	postReq.ToolResult = block.Content
 	postResults, postErr := e.runHooks(ctx, postReq)
+	postErr = cancellation.NormalizeError(postErr)
 	if postErr != nil {
 		block.Content = toolErrorContent(block.Content, postErr)
 		block.IsError = true
@@ -550,6 +553,7 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 }
 
 func (e *Engine) hookToolErrorBlock(turnID string, call llm.Block, err error) llm.Block {
+	err = cancellation.NormalizeError(err)
 	block := llm.Block{
 		Type:      llm.BlockToolResult,
 		ToolUseID: call.ToolUseID,

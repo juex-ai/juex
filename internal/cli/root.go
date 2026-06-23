@@ -3,13 +3,17 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/session"
@@ -33,7 +37,14 @@ const (
 // per error type (principle 6: stable exit codes).
 func Execute() int {
 	cmd := newRootCmd()
-	err := cmd.Execute()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	cmd.SetContext(ctx)
+	err := cmd.ExecuteContext(ctx)
 	if err == nil {
 		return ExitSuccess
 	}
@@ -43,6 +54,7 @@ func Execute() int {
 		err = emitted.err
 		alreadyEmitted = true
 	}
+	err = cancellation.NormalizeError(err)
 	var lockErr *session.LockError
 	if errors.As(err, &lockErr) {
 		printErrorIfNeeded(alreadyEmitted, err)
@@ -74,6 +86,7 @@ func printErrorIfNeeded(alreadyEmitted bool, err error) {
 	if alreadyEmitted {
 		return
 	}
+	err = cancellation.NormalizeError(err)
 	fmt.Fprintln(os.Stderr, "Error:", err.Error())
 }
 

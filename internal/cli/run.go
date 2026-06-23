@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/session"
@@ -298,6 +299,10 @@ func configFileForPlan(flags *persistentFlags) string {
 // exit code via Execute's switch). On --json: structured JSON on stderr.
 // In plain mode we let cobra print its own "Error: ..." line.
 func emit(jsonOut bool, stderr io.Writer, err error, suggestion string, retryable bool) error {
+	err = cancellation.NormalizeError(err)
+	if cancellation.IsUserCancelled(err) {
+		retryable = false
+	}
 	if jsonOut {
 		body := errorJSON{
 			Error:      errorType(err),
@@ -313,12 +318,18 @@ func emit(jsonOut bool, stderr io.Writer, err error, suggestion string, retryabl
 
 func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir string) error {
 	suggestion := "see events.jsonl in the session dir for full lifecycle trace"
+	err = cancellation.NormalizeError(err)
+	retryable := true
+	if cancellation.IsUserCancelled(err) {
+		suggestion = "rerun the command when ready"
+		retryable = false
+	}
 	if jsonOut {
 		body := errorJSON{
 			Error:      errorType(err),
 			Message:    err.Error(),
 			Suggestion: suggestion,
-			Retryable:  true,
+			Retryable:  retryable,
 		}
 		if a != nil && a.Session != nil {
 			body.SessionID = a.Session.ID
@@ -332,6 +343,9 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 }
 
 func errorType(err error) string {
+	if cancellation.IsUserCancelled(err) {
+		return "cancelled"
+	}
 	var lockErr *session.LockError
 	if errors.As(err, &lockErr) {
 		return "conflict"

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -312,6 +313,29 @@ func TestRegistry_CallWithInfoAppliesConfiguredTimeout(t *testing.T) {
 	}
 	if input["value"] != "x" {
 		t.Fatalf("handler input = %+v", input)
+	}
+}
+
+func TestRegistry_CallWithInfoReturnsParentCancellation(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(Tool{
+		Name:   "soft-cancel",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "partial output", nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out, _, err := r.CallWithInfo(ctx, "soft-cancel", map[string]any{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if out != "partial output" {
+		t.Fatalf("out = %q, want partial output", out)
 	}
 }
 

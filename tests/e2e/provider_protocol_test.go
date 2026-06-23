@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
 )
@@ -281,6 +283,105 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Interrupt process signalling is platform-specific in this e2e")
+	}
+	bin := buildJuex(t)
+
+	work := t.TempDir()
+	startedPath := filepath.Join(work, "exec-started.txt")
+	cmdText := "printf started > " + shQuote(startedPath) + "; sleep 30"
+	var requestCount atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch requestCount.Add(1) {
+		case 1:
+			writeJSON(t, w, chatToolCallResponse("call_exec_cancel", "exec_command", map[string]any{
+				"cmd": cmdText,
+			}))
+		default:
+			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
+			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
+		}
+	}))
+	defer srv.Close()
+
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+    protocol: openai/chat
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: chat-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "start cancellable exec")
+	home := t.TempDir()
+	cmd.Env = isolatedJuexBinaryEnv(home)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, startedPath, 5*time.Second)
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		_ = cmd.Process.Kill()
+		t.Fatalf("send interrupt: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("juex run did not exit after interrupt")
+	}
+	if err == nil {
+		t.Fatal("expected interrupted run to exit non-zero")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty on JSON error", stdout.String())
+	}
+
+	var got struct {
+		Error      string `json:"error"`
+		Message    string `json:"message"`
+		Retryable  bool   `json:"retryable"`
+		SessionDir string `json:"session_dir"`
+	}
+	if jsonErr := json.Unmarshal(stderr.Bytes(), &got); jsonErr != nil {
+		t.Fatalf("stderr is not JSON: %v\n%s", jsonErr, stderr.String())
+	}
+	if got.Error != "cancelled" || got.Message != "cancelled by user" || got.Retryable {
+		t.Fatalf("cancel JSON = %+v; stderr=%s", got, stderr.String())
+	}
+	if got.SessionDir == "" {
+		t.Fatalf("stderr missing session_dir: %s", stderr.String())
+	}
+	if requestCount.Load() != 1 {
+		t.Fatalf("provider requests = %d, want only initial tool-use request", requestCount.Load())
+	}
+
+	assertConversationToolError(t, filepath.Join(got.SessionDir, "conversation.jsonl"), "call_exec_cancel", "cancelled by user")
+	eventsText := strings.Join(readLines(t, filepath.Join(got.SessionDir, "events.jsonl")), "\n")
+	for _, want := range []string{"tool.errored", "turn.errored", "cancelled by user"} {
+		if !strings.Contains(eventsText, want) {
+			t.Fatalf("events missing %q:\n%s", want, eventsText)
+		}
+	}
+}
+
 func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
 	bin := buildJuex(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -453,6 +554,54 @@ func assertConversationExecCommandToolRoundTrip(t *testing.T, path string, toolU
 	if !sawToolResult {
 		t.Fatalf("conversation missing tool_result for %q containing command output %q in %s", toolUseID, wantOutput, path)
 	}
+}
+
+func assertConversationToolError(t *testing.T, path string, toolUseID string, wantError string) {
+	t.Helper()
+
+	lines := readLines(t, path)
+	var sawToolUse bool
+	var sawToolResult bool
+	for i, line := range lines {
+		var message llm.Message
+		if err := json.Unmarshal([]byte(line), &message); err != nil {
+			t.Fatalf("conversation line %d is not a message: %v\n%s", i, err, line)
+		}
+		for _, block := range message.Blocks {
+			switch block.Type {
+			case llm.BlockToolUse:
+				if block.ToolUseID == toolUseID {
+					sawToolUse = true
+				}
+			case llm.BlockToolResult:
+				if block.ToolUseID == toolUseID && block.IsError && strings.Contains(block.Content, wantError) {
+					sawToolResult = true
+				}
+			}
+		}
+	}
+	if !sawToolUse {
+		t.Fatalf("conversation missing tool_use with id %q in %s", toolUseID, path)
+	}
+	if !sawToolResult {
+		t.Fatalf("conversation missing error tool_result for %q containing %q in %s", toolUseID, wantError, path)
+	}
+}
+
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+}
+
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 func cloneMap(in map[string]any) map[string]any {
