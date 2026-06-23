@@ -111,44 +111,6 @@ export function Runtime() {
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <h1 className="font-serif text-2xl italic leading-none text-primary">
-              Hooks
-            </h1>
-            <Badge variant="secondary" className="font-mono text-[11px]">
-              {runtimeHooksSummaryLabel(hooks)}
-            </Badge>
-          </div>
-          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
-            <table className="w-full min-w-[56rem] text-left text-sm">
-              <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Source</th>
-                  <th className="px-3 py-2 font-medium">Events</th>
-                  <th className="px-3 py-2 font-medium">Tools</th>
-                  <th className="px-3 py-2 font-medium">Command</th>
-                  <th className="px-3 py-2 font-medium">Limits</th>
-                </tr>
-              </thead>
-              <tbody>
-                {hookCommands.length === 0 ? (
-                  <tr>
-                    <td className="text-muted-foreground px-3 py-3" colSpan={6}>
-                      No hooks configured.
-                    </td>
-                  </tr>
-                ) : (
-                  hookCommands.map((hook, index) => (
-                    <HookRow hook={hook} key={`${hook.name}:${index}`} />
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
               System Prompt
             </h1>
             <Badge variant="secondary" className="font-mono text-[11px]">
@@ -340,6 +302,44 @@ export function Runtime() {
                         {skill.path}
                       </td>
                     </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-2xl italic leading-none text-primary">
+              Hooks
+            </h1>
+            <Badge variant="secondary" className="font-mono text-[11px]">
+              {runtimeHooksSummaryLabel(hooks)}
+            </Badge>
+          </div>
+          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            <table className="w-full min-w-[56rem] text-left text-sm">
+              <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Name</th>
+                  <th className="px-3 py-2 font-medium">Source</th>
+                  <th className="px-3 py-2 font-medium">Events</th>
+                  <th className="px-3 py-2 font-medium">Tools</th>
+                  <th className="px-3 py-2 font-medium">Command</th>
+                  <th className="px-3 py-2 font-medium">Limits</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hookCommands.length === 0 ? (
+                  <tr>
+                    <td className="text-muted-foreground px-3 py-3" colSpan={6}>
+                      No hooks configured.
+                    </td>
+                  </tr>
+                ) : (
+                  hookCommands.map((hook, index) => (
+                    <HookRow hook={hook} key={`${hook.name}:${index}`} />
                   ))
                 )}
               </tbody>
