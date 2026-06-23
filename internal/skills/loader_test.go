@@ -78,6 +78,39 @@ func TestLoader_ProjectOverridesUser(t *testing.T) {
 	}
 }
 
+func TestLoader_ExplicitSourceDirsLoadExtensionSource(t *testing.T) {
+	ext := t.TempDir()
+	writeSkill(t, ext, "alpha", "---\nname: alpha\ndescription: extension\n---\nEXT")
+
+	l := NewLoaderFromDirs([]Dir{{Path: ext, Source: "ext:demo", StrictConflicts: true}})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := l.Get("alpha")
+	if !ok {
+		t.Fatalf("loaded skills: %+v", l.All())
+	}
+	if s.Source != "ext:demo" || s.Description != "extension" {
+		t.Fatalf("skill = %+v", s)
+	}
+}
+
+func TestLoader_StrictSourceRejectsDuplicateSkill(t *testing.T) {
+	project := t.TempDir()
+	ext := t.TempDir()
+	writeSkill(t, project, "alpha", "---\nname: alpha\ndescription: project\n---\nPROJECT")
+	writeSkill(t, ext, "alpha", "---\nname: alpha\ndescription: extension\n---\nEXT")
+
+	l := NewLoaderFromDirs([]Dir{
+		{Path: project, Source: "project"},
+		{Path: ext, Source: "ext:demo", StrictConflicts: true},
+	})
+	err := l.Load()
+	if err == nil || !strings.Contains(err.Error(), `duplicate skill "alpha"`) {
+		t.Fatalf("err = %v, want duplicate skill error", err)
+	}
+}
+
 func TestLoader_PromptSection(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "x", "---\nname: x\ndescription: do x\n---\n")
@@ -175,6 +208,16 @@ func TestLoader_DirectoryWithoutSkillMD(t *testing.T) {
 	}
 	if len(l.All()) != 1 || l.All()[0].Name != "real" {
 		t.Fatalf("got %+v", l.All())
+	}
+}
+
+func TestLoader_SkipsEmptyDirRef(t *testing.T) {
+	l := NewLoaderFromDirs([]Dir{{Path: "", Source: "empty"}})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.All()) != 0 {
+		t.Fatalf("loaded skills from empty dir ref: %+v", l.All())
 	}
 }
 

@@ -7,10 +7,15 @@
 # `juex --model provider_id/model_id ...`.
 model: openai/gpt-4.1
 
-# User-global resources under ~/.agents are enabled by default. Set to false
-# or 0 to ignore ~/.agents/AGENTS.md, ~/.agents/skills, and ~/.agents/mcp.json
-# for this workspace or run.
+# User-global resources under ~/.agents and ~/.juex/extensions are enabled by
+# default. Set to false or 0 to ignore ~/.agents/AGENTS.md, ~/.agents/skills,
+# ~/.agents/mcp.json, and ~/.juex/extensions for this workspace or run.
 # enable_user_global_resources: true
+
+# Optional extension bundles live at ~/.juex/extensions/<name> and
+# .juex/extensions/<name>. Each bundle may contain skills/<skill>/SKILL.md,
+# mcp.json, and hooks.yaml. Work-local extension hooks must set trusted: true
+# before Juex executes them.
 
 # Optional workspace command shell. Omitted is the same as profile: auto.
 # The field is always an object; scalar values like `shell: powershell` are not

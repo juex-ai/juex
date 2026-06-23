@@ -114,6 +114,99 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+
+	bin := buildJuex(t)
+	mcpScript := pythonMCPScript(t)
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	work := t.TempDir()
+	extDir := filepath.Join(work, ".juex", "extensions", "demo")
+	if err := writeExtensionSkillFile(extDir, "ext-skill", "extension provided skill"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeMCPConfigFile(
+		filepath.Join(extDir, "mcp.json"),
+		"extlocal",
+		"uv",
+		[]string{"run", "--quiet", "--project", root, "python", mcpScript},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configBody := "model: openai/m\n" +
+		"providers:\n" +
+		"  - id: openai\n" +
+		"    base_url: https://example\n" +
+		"    api_key: k\n" +
+		"    models:\n" +
+		"      - id: m\n"
+	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin,
+		"--cwd", work,
+		"--config", configPath,
+		"run", "--dry-run", "--json", "x")
+	home := t.TempDir()
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		ee, ok := err.(*exec.ExitError)
+		if !ok || ee.ExitCode() != 10 {
+			t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, out, ee.Stderr)
+		}
+	}
+
+	var plan struct {
+		Tools  []string `json:"tools"`
+		Skills []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(out, &plan); err != nil {
+		t.Fatalf("parse plan: %v\noutput:\n%s", err, out)
+	}
+
+	have := map[string]bool{}
+	for _, name := range plan.Tools {
+		have[name] = true
+	}
+	if !have["mcp__extlocal__echo"] {
+		t.Errorf("mcp__extlocal__echo not in tool list (extension MCP server not loaded?). tools=%v", plan.Tools)
+	}
+
+	skillFound := false
+	for _, s := range plan.Skills {
+		if s.Name == "ext-skill" {
+			skillFound = true
+			wantPath := filepath.Join(extDir, "skills", "ext-skill", "SKILL.md")
+			if s.Path != wantPath {
+				t.Errorf("ext-skill path = %q, want %q", s.Path, wantPath)
+			}
+		}
+	}
+	if !skillFound {
+		t.Errorf("ext-skill not in plan.skills (extension skills not loaded?). skills=%+v", plan.Skills)
+	}
+}
+
 func TestLiveBinary_ModelFlagUsesUserGlobalProvider(t *testing.T) {
 	bin := buildJuex(t)
 	work := t.TempDir()
@@ -327,21 +420,33 @@ func writeSkillFile(workDir, name, description string) error {
 	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
 }
 
+func writeExtensionSkillFile(extensionDir, name, description string) error {
+	dir := filepath.Join(extensionDir, "skills", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	body := "---\nname: " + name + "\ndescription: " + description + "\ntype: model-invocable\n---\nFull skill body."
+	return os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644)
+}
+
 func writeMCPConfig(workDir, command string, args []string) error {
+	return writeMCPConfigFile(filepath.Join(workDir, ".agents", "mcp.json"), "local", command, args)
+}
+
+func writeMCPConfigFile(path, serverName, command string, args []string) error {
 	cfg := map[string]any{
 		"mcpServers": map[string]any{
-			"local": map[string]any{
+			serverName: map[string]any{
 				"command": command,
 				"args":    args,
 			},
 		},
 	}
 	body, _ := json.MarshalIndent(cfg, "", "  ")
-	dir := filepath.Join(workDir, ".agents")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "mcp.json"), body, 0o644)
+	return os.WriteFile(path, body, 0o644)
 }
 
 // findRepoRoot walks up from cwd until it sees go.mod.

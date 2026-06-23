@@ -413,6 +413,16 @@ func (c Config) ProjectAgentsDir() string {
 	return c.ResourcePaths().ProjectAgentsDir
 }
 
+// HomeExtensionsDir is ~/.juex/extensions when user-global resources are enabled.
+func (c Config) HomeExtensionsDir() string {
+	return c.ResourcePaths().HomeExtensionsDir
+}
+
+// ProjectExtensionsDir is <WorkDir>/.juex/extensions.
+func (c Config) ProjectExtensionsDir() string {
+	return c.ResourcePaths().ProjectExtensionsDir
+}
+
 // JuexDir is <WorkDir>/.juex and stores runtime data.
 func (c Config) JuexDir() string {
 	return c.RuntimePaths().JuexDir

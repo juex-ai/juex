@@ -1,5 +1,5 @@
-// Package skills loads SKILL.md files from project- and user-scoped
-// `.agents/skills/<name>/` directories.
+// Package skills loads SKILL.md files from user, extension, and project
+// resource directories.
 //
 // Behaviour:
 //   - the system prompt's "Available Skills" section lists every loaded
@@ -8,8 +8,9 @@
 //     builtin against the path printed in that section — there is no
 //     dedicated `read_skill` tool (one fewer thing for the model to
 //     hallucinate; one less surface area to maintain)
-//   - precedence: project-scoped > user-scoped (project overrides user
-//     when two skills share a name)
+//   - precedence: project-scoped > user-scoped for non-extension resources
+//   - extension skill names must be unique and reject collisions instead of
+//     silently overriding another resource
 package skills
 
 import (
@@ -27,19 +28,42 @@ type Skill struct {
 	Description string
 	Type        string
 	Body        string
-	Source      string // "project" | "user"
+	Source      string // "project" | "user" | "ext:<name>"
 	Path        string // SKILL.md absolute path
+
+	strictConflicts bool
+}
+
+type Dir struct {
+	Path            string
+	Source          string
+	StrictConflicts bool
 }
 
 type Loader struct {
-	dirs   []string // ordered: lowest precedence first
+	dirs   []Dir // ordered: lowest precedence first
 	skills map[string]Skill
 }
 
 // NewLoader creates a loader. dirs are scanned in the supplied order; later
 // entries override earlier entries with the same skill name.
 func NewLoader(dirs ...string) *Loader {
-	return &Loader{dirs: dirs, skills: make(map[string]Skill)}
+	refs := make([]Dir, 0, len(dirs))
+	for _, dir := range dirs {
+		refs = append(refs, Dir{Path: dir, Source: sourceLabel(dir, dirs)})
+	}
+	return NewLoaderFromDirs(refs)
+}
+
+func NewLoaderFromDirs(dirs []Dir) *Loader {
+	refs := make([]Dir, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir.Source == "" {
+			dir.Source = "skill"
+		}
+		refs = append(refs, dir)
+	}
+	return &Loader{dirs: refs, skills: make(map[string]Skill)}
 }
 
 // Load scans all configured directories for `<name>/SKILL.md`.
@@ -47,16 +71,18 @@ func NewLoader(dirs ...string) *Loader {
 func (l *Loader) Load() error {
 	l.skills = make(map[string]Skill)
 	for _, dir := range l.dirs {
-		entries, err := os.ReadDir(dir)
+		if strings.TrimSpace(dir.Path) == "" {
+			continue
+		}
+		entries, err := os.ReadDir(dir.Path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return err
 		}
-		source := sourceLabel(dir, l.dirs)
 		for _, e := range entries {
-			skillDir, ok := skillDirPath(dir, e)
+			skillDir, ok := skillDirPath(dir.Path, e)
 			if !ok {
 				continue
 			}
@@ -73,13 +99,17 @@ func (l *Loader) Load() error {
 			if name == "" {
 				name = e.Name()
 			}
+			if existing, ok := l.skills[name]; ok && (existing.strictConflicts || dir.StrictConflicts) {
+				return fmt.Errorf("skills: duplicate skill %q from %s and %s", name, existing.Source, dir.Source)
+			}
 			l.skills[name] = Skill{
-				Name:        name,
-				Description: fm.Fields["description"],
-				Type:        fm.Fields["type"],
-				Body:        fm.Body,
-				Source:      source,
-				Path:        path,
+				Name:            name,
+				Description:     fm.Fields["description"],
+				Type:            fm.Fields["type"],
+				Body:            fm.Body,
+				Source:          dir.Source,
+				Path:            path,
+				strictConflicts: dir.StrictConflicts,
 			}
 		}
 	}

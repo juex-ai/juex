@@ -4,9 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/extensions"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -38,7 +40,7 @@ type RuntimeStatusOptions struct {
 // details into presentation layers.
 type RuntimeStatusSkillCache struct {
 	mu     sync.Mutex
-	dirs   []string
+	dirs   []skills.Dir
 	status RuntimeSkillsStatus
 	loader *skills.Loader
 	loaded bool
@@ -127,7 +129,11 @@ type RuntimeSkillInfo struct {
 }
 
 func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
-	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache)
+	resourceRefs, err := resolveAppResourceRefs(s.cfg)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache, resourceRefs.SkillDirs)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -135,7 +141,7 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	mcpStatus, err := s.mcpStatus(opts)
+	mcpStatus, err := s.mcpStatus(opts, resourceRefs.MCPConfigs)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -145,14 +151,14 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 		Shell:        s.cfg.Shell,
 		SystemPrompt: systemPrompt,
 		MCP:          mcpStatus,
-		Hooks:        s.hooksStatus(),
+		Hooks:        hooksStatus(resourceRefs.Hooks),
 		Skills:       skillStatus,
 	}, nil
 }
 
-func (s RuntimeStatusService) hooksStatus() RuntimeHooksStatus {
-	commands := make([]RuntimeHookInfo, 0, len(s.cfg.Hooks.Commands))
-	for _, command := range s.cfg.Hooks.Commands {
+func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
+	commands := make([]RuntimeHookInfo, 0, len(cfg.Commands))
+	for _, command := range cfg.Commands {
 		events := make([]string, 0, len(command.Events))
 		for _, event := range command.Events {
 			events = append(events, string(event))
@@ -220,33 +226,32 @@ func runtimePromptSource(section prompt.Section) string {
 	return "runtime"
 }
 
-func (s RuntimeStatusService) skillsStatus(cache *RuntimeStatusSkillCache) (RuntimeSkillsStatus, *skills.Loader, error) {
-	dirs := s.cfg.SkillDirs()
+func (s RuntimeStatusService) skillsStatus(cache *RuntimeStatusSkillCache, dirs []skills.Dir) (RuntimeSkillsStatus, *skills.Loader, error) {
 	if cache != nil {
 		return cache.snapshot(dirs)
 	}
 	return loadRuntimeSkills(dirs)
 }
 
-func (c *RuntimeStatusSkillCache) snapshot(dirs []string) (RuntimeSkillsStatus, *skills.Loader, error) {
+func (c *RuntimeStatusSkillCache) snapshot(dirs []skills.Dir) (RuntimeSkillsStatus, *skills.Loader, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.loaded && stringSlicesEqual(c.dirs, dirs) {
+	if c.loaded && skillDirsEqual(c.dirs, dirs) {
 		return cloneRuntimeSkillsStatus(c.status), c.loader, nil
 	}
 	status, loader, err := loadRuntimeSkills(dirs)
 	if err != nil {
 		return RuntimeSkillsStatus{}, nil, err
 	}
-	c.dirs = append([]string(nil), dirs...)
+	c.dirs = append([]skills.Dir(nil), dirs...)
 	c.status = cloneRuntimeSkillsStatus(status)
 	c.loader = loader
 	c.loaded = true
 	return status, loader, nil
 }
 
-func loadRuntimeSkills(dirs []string) (RuntimeSkillsStatus, *skills.Loader, error) {
-	skillLoader := skills.NewLoader(dirs...)
+func loadRuntimeSkills(dirs []skills.Dir) (RuntimeSkillsStatus, *skills.Loader, error) {
+	skillLoader := skills.NewLoaderFromDirs(dirs)
 	if err := skillLoader.Load(); err != nil {
 		return RuntimeSkillsStatus{}, nil, err
 	}
@@ -272,7 +277,7 @@ func cloneRuntimeSkillsStatus(status RuntimeSkillsStatus) RuntimeSkillsStatus {
 	return status
 }
 
-func stringSlicesEqual(left, right []string) bool {
+func skillDirsEqual(left, right []skills.Dir) bool {
 	if len(left) != len(right) {
 		return false
 	}
@@ -290,8 +295,8 @@ type runtimeMCPServerConfig struct {
 	Spec   mcp.ServerSpec
 }
 
-func (s RuntimeStatusService) mcpStatus(opts RuntimeStatusOptions) (RuntimeMCPStatus, error) {
-	servers, err := s.configuredMCPServers()
+func (s RuntimeStatusService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef) (RuntimeMCPStatus, error) {
+	servers, err := s.configuredMCPServers(refs)
 	if err != nil {
 		return RuntimeMCPStatus{}, err
 	}
@@ -332,21 +337,17 @@ func (s RuntimeStatusService) mcpStatus(opts RuntimeStatusOptions) (RuntimeMCPSt
 	}, nil
 }
 
-func (s RuntimeStatusService) configuredMCPServers() ([]runtimeMCPServerConfig, error) {
+func (s RuntimeStatusService) configuredMCPServers(refs []mcpConfigRef) ([]runtimeMCPServerConfig, error) {
 	serversByName := map[string]runtimeMCPServerConfig{}
-	for _, path := range s.cfg.MCPConfigPaths() {
-		cfg, err := mcp.LoadConfig(path)
-		if err != nil {
-			return nil, err
-		}
-		cfg = mcp.PrepareConfig(cfg, s.absoluteWorkDir())
-		source := s.runtimeSourceForPath(path)
-		for name, spec := range cfg.MCPServers {
-			serversByName[name] = runtimeMCPServerConfig{
-				Name:   name,
-				Source: source,
-				Spec:   spec,
-			}
+	_, merged, sources, err := loadMCPConfigRefs(refs, s.absoluteWorkDir())
+	if err != nil {
+		return nil, err
+	}
+	for name, spec := range merged.MCPServers {
+		serversByName[name] = runtimeMCPServerConfig{
+			Name:   name,
+			Source: sources[name],
+			Spec:   spec,
 		}
 	}
 	servers := make([]runtimeMCPServerConfig, 0, len(serversByName))
@@ -357,23 +358,6 @@ func (s RuntimeStatusService) configuredMCPServers() ([]runtimeMCPServerConfig, 
 		return runtimeSourceLess(servers[i].Source, servers[i].Name, servers[j].Source, servers[j].Name)
 	})
 	return servers, nil
-}
-
-func (s RuntimeStatusService) runtimeSourceForPath(path string) string {
-	cleanPath := filepath.Clean(path)
-	if s.cfg.WorkDir != "" {
-		projectPath := filepath.Join(s.cfg.WorkDir, ".agents", "mcp.json")
-		if cleanPath == filepath.Clean(projectPath) {
-			return "project"
-		}
-	}
-	if s.cfg.HomeAgentsDir != "" {
-		userPath := filepath.Join(s.cfg.HomeAgentsDir, "mcp.json")
-		if cleanPath == filepath.Clean(userPath) {
-			return "user"
-		}
-	}
-	return "runtime"
 }
 
 func runtimeSourceLess(leftSource, leftName, rightSource, rightName string) bool {
@@ -390,9 +374,15 @@ func runtimeSourceRank(source string) int {
 	case "project":
 		return 0
 	case "user":
-		return 1
-	default:
 		return 2
+	default:
+		if extensions.IsExtensionSource(source) {
+			return 1
+		}
+		if strings.TrimSpace(source) == "" {
+			return 4
+		}
+		return 3
 	}
 }
 

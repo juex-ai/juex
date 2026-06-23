@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -192,6 +193,38 @@ func TestApp_NewRunsSessionStartHooks(t *testing.T) {
 	}
 }
 
+func TestApp_NewRunsExtensionSessionStartHook(t *testing.T) {
+	dir := t.TempDir()
+	command, err := json.Marshal(appHookCommand("allow"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteAppTestFile(t, filepath.Join(dir, ".juex", "extensions", "demo", "hooks.yaml"), `trusted: true
+commands:
+  - name: ext-startup
+    events: [SessionStart]
+    command: `+string(command)+`
+`)
+	a, err := New(Options{
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir},
+		Provider: &stubProvider{replies: []llm.Response{}},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	data, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, `"name":"ext-startup"`) || !strings.Contains(body, `"source":"ext:demo"`) {
+		t.Fatalf("events missing extension SessionStart hook source:\n%s", body)
+	}
+}
+
 func TestApp_DebugObservabilityWritesSessionArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	a, err := New(Options{
@@ -238,6 +271,16 @@ func TestApp_DebugObservabilityWritesSessionArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(string(debugData), "finish.attempted") {
 		t.Fatalf("debug log missing finish event:\n%s", debugData)
+	}
+}
+
+func mustWriteAppTestFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

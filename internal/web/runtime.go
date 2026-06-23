@@ -230,18 +230,7 @@ func (s *Server) absoluteWorkDir() string {
 }
 
 func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
-	var configs []mcp.Config
-	for _, path := range s.opts.Cfg.MCPConfigPaths() {
-		cfg, err := mcp.LoadConfig(path)
-		if err != nil {
-			return nil, err
-		}
-		cfg = mcp.PrepareConfig(cfg, s.absoluteWorkDir())
-		if len(cfg.MCPServers) > 0 {
-			configs = append(configs, cfg)
-		}
-	}
-	return configs, nil
+	return app.LoadMCPConfigs(s.opts.Cfg, s.absoluteWorkDir())
 }
 
 func (s *Server) connectedMCPServers() map[string]int {

@@ -91,16 +91,18 @@ func (c Config) RuntimePaths() RuntimePaths {
 	return paths
 }
 
-// ResourcePaths contains AGENTS, skill, and MCP resource locations.
+// ResourcePaths contains AGENTS, skill, MCP, and extension resource locations.
 type ResourcePaths struct {
-	WorkDir             string
-	HomeAgentsDir       string
-	ProjectAgentsDir    string
-	GlobalAgentsMDPath  string
-	SkillDirs           []string
-	AgentsMDDirs        []string
-	MCPConfigPaths      []string
-	UserGlobalResources bool
+	WorkDir              string
+	HomeAgentsDir        string
+	HomeExtensionsDir    string
+	ProjectAgentsDir     string
+	ProjectExtensionsDir string
+	GlobalAgentsMDPath   string
+	SkillDirs            []string
+	AgentsMDDirs         []string
+	MCPConfigPaths       []string
+	UserGlobalResources  bool
 }
 
 func (c Config) ResourcePaths() ResourcePaths {
@@ -114,8 +116,12 @@ func (c Config) ResourcePaths() ResourcePaths {
 		paths.SkillDirs = append(paths.SkillDirs, filepath.Join(c.HomeAgentsDir, "skills"))
 		paths.MCPConfigPaths = append(paths.MCPConfigPaths, filepath.Join(c.HomeAgentsDir, "mcp.json"))
 	}
+	if c.EnableUserGlobalResources && c.HomeJuexDir != "" {
+		paths.HomeExtensionsDir = filepath.Join(c.HomeJuexDir, "extensions")
+	}
 	if c.WorkDir != "" {
 		paths.ProjectAgentsDir = filepath.Join(c.WorkDir, ".agents")
+		paths.ProjectExtensionsDir = filepath.Join(c.WorkDir, ".juex", "extensions")
 		paths.SkillDirs = append(paths.SkillDirs, filepath.Join(paths.ProjectAgentsDir, "skills"))
 		paths.AgentsMDDirs = []string{c.WorkDir, paths.ProjectAgentsDir}
 		paths.MCPConfigPaths = append(paths.MCPConfigPaths, filepath.Join(paths.ProjectAgentsDir, "mcp.json"))
