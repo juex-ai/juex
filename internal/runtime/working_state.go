@@ -18,6 +18,21 @@ import (
 
 const workingStateFile = "working_state.json"
 
+const (
+	workingStateHardConstraintsActiveLimit        = 16
+	workingStateHardConstraintsResolvedLimit      = 4
+	workingStateArtifactsActiveLimit              = 16
+	workingStateArtifactsResolvedLimit            = 4
+	workingStateChecksActiveLimit                 = 24
+	workingStateChecksResolvedLimit               = 0
+	workingStateOpenIssuesActiveLimit             = 16
+	workingStateOpenIssuesResolvedLimit           = 4
+	workingStateLastSuccessfulChecksActiveLimit   = 12
+	workingStateLastSuccessfulChecksResolvedLimit = 0
+	workingStateStaleChecksActiveLimit            = 12
+	workingStateStaleChecksResolvedLimit          = 4
+)
+
 type WorkingStateSource string
 
 const (
@@ -392,7 +407,7 @@ func (s *WorkingStateStore) loadLocked() (WorkingState, error) {
 	if state.Version == 0 {
 		state.Version = 1
 	}
-	return state, nil
+	return pruneWorkingState(state), nil
 }
 
 func (s *WorkingStateStore) saveLocked(state WorkingState) error {
@@ -400,6 +415,7 @@ func (s *WorkingStateStore) saveLocked(state WorkingState) error {
 		return nil
 	}
 	state.Version = 1
+	state = pruneWorkingState(state)
 	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
 		return fmt.Errorf("working state mkdir: %w", err)
 	}
@@ -706,6 +722,101 @@ func activeWorkingStateRecords(records []WorkingStateRecord) []WorkingStateRecor
 
 func (r WorkingStateRecord) active() bool {
 	return strings.TrimSpace(r.Text) != "" && r.ResolvedAt.IsZero()
+}
+
+func pruneWorkingState(state WorkingState) WorkingState {
+	state.HardConstraints = pruneWorkingStateRecords(state.HardConstraints, workingStateHardConstraintsActiveLimit, workingStateHardConstraintsResolvedLimit)
+	state.Artifacts = pruneWorkingStateRecords(state.Artifacts, workingStateArtifactsActiveLimit, workingStateArtifactsResolvedLimit)
+	state.Checks = pruneWorkingStateRecords(state.Checks, workingStateChecksActiveLimit, workingStateChecksResolvedLimit)
+	state.OpenIssues = pruneWorkingStateRecords(state.OpenIssues, workingStateOpenIssuesActiveLimit, workingStateOpenIssuesResolvedLimit)
+	state.LastSuccessfulChecks = pruneWorkingStateRecords(state.LastSuccessfulChecks, workingStateLastSuccessfulChecksActiveLimit, workingStateLastSuccessfulChecksResolvedLimit)
+	state.StaleChecks = pruneWorkingStateRecords(state.StaleChecks, workingStateStaleChecksActiveLimit, workingStateStaleChecksResolvedLimit)
+	return state
+}
+
+func pruneWorkingStateRecords(records []WorkingStateRecord, activeLimit, resolvedLimit int) []WorkingStateRecord {
+	if len(records) == 0 {
+		return records
+	}
+	active := make([]WorkingStateRecord, 0, len(records))
+	resolved := make([]WorkingStateRecord, 0, len(records))
+	for _, rec := range records {
+		if rec.active() {
+			active = append(active, rec)
+			continue
+		}
+		if strings.TrimSpace(rec.Text) != "" {
+			resolved = append(resolved, rec)
+		}
+	}
+	sortWorkingStateActiveRecords(active)
+	sortWorkingStateResolvedRecords(resolved)
+	active = limitWorkingStateRecords(active, activeLimit)
+	resolved = limitWorkingStateRecords(resolved, resolvedLimit)
+	out := make([]WorkingStateRecord, 0, len(active)+len(resolved))
+	out = append(out, active...)
+	out = append(out, resolved...)
+	return out
+}
+
+func limitWorkingStateRecords(records []WorkingStateRecord, limit int) []WorkingStateRecord {
+	if limit < 0 {
+		limit = 0
+	}
+	if len(records) <= limit {
+		return records
+	}
+	return records[:limit]
+}
+
+func sortWorkingStateActiveRecords(records []WorkingStateRecord) {
+	sort.SliceStable(records, func(i, j int) bool {
+		left, right := records[i], records[j]
+		if leftRank, rightRank := workingStateSeverityRank(left.Severity), workingStateSeverityRank(right.Severity); leftRank != rightRank {
+			return leftRank > rightRank
+		}
+		return workingStateRecordNewer(left, right, false)
+	})
+}
+
+func sortWorkingStateResolvedRecords(records []WorkingStateRecord) {
+	sort.SliceStable(records, func(i, j int) bool {
+		return workingStateRecordNewer(records[i], records[j], true)
+	})
+}
+
+func workingStateRecordNewer(left, right WorkingStateRecord, preferResolved bool) bool {
+	leftTime := workingStateRecordSortTime(left, preferResolved)
+	rightTime := workingStateRecordSortTime(right, preferResolved)
+	if !leftTime.Equal(rightTime) {
+		return leftTime.After(rightTime)
+	}
+	return left.ID < right.ID
+}
+
+func workingStateRecordSortTime(rec WorkingStateRecord, preferResolved bool) time.Time {
+	if preferResolved && !rec.ResolvedAt.IsZero() {
+		return rec.ResolvedAt
+	}
+	if !rec.CreatedAt.IsZero() {
+		return rec.CreatedAt
+	}
+	return rec.ResolvedAt
+}
+
+func workingStateSeverityRank(severity WorkingStateSeverity) int {
+	switch severity {
+	case WorkingStateSeverityCritical:
+		return 4
+	case WorkingStateSeverityHigh:
+		return 3
+	case WorkingStateSeverityMedium:
+		return 2
+	case WorkingStateSeverityLow:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func mergeWorkingStateSection(dst *[]WorkingStateRecord, incoming []WorkingStateRecord, section string, now time.Time, defaultSource WorkingStateSource) bool {
