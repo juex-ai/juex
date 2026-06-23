@@ -6,6 +6,7 @@ import {
   applyToolRequestedToMessages,
   applyToolResultToMessages,
 } from "../../frontend/src/lib/live-tool-events.ts";
+import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
 import type { Message } from "../../frontend/src/types.ts";
 
 test("applyToolRequestedToMessages adds a running tool block to a pending assistant", () => {
@@ -356,4 +357,142 @@ test("applyToolResultToMessages creates a named placeholder for missed completio
     tool_use_id: "tool-1",
     content: "done\n",
   });
+});
+
+test("applyToolResultToMessages inserts after the matching later tool_use", () => {
+  const messages: Message[] = [
+    {
+      role: "assistant",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "old-tool",
+          tool_name: "exec_command",
+        },
+      ],
+    },
+    {
+      role: "user",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_result",
+          tool_use_id: "old-tool",
+          content: "old result",
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "new-tool",
+          tool_name: "create_goal",
+        },
+      ],
+    },
+  ];
+
+  const next = applyToolResultToMessages(messages, {
+    turnID: "t1",
+    toolUseID: "new-tool",
+    toolName: "create_goal",
+    content: "new result",
+  });
+
+  assert.equal(next.length, 4);
+  assert.deepEqual(next[1].blocks, [
+    {
+      type: "tool_result",
+      tool_use_id: "old-tool",
+      content: "old result",
+    },
+  ]);
+  assert.deepEqual(next[3], {
+    role: "user",
+    turn_id: "t1",
+    blocks: [
+      {
+        type: "tool_result",
+        tool_use_id: "new-tool",
+        content: "new result",
+      },
+    ],
+  });
+
+  const groups = messagesToGroups(next);
+  assert.equal(groups.length, 2);
+  const newUnit = groups[1].units[0];
+  assert.equal(newUnit?.kind, "tool");
+  if (newUnit?.kind === "tool") {
+    assert.equal(newUnit.use?.tool_use_id, "new-tool");
+    assert.equal(newUnit.result?.tool_use_id, "new-tool");
+  }
+});
+
+test("applyToolOutputDeltaToMessages keeps live output after the matching later tool_use", () => {
+  const messages: Message[] = [
+    {
+      role: "assistant",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "old-tool",
+          tool_name: "exec_command",
+        },
+      ],
+    },
+    {
+      role: "user",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_result",
+          tool_use_id: "old-tool",
+          content: "old result",
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      turn_id: "t1",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "streaming-tool",
+          tool_name: "exec_command",
+        },
+      ],
+    },
+  ];
+
+  const next = applyToolOutputDeltaToMessages(messages, {
+    turnID: "t1",
+    toolUseID: "streaming-tool",
+    toolName: "exec_command",
+    text: "live output\n",
+  });
+
+  assert.equal(next.length, 4);
+  assert.deepEqual(next[3], {
+    role: "user",
+    turn_id: "t1",
+    blocks: [
+      {
+        type: "tool_result",
+        tool_use_id: "streaming-tool",
+        content: "live output\n",
+      },
+    ],
+  });
+  const groups = messagesToGroups(next);
+  const liveUnit = groups[1].units[0];
+  assert.equal(liveUnit?.kind, "tool");
+  if (liveUnit?.kind === "tool") {
+    assert.equal(liveUnit.result?.content, "live output\n");
+  }
 });
