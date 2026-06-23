@@ -772,7 +772,7 @@ func limitWorkingStateRecords(records []WorkingStateRecord, limit int) []Working
 func sortWorkingStateActiveRecords(records []WorkingStateRecord) {
 	sort.SliceStable(records, func(i, j int) bool {
 		left, right := records[i], records[j]
-		if leftRank, rightRank := workingStateSeverityRank(left.Severity), workingStateSeverityRank(right.Severity); leftRank != rightRank {
+		if leftRank, rightRank := severityRank(left.Severity), severityRank(right.Severity); leftRank != rightRank {
 			return leftRank > rightRank
 		}
 		return workingStateRecordNewer(left, right, false)
@@ -802,21 +802,6 @@ func workingStateRecordSortTime(rec WorkingStateRecord, preferResolved bool) tim
 		return rec.CreatedAt
 	}
 	return rec.ResolvedAt
-}
-
-func workingStateSeverityRank(severity WorkingStateSeverity) int {
-	switch severity {
-	case WorkingStateSeverityCritical:
-		return 4
-	case WorkingStateSeverityHigh:
-		return 3
-	case WorkingStateSeverityMedium:
-		return 2
-	case WorkingStateSeverityLow:
-		return 1
-	default:
-		return 0
-	}
 }
 
 func mergeWorkingStateSection(dst *[]WorkingStateRecord, incoming []WorkingStateRecord, section string, now time.Time, defaultSource WorkingStateSource) bool {
