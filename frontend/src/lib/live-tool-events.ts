@@ -286,11 +286,16 @@ function toolResultTarget(
     insertIndex: messages.length,
   };
   let matchingToolUseIndex = -1;
+  let seenTurn = false;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (message.turn_id !== update.turnID) {
+      if (seenTurn) {
+        break;
+      }
       continue;
     }
+    seenTurn = true;
     const blocks = message.blocks ?? [];
     if (
       message.role === "user" &&
