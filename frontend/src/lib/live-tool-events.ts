@@ -33,6 +33,11 @@ type ToolUsePlaceholderUpdate = {
   timeoutSeconds?: number;
 };
 
+type ToolResultTarget = {
+  messageIndex: number;
+  insertIndex: number;
+};
+
 export function applyToolRequestedToMessages(
   messages: Message[],
   update: ToolRequestedUpdate,
@@ -108,10 +113,10 @@ function upsertToolResultBlock(
   block: ToolResultBlock,
   mode: "append" | "final",
 ): Message[] {
-  const targetIndex = toolResultTargetIndex(messages, update);
-  if (targetIndex >= 0) {
+  const target = toolResultTarget(messages, update);
+  if (target.messageIndex >= 0) {
     return messages.map((message, index) => {
-      if (index !== targetIndex) return message;
+      if (index !== target.messageIndex) return message;
       const blocks = message.blocks ?? [];
       const existingIndex = blocks.findIndex(
         (candidate) =>
@@ -132,13 +137,16 @@ function upsertToolResultBlock(
       return { ...message, blocks: [...blocks, block] };
     });
   }
+  const insertAt = Math.min(Math.max(target.insertIndex, 0), messages.length);
+  const message: Message = {
+    role: "user",
+    turn_id: update.turnID,
+    blocks: [block],
+  };
   return [
-    ...messages,
-    {
-      role: "user",
-      turn_id: update.turnID,
-      blocks: [block],
-    },
+    ...messages.slice(0, insertAt),
+    message,
+    ...messages.slice(insertAt),
   ];
 }
 
@@ -269,21 +277,71 @@ function toolUpdateTargetIndex(
   return sameTurnAssistant;
 }
 
-function toolResultTargetIndex(
+function toolResultTarget(
   messages: Message[],
   update: Pick<ToolResultUpdate, "turnID" | "toolUseID">,
-): number {
+): ToolResultTarget {
+  const fallback: ToolResultTarget = {
+    messageIndex: -1,
+    insertIndex: messages.length,
+  };
+  let matchingToolUseIndex = -1;
+  let seenTurn = false;
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message.turn_id !== update.turnID || message.role !== "user") {
+    if (message.turn_id !== update.turnID) {
+      if (seenTurn) {
+        break;
+      }
       continue;
     }
+    seenTurn = true;
     const blocks = message.blocks ?? [];
-    if (blocks.every((candidate) => candidate.type === "tool_result")) {
-      return index;
+    if (
+      message.role === "user" &&
+      blocks.every((candidate) => candidate.type === "tool_result")
+    ) {
+      if (
+        blocks.some(
+          (candidate) =>
+            candidate.type === "tool_result" &&
+            candidate.tool_use_id === update.toolUseID,
+        )
+      ) {
+        return { messageIndex: index, insertIndex: -1 };
+      }
+      if (fallback.messageIndex < 0) {
+        fallback.messageIndex = index;
+      }
+    }
+    if (
+      matchingToolUseIndex < 0 &&
+      message.role === "assistant" &&
+      blocks.some(
+        (candidate) =>
+          candidate.type === "tool_use" &&
+          candidate.tool_use_id === update.toolUseID,
+      )
+    ) {
+      matchingToolUseIndex = index;
     }
   }
-  return -1;
+  if (matchingToolUseIndex < 0) {
+    return fallback;
+  }
+  for (let index = matchingToolUseIndex + 1; index < messages.length; index++) {
+    const message = messages[index];
+    if (message.turn_id !== update.turnID) break;
+    if (message.role === "assistant") break;
+    const blocks = message.blocks ?? [];
+    if (
+      message.role === "user" &&
+      blocks.every((candidate) => candidate.type === "tool_result")
+    ) {
+      return { messageIndex: index, insertIndex: -1 };
+    }
+  }
+  return { messageIndex: -1, insertIndex: matchingToolUseIndex + 1 };
 }
 
 function mergeToolResultBlock(
