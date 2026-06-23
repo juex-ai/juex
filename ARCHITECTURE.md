@@ -624,7 +624,9 @@ the assistant finishes without queued input, the parent context/user stop
 cancels it, provider/tool/context work fails according to its existing
 contract, or context projection/compaction cannot recover. `llm.requested`
 keeps an `iter` counter for observability only; the counter does not stop the
-turn.
+turn. User-initiated cancellation is normalized to `cancelled by user` before
+runtime error events or tool-result blocks are persisted, so CLI and Web
+interrupts share the same transcript semantics.
 
 Compaction policy defaults and the default context-window token count live on
 the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
@@ -680,6 +682,11 @@ runtime/config/env snapshots, optional artifacts, and conservative text
 redaction. The manifest lists every bundled payload file except
 `manifest.json` itself because the manifest hash would otherwise be
 self-referential.
+
+The CLI root wires Ctrl-C/SIGTERM into the Cobra command context. `run` and
+`repl` pass that context through `internal/app` to provider requests and tool
+calls. On cancellation, plain stderr and `run --json` errors use the same
+runtime-facing reason, `cancelled by user`.
 
 Persistent flags inherited by all subcommands:
 

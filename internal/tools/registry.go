@@ -167,6 +167,9 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		info.TimedOut = true
 		return out, info, toolTimeoutError(name, timeoutSeconds)
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return out, info, ctxErr
+	}
 	return out, info, err
 }
 
