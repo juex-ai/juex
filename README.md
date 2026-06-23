@@ -159,8 +159,11 @@ When enabled, Juex also keeps a generic session-local `working_state.json`
 sidecar for current goals, hard constraints, artifacts, checks, open issues,
 last successful checks, and stale checks. Non-empty sidecars are injected into
 provider context as an advisory runtime working-state block; empty sidecars do
-not change ordinary runs. Set `runtime.working_state_enabled: false` to disable
-sidecar persistence, updates, and injection.
+not change ordinary runs. Working-state sections are automatically bounded:
+recent and higher-severity active records are retained, while older resolved
+records are kept only as a small audit tail. Set
+`runtime.working_state_enabled: false` to disable sidecar persistence, updates,
+and injection.
 
 Juex also keeps a session-local `goal_state.json` for the model-owned current
 goal. The active contract is intentionally small: `description`,
