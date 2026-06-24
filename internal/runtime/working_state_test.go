@@ -122,6 +122,35 @@ func TestWorkingStateStatusSnapshotReportsPresenceAndDisabled(t *testing.T) {
 	}
 }
 
+func TestWorkingStateStatusSnapshotDoesNotWaitForTurnLock(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.WorkingState = NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})
+	if err := eng.WorkingState.ApplyPatch(WorkingStatePatch{Goal: &WorkingStateRecord{Text: "keep status visible"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	eng.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		snapshot, err := eng.WorkingStateStatusSnapshot()
+		if err == nil && (snapshot == nil || !snapshot.Present || snapshot.State.Goal == nil) {
+			err = fmt.Errorf("snapshot = %+v", snapshot)
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		eng.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		eng.mu.Unlock()
+		t.Fatal("WorkingStateStatusSnapshot blocked on the turn-wide engine lock")
+	}
+}
+
 func TestWorkingStateStoreStatusSnapshotReportsPresence(t *testing.T) {
 	store := NewWorkingStateStore(t.TempDir(), WorkingStateOptions{})
 	snapshot, err := store.StatusSnapshot()
@@ -298,6 +327,36 @@ func TestWorkingStateActiveContextInjectionEmptyAndDisabled(t *testing.T) {
 	eng.DisableWorkingState = true
 	if got := messagesText(eng.ActiveContext().Messages); strings.Contains(got, "Runtime working state") {
 		t.Fatalf("disabled sidecar should not be injected:\n%s", got)
+	}
+}
+
+func TestActiveContextDoesNotWaitForTurnLock(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.WorkingState = NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})
+	if err := eng.WorkingState.ApplyPatch(WorkingStatePatch{HardConstraints: []WorkingStateRecord{{
+		Text: "render while a turn is running",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "hi")); err != nil {
+		t.Fatal(err)
+	}
+
+	eng.mu.Lock()
+	done := make(chan string, 1)
+	go func() {
+		done <- messagesText(eng.ActiveContext().Messages)
+	}()
+
+	select {
+	case got := <-done:
+		eng.mu.Unlock()
+		if !strings.Contains(got, "Runtime working state") || !strings.Contains(got, "render while a turn is running") || !strings.Contains(got, "hi") {
+			t.Fatalf("active context = %q", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		eng.mu.Unlock()
+		t.Fatal("ActiveContext blocked on the turn-wide engine lock")
 	}
 }
 

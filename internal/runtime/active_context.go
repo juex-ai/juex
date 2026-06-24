@@ -1,6 +1,10 @@
 package runtime
 
-import "github.com/juex-ai/juex/internal/llm"
+import (
+	"time"
+
+	"github.com/juex-ai/juex/internal/llm"
+)
 
 type ActiveContextSnapshot struct {
 	Messages        []llm.Message `json:"messages"`
@@ -75,9 +79,21 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if e == nil {
 		return ActiveContextSnapshot{}
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.activeContextLocked(incoming...)
+	session := e.Session
+	if session == nil {
+		return ActiveContextSnapshot{}
+	}
+	_, history := session.Snapshot(time.Now().UTC())
+	snap := assembleActiveContext(history, incoming)
+	if text, ok := e.workingStateContextSnapshot(); ok {
+		msg := workingStateContextMessage(text)
+		out := make([]llm.Message, 0, len(snap.Messages)+1)
+		out = append(out, msg)
+		out = append(out, snap.Messages...)
+		snap.Messages = out
+		snap.EstimatedTokens = estimateMessageTokens(out)
+	}
+	return snap
 }
 
 func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
