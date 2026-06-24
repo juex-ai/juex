@@ -502,9 +502,6 @@ func (e *Engine) workingStateStoreSnapshot() *WorkingStateStore {
 	if e == nil || e.DisableWorkingState {
 		return nil
 	}
-	if e.WorkingState != nil {
-		return e.WorkingState
-	}
 	if e.Session == nil || e.Session.Dir == "" {
 		return nil
 	}

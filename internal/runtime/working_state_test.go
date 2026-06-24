@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,6 +149,46 @@ func TestWorkingStateStatusSnapshotDoesNotWaitForTurnLock(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		eng.mu.Unlock()
 		t.Fatal("WorkingStateStatusSnapshot blocked on the turn-wide engine lock")
+	}
+}
+
+func TestWorkingStateStatusSnapshotDoesNotRaceWithLazyStoreInit(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	store := NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})
+	if err := store.ApplyPatch(WorkingStatePatch{Goal: &WorkingStateRecord{Text: "avoid store pointer race"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 100)
+	for range 50 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			eng.mu.Lock()
+			eng.WorkingState = nil
+			_ = eng.workingStateStoreLocked()
+			eng.mu.Unlock()
+		}()
+		go func() {
+			defer wg.Done()
+			snapshot, err := eng.WorkingStateStatusSnapshot()
+			if err != nil {
+				errs <- err
+				return
+			}
+			if snapshot == nil || !snapshot.Present || snapshot.State.Goal == nil {
+				errs <- fmt.Errorf("snapshot = %+v", snapshot)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
