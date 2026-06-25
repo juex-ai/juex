@@ -1,11 +1,13 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -112,6 +114,56 @@ func TestRepairTranscriptLeavesValidMultiToolHistoryUnchanged(t *testing.T) {
 	}
 	if countLines(data) != len(valid) {
 		t.Fatalf("conversation lines changed: %s", data)
+	}
+}
+
+func TestLoadWithRepairTranscriptWritesCompleteEvent(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "search")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "call_load",
+		ToolName:  "grep",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.Dir
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repaired.Close()
+
+	data, err := os.ReadFile(filepath.Join(dir, eventsFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 {
+		t.Fatal("expected transcript.repaired event")
+	}
+	var evt events.Event
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &evt); err != nil {
+		t.Fatal(err)
+	}
+	if evt.Type != "transcript.repaired" {
+		t.Fatalf("event type = %q, want transcript.repaired", evt.Type)
+	}
+	if evt.ID == "" {
+		t.Fatal("event id is empty")
+	}
+	if evt.Timestamp.IsZero() {
+		t.Fatal("event timestamp is zero")
 	}
 }
 

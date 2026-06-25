@@ -139,6 +139,7 @@ func (s *Session) AppendEvent(e events.Event) error {
 	if err := s.ensureFilesLocked(); err != nil {
 		return err
 	}
+	e = events.Normalize(e)
 	return writeJSONL(s.eventFD, e)
 }
 
@@ -224,10 +225,10 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		return nil, err
 	}
 	if len(repairs) > 0 {
-		_ = writeJSONL(eventFD, events.Event{
+		_ = writeJSONL(eventFD, events.Normalize(events.Event{
 			Type:    "transcript.repaired",
 			Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
-		})
+		}))
 	}
 	tokenUsage, contextUsage, _ := loadLatestSessionUsage(dir)
 	return &Session{

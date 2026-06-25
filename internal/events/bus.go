@@ -56,16 +56,22 @@ func (b *Bus) Subscribe(pattern string, fn Handler) func() {
 	}
 }
 
-// Emit dispatches e synchronously to all matching subscribers.
-// If e.ID is empty, a random one is generated.
-// If e.Timestamp is zero, time.Now() is used.
-func (b *Bus) Emit(e Event) {
+// Normalize fills the stable default fields expected on persisted and emitted events.
+func Normalize(e Event) Event {
 	if e.ID == "" {
 		e.ID = newID()
 	}
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now()
 	}
+	return e
+}
+
+// Emit dispatches e synchronously to all matching subscribers.
+// If e.ID is empty, a random one is generated.
+// If e.Timestamp is zero, time.Now() is used.
+func (b *Bus) Emit(e Event) {
+	e = Normalize(e)
 
 	b.mu.RLock()
 	matched := make([]Handler, 0, len(b.subs))
