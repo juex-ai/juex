@@ -62,7 +62,7 @@ func Normalize(e Event) Event {
 		e.ID = newID()
 	}
 	if e.Timestamp.IsZero() {
-		e.Timestamp = time.Now()
+		e.Timestamp = time.Now().UTC()
 	}
 	return e
 }

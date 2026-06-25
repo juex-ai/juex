@@ -148,10 +148,11 @@ func TestLoadWithRepairTranscriptWritesCompleteEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) == 0 {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
 		t.Fatal("expected transcript.repaired event")
 	}
+	lines := strings.Split(trimmed, "\n")
 	var evt events.Event
 	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &evt); err != nil {
 		t.Fatal(err)
