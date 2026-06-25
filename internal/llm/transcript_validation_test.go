@@ -37,7 +37,9 @@ func TestValidateToolTranscriptRejectsDanglingToolUse(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !strings.Contains(err.Error(), "call_missing") || !strings.Contains(err.Error(), "missing tool_result") {
+	if !strings.Contains(err.Error(), "call_missing") ||
+		!strings.Contains(err.Error(), "missing tool_result") ||
+		!strings.Contains(err.Error(), "before message 3 block 1") {
 		t.Fatalf("error = %v", err)
 	}
 }

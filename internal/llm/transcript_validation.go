@@ -39,7 +39,7 @@ func ValidateToolTranscript(history []Message) error {
 		}
 	}
 	if len(pending) > 0 {
-		return missingToolResultError(pending, len(history), 0)
+		return missingToolResultError(pending, len(history), -1)
 	}
 	return nil
 }
@@ -80,7 +80,7 @@ func missingToolResultError(pending []pendingToolResult, msgIndex, blockIndex in
 		}
 		ids = append(ids, item.id)
 	}
-	if blockIndex > 0 {
+	if blockIndex >= 0 {
 		return fmt.Errorf("llm: missing tool_result for function call %s before message %d block %d", strings.Join(ids, ", "), msgIndex+1, blockIndex+1)
 	}
 	return fmt.Errorf("llm: missing tool_result for function call %s before end of transcript", strings.Join(ids, ", "))
