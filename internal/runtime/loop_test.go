@@ -1562,6 +1562,58 @@ func TestTurn_DoesNotReplayProcessedPendingInputAfterRestart(t *testing.T) {
 	}
 }
 
+func TestTurn_RepairsDanglingToolUseBeforeAppendingNewUserInput(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(llm.TextMessage(llm.RoleUser, "first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "interrupted",
+		ToolName:  "grep",
+		Input:     map[string]any{"pattern": "needle"},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := session.Load(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reloaded.Close() })
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}}
+	eng := newEngineForSession(t, reloaded, prov)
+	if _, err := eng.Turn(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.histories) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(prov.histories))
+	}
+	got := prov.histories[0]
+	if len(got) != 4 {
+		t.Fatalf("provider history len = %d, want repaired history before new input: %+v", len(got), got)
+	}
+	repair := got[2]
+	if repair.Role != llm.RoleUser || len(repair.Blocks) != 1 || repair.Blocks[0].Type != llm.BlockToolResult {
+		t.Fatalf("repair message = %+v", repair)
+	}
+	if repair.Blocks[0].ToolUseID != "interrupted" || !repair.Blocks[0].IsError {
+		t.Fatalf("repair block = %+v", repair.Blocks[0])
+	}
+	if got[3].FirstText() != "second" {
+		t.Fatalf("new user message = %+v", got[3])
+	}
+}
+
 func TestEngine_DeduplicatesPendingInputByEventID(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.PendingInputQueue = NewPendingInputQueue(eng.Session.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }})

@@ -48,6 +48,31 @@ func TestAttachWorkspaceSessionAttachesActivePrimary(t *testing.T) {
 	assertHistoryActive(t, cfg, active.ID)
 }
 
+func TestAttachWorkspaceSessionRepairsActivePrimaryTranscript(t *testing.T) {
+	cfg := attachmentTestConfig(t)
+	active := seedDanglingToolUseSession(t, cfg)
+
+	attachment, err := AttachWorkspaceSession(cfg, SessionAttachmentRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer attachment.Session.Close()
+
+	if attachment.Session.ID != active.ID {
+		t.Fatalf("session id = %s, want %s", attachment.Session.ID, active.ID)
+	}
+	if len(attachment.Session.History) != 3 {
+		t.Fatalf("history len = %d, want repaired 3-message history: %+v", len(attachment.Session.History), attachment.Session.History)
+	}
+	repair := attachment.Session.History[2]
+	if repair.Role != llm.RoleUser || len(repair.Blocks) != 1 || repair.Blocks[0].Type != llm.BlockToolResult {
+		t.Fatalf("repair message = %+v", repair)
+	}
+	if repair.Blocks[0].ToolUseID != "attach_missing" || !repair.Blocks[0].IsError {
+		t.Fatalf("repair block = %+v", repair.Blocks[0])
+	}
+}
+
 func TestAttachWorkspaceSessionFallsBackFromStaleActive(t *testing.T) {
 	cfg := attachmentTestConfig(t)
 	stale := session.Info{
@@ -237,6 +262,35 @@ func seedAttachmentSession(t *testing.T, cfg config.Config, kind, text, history 
 		if err := session.RecordSession(cfg.HistoryPath(), info); err != nil {
 			t.Fatal(err)
 		}
+	}
+	return info
+}
+
+func seedDanglingToolUseSession(t *testing.T, cfg config.Config) session.Info {
+	t.Helper()
+	sess, err := session.NewWithOptions(cfg.SessionsDir(), session.Options{
+		Kind:        session.KindPrimary,
+		HistoryPath: cfg.HistoryPath(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(llm.TextMessage(llm.RoleUser, "before")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "attach_missing",
+		ToolName:  "read",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	info := sess.Info(time.Now().UTC())
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SetActive(cfg.HistoryPath(), info); err != nil {
+		t.Fatal(err)
 	}
 	return info
 }

@@ -47,13 +47,14 @@ type Session struct {
 }
 
 type Options struct {
-	Alias          string
-	Kind           string
-	Active         bool
-	RecordActive   bool
-	NoRecordActive bool
-	HistoryPath    string
-	Lazy           bool
+	Alias            string
+	Kind             string
+	Active           bool
+	RecordActive     bool
+	NoRecordActive   bool
+	HistoryPath      string
+	Lazy             bool
+	RepairTranscript bool
 }
 
 // New creates a new session under rootDir. rootDir is created if missing.
@@ -204,6 +205,15 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		m = normalizeLoadedMessage(m, i)
 		history = append(history, m)
 	}
+	var repairs []TranscriptRepair
+	if opts.RepairTranscript {
+		history, repairs = repairTranscriptMessages(history, "load")
+		if len(repairs) > 0 {
+			if err := writeConversationMessages(convPath, history); err != nil {
+				return nil, err
+			}
+		}
+	}
 	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
@@ -212,6 +222,12 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 	if err != nil {
 		convFD.Close()
 		return nil, err
+	}
+	if len(repairs) > 0 {
+		_ = writeJSONL(eventFD, events.Event{
+			Type:    "transcript.repaired",
+			Payload: TranscriptRepairedPayload{Reason: "load", Repairs: repairs},
+		})
 	}
 	tokenUsage, contextUsage, _ := loadLatestSessionUsage(dir)
 	return &Session{

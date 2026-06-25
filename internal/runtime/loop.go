@@ -365,6 +365,20 @@ func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error
 	return nil
 }
 
+func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
+	repairs, err := e.Session.RepairTranscript(reason)
+	if err != nil {
+		return fmt.Errorf("session repair transcript: %w", err)
+	}
+	if len(repairs) > 0 {
+		e.emit(events.Event{Type: "transcript.repaired", TurnID: turnID, Payload: session.TranscriptRepairedPayload{
+			Reason:  reason,
+			Repairs: repairs,
+		}})
+	}
+	return nil
+}
+
 func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared preparedTurnContext) (providerTurnRequest, error) {
 	e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
 		Iter:       iter,

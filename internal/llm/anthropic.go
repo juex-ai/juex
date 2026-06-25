@@ -64,6 +64,9 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 }
 
 func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
+	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{}); err != nil {
+		return Response{}, err
+	}
 	maxTokens := int64(4096)
 	if p.profile.Capabilities.MaxOutputTokens && opts.MaxOutputTokens > 0 {
 		maxTokens = int64(opts.MaxOutputTokens)
