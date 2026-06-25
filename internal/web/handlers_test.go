@@ -21,6 +21,26 @@ import (
 	"github.com/juex-ai/juex/internal/session"
 )
 
+type blockingProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *blockingProvider) Name() string { return "blocking" }
+
+func (p *blockingProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	close(p.started)
+	select {
+	case <-p.release:
+		return llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "released"),
+			StopReason: llm.StopEndTurn,
+		}, nil
+	case <-ctx.Done():
+		return llm.Response{}, ctx.Err()
+	}
+}
+
 // seedSession writes a minimal conversation.jsonl under
 // <work>/.juex/sessions/<id>/ so session.List can find it.
 func seedSession(t *testing.T, work, id, body string) {
@@ -218,6 +238,81 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	}
 	if !parsed.WorkingState.Present || parsed.WorkingState.State.Goal == nil || len(parsed.WorkingState.State.HardConstraints) != 1 {
 		t.Fatalf("working_state = %+v", parsed.WorkingState)
+	}
+}
+
+func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
+	provider := &blockingProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := as.app.Session.ID
+	if err := as.app.Engine.WorkingState.ApplyPatch(juexruntime.WorkingStatePatch{
+		Goal: &juexruntime.WorkingStateRecord{Text: "visible while running"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	turnDone := make(chan error, 1)
+	go func() {
+		resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/turns", "application/json", strings.NewReader(`{"prompt":"block"}`))
+		if err != nil {
+			turnDone <- err
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+			body, _ := io.ReadAll(resp.Body)
+			turnDone <- fmt.Errorf("turn status = %d body = %s", resp.StatusCode, body)
+			return
+		}
+		turnDone <- nil
+	}()
+
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider was not called")
+	}
+	t.Cleanup(func() {
+		select {
+		case <-provider.release:
+		default:
+			close(provider.release)
+		}
+		select {
+		case err := <-turnDone:
+			if err != nil {
+				t.Errorf("turn request failed: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("turn request did not finish")
+		}
+	})
+
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	for _, path := range []string{
+		"/api/sessions/" + id,
+		"/api/sessions/" + id + "/context",
+	} {
+		resp, err := client.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s while turn is running: %v", path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d body = %s", path, resp.StatusCode, body)
+		}
 	}
 }
 

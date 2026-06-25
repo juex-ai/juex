@@ -498,28 +498,45 @@ func (e *Engine) workingStateStoreLocked() *WorkingStateStore {
 	return e.WorkingState
 }
 
+func (e *Engine) workingStateStoreSnapshot() *WorkingStateStore {
+	if e == nil || e.DisableWorkingState {
+		return nil
+	}
+	if e.Session == nil || e.Session.Dir == "" {
+		return nil
+	}
+	// Read-only UI snapshots must not wait for the turn-wide engine lock.
+	// Constructing an equivalent store avoids mutating Engine while a turn runs.
+	return NewWorkingStateStore(e.Session.Dir, WorkingStateOptions{})
+}
+
 func (e *Engine) WorkingStateStatusSnapshot() (*WorkingStateStatusSnapshot, error) {
 	if e == nil {
 		return nil, nil
 	}
-	e.mu.Lock()
-	disabled := e.DisableWorkingState
-	var store *WorkingStateStore
-	if !disabled {
-		store = e.workingStateStoreLocked()
-	}
-	e.mu.Unlock()
-
-	if disabled {
+	if e.DisableWorkingState {
 		return &WorkingStateStatusSnapshot{
 			Disabled: true,
 			State:    WorkingState{Version: 1},
 		}, nil
 	}
+	store := e.workingStateStoreSnapshot()
 	if store == nil {
 		return nil, nil
 	}
 	return store.StatusSnapshot()
+}
+
+func (e *Engine) workingStateContextSnapshot() (string, bool) {
+	store := e.workingStateStoreSnapshot()
+	if store == nil {
+		return "", false
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		return "", false
+	}
+	return state.RenderProviderContext()
 }
 
 func (e *Engine) workingStateContextLocked() (string, bool) {
