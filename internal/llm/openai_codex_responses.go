@@ -97,6 +97,9 @@ func (p *openAICodexResponsesProvider) Complete(ctx context.Context, sys string,
 }
 
 func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
+	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{OmitReasoning: true}); err != nil {
+		return Response{}, err
+	}
 	params := p.codexRequestParams(sys, history, tools, opts)
 	var resp *responses.Response
 	var err error

@@ -54,6 +54,9 @@ func (p *openAIResponsesProvider) Complete(ctx context.Context, sys string, hist
 }
 
 func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
+	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{}); err != nil {
+		return Response{}, err
+	}
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(p.profile.Model),
 		Input: responses.ResponseNewParamsInputUnion{

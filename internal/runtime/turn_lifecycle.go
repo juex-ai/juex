@@ -45,6 +45,9 @@ func (o turnFinishOutcome) shouldContinue() bool {
 }
 
 func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, error) {
+	if err := l.engine.repairTranscriptLocked(l.turnID, "turn_start"); err != nil {
+		return turnLifecycleResult{}, err
+	}
 	if err := l.engine.restorePendingInput(l.turnID, l.userMsg.ID); err != nil {
 		return turnLifecycleResult{}, err
 	}

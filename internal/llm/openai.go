@@ -63,6 +63,9 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Mes
 }
 
 func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
+	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{}); err != nil {
+		return Response{}, err
+	}
 	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(history)+1)
 	if sys != "" {
 		msgs = append(msgs, openai.SystemMessage(sys))

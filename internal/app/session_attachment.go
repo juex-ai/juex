@@ -83,10 +83,11 @@ func resumeWorkspaceSession(cfg config.Config, req SessionAttachmentRequest) (Se
 	}
 	active := session.NormalizeKind(kind) == session.KindPrimary
 	sess, err := session.LoadWithOptions(req.ResumeDir, session.Options{
-		Alias:        req.Alias,
-		Active:       active,
-		RecordActive: active,
-		HistoryPath:  cfg.HistoryPath(),
+		Alias:            req.Alias,
+		Active:           active,
+		RecordActive:     active,
+		HistoryPath:      cfg.HistoryPath(),
+		RepairTranscript: true,
 	})
 	if err != nil {
 		return SessionAttachment{}, err
@@ -113,10 +114,11 @@ func attachActiveWorkspaceSession(cfg config.Config, req SessionAttachmentReques
 		return newPrimaryWorkspaceSession(cfg, req, SessionModeAttachActive)
 	}
 	sess, err := session.LoadWithOptions(session.InfoDir(cfg.SessionsDir(), info), session.Options{
-		Alias:        req.Alias,
-		Active:       true,
-		RecordActive: true,
-		HistoryPath:  cfg.HistoryPath(),
+		Alias:            req.Alias,
+		Active:           true,
+		RecordActive:     true,
+		HistoryPath:      cfg.HistoryPath(),
+		RepairTranscript: true,
 	})
 	if err != nil {
 		return SessionAttachment{}, err
