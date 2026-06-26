@@ -314,11 +314,15 @@ streaming response has already started, with a small context-aware backoff
 between attempts; semantic stream events such as `response.failed` are returned
 without retry.
 Provider adapters share a canonical projection helper before they encode SDK
-requests. The helper compacts history, filters tool and reasoning replay blocks
-through capability gates, supports Codex's reasoning-omit path, normalizes
-function parameter schemas, and round-trips tool-call argument JSON fallbacks.
-Adapters still own protocol-specific SDK request structs, content-block
-shapes, cache-control placement, and response decoding.
+requests. The helper compacts history, validates provider-visible tool-call
+transcripts, filters tool and reasoning replay blocks through capability gates,
+supports Codex's reasoning-omit path, normalizes function parameter schemas,
+and round-trips tool-call argument JSON fallbacks. Adapters still own
+protocol-specific SDK request structs, content-block shapes, cache-control
+placement, and response decoding. Session repair remains outside provider
+adapters: malformed persisted transcripts are repaired by the session/runtime
+boundary before a provider request is assembled, while adapters fail loudly if
+an invalid transcript still reaches the protocol edge.
 Malformed provider stream events are wrapped as `StreamParseError` with a
 stable kind, provider/model identity, event type, optional content block index,
 and a bounded raw event preview.
@@ -445,7 +449,8 @@ func (b *Bus) Emit(e Event)                              // synchronous fan-out
 
 Standard event families include `turn.started/completed/errored`,
 `llm.requested/responded`, `tool.requested/output_delta/completed/errored`,
-`pending_input.*`, `context.compact.*`, and `context.projection.applied`.
+`transcript.repaired`, `pending_input.*`, `context.compact.*`, and
+`context.projection.applied`.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary
 fields (`text`, `thinking`, `tool_calls`) for older consumers.
 The live tool event family is owned by `internal/toolevents`: event name
@@ -508,11 +513,16 @@ type Info struct {
 ```
 
 Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
-`AppendEvent(e)` writes to `events.jsonl`. Runtime callers resume sessions
-with `session.LoadWithOptions(dir, opts)` so aliases and lazy transcript
-creation are applied consistently; `session.Load` is only the no-option
-convenience wrapper. The latest `token_usage` and `context_usage` are restored
-from `llm.responded` events and exposed through session `Info`, not through
+`AppendEvent(e)` writes a normalized event with id and timestamp to
+`events.jsonl`. Runtime callers resume sessions with
+`session.LoadWithOptions(dir, opts)` so aliases, lazy transcript creation, and
+explicit transcript repair policy are applied consistently; `session.Load` is
+only the no-option convenience wrapper. When repair is enabled, session loading
+or turn startup inserts explicit error `tool_result` messages for persisted
+assistant `tool_use` blocks that no longer have a matching result before normal
+conversation continues, then records `transcript.repaired` evidence in
+`events.jsonl`. The latest `token_usage` and `context_usage` are restored from
+`llm.responded` events and exposed through session `Info`, not through
 individual messages.
 
 `internal/observability` subscribes to the same in-process event bus and writes
