@@ -69,7 +69,7 @@ func Normalize(e Event) Event {
 
 // Emit dispatches e synchronously to all matching subscribers.
 // If e.ID is empty, a random one is generated.
-// If e.Timestamp is zero, time.Now() is used.
+// If e.Timestamp is zero, time.Now().UTC() is used.
 func (b *Bus) Emit(e Event) {
 	e = Normalize(e)
 
