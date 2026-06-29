@@ -19,6 +19,8 @@ const (
 	MaxTimeoutSeconds     = 300
 )
 
+var ErrMalformedRawArguments = errors.New("provider returned malformed tool arguments; retry with smaller/chunked content")
+
 type Handler func(ctx context.Context, input map[string]any) (string, error)
 
 type Result struct {
@@ -145,7 +147,6 @@ func (r *Registry) Call(ctx context.Context, name string, input map[string]any) 
 }
 
 func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[string]any) (string, CallInfo, error) {
-	input = NormalizeCallInput(input)
 	t, ok := r.Get(name)
 	if !ok {
 		info := CallInfo{TimeoutSeconds: normalizedTimeoutSeconds(r.defaultTimeoutSeconds)}
@@ -153,6 +154,11 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	}
 	timeoutSeconds := r.timeoutSecondsFor(t)
 	info := CallInfo{TimeoutSeconds: timeoutSeconds}
+	var err error
+	input, err = NormalizeCallInputForDispatch(input)
+	if err != nil {
+		return "", info, fmt.Errorf("tools: %s: %w", name, err)
+	}
 	callInput := cloneCallInput(input)
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -194,16 +200,28 @@ func toolTimeoutError(name string, timeoutSeconds int) error {
 // tool sees them. Provider adapters should normally return structured input,
 // but this keeps leaked `_raw_arguments` payloads from failing builtin tools.
 func NormalizeCallInput(input map[string]any) map[string]any {
+	normalized, _ := normalizeCallInput(input, false)
+	return normalized
+}
+
+func NormalizeCallInputForDispatch(input map[string]any) (map[string]any, error) {
+	return normalizeCallInput(input, true)
+}
+
+func normalizeCallInput(input map[string]any, strict bool) (map[string]any, error) {
 	if input == nil {
-		return nil
+		return nil, nil
 	}
 	raw, ok := input["_raw_arguments"].(string)
 	if !ok || raw == "" {
-		return input
+		return input, nil
 	}
 	decoded, ok := decodeRawArguments(raw)
 	if !ok {
-		return input
+		if strict {
+			return nil, ErrMalformedRawArguments
+		}
+		return input, nil
 	}
 	out := make(map[string]any, len(decoded)+len(input))
 	for k, v := range decoded {
@@ -215,7 +233,7 @@ func NormalizeCallInput(input map[string]any) map[string]any {
 		}
 		out[k] = v
 	}
-	return out
+	return out, nil
 }
 
 func decodeRawArguments(raw string) (map[string]any, bool) {

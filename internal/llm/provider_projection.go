@@ -15,7 +15,7 @@ func projectProviderTranscript(history []Message, profile ProviderProfile, opts 
 		projected.Blocks = make([]Block, 0, len(m.Blocks))
 		for _, b := range m.Blocks {
 			if shouldProjectProviderBlock(b, profile, opts) {
-				projected.Blocks = append(projected.Blocks, b)
+				projected.Blocks = append(projected.Blocks, projectProviderBlock(b))
 			}
 		}
 		filtered = append(filtered, projected)
@@ -34,6 +34,13 @@ func shouldProjectProviderBlock(b Block, profile ProviderProfile, opts providerP
 	default:
 		return false
 	}
+}
+
+func projectProviderBlock(b Block) Block {
+	if b.Type == BlockToolUse {
+		b.Input = providerToolInput(b.Input)
+	}
+	return b
 }
 
 func normalizedFunctionParameters(schema map[string]any) map[string]any {
@@ -78,6 +85,7 @@ func normalizedFunctionRequired(schema map[string]any) []string {
 }
 
 func toolCallArguments(input map[string]any) string {
+	input = providerToolInput(input)
 	if input == nil {
 		return "{}"
 	}
@@ -92,17 +100,61 @@ func parseToolArguments(raw string) map[string]any {
 	if raw == "" {
 		return nil
 	}
+	input, fallback, ok := decodeToolArguments(raw)
+	if ok {
+		return input
+	}
+	return map[string]any{"_raw_arguments": fallback}
+}
+
+func providerToolInput(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	raw, ok := input["_raw_arguments"].(string)
+	if !ok || raw == "" {
+		return input
+	}
+	decoded, _, ok := decodeToolArguments(raw)
+	if !ok {
+		return copyToolInputWithoutRawArguments(input)
+	}
+	out := make(map[string]any, len(decoded)+len(input))
+	for k, v := range decoded {
+		out[k] = v
+	}
+	for k, v := range input {
+		if k == "_raw_arguments" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func copyToolInputWithoutRawArguments(input map[string]any) map[string]any {
+	out := make(map[string]any, len(input))
+	for k, v := range input {
+		if k == "_raw_arguments" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func decodeToolArguments(raw string) (map[string]any, string, bool) {
 	rawBytes := []byte(raw)
 	var input map[string]any
-	if err := json.Unmarshal(rawBytes, &input); err == nil {
-		return input
+	if err := json.Unmarshal(rawBytes, &input); err == nil && input != nil {
+		return input, "", true
 	}
 	var encoded string
 	if err := json.Unmarshal(rawBytes, &encoded); err == nil {
-		if err := json.Unmarshal([]byte(encoded), &input); err == nil {
-			return input
+		if err := json.Unmarshal([]byte(encoded), &input); err == nil && input != nil {
+			return input, "", true
 		}
-		return map[string]any{"_raw_arguments": encoded}
+		return nil, encoded, false
 	}
-	return map[string]any{"_raw_arguments": raw}
+	return nil, raw, false
 }
