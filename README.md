@@ -125,8 +125,15 @@ extension hooks are trusted by location. Extension MCP servers receive
 under `.juex/` so it can stay uncommitted. User-global provider fallback
 configuration lives at `~/.juex/juex.yaml`.
 
-The builtin command tools are `exec_command` and `write_stdin`. Juex resolves
-a `ShellProfile` from the process runtime OS: Windows binaries default to
+The builtin file tools are `read`, `write`, `edit`, `apply_patch`, and `grep`.
+`apply_patch` accepts a compact patch envelope in `patch_text` with
+`*** Begin Patch` / `*** End Patch` markers and supports add, update, delete,
+and move operations. It validates the whole patch before writing, rejects paths
+outside the workspace, and returns a short changed-file summary instead of
+echoing the patch text back into the provider transcript.
+
+The builtin command tools are `exec_command` and `write_stdin`. Juex resolves a
+`ShellProfile` from the process runtime OS: Windows binaries default to
 PowerShell when available, Linux/macOS binaries default to POSIX shells, and
 Linux binaries running under WSL stay POSIX unless `shell.profile: wsl` is
 configured explicitly. `exec_command` accepts `yield_time_ms` and returns a

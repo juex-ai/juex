@@ -77,7 +77,8 @@ juex/
 │   ├── toolevents/               # live tool event names, payload contracts, and constructors
 │   ├── tools/                    # tool registry + builtin tools
 │   │   ├── registry.go
-│   │   └── builtin.go
+│   │   ├── builtin.go
+│   │   └── apply_patch.go
 │   ├── mcp/                      # stdio JSON-RPC 2.0 client, config, process manager
 │   │   ├── config.go
 │   │   ├── client.go
@@ -381,6 +382,7 @@ with the standard `read` builtin against the path printed there.
 | `read` | read file (offset/limit) |
 | `write` | overwrite file |
 | `edit` | old -> new in-place replace; unique by default, optional replace_all / expected_replacements |
+| `apply_patch` | structured patch edits with add / update / delete / move, whole-patch validation, workspace path checks, and compact results |
 | `exec_command` | run a command through the resolved workspace shell (workdir defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
 | `write_stdin` | poll a running command session or write `chars` to a TTY session using the numeric `session_id` returned by `exec_command` |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
@@ -389,10 +391,11 @@ with the standard `read` builtin against the path printed there.
 | `memory_delete` | remove an entry by name |
 
 `tools.RegisterBuiltins` receives `BuiltinOptions` fields for `WorkDir`,
-`Shell`, `ShellSessions`, and `ToolTimeoutSeconds`. `WorkDir` injects the
-default workspace so `read`, `write`, and `edit` resolve relative paths against
-the agent workspace, and `exec_command` / `grep` fall back to it when the model
-does not pass an explicit `workdir` / `path`.
+`Shell`, `ShellSessions`, `ToolTimeoutSeconds`, and `DisableApplyPatch`.
+`WorkDir` injects the default workspace so `read`, `write`, `edit`, and
+`apply_patch` resolve relative paths against the agent workspace, and
+`exec_command` / `grep` fall back to it when the model does not pass an
+explicit `workdir` / `path`.
 Tool hard timeouts are runtime policy rather than model-visible parameters.
 The registry applies a per-call timeout context from its default policy or from
 an individual tool's registration metadata, caps it at 300 seconds, and leaves
@@ -1308,7 +1311,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
-| `tools` | registry duplicate, read/write/edit/grep/exec_command/write_stdin, regex grep, command timeout/session yield, default WorkDir |
+| `tools` | registry duplicate, read/write/edit/apply_patch/grep/exec_command/write_stdin, regex grep, command timeout/session yield, default WorkDir |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |
@@ -1320,7 +1323,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, observability artifact wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
-| `tests/e2e` | full-stack tempdir scenario, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
+| `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracle for conversation/event/tool artifacts; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
 
 Run the deterministic suite with `go test ./... -count=1`.
