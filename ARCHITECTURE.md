@@ -398,7 +398,9 @@ with the standard `read` builtin against the path printed there.
 `tools.RegisterBuiltins` receives `BuiltinOptions` fields for `WorkDir`,
 `Shell`, `ShellSessions`, `ToolTimeoutSeconds`, and `DisableApplyPatch`, then
 registers a declarative list of builtin providers for file, chunked write,
-shell, and search tool families.
+shell, and search tool families. Callers that need custom composition can
+append to `tools.DefaultBuiltinProviders()` and pass the result through
+`BuiltinOptions.Providers`.
 `WorkDir` injects the default workspace so `read`, `write`, `edit`, and
 `apply_patch` resolve relative paths against the agent workspace, and
 `exec_command` / `grep` fall back to it when the model does not pass an

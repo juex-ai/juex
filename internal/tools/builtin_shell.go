@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-type shellToolProvider struct{}
+type ShellToolProvider struct{}
 
-func (shellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
+func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
 		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions, ctx.ToolTimeoutSeconds),
 		writeStdinTool(ctx.ShellSessions),

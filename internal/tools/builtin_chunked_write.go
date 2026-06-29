@@ -1,8 +1,8 @@
 package tools
 
-type chunkedWriteToolProvider struct{}
+type ChunkedWriteToolProvider struct{}
 
-func (chunkedWriteToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
+func (ChunkedWriteToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	manager := newChunkWriteManager(ctx.WorkDir)
 	return []Tool{
 		writeBeginTool(manager),

@@ -105,6 +105,27 @@ func TestRegisterBuiltinsCanUseCustomProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultBuiltinProvidersCanBeComposed(t *testing.T) {
+	r := NewRegistry()
+	providers := append(DefaultBuiltinProviders(), builtinProviderFunc(func(ctx BuiltinProviderContext) []Tool {
+		return []Tool{{
+			Name:   "custom_builtin",
+			Schema: map[string]any{"type": "object"},
+			Handler: func(ctx context.Context, in map[string]any) (string, error) {
+				return "ok", nil
+			},
+		}}
+	}))
+
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: t.TempDir(), Providers: providers})
+	if _, ok := r.Get("read"); !ok {
+		t.Fatal("default builtin providers should still be registered")
+	}
+	if _, ok := r.Get("custom_builtin"); !ok {
+		t.Fatal("custom provider tool was not registered")
+	}
+}
+
 func TestBuiltins_ExecCommandUsesConfiguredProfileAndWorkdir(t *testing.T) {
 	r := NewRegistry()
 	workDir := t.TempDir()

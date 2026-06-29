@@ -10,9 +10,9 @@ import (
 	"strings"
 )
 
-type searchToolProvider struct{}
+type SearchToolProvider struct{}
 
-func (searchToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
+func (SearchToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{grepTool(ctx.WorkDir)}
 }
 

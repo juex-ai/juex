@@ -36,11 +36,13 @@ type BuiltinProviderContext struct {
 	Options            BuiltinOptions
 }
 
-var defaultBuiltinProviders = []BuiltinProvider{
-	fileToolProvider{},
-	chunkedWriteToolProvider{},
-	shellToolProvider{},
-	searchToolProvider{},
+func DefaultBuiltinProviders() []BuiltinProvider {
+	return []BuiltinProvider{
+		FileToolProvider{},
+		ChunkedWriteToolProvider{},
+		ShellToolProvider{},
+		SearchToolProvider{},
+	}
 }
 
 // RegisterBuiltins adds the default builtin tool set.
@@ -52,7 +54,7 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	ctx := newBuiltinProviderContext(r, opts)
 	providers := opts.Providers
 	if len(providers) == 0 {
-		providers = defaultBuiltinProviders
+		providers = DefaultBuiltinProviders()
 	}
 	for _, provider := range providers {
 		for _, tool := range provider.Tools(ctx) {

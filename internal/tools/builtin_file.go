@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-type fileToolProvider struct{}
+type FileToolProvider struct{}
 
-func (fileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
+func (FileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	out := []Tool{
 		readTool(ctx.WorkDir),
 		writeTool(ctx.WorkDir),
