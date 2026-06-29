@@ -21,6 +21,12 @@ func registerTestBuiltins(r *Registry, workDir string) {
 	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile()})
 }
 
+type builtinProviderFunc func(BuiltinProviderContext) []Tool
+
+func (f builtinProviderFunc) Tools(ctx BuiltinProviderContext) []Tool {
+	return f(ctx)
+}
+
 func pwdCommand() string {
 	if runtime.GOOS == "windows" {
 		return "cd"
@@ -38,6 +44,64 @@ func TestRegistry_RegisterDuplicate(t *testing.T) {
 	}
 	if err := r.Register(tool); err == nil {
 		t.Fatal("expected duplicate error")
+	}
+}
+
+func TestRegisterBuiltinsDefaultProviderToolSet(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+
+	var names []string
+	for _, tool := range r.List() {
+		names = append(names, tool.Name)
+	}
+	want := []string{
+		"apply_patch",
+		"edit",
+		"exec_command",
+		"grep",
+		"read",
+		"write",
+		"write_abort",
+		"write_begin",
+		"write_chunk",
+		"write_commit",
+		"write_stdin",
+	}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("builtin tools = %v, want %v", names, want)
+	}
+}
+
+func TestRegisterBuiltinsCanUseCustomProviders(t *testing.T) {
+	r := NewRegistry()
+	workDir := t.TempDir()
+	var gotCtx BuiltinProviderContext
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir: workDir,
+		Providers: []BuiltinProvider{builtinProviderFunc(func(ctx BuiltinProviderContext) []Tool {
+			gotCtx = ctx
+			return []Tool{{
+				Name:   "custom_builtin",
+				Schema: map[string]any{"type": "object"},
+				Handler: func(ctx context.Context, in map[string]any) (string, error) {
+					return "ok", nil
+				},
+			}}
+		})},
+	})
+
+	if gotCtx.WorkDir != workDir {
+		t.Fatalf("context workdir = %q, want %q", gotCtx.WorkDir, workDir)
+	}
+	if gotCtx.Shell.Binary == "" {
+		t.Fatal("custom provider should receive default shell profile")
+	}
+	if _, ok := r.Get("custom_builtin"); !ok {
+		t.Fatal("custom provider tool was not registered")
+	}
+	if _, ok := r.Get("read"); ok {
+		t.Fatal("default builtin tools should not register when custom providers are supplied")
 	}
 }
 
