@@ -61,6 +61,11 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	if !opts.DisableApplyPatch {
 		r.MustRegister(applyPatchTool(workDir))
 	}
+	chunkWrites := newChunkWriteManager(workDir)
+	r.MustRegister(writeBeginTool(chunkWrites))
+	r.MustRegister(writeChunkTool(chunkWrites))
+	r.MustRegister(writeCommitTool(chunkWrites))
+	r.MustRegister(writeAbortTool(chunkWrites))
 	r.MustRegister(execCommandTool(workDir, shell, shellSessions, toolTimeoutSeconds))
 	r.MustRegister(writeStdinTool(shellSessions))
 	r.MustRegister(grepTool(workDir))

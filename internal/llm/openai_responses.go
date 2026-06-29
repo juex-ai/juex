@@ -166,7 +166,7 @@ func toOpenAIResponseInputWithOptions(history []Message, profile ProviderProfile
 			case BlockToolUse:
 				out = appendResponseTextMessage(out, m.Role, textParts)
 				textParts = nil
-				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.Input), b.ToolUseID, b.ToolName))
+				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.ToolName, b.Input), b.ToolUseID, b.ToolName))
 			case BlockToolResult:
 				out = appendResponseTextMessage(out, m.Role, textParts)
 				textParts = nil

@@ -78,7 +78,8 @@ juex/
 │   ├── tools/                    # tool registry + builtin tools
 │   │   ├── registry.go
 │   │   ├── builtin.go
-│   │   └── apply_patch.go
+│   │   ├── apply_patch.go
+│   │   └── chunked_write.go
 │   ├── mcp/                      # stdio JSON-RPC 2.0 client, config, process manager
 │   │   ├── config.go
 │   │   ├── client.go
@@ -317,10 +318,13 @@ streaming response has already started, with a small context-aware backoff
 between attempts; semantic stream events such as `response.failed` are returned
 without retry.
 Provider adapters share a canonical projection helper before they encode SDK
-requests. The helper compacts history, validates provider-visible tool-call
-transcripts, filters tool and reasoning replay blocks through capability gates,
-supports Codex's reasoning-omit path, normalizes function parameter schemas,
-and round-trips tool-call argument JSON fallbacks. Adapters still own
+requests. The runtime also applies the same provider-visible tool input
+projection before invoking any provider implementation. The helper compacts
+history, validates provider-visible tool-call transcripts, filters tool and
+reasoning replay blocks through capability gates, supports Codex's
+reasoning-omit path, normalizes function parameter schemas, summarizes
+content-heavy `write_chunk` inputs by size and SHA-256 hash, and round-trips
+tool-call argument JSON fallbacks. Adapters still own
 protocol-specific SDK request structs, content-block shapes, cache-control
 placement, and response decoding. Session repair remains outside provider
 adapters: malformed persisted transcripts are repaired by the session/runtime
@@ -383,6 +387,7 @@ with the standard `read` builtin against the path printed there.
 | `write` | overwrite file |
 | `edit` | old -> new in-place replace; unique by default, optional replace_all / expected_replacements |
 | `apply_patch` | structured patch edits with add / update / delete / move, whole-patch validation, workspace path checks, and compact results |
+| `write_begin` / `write_chunk` / `write_commit` / `write_abort` | chunked full-file writes for long generated files, with bounded chunks, idempotent chunk replay, optional SHA-256 validation, abort, and temporary-file commit |
 | `exec_command` | run a command through the resolved workspace shell (workdir defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
 | `write_stdin` | poll a running command session or write `chars` to a TTY session using the numeric `session_id` returned by `exec_command` |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
@@ -396,6 +401,11 @@ with the standard `read` builtin against the path printed there.
 `apply_patch` resolve relative paths against the agent workspace, and
 `exec_command` / `grep` fall back to it when the model does not pass an
 explicit `workdir` / `path`.
+The chunked write manager is in-memory per registry instance. Successful
+`write_chunk` calls return compact acknowledgements and never echo the chunk
+body; provider-visible history replaces the chunk body with size and SHA-256
+metadata, while the durable conversation log still preserves the original
+assistant tool-use input for replay and debugging.
 Tool hard timeouts are runtime policy rather than model-visible parameters.
 The registry applies a per-call timeout context from its default policy or from
 an individual tool's registration metadata, caps it at 300 seconds, and leaves
@@ -1311,7 +1321,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
-| `tools` | registry duplicate, read/write/edit/apply_patch/grep/exec_command/write_stdin, regex grep, command timeout/session yield, default WorkDir |
+| `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin, regex grep, command timeout/session yield, default WorkDir |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |

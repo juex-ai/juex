@@ -28,7 +28,7 @@ Juex is a single-binary Go agent runtime. It currently includes:
 - a React web UI served by `juex serve`
 - Anthropic and OpenAI-compatible providers through official SDKs
 - builtin tools: `read`, `write`, `edit`, `apply_patch`, `grep`,
-  `exec_command`, `write_stdin`, and memory tools
+  `exec_command`, `write_stdin`, chunked write tools, and memory tools
 - an MCP stdio client that registers tools as `mcp__<server>__<tool>`
 - skills loaded from `.agents/skills/<name>/SKILL.md`
 - work-local runtime state under `.juex/`
