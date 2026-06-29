@@ -18,6 +18,7 @@ type BuiltinOptions struct {
 	Shell              ShellProfile
 	ShellSessions      *ShellSessionManager
 	ToolTimeoutSeconds int
+	DisableApplyPatch  bool
 }
 
 type ShellProfile struct {
@@ -29,7 +30,7 @@ type ShellProfile struct {
 	HostPathStyle string
 }
 
-// RegisterBuiltins adds the builtin tool set: read / write / edit / exec_command / write_stdin / grep.
+// RegisterBuiltins adds the builtin tool set: read / write / edit / apply_patch / exec_command / write_stdin / grep.
 //
 // workDir is the default working directory used for relative file paths and
 // for exec_command / grep calls without an explicit workdir / path. Pass "" to fall back
@@ -57,6 +58,9 @@ func RegisterBuiltins(r *Registry, opts BuiltinOptions) {
 	r.MustRegister(readTool(workDir))
 	r.MustRegister(writeTool(workDir))
 	r.MustRegister(editTool(workDir))
+	if !opts.DisableApplyPatch {
+		r.MustRegister(applyPatchTool(workDir))
+	}
 	r.MustRegister(execCommandTool(workDir, shell, shellSessions, toolTimeoutSeconds))
 	r.MustRegister(writeStdinTool(shellSessions))
 	r.MustRegister(grepTool(workDir))

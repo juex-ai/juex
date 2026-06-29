@@ -7,7 +7,7 @@
 //   - Skill loading (path appears in system prompt; model loads body via `read`)
 //   - Work-local memory entries -> system prompt + memory_write/search round-trip
 //   - MCP stdio client -> registered as mcp__<server>__<tool> in the registry
-//   - Builtin tools end-to-end: write, read, edit, grep, exec_command
+//   - Builtin tools end-to-end: write, read, edit, apply_patch, grep, exec_command
 //   - Parallel tool calls in a single response
 //   - Event emission landing in events.jsonl
 //   - Conversation messages landing in conversation.jsonl
@@ -82,7 +82,7 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 		for _, t := range tools {
 			toolNames[t.Name] = true
 		}
-		for _, want := range []string{"read", "write", "edit", "exec_command", "write_stdin", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
+		for _, want := range []string{"read", "write", "edit", "apply_patch", "exec_command", "write_stdin", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
 			if !toolNames[want] {
 				p.t.Errorf("tool %q missing from registry; have %v", want, keys(toolNames))
 			}
@@ -514,6 +514,106 @@ func TestEndToEnd_ToolFailureLedgerRecordsAndStalesWithoutContinuation(t *testin
 	for _, want := range []string{"recoverable", "artifact.txt", "check_ready"} {
 		if !strings.Contains(payloadText.String(), want) {
 			t.Fatalf("event payloads missing %q:\n%s", want, payloadText.String())
+		}
+	}
+}
+
+func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
+	work := t.TempDir()
+	target := filepath.Join(work, "demo.txt")
+	if err := os.WriteFile(target, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	bus := events.NewBus()
+	sess.SubscribeBus(bus)
+	reg := tools.NewRegistry()
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: work, Shell: tools.DefaultShellProfile()})
+
+	patchText := strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: demo.txt",
+		"@@",
+		" alpha",
+		"-beta",
+		"+PATCHED",
+		" gamma",
+		"*** Add File: notes/result.txt",
+		"+patch flow complete",
+		"*** End Patch",
+	}, "\n")
+	prov := &bareScriptProvider{
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "patch_1", ToolName: "apply_patch", Input: map[string]any{"patch_text": patchText}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: patch applied"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	eng := &runtime.Engine{
+		Provider: prov,
+		Tools:    reg,
+		Bus:      bus,
+		Session:  sess,
+		Prompt: &prompt.Builder{
+			AgentsMDDirs: []string{work},
+			Now:          func() time.Time { return time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC) },
+		},
+	}
+
+	out, err := eng.Turn(context.Background(), "apply the patch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "TASK COMPLETE: patch applied" {
+		t.Fatalf("out = %q", out)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "alpha\nPATCHED\ngamma\n" {
+		t.Fatalf("demo.txt data=%q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(work, "notes", "result.txt")); err != nil || string(data) != "patch flow complete\n" {
+		t.Fatalf("notes/result.txt data=%q err=%v", data, err)
+	}
+
+	convLines := readLines(t, filepath.Join(sess.Dir, "conversation.jsonl"))
+	convText := strings.Join(convLines, "\n")
+	for _, want := range []string{"apply_patch", "applied patch", "add=1", "update=1"} {
+		if !strings.Contains(convText, want) {
+			t.Fatalf("conversation missing %q:\n%s", want, convText)
+		}
+	}
+	var toolResultText string
+	for _, line := range convLines {
+		var msg llm.Message
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockToolResult && block.ToolUseID == "patch_1" {
+				toolResultText = block.Content
+			}
+		}
+	}
+	if toolResultText == "" {
+		t.Fatalf("missing apply_patch tool result in conversation:\n%s", convText)
+	}
+	if strings.Contains(toolResultText, "patch flow complete") || strings.Contains(toolResultText, "*** Begin Patch") {
+		t.Fatalf("tool result should not echo full patch text:\n%s", toolResultText)
+	}
+	eventsText := strings.Join(readLines(t, filepath.Join(sess.Dir, "events.jsonl")), "\n")
+	for _, want := range []string{"tool.requested", "tool.completed", "apply_patch"} {
+		if !strings.Contains(eventsText, want) {
+			t.Fatalf("events missing %q:\n%s", want, eventsText)
 		}
 	}
 }

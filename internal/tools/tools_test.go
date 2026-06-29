@@ -560,6 +560,265 @@ func TestBuiltins_FileToolsResolveRelativePathsFromWorkDir(t *testing.T) {
 	}
 }
 
+func TestRegisterBuiltinsApplyPatchSchemaAndDisable(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+	tool, ok := r.Get("apply_patch")
+	if !ok {
+		t.Fatal("apply_patch should be registered by default")
+	}
+	props, ok := tool.Schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %+v", tool.Schema["properties"])
+	}
+	if _, ok := props["patch_text"]; !ok {
+		t.Fatalf("patch_text property missing from schema: %+v", props)
+	}
+	required, ok := tool.Schema["required"].([]string)
+	if !ok || len(required) != 1 || required[0] != "patch_text" {
+		t.Fatalf("required = %+v, want [patch_text]", tool.Schema["required"])
+	}
+
+	disabled := NewRegistry()
+	RegisterBuiltins(disabled, BuiltinOptions{WorkDir: t.TempDir(), Shell: DefaultShellProfile(), DisableApplyPatch: true})
+	if _, ok := disabled.Get("apply_patch"); ok {
+		t.Fatal("apply_patch should be omitted when DisableApplyPatch is set")
+	}
+}
+
+func TestBuiltins_ApplyPatchAddUpdateDeleteMove(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "src.txt"), []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "delete.txt"), []byte("remove me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "move.txt"), []byte("old name\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: notes/new.txt",
+		"+line one",
+		"+line two",
+		"*** Update File: src.txt",
+		"@@",
+		" alpha",
+		"-beta",
+		"+BETTER",
+		" gamma",
+		"*** Update File: move.txt",
+		"*** Move to: moved/renamed.txt",
+		"@@",
+		"-old name",
+		"+new name",
+		"*** Delete File: delete.txt",
+		"*** End Patch",
+	}, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"applied patch", "add=1", "update=2", "delete=1", "move=1", "notes/new.txt", "src.txt", "moved/renamed.txt"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("apply_patch output = %q, want substring %q", out, want)
+		}
+	}
+	if data := mustReadFile(t, filepath.Join(workDir, "notes", "new.txt")); string(data) != "line one\nline two\n" {
+		t.Fatalf("new file = %q", data)
+	}
+	if data := mustReadFile(t, filepath.Join(workDir, "src.txt")); string(data) != "alpha\nBETTER\ngamma\n" {
+		t.Fatalf("updated file = %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "delete.txt")); !os.IsNotExist(err) {
+		t.Fatalf("delete.txt should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "move.txt")); !os.IsNotExist(err) {
+		t.Fatalf("move.txt should be removed after move, stat err=%v", err)
+	}
+	if data := mustReadFile(t, filepath.Join(workDir, "moved", "renamed.txt")); string(data) != "new name\n" {
+		t.Fatalf("moved file = %q", data)
+	}
+}
+
+func TestBuiltins_ApplyPatchMissingContextPreservesFile(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "src.txt")
+	original := "one\ntwo\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: src.txt",
+		"@@",
+		" three",
+		"-missing",
+		"+replacement",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "context not found") {
+		t.Fatalf("err = %v, want context not found", err)
+	}
+	if data := mustReadFile(t, target); string(data) != original {
+		t.Fatalf("file changed after failed patch: %q", data)
+	}
+}
+
+func TestBuiltins_ApplyPatchAmbiguousContextPreservesFile(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "src.txt")
+	original := "repeat\nx\nrepeat\nx\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: src.txt",
+		"@@",
+		" repeat",
+		"-x",
+		"+y",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "ambiguous context") {
+		t.Fatalf("err = %v, want ambiguous context", err)
+	}
+	if data := mustReadFile(t, target); string(data) != original {
+		t.Fatalf("file changed after failed patch: %q", data)
+	}
+}
+
+func TestBuiltins_ApplyPatchRejectsUnsafePath(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: ../escape.txt",
+		"+nope",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "unsafe path") {
+		t.Fatalf("err = %v, want unsafe path", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(workDir), "escape.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("escape file should not exist, stat err=%v", statErr)
+	}
+}
+
+func TestBuiltins_ApplyPatchRejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink privileges vary on Windows")
+	}
+	workDir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(workDir, "link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: link/escape.txt",
+		"+nope",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "symlink escapes workspace") {
+		t.Fatalf("err = %v, want symlink escape error", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "escape.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("escape file should not exist outside workspace, stat err=%v", statErr)
+	}
+}
+
+func TestBuiltins_ApplyPatchRejectsMalformedPatch(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Add File: a.txt",
+		"+missing envelope",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "must start with") {
+		t.Fatalf("err = %v, want missing begin patch error", err)
+	}
+}
+
+func TestBuiltins_ApplyPatchRejectsDuplicateOperationsBeforeWriting(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: a.txt",
+		"+first",
+		"*** Add File: a.txt",
+		"+second",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "duplicate operation") {
+		t.Fatalf("err = %v, want duplicate operation", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workDir, "a.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("a.txt should not exist after failed patch, stat err=%v", statErr)
+	}
+}
+
+func TestBuiltins_ApplyPatchValidatesWholePatchBeforeWriting(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "src.txt")
+	if err := os.WriteFile(target, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: created.txt",
+		"+created",
+		"*** Update File: src.txt",
+		"@@",
+		" missing",
+		"-line",
+		"+replacement",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "context not found") {
+		t.Fatalf("err = %v, want context not found", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workDir, "created.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("created.txt should not exist after validation failure, stat err=%v", statErr)
+	}
+	if data := mustReadFile(t, target); string(data) != "one\ntwo\n" {
+		t.Fatalf("src.txt changed after failed patch: %q", data)
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestBuiltins_RelativeWorkDirIsCapturedAsAbsolute(t *testing.T) {
 	base := t.TempDir()
 	workDir := filepath.Join(base, "workspace")
@@ -1297,7 +1556,7 @@ func TestSpecs_OrderedAndComplete(t *testing.T) {
 	for i, s := range specs {
 		names[i] = s.Name
 	}
-	want := []string{"edit", "exec_command", "grep", "read", "write", "write_stdin"}
+	want := []string{"apply_patch", "edit", "exec_command", "grep", "read", "write", "write_stdin"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("want %v, got %v", want, names)
 	}
