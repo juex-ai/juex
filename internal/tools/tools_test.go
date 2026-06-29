@@ -644,6 +644,52 @@ func TestBuiltins_ApplyPatchAddUpdateDeleteMove(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ApplyPatchTrimsEnvelopeWhitespace(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "src.txt")
+	if err := os.WriteFile(target, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": "\n \t*** Begin Patch\n*** Update File: src.txt\n@@\n-one\n+ONE\n two\n*** End Patch\n\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data := mustReadFile(t, target); string(data) != "ONE\ntwo\n" {
+		t.Fatalf("updated file = %q", data)
+	}
+}
+
+func TestBuiltins_ApplyPatchTreatsBlankUpdateLinesAsContext(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "src.txt")
+	if err := os.WriteFile(target, []byte("alpha\n\nbeta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: src.txt",
+		"@@",
+		" alpha",
+		"",
+		"-beta",
+		"+BETA",
+		"",
+		"*** End Patch",
+	}, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data := mustReadFile(t, target); string(data) != "alpha\n\nBETA\n" {
+		t.Fatalf("updated file = %q", data)
+	}
+}
+
 func TestBuiltins_ApplyPatchMissingContextPreservesFile(t *testing.T) {
 	workDir := t.TempDir()
 	target := filepath.Join(workDir, "src.txt")
@@ -703,14 +749,24 @@ func TestBuiltins_ApplyPatchRejectsUnsafePath(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, workDir)
 
-	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
-		"*** Begin Patch",
-		"*** Add File: ../escape.txt",
-		"+nope",
-		"*** End Patch",
-	}, "\n")})
-	if err == nil || !strings.Contains(err.Error(), "unsafe path") {
-		t.Fatalf("err = %v, want unsafe path", err)
+	unsafePatches := map[string]string{
+		"parent escape": "../escape.txt",
+		"windows drive": "C:/escape.txt",
+		"unc slash":     "//server/share/escape.txt",
+		"unc backslash": `\\server\share\escape.txt`,
+	}
+	for name, unsafePath := range unsafePatches {
+		t.Run(name, func(t *testing.T) {
+			_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+				"*** Begin Patch",
+				"*** Add File: " + unsafePath,
+				"+nope",
+				"*** End Patch",
+			}, "\n")})
+			if err == nil || !strings.Contains(err.Error(), "unsafe path") {
+				t.Fatalf("err = %v, want unsafe path", err)
+			}
+		})
 	}
 	if _, statErr := os.Stat(filepath.Join(filepath.Dir(workDir), "escape.txt")); !os.IsNotExist(statErr) {
 		t.Fatalf("escape file should not exist, stat err=%v", statErr)

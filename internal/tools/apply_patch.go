@@ -125,11 +125,8 @@ func applyPatch(ctx context.Context, workDir, patchText string) (patchSummary, e
 }
 
 func parsePatch(patchText string) ([]patchOperation, error) {
-	text := strings.ReplaceAll(patchText, "\r\n", "\n")
+	text := strings.TrimSpace(strings.ReplaceAll(patchText, "\r\n", "\n"))
 	lines := strings.Split(text, "\n")
-	for len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
 	if len(lines) < 2 || lines[0] != patchHeader || lines[len(lines)-1] != patchFooter {
 		return nil, fmt.Errorf("apply_patch: patch must start with %q and end with %q", patchHeader, patchFooter)
 	}
@@ -164,7 +161,13 @@ func parsePatch(patchText string) ([]patchOperation, error) {
 					continue
 				}
 				if lines[i] == "" {
-					return nil, fmt.Errorf("apply_patch: update file %q has unprefixed empty line; use one of space/+/- prefixes", path)
+					if i+1 >= len(lines)-1 || strings.HasPrefix(lines[i+1], "*** ") {
+						i++
+						continue
+					}
+					op.lines = append(op.lines, patchLine{kind: ' ', text: ""})
+					i++
+					continue
 				}
 				prefix := lines[i][0]
 				if prefix != ' ' && prefix != '+' && prefix != '-' {
@@ -211,6 +214,9 @@ func newPatchWorkspace(workDir string) (patchWorkspace, error) {
 func (w patchWorkspace) resolve(path string) (string, string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", "", fmt.Errorf("apply_patch: unsafe path %q", path)
+	}
+	if strings.Contains(path, ":") || strings.HasPrefix(path, `\\`) || strings.HasPrefix(path, "//") {
+		return "", "", fmt.Errorf("apply_patch: unsafe path %q: colons and UNC paths are not allowed", path)
 	}
 	path = filepath.FromSlash(path)
 	if filepath.IsAbs(path) {
@@ -476,7 +482,9 @@ func applyPatchChanges(changes []patchChange) error {
 		return err
 	}
 	if err := writePatchChanges(changes); err != nil {
-		_ = rollbackPatchChanges(snapshots)
+		if rollbackErr := rollbackPatchChanges(snapshots); rollbackErr != nil {
+			return fmt.Errorf("apply_patch: write failed: %w (rollback also failed: %v)", err, rollbackErr)
+		}
 		return err
 	}
 	return nil
