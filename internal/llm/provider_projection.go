@@ -196,7 +196,7 @@ func summarizeWriteChunkInput(input map[string]any) map[string]any {
 	}
 	sum := sha256.Sum256([]byte(content))
 	out["content_omitted"] = true
-	out["content_bytes"] = len([]byte(content))
+	out["content_bytes"] = len(content)
 	out["content_chars"] = len([]rune(content))
 	out["content_sha256"] = hex.EncodeToString(sum[:])
 	return out

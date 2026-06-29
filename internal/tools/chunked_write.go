@@ -219,6 +219,11 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cleanupExpiredLocked(now)
+	for _, active := range m.sessions {
+		if active.abs == abs {
+			return nil, fmt.Errorf("write_begin: a write session is already active for %s", rel)
+		}
+	}
 	m.sessions[id] = session
 	return session, nil
 }
@@ -230,7 +235,9 @@ func (m *chunkWriteManager) chunk(writeID string, index int, content, expectedHa
 	if index < 0 {
 		return chunkWriteChunk{}, false, 0, fmt.Errorf("write_chunk: index must be non-negative")
 	}
-	if len([]byte(content)) > chunkWriteMaxChunkBytes || utf8.RuneCountInString(content) > chunkWriteMaxChunkChars {
+	contentBytes := len(content)
+	contentChars := utf8.RuneCountInString(content)
+	if contentBytes > chunkWriteMaxChunkBytes || contentChars > chunkWriteMaxChunkChars {
 		return chunkWriteChunk{}, false, 0, fmt.Errorf("write_chunk: content exceeds max chunk limits")
 	}
 	hash := sha256Hex([]byte(content))
@@ -240,8 +247,8 @@ func (m *chunkWriteManager) chunk(writeID string, index int, content, expectedHa
 	chunk := chunkWriteChunk{
 		content: content,
 		hash:    hash,
-		bytes:   len([]byte(content)),
-		chars:   utf8.RuneCountInString(content),
+		bytes:   contentBytes,
+		chars:   contentChars,
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -285,7 +292,7 @@ func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedH
 	}
 	delete(m.sessions, writeID)
 	m.mu.Unlock()
-	if err := commitChunkWriteFile(session.abs, []byte(content), session.fileMode); err != nil {
+	if err := commitChunkWriteFile(session.abs, content, session.fileMode); err != nil {
 		m.mu.Lock()
 		m.sessions[writeID] = session
 		m.mu.Unlock()
@@ -339,12 +346,18 @@ func assembleChunkWriteContent(session *chunkWriteSession, expectedChunks int, e
 	if expectedChunks >= 0 && expectedChunks != chunkCount {
 		return "", chunkWriteCommitResult{}, fmt.Errorf("write_commit: expected_chunks=%d but recorded chunks=%d", expectedChunks, chunkCount)
 	}
-	var b strings.Builder
+	totalBytes := 0
 	for i := 0; i < chunkCount; i++ {
 		chunk, ok := session.chunks[i]
 		if !ok {
 			return "", chunkWriteCommitResult{}, fmt.Errorf("write_commit: missing chunk %d", i)
 		}
+		totalBytes += chunk.bytes
+	}
+	var b strings.Builder
+	b.Grow(totalBytes)
+	for i := 0; i < chunkCount; i++ {
+		chunk := session.chunks[i]
 		b.WriteString(chunk.content)
 	}
 	content := b.String()
@@ -354,14 +367,14 @@ func assembleChunkWriteContent(session *chunkWriteSession, expectedChunks int, e
 	}
 	return content, chunkWriteCommitResult{
 		rel:    session.rel,
-		bytes:  len([]byte(content)),
+		bytes:  len(content),
 		chars:  utf8.RuneCountInString(content),
 		chunks: chunkCount,
 		hash:   hash,
 	}, nil
 }
 
-func commitChunkWriteFile(path string, content []byte, mode os.FileMode) error {
+func commitChunkWriteFile(path string, content string, mode os.FileMode) error {
 	if mode == 0 {
 		mode = 0o644
 	}
@@ -380,7 +393,7 @@ func commitChunkWriteFile(path string, content []byte, mode os.FileMode) error {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	if _, err := tmp.Write(content); err != nil {
+	if _, err := tmp.WriteString(content); err != nil {
 		_ = tmp.Close()
 		return err
 	}

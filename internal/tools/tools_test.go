@@ -1052,6 +1052,26 @@ func TestBuiltins_ChunkedWriteStaleSession(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ChunkedWriteRejectsConcurrentTargetSession(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"}); err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("second begin err = %v, want already active", err)
+	}
+	if _, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"}); err != nil {
+		t.Fatalf("begin after abort: %v", err)
+	}
+}
+
 func TestBuiltins_ChunkedWriteRejectsUnsafePath(t *testing.T) {
 	workDir := t.TempDir()
 	r := NewRegistry()
