@@ -1980,23 +1980,59 @@ func assertEmptyProperties(t *testing.T, schema map[string]any) {
 }
 
 func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
-	if got := toolCallArguments(nil); got != "{}" {
+	if got := toolCallArguments("", nil); got != "{}" {
 		t.Fatalf("nil arguments = %q, want {}", got)
 	}
-	if got := toolCallArguments(map[string]any{"path": "x"}); got != `{"path":"x"}` {
+	if got := toolCallArguments("", map[string]any{"path": "x"}); got != `{"path":"x"}` {
 		t.Fatalf("map arguments = %q", got)
 	}
-	if got := toolCallArguments(map[string]any{"_raw_arguments": `{"path":"x"}`}); got != `{"path":"x"}` {
+	if got := toolCallArguments("", map[string]any{"_raw_arguments": `{"path":"x"}`}); got != `{"path":"x"}` {
 		t.Fatalf("decoded raw arguments = %q, want structured path", got)
 	}
-	if got := toolCallArguments(map[string]any{"_raw_arguments": `{"path":"unterminated`}); got != "{}" {
+	if got := toolCallArguments("", map[string]any{"_raw_arguments": `{"path":"unterminated`}); got != "{}" {
 		t.Fatalf("malformed raw arguments = %q, want sanitized empty object", got)
 	}
-	if got := toolCallArguments(map[string]any{"_raw_arguments": `null`}); got != "{}" {
+	if got := toolCallArguments("", map[string]any{"_raw_arguments": `null`}); got != "{}" {
 		t.Fatalf("null raw arguments = %q, want sanitized empty object", got)
 	}
-	if got := toolCallArguments(map[string]any{"_raw_arguments": `"null"`}); got != "{}" {
+	if got := toolCallArguments("", map[string]any{"_raw_arguments": `"null"`}); got != "{}" {
 		t.Fatalf("encoded null raw arguments = %q, want sanitized empty object", got)
+	}
+}
+
+func TestProjectProviderTranscriptSummarizesWriteChunkContent(t *testing.T) {
+	history := []Message{{
+		Role: RoleAssistant,
+		Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "chunk_1",
+			ToolName:  "write_chunk",
+			Input: map[string]any{
+				"write_id": "write-abc",
+				"index":    2,
+				"content":  strings.Repeat("x", 128),
+				"sha256":   "abc123",
+			},
+		}},
+	}}
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	input := projected[0].Blocks[0].Input
+	if _, ok := input["content"]; ok {
+		t.Fatalf("projected write_chunk input kept content: %+v", input)
+	}
+	if input["write_id"] != "write-abc" || input["index"] != 2 {
+		t.Fatalf("projected input lost metadata: %+v", input)
+	}
+	if input["content_omitted"] != true || input["content_bytes"] != 128 || input["content_sha256"] == "" {
+		t.Fatalf("projected input missing content summary: %+v", input)
+	}
+	if history[0].Blocks[0].Input["content"] == nil {
+		t.Fatalf("projection mutated original history: %+v", history[0].Blocks[0].Input)
+	}
+	if input := ProviderToolInput("other_tool", map[string]any{"write_id": "x", "index": 0, "content": "keep"}); input["content"] != "keep" {
+		t.Fatalf("non-write_chunk input should keep content: %+v", input)
 	}
 }
 

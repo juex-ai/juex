@@ -90,12 +90,36 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 		if err != nil {
 			return nil, total, err
 		}
+		projected = projectToolUseInputsForProvider(projected)
 		out[i] = projected
 		total.UserInputsExternalized += stats.UserInputsExternalized
 		total.ToolResultsExternalized += stats.ToolResultsExternalized
 		total.BytesExternalized += stats.BytesExternalized
 	}
 	return out, total, nil
+}
+
+func projectToolUseInputsForProvider(msg llm.Message) llm.Message {
+	var cloned []llm.Block
+	for i, block := range msg.Blocks {
+		if block.Type != llm.BlockToolUse {
+			if cloned != nil {
+				cloned = append(cloned, block)
+			}
+			continue
+		}
+		projectedInput := llm.ProviderToolInput(block.ToolName, block.Input)
+		if cloned == nil {
+			cloned = make([]llm.Block, i, len(msg.Blocks))
+			copy(cloned, msg.Blocks[:i])
+		}
+		block.Input = projectedInput
+		cloned = append(cloned, block)
+	}
+	if cloned != nil {
+		msg.Blocks = cloned
+	}
+	return msg
 }
 
 func stripRedactedReasoningForProviderBudget(systemPrompt string, tools []llm.ToolSpec, msgs []llm.Message, policy compactionPolicy) ([]llm.Message, projectionStats) {

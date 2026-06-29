@@ -174,7 +174,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 						ID: b.ToolUseID,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      b.ToolName,
-							Arguments: toolCallArguments(b.Input),
+							Arguments: toolCallArguments(b.ToolName, b.Input),
 						},
 					})
 				}

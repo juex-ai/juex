@@ -3,6 +3,8 @@ package tools
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -866,6 +868,252 @@ func TestBuiltins_ApplyPatchValidatesWholePatchBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestRegisterBuiltinsChunkedWriteSchema(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+	for _, name := range []string{"write_begin", "write_chunk", "write_commit", "write_abort"} {
+		tool, ok := r.Get(name)
+		if !ok {
+			t.Fatalf("%s should be registered", name)
+		}
+		if tool.Schema["type"] != "object" {
+			t.Fatalf("%s schema = %+v", name, tool.Schema)
+		}
+	}
+}
+
+func TestBuiltins_ChunkedWriteCommitOverwrite(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "long.md")
+	if err := os.WriteFile(target, []byte("old content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "long.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	for index, content := range []string{"alpha\n", "beta\n", "gamma\n"} {
+		out, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": index, "content": content})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, content) {
+			t.Fatalf("chunk result echoed content: %q", out)
+		}
+	}
+	full := "alpha\nbeta\ngamma\n"
+	out, err := r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID, "expected_chunks": 3, "sha256": sha256HexForTest(full)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "write_commit") || !strings.Contains(out, "chunks=3") {
+		t.Fatalf("commit output = %q", out)
+	}
+	if data := mustReadFile(t, target); string(data) != full {
+		t.Fatalf("target = %q", data)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
+	}
+	if _, err := r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID}); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
+		t.Fatalf("commit after success err = %v, want unknown write_id", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteCreateMode(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "new/report.md", "mode": "create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 0, "content": "# Report\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID, "expected_chunks": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if data := mustReadFile(t, filepath.Join(workDir, "new", "report.md")); string(data) != "# Report\n" {
+		t.Fatalf("created file = %q", data)
+	}
+
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "new/report.md", "mode": "create"}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("create existing err = %v, want already exists", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteDuplicateChunkRules(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "dup.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	input := map[string]any{"write_id": writeID, "index": 0, "content": "same", "sha256": sha256HexForTest("same")}
+	if _, err := r.Call(context.Background(), "write_chunk", input); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.Call(context.Background(), "write_chunk", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "duplicate=true") {
+		t.Fatalf("duplicate output = %q, want idempotent duplicate", out)
+	}
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 0, "content": "different"}); err == nil || !strings.Contains(err.Error(), "conflicting duplicate chunk") {
+		t.Fatalf("conflict err = %v, want conflicting duplicate chunk", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteValidationFailuresPreserveTarget(t *testing.T) {
+	workDir := t.TempDir()
+	target := filepath.Join(workDir, "target.txt")
+	original := "original\n"
+	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "target.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 1, "content": "later"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID}); err == nil || !strings.Contains(err.Error(), "missing chunk 0") {
+		t.Fatalf("missing chunk err = %v, want missing chunk 0", err)
+	}
+	if data := mustReadFile(t, target); string(data) != original {
+		t.Fatalf("target changed after missing chunk: %q", data)
+	}
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 0, "content": "first", "sha256": "bad"}); err == nil || !strings.Contains(err.Error(), "chunk checksum mismatch") {
+		t.Fatalf("chunk checksum err = %v, want mismatch", err)
+	}
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 0, "content": "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID, "expected_chunks": 2, "sha256": "bad"}); err == nil || !strings.Contains(err.Error(), "full checksum mismatch") {
+		t.Fatalf("full checksum err = %v, want mismatch", err)
+	}
+	if data := mustReadFile(t, target); string(data) != original {
+		t.Fatalf("target changed after checksum mismatch: %q", data)
+	}
+}
+
+func TestBuiltins_ChunkedWriteAbort(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "aborted.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_chunk", map[string]any{"write_id": writeID, "index": 0, "content": "discard"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil || !strings.Contains(out, "aborted") {
+		t.Fatalf("abort out=%q err=%v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "aborted.txt")); !os.IsNotExist(err) {
+		t.Fatalf("aborted file should not exist, stat err=%v", err)
+	}
+	if _, err := r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID}); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
+		t.Fatalf("commit aborted err = %v, want unknown write_id", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteStaleSession(t *testing.T) {
+	now := time.Date(2026, 6, 29, 12, 0, 0, 0, time.UTC)
+	manager := newChunkWriteManager(t.TempDir())
+	manager.now = func() time.Time { return now }
+
+	session, err := manager.begin("stale.txt", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(chunkWriteSessionTTL + time.Second)
+	if _, _, _, err := manager.chunk(session.id, 0, "late", ""); err == nil || !strings.Contains(err.Error(), "stale write_id") {
+		t.Fatalf("stale chunk err = %v, want stale write_id", err)
+	}
+	if _, _, _, err := manager.chunk(session.id, 0, "late", ""); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
+		t.Fatalf("second stale chunk err = %v, want unknown write_id", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteRejectsConcurrentTargetSession(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"}); err == nil || !strings.Contains(err.Error(), "already active") {
+		t.Fatalf("second begin err = %v, want already active", err)
+	}
+	if _, err := r.Call(context.Background(), "write_abort", map[string]any{"write_id": writeID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "same.txt"}); err != nil {
+		t.Fatalf("begin after abort: %v", err)
+	}
+}
+
+func TestBuiltins_ChunkedWriteRejectsUnsafePath(t *testing.T) {
+	workDir := t.TempDir()
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+	for name, unsafePath := range map[string]string{
+		"parent escape": "../escape.txt",
+		"windows drive": "C:/escape.txt",
+		"unc slash":     "//server/share/escape.txt",
+		"unc backslash": `\\server\share\escape.txt`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": unsafePath}); err == nil || !strings.Contains(err.Error(), "unsafe path") {
+				t.Fatalf("err = %v, want unsafe path", err)
+			}
+		})
+	}
+}
+
+func chunkWriteIDFromResult(t *testing.T, out string) string {
+	t.Helper()
+	const marker = "write_id="
+	start := strings.Index(out, marker)
+	if start < 0 {
+		t.Fatalf("output %q missing write_id", out)
+	}
+	start += len(marker)
+	end := strings.IndexAny(out[start:], " \n")
+	if end < 0 {
+		return out[start:]
+	}
+	return out[start : start+end]
+}
+
+func sha256HexForTest(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -1612,7 +1860,7 @@ func TestSpecs_OrderedAndComplete(t *testing.T) {
 	for i, s := range specs {
 		names[i] = s.Name
 	}
-	want := []string{"apply_patch", "edit", "exec_command", "grep", "read", "write", "write_stdin"}
+	want := []string{"apply_patch", "edit", "exec_command", "grep", "read", "write", "write_abort", "write_begin", "write_chunk", "write_commit", "write_stdin"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("want %v, got %v", want, names)
 	}

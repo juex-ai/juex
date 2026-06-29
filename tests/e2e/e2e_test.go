@@ -82,7 +82,7 @@ func (p *scriptProvider) Complete(ctx context.Context, sys string, hist []llm.Me
 		for _, t := range tools {
 			toolNames[t.Name] = true
 		}
-		for _, want := range []string{"read", "write", "edit", "apply_patch", "exec_command", "write_stdin", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
+		for _, want := range []string{"read", "write", "edit", "apply_patch", "write_begin", "write_chunk", "write_commit", "write_abort", "exec_command", "write_stdin", "grep", "memory_write", "memory_search", "memory_delete", "mcp__local__echo"} {
 			if !toolNames[want] {
 				p.t.Errorf("tool %q missing from registry; have %v", want, keys(toolNames))
 			}
@@ -616,6 +616,159 @@ func TestEndToEnd_ApplyPatchBuiltinFlow(t *testing.T) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
 		}
 	}
+}
+
+func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
+	work := t.TempDir()
+	sess, err := session.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sess.Close() })
+	bus := events.NewBus()
+	sess.SubscribeBus(bus)
+	reg := tools.NewRegistry()
+	tools.RegisterBuiltins(reg, tools.BuiltinOptions{WorkDir: work, Shell: tools.DefaultShellProfile()})
+
+	contentA := strings.Repeat("alpha\n", 80)
+	contentB := strings.Repeat("beta\n", 80)
+	full := contentA + contentB
+	prov := &chunkedWriteProvider{t: t, contentA: contentA, contentB: contentB}
+	eng := &runtime.Engine{
+		Provider: prov,
+		Tools:    reg,
+		Bus:      bus,
+		Session:  sess,
+		Prompt: &prompt.Builder{
+			AgentsMDDirs: []string{work},
+			Now:          func() time.Time { return time.Date(2026, 6, 29, 11, 0, 0, 0, time.UTC) },
+		},
+	}
+
+	out, err := eng.Turn(context.Background(), "write a long report")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "TASK COMPLETE: chunked write applied" {
+		t.Fatalf("out = %q", out)
+	}
+	if data, err := os.ReadFile(filepath.Join(work, "reports", "long.md")); err != nil || string(data) != full {
+		t.Fatalf("long.md len=%d err=%v", len(data), err)
+	}
+	if len(prov.history) < 5 {
+		t.Fatalf("provider calls = %d, want at least 5", len(prov.history))
+	}
+	for _, msg := range prov.history[3] {
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockToolUse && block.ToolName == "write_chunk" {
+				if _, ok := block.Input["content"]; ok {
+					t.Fatalf("provider replay kept chunk content: %+v", block.Input)
+				}
+				if block.Input["content_omitted"] != true {
+					t.Fatalf("provider replay missing content summary: %+v", block.Input)
+				}
+			}
+		}
+	}
+	convText := strings.Join(readLines(t, filepath.Join(sess.Dir, "conversation.jsonl")), "\n")
+	for _, want := range []string{"write_begin", "write_chunk", "write_commit", "chunks=2"} {
+		if !strings.Contains(convText, want) {
+			t.Fatalf("conversation missing %q:\n%s", want, convText)
+		}
+	}
+	for _, forbidden := range []string{contentA, contentB} {
+		if strings.Contains(toolResultsFromConversation(t, convText), forbidden) {
+			t.Fatalf("tool results echoed chunk content")
+		}
+	}
+	eventsText := strings.Join(readLines(t, filepath.Join(sess.Dir, "events.jsonl")), "\n")
+	for _, want := range []string{"tool.requested", "tool.completed", "write_chunk"} {
+		if !strings.Contains(eventsText, want) {
+			t.Fatalf("events missing %q:\n%s", want, eventsText)
+		}
+	}
+}
+
+type chunkedWriteProvider struct {
+	t        *testing.T
+	called   atomic.Int32
+	history  [][]llm.Message
+	contentA string
+	contentB string
+}
+
+func (p *chunkedWriteProvider) Name() string { return "chunked-write-script" }
+
+func (p *chunkedWriteProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	idx := int(p.called.Add(1) - 1)
+	p.history = append(p.history, append([]llm.Message{}, hist...))
+	switch idx {
+	case 0:
+		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "begin_1", ToolName: "write_begin", Input: map[string]any{"path": "reports/long.md", "mode": "create"}},
+		}}, StopReason: llm.StopToolUse}, nil
+	case 1:
+		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "chunk_1", ToolName: "write_chunk", Input: map[string]any{"write_id": chunkWriteIDFromMessages(p.t, hist), "index": 0, "content": p.contentA}},
+		}}, StopReason: llm.StopToolUse}, nil
+	case 2:
+		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "chunk_2", ToolName: "write_chunk", Input: map[string]any{"write_id": chunkWriteIDFromMessages(p.t, hist), "index": 1, "content": p.contentB}},
+		}}, StopReason: llm.StopToolUse}, nil
+	case 3:
+		return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "commit_1", ToolName: "write_commit", Input: map[string]any{"write_id": chunkWriteIDFromMessages(p.t, hist), "expected_chunks": 2}},
+		}}, StopReason: llm.StopToolUse}, nil
+	case 4:
+		return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "TASK COMPLETE: chunked write applied"), StopReason: llm.StopEndTurn}, nil
+	default:
+		return llm.Response{}, fmt.Errorf("chunkedWriteProvider exhausted at call %d", idx)
+	}
+}
+
+func chunkWriteIDFromMessages(t *testing.T, history []llm.Message) string {
+	t.Helper()
+	for _, msg := range history {
+		for _, block := range msg.Blocks {
+			if block.Type != llm.BlockToolResult || block.ToolUseID != "begin_1" {
+				continue
+			}
+			const marker = "write_id="
+			start := strings.Index(block.Content, marker)
+			if start < 0 {
+				t.Fatalf("begin result missing write_id: %q", block.Content)
+			}
+			start += len(marker)
+			end := strings.IndexAny(block.Content[start:], " \n")
+			if end < 0 {
+				return block.Content[start:]
+			}
+			return block.Content[start : start+end]
+		}
+	}
+	t.Fatalf("history missing begin tool result: %+v", history)
+	return ""
+}
+
+func toolResultsFromConversation(t *testing.T, convText string) string {
+	t.Helper()
+	var out strings.Builder
+	for _, line := range strings.Split(convText, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var msg llm.Message
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockToolResult {
+				out.WriteString(block.Content)
+				out.WriteByte('\n')
+			}
+		}
+	}
+	return out.String()
 }
 
 func TestEndToEnd_ToolFailureLedgerWithUserGlobalDisabledDoesNotHardBlock(t *testing.T) {
