@@ -916,8 +916,12 @@ func TestBuiltins_ChunkedWriteCommitOverwrite(t *testing.T) {
 	if data := mustReadFile(t, target); string(data) != full {
 		t.Fatalf("target = %q", data)
 	}
-	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("mode = %v err=%v, want 0600", info.Mode().Perm(), err)
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
 	}
 	if _, err := r.Call(context.Background(), "write_commit", map[string]any{"write_id": writeID}); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
 		t.Fatalf("commit after success err = %v, want unknown write_id", err)
