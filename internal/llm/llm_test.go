@@ -1986,6 +1986,18 @@ func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
 	if got := toolCallArguments(map[string]any{"path": "x"}); got != `{"path":"x"}` {
 		t.Fatalf("map arguments = %q", got)
 	}
+	if got := toolCallArguments(map[string]any{"_raw_arguments": `{"path":"x"}`}); got != `{"path":"x"}` {
+		t.Fatalf("decoded raw arguments = %q, want structured path", got)
+	}
+	if got := toolCallArguments(map[string]any{"_raw_arguments": `{"path":"unterminated`}); got != "{}" {
+		t.Fatalf("malformed raw arguments = %q, want sanitized empty object", got)
+	}
+	if got := toolCallArguments(map[string]any{"_raw_arguments": `null`}); got != "{}" {
+		t.Fatalf("null raw arguments = %q, want sanitized empty object", got)
+	}
+	if got := toolCallArguments(map[string]any{"_raw_arguments": `"null"`}); got != "{}" {
+		t.Fatalf("encoded null raw arguments = %q, want sanitized empty object", got)
+	}
 }
 
 func TestProjectProviderTranscriptGatesToolsAndReasoning(t *testing.T) {

@@ -414,6 +414,39 @@ func TestRegistry_CallWithInfoParsesRawArgumentsBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestRegistry_CallWithInfoRejectsMalformedRawArgumentsBeforeDispatch(t *testing.T) {
+	r := NewRegistry()
+	called := false
+	if err := r.Register(Tool{
+		Name: "echo",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"value": map[string]any{"type": "string"}},
+		},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			called = true
+			return "ok", nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := r.CallWithInfo(context.Background(), "echo", map[string]any{
+		"_raw_arguments": `{"value":"unterminated`,
+	})
+	if err == nil {
+		t.Fatal("expected malformed raw arguments error")
+	}
+	if called {
+		t.Fatal("handler was called for malformed raw arguments")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "provider returned malformed tool arguments") ||
+		!strings.Contains(msg, "retry with smaller/chunked content") {
+		t.Fatalf("error = %q, want provider malformed arguments guidance", msg)
+	}
+}
+
 func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, "")
