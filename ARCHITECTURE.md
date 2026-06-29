@@ -67,6 +67,7 @@ juex/
 │   │   ├── profile.go            # provider presets, protocol, capabilities
 │   │   ├── history.go            # provider transcript compaction
 │   │   ├── provider_projection.go
+│   │   ├── transcript_validation.go # provider-visible tool_use/tool_result validation
 │   │   ├── anthropic.go          # wraps anthropic-sdk-go
 │   │   ├── anthropic_stream_diagnostics.go
 │   │   ├── openai.go             # Chat Completions / compatible chat
@@ -89,6 +90,7 @@ juex/
 │   │   ├── session.go
 │   │   ├── history.go
 │   │   ├── info.go
+│   │   ├── transcript_repair.go
 │   │   └── lock*.go
 │   ├── runtime/                  # turn loop, pending input, compaction, context projection
 │   │   ├── loop.go
@@ -443,6 +445,7 @@ type Event struct {
 }
 
 type Bus struct { ... }
+func Normalize(e Event) Event                         // fill stable id/timestamp defaults
 func (b *Bus) Subscribe(pattern string, fn func(Event))  // glob: "tool.*"
 func (b *Bus) Emit(e Event)                              // synchronous fan-out
 ```
