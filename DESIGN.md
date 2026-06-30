@@ -92,7 +92,7 @@ juex/
 │   │   ├── main.tsx                # React root
 │   │   ├── App.tsx                 # routes
 │   │   ├── api.ts                  # typed fetch + SSE helpers
-│   │   ├── types.ts                # mirror of internal/llm + internal/session types
+│   │   ├── types.ts                # mirror of API/session DTOs + browser event contract
 │   │   ├── lib/
 │   │   │   ├── utils.ts            # shadcn `cn` helper
 │   │   │   └── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing

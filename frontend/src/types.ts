@@ -1,4 +1,4 @@
-// Mirror of Go types from internal/llm, internal/session, internal/events.
+// Mirror of Go API/session DTOs and the internal/web browser event contract.
 // When the Go side changes, update this file in the same PR.
 
 export type Role = "user" | "assistant" | "system";
@@ -196,7 +196,34 @@ export interface ActiveContextSnapshot {
   estimated_tokens: number;
 }
 
-interface BusEventBase<TType extends string> {
+export const BROWSER_EVENT_TYPES = [
+  "turn.started",
+  "turn.completed",
+  "turn.errored",
+  "llm.requested",
+  "llm.responded",
+  "tool.requested",
+  "tool.completed",
+  "tool.output_delta",
+  "tool.errored",
+  "hook.started",
+  "hook.completed",
+  "hook.errored",
+  "hook.trace",
+  "pending_input.queued",
+  "pending_input.drained",
+  "pending_input.dropped",
+  "pending_input.rejected",
+  "context.compact.skipped",
+  "context.compact.started",
+  "context.compact.completed",
+  "context.compact.errored",
+  "context.projection.applied",
+] as const;
+
+export type BrowserEventType = (typeof BROWSER_EVENT_TYPES)[number];
+
+interface BrowserEventBase<TType extends BrowserEventType> {
   id: string;
   type: TType;
   ts: string;
@@ -384,29 +411,29 @@ export interface ContextProjectionAppliedPayload {
   reasoning_content_bytes_stripped?: number;
 }
 
-export type BusEvent =
-  | (BusEventBase<"turn.started"> & { payload: TurnStartedPayload })
-  | (BusEventBase<"turn.completed"> & { payload: TurnCompletedPayload })
-  | (BusEventBase<"turn.errored"> & { payload: TurnErroredPayload })
-  | (BusEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
-  | (BusEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
-  | (BusEventBase<"tool.requested"> & { payload: ToolRequestedPayload })
-  | (BusEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
-  | (BusEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })
-  | (BusEventBase<"tool.errored"> & { payload: ToolErroredPayload })
-  | (BusEventBase<"hook.started"> & { payload: HookStartedPayload })
-  | (BusEventBase<"hook.completed"> & { payload: HookCompletedPayload })
-  | (BusEventBase<"hook.errored"> & { payload: HookErroredPayload })
-  | (BusEventBase<"hook.trace"> & { payload: HookTracePayload })
-  | (BusEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
-  | (BusEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
-  | (BusEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
-  | (BusEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
-  | (BusEventBase<"context.compact.skipped"> & { payload: ContextCompactSkippedPayload })
-  | (BusEventBase<"context.compact.started"> & { payload: ContextCompactStartedPayload })
-  | (BusEventBase<"context.compact.completed"> & { payload: ContextCompactCompletedPayload })
-  | (BusEventBase<"context.compact.errored"> & { payload: ContextCompactErroredPayload })
-  | (BusEventBase<"context.projection.applied"> & { payload: ContextProjectionAppliedPayload });
+export type BrowserEvent =
+  | (BrowserEventBase<"turn.started"> & { payload: TurnStartedPayload })
+  | (BrowserEventBase<"turn.completed"> & { payload: TurnCompletedPayload })
+  | (BrowserEventBase<"turn.errored"> & { payload: TurnErroredPayload })
+  | (BrowserEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
+  | (BrowserEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
+  | (BrowserEventBase<"tool.requested"> & { payload: ToolRequestedPayload })
+  | (BrowserEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
+  | (BrowserEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })
+  | (BrowserEventBase<"tool.errored"> & { payload: ToolErroredPayload })
+  | (BrowserEventBase<"hook.started"> & { payload: HookStartedPayload })
+  | (BrowserEventBase<"hook.completed"> & { payload: HookCompletedPayload })
+  | (BrowserEventBase<"hook.errored"> & { payload: HookErroredPayload })
+  | (BrowserEventBase<"hook.trace"> & { payload: HookTracePayload })
+  | (BrowserEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
+  | (BrowserEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
+  | (BrowserEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
+  | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
+  | (BrowserEventBase<"context.compact.skipped"> & { payload: ContextCompactSkippedPayload })
+  | (BrowserEventBase<"context.compact.started"> & { payload: ContextCompactStartedPayload })
+  | (BrowserEventBase<"context.compact.completed"> & { payload: ContextCompactCompletedPayload })
+  | (BrowserEventBase<"context.compact.errored"> & { payload: ContextCompactErroredPayload })
+  | (BrowserEventBase<"context.projection.applied"> & { payload: ContextProjectionAppliedPayload });
 
 export interface FileNode {
   name: string;

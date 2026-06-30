@@ -35,7 +35,7 @@ func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
 
 func TestWriteSSEFrame_DataIsOneLine(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeSSEFrame(&buf, events.Event{ID: "x1", Type: "x", Payload: map[string]any{"text": "line1\nline2"}}); err != nil {
+	if err := writeSSEFrame(&buf, events.Event{ID: "x1", Type: "hook.trace", Payload: map[string]any{"text": "line1\nline2"}}); err != nil {
 		t.Fatal(err)
 	}
 	body := buf.String()
@@ -47,6 +47,16 @@ func TestWriteSSEFrame_DataIsOneLine(t *testing.T) {
 	}
 	if dataLines != 1 {
 		t.Fatalf("expected exactly one data line, got %d in:\n%s", dataLines, body)
+	}
+}
+
+func TestWriteSSEFrame_SkipsRuntimeOnlyEvents(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeSSEFrame(&buf, events.Event{ID: "internal-1", Type: "tool.failure.recorded", Payload: map[string]any{"name": "exec_command"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("runtime-only event wrote frame:\n%s", got)
 	}
 }
 

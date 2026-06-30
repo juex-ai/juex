@@ -1,0 +1,170 @@
+[
+  {
+    "id": "evt-turn-started",
+    "type": "turn.started",
+    "ts": "2026-06-15T00:00:00Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "input": "run command",
+      "kind": "user"
+    }
+  },
+  {
+    "id": "evt-llm-responded",
+    "type": "llm.responded",
+    "ts": "2026-06-15T00:00:01Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "stop_reason": "tool_use",
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 5
+      },
+      "token_usage": {
+        "input_tokens": 10,
+        "output_tokens": 5
+      },
+      "blocks": [
+        {
+          "type": "text",
+          "text": "I'll run it."
+        }
+      ],
+      "text": "I'll run it.",
+      "thinking": "",
+      "tool_calls": [],
+      "model": "gpt-test",
+      "context_usage": {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "total_tokens": 15
+      }
+    }
+  },
+  {
+    "id": "evt-tool-requested",
+    "type": "tool.requested",
+    "ts": "2026-06-15T00:00:02Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "name": "exec_command",
+      "input": {
+        "cmd": "printf hi"
+      },
+      "tool_use_id": "tool-1",
+      "timeout_seconds": 30
+    }
+  },
+  {
+    "id": "evt-tool-delta",
+    "type": "tool.output_delta",
+    "ts": "2026-06-15T00:00:03Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "name": "exec_command",
+      "tool_use_id": "tool-1",
+      "session_id": "shell-1",
+      "chunk_id": 1,
+      "stream": "stdout",
+      "text": "hi\n",
+      "truncated": true
+    }
+  },
+  {
+    "id": "evt-tool-completed",
+    "type": "tool.completed",
+    "ts": "2026-06-15T00:00:04Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "name": "exec_command",
+      "tool_use_id": "tool-1",
+      "timeout_seconds": 30,
+      "len": 3,
+      "preview": "hi\n",
+      "result": {
+        "exit_code": 0
+      }
+    }
+  },
+  {
+    "id": "evt-hook-trace",
+    "type": "hook.trace",
+    "ts": "2026-06-15T00:00:05Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "text": "hook extract-state allow UserPromptSubmit in 12ms"
+    }
+  },
+  {
+    "id": "evt-pending-queued",
+    "type": "pending_input.queued",
+    "ts": "2026-06-15T00:00:06Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "input": "queued follow-up",
+      "kind": "user",
+      "pending_count": 1,
+      "max_pending_inputs": 4
+    }
+  },
+  {
+    "id": "evt-pending-drained",
+    "type": "pending_input.drained",
+    "ts": "2026-06-15T00:00:07Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "count": 1,
+      "pending_count": 0,
+      "max_pending_inputs": 4
+    }
+  },
+  {
+    "id": "evt-compact-started",
+    "type": "context.compact.started",
+    "ts": "2026-06-15T00:00:08Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "reason": "manual",
+      "auto": false,
+      "estimated_tokens": 100,
+      "tokens_before": 100,
+      "context_window": 1000,
+      "reserve_tokens": 100,
+      "keep_recent_tokens": 100,
+      "tail_turns": 2
+    }
+  },
+  {
+    "id": "evt-compact-completed",
+    "type": "context.compact.completed",
+    "ts": "2026-06-15T00:00:09Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "message_id": "compact-1",
+      "reason": "manual",
+      "auto": false,
+      "estimated_tokens": 100,
+      "tokens_before": 100,
+      "tokens_after": 40,
+      "summary_chars": 20,
+      "summary_model": "gpt-test",
+      "tail_start_message_id": "m-tail",
+      "context_window": 1000,
+      "reserve_tokens": 100,
+      "keep_recent_tokens": 100
+    }
+  },
+  {
+    "id": "evt-projection-applied",
+    "type": "context.projection.applied",
+    "ts": "2026-06-15T00:00:10Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "user_inputs_externalized": 1,
+      "tool_results_externalized": 2,
+      "bytes_externalized": 3000,
+      "reasoning_contents_stripped": 1,
+      "reasoning_content_bytes_stripped": 200
+    }
+  }
+]

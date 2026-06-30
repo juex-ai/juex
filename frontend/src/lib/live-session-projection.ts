@@ -20,7 +20,7 @@ import {
   type QueuedInputState,
 } from "./queued-inputs.ts";
 import type {
-  BusEvent,
+  BrowserEvent,
   ContextUsage,
   Message,
   TokenUsage,
@@ -228,7 +228,7 @@ export function projectPendingCompact(
 
 export function projectLiveSessionEvent(
   state: LiveSessionProjection,
-  event: BusEvent,
+  event: BrowserEvent,
 ): LiveSessionProjectionResult {
   let next = state;
   const effects: LiveSessionProjectionEffect[] = [];
@@ -564,7 +564,7 @@ function messageText(message: Message): string | undefined {
 
 function applyAssistantResponse(
   state: LiveSessionProjection,
-  event: Extract<BusEvent, { type: "llm.responded" }>,
+  event: Extract<BrowserEvent, { type: "llm.responded" }>,
 ): LiveSessionProjection {
   if (!event.turn_id) return state;
   const blocks = assistantBlocksFromEventPayload(event.payload);
@@ -593,7 +593,7 @@ function applyAssistantResponse(
 
 function appendToolResult(
   state: LiveSessionProjection,
-  event: Extract<BusEvent, { type: "tool.completed" | "tool.errored" }>,
+  event: Extract<BrowserEvent, { type: "tool.completed" | "tool.errored" }>,
   isError: boolean,
 ): LiveSessionProjection {
   if (!event.turn_id) return state;
@@ -616,7 +616,7 @@ function appendToolResult(
 
 function appendHookTraceMessage(
   messages: Message[],
-  event: Extract<BusEvent, { type: "hook.trace" }>,
+  event: Extract<BrowserEvent, { type: "hook.trace" }>,
 ): Message[] {
   const text = event.payload.text;
   if (!text) return messages;
@@ -635,7 +635,7 @@ function appendHookTraceMessage(
 }
 
 function tokenUsageFromEvent(
-  event: Extract<BusEvent, { type: "llm.responded" }>,
+  event: Extract<BrowserEvent, { type: "llm.responded" }>,
 ): TokenUsage | null {
   const usage = event.payload.token_usage ?? event.payload.usage;
   if (!usage) return null;

@@ -9,7 +9,7 @@ import {
   type LiveSessionProjection,
 } from "../../frontend/src/lib/live-session-projection.ts";
 import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
-import type { BusEvent } from "../../frontend/src/types.ts";
+import type { BrowserEvent } from "../../frontend/src/types.ts";
 
 test("projectLiveSessionEvent projects a live turn with tool deltas and completion effects", () => {
   let state = createLiveSessionProjection();
@@ -282,7 +282,7 @@ test("projectLiveSessionEvent keeps duplicate tool.requested and queue drops sta
     payload: { input: "run command" },
   });
 
-  const toolRequested: BusEvent = {
+  const toolRequested: BrowserEvent = {
     id: "e2",
     type: "tool.requested",
     ts: "2026-06-15T00:00:01Z",
@@ -425,6 +425,6 @@ test("projectLiveSessionEvent projects hook.trace as weak messages", () => {
   assert.equal(state.messages.length, 1);
 });
 
-function apply(state: LiveSessionProjection, event: BusEvent): LiveSessionProjection {
+function apply(state: LiveSessionProjection, event: BrowserEvent): LiveSessionProjection {
   return projectLiveSessionEvent(state, event).state;
 }
