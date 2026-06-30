@@ -157,6 +157,9 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	var err error
 	input, err = NormalizeCallInputForDispatch(input)
 	if err != nil {
+		if errors.Is(err, ErrMalformedRawArguments) {
+			return "", info, malformedRawArgumentsError(name)
+		}
 		return "", info, fmt.Errorf("tools: %s: %w", name, err)
 	}
 	callInput := cloneCallInput(input)
@@ -194,6 +197,13 @@ func structuredResultTimedOut(result any) bool {
 
 func toolTimeoutError(name string, timeoutSeconds int) error {
 	return fmt.Errorf("tools: %s timed out after %ds", name, timeoutSeconds)
+}
+
+func malformedRawArgumentsError(name string) error {
+	if name == "write_chunk" {
+		return fmt.Errorf("tools: %s: provider returned malformed tool arguments; retry with smaller write_chunk content, preferably no more than %d chars or %d bytes per chunk", name, chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes)
+	}
+	return fmt.Errorf("tools: %s: %w", name, ErrMalformedRawArguments)
 }
 
 // NormalizeCallInput decodes OpenAI-compatible fallback arguments before a

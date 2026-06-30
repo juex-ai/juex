@@ -1,10 +1,6 @@
 package llm
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-)
+import "encoding/json"
 
 type providerProjectionOptions struct {
 	// Codex Responses uses store=false. Replaying reasoning item IDs in that
@@ -24,7 +20,7 @@ func projectProviderTranscript(history []Message, profile ProviderProfile, opts 
 		}
 		filtered = append(filtered, projected)
 	}
-	return compactHistoryForProvider(filtered)
+	return compactHistoryForProvider(foldChunkedWriteHistoryForProvider(filtered))
 }
 
 func shouldProjectProviderBlock(b Block, profile ProviderProfile, opts providerProjectionOptions) bool {
@@ -112,19 +108,21 @@ func parseToolArguments(raw string) map[string]any {
 }
 
 // ProviderToolInput returns the model-visible representation of one tool-use
-// input. It normalizes raw JSON arguments and removes content-heavy payloads
-// from tools that acknowledge the payload by metadata instead of replaying it.
+// input. It normalizes raw JSON arguments while preserving the semantic shape
+// of prior tool calls. Required tool arguments must remain visible in replay;
+// otherwise models can mistake history compaction for a failed or malformed
+// call and abandon the tool flow.
 func ProviderToolInput(toolName string, input map[string]any) map[string]any {
 	if input == nil {
 		return nil
 	}
 	raw, ok := input["_raw_arguments"].(string)
 	if !ok || raw == "" {
-		return summarizeToolInput(toolName, input)
+		return input
 	}
 	decoded, _, ok := decodeToolArguments(raw)
 	if !ok {
-		return summarizeToolInput(toolName, copyToolInputWithoutRawArguments(input))
+		return copyToolInputWithoutRawArguments(input)
 	}
 	out := make(map[string]any, len(decoded)+len(input))
 	for k, v := range decoded {
@@ -136,7 +134,7 @@ func ProviderToolInput(toolName string, input map[string]any) map[string]any {
 		}
 		out[k] = v
 	}
-	return summarizeToolInput(toolName, out)
+	return out
 }
 
 func copyToolInputWithoutRawArguments(input map[string]any) map[string]any {
@@ -164,40 +162,4 @@ func decodeToolArguments(raw string) (map[string]any, string, bool) {
 		return nil, encoded, false
 	}
 	return nil, raw, false
-}
-
-func summarizeToolInput(toolName string, input map[string]any) map[string]any {
-	if toolName != "write_chunk" {
-		return input
-	}
-	return summarizeWriteChunkInput(input)
-}
-
-func summarizeWriteChunkInput(input map[string]any) map[string]any {
-	if input == nil {
-		return nil
-	}
-	content, ok := input["content"].(string)
-	if !ok {
-		return input
-	}
-	if _, ok := input["write_id"]; !ok {
-		return input
-	}
-	if _, ok := input["index"]; !ok {
-		return input
-	}
-	out := make(map[string]any, len(input)+3)
-	for k, v := range input {
-		if k == "content" {
-			continue
-		}
-		out[k] = v
-	}
-	sum := sha256.Sum256([]byte(content))
-	out["content_omitted"] = true
-	out["content_bytes"] = len(content)
-	out["content_chars"] = len([]rune(content))
-	out["content_sha256"] = hex.EncodeToString(sum[:])
-	return out
 }

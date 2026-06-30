@@ -139,6 +139,7 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 			Model:            "m",
 			WorkDir:          dir,
 			ContextWindow:    2048,
+			MaxOutputTokens:  8192,
 			Compaction:       compaction,
 			PendingInputTTL:  30 * time.Minute,
 			ExternalEventTTL: 48 * time.Hour,
@@ -152,6 +153,9 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	defer a.Close()
 	if a.Engine.ContextWindow != 2048 {
 		t.Fatalf("Engine.ContextWindow = %d, want 2048", a.Engine.ContextWindow)
+	}
+	if a.Engine.MaxOutputTokens != 8192 {
+		t.Fatalf("Engine.MaxOutputTokens = %d, want 8192", a.Engine.MaxOutputTokens)
 	}
 	if a.Engine.Compaction.ReserveTokens != 123 {
 		t.Fatalf("Engine.Compaction.ReserveTokens = %d, want 123", a.Engine.Compaction.ReserveTokens)

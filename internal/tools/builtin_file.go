@@ -71,12 +71,12 @@ func readTool(workDir string) Tool {
 func writeTool(workDir string) Tool {
 	return Tool{
 		Name:        "write",
-		Description: "Write content to a file, creating parent directories if needed. Overwrites existing files.",
+		Description: fmt.Sprintf("Write short content to a file, creating parent directories if needed. Overwrites existing files. For generated content longer than %d characters, use write_begin/write_chunk/write_commit instead.", chunkWriteRecommendedChunkChars),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"path":    map[string]any{"type": "string"},
-				"content": map[string]any{"type": "string"},
+				"content": map[string]any{"type": "string", "maxLength": chunkWriteRecommendedChunkChars},
 			},
 			"required": []string{"path", "content"},
 		},

@@ -267,6 +267,7 @@ func New(opts Options) (*App, error) {
 		DisableWorkingState:   !runtimeLimits.WorkingStateEnabled,
 		ShowBuiltinHookTraces: runtimeLimits.ShowBuiltinHookTraces,
 		ContextWindow:         runtimeLimits.ContextWindow,
+		MaxOutputTokens:       runtimeLimits.MaxOutputTokens,
 		Compaction:            runtimeLimits.Compaction,
 	}
 

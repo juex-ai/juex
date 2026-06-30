@@ -965,6 +965,113 @@ func TestRegisterBuiltinsChunkedWriteSchema(t *testing.T) {
 			t.Fatalf("%s schema = %+v", name, tool.Schema)
 		}
 	}
+	begin, _ := r.Get("write_begin")
+	if !strings.Contains(begin.Description, "2000 characters") || !strings.Contains(begin.Description, "4000 bytes") {
+		t.Fatalf("write_begin description missing recommended chunk guidance: %q", begin.Description)
+	}
+	chunk, _ := r.Get("write_chunk")
+	if !strings.Contains(chunk.Description, "content_omitted") || !strings.Contains(chunk.Description, "actual content string") || !strings.Contains(chunk.Description, "2000 characters") {
+		t.Fatalf("write_chunk description missing provider-safe guidance: %q", chunk.Description)
+	}
+	if chunk.Schema["additionalProperties"] != false {
+		t.Fatalf("write_chunk schema should reject additional properties: %+v", chunk.Schema)
+	}
+	contentSchema, ok := chunk.Schema["properties"].(map[string]any)["content"].(map[string]any)
+	if !ok || !strings.Contains(fmt.Sprint(contentSchema["description"]), "2000 characters") {
+		t.Fatalf("write_chunk content schema missing recommended chunk guidance: %+v", contentSchema)
+	}
+	if contentSchema["maxLength"] != chunkWriteRecommendedChunkChars {
+		t.Fatalf("write_chunk content maxLength = %+v, want %d", contentSchema["maxLength"], chunkWriteRecommendedChunkChars)
+	}
+
+	write, _ := r.Get("write")
+	if !strings.Contains(write.Description, "write_begin/write_chunk/write_commit") {
+		t.Fatalf("write description should steer long content to chunked write: %q", write.Description)
+	}
+	writeContentSchema, ok := write.Schema["properties"].(map[string]any)["content"].(map[string]any)
+	if !ok || writeContentSchema["maxLength"] != chunkWriteRecommendedChunkChars {
+		t.Fatalf("write content schema should cap provider-visible content length: %+v", writeContentSchema)
+	}
+}
+
+func TestBuiltins_ChunkedWriteBeginReportsRecommendedChunkSize(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+
+	out, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "long.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"max_chunk_bytes=4000", "max_chunk_chars=2000", "recommended_chunk_bytes=4000", "recommended_chunk_chars=2000"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("write_begin output = %q, missing %q", out, want)
+		}
+	}
+}
+
+func TestBuiltins_ChunkedWriteRejectsProviderUnsafeChunkSize(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+
+	beginOut, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "long.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeID := chunkWriteIDFromResult(t, beginOut)
+	_, err = r.Call(context.Background(), "write_chunk", map[string]any{
+		"write_id": writeID,
+		"index":    0,
+		"content":  strings.Repeat("x", chunkWriteMaxChunkChars+1),
+	})
+	if err == nil {
+		t.Fatal("expected provider-unsafe chunk size to fail")
+	}
+	for _, want := range []string{"content exceeds max chunk limits", "2000 chars", "4000 bytes", "split into smaller chunks"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, missing %q", err.Error(), want)
+		}
+	}
+}
+
+func TestBuiltins_ChunkedWriteRejectsProjectedMetadataAsInput(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+
+	_, err := r.Call(context.Background(), "write_chunk", map[string]any{
+		"write_id":        "w_demo",
+		"index":           0,
+		"content_omitted": true,
+		"content_bytes":   123,
+		"content_chars":   100,
+		"content_sha256":  "abc123",
+	})
+	if err == nil {
+		t.Fatal("expected missing content error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"summary metadata", "actual content string", "2000 chars", "4000 bytes"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error = %q, missing %q", msg, want)
+		}
+	}
+}
+
+func TestBuiltins_ChunkedWriteMalformedRawArgumentsMentionsSafeChunkSize(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+
+	_, err := r.Call(context.Background(), "write_chunk", map[string]any{
+		"_raw_arguments": `{"write_id":"w_demo","index":0,"content":"unterminated`,
+	})
+	if err == nil {
+		t.Fatal("expected malformed raw arguments error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"smaller write_chunk content", "2000 chars", "4000 bytes"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error = %q, missing %q", msg, want)
+		}
+	}
 }
 
 func TestBuiltins_ChunkedWriteCommitOverwrite(t *testing.T) {

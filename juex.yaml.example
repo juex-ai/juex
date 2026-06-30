@@ -35,6 +35,8 @@ model: openai/gpt-4.1
 #   pending_input_ttl: 15m
 #   external_event_ttl: 24h
 #   tool_timeout: 60s
+#   # Optional normal-turn provider output cap. Omit to use provider default.
+#   max_output_tokens: 8192
 #   working_state_enabled: true
 
 # Optional lifecycle command hooks. User-global hooks in ~/.juex/juex.yaml are

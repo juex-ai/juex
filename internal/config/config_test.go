@@ -1126,6 +1126,7 @@ runtime:
   pending_input_ttl: 30m
   external_event_ttl: 48h
   tool_timeout: 2m
+  max_output_tokens: 8192
   working_state_enabled: false
   show_builtin_hook_traces: true
 `
@@ -1138,6 +1139,9 @@ runtime:
 	limits := cfg.RuntimeLimits()
 	if limits.PendingInputTTL != 30*time.Minute || limits.ExternalEventTTL != 48*time.Hour || limits.ToolTimeout != 2*time.Minute {
 		t.Fatalf("runtime TTLs = %+v", limits)
+	}
+	if limits.MaxOutputTokens != 8192 {
+		t.Fatalf("runtime max output tokens = %d, want 8192", limits.MaxOutputTokens)
 	}
 	if limits.WorkingStateEnabled {
 		t.Fatalf("working state should be disabled: %+v", limits)

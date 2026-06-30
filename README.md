@@ -134,9 +134,12 @@ rejects paths outside the workspace, and returns a short changed-file summary
 instead of echoing the patch text back into the provider transcript. For long
 generated files, chunked write sessions accept bounded chunks, validate
 optional chunk/full-file SHA-256 digests, and commit with a temporary file plus
-rename so failed validation does not overwrite the target. Provider-visible
-history summarizes `write_chunk.content` by size and hash instead of replaying
-large chunk text.
+rename so failed validation does not overwrite the target. Each chunk is capped
+at the provider-safe limit of about 2,000 characters or 4,000 bytes so tool
+argument JSON stays within model output limits. Provider-visible history keeps
+recent active chunks available for continuation, and folds committed chunked
+write sessions into a compact summary; the durable conversation log still
+preserves the original tool-use inputs for replay and debugging.
 
 The builtin command tools are `exec_command` and `write_stdin`. Juex resolves a
 `ShellProfile` from the process runtime OS: Windows binaries default to
