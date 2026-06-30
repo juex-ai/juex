@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/extensions"
@@ -11,12 +12,6 @@ import (
 	"github.com/juex-ai/juex/internal/skills"
 )
 
-type appResourceRefs struct {
-	SkillDirs  []skills.Dir
-	MCPConfigs []mcpConfigRef
-	Hooks      hooks.Config
-}
-
 type mcpConfigRef struct {
 	Path            string
 	Source          string
@@ -24,7 +19,34 @@ type mcpConfigRef struct {
 	StrictConflicts bool
 }
 
-func resolveAppResourceRefs(cfg config.Config) (appResourceRefs, error) {
+type RuntimeResourceKind string
+
+const (
+	RuntimeResourceExtension RuntimeResourceKind = "extension"
+	RuntimeResourceSkillDir  RuntimeResourceKind = "skill_dir"
+	RuntimeResourceMCPConfig RuntimeResourceKind = "mcp_config"
+	RuntimeResourceHookFile  RuntimeResourceKind = "hook_file"
+)
+
+type RuntimeResourceNode struct {
+	Kind            RuntimeResourceKind
+	Source          string
+	Path            string
+	ExtensionName   string
+	ExtensionDir    string
+	RequireTrust    bool
+	StrictConflicts bool
+	Precedence      int
+}
+
+type RuntimeResourceGraph struct {
+	skillDirs  []skills.Dir
+	mcpConfigs []mcpConfigRef
+	hooks      hooks.Config
+	nodes      []RuntimeResourceNode
+}
+
+func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error) {
 	paths := cfg.ResourcePaths()
 	extResources, err := extensions.Discover(extensions.DiscoverOptions{
 		HomeJuexDir:               cfg.HomeJuexDir,
@@ -32,19 +54,141 @@ func resolveAppResourceRefs(cfg config.Config) (appResourceRefs, error) {
 		EnableUserGlobalResources: cfg.EnableUserGlobalResources,
 	})
 	if err != nil {
-		return appResourceRefs{}, err
+		return RuntimeResourceGraph{}, err
 	}
 
 	hookConfig, err := appendExtensionHooks(cfg.Hooks, extResources.HookFiles)
 	if err != nil {
-		return appResourceRefs{}, err
+		return RuntimeResourceGraph{}, err
 	}
 
-	return appResourceRefs{
-		SkillDirs:  skillDirRefs(paths, extResources.SkillDirs),
-		MCPConfigs: mcpConfigRefs(paths, extResources.MCPConfigs),
-		Hooks:      hookConfig,
+	skillDirs := skillDirRefs(paths, extResources.SkillDirs)
+	mcpConfigs := mcpConfigRefs(paths, extResources.MCPConfigs)
+	return RuntimeResourceGraph{
+		skillDirs:  skillDirs,
+		mcpConfigs: mcpConfigs,
+		hooks:      hookConfig,
+		nodes:      runtimeResourceNodes(paths, extResources),
 	}, nil
+}
+
+func (g RuntimeResourceGraph) SkillDirs() []skills.Dir {
+	return append([]skills.Dir(nil), g.skillDirs...)
+}
+
+func (g RuntimeResourceGraph) MCPConfigs() []mcpConfigRef {
+	return append([]mcpConfigRef(nil), g.mcpConfigs...)
+}
+
+func (g RuntimeResourceGraph) HooksConfig() hooks.Config {
+	return cloneHooksConfig(g.hooks)
+}
+
+func (g RuntimeResourceGraph) Nodes() []RuntimeResourceNode {
+	return append([]RuntimeResourceNode(nil), g.nodes...)
+}
+
+func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Resources) []RuntimeResourceNode {
+	var nodes []RuntimeResourceNode
+	if paths.UserGlobalResources && paths.HomeAgentsDir != "" {
+		nodes = append(nodes,
+			runtimeResourceNode(RuntimeResourceSkillDir, "user", filepath.Join(paths.HomeAgentsDir, "skills"), false, false),
+			runtimeResourceNode(RuntimeResourceMCPConfig, "user", filepath.Join(paths.HomeAgentsDir, "mcp.json"), false, false),
+		)
+	}
+	skillDirsByExt := resourceRefsByExtension(extResources.SkillDirs)
+	mcpConfigsByExt := resourceRefsByExtension(extResources.MCPConfigs)
+	hookFilesByExt := resourceRefsByExtension(extResources.HookFiles)
+	for _, ext := range extResources.Extensions {
+		nodes = append(nodes, RuntimeResourceNode{
+			Kind:          RuntimeResourceExtension,
+			Source:        ext.Source,
+			Path:          ext.Dir,
+			ExtensionName: ext.Name,
+			ExtensionDir:  ext.Dir,
+			RequireTrust:  ext.Scope == extensions.ScopeProject,
+			Precedence:    runtimeSourceRank(ext.Source),
+		})
+		for _, ref := range skillDirsByExt[ext.Name] {
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceSkillDir, ref, true))
+		}
+		for _, ref := range mcpConfigsByExt[ext.Name] {
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceMCPConfig, ref, true))
+		}
+		for _, ref := range hookFilesByExt[ext.Name] {
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceHookFile, ref, true))
+		}
+	}
+	if paths.ProjectAgentsDir != "" {
+		nodes = append(nodes,
+			runtimeResourceNode(RuntimeResourceSkillDir, "project", filepath.Join(paths.ProjectAgentsDir, "skills"), false, false),
+			runtimeResourceNode(RuntimeResourceMCPConfig, "project", filepath.Join(paths.ProjectAgentsDir, "mcp.json"), false, false),
+		)
+	}
+	return nodes
+}
+
+func resourceRefsByExtension(refs []extensions.ResourceRef) map[string][]extensions.ResourceRef {
+	byExtension := make(map[string][]extensions.ResourceRef)
+	for _, ref := range refs {
+		byExtension[ref.ExtensionName] = append(byExtension[ref.ExtensionName], ref)
+	}
+	return byExtension
+}
+
+func runtimeResourceNode(kind RuntimeResourceKind, source, path string, requireTrust, strictConflicts bool) RuntimeResourceNode {
+	return RuntimeResourceNode{
+		Kind:            kind,
+		Source:          source,
+		Path:            path,
+		RequireTrust:    requireTrust,
+		StrictConflicts: strictConflicts,
+		Precedence:      runtimeSourceRank(source),
+	}
+}
+
+func runtimeExtensionResourceNode(kind RuntimeResourceKind, ref extensions.ResourceRef, strictConflicts bool) RuntimeResourceNode {
+	node := runtimeResourceNode(kind, ref.Source, ref.Path, ref.RequireTrust, strictConflicts)
+	node.ExtensionName = ref.ExtensionName
+	node.ExtensionDir = ref.ExtensionDir
+	return node
+}
+
+func cloneHooksConfig(cfg hooks.Config) hooks.Config {
+	commands := make([]hooks.CommandHook, 0, len(cfg.Commands))
+	for _, command := range cfg.Commands {
+		command.Events = append([]hooks.EventName(nil), command.Events...)
+		command.Tools = append([]string(nil), command.Tools...)
+		command.Command = append([]string(nil), command.Command...)
+		commands = append(commands, command)
+	}
+	return hooks.Config{Commands: commands}
+}
+
+func runtimeSourceLess(leftSource, leftName, rightSource, rightName string) bool {
+	leftRank := runtimeSourceRank(leftSource)
+	rightRank := runtimeSourceRank(rightSource)
+	if leftRank != rightRank {
+		return leftRank < rightRank
+	}
+	return leftName < rightName
+}
+
+func runtimeSourceRank(source string) int {
+	switch source {
+	case "project":
+		return 0
+	case "user":
+		return 2
+	default:
+		if extensions.IsExtensionSource(source) {
+			return 1
+		}
+		if strings.TrimSpace(source) == "" {
+			return 4
+		}
+		return 3
+	}
 }
 
 func skillDirRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef) []skills.Dir {
@@ -153,10 +297,10 @@ func loadMCPConfigRefs(refs []mcpConfigRef, workDir string) ([]mcp.Config, mcp.C
 // LoadMCPConfigs resolves configured MCP resources, including extension MCP
 // bundles, into runtime-ready configs for process-scoped startup.
 func LoadMCPConfigs(cfg config.Config, workDir string) ([]mcp.Config, error) {
-	refs, err := resolveAppResourceRefs(cfg)
+	graph, err := ResolveRuntimeResourceGraph(cfg)
 	if err != nil {
 		return nil, err
 	}
-	configs, _, _, err := loadMCPConfigRefs(refs.MCPConfigs, workDir)
+	configs, _, _, err := loadMCPConfigRefs(graph.MCPConfigs(), workDir)
 	return configs, err
 }

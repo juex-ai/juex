@@ -130,7 +130,7 @@ func New(opts Options) (*App, error) {
 	runtimePaths := cfg.RuntimePaths()
 	resourcePaths := cfg.ResourcePaths()
 	runtimeLimits := cfg.RuntimeLimits()
-	resourceRefs, err := resolveAppResourceRefs(cfg)
+	resourceGraph, err := ResolveRuntimeResourceGraph(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +178,7 @@ func New(opts Options) (*App, error) {
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 	})
 
-	skillLoader := skills.NewLoaderFromDirs(resourceRefs.SkillDirs)
+	skillLoader := skills.NewLoaderFromDirs(resourceGraph.SkillDirs())
 	if err := skillLoader.Load(); err != nil {
 		return nil, err
 	}
@@ -195,7 +195,7 @@ func New(opts Options) (*App, error) {
 	var mergedMCP mcp.Config
 	if !opts.DisableMCP && opts.MCPManager == nil {
 		var err error
-		mcpConfigs, mergedMCP, _, err = loadMCPConfigRefs(resourceRefs.MCPConfigs, runtimePaths.WorkDir)
+		mcpConfigs, mergedMCP, _, err = loadMCPConfigRefs(resourceGraph.MCPConfigs(), runtimePaths.WorkDir)
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +230,7 @@ func New(opts Options) (*App, error) {
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
 	}
-	hookRunner, err := hooks.NewRunner(resourceRefs.Hooks)
+	hookRunner, err := hooks.NewRunner(resourceGraph.HooksConfig())
 	if err != nil {
 		closeSessionResources()
 		return nil, err

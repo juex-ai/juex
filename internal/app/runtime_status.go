@@ -4,11 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/extensions"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -129,11 +127,11 @@ type RuntimeSkillInfo struct {
 }
 
 func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
-	resourceRefs, err := resolveAppResourceRefs(s.cfg)
+	resourceGraph, err := ResolveRuntimeResourceGraph(s.cfg)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache, resourceRefs.SkillDirs)
+	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache, resourceGraph.SkillDirs())
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -141,7 +139,7 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	mcpStatus, err := s.mcpStatus(opts, resourceRefs.MCPConfigs)
+	mcpStatus, err := s.mcpStatus(opts, resourceGraph.MCPConfigs())
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -151,7 +149,7 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 		Shell:        s.cfg.Shell,
 		SystemPrompt: systemPrompt,
 		MCP:          mcpStatus,
-		Hooks:        hooksStatus(resourceRefs.Hooks),
+		Hooks:        hooksStatus(resourceGraph.HooksConfig()),
 		Skills:       skillStatus,
 	}, nil
 }
@@ -358,32 +356,6 @@ func (s RuntimeStatusService) configuredMCPServers(refs []mcpConfigRef) ([]runti
 		return runtimeSourceLess(servers[i].Source, servers[i].Name, servers[j].Source, servers[j].Name)
 	})
 	return servers, nil
-}
-
-func runtimeSourceLess(leftSource, leftName, rightSource, rightName string) bool {
-	leftRank := runtimeSourceRank(leftSource)
-	rightRank := runtimeSourceRank(rightSource)
-	if leftRank != rightRank {
-		return leftRank < rightRank
-	}
-	return leftName < rightName
-}
-
-func runtimeSourceRank(source string) int {
-	switch source {
-	case "project":
-		return 0
-	case "user":
-		return 2
-	default:
-		if extensions.IsExtensionSource(source) {
-			return 1
-		}
-		if strings.TrimSpace(source) == "" {
-			return 4
-		}
-		return 3
-	}
 }
 
 func (s RuntimeStatusService) absoluteWorkDir() string {
