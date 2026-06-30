@@ -95,6 +95,7 @@ import {
   projectLoadOlderSucceeded,
   projectPendingSubmit,
   projectPromptInputChanged,
+  projectSessionLoadFailed,
   projectSessionLoaded,
   projectStartTurnFailed,
   projectStartTurnSucceeded,
@@ -163,6 +164,7 @@ export function Session() {
   const latestRouteRef = useRef({ id });
   const {
     data,
+    loadError,
     projection,
     activeContext,
     composerHint,
@@ -270,6 +272,7 @@ export function Session() {
       } catch (e) {
         if (!cancelled && isLatestRoute(latestRouteRef.current, requestId)) {
           console.error("getSession failed", e);
+          updateReadState((prev) => projectSessionLoadFailed(prev, e));
         }
       }
     })();
@@ -352,6 +355,14 @@ export function Session() {
   );
 
   if (!data) {
+    if (loadError) {
+      return (
+        <SessionLoadErrorState
+          detail={loadError}
+          onHistory={() => navigate("/history")}
+        />
+      );
+    }
     return <LoadingState label="Loading conversation" />;
   }
 
@@ -542,6 +553,38 @@ export function Session() {
       1800,
     );
   }
+}
+
+function SessionLoadErrorState({
+  detail,
+  onHistory,
+}: {
+  detail: string;
+  onHistory: () => void;
+}) {
+  return (
+    <div
+      className="flex min-h-0 flex-1 items-center justify-center bg-background px-4 py-8 text-center"
+      role="alert"
+    >
+      <div className="flex max-w-md flex-col items-center gap-3">
+        <div className="font-serif text-2xl italic text-primary">
+          Conversation unavailable
+        </div>
+        <p className="break-words font-mono text-xs text-muted-foreground">
+          {detail}
+        </p>
+        <Button
+          className="mt-1 h-8 rounded-full px-3 font-mono text-[11px]"
+          onClick={onHistory}
+          type="button"
+          variant="outline"
+        >
+          Open history
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function LoadOlderMessagesControl({

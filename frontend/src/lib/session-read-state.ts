@@ -35,6 +35,7 @@ export type SessionInitialCommandState = {
 
 export type SessionReadState = {
   data: SessionShowResponse | null;
+  loadError: string | null;
   projection: LiveSessionProjection;
   activeContext: ActiveContextSnapshot | null;
   composerHint: string | null;
@@ -61,6 +62,7 @@ export type SessionReadResult = {
 export function createSessionReadState(): SessionReadState {
   return {
     data: null,
+    loadError: null,
     projection: createLiveSessionProjection(),
     activeContext: null,
     composerHint: null,
@@ -75,7 +77,10 @@ export function resetSessionReadState(
 ): SessionReadState {
   return {
     ...state,
+    data: null,
+    loadError: null,
     projection: resetLiveSessionProjection(opts),
+    activeContext: null,
     composerHint: null,
     loadingOlderMessages: false,
     olderMessagesError: null,
@@ -90,10 +95,25 @@ export function projectSessionLoaded(
   return {
     ...state,
     data,
+    loadError: null,
     olderMessagesError: null,
     projection: opts?.preserveLiveMessages
       ? state.projection
       : clearLiveSessionTranscript(state.projection),
+  };
+}
+
+export function projectSessionLoadFailed(
+  state: SessionReadState,
+  error: unknown,
+): SessionReadState {
+  return {
+    ...state,
+    data: null,
+    loadError: errorMessage(error),
+    activeContext: null,
+    loadingOlderMessages: false,
+    olderMessagesError: null,
   };
 }
 
@@ -337,6 +357,16 @@ function markProjectionDoneSoon(
     state: { ...state, projection: markProjectionDone(state.projection) },
     effects: [...effects, { type: "scheduleIdleStatus" }],
   };
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  return "Failed to load conversation.";
 }
 
 function withProjectionResult(
