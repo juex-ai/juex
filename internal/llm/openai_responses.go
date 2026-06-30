@@ -54,13 +54,14 @@ func (p *openAIResponsesProvider) Complete(ctx context.Context, sys string, hist
 }
 
 func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{}); err != nil {
+	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{})
+	if err != nil {
 		return Response{}, err
 	}
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(p.profile.Model),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: toOpenAIResponseInput(history, p.profile),
+			OfInputItemList: encodeOpenAIResponseInput(providerContext.Messages),
 		},
 		Store: param.NewOpt(false),
 	}
@@ -145,19 +146,9 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 	}
 }
 
-func toOpenAIResponseInput(history []Message, profile ProviderProfile) responses.ResponseInputParam {
-	return toOpenAIResponseInputWithOptions(history, profile, responseInputOptions{})
-}
-
-type responseInputOptions struct {
-	// Codex uses store=false against the ChatGPT backend. Replaying reasoning
-	// item IDs in that mode makes the backend look up non-persisted items.
-	OmitReasoning bool
-}
-
-func toOpenAIResponseInputWithOptions(history []Message, profile ProviderProfile, opts responseInputOptions) responses.ResponseInputParam {
+func encodeOpenAIResponseInput(history []Message) responses.ResponseInputParam {
 	var out responses.ResponseInputParam
-	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions(opts)) {
+	for _, m := range history {
 		var textParts []string
 		for _, b := range m.Blocks {
 			switch b.Type {

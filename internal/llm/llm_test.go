@@ -2001,6 +2001,75 @@ func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
 	}
 }
 
+func TestBuildProviderContextOwnsProjectionAndValidation(t *testing.T) {
+	history := []Message{
+		{
+			Role: RoleAssistant,
+			Blocks: []Block{
+				{Type: BlockReasoning, Text: "hidden", Signature: "rs_1"},
+				{
+					Type:      BlockToolUse,
+					ToolUseID: "call_1",
+					ToolName:  "read",
+					Input:     map[string]any{"_raw_arguments": `{"path":"README.md"}`},
+				},
+			},
+		},
+		{
+			Role: RoleUser,
+			Blocks: []Block{{
+				Type:      BlockToolResult,
+				ToolUseID: "call_1",
+				Content:   "file",
+			}},
+		},
+	}
+	providerContext, err := BuildProviderContext(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true, ReasoningReplay: true},
+	}, ProviderContextOptions{OmitReasoning: true})
+	if err != nil {
+		t.Fatalf("BuildProviderContext: %v", err)
+	}
+	if len(providerContext.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(providerContext.Messages))
+	}
+	blocks := providerContext.Messages[0].Blocks
+	if len(blocks) != 1 || blocks[0].Type != BlockToolUse {
+		t.Fatalf("assistant blocks = %+v, want only projected tool use", blocks)
+	}
+	if blocks[0].Input["_raw_arguments"] != nil || blocks[0].Input["path"] != "README.md" {
+		t.Fatalf("tool input = %+v, want decoded provider-visible input", blocks[0].Input)
+	}
+}
+
+func TestBuildProviderContextValidatesAfterCapabilityFiltering(t *testing.T) {
+	history := []Message{
+		{
+			Role: RoleAssistant,
+			Blocks: []Block{{
+				Type:      BlockToolUse,
+				ToolUseID: "call_missing",
+				ToolName:  "read",
+				Input:     map[string]any{"path": "README.md"},
+			}},
+		},
+	}
+	if _, err := BuildProviderContext(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, ProviderContextOptions{}); err == nil {
+		t.Fatal("expected missing tool_result error when tools are provider-visible")
+	}
+	providerContext, err := BuildProviderContext(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: false},
+	}, ProviderContextOptions{})
+	if err != nil {
+		t.Fatalf("tool blocks filtered by capability should not fail provider-visible validation: %v", err)
+	}
+	if len(providerContext.Messages) != 0 {
+		t.Fatalf("provider-visible messages = %+v, want empty after filtering and compaction", providerContext.Messages)
+	}
+}
+
 func TestProjectProviderTranscriptPreservesWriteChunkContent(t *testing.T) {
 	history := []Message{{
 		Role: RoleAssistant,

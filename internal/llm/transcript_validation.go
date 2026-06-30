@@ -44,11 +44,6 @@ func ValidateToolTranscript(history []Message) error {
 	return nil
 }
 
-func validateProviderTranscript(history []Message, profile ProviderProfile, opts providerProjectionOptions) error {
-	_, _ = profile, opts
-	return ValidateToolTranscript(history)
-}
-
 func providerVisibleValidationBoundary(block Block) bool {
 	switch block.Type {
 	case BlockText:

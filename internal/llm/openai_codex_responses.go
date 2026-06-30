@@ -97,12 +97,12 @@ func (p *openAICodexResponsesProvider) Complete(ctx context.Context, sys string,
 }
 
 func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{OmitReasoning: true}); err != nil {
+	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{OmitReasoning: true})
+	if err != nil {
 		return Response{}, err
 	}
-	params := p.codexRequestParams(sys, history, tools, opts)
+	params := p.codexRequestParams(sys, providerContext.Messages, tools, opts)
 	var resp *responses.Response
-	var err error
 
 	switch p.transport {
 	case CodexTransportAuto:
@@ -144,9 +144,7 @@ func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []
 		Model: shared.ResponsesModel(p.profile.Model),
 		Store: param.NewOpt(false),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: toOpenAIResponseInputWithOptions(history, p.profile, responseInputOptions{
-				OmitReasoning: true,
-			}),
+			OfInputItemList: encodeOpenAIResponseInput(history),
 		},
 		Include:           []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
 		ParallelToolCalls: param.NewOpt(true),

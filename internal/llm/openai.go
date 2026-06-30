@@ -63,14 +63,15 @@ func (p *openAIProvider) Complete(ctx context.Context, sys string, history []Mes
 }
 
 func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{}); err != nil {
+	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{})
+	if err != nil {
 		return Response{}, err
 	}
-	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(history)+1)
+	msgs := make([]openai.ChatCompletionMessageParamUnion, 0, len(providerContext.Messages)+1)
 	if sys != "" {
 		msgs = append(msgs, openai.SystemMessage(sys))
 	}
-	msgs = append(msgs, toOpenAIMessages(history, p.profile)...)
+	msgs = append(msgs, toOpenAIMessages(providerContext.Messages, p.profile)...)
 
 	params := openai.ChatCompletionNewParams{
 		Model:    p.profile.Model,
@@ -134,7 +135,7 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 // tool_call_id <-> tool message linkage is preserved.
 func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatCompletionMessageParamUnion {
 	var out []openai.ChatCompletionMessageParamUnion
-	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions{}) {
+	for _, m := range history {
 		switch m.Role {
 		case RoleUser:
 			var userText strings.Builder

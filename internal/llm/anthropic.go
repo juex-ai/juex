@@ -64,7 +64,8 @@ func (p *anthropicProvider) Complete(ctx context.Context, sys string, history []
 }
 
 func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string, history []Message, tools []ToolSpec, opts CompleteOptions) (Response, error) {
-	if err := validateProviderTranscript(history, p.profile, providerProjectionOptions{}); err != nil {
+	providerContext, err := BuildProviderContext(history, p.profile, ProviderContextOptions{})
+	if err != nil {
 		return Response{}, err
 	}
 	maxTokens := int64(4096)
@@ -75,7 +76,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.profile.Model),
 		MaxTokens: maxTokens,
-		Messages:  toAnthropicMessages(history, p.profile),
+		Messages:  toAnthropicMessages(providerContext.Messages, p.profile),
 	}
 	cachePrompt := opts.CachePolicy.StablePrefixKey != ""
 	if p.profile.Capabilities.Tools {
@@ -235,7 +236,7 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 
 func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
-	for _, m := range projectProviderTranscript(history, profile, providerProjectionOptions{}) {
+	for _, m := range history {
 		var blocks []anthropic.ContentBlockParamUnion
 		for _, b := range m.Blocks {
 			switch b.Type {
