@@ -25,7 +25,14 @@ import (
 // frame to the default "message" listener — the type is in the JSON
 // payload (e.type) and the client switches on that.
 func writeSSEFrame(w io.Writer, e events.Event) error {
-	body, err := json.Marshal(e)
+	browserEvent, visible, err := browserEventFromRuntime(e)
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return nil
+	}
+	body, err := json.Marshal(browserEvent)
 	if err != nil {
 		return err
 	}

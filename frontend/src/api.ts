@@ -1,6 +1,6 @@
 import type {
   ActiveContextSnapshot,
-  BusEvent,
+  BrowserEvent,
   CompactSessionResponse,
   CreateSessionResponse,
   DeleteSessionResponse,
@@ -130,12 +130,12 @@ export async function getTurnStatus(
 // SubscribeOptions configures the SSE subscription.
 export interface SubscribeOptions {
   since?: string;
-  onEvent: (e: BusEvent) => void;
+  onEvent: (e: BrowserEvent) => void;
   onError?: (err: Event) => void;
 }
 
 // subscribeEvents opens an EventSource for the given session and invokes
-// onEvent for each parsed BusEvent. Returns a function that closes the
+// onEvent for each parsed BrowserEvent. Returns a function that closes the
 // connection. Auto-reconnect is the caller's responsibility.
 export function subscribeEvents(
   id: string,
@@ -146,7 +146,7 @@ export function subscribeEvents(
   const es = new EventSource(url);
   es.addEventListener("message", (ev) => {
     try {
-      const e = JSON.parse((ev as MessageEvent).data) as BusEvent;
+      const e = JSON.parse((ev as MessageEvent).data) as BrowserEvent;
       opts.onEvent(e);
     } catch {
       /* ignore malformed frames */
