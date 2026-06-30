@@ -44,7 +44,7 @@ func TestValidateToolTranscriptRejectsDanglingToolUse(t *testing.T) {
 	}
 }
 
-func TestValidateProviderTranscriptRejectsCanonicalDanglingToolUse(t *testing.T) {
+func TestBuildProviderContextRejectsCanonicalDanglingToolUse(t *testing.T) {
 	history := []Message{
 		TextMessage(RoleUser, "search"),
 		{Role: RoleAssistant, Blocks: []Block{{
@@ -53,9 +53,9 @@ func TestValidateProviderTranscriptRejectsCanonicalDanglingToolUse(t *testing.T)
 			ToolName:  "grep",
 		}}},
 	}
-	err := validateProviderTranscript(history, ProviderProfile{
+	_, err := BuildProviderContext(history, ProviderProfile{
 		Capabilities: ProviderCapabilities{Tools: true},
-	}, providerProjectionOptions{})
+	}, ProviderContextOptions{})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}

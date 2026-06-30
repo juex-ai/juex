@@ -155,10 +155,10 @@ func codexResponsesWebsocketDelta(current, previous map[string]any, baseline []a
 func codexResponsesWebsocketBaseline(payload map[string]any, resp *responses.Response, profile ProviderProfile) []any {
 	input, _ := payload["input"].([]any)
 	baseline := append([]any(nil), input...)
-	return append(baseline, codexResponsesOutputAsInput(resp, profile)...)
+	return append(baseline, codexResponsesOutputAsInput(resp)...)
 }
 
-func codexResponsesOutputAsInput(resp *responses.Response, profile ProviderProfile) []any {
+func codexResponsesOutputAsInput(resp *responses.Response) []any {
 	if resp == nil || len(resp.Output) == 0 {
 		return nil
 	}
@@ -186,7 +186,7 @@ func codexResponsesOutputAsInput(resp *responses.Response, profile ProviderProfi
 	if len(assistant.Blocks) == 0 {
 		return nil
 	}
-	encoded := toOpenAIResponseInputWithOptions([]Message{assistant}, profile, responseInputOptions{OmitReasoning: true})
+	encoded := encodeOpenAIResponseInput([]Message{assistant})
 	raw, err := json.Marshal(encoded)
 	if err != nil {
 		return nil

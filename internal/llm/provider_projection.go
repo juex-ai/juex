@@ -8,6 +8,24 @@ type providerProjectionOptions struct {
 	OmitReasoning bool
 }
 
+type ProviderContextOptions struct {
+	// OmitReasoning removes replayed reasoning blocks from provider-visible
+	// history for protocols that cannot reference stored reasoning items.
+	OmitReasoning bool
+}
+
+type ProviderContext struct {
+	Messages []Message
+}
+
+func BuildProviderContext(history []Message, profile ProviderProfile, opts ProviderContextOptions) (ProviderContext, error) {
+	projected := projectProviderTranscript(history, profile, providerProjectionOptions(opts))
+	if err := ValidateToolTranscript(projected); err != nil {
+		return ProviderContext{}, err
+	}
+	return ProviderContext{Messages: projected}, nil
+}
+
 func projectProviderTranscript(history []Message, profile ProviderProfile, opts providerProjectionOptions) []Message {
 	filtered := make([]Message, 0, len(history))
 	for _, m := range history {
