@@ -1599,6 +1599,14 @@ func (timedOutStructuredTestResult) ToolCallTimedOut() bool {
 	return true
 }
 
+type exitCodeStructuredTestResult struct {
+	code int
+}
+
+func (r exitCodeStructuredTestResult) ToolCallExitCode() (int, bool) {
+	return r.code, true
+}
+
 func TestRegistryCallWithInfoKeepsStructuredResult(t *testing.T) {
 	r := NewRegistry()
 	if err := r.Register(Tool{
@@ -1624,6 +1632,16 @@ func TestRegistryCallWithInfoKeepsStructuredResult(t *testing.T) {
 	structured, ok := info.StructuredResult.(map[string]any)
 	if !ok || structured["answer"] != 42 {
 		t.Fatalf("structured result = %#v", info.StructuredResult)
+	}
+	if info.Observation == nil {
+		t.Fatal("observation = nil")
+	}
+	if info.Observation.ToolName != "structured" || info.Observation.Content != "ok" {
+		t.Fatalf("observation = %+v, want structured tool output", info.Observation)
+	}
+	obsStructured, ok := info.Observation.StructuredResult.(map[string]any)
+	if !ok || obsStructured["answer"] != 42 {
+		t.Fatalf("observation structured result = %#v, want answer 42", info.Observation.StructuredResult)
 	}
 }
 
@@ -1654,6 +1672,84 @@ func TestRegistryCallWithInfoHonorsStructuredTimeout(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out after 1s") {
 		t.Fatalf("err = %v, want timed out after 1s", err)
+	}
+	if info.Observation == nil || !info.Observation.TimedOut || info.Observation.Error == "" {
+		t.Fatalf("observation = %+v, want timed-out error observation", info.Observation)
+	}
+}
+
+func TestRegistryCallWithInfoObservationCapturesStructuredExitCode(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register(Tool{
+		Name:   "check",
+		Schema: map[string]any{"type": "object"},
+		ResultHandler: func(ctx context.Context, input map[string]any) (Result, error) {
+			return Result{
+				Text:       "opaque failure output",
+				Structured: exitCodeStructuredTestResult{code: 9},
+			}, errors.New("check failed")
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, info, err := r.CallWithInfo(context.Background(), "check", map[string]any{"path": "artifact.txt"})
+	if err == nil {
+		t.Fatal("expected check error")
+	}
+	if out != "opaque failure output" {
+		t.Fatalf("out = %q, want opaque failure output", out)
+	}
+	if info.Observation == nil {
+		t.Fatal("observation = nil")
+	}
+	if info.Observation.ExitCode == nil || *info.Observation.ExitCode != 9 {
+		t.Fatalf("observation exit code = %+v, want 9", info.Observation.ExitCode)
+	}
+	if info.Observation.Error != "check failed" {
+		t.Fatalf("observation error = %q, want check failed", info.Observation.Error)
+	}
+}
+
+func TestObservationWithRuntimeContextPreservesSpecificExitCode(t *testing.T) {
+	explicitCode := 42
+	tests := []struct {
+		name string
+		obs  Observation
+		want int
+	}{
+		{
+			name: "explicit option",
+			obs:  NewObservation(ObservationOptions{ExitCode: &explicitCode}),
+			want: 42,
+		},
+		{
+			name: "structured result",
+			obs: NewObservation(ObservationOptions{
+				StructuredResult: exitCodeStructuredTestResult{code: 9},
+			}),
+			want: 9,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.obs.WithRuntimeContext(
+				"exec_command",
+				"call_1",
+				map[string]any{"cmd": "false"},
+				"runtime output",
+				&ShellExitError{ToolName: "exec_command", Code: 7},
+			)
+			if got.ExitCode == nil || *got.ExitCode != tt.want {
+				t.Fatalf("exit code = %+v, want %d", got.ExitCode, tt.want)
+			}
+			if got.Error == "" {
+				t.Fatal("error should still be captured from runtime context")
+			}
+			if got.ToolName != "exec_command" || got.ToolUseID != "call_1" {
+				t.Fatalf("runtime identity = %q/%q, want exec_command/call_1", got.ToolName, got.ToolUseID)
+			}
+		})
 	}
 }
 
