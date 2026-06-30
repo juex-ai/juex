@@ -94,6 +94,14 @@ func TestBrowserEventFromRuntimeNormalizesReplayPayload(t *testing.T) {
 	}
 }
 
+func TestNormalizeGoldenJSONUsesUnixLineEndings(t *testing.T) {
+	got := normalizeGoldenJSON([]byte("{\r\n  \"ok\": true\r\n}\r\n"))
+	want := []byte("{\n  \"ok\": true\n}\n")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("normalized golden = %q", got)
+	}
+}
+
 func assertGoldenJSON(t *testing.T, name string, value any) {
 	t.Helper()
 	got, err := json.MarshalIndent(value, "", "  ")
@@ -115,9 +123,14 @@ func assertGoldenJSON(t *testing.T, name string, value any) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	want = normalizeGoldenJSON(want)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("%s mismatch\nwant:\n%s\ngot:\n%s", name, want, got)
 	}
+}
+
+func normalizeGoldenJSON(data []byte) []byte {
+	return bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 }
 
 func browserEventFixtureEvents() []events.Event {
