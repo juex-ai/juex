@@ -54,13 +54,26 @@ func TestBrowserEventFromRuntimeValidatesKnownPayload(t *testing.T) {
 	}
 }
 
+func TestBrowserPayloadJSONAcceptsTypedPayloadFastPath(t *testing.T) {
+	raw, err := browserPayloadJSON("hook.trace", juexruntime.HookTracePayload{Text: "visible"}, func() any {
+		return &juexruntime.HookTracePayload{}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"text":"visible"}` {
+		t.Fatalf("raw = %s", raw)
+	}
+}
+
 func TestBrowserEventFromRuntimeNormalizesReplayPayload(t *testing.T) {
 	got, visible, err := browserEventFromRuntime(events.Event{
 		ID:   "turn-1",
 		Type: "turn.started",
 		Payload: map[string]any{
-			"input": "hello",
-			"kind":  "user",
+			"debug_only": "ignored",
+			"input":      "hello",
+			"kind":       "user",
 		},
 	})
 	if err != nil {
@@ -75,6 +88,9 @@ func TestBrowserEventFromRuntimeNormalizesReplayPayload(t *testing.T) {
 	}
 	if payload.Input != "hello" || payload.Kind != "user" {
 		t.Fatalf("payload = %+v", payload)
+	}
+	if bytes.Contains(got.Payload, []byte("debug_only")) {
+		t.Fatalf("replay payload was not normalized: %s", got.Payload)
 	}
 }
 

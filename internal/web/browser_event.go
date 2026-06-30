@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -100,11 +101,20 @@ func browserPayloadJSON(eventType string, payload any, factory func() any) (json
 	if payload == nil {
 		return nil, nil
 	}
+	target := factory()
+	targetType := reflect.TypeOf(target)
+	payloadType := reflect.TypeOf(payload)
+	if payloadType == targetType || (payloadType.Kind() != reflect.Ptr && reflect.PtrTo(payloadType) == targetType) {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal %s browser event payload: %w", eventType, err)
+		}
+		return raw, nil
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s browser event payload: %w", eventType, err)
 	}
-	target := factory()
 	if err := json.Unmarshal(raw, target); err != nil {
 		return nil, fmt.Errorf("decode %s browser event payload: %w", eventType, err)
 	}
