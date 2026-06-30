@@ -447,9 +447,10 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 }
 
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
-	results := e.runToolCalls(ctx, turnID, toolCalls)
-	e.recordToolFailureBatch(turnID, toolCalls, results)
-	if err := e.recordWorkingStateToolBatch(toolCalls, results); err != nil {
+	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
+	results := toolResultBlocks(toolResults)
+	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
+	if err := e.recordWorkingStateToolBatch(toolCalls, toolResults); err != nil {
 		return err
 	}
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
@@ -473,10 +474,15 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 	}})
 }
 
+type toolCallResult struct {
+	Block       llm.Block
+	Observation tools.Observation
+}
+
 // runToolCalls executes one assistant tool-use batch concurrently while
 // preserving provider-facing result order.
-func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Block) []llm.Block {
-	results := make([]llm.Block, len(calls))
+func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Block) []toolCallResult {
+	results := make([]toolCallResult, len(calls))
 	var wg sync.WaitGroup
 	for i, tc := range calls {
 		wg.Add(1)
@@ -489,16 +495,24 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Bl
 	return results
 }
 
-func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) llm.Block {
+func toolResultBlocks(results []toolCallResult) []llm.Block {
+	blocks := make([]llm.Block, len(results))
+	for i, result := range results {
+		blocks[i] = result.Block
+	}
+	return blocks
+}
+
+func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) toolCallResult {
 	preReq := e.newHookRequest(hooks.EventPreToolUse, turnID)
 	preReq.ToolName = call.ToolName
 	preReq.ToolInput = call.Input
 	preResults, err := e.runHooks(ctx, preReq)
 	if err != nil {
-		return e.hookToolErrorBlock(turnID, call, err)
+		return e.hookToolErrorResult(turnID, call, err)
 	}
 	if denied, reason := hookDenied(preResults); denied {
-		return e.hookToolErrorBlock(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
+		return e.hookToolErrorResult(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
 	}
 
 	callPayload := toolCallPayload(call)
@@ -538,39 +552,55 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		block.Content = toolErrorContent(block.Content, toolErr)
 		block.IsError = true
 	}
-	e.emitToolFinished(turnID, call, block, out, info, toolErr)
-	return block
+	observation := toolObservationForResult(call, block, info, toolErr)
+	e.emitToolFinished(turnID, call, block, observation, info)
+	return toolCallResult{Block: block, Observation: observation}
 }
 
-func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, out string, info tools.CallInfo, err error) {
+func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallInfo, err error) tools.Observation {
+	var obs tools.Observation
+	if info.Observation != nil {
+		obs = info.Observation.Clone()
+	}
+	obs = obs.WithRuntimeContext(call.ToolName, call.ToolUseID, call.Input, block.Content, err)
+	obs.TimedOut = obs.TimedOut || info.TimedOut
+	if obs.StructuredResult == nil {
+		obs.StructuredResult = info.StructuredResult
+	}
+	if obs.Content == "" {
+		obs.Content = block.Content
+	}
+	if obs.ExitCode == nil {
+		obs.ExitCode = firstExitCode(nil, block.Content)
+	}
+	return obs
+}
+
+func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block, observation tools.Observation, info tools.CallInfo) {
 	if block.IsError {
 		opts := toolevents.ErroredOptions{
 			Error:          "tool errored",
 			TimeoutSeconds: info.TimeoutSeconds,
 		}
-		if err != nil {
-			opts.Error = err.Error()
+		if observation.Error != "" {
+			opts.Error = observation.Error
 		}
-		if out != "" {
-			opts.Len = len(out)
-			opts.Preview = truncate(out, 200)
+		if observation.Content != "" {
+			opts.Len = len(observation.Content)
+			opts.Preview = truncate(observation.Content, 200)
 		}
-		if info.TimedOut {
+		if observation.TimedOut {
 			opts.TimedOut = true
 		}
-		if code, ok := tools.ExitCodeFromError(err); ok {
-			opts.ExitCode = intPtr(code)
-		} else if code := firstExitCode(nil, block.Content); code != nil {
-			opts.ExitCode = code
-		}
-		opts.Result = info.StructuredResult
+		opts.ExitCode = cloneIntPtr(observation.ExitCode)
+		opts.Result = observation.StructuredResult
 		e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
 		return
 	}
-	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(out), truncate(out, 200), info.StructuredResult)})
+	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(observation.Content), truncate(observation.Content, 200), observation.StructuredResult)})
 }
 
-func (e *Engine) hookToolErrorBlock(turnID string, call llm.Block, err error) llm.Block {
+func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) toolCallResult {
 	err = cancellation.NormalizeError(err)
 	block := llm.Block{
 		Type:      llm.BlockToolResult,
@@ -582,7 +612,8 @@ func (e *Engine) hookToolErrorBlock(turnID string, call llm.Block, err error) ll
 	e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), toolevents.ErroredOptions{
 		Error: err.Error(),
 	})})
-	return block
+	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
+	return toolCallResult{Block: block, Observation: observation}
 }
 
 func (e *Engine) effectiveMaxPendingInputs() int {

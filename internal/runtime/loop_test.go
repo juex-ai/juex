@@ -2533,6 +2533,60 @@ func TestTurn_FailureLedgerRecordsUnresolvedBlockingToolFailureWithoutContinuati
 	}
 }
 
+type runtimeExitCodeStructuredResult struct {
+	code int
+}
+
+func (r runtimeExitCodeStructuredResult) ToolCallExitCode() (int, bool) {
+	return r.code, true
+}
+
+func TestTurn_FailureLedgerUsesToolObservationExitCode(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "check_1", ToolName: "check_ready", Input: map[string]any{"path": "artifact.txt"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "check_ready",
+		Schema: map[string]any{"type": "object"},
+		ResultHandler: func(ctx context.Context, in map[string]any) (tools.Result, error) {
+			return tools.Result{
+				Text:       "opaque failure output",
+				Structured: runtimeExitCodeStructuredResult{code: 9},
+			}, fmt.Errorf("check failed")
+		},
+	})
+
+	var recorded ToolFailureRecordedPayload
+	bus.Subscribe("tool.failure.recorded", func(e events.Event) {
+		recorded, _ = e.Payload.(ToolFailureRecordedPayload)
+	})
+	var errored toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(e events.Event) {
+		errored, _ = e.Payload.(toolevents.ErroredPayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "finish the artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done too early" {
+		t.Fatalf("out = %q", out)
+	}
+	if recorded.ExitCode == nil || *recorded.ExitCode != 9 {
+		t.Fatalf("recorded exit code = %+v, want 9", recorded.ExitCode)
+	}
+	if recorded.OutputPreview == "" || strings.Contains(recorded.OutputPreview, "Process exited with code") {
+		t.Fatalf("recorded output preview = %q, want opaque text without formatted exit code", recorded.OutputPreview)
+	}
+	if errored.ExitCode == nil || *errored.ExitCode != 9 {
+		t.Fatalf("tool.errored exit code = %+v, want 9", errored.ExitCode)
+	}
+}
+
 func TestTurn_StopHookFailureFailsOnceAndEmitsHookErrored(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},

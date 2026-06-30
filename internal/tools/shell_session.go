@@ -105,6 +105,13 @@ func (r ShellResult) ToolCallTimedOut() bool {
 	return r.TimedOut
 }
 
+func (r ShellResult) ToolCallExitCode() (int, bool) {
+	if r.ExitCode == nil {
+		return 0, false
+	}
+	return *r.ExitCode, true
+}
+
 type shellSession struct {
 	id            int
 	started       time.Time

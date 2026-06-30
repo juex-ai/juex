@@ -551,7 +551,7 @@ func (e *Engine) workingStateContextLocked() (string, bool) {
 	return state.RenderProviderContext()
 }
 
-func (e *Engine) recordWorkingStateToolBatch(calls []llm.Block, results []llm.Block) error {
+func (e *Engine) recordWorkingStateToolBatch(calls []llm.Block, results []toolCallResult) error {
 	store := e.workingStateStoreLocked()
 	if store == nil {
 		return nil
@@ -565,27 +565,21 @@ func (e *Engine) recordWorkingStateToolBatch(calls []llm.Block, results []llm.Bl
 		if i < len(calls) {
 			call = calls[i]
 		}
-		toolName := firstNonEmptyString(result.ToolName, call.ToolName)
-		toolUseID := firstNonEmptyString(result.ToolUseID, call.ToolUseID)
-		paths := relatedPathsFromInput(workDir, call.Input)
-		if result.IsError {
-			errText := extractToolError(result.Content)
+		block := result.Block
+		obs := toolFailureObservationFromToolResult(call, result)
+		toolName := firstNonEmptyString(obs.ToolName, block.ToolName, call.ToolName)
+		toolUseID := firstNonEmptyString(obs.ToolUseID, block.ToolUseID, call.ToolUseID)
+		paths := relatedPathsFromInput(workDir, obs.Input)
+		if block.IsError {
+			errText := obs.Error
 			if errText == "" {
-				errText = strings.TrimSpace(result.Content)
+				errText = strings.TrimSpace(obs.Content)
 			}
-			classified := classifyToolFailure(toolFailureObservation{
-				ToolName:  toolName,
-				ToolUseID: toolUseID,
-				Input:     call.Input,
-				Content:   result.Content,
-				Error:     errText,
-				TimedOut:  strings.Contains(strings.ToLower(result.Content), "timed out"),
-				ExitCode:  firstExitCode(nil, result.Content),
-			})
+			classified := classifyToolFailure(obs)
 			if err := store.RecordOpenIssue(WorkingStateIssueObservation{
 				ToolName:     toolName,
 				ToolUseID:    toolUseID,
-				Text:         workingStateIssueText(toolName, toolUseID, errText, result.Content),
+				Text:         workingStateIssueText(toolName, toolUseID, errText, obs.Content),
 				Severity:     workingStateSeverityForFailure(classified.Classification),
 				Confidence:   workingStateConfidenceForFailure(classified.Classification),
 				RelatedPaths: paths,
@@ -606,7 +600,7 @@ func (e *Engine) recordWorkingStateToolBatch(calls []llm.Block, results []llm.Bl
 			if err := store.RecordSuccessfulCheck(WorkingStateCheckObservation{
 				ToolName:     toolName,
 				ToolUseID:    toolUseID,
-				Text:         workingStateCheckText(toolName, toolUseID, result.Content),
+				Text:         workingStateCheckText(toolName, toolUseID, obs.Content),
 				RelatedPaths: paths,
 			}); err != nil {
 				return err

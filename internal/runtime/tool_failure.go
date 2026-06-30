@@ -13,6 +13,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
 const (
@@ -64,7 +65,7 @@ func newToolFailureLedger(sessionDir string) *toolFailureLedger {
 	}
 }
 
-func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, results []llm.Block) {
+func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, results []toolCallResult) {
 	if e == nil || e.toolFailures == nil {
 		return
 	}
@@ -73,22 +74,8 @@ func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, result
 		if i < len(calls) {
 			call = calls[i]
 		}
-		toolName := firstNonEmptyString(result.ToolName, call.ToolName)
-		toolUseID := firstNonEmptyString(result.ToolUseID, call.ToolUseID)
-		errText := extractToolError(result.Content)
-		if errText == "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(result.Content)), "hooks:") {
-			errText = strings.TrimSpace(result.Content)
-		}
-		obs := toolFailureObservation{
-			ToolName:  toolName,
-			ToolUseID: toolUseID,
-			Input:     call.Input,
-			Content:   result.Content,
-			Error:     errText,
-			TimedOut:  strings.Contains(strings.ToLower(result.Content), "timed out"),
-			ExitCode:  firstExitCode(nil, result.Content),
-		}
-		if result.IsError {
+		obs := toolFailureObservationFromToolResult(call, result)
+		if result.Block.IsError {
 			payload := e.toolFailures.recordFailure(obs)
 			e.emit(events.Event{Type: "tool.failure.recorded", TurnID: turnID, Payload: payload})
 			continue
@@ -100,6 +87,34 @@ func (e *Engine) recordToolFailureBatch(turnID string, calls []llm.Block, result
 		for _, payload := range stale {
 			e.emit(events.Event{Type: "tool.failure.stale", TurnID: turnID, Payload: payload})
 		}
+	}
+}
+
+func toolFailureObservationFromToolResult(call llm.Block, result toolCallResult) toolFailureObservation {
+	block := result.Block
+	obs := result.Observation.WithRuntimeContext(
+		firstNonEmptyString(block.ToolName, call.ToolName),
+		firstNonEmptyString(block.ToolUseID, call.ToolUseID),
+		call.Input,
+		block.Content,
+		nil,
+	)
+	return toolFailureObservationFromToolsObservation(obs)
+}
+
+func toolFailureObservationFromToolsObservation(obs tools.Observation) toolFailureObservation {
+	errText := firstNonEmptyString(obs.Error, extractToolError(obs.Content))
+	if errText == "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(obs.Content)), "hooks:") {
+		errText = strings.TrimSpace(obs.Content)
+	}
+	return toolFailureObservation{
+		ToolName:  obs.ToolName,
+		ToolUseID: obs.ToolUseID,
+		Input:     obs.Input,
+		Content:   obs.Content,
+		Error:     errText,
+		TimedOut:  obs.TimedOut,
+		ExitCode:  firstExitCode(obs.ExitCode, obs.Content),
 	}
 }
 

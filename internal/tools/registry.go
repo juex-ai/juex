@@ -40,9 +40,10 @@ type Tool struct {
 }
 
 type CallInfo struct {
-	TimeoutSeconds   int  `json:"timeout_seconds"`
-	TimedOut         bool `json:"timed_out,omitempty"`
-	StructuredResult any  `json:"structured_result,omitempty"`
+	TimeoutSeconds   int          `json:"timeout_seconds"`
+	TimedOut         bool         `json:"timed_out,omitempty"`
+	StructuredResult any          `json:"structured_result,omitempty"`
+	Observation      *Observation `json:"-"`
 }
 
 type structuredTimeoutResult interface {
@@ -150,7 +151,14 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	t, ok := r.Get(name)
 	if !ok {
 		info := CallInfo{TimeoutSeconds: normalizedTimeoutSeconds(r.defaultTimeoutSeconds)}
-		return "", info, fmt.Errorf("tools: unknown tool %q", name)
+		err := fmt.Errorf("tools: unknown tool %q", name)
+		obs := NewObservation(ObservationOptions{
+			ToolName: name,
+			Input:    input,
+			Err:      err,
+		})
+		info.Observation = &obs
+		return "", info, err
 	}
 	timeoutSeconds := r.timeoutSecondsFor(t)
 	info := CallInfo{TimeoutSeconds: timeoutSeconds}
@@ -158,9 +166,23 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	input, err = NormalizeCallInputForDispatch(input)
 	if err != nil {
 		if errors.Is(err, ErrMalformedRawArguments) {
-			return "", info, malformedRawArgumentsError(name)
+			err = malformedRawArgumentsError(name)
+			obs := NewObservation(ObservationOptions{
+				ToolName: name,
+				Input:    input,
+				Err:      err,
+			})
+			info.Observation = &obs
+			return "", info, err
 		}
-		return "", info, fmt.Errorf("tools: %s: %w", name, err)
+		err = fmt.Errorf("tools: %s: %w", name, err)
+		obs := NewObservation(ObservationOptions{
+			ToolName: name,
+			Input:    input,
+			Err:      err,
+		})
+		info.Observation = &obs
+		return "", info, err
 	}
 	callInput := cloneCallInput(input)
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
@@ -170,15 +192,53 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	info.StructuredResult = result.Structured
 	if structuredResultTimedOut(result.Structured) && ctx.Err() == nil {
 		info.TimedOut = true
-		return out, info, toolTimeoutError(name, timeoutSeconds)
+		err = toolTimeoutError(name, timeoutSeconds)
+		obs := NewObservation(ObservationOptions{
+			ToolName:         name,
+			Input:            callInput,
+			Content:          out,
+			Err:              err,
+			TimedOut:         info.TimedOut,
+			StructuredResult: result.Structured,
+		})
+		info.Observation = &obs
+		return out, info, err
 	}
 	if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		info.TimedOut = true
-		return out, info, toolTimeoutError(name, timeoutSeconds)
+		err = toolTimeoutError(name, timeoutSeconds)
+		obs := NewObservation(ObservationOptions{
+			ToolName:         name,
+			Input:            callInput,
+			Content:          out,
+			Err:              err,
+			TimedOut:         info.TimedOut,
+			StructuredResult: result.Structured,
+		})
+		info.Observation = &obs
+		return out, info, err
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		obs := NewObservation(ObservationOptions{
+			ToolName:         name,
+			Input:            callInput,
+			Content:          out,
+			Err:              ctxErr,
+			TimedOut:         info.TimedOut,
+			StructuredResult: result.Structured,
+		})
+		info.Observation = &obs
 		return out, info, ctxErr
 	}
+	obs := NewObservation(ObservationOptions{
+		ToolName:         name,
+		Input:            callInput,
+		Content:          out,
+		Err:              err,
+		TimedOut:         info.TimedOut,
+		StructuredResult: result.Structured,
+	})
+	info.Observation = &obs
 	return out, info, err
 }
 
