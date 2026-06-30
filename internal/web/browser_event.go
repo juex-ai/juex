@@ -104,7 +104,7 @@ func browserPayloadJSON(eventType string, payload any, factory func() any) (json
 	target := factory()
 	targetType := reflect.TypeOf(target)
 	payloadType := reflect.TypeOf(payload)
-	if payloadType == targetType || (payloadType.Kind() != reflect.Ptr && reflect.PtrTo(payloadType) == targetType) {
+	if browserPayloadTypeMatchesTarget(payloadType, targetType) {
 		raw, err := json.Marshal(payload)
 		if err != nil {
 			return nil, fmt.Errorf("marshal %s browser event payload: %w", eventType, err)
@@ -123,4 +123,11 @@ func browserPayloadJSON(eventType string, payload any, factory func() any) (json
 		return nil, fmt.Errorf("marshal normalized %s browser event payload: %w", eventType, err)
 	}
 	return raw, nil
+}
+
+func browserPayloadTypeMatchesTarget(payloadType, targetType reflect.Type) bool {
+	if payloadType == targetType {
+		return true
+	}
+	return targetType.Kind() == reflect.Pointer && payloadType == targetType.Elem()
 }
