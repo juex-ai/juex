@@ -165,7 +165,7 @@ export function projectInitialCommand(
     next = projectCompactCommand(next, command.compact.message_id, commandInput);
     effects.unshift({ type: "refresh", preserveLiveMessages: true });
   } else {
-    next = projectCommandResult(next, commandInput, command.text);
+    next = projectCommandResult(next, commandInput, command.text ?? "");
   }
   return markProjectionDoneSoon({ ...state, projection: next }, effects);
 }
@@ -323,7 +323,7 @@ function projectCommandTurnSucceeded(
   return markProjectionDoneSoon(
     {
       ...state,
-      projection: projectCommandResult(state.projection, prompt, command.text),
+      projection: projectCommandResult(state.projection, prompt, command.text ?? ""),
     },
     [],
   );

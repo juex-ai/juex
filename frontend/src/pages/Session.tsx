@@ -156,7 +156,10 @@ export function Session() {
   const doneTimerRef = useRef<number | null>(null);
   const composerHintTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
-  const readStateRef = useRef<SessionReadState>(createSessionReadState());
+  const readStateRef = useRef<SessionReadState | null>(null);
+  if (readStateRef.current === null) {
+    readStateRef.current = readState;
+  }
   const latestRouteRef = useRef({ id });
   const {
     data,
@@ -207,7 +210,7 @@ export function Session() {
     const state = location.state as InitialCommandState;
     const activeTurnID = state?.activeTurnID;
     setSessionReadState(
-      resetSessionReadState(readStateRef.current, { activeTurnID }),
+      resetSessionReadState(currentReadState(), { activeTurnID }),
     );
     setDraft("");
     if (!activeTurnID) return;
@@ -218,7 +221,7 @@ export function Session() {
       try {
         const turn = await getTurnStatus(id, activeTurnID);
         if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
-        runSessionReadResult(projectTurnStatus(readStateRef.current, turn));
+        runSessionReadResult(projectTurnStatus(currentReadState(), turn));
         if (turn.state === "running") {
           timer = window.setTimeout(() => void reconcile(), 1000);
         }
@@ -288,7 +291,7 @@ export function Session() {
     if (initialCommandRef.current === key) return;
     initialCommandRef.current = key;
     runSessionReadResult(
-      projectInitialCommand(readStateRef.current, commandInput, command),
+      projectInitialCommand(currentReadState(), commandInput, command),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -305,7 +308,7 @@ export function Session() {
     if (!id || !data || !sessionCanSend(data)) return;
     const unsub = subscribeEvents(id, {
       onEvent: (e) => {
-        runSessionReadResult(projectLiveBrowserEvent(readStateRef.current, e));
+        runSessionReadResult(projectLiveBrowserEvent(currentReadState(), e));
       },
     });
     return () => {
@@ -325,12 +328,12 @@ export function Session() {
     try {
       const turn = await startTurn(id, prompt);
       runSessionReadResult(
-        projectStartTurnSucceeded(readStateRef.current, prompt, turn),
+        projectStartTurnSucceeded(currentReadState(), prompt, turn),
       );
     } catch (e) {
       console.error("startTurn failed", e);
       runSessionReadResult(
-        projectStartTurnFailed(readStateRef.current, compactCommand, e),
+        projectStartTurnFailed(currentReadState(), compactCommand, e),
       );
     }
   }
@@ -475,8 +478,12 @@ export function Session() {
     setReadState(next);
   }
 
+  function currentReadState(): SessionReadState {
+    return readStateRef.current ?? readState;
+  }
+
   function updateReadState(project: (state: SessionReadState) => SessionReadState) {
-    setSessionReadState(project(readStateRef.current));
+    setSessionReadState(project(currentReadState()));
   }
 
   function runSessionReadResult(result: SessionReadResult) {
@@ -508,7 +515,9 @@ export function Session() {
         });
         continue;
       }
-      scheduleIdleStatus();
+      if (effect.type === "scheduleIdleStatus") {
+        scheduleIdleStatus();
+      }
     }
   }
 
@@ -521,7 +530,7 @@ export function Session() {
   }
 
   function showComposerHint(message: string) {
-    runSessionReadResult(projectComposerHint(readStateRef.current, message));
+    runSessionReadResult(projectComposerHint(currentReadState(), message));
   }
 
   function scheduleComposerHintClear() {
