@@ -74,8 +74,10 @@ func (o Observation) WithRuntimeContext(toolName, toolUseID string, input map[st
 	}
 	if err != nil {
 		o.Error = err.Error()
-		if code, ok := ExitCodeFromError(err); ok {
-			o.ExitCode = &code
+		if o.ExitCode == nil {
+			if code, ok := ExitCodeFromError(err); ok {
+				o.ExitCode = &code
+			}
 		}
 	}
 	return o

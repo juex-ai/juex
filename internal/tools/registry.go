@@ -152,12 +152,11 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	if !ok {
 		info := CallInfo{TimeoutSeconds: normalizedTimeoutSeconds(r.defaultTimeoutSeconds)}
 		err := fmt.Errorf("tools: unknown tool %q", name)
-		obs := NewObservation(ObservationOptions{
+		info.setObservation(ObservationOptions{
 			ToolName: name,
 			Input:    input,
 			Err:      err,
 		})
-		info.Observation = &obs
 		return "", info, err
 	}
 	timeoutSeconds := r.timeoutSecondsFor(t)
@@ -167,21 +166,19 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	if err != nil {
 		if errors.Is(err, ErrMalformedRawArguments) {
 			err = malformedRawArgumentsError(name)
-			obs := NewObservation(ObservationOptions{
+			info.setObservation(ObservationOptions{
 				ToolName: name,
 				Input:    input,
 				Err:      err,
 			})
-			info.Observation = &obs
 			return "", info, err
 		}
 		err = fmt.Errorf("tools: %s: %w", name, err)
-		obs := NewObservation(ObservationOptions{
+		info.setObservation(ObservationOptions{
 			ToolName: name,
 			Input:    input,
 			Err:      err,
 		})
-		info.Observation = &obs
 		return "", info, err
 	}
 	callInput := cloneCallInput(input)
@@ -193,44 +190,13 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	if structuredResultTimedOut(result.Structured) && ctx.Err() == nil {
 		info.TimedOut = true
 		err = toolTimeoutError(name, timeoutSeconds)
-		obs := NewObservation(ObservationOptions{
-			ToolName:         name,
-			Input:            callInput,
-			Content:          out,
-			Err:              err,
-			TimedOut:         info.TimedOut,
-			StructuredResult: result.Structured,
-		})
-		info.Observation = &obs
-		return out, info, err
-	}
-	if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+	} else if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		info.TimedOut = true
 		err = toolTimeoutError(name, timeoutSeconds)
-		obs := NewObservation(ObservationOptions{
-			ToolName:         name,
-			Input:            callInput,
-			Content:          out,
-			Err:              err,
-			TimedOut:         info.TimedOut,
-			StructuredResult: result.Structured,
-		})
-		info.Observation = &obs
-		return out, info, err
+	} else if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
 	}
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		obs := NewObservation(ObservationOptions{
-			ToolName:         name,
-			Input:            callInput,
-			Content:          out,
-			Err:              ctxErr,
-			TimedOut:         info.TimedOut,
-			StructuredResult: result.Structured,
-		})
-		info.Observation = &obs
-		return out, info, ctxErr
-	}
-	obs := NewObservation(ObservationOptions{
+	info.setObservation(ObservationOptions{
 		ToolName:         name,
 		Input:            callInput,
 		Content:          out,
@@ -238,8 +204,12 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		TimedOut:         info.TimedOut,
 		StructuredResult: result.Structured,
 	})
-	info.Observation = &obs
 	return out, info, err
+}
+
+func (i *CallInfo) setObservation(opts ObservationOptions) {
+	obs := NewObservation(opts)
+	i.Observation = &obs
 }
 
 func callToolHandler(ctx context.Context, t Tool, input map[string]any) (Result, error) {

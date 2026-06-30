@@ -1711,6 +1711,48 @@ func TestRegistryCallWithInfoObservationCapturesStructuredExitCode(t *testing.T)
 	}
 }
 
+func TestObservationWithRuntimeContextPreservesSpecificExitCode(t *testing.T) {
+	explicitCode := 42
+	tests := []struct {
+		name string
+		obs  Observation
+		want int
+	}{
+		{
+			name: "explicit option",
+			obs:  NewObservation(ObservationOptions{ExitCode: &explicitCode}),
+			want: 42,
+		},
+		{
+			name: "structured result",
+			obs: NewObservation(ObservationOptions{
+				StructuredResult: exitCodeStructuredTestResult{code: 9},
+			}),
+			want: 9,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.obs.WithRuntimeContext(
+				"exec_command",
+				"call_1",
+				map[string]any{"cmd": "false"},
+				"runtime output",
+				&ShellExitError{ToolName: "exec_command", Code: 7},
+			)
+			if got.ExitCode == nil || *got.ExitCode != tt.want {
+				t.Fatalf("exit code = %+v, want %d", got.ExitCode, tt.want)
+			}
+			if got.Error == "" {
+				t.Fatal("error should still be captured from runtime context")
+			}
+			if got.ToolName != "exec_command" || got.ToolUseID != "call_1" {
+				t.Fatalf("runtime identity = %q/%q, want exec_command/call_1", got.ToolName, got.ToolUseID)
+			}
+		})
+	}
+}
+
 func TestBuiltins_ExecCommandTTYWritesStdin(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("windows tty coverage runs through ConPTY-specific tests")
