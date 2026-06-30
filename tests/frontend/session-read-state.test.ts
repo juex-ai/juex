@@ -13,6 +13,7 @@ import {
   projectLoadOlderSucceeded,
   projectPendingSubmit,
   projectPromptInputChanged,
+  projectSessionLoadFailed,
   projectSessionLoaded,
   projectStartTurnFailed,
   projectStartTurnSucceeded,
@@ -33,6 +34,40 @@ test("resetSessionReadState starts active turn reconciliation", () => {
   assert.deepEqual(state.projection.status, { kind: "running" });
   assert.equal(state.composerHint, null);
   assert.equal(state.loadingOlderMessages, false);
+});
+
+test("session load failure leaves loading and route reset clears stale data", () => {
+  let state = projectSessionLoaded(
+    createSessionReadState(),
+    session("old", []),
+  );
+  state = projectSessionLoadFailed(
+    state,
+    new Error("session not found: missing"),
+  );
+
+  assert.equal(state.data, null);
+  assert.equal(state.loadError, "session not found: missing");
+  assert.equal(state.olderMessagesError, null);
+
+  state = projectSessionLoaded(state, session("old", []));
+  state = resetSessionReadState(state);
+  assert.equal(state.data, null);
+  assert.equal(state.loadError, null);
+});
+
+test("session load failure extracts plain API error objects", () => {
+  let state = projectSessionLoadFailed(createSessionReadState(), {
+    message: "session not found: object-message",
+  });
+
+  assert.equal(state.loadError, "session not found: object-message");
+
+  state = projectSessionLoadFailed(createSessionReadState(), {
+    error: "not_found",
+  });
+
+  assert.equal(state.loadError, "not_found");
 });
 
 test("projectLiveBrowserEvent carries projection effects through controller", () => {
