@@ -31,6 +31,7 @@ type Config struct {
 	Model                     string
 	ThinkingEffort            string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
 	ContextWindow             int    // provider context window in tokens; defaults to 256K
+	MaxOutputTokens           int    // optional provider-visible output cap for normal turns
 	ProviderHeaders           map[string]string
 	ProviderQuery             map[string]string
 	ProviderCapabilities      llm.CapabilityOverrides
@@ -180,6 +181,8 @@ type runtimeConfig struct {
 	ExternalEventTTLSet      bool
 	ToolTimeout              time.Duration
 	ToolTimeoutSet           bool
+	MaxOutputTokens          int
+	MaxOutputTokensSet       bool
 	WorkingStateEnabled      bool
 	WorkingStateEnabledSet   bool
 	ShowBuiltinHookTraces    bool
@@ -218,6 +221,13 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			}
 			c.ToolTimeout = d
 			c.ToolTimeoutSet = true
+		case "max_output_tokens":
+			n, err := parseRuntimePositiveInt(key, value)
+			if err != nil {
+				return err
+			}
+			c.MaxOutputTokens = n
+			c.MaxOutputTokensSet = true
 		case "working_state_enabled":
 			enabled, err := ParseBoolValue(value.Value)
 			if err != nil {
@@ -574,6 +584,27 @@ func parseRuntimeDuration(field string, node *yaml.Node) (time.Duration, error) 
 	return d, nil
 }
 
+func parseRuntimePositiveInt(field string, node *yaml.Node) (int, error) {
+	if node == nil || node.Tag == "!!null" {
+		return 0, nil
+	}
+	if node.Kind != yaml.ScalarNode {
+		return 0, fmt.Errorf("runtime.%s must be a positive integer", field)
+	}
+	value := strings.TrimSpace(node.Value)
+	if value == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("runtime.%s: %w", field, err)
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("runtime.%s must be positive", field)
+	}
+	return n, nil
+}
+
 func DefaultCompactionConfig() CompactionConfig {
 	return runtimepolicy.DefaultCompactionPolicy()
 }
@@ -854,6 +885,9 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	}
 	if c.ToolTimeoutSet {
 		cfg.ToolTimeout = c.ToolTimeout
+	}
+	if c.MaxOutputTokensSet {
+		cfg.MaxOutputTokens = c.MaxOutputTokens
 	}
 	if c.WorkingStateEnabledSet {
 		cfg.DisableWorkingState = !c.WorkingStateEnabled

@@ -661,12 +661,30 @@ func TestEndToEnd_ChunkedWriteBuiltinFlow(t *testing.T) {
 	for _, msg := range prov.history[3] {
 		for _, block := range msg.Blocks {
 			if block.Type == llm.BlockToolUse && block.ToolName == "write_chunk" {
-				if _, ok := block.Input["content"]; ok {
-					t.Fatalf("provider replay kept chunk content: %+v", block.Input)
+				content, ok := block.Input["content"].(string)
+				if !ok || (content != contentA && content != contentB) {
+					t.Fatalf("provider replay should keep provider-safe chunk content: %+v", block.Input)
 				}
-				if block.Input["content_omitted"] != true {
-					t.Fatalf("provider replay missing content summary: %+v", block.Input)
+				if _, ok := block.Input["content_omitted"]; ok {
+					t.Fatalf("provider replay kept schema-like content summary at top level: %+v", block.Input)
 				}
+			}
+		}
+	}
+	afterCommitText := messagesText(prov.history[4])
+	if !strings.Contains(afterCommitText, "Chunked write provider replay summary: committed") {
+		t.Fatalf("provider replay after commit should include chunked write summary:\n%s", afterCommitText)
+	}
+	afterCommitDebug := fmt.Sprintf("%+v", prov.history[4])
+	for _, forbidden := range []string{contentA, contentB} {
+		if strings.Contains(afterCommitDebug, forbidden) {
+			t.Fatalf("provider replay after commit should fold chunk content %q:\n%s", forbidden, afterCommitDebug)
+		}
+	}
+	for _, msg := range prov.history[4] {
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockToolUse && strings.HasPrefix(block.ToolName, "write_") {
+				t.Fatalf("provider replay after commit should fold chunked write tool call: %+v", block)
 			}
 		}
 	}

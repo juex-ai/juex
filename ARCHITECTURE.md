@@ -322,9 +322,9 @@ requests. The runtime also applies the same provider-visible tool input
 projection before invoking any provider implementation. The helper compacts
 history, validates provider-visible tool-call transcripts, filters tool and
 reasoning replay blocks through capability gates, supports Codex's
-reasoning-omit path, normalizes function parameter schemas, summarizes
-content-heavy `write_chunk` inputs by size and SHA-256 hash, and round-trips
-tool-call argument JSON fallbacks. Adapters still own
+reasoning-omit path, normalizes function parameter schemas, folds committed
+chunked write sessions out of provider replay with a compact summary, and
+round-trips tool-call argument JSON fallbacks. Adapters still own
 protocol-specific SDK request structs, content-block shapes, cache-control
 placement, and response decoding. Session repair remains outside provider
 adapters: malformed persisted transcripts are repaired by the session/runtime
@@ -407,9 +407,11 @@ append to `tools.DefaultBuiltinProviders()` and pass the result through
 explicit `workdir` / `path`.
 The chunked write manager is in-memory per registry instance. Successful
 `write_chunk` calls return compact acknowledgements and never echo the chunk
-body; provider-visible history replaces the chunk body with size and SHA-256
-metadata, while the durable conversation log still preserves the original
-assistant tool-use input for replay and debugging.
+body. Provider-visible history keeps recent active chunks available so a model
+can continue writing, then folds committed chunked write sessions into a
+compact summary with path, size, chunk count, and SHA-256 metadata. The durable
+conversation log still preserves the original assistant tool-use input for
+replay and debugging.
 Tool hard timeouts are runtime policy rather than model-visible parameters.
 The registry applies a per-call timeout context from its default policy or from
 an individual tool's registration metadata, caps it at 300 seconds, and leaves
@@ -882,6 +884,7 @@ runtime:
   pending_input_ttl: 15m
   external_event_ttl: 24h
   tool_timeout: 60s
+  max_output_tokens: 8192
   working_state_enabled: true
   show_builtin_hook_traces: false
 compaction:
@@ -935,6 +938,7 @@ compaction:
 | `runtime.pending_input_ttl` | duration for queued user steer messages while a turn is running; defaults to 15m |
 | `runtime.external_event_ttl` | duration for queued MCP/external event messages while a turn is running; defaults to 24h |
 | `runtime.tool_timeout` | default hard timeout for tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
+| `runtime.max_output_tokens` | optional normal-turn provider output cap; omit it to use the provider default |
 | `runtime.working_state_enabled` | enables the session-local generic working-state sidecar; defaults to true |
 | `runtime.show_builtin_hook_traces` | mirrors built-in runtime hook/gate completions and failures into conversation-visible UI-only hook traces; defaults to false |
 | `compaction.enabled` | enables automatic and manual context compaction |

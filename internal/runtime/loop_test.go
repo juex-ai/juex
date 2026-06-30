@@ -60,6 +60,21 @@ func (m *mockProvider) Complete(ctx context.Context, sys string, history []llm.M
 	return r, nil
 }
 
+type captureOptionsProvider struct {
+	opts llm.CompleteOptions
+}
+
+func (p *captureOptionsProvider) Name() string { return "capture" }
+
+func (p *captureOptionsProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *captureOptionsProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	p.opts = opts
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn}, nil
+}
+
 type mockProviderWithErrors struct {
 	errs      []error
 	responses []llm.Response
@@ -186,6 +201,22 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 		Session:  sess,
 		Prompt:   pb,
 	}, bus
+}
+
+func TestTurn_PassesMaxOutputTokensToProvider(t *testing.T) {
+	prov := &captureOptionsProvider{}
+	eng, _ := newEngine(t, prov, false)
+	eng.MaxOutputTokens = 8192
+
+	if out, err := eng.Turn(context.Background(), "hi"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if prov.opts.Purpose != "turn" {
+		t.Fatalf("purpose = %q, want turn", prov.opts.Purpose)
+	}
+	if prov.opts.MaxOutputTokens != 8192 {
+		t.Fatalf("MaxOutputTokens = %d, want 8192", prov.opts.MaxOutputTokens)
+	}
 }
 
 func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider) *Engine {

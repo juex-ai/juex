@@ -18,9 +18,13 @@ const (
 	chunkWriteDefaultMode   = "overwrite"
 	chunkWriteCreateMode    = "create"
 	chunkWriteOverwriteMode = "overwrite"
-	chunkWriteMaxChunkBytes = 64 * 1024
-	chunkWriteMaxChunkChars = 64 * 1024
-	chunkWriteSessionTTL    = 2 * time.Hour
+	// Tool storage can accept larger chunks, but provider-side tool argument
+	// JSON is often bounded by the model's visible output budget.
+	chunkWriteRecommendedChunkBytes = 4000
+	chunkWriteRecommendedChunkChars = 2000
+	chunkWriteMaxChunkBytes         = chunkWriteRecommendedChunkBytes
+	chunkWriteMaxChunkChars         = chunkWriteRecommendedChunkChars
+	chunkWriteSessionTTL            = 2 * time.Hour
 )
 
 type chunkWriteManager struct {
@@ -64,7 +68,7 @@ func newChunkWriteManager(workDir string) *chunkWriteManager {
 func writeBeginTool(manager *chunkWriteManager) Tool {
 	return Tool{
 		Name:        "write_begin",
-		Description: "Begin a chunked full-file write session for a long generated file. Use write_chunk to add chunks and write_commit to atomically create or overwrite the final file.",
+		Description: fmt.Sprintf("Begin a chunked full-file write session for a long generated file. Use write_chunk repeatedly with small provider-safe chunks, preferably no more than %d characters or %d bytes each, then write_commit to atomically create or overwrite the final file.", chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -80,7 +84,7 @@ func writeBeginTool(manager *chunkWriteManager) Tool {
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("write_begin: write_id=%s path=%s mode=%s max_chunk_bytes=%d max_chunk_chars=%d", session.id, session.rel, session.mode, chunkWriteMaxChunkBytes, chunkWriteMaxChunkChars), nil
+			return fmt.Sprintf("write_begin: write_id=%s path=%s mode=%s max_chunk_bytes=%d max_chunk_chars=%d recommended_chunk_bytes=%d recommended_chunk_chars=%d", session.id, session.rel, session.mode, chunkWriteMaxChunkBytes, chunkWriteMaxChunkChars, chunkWriteRecommendedChunkBytes, chunkWriteRecommendedChunkChars), nil
 		},
 	}
 }
@@ -88,14 +92,19 @@ func writeBeginTool(manager *chunkWriteManager) Tool {
 func writeChunkTool(manager *chunkWriteManager) Tool {
 	return Tool{
 		Name:        "write_chunk",
-		Description: "Record one chunk for a chunked write session. The result is a compact acknowledgement and never echoes content.",
+		Description: fmt.Sprintf("Record one chunk for a chunked write session. Send the actual content string in content. For long files, split content across multiple sequential write_chunk calls, preferably no more than %d characters or %d bytes per chunk. Do not send summary or size metadata such as content_omitted, content_bytes, content_chars, or content_sha256 as input; those fields are not file content. The result is a compact acknowledgement and never echoes content.", chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes),
 		Schema: map[string]any{
-			"type": "object",
+			"type":                 "object",
+			"additionalProperties": false,
 			"properties": map[string]any{
 				"write_id": map[string]any{"type": "string"},
 				"index":    map[string]any{"type": "integer", "description": "Zero-based chunk index"},
-				"content":  map[string]any{"type": "string"},
-				"sha256":   map[string]any{"type": "string", "description": "Optional SHA-256 hex digest of this chunk"},
+				"content": map[string]any{
+					"type":        "string",
+					"description": fmt.Sprintf("Actual chunk text. Keep each call <= %d characters and <= %d bytes; continue with the next index for more content.", chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes),
+					"maxLength":   chunkWriteRecommendedChunkChars,
+				},
+				"sha256": map[string]any{"type": "string", "description": "Optional SHA-256 hex digest of this chunk"},
 			},
 			"required": []string{"write_id", "index", "content"},
 		},
@@ -107,6 +116,9 @@ func writeChunkTool(manager *chunkWriteManager) Tool {
 			}
 			content, contentOK := in["content"].(string)
 			if !contentOK {
+				if projectedWriteChunkMetadata(in) {
+					return "", fmt.Errorf("write_chunk: missing content; content_omitted/content_bytes/content_chars/content_sha256 are summary metadata, not valid input. Send the actual content string, preferably no more than %d chars or %d bytes per chunk", chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes)
+				}
 				return "", fmt.Errorf("write_chunk: missing content")
 			}
 			expectedHash, _ := in["sha256"].(string)
@@ -117,6 +129,15 @@ func writeChunkTool(manager *chunkWriteManager) Tool {
 			return fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=%s chunks=%d duplicate=%t", writeID, index, chunk.bytes, chunk.chars, chunk.hash, count, duplicate), nil
 		},
 	}
+}
+
+func projectedWriteChunkMetadata(in map[string]any) bool {
+	for _, key := range []string{"content_omitted", "content_bytes", "content_chars", "content_sha256"} {
+		if _, ok := in[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func writeCommitTool(manager *chunkWriteManager) Tool {
@@ -238,7 +259,7 @@ func (m *chunkWriteManager) chunk(writeID string, index int, content, expectedHa
 	contentBytes := len(content)
 	contentChars := utf8.RuneCountInString(content)
 	if contentBytes > chunkWriteMaxChunkBytes || contentChars > chunkWriteMaxChunkChars {
-		return chunkWriteChunk{}, false, 0, fmt.Errorf("write_chunk: content exceeds max chunk limits")
+		return chunkWriteChunk{}, false, 0, fmt.Errorf("write_chunk: content exceeds max chunk limits (%d chars/%d bytes); split into smaller chunks, preferably no more than %d chars or %d bytes per chunk", chunkWriteMaxChunkChars, chunkWriteMaxChunkBytes, chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes)
 	}
 	hash := sha256Hex([]byte(content))
 	if expectedHash != "" && !strings.EqualFold(expectedHash, hash) {

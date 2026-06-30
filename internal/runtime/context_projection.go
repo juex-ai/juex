@@ -96,7 +96,7 @@ func (e *Engine) projectMessagesForProviderLocked(msgs []llm.Message, policy com
 		total.ToolResultsExternalized += stats.ToolResultsExternalized
 		total.BytesExternalized += stats.BytesExternalized
 	}
-	return out, total, nil
+	return llm.FoldChunkedWriteHistoryForProvider(out), total, nil
 }
 
 func projectToolUseInputsForProvider(msg llm.Message) llm.Message {

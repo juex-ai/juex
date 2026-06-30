@@ -85,7 +85,10 @@ type Engine struct {
 	// ContextWindow is the provider context window in tokens. When omitted,
 	// the engine uses DefaultContextWindowTokens.
 	ContextWindow int
-	Compaction    CompactionPolicy
+	// MaxOutputTokens optionally caps provider-visible output for normal
+	// turns. A zero value leaves the provider default in place.
+	MaxOutputTokens int
+	Compaction      CompactionPolicy
 
 	// mu serializes turns for one Engine. MCP notifications can arrive while
 	// a user turn is running, and both paths append to the same session
@@ -399,8 +402,9 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 
 func (e *Engine) requestProviderTurnLocked(ctx context.Context, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
 	return llm.CompleteWithOptions(ctx, e.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
-		Purpose:     "turn",
-		CachePolicy: e.cachePolicyLocked(),
+		Purpose:         "turn",
+		MaxOutputTokens: e.MaxOutputTokens,
+		CachePolicy:     e.cachePolicyLocked(),
 	})
 }
 

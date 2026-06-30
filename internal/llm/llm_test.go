@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2000,7 +2001,7 @@ func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
 	}
 }
 
-func TestProjectProviderTranscriptSummarizesWriteChunkContent(t *testing.T) {
+func TestProjectProviderTranscriptPreservesWriteChunkContent(t *testing.T) {
 	history := []Message{{
 		Role: RoleAssistant,
 		Blocks: []Block{{
@@ -2019,20 +2020,313 @@ func TestProjectProviderTranscriptSummarizesWriteChunkContent(t *testing.T) {
 		Capabilities: ProviderCapabilities{Tools: true},
 	}, providerProjectionOptions{})
 	input := projected[0].Blocks[0].Input
-	if _, ok := input["content"]; ok {
-		t.Fatalf("projected write_chunk input kept content: %+v", input)
+	if input["content"] != strings.Repeat("x", 128) {
+		t.Fatalf("projected write_chunk input should keep content: %+v", input)
 	}
 	if input["write_id"] != "write-abc" || input["index"] != 2 {
 		t.Fatalf("projected input lost metadata: %+v", input)
-	}
-	if input["content_omitted"] != true || input["content_bytes"] != 128 || input["content_sha256"] == "" {
-		t.Fatalf("projected input missing content summary: %+v", input)
 	}
 	if history[0].Blocks[0].Input["content"] == nil {
 		t.Fatalf("projection mutated original history: %+v", history[0].Blocks[0].Input)
 	}
 	if input := ProviderToolInput("other_tool", map[string]any{"write_id": "x", "index": 0, "content": "keep"}); input["content"] != "keep" {
 		t.Fatalf("non-write_chunk input should keep content: %+v", input)
+	}
+}
+
+func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T) {
+	const writeID = "write-committed"
+	chunks := []string{
+		strings.Repeat("alpha ", 20),
+		strings.Repeat("beta ", 20),
+		strings.Repeat("gamma ", 20),
+	}
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "begin_1",
+			ToolName:  "write_begin",
+			Input:     map[string]any{"path": "reports/long.md", "mode": "create"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "begin_1",
+			Content:   "write_begin: write_id=" + writeID + " path=reports/long.md mode=create max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+		}}},
+	}
+	for i, chunk := range chunks {
+		toolUseID := fmt.Sprintf("chunk_%d", i)
+		history = append(history,
+			Message{Role: RoleAssistant, Blocks: []Block{{
+				Type:      BlockToolUse,
+				ToolUseID: toolUseID,
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": writeID, "index": i, "content": chunk},
+			}}},
+			Message{Role: RoleUser, Blocks: []Block{{
+				Type:      BlockToolResult,
+				ToolUseID: toolUseID,
+				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+			}}},
+		)
+	}
+	history = append(history,
+		Message{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "commit_1",
+			ToolName:  "write_commit",
+			Input:     map[string]any{"write_id": writeID, "expected_chunks": len(chunks)},
+		}}},
+		Message{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "commit_1",
+			Content:   "write_commit: write_id=write-committed path=reports/long.md bytes=320 chars=320 chunks=3 sha256=final-hash",
+		}}},
+	)
+
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	text := providerProjectionDebugString(projected)
+	if !strings.Contains(text, "Chunked write provider replay summary: committed") {
+		t.Fatalf("projected history missing committed summary:\n%s", text)
+	}
+	if !strings.Contains(text, "path=reports/long.md") || !strings.Contains(text, "sha256=final-hash") {
+		t.Fatalf("committed summary missing file metadata:\n%s", text)
+	}
+	for _, chunk := range chunks {
+		if strings.Contains(text, chunk) {
+			t.Fatalf("committed projection should fold raw chunk content %q:\n%s", chunk, text)
+		}
+	}
+	if got := providerProjectionToolUseNames(projected); len(got) != 0 {
+		t.Fatalf("committed projection should omit chunked write tool calls, got %+v", got)
+	}
+	if strings.Contains(text, "content_omitted") {
+		t.Fatalf("committed projection should not use fake tool arguments:\n%s", text)
+	}
+}
+
+func TestProjectProviderTranscriptFoldsOnlyOldActiveChunkedWriteChunks(t *testing.T) {
+	const writeID = "write-active"
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "begin_1",
+			ToolName:  "write_begin",
+			Input:     map[string]any{"path": "drafts/live.md", "mode": "overwrite"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "begin_1",
+			Content:   "write_begin: write_id=" + writeID + " path=drafts/live.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+		}}},
+	}
+	chunks := make([]string, 0, providerWriteChunkRecentReplayCount+2)
+	for i := 0; i < providerWriteChunkRecentReplayCount+2; i++ {
+		chunk := strings.Repeat(fmt.Sprintf("chunk-%d ", i), 10)
+		chunks = append(chunks, chunk)
+		toolUseID := fmt.Sprintf("chunk_%d", i)
+		history = append(history,
+			Message{Role: RoleAssistant, Blocks: []Block{{
+				Type:      BlockToolUse,
+				ToolUseID: toolUseID,
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": writeID, "index": i, "content": chunk},
+			}}},
+			Message{Role: RoleUser, Blocks: []Block{{
+				Type:      BlockToolResult,
+				ToolUseID: toolUseID,
+				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+			}}},
+		)
+	}
+
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	text := providerProjectionDebugString(projected)
+	if !strings.Contains(text, "Chunked write provider replay summary: active") {
+		t.Fatalf("projected history missing active summary:\n%s", text)
+	}
+	if !strings.Contains(text, "folded_chunks=2") || !strings.Contains(text, "next_index=2") {
+		t.Fatalf("active summary missing fold metadata:\n%s", text)
+	}
+	for _, oldChunk := range chunks[:2] {
+		if strings.Contains(text, oldChunk) {
+			t.Fatalf("active projection should fold old chunk content %q:\n%s", oldChunk, text)
+		}
+	}
+	for _, recentChunk := range chunks[2:] {
+		if !strings.Contains(text, recentChunk) {
+			t.Fatalf("active projection should keep recent chunk content %q:\n%s", recentChunk, text)
+		}
+	}
+	if got := providerProjectionToolUseNames(projected); strings.Count(strings.Join(got, ","), "write_chunk") != providerWriteChunkRecentReplayCount {
+		t.Fatalf("active projection should keep %d recent write_chunk calls, got %+v", providerWriteChunkRecentReplayCount, got)
+	}
+	if !strings.Contains(text, "write_begin") || !strings.Contains(text, writeID) {
+		t.Fatalf("active projection should keep begin context and write_id:\n%s", text)
+	}
+	if strings.Contains(text, "content_omitted") {
+		t.Fatalf("active projection should not use fake tool arguments:\n%s", text)
+	}
+}
+
+func TestProjectProviderTranscriptDoesNotFoldUnresolvedChunkedWriteCommit(t *testing.T) {
+	const writeID = "write-unresolved"
+	chunks := []string{
+		strings.Repeat("alpha ", 20),
+		strings.Repeat("beta ", 20),
+	}
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "begin_1",
+			ToolName:  "write_begin",
+			Input:     map[string]any{"path": "drafts/unresolved.md", "mode": "overwrite"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "begin_1",
+			Content:   "write_begin: write_id=" + writeID + " path=drafts/unresolved.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+		}}},
+	}
+	for i, chunk := range chunks {
+		toolUseID := fmt.Sprintf("chunk_%d", i)
+		history = append(history,
+			Message{Role: RoleAssistant, Blocks: []Block{{
+				Type:      BlockToolUse,
+				ToolUseID: toolUseID,
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": writeID, "index": i, "content": chunk},
+			}}},
+			Message{Role: RoleUser, Blocks: []Block{{
+				Type:      BlockToolResult,
+				ToolUseID: toolUseID,
+				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+			}}},
+		)
+	}
+	history = append(history, Message{Role: RoleAssistant, Blocks: []Block{{
+		Type:      BlockToolUse,
+		ToolUseID: "commit_1",
+		ToolName:  "write_commit",
+		Input:     map[string]any{"write_id": writeID, "expected_chunks": len(chunks)},
+	}}})
+
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	text := providerProjectionDebugString(projected)
+	if strings.Contains(text, "Chunked write provider replay summary: committed") {
+		t.Fatalf("unresolved commit should not be folded as committed:\n%s", text)
+	}
+	for _, chunk := range chunks {
+		if !strings.Contains(text, chunk) {
+			t.Fatalf("unresolved commit should keep prior chunk content %q:\n%s", chunk, text)
+		}
+	}
+	if got := providerProjectionToolUseNames(projected); !slices.Contains(got, "write_commit") {
+		t.Fatalf("unresolved commit tool call should remain visible, got %+v", got)
+	}
+}
+
+func TestProjectProviderTranscriptDefersActiveChunkedWriteSummaryUntilToolResultsComplete(t *testing.T) {
+	const writeID = "write-batch"
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "begin_1",
+			ToolName:  "write_begin",
+			Input:     map[string]any{"path": "drafts/batch.md", "mode": "overwrite"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "begin_1",
+			Content:   "write_begin: write_id=" + writeID + " path=drafts/batch.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+		}}},
+		{Role: RoleAssistant},
+		{Role: RoleUser},
+	}
+	for i := 0; i < providerWriteChunkRecentReplayCount+2; i++ {
+		chunk := strings.Repeat(fmt.Sprintf("batch-%d ", i), 10)
+		toolUseID := fmt.Sprintf("chunk_%d", i)
+		history[2].Blocks = append(history[2].Blocks, Block{
+			Type:      BlockToolUse,
+			ToolUseID: toolUseID,
+			ToolName:  "write_chunk",
+			Input:     map[string]any{"write_id": writeID, "index": i, "content": chunk},
+		})
+		history[3].Blocks = append(history[3].Blocks, Block{
+			Type:      BlockToolResult,
+			ToolUseID: toolUseID,
+			Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+		})
+	}
+
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	if err := ValidateToolTranscript(projected); err != nil {
+		t.Fatalf("projected transcript should remain valid after active chunk folding: %v\n%s", err, providerProjectionDebugString(projected))
+	}
+
+	var userBlocks []Block
+	for _, message := range projected {
+		if message.Role == RoleUser {
+			userBlocks = message.Blocks
+		}
+	}
+	if len(userBlocks) != providerWriteChunkRecentReplayCount+1 {
+		t.Fatalf("projected user blocks = %d, want %d: %+v", len(userBlocks), providerWriteChunkRecentReplayCount+1, userBlocks)
+	}
+	for i := 0; i < providerWriteChunkRecentReplayCount; i++ {
+		if userBlocks[i].Type != BlockToolResult {
+			t.Fatalf("retained tool_result %d should precede summary: %+v", i, userBlocks)
+		}
+	}
+	last := userBlocks[len(userBlocks)-1]
+	if last.Type != BlockText || !strings.Contains(last.Text, "Chunked write provider replay summary: active") {
+		t.Fatalf("active summary should be deferred after retained tool_results: %+v", userBlocks)
+	}
+}
+
+func providerProjectionDebugString(messages []Message) string {
+	var out strings.Builder
+	for _, message := range messages {
+		fmt.Fprintf(&out, "role=%s\n", message.Role)
+		for _, block := range message.Blocks {
+			switch block.Type {
+			case BlockText:
+				fmt.Fprintf(&out, "text=%s\n", block.Text)
+			case BlockToolUse:
+				fmt.Fprintf(&out, "tool_use=%s id=%s input=%+v\n", block.ToolName, block.ToolUseID, block.Input)
+			case BlockToolResult:
+				fmt.Fprintf(&out, "tool_result id=%s error=%t content=%s\n", block.ToolUseID, block.IsError, block.Content)
+			default:
+				fmt.Fprintf(&out, "block=%s text=%s content=%s input=%+v\n", block.Type, block.Text, block.Content, block.Input)
+			}
+		}
+	}
+	return out.String()
+}
+
+func providerProjectionToolUseNames(messages []Message) []string {
+	var out []string
+	for _, message := range messages {
+		for _, block := range message.Blocks {
+			if block.Type == BlockToolUse {
+				out = append(out, block.ToolName)
+			}
+		}
+	}
+	return out
+}
+
+func TestProviderIndexRangeDoesNotCollapseDuplicateIndices(t *testing.T) {
+	if got := providerIndexRange([]int{0, 2, 2}); got != "0,2,2" {
+		t.Fatalf("providerIndexRange duplicate indices = %q, want 0,2,2", got)
 	}
 }
 
