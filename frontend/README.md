@@ -68,6 +68,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/route-state.ts` | pure route matching helpers for shell state |
 | `src/lib/runtime-display.ts` | pure runtime and session-state display formatting helpers |
 | `src/lib/session-messages.ts` | pure helpers for merging paged transcript windows |
+| `src/lib/session-read-state.ts` | pure session-detail controller state transitions and effect descriptors |
 | `src/lib/session-title.ts` | pure session preview display-title fallback helper |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |
 | `src/lib/tool-display.ts` | pure tool title, lifecycle label, and timeout display helpers |

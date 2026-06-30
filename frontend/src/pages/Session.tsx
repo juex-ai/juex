@@ -66,7 +66,6 @@ import {
   type CopyTooltipMode,
 } from "@/lib/message-copy";
 import { sessionPreviewTitle } from "@/lib/session-title";
-import { mergeOlderSessionPage } from "@/lib/session-messages";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
 import {
@@ -83,23 +82,29 @@ import {
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
 import {
-  clearLiveSessionTranscript,
-  clearLocalCompactMessages,
-  createLiveSessionProjection,
-  markProjectionDone,
-  markProjectionError,
-  markProjectionIdle,
-  projectCommandResult,
-  projectCompactCommand,
-  projectLiveSessionEvent,
-  projectOptimisticTurn,
-  projectPendingCompact,
-  projectQueuedInput,
-  projectTurnStatusReconcile,
-  resetLiveSessionProjection,
-  type LiveSessionProjection,
-  type LiveSessionProjectionEffect,
-} from "@/lib/live-session-projection";
+  clearComposerHint,
+  createSessionReadState,
+  markSessionProjectionIdle,
+  projectActiveContextFailed,
+  projectActiveContextLoaded,
+  projectComposerHint,
+  projectInitialCommand,
+  projectLiveBrowserEvent,
+  projectLoadOlderFailed,
+  projectLoadOlderStarted,
+  projectLoadOlderSucceeded,
+  projectPendingSubmit,
+  projectPromptInputChanged,
+  projectSessionLoaded,
+  projectStartTurnFailed,
+  projectStartTurnSucceeded,
+  projectTurnStatus,
+  resetSessionReadState,
+  type SessionInitialCommandState,
+  type SessionReadEffect,
+  type SessionReadResult,
+  type SessionReadState,
+} from "@/lib/session-read-state";
 import {
   getSession,
   getSessionContext,
@@ -125,17 +130,12 @@ import type {
   GoalStatusSnapshot,
   Message as ChatMessage,
   SessionShowResponse,
-  SlashCommandResponse,
   TokenUsage,
   WorkingStateRecord,
   WorkingStateStatusSnapshot,
 } from "@/types";
 
-type InitialCommandState = {
-  activeTurnID?: string;
-  commandInput?: string;
-  command?: SlashCommandResponse;
-} | null;
+type InitialCommandState = SessionInitialCommandState;
 
 type SessionRouteSnapshot = {
   id: string;
@@ -149,25 +149,26 @@ export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const [data, setData] = useState<SessionShowResponse | null>(null);
-  const [projection, setProjection] = useState<LiveSessionProjection>(() =>
-    createLiveSessionProjection(),
+  const [readState, setReadState] = useState<SessionReadState>(() =>
+    createSessionReadState(),
   );
-  const [activeContext, setActiveContext] =
-    useState<ActiveContextSnapshot | null>(null);
   const [draft, setDraft] = useState("");
-  const [composerHint, setComposerHint] = useState<string | null>(null);
-  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
-  const [olderMessagesError, setOlderMessagesError] = useState<string | null>(
-    null,
-  );
   const doneTimerRef = useRef<number | null>(null);
   const composerHintTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
-  const projectionRef = useRef<LiveSessionProjection>(
-    createLiveSessionProjection(),
-  );
+  const readStateRef = useRef<SessionReadState | null>(null);
+  if (readStateRef.current === null) {
+    readStateRef.current = readState;
+  }
   const latestRouteRef = useRef({ id });
+  const {
+    data,
+    projection,
+    activeContext,
+    composerHint,
+    loadingOlderMessages,
+    olderMessagesError,
+  } = readState;
 
   useEffect(() => {
     latestRouteRef.current = { id };
@@ -183,21 +184,17 @@ export function Session() {
       if (!isLatestRoute(latestRouteRef.current, requestId)) {
         return;
       }
-      setData(r);
-      setOlderMessagesError(null);
-      if (!opts?.preserveLiveMessages) {
-        updateProjection(clearLiveSessionTranscript);
-      }
+      updateReadState((prev) => projectSessionLoaded(prev, r, opts));
       try {
         const context = await getSessionContext(requestId);
         if (!isLatestRoute(latestRouteRef.current, requestId)) {
           return;
         }
-        setActiveContext(context);
+        updateReadState((prev) => projectActiveContextLoaded(prev, context));
       } catch (contextError) {
         if (isLatestRoute(latestRouteRef.current, requestId)) {
           console.error("getSessionContext failed", contextError);
-          setActiveContext(null);
+          updateReadState(projectActiveContextFailed);
         }
       }
     } catch (e) {
@@ -205,18 +202,17 @@ export function Session() {
         console.error("getSession failed", e);
       }
     }
-    // updateProjection writes through projectionRef and React's stable setter.
+    // updateReadState writes through readStateRef and React's stable setter.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
     const state = location.state as InitialCommandState;
     const activeTurnID = state?.activeTurnID;
-    setProjectionControllerState(resetLiveSessionProjection({ activeTurnID }));
+    setSessionReadState(
+      resetSessionReadState(currentReadState(), { activeTurnID }),
+    );
     setDraft("");
-    setComposerHint(null);
-    setLoadingOlderMessages(false);
-    setOlderMessagesError(null);
     if (!activeTurnID) return;
 
     let cancelled = false;
@@ -225,9 +221,7 @@ export function Session() {
       try {
         const turn = await getTurnStatus(id, activeTurnID);
         if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
-        const result = projectTurnStatusReconcile(projectionRef.current, turn);
-        setProjectionControllerState(result.state);
-        runProjectionEffects(result.effects);
+        runSessionReadResult(projectTurnStatus(currentReadState(), turn));
         if (turn.state === "running") {
           timer = window.setTimeout(() => void reconcile(), 1000);
         }
@@ -258,18 +252,19 @@ export function Session() {
         if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
           return;
         }
-        setData(r);
-        setOlderMessagesError(null);
+        updateReadState((prev) =>
+          projectSessionLoaded(prev, r, { preserveLiveMessages: true }),
+        );
         try {
           const context = await getSessionContext(requestId);
           if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
             return;
           }
-          setActiveContext(context);
+          updateReadState((prev) => projectActiveContextLoaded(prev, context));
         } catch (contextError) {
           if (!cancelled && isLatestRoute(latestRouteRef.current, requestId)) {
             console.error("getSessionContext failed", contextError);
-            setActiveContext(null);
+            updateReadState(projectActiveContextFailed);
           }
         }
       } catch (e) {
@@ -281,6 +276,9 @@ export function Session() {
     return () => {
       cancelled = true;
     };
+    // updateReadState writes through readStateRef; including it would refetch
+    // the session whenever the route-local controller state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -292,21 +290,9 @@ export function Session() {
     const key = `${id}:${commandInput}:${command.name}:${command.text}`;
     if (initialCommandRef.current === key) return;
     initialCommandRef.current = key;
-    if (command.name === "/compact" && command.compact?.message_id) {
-      const messageID = command.compact.message_id;
-      void refresh().then(() =>
-        updateProjection((prev) =>
-          projectCompactCommand(prev, messageID, commandInput),
-        ),
-      );
-    } else {
-      updateProjection((prev) =>
-        projectCommandResult(prev, commandInput, command.text),
-      );
-    }
-    markDoneSoon();
-    navigate(location.pathname, { replace: true, state: null });
-    // markDoneSoon only schedules local status decay through refs/timers.
+    runSessionReadResult(
+      projectInitialCommand(currentReadState(), commandInput, command),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     data,
@@ -322,9 +308,7 @@ export function Session() {
     if (!id || !data || !sessionCanSend(data)) return;
     const unsub = subscribeEvents(id, {
       onEvent: (e) => {
-        const result = projectLiveSessionEvent(projectionRef.current, e);
-        setProjectionControllerState(result.state);
-        runProjectionEffects(result.effects);
+        runSessionReadResult(projectLiveBrowserEvent(currentReadState(), e));
       },
     });
     return () => {
@@ -340,74 +324,16 @@ export function Session() {
 
   async function handleSend(prompt: string) {
     const compactCommand = isCompactCommandInput(prompt);
-    if (compactCommand) {
-      updateProjection((prev) => projectPendingCompact(prev, prompt));
-    }
+    updateReadState((prev) => projectPendingSubmit(prev, prompt));
     try {
       const turn = await startTurn(id, prompt);
-      if (turn.command) {
-        if (turn.command.name === "/new" && turn.command.status?.session_id) {
-          window.dispatchEvent(new Event("juex:sessions-changed"));
-          navigate(
-            `/sessions/${encodeURIComponent(turn.command.status.session_id)}`,
-            {
-              state: turn.turn_id
-                ? { activeTurnID: turn.turn_id }
-                : { commandInput: prompt, command: turn.command },
-            },
-          );
-          return;
-        }
-        if (turn.command.name === "/compact") {
-          await refresh({ preserveLiveMessages: true });
-          updateProjection((prev) => ({
-            ...clearLocalCompactMessages(prev),
-            compactActive: false,
-          }));
-          if (turn.command.compact?.message_id) {
-            updateProjection((prev) =>
-              projectCompactCommand(prev, turn.command?.compact?.message_id, prompt),
-            );
-          } else {
-            updateProjection((prev) =>
-              projectCommandResult(prev, prompt, turn.command?.text ?? ""),
-            );
-          }
-          if (
-            !projectionRef.current.turnActive &&
-            projectionRef.current.queuedInput.items.length === 0
-          ) {
-            markDoneSoon();
-          }
-          return;
-        } else {
-          updateProjection((prev) =>
-            projectCommandResult(prev, prompt, turn.command?.text ?? ""),
-          );
-        }
-        markDoneSoon();
-        return;
-      }
-      if (turn.queued) {
-        updateProjection((prev) =>
-          projectQueuedInput(prev, prompt, undefined, turn.pending_count ?? 0),
-        );
-      } else {
-        if (!turn.turn_id) throw new Error("turn response missing turn_id");
-        updateProjection((prev) =>
-          projectOptimisticTurn(prev, turn.turn_id, prompt),
-        );
-      }
+      runSessionReadResult(
+        projectStartTurnSucceeded(currentReadState(), prompt, turn),
+      );
     } catch (e) {
       console.error("startTurn failed", e);
-      if (compactCommand) {
-        updateProjection((prev) => ({
-          ...clearLocalCompactMessages(prev),
-          compactActive: false,
-        }));
-      }
-      updateProjection((prev) =>
-        markProjectionError(prev, e instanceof Error ? e.message : String(e)),
+      runSessionReadResult(
+        projectStartTurnFailed(currentReadState(), compactCommand, e),
       );
     }
   }
@@ -484,10 +410,7 @@ export function Session() {
               <PromptInputTextarea
                 onChange={(event) => {
                   setDraft(event.currentTarget.value);
-                  if (composerHint) setComposerHint(null);
-                  if (projection.status.kind === "error") {
-                    updateProjection(markProjectionIdle);
-                  }
+                  updateReadState(projectPromptInputChanged);
                 }}
                 placeholder="Ask juex anything..."
               />
@@ -536,70 +459,88 @@ export function Session() {
     if (!data?.oldest_message_id || loadingOlderMessages) return;
     const requestId = id;
     const before = data.oldest_message_id;
-    setLoadingOlderMessages(true);
-    setOlderMessagesError(null);
+    updateReadState(projectLoadOlderStarted);
     try {
       const page = await getSession(requestId, { before });
       if (!isLatestRoute(latestRouteRef.current, requestId)) {
         return;
       }
-      setData((prev) => mergeOlderSessionPage(prev, page));
+      updateReadState((prev) => projectLoadOlderSucceeded(prev, page));
     } catch (error) {
       if (isLatestRoute(latestRouteRef.current, requestId)) {
-        setOlderMessagesError(
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-    } finally {
-      if (isLatestRoute(latestRouteRef.current, requestId)) {
-        setLoadingOlderMessages(false);
+        updateReadState((prev) => projectLoadOlderFailed(prev, error));
       }
     }
   }
 
-  function setProjectionControllerState(next: LiveSessionProjection) {
-    projectionRef.current = next;
-    setProjection(next);
+  function setSessionReadState(next: SessionReadState) {
+    readStateRef.current = next;
+    setReadState(next);
   }
 
-  function updateProjection(
-    project: (state: LiveSessionProjection) => LiveSessionProjection,
-  ) {
-    setProjectionControllerState(project(projectionRef.current));
+  function currentReadState(): SessionReadState {
+    return readStateRef.current ?? readState;
   }
 
-  function runProjectionEffects(effects: LiveSessionProjectionEffect[]) {
+  function updateReadState(project: (state: SessionReadState) => SessionReadState) {
+    setSessionReadState(project(currentReadState()));
+  }
+
+  function runSessionReadResult(result: SessionReadResult) {
+    setSessionReadState(result.state);
+    runSessionReadEffects(result.effects);
+  }
+
+  function runSessionReadEffects(effects: SessionReadEffect[]) {
     for (const effect of effects) {
       if (effect.type === "refresh") {
         void refresh({ preserveLiveMessages: effect.preserveLiveMessages });
         continue;
       }
-      scheduleIdleStatus();
+      if (effect.type === "scheduleComposerHintClear") {
+        scheduleComposerHintClear();
+        continue;
+      }
+      if (effect.type === "clearRouteState") {
+        navigate(location.pathname, { replace: true, state: null });
+        continue;
+      }
+      if (effect.type === "dispatchSessionsChanged") {
+        window.dispatchEvent(new Event("juex:sessions-changed"));
+        continue;
+      }
+      if (effect.type === "navigateToSession") {
+        navigate(`/sessions/${encodeURIComponent(effect.sessionID)}`, {
+          state: effect.state,
+        });
+        continue;
+      }
+      if (effect.type === "scheduleIdleStatus") {
+        scheduleIdleStatus();
+      }
     }
   }
 
   function scheduleIdleStatus() {
     if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
     doneTimerRef.current = window.setTimeout(
-      () => updateProjection(markProjectionIdle),
+      () => updateReadState(markSessionProjectionIdle),
       1500,
     );
   }
 
   function showComposerHint(message: string) {
-    setComposerHint(message);
+    runSessionReadResult(projectComposerHint(currentReadState(), message));
+  }
+
+  function scheduleComposerHintClear() {
     if (composerHintTimerRef.current) {
       window.clearTimeout(composerHintTimerRef.current);
     }
     composerHintTimerRef.current = window.setTimeout(
-      () => setComposerHint(null),
+      () => updateReadState(clearComposerHint),
       1800,
     );
-  }
-
-  function markDoneSoon() {
-    updateProjection(markProjectionDone);
-    scheduleIdleStatus();
   }
 }
 
