@@ -96,6 +96,9 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 			runtimeResourceNode(RuntimeResourceMCPConfig, "user", filepath.Join(paths.HomeAgentsDir, "mcp.json"), false, false),
 		)
 	}
+	skillDirsByExt := resourceRefsByExtension(extResources.SkillDirs)
+	mcpConfigsByExt := resourceRefsByExtension(extResources.MCPConfigs)
+	hookFilesByExt := resourceRefsByExtension(extResources.HookFiles)
 	for _, ext := range extResources.Extensions {
 		nodes = append(nodes, RuntimeResourceNode{
 			Kind:          RuntimeResourceExtension,
@@ -106,20 +109,14 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 			RequireTrust:  ext.Scope == extensions.ScopeProject,
 			Precedence:    runtimeSourceRank(ext.Source),
 		})
-		for _, ref := range extResources.SkillDirs {
-			if ref.ExtensionName == ext.Name {
-				nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceSkillDir, ref, true))
-			}
+		for _, ref := range skillDirsByExt[ext.Name] {
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceSkillDir, ref, true))
 		}
-		for _, ref := range extResources.MCPConfigs {
-			if ref.ExtensionName == ext.Name {
-				nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceMCPConfig, ref, true))
-			}
+		for _, ref := range mcpConfigsByExt[ext.Name] {
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceMCPConfig, ref, true))
 		}
-		for _, ref := range extResources.HookFiles {
-			if ref.ExtensionName == ext.Name {
-				nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceHookFile, ref, true))
-			}
+		for _, ref := range hookFilesByExt[ext.Name] {
+			nodes = append(nodes, runtimeExtensionResourceNode(RuntimeResourceHookFile, ref, true))
 		}
 	}
 	if paths.ProjectAgentsDir != "" {
@@ -129,6 +126,14 @@ func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Re
 		)
 	}
 	return nodes
+}
+
+func resourceRefsByExtension(refs []extensions.ResourceRef) map[string][]extensions.ResourceRef {
+	byExtension := make(map[string][]extensions.ResourceRef)
+	for _, ref := range refs {
+		byExtension[ref.ExtensionName] = append(byExtension[ref.ExtensionName], ref)
+	}
+	return byExtension
 }
 
 func runtimeResourceNode(kind RuntimeResourceKind, source, path string, requireTrust, strictConflicts bool) RuntimeResourceNode {
