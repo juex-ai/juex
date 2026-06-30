@@ -56,6 +56,20 @@ test("session load failure leaves loading and route reset clears stale data", ()
   assert.equal(state.loadError, null);
 });
 
+test("session load failure extracts plain API error objects", () => {
+  let state = projectSessionLoadFailed(createSessionReadState(), {
+    message: "session not found: object-message",
+  });
+
+  assert.equal(state.loadError, "session not found: object-message");
+
+  state = projectSessionLoadFailed(createSessionReadState(), {
+    error: "not_found",
+  });
+
+  assert.equal(state.loadError, "not_found");
+});
+
 test("projectLiveBrowserEvent carries projection effects through controller", () => {
   const result = projectLiveBrowserEvent(createSessionReadState(), {
     id: "evt-1",
