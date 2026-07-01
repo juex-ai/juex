@@ -154,7 +154,7 @@ export function projectLoadOlderFailed(
   return {
     ...state,
     loadingOlderMessages: false,
-    olderMessagesError: error instanceof Error ? error.message : String(error),
+    olderMessagesError: errorMessage(error, "Failed to load older messages."),
   };
 }
 
@@ -280,7 +280,7 @@ export function projectStartTurnFailed(
       ...state,
       projection: markProjectionError(
         projection,
-        error instanceof Error ? error.message : String(error),
+        errorMessage(error, "Failed to start turn."),
       ),
     },
     effects: [],
@@ -359,7 +359,10 @@ function markProjectionDoneSoon(
   };
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage(
+  error: unknown,
+  fallback = "Failed to load conversation.",
+): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
@@ -375,7 +378,7 @@ function errorMessage(error: unknown): string {
   if (typeof error === "string" && error.trim()) {
     return error;
   }
-  return "Failed to load conversation.";
+  return fallback;
 }
 
 function withProjectionResult(

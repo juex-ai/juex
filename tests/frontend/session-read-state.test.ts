@@ -70,6 +70,34 @@ test("session load failure extracts plain API error objects", () => {
   assert.equal(state.loadError, "not_found");
 });
 
+test("session transient failures extract plain API error objects", () => {
+  let state = projectLoadOlderFailed(createSessionReadState(), {
+    message: "older page unavailable",
+  });
+
+  assert.equal(state.olderMessagesError, "older page unavailable");
+
+  state = projectLoadOlderFailed(createSessionReadState(), {});
+
+  assert.equal(state.olderMessagesError, "Failed to load older messages.");
+
+  const result = projectStartTurnFailed(createSessionReadState(), false, {
+    error: "turn rejected",
+  });
+
+  assert.deepEqual(result.state.projection.status, {
+    kind: "error",
+    detail: "turn rejected",
+  });
+
+  const fallbackResult = projectStartTurnFailed(createSessionReadState(), false, {});
+
+  assert.deepEqual(fallbackResult.state.projection.status, {
+    kind: "error",
+    detail: "Failed to start turn.",
+  });
+});
+
 test("projectLiveBrowserEvent carries projection effects through controller", () => {
   const result = projectLiveBrowserEvent(createSessionReadState(), {
     id: "evt-1",
