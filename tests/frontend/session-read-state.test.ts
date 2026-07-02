@@ -251,6 +251,29 @@ test("load older state merges pages and records errors", () => {
   assert.equal(state.olderMessagesError, "nope");
 });
 
+test("full session load settles stale older-message loading state", () => {
+  let state = projectSessionLoaded(
+    createSessionReadState(),
+    session("s1", [{ role: "user", blocks: [{ type: "text", text: "new" }] }]),
+    { preserveLiveMessages: true },
+  );
+
+  state = projectLoadOlderFailed(
+    projectLoadOlderStarted(state),
+    new Error("older page failed"),
+  );
+  state = projectLoadOlderStarted(state);
+
+  state = projectSessionLoaded(
+    state,
+    session("s1", [{ role: "user", blocks: [{ type: "text", text: "fresh" }] }]),
+    { preserveLiveMessages: true },
+  );
+
+  assert.equal(state.loadingOlderMessages, false);
+  assert.equal(state.olderMessagesError, null);
+});
+
 test("composer hint and input changes are controller state", () => {
   let result = projectComposerHint(createSessionReadState(), "Enter a message");
   assert.equal(result.state.composerHint, "Enter a message");

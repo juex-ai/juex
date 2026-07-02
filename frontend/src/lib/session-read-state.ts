@@ -96,6 +96,7 @@ export function projectSessionLoaded(
     ...state,
     data,
     loadError: null,
+    loadingOlderMessages: false,
     olderMessagesError: null,
     projection: opts?.preserveLiveMessages
       ? state.projection
