@@ -421,6 +421,13 @@ captured stdout or stderr before failing, a bounded copy of that output is
 preserved in the error tool result before the timeout detail. On Unix,
 `exec_command` runs in its own process group so a timeout terminates descendant
 processes that still hold stdout or stderr pipes open.
+Deadline-shaped causes such as Go `context deadline exceeded`, SDK
+`deadline_exceeded`, and network read/write deadlines are normalized to the
+public timeout contract before they reach model-visible tool results, CLI JSON,
+or turn error events. Runtime events carry `error_kind: "timeout"` and
+`timed_out: true` for these cases; the original cause is kept separately in
+`raw_cause` for diagnostics. User cancellation remains `cancelled by user` and
+is not classified as timeout.
 
 `exec_command` always starts the process through a shared in-memory session
 manager and waits only for the bounded yield window. If the process is still
@@ -554,6 +561,9 @@ views over runtime events and intentionally do not alter the compatibility
 shape of `conversation.jsonl` or `events.jsonl`. Trace records include
 `session_id`, `turn_id`, span identifiers, level/status, duration, error kind,
 artifact paths, and bounded summaries with secret-shaped values redacted.
+Timeout traces prefer structured event fields such as `error_kind`,
+`timed_out`, `timeout_seconds`, and `raw_cause`; string parsing is only a
+fallback for older events that predate those fields.
 
 Each work directory has one active primary session recorded in
 `<WorkDir>/.juex/history.json` as `{active, sessions}`. `run`, `repl`, and

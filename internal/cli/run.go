@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/session"
 )
@@ -306,7 +307,7 @@ func emit(jsonOut bool, stderr io.Writer, err error, suggestion string, retryabl
 	if jsonOut {
 		body := errorJSON{
 			Error:      errorType(err),
-			Message:    err.Error(),
+			Message:    errorclass.PublicMessage(err, errorclass.MessageOptions{}),
 			Suggestion: suggestion,
 			Retryable:  retryable,
 		}
@@ -327,7 +328,7 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 	if jsonOut {
 		body := errorJSON{
 			Error:      errorType(err),
-			Message:    err.Error(),
+			Message:    errorclass.PublicMessage(err, errorclass.MessageOptions{}),
 			Suggestion: suggestion,
 			Retryable:  retryable,
 		}
@@ -345,6 +346,9 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 func errorType(err error) string {
 	if cancellation.IsUserCancelled(err) {
 		return "cancelled"
+	}
+	if errorclass.IsTimeout(err) {
+		return "timeout"
 	}
 	var lockErr *session.LockError
 	if errors.As(err, &lockErr) {

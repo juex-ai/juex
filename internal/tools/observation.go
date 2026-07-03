@@ -1,11 +1,15 @@
 package tools
 
+import "github.com/juex-ai/juex/internal/errorclass"
+
 type Observation struct {
 	ToolName         string
 	ToolUseID        string
 	Input            map[string]any
 	Content          string
 	Error            string
+	ErrorKind        string
+	RawCause         string
 	TimedOut         bool
 	ExitCode         *int
 	StructuredResult any
@@ -17,6 +21,8 @@ type ObservationOptions struct {
 	Input            map[string]any
 	Content          string
 	Err              error
+	ErrorKind        string
+	RawCause         string
 	TimedOut         bool
 	ExitCode         *int
 	StructuredResult any
@@ -32,12 +38,23 @@ func NewObservation(opts ObservationOptions) Observation {
 		ToolUseID:        opts.ToolUseID,
 		Input:            cloneCallInput(opts.Input),
 		Content:          opts.Content,
+		ErrorKind:        opts.ErrorKind,
+		RawCause:         opts.RawCause,
 		TimedOut:         opts.TimedOut || structuredResultTimedOut(opts.StructuredResult),
 		ExitCode:         cloneIntPtr(opts.ExitCode),
 		StructuredResult: opts.StructuredResult,
 	}
 	if opts.Err != nil {
 		obs.Error = opts.Err.Error()
+		if obs.ErrorKind == "" {
+			obs.ErrorKind = errorclass.KindForError(opts.Err)
+		}
+		if obs.RawCause == "" && obs.ErrorKind == string(errorclass.KindTimeout) {
+			obs.RawCause = opts.Err.Error()
+		}
+	}
+	if obs.TimedOut && obs.ErrorKind == "" {
+		obs.ErrorKind = string(errorclass.KindTimeout)
 	}
 	if obs.ExitCode == nil {
 		if code, ok := structuredResultExitCode(opts.StructuredResult); ok {
@@ -74,6 +91,12 @@ func (o Observation) WithRuntimeContext(toolName, toolUseID string, input map[st
 	}
 	if err != nil {
 		o.Error = err.Error()
+		if o.ErrorKind == "" {
+			o.ErrorKind = errorclass.KindForError(err)
+		}
+		if o.RawCause == "" && o.ErrorKind == string(errorclass.KindTimeout) {
+			o.RawCause = err.Error()
+		}
 		if o.ExitCode == nil {
 			if code, ok := ExitCodeFromError(err); ok {
 				o.ExitCode = &code

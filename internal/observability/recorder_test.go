@@ -225,6 +225,54 @@ func TestRecorderRedactsSecretsAndClassifiesErrors(t *testing.T) {
 	}
 }
 
+func TestRecorderPreservesTimeoutRawCause(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("turn.errored", "t1", map[string]any{
+		"error":      "openai codex responses: codex SSE read timed out",
+		"error_kind": "timeout",
+		"timed_out":  true,
+		"raw_cause":  "openai codex responses: codex SSE read: context deadline exceeded",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event(toolevents.ErroredType, "t1", map[string]any{
+		"name":            "exec_command",
+		"tool_use_id":     "tu1",
+		"error":           "tools: exec_command timed out after 1s",
+		"error_kind":      "timeout",
+		"timed_out":       true,
+		"timeout_seconds": 1,
+		"raw_cause":       "context deadline exceeded",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
+	if len(trace) != 2 {
+		t.Fatalf("trace len = %d, want 2", len(trace))
+	}
+	if trace[0].ErrorKind != "timeout" || trace[0].Summary["raw_cause"] == "" {
+		t.Fatalf("turn trace = %+v, want timeout raw cause", trace[0])
+	}
+	tools := readJSONLines[ToolRecord](t, filepath.Join(dir, "tools.jsonl"))
+	if len(tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(tools))
+	}
+	if tools[0].ErrorKind != "timeout" || tools[0].Summary["raw_cause"] != "context deadline exceeded" {
+		t.Fatalf("tool record = %+v, want timeout raw cause", tools[0])
+	}
+	if tools[0].Summary["timeout_seconds"] != float64(1) {
+		t.Fatalf("tool summary = %+v, want timeout_seconds", tools[0].Summary)
+	}
+}
+
 func TestRecorderCapturesToolFailureLedgerEvents(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})

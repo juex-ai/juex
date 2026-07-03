@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -42,6 +43,8 @@ type Tool struct {
 type CallInfo struct {
 	TimeoutSeconds   int          `json:"timeout_seconds"`
 	TimedOut         bool         `json:"timed_out,omitempty"`
+	ErrorKind        string       `json:"error_kind,omitempty"`
+	RawCause         string       `json:"raw_cause,omitempty"`
 	StructuredResult any          `json:"structured_result,omitempty"`
 	Observation      *Observation `json:"-"`
 }
@@ -185,16 +188,29 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	result, err := callToolHandler(callCtx, t, callInput)
+	rawErr := err
 	out := result.Text
 	info.StructuredResult = result.Structured
 	if structuredResultTimedOut(result.Structured) && ctx.Err() == nil {
 		info.TimedOut = true
+		info.ErrorKind = string(errorclass.KindTimeout)
+		info.RawCause = rawCauseFor(rawErr, "structured result timed_out=true")
+		err = toolTimeoutError(name, timeoutSeconds)
+	} else if rawErr != nil && errorclass.IsTimeout(rawErr) && ctx.Err() == nil {
+		info.TimedOut = true
+		info.ErrorKind = string(errorclass.KindTimeout)
+		info.RawCause = rawErr.Error()
 		err = toolTimeoutError(name, timeoutSeconds)
 	} else if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		info.TimedOut = true
+		info.ErrorKind = string(errorclass.KindTimeout)
+		info.RawCause = rawCauseFor(rawErr, callCtx.Err().Error())
 		err = toolTimeoutError(name, timeoutSeconds)
 	} else if ctxErr := ctx.Err(); ctxErr != nil {
 		err = ctxErr
+	}
+	if err != nil && info.ErrorKind == "" {
+		info.ErrorKind = errorclass.KindForError(err)
 	}
 	info.setObservation(ObservationOptions{
 		ToolName:         name,
@@ -202,6 +218,8 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		Content:          out,
 		Err:              err,
 		TimedOut:         info.TimedOut,
+		ErrorKind:        info.ErrorKind,
+		RawCause:         info.RawCause,
 		StructuredResult: result.Structured,
 	})
 	return out, info, err
@@ -227,6 +245,13 @@ func structuredResultTimedOut(result any) bool {
 
 func toolTimeoutError(name string, timeoutSeconds int) error {
 	return fmt.Errorf("tools: %s timed out after %ds", name, timeoutSeconds)
+}
+
+func rawCauseFor(err error, fallback string) string {
+	if err != nil {
+		return err.Error()
+	}
+	return fallback
 }
 
 func malformedRawArgumentsError(name string) error {

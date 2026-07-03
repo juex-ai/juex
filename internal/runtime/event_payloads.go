@@ -17,7 +17,10 @@ type TurnCompletedPayload struct {
 }
 
 type TurnErroredPayload struct {
-	Error string `json:"error"`
+	Error     string `json:"error"`
+	ErrorKind string `json:"error_kind,omitempty"`
+	TimedOut  bool   `json:"timed_out,omitempty"`
+	RawCause  string `json:"raw_cause,omitempty"`
 }
 
 type HookStartedPayload struct {
