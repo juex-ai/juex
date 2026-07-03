@@ -58,6 +58,34 @@ func TestRunCmd_RequiresPrompt(t *testing.T) {
 	}
 }
 
+func TestEmitRunErrorJSONClassifiesTimeout(t *testing.T) {
+	var stderr bytes.Buffer
+	err := emitRunError(true, &stderr, context.DeadlineExceeded, nil, "/tmp/work")
+	if err == nil {
+		t.Fatal("expected emitted error")
+	}
+
+	var body errorJSON
+	if unmarshalErr := json.Unmarshal(stderr.Bytes(), &body); unmarshalErr != nil {
+		t.Fatalf("unmarshal stderr %q: %v", stderr.String(), unmarshalErr)
+	}
+	if body.Error != "timeout" {
+		t.Fatalf("error = %q, want timeout", body.Error)
+	}
+	if !body.Retryable {
+		t.Fatal("timeout should remain retryable")
+	}
+	if !strings.Contains(body.Message, "timed out") {
+		t.Fatalf("message = %q, want timed out", body.Message)
+	}
+	if strings.Contains(body.Message, "context deadline exceeded") {
+		t.Fatalf("message = %q, should not expose context deadline", body.Message)
+	}
+	if body.WorkDir != "/tmp/work" {
+		t.Fatalf("work_dir = %q, want /tmp/work", body.WorkDir)
+	}
+}
+
 func TestRootHelpListsSubcommands(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer

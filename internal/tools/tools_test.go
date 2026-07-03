@@ -1678,6 +1678,45 @@ func TestRegistryCallWithInfoHonorsStructuredTimeout(t *testing.T) {
 	}
 }
 
+func TestRegistryCallWithInfoClassifiesDirectDeadlineExceeded(t *testing.T) {
+	r := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: 1})
+	if err := r.Register(Tool{
+		Name:   "deadline",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, input map[string]any) (string, error) {
+			return "partial output", context.DeadlineExceeded
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, info, err := r.CallWithInfo(context.Background(), "deadline", nil)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if out != "partial output" {
+		t.Fatalf("out = %q, want partial output", out)
+	}
+	if !info.TimedOut || info.ErrorKind != "timeout" {
+		t.Fatalf("info = %+v, want timeout classification", info)
+	}
+	if !strings.Contains(info.RawCause, "context deadline exceeded") {
+		t.Fatalf("raw cause = %q, want original deadline cause", info.RawCause)
+	}
+	if strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("err = %q, should use public timeout wording", err.Error())
+	}
+	if !strings.Contains(err.Error(), "tools: deadline timed out after 1s") {
+		t.Fatalf("err = %q, want public tool timeout", err.Error())
+	}
+	if info.Observation == nil || !info.Observation.TimedOut || info.Observation.ErrorKind != "timeout" {
+		t.Fatalf("observation = %+v, want timeout observation", info.Observation)
+	}
+	if !strings.Contains(info.Observation.RawCause, "context deadline exceeded") {
+		t.Fatalf("observation raw cause = %q, want original deadline cause", info.Observation.RawCause)
+	}
+}
+
 func TestRegistryCallWithInfoObservationCapturesStructuredExitCode(t *testing.T) {
 	r := NewRegistry()
 	if err := r.Register(Tool{

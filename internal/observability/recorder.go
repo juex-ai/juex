@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -331,7 +332,7 @@ func classify(ev events.Event) eventMeta {
 	if strings.Contains(ev.Type, "errored") || ev.Type == "turn.errored" {
 		meta.Level = LevelError
 		meta.Status = "error"
-		meta.ErrorKind = classifyErrorKind(stringValue(payload["error"]))
+		meta.ErrorKind = firstNonEmpty(stringValue(payload["error_kind"]), errorclass.KindForText(stringValue(payload["error"])))
 	}
 	if ev.Type == "tool.failure.recorded" {
 		meta.Level = LevelWarn
@@ -429,6 +430,9 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("token_usage")
 	case "turn.errored":
 		add("error")
+		add("error_kind")
+		add("timed_out")
+		add("raw_cause")
 	case "llm.requested":
 		add("iter")
 		add("history_len")
@@ -456,6 +460,9 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("name")
 		add("tool_use_id")
 		add("error")
+		add("error_kind")
+		add("raw_cause")
+		add("timeout_seconds")
 		add("timed_out")
 		add("preview")
 		add("exit_code")
@@ -678,24 +685,6 @@ func isSecretKey(key string) bool {
 		}
 	}
 	return key == "token" || strings.HasSuffix(key, "_token") || strings.HasPrefix(key, "token_") || strings.Contains(key, "_token_")
-}
-
-func classifyErrorKind(raw string) string {
-	raw = strings.ToLower(raw)
-	switch {
-	case strings.Contains(raw, "timeout") || strings.Contains(raw, "timed out"):
-		return "timeout"
-	case strings.Contains(raw, "permission") || strings.Contains(raw, "denied"):
-		return "permission"
-	case strings.Contains(raw, "auth") || strings.Contains(raw, "unauthorized"):
-		return "auth"
-	case strings.Contains(raw, "cancel"):
-		return "cancelled"
-	case raw == "":
-		return "error"
-	default:
-		return "error"
-	}
 }
 
 func int64Value(v any) int64 {

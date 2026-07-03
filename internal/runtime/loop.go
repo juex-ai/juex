@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/cancellation"
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -564,6 +565,12 @@ func toolObservationForResult(call llm.Block, block llm.Block, info tools.CallIn
 	}
 	obs = obs.WithRuntimeContext(call.ToolName, call.ToolUseID, call.Input, block.Content, err)
 	obs.TimedOut = obs.TimedOut || info.TimedOut
+	if obs.ErrorKind == "" {
+		obs.ErrorKind = info.ErrorKind
+	}
+	if info.RawCause != "" {
+		obs.RawCause = info.RawCause
+	}
 	if obs.StructuredResult == nil {
 		obs.StructuredResult = info.StructuredResult
 	}
@@ -585,6 +592,8 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		if observation.Error != "" {
 			opts.Error = observation.Error
 		}
+		opts.ErrorKind = observation.ErrorKind
+		opts.RawCause = observation.RawCause
 		if observation.Content != "" {
 			opts.Len = len(observation.Content)
 			opts.Preview = truncate(observation.Content, 200)
@@ -602,15 +611,20 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 
 func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) toolCallResult {
 	err = cancellation.NormalizeError(err)
+	classification := errorclass.Classify(err)
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
 	block := llm.Block{
 		Type:      llm.BlockToolResult,
 		ToolUseID: call.ToolUseID,
 		ToolName:  call.ToolName,
-		Content:   err.Error(),
+		Content:   publicErr,
 		IsError:   true,
 	}
 	e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), toolevents.ErroredOptions{
-		Error: err.Error(),
+		Error:     publicErr,
+		ErrorKind: string(classification.Kind),
+		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
+		TimedOut:  classification.TimedOut,
 	})})
 	observation := toolObservationForResult(call, block, tools.CallInfo{}, err)
 	return toolCallResult{Block: block, Observation: observation}
@@ -892,7 +906,14 @@ func (e *Engine) emit(ev events.Event) {
 }
 
 func (e *Engine) failTurn(turnID string, err error) error {
-	payload := TurnErroredPayload{Error: err.Error()}
+	classification := errorclass.Classify(err)
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	payload := TurnErroredPayload{
+		Error:     publicErr,
+		ErrorKind: string(classification.Kind),
+		TimedOut:  classification.TimedOut,
+		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
+	}
 	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: payload})
 	return err
 }
@@ -976,8 +997,9 @@ func canContinueAfterAutoCompactError(ctx context.Context, msg llm.Message) bool
 }
 
 func toolErrorContent(out string, err error) string {
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
 	if out == "" {
-		return err.Error()
+		return publicErr
 	}
 	if len(out) > maxToolErrorOutput {
 		limit := maxToolErrorOutput
@@ -986,7 +1008,14 @@ func toolErrorContent(out string, err error) string {
 		}
 		out = out[:limit] + "\n... (remaining output truncated) ..."
 	}
-	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + err.Error()
+	return strings.TrimRight(out, "\n") + "\n\n[tool error]\n" + publicErr
+}
+
+func rawCauseIfDifferent(rawCause, public string) string {
+	if rawCause == "" || rawCause == public {
+		return ""
+	}
+	return rawCause
 }
 
 func truncate(s string, n int) string {

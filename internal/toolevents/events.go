@@ -54,6 +54,8 @@ type ErroredPayload struct {
 	Name           string `json:"name"`
 	ToolUseID      string `json:"tool_use_id"`
 	Error          string `json:"error"`
+	ErrorKind      string `json:"error_kind,omitempty"`
+	RawCause       string `json:"raw_cause,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	Len            int    `json:"len,omitempty"`
 	Preview        string `json:"preview,omitempty"`
@@ -64,6 +66,8 @@ type ErroredPayload struct {
 
 type ErroredOptions struct {
 	Error          string
+	ErrorKind      string
+	RawCause       string
 	TimeoutSeconds int
 	Len            int
 	Preview        string
@@ -117,6 +121,8 @@ func Errored(call ToolCallPayload, opts ErroredOptions) ErroredPayload {
 		Name:           call.Name,
 		ToolUseID:      call.ToolUseID,
 		Error:          opts.Error,
+		ErrorKind:      opts.ErrorKind,
+		RawCause:       opts.RawCause,
 		TimeoutSeconds: opts.TimeoutSeconds,
 		Len:            opts.Len,
 		Preview:        opts.Preview,

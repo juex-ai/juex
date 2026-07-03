@@ -248,6 +248,9 @@ export interface TurnCompletedPayload {
 
 export interface TurnErroredPayload {
   error: string;
+  error_kind?: string;
+  timed_out?: boolean;
+  raw_cause?: string;
 }
 
 export interface LLMRequestedPayload {
@@ -305,6 +308,8 @@ export interface ToolErroredPayload {
   name: string;
   tool_use_id: string;
   error: string;
+  error_kind?: string;
+  raw_cause?: string;
   timeout_seconds: number;
   len?: number;
   preview?: string;

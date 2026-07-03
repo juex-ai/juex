@@ -435,6 +435,68 @@ func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_ProviderDeadlineErrorJSONIsTimeout(t *testing.T) {
+	bin := buildJuex(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"message":"deadline_exceeded"}}`, http.StatusGatewayTimeout)
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body := "model: openai/gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
+    protocol: openai/responses
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: gpt-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--json", "hello")
+	home := t.TempDir()
+	cmd.Env = isolatedJuexBinaryEnv(home)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("expected provider timeout failure")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	var got struct {
+		Error      string `json:"error"`
+		Message    string `json:"message"`
+		Retryable  bool   `json:"retryable"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &got); err != nil {
+		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr.String())
+	}
+	if got.Error != "timeout" || !got.Retryable {
+		t.Fatalf("error JSON = %+v, want retryable timeout; stderr=%s", got, stderr.String())
+	}
+	if !strings.Contains(got.Message, "timed out") {
+		t.Fatalf("message = %q, want timed out", got.Message)
+	}
+	if strings.Contains(got.Message, "deadline_exceeded") || strings.Contains(got.Message, "context deadline exceeded") {
+		t.Fatalf("message = %q, should not expose raw deadline", got.Message)
+	}
+	if got.SessionDir == "" {
+		t.Fatalf("stderr missing session_dir: %s", stderr.String())
+	}
+
+	eventsText := strings.Join(readLines(t, filepath.Join(got.SessionDir, "events.jsonl")), "\n")
+	for _, want := range []string{`"type":"turn.errored"`, `"error_kind":"timeout"`, `"timed_out":true`, `"raw_cause":`} {
+		if !strings.Contains(eventsText, want) {
+			t.Fatalf("events missing %q:\n%s", want, eventsText)
+		}
+	}
+}
+
 func chatCompletionResponse(text string) string {
 	return `{
   "id": "chatcmpl_1",

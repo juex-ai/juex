@@ -2068,11 +2068,64 @@ func TestTurn_ToolTimeoutPersistsErrorWithoutFailureLedgerContinuation(t *testin
 	if got := erroredPayload.TimedOut; got != true {
 		t.Fatalf("errored timed_out = %v, want true", got)
 	}
+	if got := erroredPayload.ErrorKind; got != "timeout" {
+		t.Fatalf("errored error_kind = %q, want timeout", got)
+	}
+	if !strings.Contains(erroredPayload.RawCause, "context deadline exceeded") {
+		t.Fatalf("errored raw_cause = %q, want original deadline cause", erroredPayload.RawCause)
+	}
 	if got := erroredPayload.Len; got != len("partial stdout\npartial stderr\n") {
 		t.Fatalf("errored len = %v, want captured output length", got)
 	}
 	if got := erroredPayload.Preview; got != "partial stdout\npartial stderr\n" {
 		t.Fatalf("errored preview = %v, want captured output preview", got)
+	}
+}
+
+func TestTurn_DirectToolDeadlineUsesTimeoutContract(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "deadline_1", ToolName: "deadline", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:           "deadline",
+		Schema:         map[string]any{"type": "object"},
+		TimeoutSeconds: 1,
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "partial output", context.DeadlineExceeded
+		},
+	})
+
+	var erroredPayload toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(e events.Event) {
+		erroredPayload, _ = e.Payload.(toolevents.ErroredPayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "run deadline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	block := eng.Session.History[2].Blocks[0]
+	if !block.IsError {
+		t.Fatalf("tool result block = %+v, want error", block)
+	}
+	if !strings.Contains(block.Content, "tools: deadline timed out after 1s") {
+		t.Fatalf("tool result content = %q, want public timeout", block.Content)
+	}
+	if strings.Contains(block.Content, "context deadline exceeded") {
+		t.Fatalf("tool result content = %q, should not expose raw deadline", block.Content)
+	}
+	if !erroredPayload.TimedOut || erroredPayload.ErrorKind != "timeout" {
+		t.Fatalf("errored payload = %+v, want timeout classification", erroredPayload)
+	}
+	if !strings.Contains(erroredPayload.RawCause, "context deadline exceeded") {
+		t.Fatalf("raw_cause = %q, want original deadline cause", erroredPayload.RawCause)
 	}
 }
 
@@ -2889,6 +2942,34 @@ func TestTurn_ProviderError(t *testing.T) {
 	_, err := eng.Turn(context.Background(), "x")
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected provider error, got %v", err)
+	}
+}
+
+func TestTurn_ProviderDeadlineEmitsTimeoutContract(t *testing.T) {
+	prov := &mockProviderWithErrors{
+		errs: []error{fmt.Errorf("openai codex responses: codex SSE read: context deadline exceeded")},
+	}
+	eng, bus := newEngine(t, prov, false)
+	var payload TurnErroredPayload
+	bus.Subscribe("turn.errored", func(e events.Event) {
+		payload, _ = e.Payload.(TurnErroredPayload)
+	})
+
+	_, err := eng.Turn(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected provider timeout")
+	}
+	if payload.ErrorKind != "timeout" || !payload.TimedOut {
+		t.Fatalf("turn.errored payload = %+v, want timeout classification", payload)
+	}
+	if !strings.Contains(payload.Error, "timed out") {
+		t.Fatalf("turn.errored error = %q, want public timeout", payload.Error)
+	}
+	if strings.Contains(payload.Error, "context deadline exceeded") {
+		t.Fatalf("turn.errored error = %q, should not expose raw deadline", payload.Error)
+	}
+	if !strings.Contains(payload.RawCause, "context deadline exceeded") {
+		t.Fatalf("turn.errored raw_cause = %q, want original deadline cause", payload.RawCause)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/session"
 )
@@ -87,7 +88,7 @@ func printErrorIfNeeded(alreadyEmitted bool, err error) {
 		return
 	}
 	err = cancellation.NormalizeError(err)
-	fmt.Fprintln(os.Stderr, "Error:", err.Error())
+	fmt.Fprintln(os.Stderr, "Error:", errorclass.PublicMessage(err, errorclass.MessageOptions{}))
 }
 
 // usageError marks an error caused by bad CLI usage (missing required arg,
