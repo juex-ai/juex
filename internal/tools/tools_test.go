@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -19,6 +20,16 @@ import (
 
 func registerTestBuiltins(r *Registry, workDir string) {
 	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile()})
+}
+
+func fakeShellProfile() ShellProfile {
+	return ShellProfile{
+		Profile:   "fake",
+		Family:    "posix",
+		Binary:    os.Args[0],
+		Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+		PathStyle: "posix",
+	}
 }
 
 type builtinProviderFunc func(BuiltinProviderContext) []Tool
@@ -317,6 +328,20 @@ func TestShellHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintln(os.Stdout, "declined")
 		os.Exit(1)
+	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "interrupt" {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt)
+		defer signal.Stop(sigCh)
+		fmt.Fprintln(os.Stdout, "interrupt ready")
+		select {
+		case <-sigCh:
+			fmt.Fprintln(os.Stdout, "interrupted")
+			os.Exit(130)
+		case <-time.After(10 * time.Second):
+			fmt.Fprintln(os.Stdout, "interrupt timeout")
+			os.Exit(0)
+		}
 	}
 	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "fail" {
 		fmt.Fprintln(os.Stdout, "before failure stdout")
@@ -1865,6 +1890,121 @@ func TestBuiltins_ListShellSessionsHidesCompletedByDefault(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ListShellSessionsPrunesCompletedAfterTTL(t *testing.T) {
+	sessions := NewShellSessionManager(context.Background())
+	defer func() {
+		_ = sessions.Close()
+	}()
+	sessions.completedTTL = time.Millisecond
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "delayed")
+
+	result, err := sessions.Start(ShellStartRequest{
+		Binary:  fakeShellProfile().Binary,
+		Args:    fakeShellProfile().Args,
+		Command: "delayed complete",
+		Yield:   time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Running {
+		result, err = sessions.Continue(ShellContinueRequest{
+			SessionID: result.SessionID,
+			Yield:     2 * time.Second,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if result.Running {
+		t.Fatalf("continued result = %+v, want completed command", result)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if got := sessions.List(true); len(got) != 0 {
+		t.Fatalf("sessions after completed TTL = %+v, want pruned", got)
+	}
+}
+
+func TestBuiltins_ExecCommandRejectsTooManyActiveShellSessions(t *testing.T) {
+	r := NewRegistry()
+	sessions := NewShellSessionManager(context.Background())
+	defer func() {
+		_ = sessions.Close()
+	}()
+	sessions.maxSessions = 1
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "slow")
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       t.TempDir(),
+		ShellSessions: sessions,
+		Shell:         fakeShellProfile(),
+	})
+
+	_, firstInfo, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd":           "slow one",
+		"yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := shellResultFromInfo(t, firstInfo)
+	if !first.Running || first.SessionID <= 0 {
+		t.Fatalf("first shell result = %+v, want running session", first)
+	}
+
+	out, _, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd":           "slow two",
+		"yield_time_ms": 250,
+	})
+	if err == nil {
+		t.Fatalf("second exec_command output = %q, want max session error", out)
+	}
+	if !strings.Contains(err.Error(), "too many active sessions (1)") {
+		t.Fatalf("second exec_command err = %v, want max session error", err)
+	}
+}
+
+func TestShellSessionManagerCloseKillsAndWaitsForSessions(t *testing.T) {
+	sessions := NewShellSessionManager(context.Background())
+	killed := make(chan struct{})
+	done := make(chan struct{})
+	closed := make(chan struct{})
+	session := &shellSession{
+		id:         1,
+		started:    time.Now(),
+		lastAccess: time.Now(),
+		doneChan:   done,
+		killFunc: func() error {
+			close(killed)
+			return nil
+		},
+	}
+	sessions.sessions[session.id] = session
+
+	go func() {
+		_ = sessions.Close()
+		close(closed)
+	}()
+
+	select {
+	case <-killed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not call kill on the running shell session")
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned before the shell session reported done")
+	default:
+	}
+	close(done)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after the shell session reported done")
+	}
+}
+
 type timedOutStructuredTestResult struct{}
 
 func (timedOutStructuredTestResult) ToolCallTimedOut() bool {
@@ -2192,6 +2332,48 @@ func TestBuiltins_WriteStdinRejectsNonTTYInput(t *testing.T) {
 	}
 }
 
+func TestBuiltins_WriteStdinInterruptsNonTTYSession(t *testing.T) {
+	r := NewRegistry()
+	sessions := NewShellSessionManager(context.Background())
+	defer func() {
+		_ = sessions.Close()
+	}()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "interrupt")
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       t.TempDir(),
+		ShellSessions: sessions,
+		Shell:         fakeShellProfile(),
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":           "interrupt",
+		"yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sessionIDFromOutput(t, out)
+	if !strings.Contains(out, "interrupt ready") {
+		t.Fatalf("initial output = %q, want interrupt ready", out)
+	}
+
+	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    sessionID,
+		"chars":         shellInterruptInput,
+		"yield_time_ms": 1500,
+	})
+	if err == nil {
+		t.Fatalf("write_stdin output = %q, want interrupted exit error", out)
+	}
+	if !strings.Contains(out, "Process exited with code") {
+		t.Fatalf("interrupted output = %q, want exited status", out)
+	}
+	if runtime.GOOS != "windows" && !strings.Contains(out, "interrupted") {
+		t.Fatalf("interrupted output = %q, want signal handler output", out)
+	}
+}
+
 func TestBuiltins_ExecCommandTTYAllocatesTerminalAndAcceptsChars(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("windows tty coverage runs through ConPTY-specific tests")
@@ -2237,6 +2419,46 @@ func TestBuiltins_ExecCommandTTYAllocatesTerminalAndAcceptsChars(t *testing.T) {
 	}
 	if !strings.Contains(out, "Process exited with code 0") {
 		t.Fatalf("continued tty output = %q, want successful exit", out)
+	}
+}
+
+func TestBuiltins_WriteStdinInterruptsTTYSession(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows tty coverage runs through ConPTY-specific tests")
+	}
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "interrupt")
+	RegisterBuiltins(r, BuiltinOptions{
+		Shell: fakeShellProfile(),
+	})
+
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{
+		"cmd":           "interrupt",
+		"tty":           true,
+		"yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := sessionIDFromOutput(t, out)
+	if !strings.Contains(out, "interrupt ready") {
+		t.Fatalf("initial tty output = %q, want interrupt ready", out)
+	}
+
+	out, err = r.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    sessionID,
+		"chars":         shellInterruptInput,
+		"yield_time_ms": 1500,
+	})
+	if err == nil {
+		t.Fatalf("write_stdin output = %q, want interrupted exit error", out)
+	}
+	if !strings.Contains(out, "interrupted") {
+		t.Fatalf("interrupted tty output = %q, want signal handler output", out)
+	}
+	if !strings.Contains(out, "Process exited with code") {
+		t.Fatalf("interrupted tty output = %q, want exited status", out)
 	}
 }
 

@@ -25,6 +25,7 @@ const (
 	defaultShellInputPollYield   = 5 * time.Second
 	maxShellYield                = 30 * time.Second
 	maxShellInputPollYield       = 5 * time.Minute
+	defaultShellCloseWait        = 2 * time.Second
 	shellExitSettleGrace         = 100 * time.Millisecond
 	shellInterruptInput          = "\x03"
 )
@@ -303,6 +304,10 @@ func (m *ShellSessionManager) Continue(req ShellContinueRequest) (ShellSessionRe
 		callCtx = context.Background()
 	}
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return ShellSessionResult{}, fmt.Errorf("write_stdin: session manager closed")
+	}
 	session := m.sessions[req.SessionID]
 	m.mu.Unlock()
 	if session == nil {
@@ -342,6 +347,10 @@ func (m *ShellSessionManager) Close() error {
 	m.mu.Unlock()
 	for _, session := range sessions {
 		session.kill()
+	}
+	deadline := time.Now().Add(defaultShellCloseWait)
+	for _, session := range sessions {
+		session.waitDone(time.Until(deadline))
 	}
 	return nil
 }
@@ -581,6 +590,28 @@ func (s *shellSession) kill() {
 	}
 	if s.stdin != nil {
 		_ = s.stdin.Close()
+	}
+}
+
+func (s *shellSession) waitDone(timeout time.Duration) bool {
+	if s == nil || s.doneChan == nil {
+		return true
+	}
+	if timeout <= 0 {
+		select {
+		case <-s.doneChan:
+			return true
+		default:
+			return false
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-s.doneChan:
+		return true
+	case <-timer.C:
+		return false
 	}
 }
 

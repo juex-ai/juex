@@ -15,5 +15,8 @@ func interruptCommandProcessGroup(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return os.ErrProcessDone
 	}
-	return cmd.Process.Signal(os.Interrupt)
+	if err := cmd.Process.Signal(os.Interrupt); err == nil {
+		return nil
+	}
+	return cmd.Process.Kill()
 }
