@@ -1,6 +1,6 @@
 import type { Message } from "@/types";
 
-export const PENDING_COMPACT_LABEL = "Context compating...";
+export const PENDING_COMPACT_LABEL = "Context compacting...";
 export const LOCAL_COMPACT_COMMAND_ID = "local-compact-command";
 export const LOCAL_COMPACT_PENDING_ID = "local-compact-pending";
 export const LOCAL_COMPACT_PENDING_KIND = "compact_pending";
