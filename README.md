@@ -149,8 +149,9 @@ Linux binaries running under WSL stay POSIX unless `shell.profile: wsl` is
 configured explicitly. `exec_command` accepts `yield_time_ms` and returns a
 numeric `session_id` only when the process is still running. Set `tty: true`
 for interactive commands that need a real terminal and follow-up input;
-`write_stdin` polls running sessions or writes `chars` only to TTY sessions
-while live output is streamed through runtime events. `list_shell_sessions`
+`write_stdin` polls running sessions, writes `chars` to TTY sessions, or sends
+Ctrl-C (`\x03`) to interrupt a non-TTY session while live output is streamed
+through runtime events. `list_shell_sessions`
 returns Juex-managed shell sessions so the model can recover active
 `session_id` values after compaction or forgotten state; by default it lists
 only running sessions, with an explicit `include_completed` option for retained

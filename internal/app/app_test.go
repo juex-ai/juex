@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
 type stubProvider struct {
@@ -61,6 +63,16 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	}
 	t.Cleanup(func() { a.Close() })
 	return a, prov
+}
+
+func TestAppShellHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_APP_FAKE_SHELL") != "1" {
+		return
+	}
+	fmt.Fprintln(os.Stdout, "app shell start")
+	time.Sleep(10 * time.Second)
+	fmt.Fprintln(os.Stdout, "app shell done")
+	os.Exit(0)
 }
 
 func TestApp_DefaultAttachesActivePrimary(t *testing.T) {
@@ -162,6 +174,59 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	}
 	if a.Engine.PendingInputTTL != 30*time.Minute || a.Engine.ExternalEventTTL != 48*time.Hour {
 		t.Fatalf("Engine pending TTLs = %s/%s", a.Engine.PendingInputTTL, a.Engine.ExternalEventTTL)
+	}
+}
+
+func TestApp_CloseClosesShellSessionManager(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("JUEX_APP_FAKE_SHELL", "1")
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    dir,
+			Shell: config.ShellProfile{
+				Profile:   "fake",
+				Family:    "posix",
+				Binary:    os.Args[0],
+				Args:      []string{"-test.run=TestAppShellHelperProcess", "--"},
+				PathStyle: "posix",
+			},
+		},
+		Provider: &stubProvider{replies: []llm.Response{}},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out, info, err := a.Engine.Tools.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd":           "slow",
+		"yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := info.StructuredResult.(tools.ShellResult)
+	if !ok {
+		t.Fatalf("structured result = %#v, want ShellResult", info.StructuredResult)
+	}
+	if !result.Running || result.SessionID <= 0 {
+		t.Fatalf("exec output/result = %q / %+v, want running shell session", out, result)
+	}
+
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = a.Engine.Tools.CallWithInfo(context.Background(), "write_stdin", map[string]any{
+		"session_id": result.SessionID,
+	})
+	if err == nil {
+		t.Fatal("write_stdin after App.Close succeeded, want closed session manager error")
+	}
+	if !strings.Contains(err.Error(), "session manager closed") {
+		t.Fatalf("write_stdin after App.Close err = %v, want session manager closed", err)
 	}
 }
 

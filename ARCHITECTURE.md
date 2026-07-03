@@ -389,7 +389,7 @@ with the standard `read` builtin against the path printed there.
 | `apply_patch` | structured patch edits with add / update / delete / move, whole-patch validation, workspace path checks, and compact results |
 | `write_begin` / `write_chunk` / `write_commit` / `write_abort` | chunked full-file writes for long generated files, with bounded chunks, idempotent chunk replay, optional SHA-256 validation, abort, and temporary-file commit |
 | `exec_command` | run a command through the resolved workspace shell (workdir defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
-| `write_stdin` | poll a running command session or write `chars` to a TTY session using the numeric `session_id` returned by `exec_command` |
+| `write_stdin` | poll a running command session, write `chars` to a TTY session, or send Ctrl-C (`\x03`) to interrupt a non-TTY session using the numeric `session_id` returned by `exec_command` |
 | `list_shell_sessions` | recover Juex-managed shell session ids and status after forgotten state, compaction, or background commands; defaults to running sessions |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
 | `memory_write` | persist a memory entry |
@@ -443,10 +443,12 @@ default it hides completed sessions, with an explicit option for retained
 completed entries. Empty polls use their own observation window and do not fail
 or kill the process merely because `runtime.tool_timeout` is smaller.
 Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
-matching Codex's unified exec behavior. `tty: true` allocates a pseudo-terminal
-on supported platforms so interactive programs can prompt and receive follow-up
-input. Session transcripts and SSE deltas are bounded, completed sessions are
-pruned, and sessions are not durable across Juex process restart.
+matching Codex's unified exec behavior; Ctrl-C (`\x03`) is the supported
+follow-up exception and maps to shell-session interrupt. `tty: true` allocates
+a pseudo-terminal on supported platforms so interactive programs can prompt and
+receive follow-up input. Session transcripts and SSE deltas are bounded,
+completed sessions are pruned, and sessions are not durable across Juex
+process restart.
 
 Shell tools also return a structured `tools.ShellResult` through
 `CallInfo.StructuredResult`. The provider-facing text remains the model-reading

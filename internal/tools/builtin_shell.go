@@ -120,7 +120,7 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 				"session_id": map[string]any{"type": "integer"},
 				"chars": map[string]any{
 					"type":        "string",
-					"description": "Characters to write before waiting. Non-empty writes require the exec_command session to have been started with tty=true.",
+					"description": "Characters to write before waiting. Non-empty writes require tty=true except Ctrl-C (\\x03), which interrupts non-TTY sessions.",
 				},
 				"yield_time_ms": map[string]any{
 					"type":        "integer",
