@@ -230,6 +230,7 @@ export function Session() {
       } catch (e) {
         if (!cancelled && isLatestRoute(latestRouteRef.current, id)) {
           console.error("getTurnStatus failed", e);
+          timer = window.setTimeout(() => void reconcile(), 1000);
         }
       }
     };
@@ -243,6 +244,38 @@ export function Session() {
     // only on session entry; clearing it later must not reset live projection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, refresh]);
+
+  const loadedTurnID =
+    data?.turn?.state === "running" ? data.turn.turn_id : undefined;
+
+  useEffect(() => {
+    if (!id || !loadedTurnID) return;
+
+    let cancelled = false;
+    let timer: number | null = null;
+    const reconcile = async () => {
+      try {
+        const turn = await getTurnStatus(id, loadedTurnID);
+        if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
+        runSessionReadResult(projectTurnStatus(currentReadState(), turn));
+        if (turn.state === "running") {
+          timer = window.setTimeout(() => void reconcile(), 1000);
+        }
+      } catch (e) {
+        if (!cancelled && isLatestRoute(latestRouteRef.current, id)) {
+          console.error("getTurnStatus failed", e);
+        }
+      }
+    };
+    void reconcile();
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+    // Projection effect helpers read current state from refs; including them
+    // would restart the polling loop on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, loadedTurnID]);
 
   useEffect(() => {
     if (!id) return;

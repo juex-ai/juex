@@ -113,8 +113,17 @@ type sessionShowResponse struct {
 	Model           string                              `json:"model,omitempty"`
 	HasMoreBefore   bool                                `json:"has_more_before"`
 	OldestMessageID string                              `json:"oldest_message_id,omitempty"`
+	Turn            *sessionTurnResponse                `json:"turn,omitempty"`
 	Goal            *runtime.GoalStatusSnapshot         `json:"goal,omitempty"`
 	WorkingState    *runtime.WorkingStateStatusSnapshot `json:"working_state,omitempty"`
+}
+
+type sessionTurnResponse struct {
+	TurnID           string `json:"turn_id"`
+	State            string `json:"state"`
+	Error            string `json:"error,omitempty"`
+	PendingCount     *int   `json:"pending_count,omitempty"`
+	MaxPendingInputs *int   `json:"max_pending_inputs,omitempty"`
 }
 
 const (
@@ -166,6 +175,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			Model:           s.opts.Cfg.Model,
 			HasMoreBefore:   page.HasMoreBefore,
 			OldestMessageID: page.OldestMessageID,
+			Turn:            activeSessionTurnResponse(as),
 			Goal:            goal,
 			WorkingState:    workingState,
 		})
@@ -201,6 +211,23 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		Goal:            goal,
 		WorkingState:    workingState,
 	})
+}
+
+func activeSessionTurnResponse(as *activeSession) *sessionTurnResponse {
+	if as == nil || as.turns == nil {
+		return nil
+	}
+	turnID, status, ok := as.turns.activeStatus()
+	if !ok {
+		return nil
+	}
+	return &sessionTurnResponse{
+		TurnID:           turnID,
+		State:            status.State,
+		Error:            status.Err,
+		PendingCount:     status.PendingCount,
+		MaxPendingInputs: status.MaxPendingInputs,
+	}
 }
 
 func (s *Server) sessionStateStatus(dir string, as *activeSession) (*runtime.GoalStatusSnapshot, *runtime.WorkingStateStatusSnapshot) {

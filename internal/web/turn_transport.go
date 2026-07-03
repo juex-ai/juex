@@ -99,6 +99,23 @@ func (t *webTurnTransport) status(turnID string) (webTurnStatus, bool) {
 	return status, true
 }
 
+func (t *webTurnTransport) activeStatus() (string, webTurnStatus, bool) {
+	if t == nil {
+		return "", webTurnStatus{}, false
+	}
+	t.cancelMu.Lock()
+	turnID := t.activeTurn
+	t.cancelMu.Unlock()
+	if turnID == "" {
+		return "", webTurnStatus{}, false
+	}
+	status, ok := t.status(turnID)
+	if !ok || status.State != "running" {
+		return "", webTurnStatus{}, false
+	}
+	return turnID, status, true
+}
+
 func (t *webTurnTransport) interrupt() bool {
 	if t == nil {
 		return false
