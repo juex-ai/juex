@@ -231,6 +231,7 @@ type spinner struct {
 	isTTY bool
 	mu    sync.Mutex
 	stop  chan struct{}
+	done  chan struct{}
 	msg   string
 }
 
@@ -251,11 +252,14 @@ func (s *spinner) start(msg string) {
 		return
 	}
 	s.stop = make(chan struct{})
+	s.done = make(chan struct{})
 	stopCh := s.stop
-	go s.run(stopCh)
+	doneCh := s.done
+	go s.run(stopCh, doneCh)
 }
 
-func (s *spinner) run(stopCh chan struct{}) {
+func (s *spinner) run(stopCh chan struct{}, doneCh chan struct{}) {
+	defer close(doneCh)
 	ticker := time.NewTicker(80 * time.Millisecond)
 	defer ticker.Stop()
 	i := 0
@@ -280,11 +284,12 @@ func (s *spinner) run(stopCh chan struct{}) {
 func (s *spinner) halt() {
 	s.mu.Lock()
 	ch := s.stop
+	done := s.done
 	s.stop = nil
+	s.done = nil
 	s.mu.Unlock()
 	if ch != nil {
 		close(ch)
-		// Give the goroutine a moment to clear the line.
-		time.Sleep(5 * time.Millisecond)
+		<-done
 	}
 }
