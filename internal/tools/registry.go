@@ -189,6 +189,7 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 	defer cancel()
 	result, err := callToolHandler(callCtx, t, callInput)
 	rawErr := err
+	result.Text = SanitizeOutputText(result.Text).Text
 	out := result.Text
 	info.StructuredResult = result.Structured
 	if structuredResultTimedOut(result.Structured) && ctx.Err() == nil {

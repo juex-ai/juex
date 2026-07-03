@@ -302,6 +302,10 @@ export interface ToolOutputDeltaPayload {
   stream: string;
   text: string;
   truncated?: boolean;
+  binary_omitted?: boolean;
+  binary_bytes?: number;
+  binary_sha256?: string;
+  first_bytes_hex?: string;
 }
 
 export interface ToolErroredPayload {
