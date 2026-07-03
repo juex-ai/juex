@@ -60,6 +60,7 @@ func TestRegisterBuiltinsDefaultProviderToolSet(t *testing.T) {
 		"edit",
 		"exec_command",
 		"grep",
+		"list_shell_sessions",
 		"read",
 		"write",
 		"write_abort",
@@ -539,6 +540,9 @@ func TestRegisterBuiltinsShellToolsDisableRegistryTimeout(t *testing.T) {
 		if got := r.TimeoutSecondsFor(name); got != 0 {
 			t.Fatalf("%s timeout = %d, want generic timeout disabled", name, got)
 		}
+	}
+	if got := r.TimeoutSecondsFor("list_shell_sessions"); got != 2 {
+		t.Fatalf("list_shell_sessions timeout = %d, want generic timeout", got)
 	}
 }
 
@@ -1675,6 +1679,192 @@ func TestBuiltins_ExecCommandYieldReturnsSessionAndPollsLaterOutput(t *testing.T
 	}
 }
 
+func TestBuiltins_ListShellSessionsEmpty(t *testing.T) {
+	r := NewRegistry()
+	registerTestBuiltins(r, t.TempDir())
+
+	out, info, err := r.CallWithInfo(context.Background(), "list_shell_sessions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "No running shell sessions." {
+		t.Fatalf("list output = %q, want empty running message", out)
+	}
+	result := shellSessionListFromInfo(t, info)
+	if len(result.Sessions) != 0 {
+		t.Fatalf("sessions = %+v, want empty", result.Sessions)
+	}
+}
+
+func TestBuiltins_ListShellSessionsRunningAndPollsReturnedSession(t *testing.T) {
+	r := NewRegistry()
+	workDir := t.TempDir()
+	sessions := NewShellSessionManager(context.Background())
+	defer func() {
+		_ = sessions.Close()
+	}()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "slow")
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       workDir,
+		ShellSessions: sessions,
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	_, firstInfo, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd":           "slow one",
+		"yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, secondInfo, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd":           "slow two",
+		"yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := shellResultFromInfo(t, firstInfo)
+	second := shellResultFromInfo(t, secondInfo)
+	if !first.Running || first.SessionID <= 0 || !second.Running || second.SessionID <= 0 {
+		t.Fatalf("initial sessions = %+v / %+v, want two running sessions", first, second)
+	}
+
+	out, listInfo, err := r.CallWithInfo(context.Background(), "list_shell_sessions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"session_id=" + strconv.Itoa(first.SessionID),
+		"session_id=" + strconv.Itoa(second.SessionID),
+		"status=running",
+		"slow one",
+		"slow two",
+		strconv.Quote(workDir),
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("list output missing %q:\n%s", want, out)
+		}
+	}
+	list := shellSessionListFromInfo(t, listInfo)
+	if len(list.Sessions) != 2 {
+		t.Fatalf("sessions = %+v, want two running sessions", list.Sessions)
+	}
+	seen := map[int]ShellSessionInfo{}
+	for _, session := range list.Sessions {
+		seen[session.SessionID] = session
+		if !session.Running || session.ExitCode != nil || session.TimedOut {
+			t.Fatalf("listed running session = %+v, want running without exit state", session)
+		}
+		if session.Workdir != workDir {
+			t.Fatalf("listed workdir = %q, want %q", session.Workdir, workDir)
+		}
+		if session.StartedAt.IsZero() || session.LastAccessAt.IsZero() {
+			t.Fatalf("listed times should be populated: %+v", session)
+		}
+		if session.AgeMS < 0 || session.IdleMS < 0 {
+			t.Fatalf("listed durations should be non-negative: %+v", session)
+		}
+	}
+	if seen[first.SessionID].Command != "slow one" || seen[second.SessionID].Command != "slow two" {
+		t.Fatalf("listed commands = %+v, want original commands", seen)
+	}
+
+	out, _, err = r.CallWithInfo(context.Background(), "write_stdin", map[string]any{
+		"session_id":    first.SessionID,
+		"yield_time_ms": 4000,
+	})
+	if err != nil {
+		t.Fatalf("poll returned session_id: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "slow done") {
+		t.Fatalf("poll output = %q, want slow done", out)
+	}
+	out, _, err = r.CallWithInfo(context.Background(), "write_stdin", map[string]any{
+		"session_id":    second.SessionID,
+		"yield_time_ms": 4000,
+	})
+	if err != nil {
+		t.Fatalf("poll second returned session_id: %v\n%s", err, out)
+	}
+}
+
+func TestBuiltins_ListShellSessionsHidesCompletedByDefault(t *testing.T) {
+	r := NewRegistry()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "delayed")
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir: t.TempDir(),
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	_, execInfo, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd":           "delayed complete",
+		"yield_time_ms": 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execResult := shellResultFromInfo(t, execInfo)
+	if execResult.Running {
+		_, execInfo, err = r.CallWithInfo(context.Background(), "write_stdin", map[string]any{
+			"session_id":    execResult.SessionID,
+			"yield_time_ms": 1500,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		execResult = shellResultFromInfo(t, execInfo)
+	}
+	if execResult.Running || execResult.ExitCode == nil || *execResult.ExitCode != 0 {
+		t.Fatalf("exec result = %+v, want completed command", execResult)
+	}
+
+	out, info, err := r.CallWithInfo(context.Background(), "list_shell_sessions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "No running shell sessions." {
+		t.Fatalf("default list output = %q, want no running sessions", out)
+	}
+	if result := shellSessionListFromInfo(t, info); len(result.Sessions) != 0 {
+		t.Fatalf("default sessions = %+v, want completed hidden", result.Sessions)
+	}
+
+	out, info, err = r.CallWithInfo(context.Background(), "list_shell_sessions", map[string]any{
+		"include_completed": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"status=exited", "exit_code=0", "delayed complete"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("include_completed output missing %q:\n%s", want, out)
+		}
+	}
+	result := shellSessionListFromInfo(t, info)
+	if len(result.Sessions) != 1 {
+		t.Fatalf("include_completed sessions = %+v, want one completed session", result.Sessions)
+	}
+	session := result.Sessions[0]
+	if session.Running || session.ExitCode == nil || *session.ExitCode != 0 {
+		t.Fatalf("completed session = %+v, want non-running exit 0", session)
+	}
+}
+
 type timedOutStructuredTestResult struct{}
 
 func (timedOutStructuredTestResult) ToolCallTimedOut() bool {
@@ -2289,7 +2479,7 @@ func TestSpecs_OrderedAndComplete(t *testing.T) {
 	for i, s := range specs {
 		names[i] = s.Name
 	}
-	want := []string{"apply_patch", "edit", "exec_command", "grep", "read", "write", "write_abort", "write_begin", "write_chunk", "write_commit", "write_stdin"}
+	want := []string{"apply_patch", "edit", "exec_command", "grep", "list_shell_sessions", "read", "write", "write_abort", "write_begin", "write_chunk", "write_commit", "write_stdin"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("want %v, got %v", want, names)
 	}
@@ -2339,6 +2529,14 @@ func TestBuiltinSchemas_ExecCommandAndWriteStdinShape(t *testing.T) {
 	if sessionIDSchema["type"] != "integer" {
 		t.Fatalf("write_stdin session_id schema = %+v, want integer", sessionIDSchema)
 	}
+
+	listProps := schemaProperties(t, byName["list_shell_sessions"])
+	if _, ok := listProps["include_completed"]; !ok {
+		t.Fatalf("list_shell_sessions schema missing include_completed: %+v", listProps)
+	}
+	if _, ok := listProps["timeout"]; ok {
+		t.Fatalf("list_shell_sessions schema should not expose runtime timeout: %+v", listProps)
+	}
 }
 
 func TestShellYieldClampMatchesExecSemantics(t *testing.T) {
@@ -2379,6 +2577,15 @@ func shellResultFromInfo(t *testing.T, info CallInfo) ShellResult {
 	result, ok := info.StructuredResult.(ShellResult)
 	if !ok {
 		t.Fatalf("structured result = %#v, want ShellResult", info.StructuredResult)
+	}
+	return result
+}
+
+func shellSessionListFromInfo(t *testing.T, info CallInfo) ShellSessionListResult {
+	t.Helper()
+	result, ok := info.StructuredResult.(ShellSessionListResult)
+	if !ok {
+		t.Fatalf("structured result = %#v, want ShellSessionListResult", info.StructuredResult)
 	}
 	return result
 }

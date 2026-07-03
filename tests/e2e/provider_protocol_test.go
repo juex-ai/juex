@@ -253,8 +253,8 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	first := cloneMap(firstBody)
 	second := cloneMap(secondBody)
 	mu.Unlock()
-	if !requestHasTool(first, "exec_command") || !requestHasTool(first, "write_stdin") {
-		t.Fatalf("first provider request missing exec_command/write_stdin tools: %+v", first["tools"])
+	if !requestHasTool(first, "exec_command") || !requestHasTool(first, "write_stdin") || !requestHasTool(first, "list_shell_sessions") {
+		t.Fatalf("first provider request missing shell tool family: %+v", first["tools"])
 	}
 	if requestHasTool(first, "shell") || requestHasTool(first, "shell_input") {
 		t.Fatalf("first provider request exposed legacy shell tools: %+v", first["tools"])
@@ -303,7 +303,7 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 		case 1:
 			writeJSON(t, w, chatToolCallResponse("call_exec_yield", "exec_command", map[string]any{
 				"cmd":           slowShellYieldCommand(),
-				"yield_time_ms": 250,
+				"yield_time_ms": 1600,
 			}))
 		case 2:
 			mu.Lock()

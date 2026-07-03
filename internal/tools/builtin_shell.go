@@ -12,6 +12,7 @@ type ShellToolProvider struct{}
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
 		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions),
+		listShellSessionsTool(ctx.ShellSessions),
 		writeStdinTool(ctx.ShellSessions),
 	}
 }
@@ -84,6 +85,30 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 	}
 }
 
+func listShellSessionsTool(sessions *ShellSessionManager) Tool {
+	return Tool{
+		Name:        "list_shell_sessions",
+		Description: "List JueX-managed exec_command shell sessions so you can recover session_id values. exec_command starts and observes commands, write_stdin polls or sends input to a known session_id, and list_shell_sessions finds active session ids. By default only running sessions are returned; set include_completed to inspect retained completed sessions.",
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"include_completed": map[string]any{
+					"type":        "boolean",
+					"description": "Include completed shell sessions retained in memory. Defaults to false.",
+				},
+			},
+		},
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
+			includeCompleted, _ := in["include_completed"].(bool)
+			result := ShellSessionListResult{Sessions: sessions.List(includeCompleted)}
+			return Result{
+				Text:       formatShellSessionList(result, includeCompleted),
+				Structured: result,
+			}, nil
+		},
+	}
+}
+
 func writeStdinTool(sessions *ShellSessionManager) Tool {
 	return Tool{
 		Name:          "write_stdin",
@@ -142,6 +167,52 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 			return out, nil
 		},
 	}
+}
+
+func formatShellSessionList(result ShellSessionListResult, includeCompleted bool) string {
+	if len(result.Sessions) == 0 {
+		if includeCompleted {
+			return "No shell sessions."
+		}
+		return "No running shell sessions."
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Shell sessions: %d\n", len(result.Sessions))
+	for _, session := range result.Sessions {
+		status := "running"
+		if !session.Running {
+			status = "exited"
+			if session.TimedOut {
+				status = "timed_out"
+			}
+		}
+		fmt.Fprintf(
+			&b,
+			"session_id=%d status=%s tty=%t age=%s idle=%s chunk_id=%d unread_bytes=%d",
+			session.SessionID,
+			status,
+			session.TTY,
+			formatShellListDuration(session.AgeMS),
+			formatShellListDuration(session.IdleMS),
+			session.ChunkID,
+			session.UnreadBytes,
+		)
+		if session.ExitCode != nil {
+			fmt.Fprintf(&b, " exit_code=%d", *session.ExitCode)
+		}
+		if session.Workdir != "" {
+			fmt.Fprintf(&b, " workdir=%q", session.Workdir)
+		}
+		fmt.Fprintf(&b, " command=%q\n", session.Command)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatShellListDuration(ms int64) string {
+	if ms <= 0 {
+		return "0s"
+	}
+	return (time.Duration(ms) * time.Millisecond).String()
 }
 
 func shellToolResult(result ShellSessionResult) Result {

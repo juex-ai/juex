@@ -390,6 +390,7 @@ with the standard `read` builtin against the path printed there.
 | `write_begin` / `write_chunk` / `write_commit` / `write_abort` | chunked full-file writes for long generated files, with bounded chunks, idempotent chunk replay, optional SHA-256 validation, abort, and temporary-file commit |
 | `exec_command` | run a command through the resolved workspace shell (workdir defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
 | `write_stdin` | poll a running command session or write `chars` to a TTY session using the numeric `session_id` returned by `exec_command` |
+| `list_shell_sessions` | recover Juex-managed shell session ids and status after forgotten state, compaction, or background commands; defaults to running sessions |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
 | `memory_write` | persist a memory entry |
 | `memory_search` | substring match |
@@ -436,8 +437,11 @@ is not classified as timeout.
 manager and waits only for the bounded yield window. If the process is still
 alive, the tool result includes a numeric `session_id`; quick-exit commands do
 not expose a follow-up session. Later `write_stdin` calls poll unread output
-or write follow-up `chars`. Empty polls use their own observation window and do
-not fail or kill the process merely because `runtime.tool_timeout` is smaller.
+or write follow-up `chars`. `list_shell_sessions` snapshots the same manager so
+the model can recover active session ids without using OS process guesses; by
+default it hides completed sessions, with an explicit option for retained
+completed entries. Empty polls use their own observation window and do not fail
+or kill the process merely because `runtime.tool_timeout` is smaller.
 Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
 matching Codex's unified exec behavior. `tty: true` allocates a pseudo-terminal
 on supported platforms so interactive programs can prompt and receive follow-up
@@ -1350,7 +1354,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `events` | exact + glob match, auto-fill ID/timestamp, ordering |
 | `frontmatter` | round-trip, embedded quotes, embedded colons, blank lines, comments, malformed handling |
 | `version` | default + ldflags override |
-| `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin, regex grep, command timeout/session yield, default WorkDir |
+| `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin/list_shell_sessions, regex grep, command timeout/session yield, default WorkDir |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
 | `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |

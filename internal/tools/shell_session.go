@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -93,6 +94,26 @@ type ShellResult struct {
 	FirstBytesHex      string `json:"first_bytes_hex,omitempty"`
 }
 
+type ShellSessionListResult struct {
+	Sessions []ShellSessionInfo `json:"sessions"`
+}
+
+type ShellSessionInfo struct {
+	SessionID    int       `json:"session_id"`
+	Command      string    `json:"command"`
+	Workdir      string    `json:"workdir"`
+	Running      bool      `json:"running"`
+	TTY          bool      `json:"tty"`
+	StartedAt    time.Time `json:"started_at"`
+	AgeMS        int64     `json:"age_ms"`
+	LastAccessAt time.Time `json:"last_access_at"`
+	IdleMS       int64     `json:"idle_ms"`
+	ChunkID      int       `json:"chunk_id"`
+	UnreadBytes  int       `json:"unread_bytes"`
+	ExitCode     *int      `json:"exit_code"`
+	TimedOut     bool      `json:"timed_out"`
+}
+
 func NewShellResult(result ShellSessionResult) ShellResult {
 	return ShellResult{
 		SessionID:          result.SessionID,
@@ -125,6 +146,8 @@ func (r ShellResult) ToolCallExitCode() (int, bool) {
 
 type shellSession struct {
 	id            int
+	command       string
+	workdir       string
 	started       time.Time
 	lastAccess    time.Time
 	cmd           *exec.Cmd
@@ -189,13 +212,19 @@ func (m *ShellSessionManager) Start(req ShellStartRequest) (ShellSessionResult, 
 	argv := append([]string(nil), req.Args...)
 	argv = append(argv, req.Command)
 	cmd := exec.CommandContext(procCtx, req.Binary, argv...)
+	workdir := req.Cwd
 	if req.Cwd != "" {
 		cmd.Dir = req.Cwd
+	} else if cwd, err := os.Getwd(); err == nil {
+		workdir = cwd
 	}
+	now := time.Now()
 	session := &shellSession{
 		id:            id,
-		started:       time.Now(),
-		lastAccess:    time.Now(),
+		command:       req.Command,
+		workdir:       workdir,
+		started:       now,
+		lastAccess:    now,
 		cmd:           cmd,
 		cancel:        cancel,
 		events:        req.Events,
@@ -238,6 +267,34 @@ func (m *ShellSessionManager) Start(req ShellStartRequest) (ShellSessionResult, 
 
 	session.waitFor(callCtx, defaultDuration(req.Yield, defaultShellExecYield), minShellYield, maxShellYield)
 	return session.snapshot(true, req.MaxOutputTokens), nil
+}
+
+func (m *ShellSessionManager) List(includeCompleted bool) []ShellSessionInfo {
+	now := time.Now()
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	m.pruneLocked(now)
+	sessions := make([]*shellSession, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		sessions = append(sessions, session)
+	}
+	m.mu.Unlock()
+
+	infos := make([]ShellSessionInfo, 0, len(sessions))
+	for _, session := range sessions {
+		info := session.info(now)
+		if !includeCompleted && !info.Running {
+			continue
+		}
+		infos = append(infos, info)
+	}
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].SessionID < infos[j].SessionID
+	})
+	return infos
 }
 
 func (m *ShellSessionManager) Continue(req ShellContinueRequest) (ShellSessionResult, error) {
@@ -539,6 +596,26 @@ func (s *shellSession) lastAccessTime() time.Time {
 	return s.lastAccess
 }
 
+func (s *shellSession) info(now time.Time) ShellSessionInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ShellSessionInfo{
+		SessionID:    s.id,
+		Command:      s.command,
+		Workdir:      s.workdir,
+		Running:      !s.done,
+		TTY:          s.tty,
+		StartedAt:    s.started,
+		AgeMS:        durationMillis(now.Sub(s.started)),
+		LastAccessAt: s.lastAccess,
+		IdleMS:       durationMillis(now.Sub(s.lastAccess)),
+		ChunkID:      s.chunkID,
+		UnreadBytes:  len(s.unread),
+		ExitCode:     cloneIntPtr(s.exitCode),
+		TimedOut:     s.timedOut,
+	}
+}
+
 func appendCappedBytes(dst, src []byte, limit int) []byte {
 	if limit <= 0 {
 		return append(dst, src...)
@@ -567,6 +644,13 @@ func approxTokenCountBytes(data []byte) int {
 		return 0
 	}
 	return (len(data) + 3) / 4
+}
+
+func durationMillis(d time.Duration) int64 {
+	if d < 0 {
+		return 0
+	}
+	return d.Milliseconds()
 }
 
 func clampShellYield(d time.Duration, minYield time.Duration, maxYield time.Duration) time.Duration {

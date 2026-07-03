@@ -141,7 +141,8 @@ recent active chunks available for continuation, and folds committed chunked
 write sessions into a compact summary; the durable conversation log still
 preserves the original tool-use inputs for replay and debugging.
 
-The builtin command tools are `exec_command` and `write_stdin`. Juex resolves a
+The builtin command tools are `exec_command`, `write_stdin`, and
+`list_shell_sessions`. Juex resolves a
 `ShellProfile` from the process runtime OS: Windows binaries default to
 PowerShell when available, Linux/macOS binaries default to POSIX shells, and
 Linux binaries running under WSL stay POSIX unless `shell.profile: wsl` is
@@ -149,8 +150,12 @@ configured explicitly. `exec_command` accepts `yield_time_ms` and returns a
 numeric `session_id` only when the process is still running. Set `tty: true`
 for interactive commands that need a real terminal and follow-up input;
 `write_stdin` polls running sessions or writes `chars` only to TTY sessions
-while live output is streamed through runtime events. `yield_time_ms` only
-bounds the current observation window; it does not kill a still-running command.
+while live output is streamed through runtime events. `list_shell_sessions`
+returns Juex-managed shell sessions so the model can recover active
+`session_id` values after compaction or forgotten state; by default it lists
+only running sessions, with an explicit `include_completed` option for retained
+completed sessions. `yield_time_ms` only bounds the current observation window;
+it does not kill a still-running command.
 Shell tools are not governed by the generic `runtime.tool_timeout`, which
 remains a runtime policy for ordinary non-shell tools rather than a
 model-visible parameter. Shell processes still stop on parent cancellation,
