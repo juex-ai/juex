@@ -283,6 +283,108 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_ExecCommandOmitsBinaryOutputFromTranscript(t *testing.T) {
+	bin := buildJuex(t)
+
+	var requestCount atomic.Int32
+	var mu sync.Mutex
+	var secondBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		switch requestCount.Add(1) {
+		case 1:
+			writeJSON(t, w, chatToolCallResponse("call_exec_binary", "exec_command", map[string]any{
+				"cmd":           "go run emit_binary.go",
+				"yield_time_ms": 30000,
+			}))
+		case 2:
+			mu.Lock()
+			secondBody = body
+			mu.Unlock()
+			writeJSON(t, w, chatCompletionResponseMap("binary output handled"))
+		default:
+			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
+			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
+		}
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	if err := writeText(filepath.Join(work, "emit_binary.go"), `package main
+
+import "os"
+
+func main() {
+	data := []byte{0x00, 0x01, 'P', 'N', 'G'}
+	for i := 0; i < 1024; i++ {
+		data = append(data, byte(i%251))
+	}
+	_, _ = os.Stdout.Write(data)
+}
+`); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+    protocol: openai/chat
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: chat-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "run the binary output command")
+	home := t.TempDir()
+	cmd.Env = isolatedJuexBinaryEnv(home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("juex run: %v\n%s", err, out)
+	}
+	if got := requestCount.Load(); got != 2 {
+		t.Fatalf("provider requests = %d, want 2", got)
+	}
+
+	var result struct {
+		Text       string `json:"text"`
+		SessionID  string `json:"session_id"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
+	}
+	if result.Text != "binary output handled" || result.SessionDir == "" {
+		t.Fatalf("run result = %+v", result)
+	}
+
+	mu.Lock()
+	second := cloneMap(secondBody)
+	mu.Unlock()
+	secondJSON, _ := json.Marshal(second)
+	assertBinaryOutputSanitized(t, string(secondJSON))
+	if !requestHasToolResult(second, "call_exec_binary", "[binary output omitted:") {
+		t.Fatalf("second provider request missing sanitized binary tool result: %+v", second["messages"])
+	}
+
+	conversationText := strings.Join(readLines(t, filepath.Join(result.SessionDir, "conversation.jsonl")), "\n")
+	assertBinaryOutputSanitized(t, conversationText)
+	eventsText := strings.Join(readLines(t, filepath.Join(result.SessionDir, "events.jsonl")), "\n")
+	assertBinaryOutputSanitized(t, eventsText)
+	for _, want := range []string{`"type":"tool.output_delta"`, `"binary_omitted":true`, `"binary_sha256":`, `"first_bytes_hex":"0001504e47`} {
+		if !strings.Contains(eventsText, want) {
+			t.Fatalf("events missing %q:\n%s", want, eventsText)
+		}
+	}
+}
+
 func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("os.Interrupt process signalling is platform-specific in this e2e")
@@ -647,6 +749,20 @@ func assertConversationToolError(t *testing.T, path string, toolUseID string, wa
 	}
 	if !sawToolResult {
 		t.Fatalf("conversation missing error tool_result for %q containing %q in %s", toolUseID, wantError, path)
+	}
+}
+
+func assertBinaryOutputSanitized(t *testing.T, text string) {
+	t.Helper()
+	for _, want := range []string{"[binary output omitted:", "first_bytes_hex=0001504e47"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text missing binary placeholder marker %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{`\u0000`, "\x00", "PNG"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("text contains raw binary marker %q:\n%s", forbidden, text)
+		}
 	}
 }
 

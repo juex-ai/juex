@@ -155,7 +155,10 @@ runtime policy, not a model-visible tool parameter; configure
 non-zero exit code is returned as an error tool result with the captured output
 preserved. Shell execution metadata is also emitted as structured runtime event
 data so consumers can read session, running, exit-code, chunk, and truncation
-state without parsing the provider-facing text.
+state without parsing the provider-facing text. Binary or binary-like command
+output is replaced before it reaches provider-visible text, conversation
+history, runtime events, or the Web UI with a compact placeholder that includes
+byte count, SHA-256, and first-bytes hex metadata.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

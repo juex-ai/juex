@@ -22,23 +22,31 @@ type RequestedPayload struct {
 }
 
 type OutputDelta struct {
-	Name      string
-	ToolUseID string
-	SessionID string
-	ChunkID   int
-	Stream    string
-	Text      string
-	Truncated bool
+	Name          string
+	ToolUseID     string
+	SessionID     string
+	ChunkID       int
+	Stream        string
+	Text          string
+	Truncated     bool
+	BinaryOmitted bool
+	BinaryBytes   int
+	BinarySHA256  string
+	FirstBytesHex string
 }
 
 type OutputDeltaPayload struct {
-	Name      string `json:"name"`
-	ToolUseID string `json:"tool_use_id"`
-	SessionID string `json:"session_id"`
-	ChunkID   int    `json:"chunk_id"`
-	Stream    string `json:"stream"`
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Name          string `json:"name"`
+	ToolUseID     string `json:"tool_use_id"`
+	SessionID     string `json:"session_id"`
+	ChunkID       int    `json:"chunk_id"`
+	Stream        string `json:"stream"`
+	Text          string `json:"text"`
+	Truncated     bool   `json:"truncated,omitempty"`
+	BinaryOmitted bool   `json:"binary_omitted,omitempty"`
+	BinaryBytes   int    `json:"binary_bytes,omitempty"`
+	BinarySHA256  string `json:"binary_sha256,omitempty"`
+	FirstBytesHex string `json:"first_bytes_hex,omitempty"`
 }
 
 type CompletedPayload struct {
@@ -95,13 +103,17 @@ func Delta(call ToolCallPayload, delta OutputDelta) OutputDeltaPayload {
 		toolUseID = call.ToolUseID
 	}
 	return OutputDeltaPayload{
-		Name:      name,
-		ToolUseID: toolUseID,
-		SessionID: delta.SessionID,
-		ChunkID:   delta.ChunkID,
-		Stream:    delta.Stream,
-		Text:      delta.Text,
-		Truncated: delta.Truncated,
+		Name:          name,
+		ToolUseID:     toolUseID,
+		SessionID:     delta.SessionID,
+		ChunkID:       delta.ChunkID,
+		Stream:        delta.Stream,
+		Text:          delta.Text,
+		Truncated:     delta.Truncated,
+		BinaryOmitted: delta.BinaryOmitted,
+		BinaryBytes:   delta.BinaryBytes,
+		BinarySHA256:  delta.BinarySHA256,
+		FirstBytesHex: delta.FirstBytesHex,
 	}
 }
 

@@ -445,7 +445,13 @@ Shell tools also return a structured `tools.ShellResult` through
 adapter, but runtime events expose the same shell result under
 `tool.completed.payload.result` or `tool.errored.payload.result` so consumers
 can read `session_id`, `running`, `exit_code`, `chunk_id`, truncation, and
-output sizing without scraping prose.
+output sizing without scraping prose. Shell output is sanitized at the tool
+output seam before text enters conversation history, runtime events, provider
+context, or Web DTOs. Binary or binary-like bytes are omitted from the visible
+text and replaced with a deterministic placeholder carrying byte count, SHA-256,
+and first-bytes hex metadata; normal UTF-8 logs, ANSI-colored output, and
+localized text remain unchanged and still pass through the usual truncation
+budgets.
 
 Provider adapters should normally return structured tool input. The registry
 still normalizes leaked OpenAI-compatible `_raw_arguments` payloads, including

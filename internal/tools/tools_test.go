@@ -217,6 +217,68 @@ func TestBuiltins_ExecCommandRelativeWorkdirResolvesFromWorkDir(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ExecCommandOmitsBinaryOutput(t *testing.T) {
+	r := NewRegistry()
+	workDir := t.TempDir()
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "binary")
+
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir: workDir,
+		Shell: ShellProfile{
+			Profile:   "fake",
+			Family:    "posix",
+			Binary:    os.Args[0],
+			Args:      []string{"-test.run=TestShellHelperProcess", "--"},
+			PathStyle: "posix",
+		},
+	})
+
+	var deltas []OutputDelta
+	ctx := WithToolCallEvents(context.Background(), ToolCallEvents{
+		Name:      "exec_command",
+		ToolUseID: "call_binary",
+		Emit: func(delta OutputDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	out, info, err := r.CallWithInfo(ctx, "exec_command", map[string]any{"cmd": "emit binary"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBytes := testBinaryShellOutput()
+	wantSum := sha256.Sum256(wantBytes)
+	wantSHA := hex.EncodeToString(wantSum[:])
+	for _, want := range []string{"[binary output omitted:", "bytes=", "sha256=" + wantSHA, "first_bytes_hex=0001504e47"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, string(wantBytes[:5])) {
+		t.Fatalf("output contains raw binary prefix: %q", out)
+	}
+	shellResult, ok := info.StructuredResult.(ShellResult)
+	if !ok {
+		t.Fatalf("structured result = %T", info.StructuredResult)
+	}
+	if !shellResult.BinaryOmitted || shellResult.BinaryBytes != len(wantBytes) || shellResult.BinarySHA256 != wantSHA {
+		t.Fatalf("shell binary metadata = %+v", shellResult)
+	}
+	if wantTokens := (len(shellResult.Output) + 3) / 4; shellResult.OriginalTokenCount != wantTokens {
+		t.Fatalf("original token count = %d, want placeholder token count %d", shellResult.OriginalTokenCount, wantTokens)
+	}
+	if len(deltas) != 1 {
+		t.Fatalf("deltas = %d, want one binary placeholder delta: %+v", len(deltas), deltas)
+	}
+	delta := deltas[0]
+	if !delta.BinaryOmitted || delta.BinaryBytes != len(wantBytes) || delta.BinarySHA256 != wantSHA {
+		t.Fatalf("delta binary metadata = %+v", delta)
+	}
+	if strings.Contains(delta.Text, string(wantBytes[:5])) {
+		t.Fatalf("delta contains raw binary prefix: %q", delta.Text)
+	}
+}
+
 func TestShellHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_FAKE_SHELL") != "1" {
 		return
@@ -254,6 +316,10 @@ func TestShellHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "before failure stderr")
 		os.Exit(7)
 	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "binary" {
+		_, _ = os.Stdout.Write(testBinaryShellOutput())
+		os.Exit(0)
+	}
 	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "tty" {
 		fmt.Fprintf(os.Stdout, "stdin_tty:%t stdout_tty:%t stderr_tty:%t\n", isCharDevice(os.Stdin), isCharDevice(os.Stdout), isCharDevice(os.Stderr))
 		fmt.Fprint(os.Stdout, "enter value: ")
@@ -273,6 +339,14 @@ func TestShellHelperProcess(t *testing.T) {
 	}
 	fmt.Fprintln(os.Stdout, "fake shell ok")
 	os.Exit(0)
+}
+
+func testBinaryShellOutput() []byte {
+	data := []byte{0x00, 0x01, 'P', 'N', 'G'}
+	for i := 0; i < 1024; i++ {
+		data = append(data, byte(i%251))
+	}
+	return data
 }
 
 func isCharDevice(file *os.File) bool {

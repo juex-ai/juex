@@ -71,6 +71,10 @@ type ShellSessionResult struct {
 	OriginalBytes      int
 	OriginalTokenCount int
 	Truncated          bool
+	BinaryOmitted      bool
+	BinaryBytes        int
+	BinarySHA256       string
+	FirstBytesHex      string
 }
 
 type ShellResult struct {
@@ -84,6 +88,10 @@ type ShellResult struct {
 	OriginalBytes      int    `json:"original_bytes"`
 	OriginalTokenCount int    `json:"original_token_count"`
 	Truncated          bool   `json:"truncated,omitempty"`
+	BinaryOmitted      bool   `json:"binary_omitted,omitempty"`
+	BinaryBytes        int    `json:"binary_bytes,omitempty"`
+	BinarySHA256       string `json:"binary_sha256,omitempty"`
+	FirstBytesHex      string `json:"first_bytes_hex,omitempty"`
 }
 
 func NewShellResult(result ShellSessionResult) ShellResult {
@@ -98,6 +106,10 @@ func NewShellResult(result ShellSessionResult) ShellResult {
 		OriginalBytes:      result.OriginalBytes,
 		OriginalTokenCount: result.OriginalTokenCount,
 		Truncated:          result.Truncated,
+		BinaryOmitted:      result.BinaryOmitted,
+		BinaryBytes:        result.BinaryBytes,
+		BinarySHA256:       result.BinarySHA256,
+		FirstBytesHex:      result.FirstBytesHex,
 	}
 }
 
@@ -365,6 +377,7 @@ func (s *shellSession) appendOutput(p []byte) {
 		return
 	}
 	data := append([]byte(nil), p...)
+	sanitized := SanitizeOutputBytes(data)
 	deltas := make([]OutputDelta, 0, (len(data)/maxShellDeltaBytes)+1)
 	s.mu.Lock()
 	s.transcript = appendCappedBytes(s.transcript, data, s.maxTranscript)
@@ -373,22 +386,39 @@ func (s *shellSession) appendOutput(p []byte) {
 	if beforeUnread+len(data) > s.maxTranscript {
 		s.unreadTruncated = true
 	}
-	for len(data) > 0 {
-		n := len(data)
-		if n > maxShellDeltaBytes {
-			n = maxShellDeltaBytes
-		}
+	if sanitized.Binary.Omitted {
 		s.chunkID++
 		deltas = append(deltas, OutputDelta{
-			Name:      eventToolName(s.events),
-			ToolUseID: s.events.ToolUseID,
-			SessionID: fmt.Sprint(s.id),
-			ChunkID:   s.chunkID,
-			Stream:    "combined",
-			Text:      string(data[:n]),
-			Truncated: false,
+			Name:          eventToolName(s.events),
+			ToolUseID:     s.events.ToolUseID,
+			SessionID:     fmt.Sprint(s.id),
+			ChunkID:       s.chunkID,
+			Stream:        "combined",
+			Text:          sanitized.Text,
+			BinaryOmitted: true,
+			BinaryBytes:   sanitized.Binary.Bytes,
+			BinarySHA256:  sanitized.Binary.SHA256,
+			FirstBytesHex: sanitized.Binary.FirstBytesHex,
+			Truncated:     false,
 		})
-		data = data[n:]
+	} else {
+		for len(data) > 0 {
+			n := len(data)
+			if n > maxShellDeltaBytes {
+				n = maxShellDeltaBytes
+			}
+			s.chunkID++
+			deltas = append(deltas, OutputDelta{
+				Name:      eventToolName(s.events),
+				ToolUseID: s.events.ToolUseID,
+				SessionID: fmt.Sprint(s.id),
+				ChunkID:   s.chunkID,
+				Stream:    "combined",
+				Text:      string(data[:n]),
+				Truncated: false,
+			})
+			data = data[n:]
+		}
 	}
 	emit := s.events.Emit
 	s.mu.Unlock()
@@ -432,13 +462,22 @@ func (s *shellSession) snapshot(clearUnread bool, maxOutputTokens int) ShellSess
 	if len(output) == 0 && !clearUnread {
 		output = append([]byte(nil), s.transcript...)
 	}
-	text, capped := capOutputText(string(output), maxOutputTokens)
-	if capped {
-		truncated = true
+	sanitized := SanitizeOutputBytes(output)
+	text := sanitized.Text
+	if !sanitized.Binary.Omitted {
+		var capped bool
+		text, capped = capOutputText(text, maxOutputTokens)
+		if capped {
+			truncated = true
+		}
 	}
 	sessionID := 0
 	if !s.done {
 		sessionID = s.id
+	}
+	originalTokenCount := approxTokenCountBytes(output)
+	if sanitized.Binary.Omitted {
+		originalTokenCount = approxTokenCountBytes([]byte(text))
 	}
 	return ShellSessionResult{
 		SessionID:          sessionID,
@@ -449,8 +488,12 @@ func (s *shellSession) snapshot(clearUnread bool, maxOutputTokens int) ShellSess
 		WallTime:           time.Since(s.started),
 		ChunkID:            s.chunkID,
 		OriginalBytes:      len(output),
-		OriginalTokenCount: approxTokenCount(string(output)),
+		OriginalTokenCount: originalTokenCount,
 		Truncated:          truncated,
+		BinaryOmitted:      sanitized.Binary.Omitted,
+		BinaryBytes:        sanitized.Binary.Bytes,
+		BinarySHA256:       sanitized.Binary.SHA256,
+		FirstBytesHex:      sanitized.Binary.FirstBytesHex,
 	}
 }
 
@@ -523,11 +566,11 @@ func capOutputText(text string, maxOutputTokens int) (string, bool) {
 	return fmt.Sprintf("[output truncated: %d earlier bytes omitted]\n%s", omitted, text[len(text)-limit:]), true
 }
 
-func approxTokenCount(text string) int {
-	if text == "" {
+func approxTokenCountBytes(data []byte) int {
+	if len(data) == 0 {
 		return 0
 	}
-	return (len(text) + 3) / 4
+	return (len(data) + 3) / 4
 }
 
 func clampShellYield(d time.Duration, minYield time.Duration, maxYield time.Duration) time.Duration {
