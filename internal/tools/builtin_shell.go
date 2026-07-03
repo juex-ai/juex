@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -206,6 +207,67 @@ func formatShellSessionList(result ShellSessionListResult, includeCompleted bool
 		fmt.Fprintf(&b, " command=%q\n", session.Command)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+const (
+	activeShellPromptMaxSessions = 8
+	activeShellPromptMaxCommand  = 160
+	activeShellPromptMaxWorkdir  = 120
+)
+
+func FormatActiveShellSessionsPrompt(sessions []ShellSessionInfo) string {
+	active := make([]ShellSessionInfo, 0, len(sessions))
+	for _, session := range sessions {
+		if session.Running {
+			active = append(active, session)
+		}
+	}
+	if len(active) == 0 {
+		return ""
+	}
+	sort.SliceStable(active, func(i, j int) bool {
+		return active[i].SessionID < active[j].SessionID
+	})
+
+	limit := len(active)
+	if limit > activeShellPromptMaxSessions {
+		limit = activeShellPromptMaxSessions
+	}
+	var b strings.Builder
+	b.WriteString("## Active Shell Sessions\n")
+	b.WriteString("These exec_command sessions are still running in this JueX process. Use `write_stdin` with `session_id` to poll output or send input; use `list_shell_sessions` for full current details. Sessions are not restored after JueX restarts.\n")
+	for _, session := range active[:limit] {
+		fmt.Fprintf(
+			&b,
+			"- session_id=%d running=true tty=%t age=%s idle=%s chunk_id=%d unread_bytes=%d workdir=%q command=%q\n",
+			session.SessionID,
+			session.TTY,
+			formatShellListDuration(session.AgeMS),
+			formatShellListDuration(session.IdleMS),
+			session.ChunkID,
+			session.UnreadBytes,
+			truncateShellPromptField(session.Workdir, activeShellPromptMaxWorkdir),
+			truncateShellPromptField(session.Command, activeShellPromptMaxCommand),
+		)
+	}
+	if omitted := len(active) - limit; omitted > 0 {
+		fmt.Fprintf(&b, "- %d more active shell session(s) omitted; call `list_shell_sessions` for the full list.\n", omitted)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func truncateShellPromptField(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func formatShellListDuration(ms int64) string {

@@ -16,7 +16,7 @@
 
 ```
 user types a prompt in the CLI
-  -> assemble system prompt from AGENTS.md + skills + memory entries
+  -> assemble system prompt from AGENTS.md + skills + memory entries + bounded runtime sections
   -> call the LLM (Anthropic or OpenAI-compatible)
   -> execute tool calls in parallel (builtin / MCP / skill helpers)
   -> persist conversation + emit events
@@ -440,8 +440,11 @@ not expose a follow-up session. Later `write_stdin` calls poll unread output
 or write follow-up `chars`. `list_shell_sessions` snapshots the same manager so
 the model can recover active session ids without using OS process guesses; by
 default it hides completed sessions, with an explicit option for retained
-completed entries. Empty polls use their own observation window and do not fail
-or kill the process merely because `runtime.tool_timeout` is smaller.
+completed entries. Active running sessions are also emitted as a bounded runtime
+prompt section on later turns and compaction requests; the section carries only
+session metadata and command summaries, not command output. Empty polls use
+their own observation window and do not fail or kill the process merely because
+`runtime.tool_timeout` is smaller.
 Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
 matching Codex's unified exec behavior; Ctrl-C (`\x03`) is the supported
 follow-up exception and maps to shell-session interrupt. `tty: true` allocates

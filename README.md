@@ -155,8 +155,11 @@ through runtime events. `list_shell_sessions`
 returns Juex-managed shell sessions so the model can recover active
 `session_id` values after compaction or forgotten state; by default it lists
 only running sessions, with an explicit `include_completed` option for retained
-completed sessions. `yield_time_ms` only bounds the current observation window;
-it does not kill a still-running command.
+completed sessions. Running shell sessions are also surfaced as a bounded
+runtime system-prompt section on later turns and compaction requests so the
+model can keep polling by `session_id` without replaying command output.
+`yield_time_ms` only bounds the current observation window; it does not kill a
+still-running command.
 Shell tools are not governed by the generic `runtime.tool_timeout`, which
 remains a runtime policy for ordinary non-shell tools rather than a
 model-visible parameter. Shell processes still stop on parent cancellation,

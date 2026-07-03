@@ -191,6 +191,40 @@ func TestBuilder_SectionsIncludeInspectableAgentsEntries(t *testing.T) {
 	}
 }
 
+func TestBuilder_RuntimeSectionsInsertedBeforeOperatingContext(t *testing.T) {
+	b := &Builder{
+		AgentsMDDirs: []string{t.TempDir()},
+		RuntimeSections: func() []Section {
+			return []Section{
+				{Key: "empty_runtime", Label: "Empty Runtime", Source: "runtime"},
+				{Key: "active_shell_sessions", Label: "Active Shell Sessions", Source: "runtime", Text: "## Active Shell Sessions\n- session_id=7"},
+			}
+		},
+		Now: func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
+	}
+
+	sections := b.Sections()
+	if len(sections) != 2 {
+		t.Fatalf("sections = %+v, want runtime section and operating context", sections)
+	}
+	if sections[0].Key != "active_shell_sessions" || sections[0].Label != "Active Shell Sessions" || sections[0].Source != "runtime" {
+		t.Fatalf("runtime section = %+v", sections[0])
+	}
+	if sections[1].Key != "operating_context" {
+		t.Fatalf("section[1] = %+v, want operating context after runtime section", sections[1])
+	}
+
+	got := b.Build()
+	mustContain(t, got, "## Active Shell Sessions")
+	mustContain(t, got, "session_id=7")
+	if strings.Contains(got, "Empty Runtime") {
+		t.Fatalf("empty runtime section leaked into prompt:\n%s", got)
+	}
+	if strings.Index(got, "## Active Shell Sessions") > strings.Index(got, "## Operating Context") {
+		t.Fatalf("runtime section should appear before operating context:\n%s", got)
+	}
+}
+
 func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 	b := &Builder{
 		AgentsMDDirs: []string{t.TempDir()},

@@ -32,6 +32,7 @@ type Builder struct {
 	Skills             *skills.Loader
 	WorkDir            string
 	Shell              ShellProfile
+	RuntimeSections    func() []Section
 	Now                func() time.Time
 }
 
@@ -92,6 +93,14 @@ func (b *Builder) Sections() []Section {
 	if b.Memory != nil {
 		if mem, _ := b.Memory.PromptSection(); mem != "" {
 			sections = append(sections, Section{Key: "memory_files", Label: "Memory", Source: "runtime", Text: mem})
+		}
+	}
+
+	if b.RuntimeSections != nil {
+		for _, section := range b.RuntimeSections() {
+			if section.Text != "" {
+				sections = append(sections, section)
+			}
 		}
 	}
 
