@@ -230,6 +230,7 @@ export function Session() {
       } catch (e) {
         if (!cancelled && isLatestRoute(latestRouteRef.current, id)) {
           console.error("getTurnStatus failed", e);
+          timer = window.setTimeout(() => void reconcile(), 1000);
         }
       }
     };

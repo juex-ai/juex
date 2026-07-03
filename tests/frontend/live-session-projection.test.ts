@@ -6,6 +6,7 @@ import {
   projectLiveSessionEvent,
   projectOptimisticTurn,
   projectQueuedInput,
+  projectSessionTurnStatus,
   type LiveSessionProjection,
 } from "../../frontend/src/lib/live-session-projection.ts";
 import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
@@ -185,6 +186,31 @@ test("projectOptimisticTurn is replaced by the canonical turn.started event", ()
     payload: { input: "hello" },
   });
   assert.equal(state.messages.length, 2);
+});
+
+test("projectSessionTurnStatus does not duplicate an existing assistant turn", () => {
+  const state = projectSessionTurnStatus(
+    {
+      ...createLiveSessionProjection(),
+      messages: [
+        {
+          role: "assistant",
+          turn_id: "turn-1",
+          pending: false,
+          blocks: [{ type: "text", text: "partial answer" }],
+        },
+      ],
+    },
+    { turn_id: "turn-1", state: "running" },
+  );
+
+  assert.equal(state.turnActive, true);
+  assert.equal(
+    state.messages.filter(
+      (message) => message.role === "assistant" && message.turn_id === "turn-1",
+    ).length,
+    1,
+  );
 });
 
 test("projectLiveSessionEvent drains queued input before the pending assistant placeholder", () => {

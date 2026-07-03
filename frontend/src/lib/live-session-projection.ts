@@ -557,9 +557,7 @@ function ensurePendingAssistant(messages: Message[], turnID: string): Message[] 
   if (
     messages.some(
       (message) =>
-        message.turn_id === turnID &&
-        message.role === "assistant" &&
-        message.pending,
+        message.turn_id === turnID && message.role === "assistant",
     )
   ) {
     return messages;
