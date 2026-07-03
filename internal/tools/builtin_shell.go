@@ -11,16 +11,16 @@ type ShellToolProvider struct{}
 
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
-		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions, ctx.ToolTimeoutSeconds),
+		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions),
 		writeStdinTool(ctx.ShellSessions),
 	}
 }
 
-func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager, timeoutSeconds int) Tool {
+func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager) Tool {
 	return Tool{
-		Name:           "exec_command",
-		Description:    execCommandToolDescription(profile),
-		TimeoutSeconds: timeoutSeconds,
+		Name:          "exec_command",
+		Description:   execCommandToolDescription(profile),
+		TimeoutPolicy: ToolTimeoutDisabled,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -66,7 +66,6 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 				Args:            profile.Args,
 				Command:         cmd,
 				Cwd:             workdir,
-				Timeout:         time.Duration(timeoutSeconds) * time.Second,
 				Yield:           yield,
 				MaxOutputTokens: maxOutputTokens,
 				TTY:             tty,
@@ -87,8 +86,9 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 
 func writeStdinTool(sessions *ShellSessionManager) Tool {
 	return Tool{
-		Name:        "write_stdin",
-		Description: "Poll a running exec_command session or write chars to a tty session. Use the numeric session_id returned by exec_command.",
+		Name:          "write_stdin",
+		Description:   "Poll a running exec_command session or write chars to a tty session. Use the numeric session_id returned by exec_command.",
+		TimeoutPolicy: ToolTimeoutDisabled,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

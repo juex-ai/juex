@@ -44,7 +44,6 @@ type ShellStartRequest struct {
 	Args            []string
 	Command         string
 	Cwd             string
-	Timeout         time.Duration
 	Yield           time.Duration
 	MaxOutputTokens int
 	TTY             bool
@@ -173,9 +172,6 @@ func (m *ShellSessionManager) Start(req ShellStartRequest) (ShellSessionResult, 
 	if req.Command == "" {
 		return ShellSessionResult{}, fmt.Errorf("exec_command: missing cmd")
 	}
-	if req.Timeout <= 0 {
-		req.Timeout = time.Duration(DefaultTimeoutSeconds) * time.Second
-	}
 	callCtx := req.CallContext
 	if callCtx == nil {
 		callCtx = context.Background()
@@ -189,7 +185,7 @@ func (m *ShellSessionManager) Start(req ShellStartRequest) (ShellSessionResult, 
 	id := m.allocateSessionIDLocked()
 	m.mu.Unlock()
 
-	procCtx, cancel := context.WithTimeout(m.baseCtx, req.Timeout)
+	procCtx, cancel := context.WithCancel(m.baseCtx)
 	argv := append([]string(nil), req.Args...)
 	argv = append(argv, req.Command)
 	cmd := exec.CommandContext(procCtx, req.Binary, argv...)

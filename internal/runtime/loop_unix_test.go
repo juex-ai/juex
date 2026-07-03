@@ -11,22 +11,24 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/toolevents"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
-func TestTurn_BuiltinExecCommandTimeoutFinishesWhenChildKeepsPipeOpen(t *testing.T) {
+func TestTurn_BuiltinExecCommandYieldDoesNotWaitForChildPipe(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
-			{Type: llm.BlockToolUse, ToolUseID: "exec_timeout", ToolName: "exec_command", Input: map[string]any{
-				"cmd": "printf 'child still owns pipe\\n'; sleep 5 & wait",
+			{Type: llm.BlockToolUse, ToolUseID: "exec_yield", ToolName: "exec_command", Input: map[string]any{
+				"cmd":           "printf 'child still owns pipe\\n'; sleep 5 & wait",
+				"yield_time_ms": 250,
 			}},
 		}}, StopReason: llm.StopToolUse},
-		{Message: llm.TextMessage(llm.RoleAssistant, "done too early"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done after yield"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngineWithToolTimeout(t, prov, true, 1)
 
-	var erroredPayload toolevents.ErroredPayload
-	bus.Subscribe(toolevents.ErroredType, func(e events.Event) {
-		erroredPayload, _ = e.Payload.(toolevents.ErroredPayload)
+	var completedPayload toolevents.CompletedPayload
+	bus.Subscribe(toolevents.CompletedType, func(e events.Event) {
+		completedPayload, _ = e.Payload.(toolevents.CompletedPayload)
 	})
 
 	start := time.Now()
@@ -35,7 +37,7 @@ func TestTurn_BuiltinExecCommandTimeoutFinishesWhenChildKeepsPipeOpen(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "done too early" {
+	if out != "done after yield" {
 		t.Fatalf("out = %q, want final answer without failure-ledger continuation", out)
 	}
 	if len(prov.histories) != 2 {
@@ -49,13 +51,25 @@ func TestTurn_BuiltinExecCommandTimeoutFinishesWhenChildKeepsPipeOpen(t *testing
 		t.Fatalf("tool result message wrong: %+v", result)
 	}
 	block := result.Blocks[0]
-	if block.Type != llm.BlockToolResult || !block.IsError {
-		t.Fatalf("tool result block = %+v, want error result", block)
+	if block.Type != llm.BlockToolResult || block.IsError {
+		t.Fatalf("tool result block = %+v, want successful running result", block)
 	}
-	if !strings.Contains(block.Content, "timed out after 1s") {
-		t.Fatalf("tool result content = %q, want timeout detail", block.Content)
+	if !strings.Contains(block.Content, "child still owns pipe") ||
+		!strings.Contains(block.Content, "Process running with session ID") {
+		t.Fatalf("tool result content = %q, want running shell result", block.Content)
 	}
-	if got := erroredPayload.TimedOut; got != true {
-		t.Fatalf("errored timed_out = %v, want true", got)
+	shellResult, ok := completedPayload.Result.(tools.ShellResult)
+	if !ok {
+		t.Fatalf("completed result = %#v, want tools.ShellResult", completedPayload.Result)
+	}
+	if !shellResult.Running || shellResult.SessionID <= 0 || shellResult.TimedOut || completedPayload.TimeoutSeconds != 0 {
+		t.Fatalf("completed shell result = %+v timeout=%d, want running non-timeout session", shellResult, completedPayload.TimeoutSeconds)
+	}
+	if _, err := eng.Tools.Call(context.Background(), "write_stdin", map[string]any{
+		"session_id":    shellResult.SessionID,
+		"chars":         "\x03",
+		"yield_time_ms": 250,
+	}); err != nil {
+		t.Logf("cleanup interrupt result: %v", err)
 	}
 }

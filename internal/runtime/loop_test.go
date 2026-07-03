@@ -2252,8 +2252,8 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if _, ok := input["_raw_arguments"]; ok {
 		t.Fatalf("assistant tool input kept raw arguments: %+v", input)
 	}
-	if assistant.Blocks[0].TimeoutSeconds != tools.DefaultTimeoutSeconds {
-		t.Fatalf("assistant timeout = %d, want runtime default", assistant.Blocks[0].TimeoutSeconds)
+	if assistant.Blocks[0].TimeoutSeconds != 0 {
+		t.Fatalf("assistant timeout = %d, want shell generic timeout disabled", assistant.Blocks[0].TimeoutSeconds)
 	}
 	respondedCalls := respondedPayload.ToolCalls
 	if len(respondedCalls) != 1 {
@@ -2263,15 +2263,15 @@ func TestTurn_BuiltinShellRawArgumentsNormalizeAndContinue(t *testing.T) {
 	if respondedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("responded tool input = %+v, want normalized command", respondedInput)
 	}
-	if got := respondedCalls[0].TimeoutSeconds; got != tools.DefaultTimeoutSeconds {
-		t.Fatalf("responded timeout = %v, want runtime default", got)
+	if got := respondedCalls[0].TimeoutSeconds; got != 0 {
+		t.Fatalf("responded timeout = %v, want shell generic timeout disabled", got)
 	}
 	requestedInput := requestedPayload.Input
 	if requestedInput["cmd"] != "echo raw-ok" {
 		t.Fatalf("requested input = %+v, want normalized command", requestedInput)
 	}
-	if got := requestedPayload.TimeoutSeconds; got != tools.DefaultTimeoutSeconds {
-		t.Fatalf("requested timeout = %v, want runtime default", got)
+	if got := requestedPayload.TimeoutSeconds; got != 0 {
+		t.Fatalf("requested timeout = %v, want shell generic timeout disabled", got)
 	}
 	result := eng.Session.History[2]
 	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {

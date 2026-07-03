@@ -31,10 +31,18 @@ type Result struct {
 
 type ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
 
+type ToolTimeoutPolicy int
+
+const (
+	ToolTimeoutDefault ToolTimeoutPolicy = iota
+	ToolTimeoutDisabled
+)
+
 type Tool struct {
 	Name           string
 	Description    string
 	Schema         map[string]any
+	TimeoutPolicy  ToolTimeoutPolicy
 	TimeoutSeconds int
 	Handler        Handler
 	ResultHandler  ResultHandler
@@ -185,24 +193,28 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		return "", info, err
 	}
 	callInput := cloneCallInput(input)
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
-	defer cancel()
+	callCtx := ctx
+	var cancel context.CancelFunc
+	if timeoutSeconds > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+		defer cancel()
+	}
 	result, err := callToolHandler(callCtx, t, callInput)
 	rawErr := err
 	result.Text = SanitizeOutputText(result.Text).Text
 	out := result.Text
 	info.StructuredResult = result.Structured
-	if structuredResultTimedOut(result.Structured) && ctx.Err() == nil {
+	if timeoutSeconds > 0 && structuredResultTimedOut(result.Structured) && ctx.Err() == nil {
 		info.TimedOut = true
 		info.ErrorKind = string(errorclass.KindTimeout)
 		info.RawCause = rawCauseFor(rawErr, "structured result timed_out=true")
 		err = toolTimeoutError(name, timeoutSeconds)
-	} else if rawErr != nil && errorclass.IsTimeout(rawErr) && ctx.Err() == nil {
+	} else if timeoutSeconds > 0 && rawErr != nil && errorclass.IsTimeout(rawErr) && ctx.Err() == nil {
 		info.TimedOut = true
 		info.ErrorKind = string(errorclass.KindTimeout)
 		info.RawCause = rawErr.Error()
 		err = toolTimeoutError(name, timeoutSeconds)
-	} else if errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+	} else if timeoutSeconds > 0 && errors.Is(callCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		info.TimedOut = true
 		info.ErrorKind = string(errorclass.KindTimeout)
 		info.RawCause = rawCauseFor(rawErr, callCtx.Err().Error())
@@ -319,6 +331,9 @@ func decodeRawArguments(raw string) (map[string]any, bool) {
 }
 
 func (r *Registry) timeoutSecondsFor(t Tool) int {
+	if t.TimeoutPolicy == ToolTimeoutDisabled {
+		return 0
+	}
 	if t.TimeoutSeconds > 0 {
 		return normalizedTimeoutSeconds(t.TimeoutSeconds)
 	}

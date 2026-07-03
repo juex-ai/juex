@@ -149,16 +149,20 @@ configured explicitly. `exec_command` accepts `yield_time_ms` and returns a
 numeric `session_id` only when the process is still running. Set `tty: true`
 for interactive commands that need a real terminal and follow-up input;
 `write_stdin` polls running sessions or writes `chars` only to TTY sessions
-while live output is streamed through runtime events. Tool hard timeouts are a
-runtime policy, not a model-visible tool parameter; configure
-`runtime.tool_timeout` to change the default. A completed command with a
-non-zero exit code is returned as an error tool result with the captured output
-preserved. Shell execution metadata is also emitted as structured runtime event
-data so consumers can read session, running, exit-code, chunk, and truncation
-state without parsing the provider-facing text. Binary or binary-like command
-output is replaced before it reaches provider-visible text, conversation
-history, runtime events, or the Web UI with a compact placeholder that includes
-byte count, SHA-256, and first-bytes hex metadata.
+while live output is streamed through runtime events. `yield_time_ms` only
+bounds the current observation window; it does not kill a still-running command.
+Shell tools are not governed by the generic `runtime.tool_timeout`, which
+remains a runtime policy for ordinary non-shell tools rather than a
+model-visible parameter. Shell processes still stop on parent cancellation,
+JueX shutdown, manager cleanup, or explicit interrupt input. A completed
+command with a non-zero exit code is returned as an error tool result with the
+captured output preserved. Shell execution metadata is also emitted as
+structured runtime event data so consumers can read session, running,
+exit-code, chunk, and truncation state without parsing the provider-facing text.
+Binary or binary-like command output is replaced before it reaches
+provider-visible text, conversation history, runtime events, or the Web UI with
+a compact placeholder that includes byte count, SHA-256, and first-bytes hex
+metadata.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

@@ -289,6 +289,12 @@ func TestShellHelperProcess(t *testing.T) {
 		time.Sleep(5 * time.Second)
 		os.Exit(0)
 	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "slow" {
+		fmt.Fprintln(os.Stdout, "slow start")
+		time.Sleep(3 * time.Second)
+		fmt.Fprintln(os.Stdout, "slow done")
+		os.Exit(0)
+	}
 	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "delayed" {
 		fmt.Fprintln(os.Stdout, "first chunk")
 		time.Sleep(500 * time.Millisecond)
@@ -525,12 +531,14 @@ func TestRegistry_CallWithInfoUsesToolTimeoutOverride(t *testing.T) {
 	}
 }
 
-func TestRegisterBuiltinsExecCommandInheritsRegistryTimeout(t *testing.T) {
+func TestRegisterBuiltinsShellToolsDisableRegistryTimeout(t *testing.T) {
 	r := NewRegistryWithOptions(RegistryOptions{DefaultTimeoutSeconds: 2})
 	RegisterBuiltins(r, BuiltinOptions{Shell: DefaultShellProfile()})
 
-	if got := r.TimeoutSecondsFor("exec_command"); got != 2 {
-		t.Fatalf("exec_command timeout = %d, want registry default 2", got)
+	for _, name := range []string{"exec_command", "write_stdin"} {
+		if got := r.TimeoutSecondsFor(name); got != 0 {
+			t.Fatalf("%s timeout = %d, want generic timeout disabled", name, got)
+		}
 	}
 }
 
@@ -2122,10 +2130,10 @@ func TestBuiltins_GrepNoMatches(t *testing.T) {
 	}
 }
 
-func TestBuiltins_ExecCommandTimeout(t *testing.T) {
+func TestBuiltins_ShellYieldIsNotGenericToolTimeout(t *testing.T) {
 	r := NewRegistry()
 	t.Setenv("JUEX_FAKE_SHELL", "1")
-	t.Setenv("JUEX_FAKE_SHELL_MODE", "timeout")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "slow")
 	RegisterBuiltins(r, BuiltinOptions{
 		Shell: ShellProfile{
 			Profile:   "fake",
@@ -2137,19 +2145,39 @@ func TestBuiltins_ExecCommandTimeout(t *testing.T) {
 		ToolTimeoutSeconds: 1,
 	})
 	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
-		"cmd": "ignored by fake shell",
+		"cmd":           "ignored by fake shell",
+		"yield_time_ms": 250,
 	})
-	if err == nil {
-		t.Fatal("expected timeout error")
+	if err != nil {
+		t.Fatalf("exec_command should yield without generic timeout: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "before timeout stdout") || !strings.Contains(out, "before timeout stderr") {
-		t.Fatalf("timeout output = %q, want captured stdout/stderr", out)
+	if info.TimeoutSeconds != 0 || info.TimedOut {
+		t.Fatalf("exec info = %+v, want shell without generic timeout", info)
 	}
-	if !info.TimedOut || info.TimeoutSeconds != 1 {
-		t.Fatalf("info = %+v, want timed out after 1s", info)
+	if !strings.Contains(out, "slow start") || strings.Contains(out, "slow done") {
+		t.Fatalf("initial output = %q, want only slow start", out)
 	}
-	if !strings.Contains(err.Error(), "timed out after 1s") {
-		t.Fatalf("expected timeout error, got %v", err)
+	first := shellResultFromInfo(t, info)
+	if !first.Running || first.SessionID <= 0 || first.TimedOut {
+		t.Fatalf("initial shell result = %+v, want running non-timeout session", first)
+	}
+
+	out, info, err = r.CallWithInfo(context.Background(), "write_stdin", map[string]any{
+		"session_id":    first.SessionID,
+		"yield_time_ms": 1500,
+	})
+	if err != nil {
+		t.Fatalf("empty write_stdin poll should yield without generic timeout: %v\n%s", err, out)
+	}
+	if info.TimeoutSeconds != 0 || info.TimedOut {
+		t.Fatalf("poll info = %+v, want shell without generic timeout", info)
+	}
+	poll := shellResultFromInfo(t, info)
+	if poll.Running || poll.ExitCode == nil || *poll.ExitCode != 0 || poll.TimedOut {
+		t.Fatalf("poll shell result = %+v, want successful non-timeout completion", poll)
+	}
+	if !strings.Contains(out, "slow done") {
+		t.Fatalf("poll output = %q, want slow done", out)
 	}
 }
 
