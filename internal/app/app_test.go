@@ -70,7 +70,12 @@ func TestAppShellHelperProcess(t *testing.T) {
 		return
 	}
 	fmt.Fprintln(os.Stdout, "app shell start")
-	time.Sleep(10 * time.Second)
+	switch os.Getenv("JUEX_APP_FAKE_SHELL_MODE") {
+	case "delayed":
+		time.Sleep(2 * time.Second)
+	default:
+		time.Sleep(10 * time.Second)
+	}
 	fmt.Fprintln(os.Stdout, "app shell done")
 	os.Exit(0)
 }
@@ -228,6 +233,114 @@ func TestApp_CloseClosesShellSessionManager(t *testing.T) {
 	if !strings.Contains(err.Error(), "session manager closed") {
 		t.Fatalf("write_stdin after App.Close err = %v, want session manager closed", err)
 	}
+}
+
+func TestApp_ActiveShellSessionsAppearInPromptThroughCompaction(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("JUEX_APP_FAKE_SHELL", "1")
+	t.Setenv("JUEX_APP_FAKE_SHELL_MODE", "delayed")
+	prov := &stubProvider{replies: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "active seen"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "compact summary"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "after compact"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "after complete"), StopReason: llm.StopEndTurn},
+	}}
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    dir,
+			Compaction: config.DefaultCompactionConfig(),
+			Shell: config.ShellProfile{
+				Profile:   "fake",
+				Family:    "posix",
+				Binary:    os.Args[0],
+				Args:      []string{"-test.run=TestAppShellHelperProcess", "--"},
+				PathStyle: "posix",
+			},
+		},
+		Provider: prov,
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+
+	_, info, err := a.Engine.Tools.CallWithInfo(context.Background(), "exec_command", map[string]any{
+		"cmd":           "delayed active",
+		"yield_time_ms": 250,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := shellResultFromAppInfo(t, info)
+	if !started.Running || started.SessionID <= 0 {
+		t.Fatalf("exec result = %+v, want running session", started)
+	}
+
+	if out, err := a.Run(context.Background(), "inspect active shell"); err != nil || out != "active seen" {
+		t.Fatalf("first run = %q, %v", out, err)
+	}
+	requireActiveShellPrompt(t, prov.systems[0], started.SessionID)
+
+	compact, err := a.CompactWithInstructions(context.Background(), "manual", false, "keep shell session ids visible")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compact.MessageID == "" {
+		t.Fatalf("compact result = %+v, want appended compact message", compact)
+	}
+	requireActiveShellPrompt(t, prov.systems[1], started.SessionID)
+
+	if out, err := a.Run(context.Background(), "continue after compact"); err != nil || out != "after compact" {
+		t.Fatalf("post-compact run = %q, %v", out, err)
+	}
+	requireActiveShellPrompt(t, prov.systems[2], started.SessionID)
+
+	_, _, err = a.Engine.Tools.CallWithInfo(context.Background(), "write_stdin", map[string]any{
+		"session_id":    started.SessionID,
+		"yield_time_ms": 5000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := a.Run(context.Background(), "after shell complete"); err != nil || out != "after complete" {
+		t.Fatalf("final run = %q, %v", out, err)
+	}
+	if len(prov.systems) != 4 {
+		t.Fatalf("provider systems = %d, want 4", len(prov.systems))
+	}
+	if strings.Contains(prov.systems[3], "## Active Shell Sessions") || strings.Contains(prov.systems[3], fmt.Sprintf("session_id=%d", started.SessionID)) {
+		t.Fatalf("stale active shell session leaked into final prompt:\n%s", prov.systems[3])
+	}
+}
+
+func requireActiveShellPrompt(t *testing.T, systemPrompt string, sessionID int) {
+	t.Helper()
+	for _, want := range []string{
+		"## Active Shell Sessions",
+		fmt.Sprintf("session_id=%d", sessionID),
+		"running=true",
+		"tty=false",
+		"delayed active",
+		"write_stdin",
+		"list_shell_sessions",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		}
+	}
+}
+
+func shellResultFromAppInfo(t *testing.T, info tools.CallInfo) tools.ShellResult {
+	t.Helper()
+	result, ok := info.StructuredResult.(tools.ShellResult)
+	if !ok {
+		t.Fatalf("structured result = %#v, want ShellResult", info.StructuredResult)
+	}
+	return result
 }
 
 func TestApp_NewRunsSessionStartHooks(t *testing.T) {

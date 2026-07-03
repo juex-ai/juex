@@ -1721,6 +1721,71 @@ func TestBuiltins_ListShellSessionsEmpty(t *testing.T) {
 	}
 }
 
+func TestFormatActiveShellSessionsPrompt(t *testing.T) {
+	exitCode := 0
+	got := FormatActiveShellSessionsPrompt([]ShellSessionInfo{
+		{SessionID: 9, Running: false, ExitCode: &exitCode, Command: "completed"},
+		{SessionID: 7, Running: true, TTY: true, AgeMS: 1500, IdleMS: 250, ChunkID: 3, UnreadBytes: 11, Workdir: "/tmp/work", Command: "python server.py"},
+	})
+
+	for _, want := range []string{
+		"## Active Shell Sessions",
+		"session_id=7",
+		"running=true",
+		"tty=true",
+		"age=1.5s",
+		"idle=250ms",
+		"workdir=\"/tmp/work\"",
+		"command=\"python server.py\"",
+		"write_stdin",
+		"list_shell_sessions",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("active shell prompt missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "session_id=9") || strings.Contains(got, "completed") {
+		t.Fatalf("completed session leaked into active prompt:\n%s", got)
+	}
+}
+
+func TestFormatActiveShellSessionsPromptIsBounded(t *testing.T) {
+	longCommand := strings.Repeat("c", 300)
+	longWorkdir := "/" + strings.Repeat("w", 240)
+	sessions := make([]ShellSessionInfo, 0, 10)
+	for i := 1; i <= 10; i++ {
+		sessions = append(sessions, ShellSessionInfo{
+			SessionID: i,
+			Running:   true,
+			Command:   longCommand,
+			Workdir:   longWorkdir,
+		})
+	}
+
+	got := FormatActiveShellSessionsPrompt(sessions)
+	if count := strings.Count(got, "\n- session_id="); count != activeShellPromptMaxSessions {
+		t.Fatalf("active session rows = %d, want %d:\n%s", count, activeShellPromptMaxSessions, got)
+	}
+	if !strings.Contains(got, "2 more active shell session(s) omitted") {
+		t.Fatalf("missing omitted count:\n%s", got)
+	}
+	if strings.Contains(got, longCommand) || strings.Contains(got, longWorkdir) {
+		t.Fatalf("unbounded command/workdir leaked into prompt:\n%s", got)
+	}
+	if !strings.Contains(got, "...") {
+		t.Fatalf("bounded prompt should show truncation marker:\n%s", got)
+	}
+}
+
+func TestFormatActiveShellSessionsPromptEmpty(t *testing.T) {
+	if got := FormatActiveShellSessionsPrompt(nil); got != "" {
+		t.Fatalf("nil sessions prompt = %q, want empty", got)
+	}
+	if got := FormatActiveShellSessionsPrompt([]ShellSessionInfo{{SessionID: 1, Running: false}}); got != "" {
+		t.Fatalf("completed-only prompt = %q, want empty", got)
+	}
+}
+
 func TestBuiltins_ListShellSessionsRunningAndPollsReturnedSession(t *testing.T) {
 	r := NewRegistry()
 	workDir := t.TempDir()

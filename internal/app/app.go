@@ -229,6 +229,18 @@ func New(opts Options) (*App, error) {
 		Skills:             skillLoader,
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
+		RuntimeSections: func() []prompt.Section {
+			text := tools.FormatActiveShellSessionsPrompt(shellSessions.List(false))
+			if text == "" {
+				return nil
+			}
+			return []prompt.Section{{
+				Key:    "active_shell_sessions",
+				Label:  "Active Shell Sessions",
+				Source: "runtime",
+				Text:   text,
+			}}
+		},
 	}
 	hookRunner, err := hooks.NewRunner(resourceGraph.HooksConfig())
 	if err != nil {
