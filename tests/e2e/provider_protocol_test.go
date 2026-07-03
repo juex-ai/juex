@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -280,6 +281,109 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	}
 	if tools := readJSONLObjects(t, filepath.Join(result.SessionDir, "tools.jsonl")); !jsonlHasString(tools, "event", "tool.completed") {
 		t.Fatalf("tools missing tool.completed: %+v", tools)
+	}
+}
+
+func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
+	bin := buildJuex(t)
+
+	var requestCount atomic.Int32
+	var mu sync.Mutex
+	var secondBody map[string]any
+	var thirdBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		switch requestCount.Add(1) {
+		case 1:
+			writeJSON(t, w, chatToolCallResponse("call_exec_yield", "exec_command", map[string]any{
+				"cmd":           slowShellYieldCommand(),
+				"yield_time_ms": 250,
+			}))
+		case 2:
+			mu.Lock()
+			secondBody = body
+			mu.Unlock()
+			sessionID, ok := sessionIDFromProviderToolResult(body, "call_exec_yield")
+			if !ok {
+				t.Errorf("second request missing running shell session id: %+v", body["messages"])
+				writeJSON(t, w, chatCompletionResponseMap("missing session id"))
+				return
+			}
+			writeJSON(t, w, chatToolCallResponse("call_stdin_yield", "write_stdin", map[string]any{
+				"session_id":    sessionID,
+				"yield_time_ms": 1500,
+			}))
+		case 3:
+			mu.Lock()
+			thirdBody = body
+			mu.Unlock()
+			writeJSON(t, w, chatCompletionResponseMap("yield semantics complete"))
+		default:
+			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
+			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
+		}
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body := "model: local-chat/chat-test\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+    protocol: openai/chat
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: chat-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, body); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "--debug", "run", "--new", "--json", "run the shell yield timeout e2e")
+	home := t.TempDir()
+	cmd.Env = isolatedJuexBinaryEnv(home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("juex run: %v\n%s", err, out)
+	}
+	if got := requestCount.Load(); got != 3 {
+		t.Fatalf("provider requests = %d, want 3", got)
+	}
+
+	var result struct {
+		Text       string `json:"text"`
+		SessionID  string `json:"session_id"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
+	}
+	if result.Text != "yield semantics complete" || result.SessionDir == "" {
+		t.Fatalf("run result = %+v", result)
+	}
+
+	mu.Lock()
+	second := cloneMap(secondBody)
+	third := cloneMap(thirdBody)
+	mu.Unlock()
+	if !requestHasToolResult(second, "call_exec_yield", "Process running with session ID") ||
+		!requestHasToolResult(second, "call_exec_yield", "slow start") {
+		t.Fatalf("second provider request missing running exec result: %+v", second["messages"])
+	}
+	if requestHasToolResult(second, "call_exec_yield", "timed out") {
+		t.Fatalf("exec_command result should not be a timeout: %+v", second["messages"])
+	}
+	if !requestHasToolResult(third, "call_stdin_yield", "slow done") ||
+		!requestHasToolResult(third, "call_stdin_yield", "Process exited with code 0") {
+		t.Fatalf("third provider request missing successful poll result: %+v", third["messages"])
+	}
+	if requestHasToolResult(third, "call_stdin_yield", "timed out") {
+		t.Fatalf("write_stdin result should not be a timeout: %+v", third["messages"])
 	}
 }
 
@@ -672,17 +776,38 @@ func requestHasTool(body map[string]any, name string) bool {
 }
 
 func requestHasToolResult(body map[string]any, toolCallID string, want string) bool {
+	content, ok := providerToolResultContent(body, toolCallID)
+	return ok && strings.Contains(content, want)
+}
+
+func providerToolResultContent(body map[string]any, toolCallID string) (string, bool) {
 	messages, _ := body["messages"].([]any)
 	for _, raw := range messages {
 		message, _ := raw.(map[string]any)
 		if message["role"] != "tool" || message["tool_call_id"] != toolCallID {
 			continue
 		}
-		if strings.Contains(fmt.Sprint(message["content"]), want) {
-			return true
-		}
+		return fmt.Sprint(message["content"]), true
 	}
-	return false
+	return "", false
+}
+
+func sessionIDFromProviderToolResult(body map[string]any, toolCallID string) (int, bool) {
+	content, ok := providerToolResultContent(body, toolCallID)
+	if !ok {
+		return 0, false
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.HasPrefix(line, "Process running with session ID ") {
+			continue
+		}
+		sessionID, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "Process running with session ID ")))
+		if err != nil {
+			return 0, false
+		}
+		return sessionID, true
+	}
+	return 0, false
 }
 
 func assertConversationExecCommandToolRoundTrip(t *testing.T, path string, toolUseID string, wantOutput string) {
@@ -780,6 +905,13 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+func slowShellYieldCommand() string {
+	if runtime.GOOS == "windows" {
+		return "[Console]::Out.WriteLine('slow start'); [Console]::Out.Flush(); Start-Sleep -Seconds 3; [Console]::Out.WriteLine('slow done'); [Console]::Out.Flush()"
+	}
+	return "printf 'slow start\\n'; sleep 3; printf 'slow done\\n'"
 }
 
 func cloneMap(in map[string]any) map[string]any {

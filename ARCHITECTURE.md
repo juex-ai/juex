@@ -164,7 +164,7 @@ type Block struct {
     ToolUseID      string
     ToolName       string
     Input          map[string]any
-    TimeoutSeconds int    // runtime-applied tool timeout for UI/status
+    TimeoutSeconds int    // runtime-applied tool timeout for UI/status; 0 when disabled
     Content        string
     IsError        bool
     Signature      string // anthropic thinking-block signature
@@ -415,12 +415,15 @@ replay and debugging.
 Tool hard timeouts are runtime policy rather than model-visible parameters.
 The registry applies a per-call timeout context from its default policy or from
 an individual tool's registration metadata, caps it at 300 seconds, and leaves
-tool input schemas unchanged. Tool timeouts are returned as ordinary error tool
-results so the agent can recover in the next model round. When a timed-out tool
-captured stdout or stderr before failing, a bounded copy of that output is
-preserved in the error tool result before the timeout detail. On Unix,
-`exec_command` runs in its own process group so a timeout terminates descendant
-processes that still hold stdout or stderr pipes open.
+tool input schemas unchanged. Tools can explicitly opt out when they own a
+different lifecycle contract; `exec_command` and `write_stdin` do this so
+`yield_time_ms` controls only the current observation window. Tool timeouts are
+returned as ordinary error tool results so the agent can recover in the next
+model round. When a timed-out non-shell tool captured stdout or stderr before
+failing, a bounded copy of that output is preserved in the error tool result
+before the timeout detail. On Unix, explicit shell cancellation and manager
+cleanup terminate the command process group, including descendants that still
+hold stdout or stderr pipes open.
 Deadline-shaped causes such as Go `context deadline exceeded`, SDK
 `deadline_exceeded`, and network read/write deadlines are normalized to the
 public timeout contract before they reach model-visible tool results, CLI JSON,
@@ -433,12 +436,13 @@ is not classified as timeout.
 manager and waits only for the bounded yield window. If the process is still
 alive, the tool result includes a numeric `session_id`; quick-exit commands do
 not expose a follow-up session. Later `write_stdin` calls poll unread output
-or write follow-up `chars`. Non-TTY sessions use regular stdout/stderr pipes
-and close stdin at start, matching Codex's unified exec behavior. `tty: true`
-allocates a pseudo-terminal on supported platforms so interactive programs can
-prompt and receive follow-up input. Session transcripts and SSE deltas are
-bounded, completed sessions are pruned, and sessions are not durable across
-Juex process restart.
+or write follow-up `chars`. Empty polls use their own observation window and do
+not fail or kill the process merely because `runtime.tool_timeout` is smaller.
+Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
+matching Codex's unified exec behavior. `tty: true` allocates a pseudo-terminal
+on supported platforms so interactive programs can prompt and receive follow-up
+input. Session transcripts and SSE deltas are bounded, completed sessions are
+pruned, and sessions are not durable across Juex process restart.
 
 Shell tools also return a structured `tools.ShellResult` through
 `CallInfo.StructuredResult`. The provider-facing text remains the model-reading
@@ -681,13 +685,14 @@ the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
 and environment input; `internal/app` passes the resolved value into
 `runtime.Engine`.
 
-Tool and provider adapters keep their own safeguards. Builtin shell/tool calls
-retain per-action timeouts, MCP startup/tool timeouts remain adapter-level
-limits, and provider transports may enforce request or stream-idle protection.
-Those safeguards are not turn budgets and do not add `runtime_*` error kinds.
-Long-running command sessions continue after the initial `exec_command` tool
-result when the process is still alive after the yield window; their process
-lifetime is still bounded by the original tool timeout or app shutdown.
+Tool and provider adapters keep their own safeguards. Hooks and MCP
+startup/tool calls retain adapter-level timeouts, and provider transports may
+enforce request or stream-idle protection. Those safeguards are not turn
+budgets and do not add `runtime_*` error kinds. Long-running command sessions
+continue after the initial `exec_command` tool result when the process is still
+alive after the yield window; their process lifetime is bounded by parent
+cancellation, app shutdown, explicit interrupt input, and session-manager
+cleanup rather than `runtime.tool_timeout`.
 
 `Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
 single LLM response run via `sync.WaitGroup`-backed goroutines; results are
@@ -953,7 +958,7 @@ compaction:
 | `hooks.commands[].max_output_bytes` | optional stdout/stderr byte cap per stream; defaults to 65536 |
 | `runtime.pending_input_ttl` | duration for queued user steer messages while a turn is running; defaults to 15m |
 | `runtime.external_event_ttl` | duration for queued MCP/external event messages while a turn is running; defaults to 24h |
-| `runtime.tool_timeout` | default hard timeout for tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
+| `runtime.tool_timeout` | default hard timeout for generic non-shell tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
 | `runtime.max_output_tokens` | optional normal-turn provider output cap; omit it to use the provider default |
 | `runtime.working_state_enabled` | enables the session-local generic working-state sidecar; defaults to true |
 | `runtime.show_builtin_hook_traces` | mirrors built-in runtime hook/gate completions and failures into conversation-visible UI-only hook traces; defaults to false |

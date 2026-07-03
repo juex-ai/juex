@@ -4,33 +4,38 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestBuiltins_ShellTimeoutKillsChildProcessGroup(t *testing.T) {
+func TestBuiltins_ShellCancellationKillsChildProcessGroup(t *testing.T) {
 	r := NewRegistry()
 	RegisterBuiltins(r, BuiltinOptions{ToolTimeoutSeconds: 1})
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		cancel()
+	}()
 	start := time.Now()
-	out, info, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{
-		"cmd": "printf 'child still owns pipe\\n'; sleep 5 & wait",
+	out, info, err := r.CallWithInfo(ctx, "exec_command", map[string]any{
+		"cmd":           "printf 'child still owns pipe\\n'; sleep 5 & wait",
+		"yield_time_ms": 30000,
 	})
 	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("expected timeout error")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if !strings.Contains(out, "child still owns pipe") {
-		t.Fatalf("timeout output = %q, want captured stdout", out)
+		t.Fatalf("cancelled output = %q, want captured stdout", out)
 	}
-	if !info.TimedOut || info.TimeoutSeconds != 1 {
-		t.Fatalf("info = %+v, want timed out after 1s", info)
-	}
-	if !strings.Contains(err.Error(), "timed out after 1s") {
-		t.Fatalf("expected normalized timeout error, got %v", err)
+	if info.TimedOut || info.TimeoutSeconds != 0 {
+		t.Fatalf("info = %+v, want cancelled shell without generic timeout", info)
 	}
 	if elapsed > 2*time.Second {
-		t.Fatalf("timeout waited for child process to exit: %s", elapsed)
+		t.Fatalf("cancellation waited for child process to exit: %s", elapsed)
 	}
 }
