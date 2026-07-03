@@ -11,6 +11,7 @@ import {
   projectOptimisticTurn,
   projectPendingCompact,
   projectQueuedInput,
+  projectSessionTurnStatus,
   projectTurnStatusReconcile,
   resetLiveSessionProjection,
   type LiveSessionProjection,
@@ -92,15 +93,16 @@ export function projectSessionLoaded(
   data: SessionShowResponse,
   opts?: { preserveLiveMessages?: boolean },
 ): SessionReadState {
+  const projection = opts?.preserveLiveMessages
+    ? state.projection
+    : clearLiveSessionTranscript(state.projection);
   return {
     ...state,
     data,
     loadError: null,
     loadingOlderMessages: false,
     olderMessagesError: null,
-    projection: opts?.preserveLiveMessages
-      ? state.projection
-      : clearLiveSessionTranscript(state.projection),
+    projection: projectSessionTurnStatus(projection, data.turn),
   };
 }
 

@@ -50,6 +50,28 @@ func TestWebTurnTransportStatusForwardsPendingCounts(t *testing.T) {
 	as.turns.wait()
 }
 
+func TestWebTurnTransportActiveStatusOnlyWhileRunning(t *testing.T) {
+	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
+	_, as := newTurnTransportTestSession(t, prov)
+
+	if turnID, status, ok := as.turns.activeStatus(); ok {
+		t.Fatalf("idle active status = %q %+v", turnID, status)
+	}
+
+	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
+	waitForProviderStart(t, prov)
+	turnID, status, ok := as.turns.activeStatus()
+	if !ok || turnID != "turn-1" || status.State != "running" {
+		t.Fatalf("running active status = %q %+v ok=%v", turnID, status, ok)
+	}
+
+	close(prov.release)
+	as.turns.wait()
+	if turnID, status, ok := as.turns.activeStatus(); ok {
+		t.Fatalf("completed active status = %q %+v", turnID, status)
+	}
+}
+
 func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
 	_, as := newTurnTransportTestSession(t, prov)

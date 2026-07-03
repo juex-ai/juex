@@ -314,6 +314,21 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 			t.Fatalf("GET %s status = %d body = %s", path, resp.StatusCode, body)
 		}
 	}
+
+	resp, err := client.Get(ts.URL + "/api/sessions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Turn *sessionTurnResponse `json:"turn"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Turn == nil || parsed.Turn.TurnID == "" || parsed.Turn.State != "running" {
+		t.Fatalf("turn = %+v, want running turn", parsed.Turn)
+	}
 }
 
 func TestGetSessionShow_LimitsRecentTranscript(t *testing.T) {

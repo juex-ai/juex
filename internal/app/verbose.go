@@ -105,9 +105,11 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		payload, _ := payloadAs[runtimeevents.PendingInputRejectedPayload](e.Payload)
 		vp.printlnRed(fmt.Sprintf("  + rejected pending input (%d/%d)", payload.PendingCount, payload.MaxPendingInputs))
 	case "turn.completed":
+		vp.spin.halt()
 		elapsed := time.Since(vp.tStart).Round(time.Millisecond)
 		vp.printlnDim(fmt.Sprintf("✓ done in %s", elapsed))
 	case "turn.errored":
+		vp.spin.halt()
 		payload, _ := payloadAs[runtimeevents.TurnErroredPayload](e.Payload)
 		vp.printlnRed("✗ " + payload.Error)
 	}

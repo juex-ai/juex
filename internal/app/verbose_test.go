@@ -132,6 +132,22 @@ func TestVerbose_TurnError(t *testing.T) {
 	}
 }
 
+func TestVerbose_TurnErrorHaltsSpinner(t *testing.T) {
+	var buf bytes.Buffer
+	vp := newVerbosePrinter(&buf)
+	vp.isTTY = true
+	vp.spin.isTTY = true
+
+	vp.handle(events.Event{Type: "llm.requested", Payload: map[string]any{"iter": 0}})
+	if vp.spin.stop == nil {
+		t.Fatal("spinner was not started")
+	}
+	vp.handle(events.Event{Type: "turn.errored", Payload: map[string]any{"error": "llm failed"}})
+	if vp.spin.stop != nil {
+		t.Fatal("spinner remained active after turn.errored")
+	}
+}
+
 func TestVerbose_MultilineThinkingAndText(t *testing.T) {
 	out := emitAll([]events.Event{
 		{Type: "llm.requested", Payload: map[string]any{}},

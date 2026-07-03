@@ -119,6 +119,7 @@ export interface SessionShowResponse extends SessionInfo {
   model?: string;
   has_more_before?: boolean;
   oldest_message_id?: string;
+  turn?: SessionTurnStatus;
   goal?: GoalStatusSnapshot;
   working_state?: WorkingStateStatusSnapshot;
 }
@@ -173,6 +174,10 @@ export interface TurnStatusResponse {
   error?: string;
   pending_count?: number;
   max_pending_inputs?: number;
+}
+
+export interface SessionTurnStatus extends TurnStatusResponse {
+  turn_id: string;
 }
 
 export interface InterruptResponse {

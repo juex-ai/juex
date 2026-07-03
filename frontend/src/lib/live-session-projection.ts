@@ -23,6 +23,7 @@ import type {
   BrowserEvent,
   ContextUsage,
   Message,
+  SessionTurnStatus,
   TokenUsage,
   TurnStatusResponse,
 } from "../types.ts";
@@ -428,6 +429,24 @@ export function projectTurnStatusReconcile(
   };
 }
 
+export function projectSessionTurnStatus(
+  state: LiveSessionProjection,
+  turn: SessionTurnStatus | undefined,
+): LiveSessionProjection {
+  if (!turn?.turn_id) return state;
+  if (turn.state !== "running") {
+    return projectTurnStatusReconcile(state, turn).state;
+  }
+  const result = projectTurnStatusReconcile(
+    {
+      ...state,
+      messages: ensurePendingAssistant(state.messages, turn.turn_id),
+    },
+    turn,
+  );
+  return result.state;
+}
+
 function consumeQueuedInput(
   state: LiveSessionProjection,
   input: string | undefined,
@@ -524,6 +543,29 @@ function appendLiveTurnToMessages(
       kind,
       blocks: [{ type: "text", text: input }],
     },
+    {
+      role: "assistant",
+      turn_id: turnID,
+      pending: true,
+      blocks: [],
+    },
+  ];
+}
+
+function ensurePendingAssistant(messages: Message[], turnID: string): Message[] {
+  if (!turnID) return messages;
+  if (
+    messages.some(
+      (message) =>
+        message.turn_id === turnID &&
+        message.role === "assistant" &&
+        message.pending,
+    )
+  ) {
+    return messages;
+  }
+  return [
+    ...messages,
     {
       role: "assistant",
       turn_id: turnID,

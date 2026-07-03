@@ -56,6 +56,29 @@ test("session load failure leaves loading and route reset clears stale data", ()
   assert.equal(state.loadError, null);
 });
 
+test("session load restores running turn from session DTO", () => {
+  const state = projectSessionLoaded(createSessionReadState(), {
+    ...session("running", [{ role: "user", blocks: [{ type: "text", text: "go" }] }]),
+    turn: {
+      turn_id: "turn-1",
+      state: "running",
+      pending_count: 1,
+      max_pending_inputs: 4,
+    },
+  });
+
+  assert.equal(state.projection.turnActive, true);
+  assert.deepEqual(state.projection.status, { kind: "pending", count: 1 });
+  assert.deepEqual(
+    state.projection.messages.map((message) => ({
+      role: message.role,
+      turn_id: message.turn_id,
+      pending: message.pending,
+    })),
+    [{ role: "assistant", turn_id: "turn-1", pending: true }],
+  );
+});
+
 test("session load failure extracts plain API error objects", () => {
   let state = projectSessionLoadFailed(createSessionReadState(), {
     message: "session not found: object-message",
