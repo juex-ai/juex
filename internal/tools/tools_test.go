@@ -58,6 +58,38 @@ func TestRegistry_RegisterDuplicate(t *testing.T) {
 	}
 }
 
+func TestRegistry_CallWithInfoSkipsHandlerWhenContextCancelled(t *testing.T) {
+	r := NewRegistry()
+	called := false
+	r.MustRegister(Tool{
+		Name:   "cancelled",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			called = true
+			return "should not run", nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out, info, err := r.CallWithInfo(ctx, "cancelled", map[string]any{})
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if called {
+		t.Fatal("handler ran after context cancellation")
+	}
+	if out != "" {
+		t.Fatalf("out = %q, want empty output", out)
+	}
+	if info.ErrorKind == "" {
+		t.Fatalf("missing error classification: %+v", info)
+	}
+}
+
 func TestRegisterBuiltinsDefaultProviderToolSet(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, t.TempDir())
@@ -511,18 +543,18 @@ func TestRegistry_CallWithInfoAppliesConfiguredTimeout(t *testing.T) {
 
 func TestRegistry_CallWithInfoReturnsParentCancellation(t *testing.T) {
 	r := NewRegistry()
+	ctx, cancel := context.WithCancel(context.Background())
 	if err := r.Register(Tool{
 		Name:   "soft-cancel",
 		Schema: map[string]any{"type": "object"},
 		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			cancel()
 			return "partial output", nil
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 	out, _, err := r.CallWithInfo(ctx, "soft-cancel", map[string]any{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)

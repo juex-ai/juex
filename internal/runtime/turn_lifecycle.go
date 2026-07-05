@@ -98,9 +98,15 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		}
 		return fmt.Errorf("llm: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	recorded, err := l.engine.recordProviderResponseLocked(l.turnID, l.prepared, request, resp)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if len(recorded.toolCalls) > 0 {
