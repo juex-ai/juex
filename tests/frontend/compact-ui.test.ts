@@ -16,7 +16,7 @@ test("isCompactCommandInput matches only bare compact commands", () => {
 });
 
 test("pending compact label matches the in-progress divider copy", () => {
-  assert.equal(PENDING_COMPACT_LABEL, "Context compating...");
+  assert.equal(PENDING_COMPACT_LABEL, "Context compacting...");
 });
 
 test("isLocalCompactMessage identifies optimistic compact UI messages", () => {

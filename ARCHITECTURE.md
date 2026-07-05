@@ -77,7 +77,13 @@ juex/
 │   ├── toolevents/               # live tool event names, payload contracts, and constructors
 │   ├── tools/                    # tool registry + builtin tools
 │   │   ├── registry.go
-│   │   ├── builtin.go
+│   │   ├── builtin.go            # builtin provider composition
+│   │   ├── builtin_file.go
+│   │   ├── builtin_chunked_write.go
+│   │   ├── builtin_search.go
+│   │   ├── builtin_shell.go
+│   │   ├── observation.go        # normalized tool observation facts
+│   │   ├── output_hygiene.go     # binary/binary-like output sanitization
 │   │   ├── apply_patch.go
 │   │   └── chunked_write.go
 │   ├── mcp/                      # stdio JSON-RPC 2.0 client, config, process manager
