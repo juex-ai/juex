@@ -75,6 +75,24 @@ func (p *captureOptionsProvider) CompleteWithOptions(ctx context.Context, sys st
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn}, nil
 }
 
+type cancelBeforeToolProvider struct {
+	cancel context.CancelFunc
+}
+
+func (p *cancelBeforeToolProvider) Name() string { return "cancel-before-tool" }
+
+func (p *cancelBeforeToolProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	return llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "after_cancel", ToolName: "should_not_run", Input: map[string]any{}},
+		}},
+		StopReason: llm.StopToolUse,
+	}, nil
+}
+
 type mockProviderWithErrors struct {
 	errs      []error
 	responses []llm.Response
@@ -1946,6 +1964,32 @@ func TestTurn_ContextCancellation(t *testing.T) {
 	}
 	if !errors.Is(err, cancellation.ErrUserCancelled) {
 		t.Fatalf("err = %v, want ErrUserCancelled", err)
+	}
+}
+
+func TestTurn_DoesNotDispatchToolAfterProviderCancelsContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	prov := &cancelBeforeToolProvider{cancel: cancel}
+	eng, _ := newEngine(t, prov, false)
+	var toolCalls atomic.Int32
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "should_not_run",
+		Schema: map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			toolCalls.Add(1)
+			return "unexpected", nil
+		},
+	})
+
+	_, err := eng.Turn(ctx, "cancel before tool")
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	if !errors.Is(err, cancellation.ErrUserCancelled) {
+		t.Fatalf("err = %v, want ErrUserCancelled", err)
+	}
+	if got := toolCalls.Load(); got != 0 {
+		t.Fatalf("tool calls = %d, want 0 after cancellation", got)
 	}
 }
 

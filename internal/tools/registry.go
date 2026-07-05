@@ -199,6 +199,16 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		callCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 		defer cancel()
 	}
+	if err := callCtx.Err(); err != nil {
+		info.ErrorKind = errorclass.KindForError(err)
+		info.setObservation(ObservationOptions{
+			ToolName:  name,
+			Input:     callInput,
+			Err:       err,
+			ErrorKind: info.ErrorKind,
+		})
+		return "", info, err
+	}
 	result, err := callToolHandler(callCtx, t, callInput)
 	rawErr := err
 	result.Text = SanitizeOutputText(result.Text).Text
