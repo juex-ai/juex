@@ -308,6 +308,86 @@ runtime:
 	}
 }
 
+func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	writeJuexConfig(t, filepath.Join(home, ".juex", "juex.yaml"), "openai", "https://global.example", "sk-global", "gpt-global")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sandbox.Enabled {
+		t.Fatalf("sandbox enabled = true, want default false")
+	}
+	if cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite || !cfg.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox defaults = %+v", cfg.Sandbox)
+	}
+
+	local := `sandbox:
+  enabled: true
+  file_system:
+    outside_workspace: read_only
+  network:
+    enabled: false
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sandbox.Enabled || cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || cfg.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox override = %+v", cfg.Sandbox)
+	}
+}
+
+func TestLoad_SandboxMergesAcrossConfigLayers(t *testing.T) {
+	home := prepareConfigTest(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	global := `model: openai/gpt-global
+providers:
+  - id: openai
+    base_url: https://global.example
+    api_key: sk-global
+    models:
+      - id: gpt-global
+sandbox:
+  enabled: true
+  file_system:
+    outside_workspace: read_only
+`
+	local := `sandbox:
+  network:
+    enabled: false
+`
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sandbox.Enabled || cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || cfg.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox merged policy = %+v", cfg.Sandbox)
+	}
+}
+
+func TestLoad_SandboxRejectsInvalidOutsideWorkspace(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `sandbox:
+  file_system:
+    outside_workspace: maybe
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(work)
+	if err == nil || !strings.Contains(err.Error(), "sandbox.file_system.outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only, denied") {
+		t.Fatalf("err = %v, want sandbox enum error", err)
+	}
+}
+
 func TestLoad_GlobalHooksDoNotRequireTrust(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()

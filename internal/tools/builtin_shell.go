@@ -6,19 +6,21 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 type ShellToolProvider struct{}
 
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
-		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions),
+		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.SandboxRunner),
 		listShellSessionsTool(ctx.ShellSessions),
 		writeStdinTool(ctx.ShellSessions),
 	}
 }
 
-func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager) Tool {
+func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner) Tool {
 	return Tool{
 		Name:          "exec_command",
 		Description:   execCommandToolDescription(profile),
@@ -68,6 +70,9 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 				Args:            profile.Args,
 				Command:         cmd,
 				Cwd:             workdir,
+				WorkspaceRoots:  shellWorkspaceRoots(defaultWorkdir),
+				Sandbox:         sandboxPolicy,
+				SandboxRunner:   sandboxRunner,
 				Yield:           yield,
 				MaxOutputTokens: maxOutputTokens,
 				TTY:             tty,
@@ -84,6 +89,13 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 			return out, nil
 		},
 	}
+}
+
+func shellWorkspaceRoots(defaultWorkdir string) []string {
+	if strings.TrimSpace(defaultWorkdir) == "" {
+		return nil
+	}
+	return []string{defaultWorkdir}
 }
 
 func listShellSessionsTool(sessions *ShellSessionManager) Tool {

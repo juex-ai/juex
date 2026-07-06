@@ -45,6 +45,9 @@ body`)
 	if status.Provider.ID != "openai" || status.Provider.Protocol != "openai/responses" || status.Provider.Model != "gpt-test" || status.Provider.Capabilities.Tools {
 		t.Fatalf("provider = %+v", status.Provider)
 	}
+	if status.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadWrite || !status.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox = %+v", status.Sandbox)
+	}
 	if status.Skills.Count != 1 || status.Skills.Items[0].Name != "review" || status.Skills.Items[0].Source != "project" {
 		t.Fatalf("skills = %+v", status.Skills)
 	}
@@ -144,6 +147,27 @@ func TestRuntimeStatusServiceIncludesHookStatus(t *testing.T) {
 	}
 	if hook.TimeoutSeconds != hooks.DefaultTimeoutSeconds || hook.MaxOutputBytes != hooks.DefaultMaxOutputBytes {
 		t.Fatalf("effective limits = timeout %d output %d", hook.TimeoutSeconds, hook.MaxOutputBytes)
+	}
+}
+
+func TestRuntimeStatusServiceIncludesSandboxPolicy(t *testing.T) {
+	cfg := config.Config{
+		WorkDir: t.TempDir(),
+		Sandbox: config.SandboxPolicy{
+			Enabled: true,
+			FileSystem: config.FileSystemSandboxPolicy{
+				OutsideWorkspace: config.OutsideWorkspaceReadOnly,
+			},
+			Network: config.NetworkSandboxPolicy{Enabled: false},
+		},
+	}
+
+	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Sandbox.Enabled || status.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadOnly || status.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox = %+v", status.Sandbox)
 	}
 }
 

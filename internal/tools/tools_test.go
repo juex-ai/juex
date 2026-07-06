@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 func registerTestBuiltins(r *Registry, workDir string) {
@@ -36,6 +38,21 @@ type builtinProviderFunc func(BuiltinProviderContext) []Tool
 
 func (f builtinProviderFunc) Tools(ctx BuiltinProviderContext) []Tool {
 	return f(ctx)
+}
+
+type fakeSandboxRunner struct {
+	calls int
+	specs []sandbox.ExecSpec
+	err   error
+}
+
+func (r *fakeSandboxRunner) Prepare(ctx context.Context, req sandbox.Request) (sandbox.ExecSpec, error) {
+	r.calls++
+	r.specs = append(r.specs, req.Spec)
+	if r.err != nil {
+		return sandbox.ExecSpec{}, r.err
+	}
+	return req.Spec, nil
 }
 
 func pwdCommand() string {
@@ -1753,6 +1770,79 @@ func TestBuiltins_ListShellSessionsEmpty(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ExecCommandSandboxDisabledDoesNotWrap(t *testing.T) {
+	r := NewRegistry()
+	runner := &fakeSandboxRunner{err: errors.New("should not be called")}
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "instant")
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       t.TempDir(),
+		Shell:         fakeShellProfile(),
+		Sandbox:       sandbox.DefaultPolicy(),
+		SandboxRunner: runner,
+	})
+
+	out, _, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{"cmd": "hello"})
+	if err != nil {
+		t.Fatalf("exec_command failed: %v\n%s", err, out)
+	}
+	if runner.calls != 0 {
+		t.Fatalf("sandbox runner calls = %d, want 0 when disabled", runner.calls)
+	}
+}
+
+func TestBuiltins_ExecCommandSandboxEnabledWrapsBeforeStart(t *testing.T) {
+	r := NewRegistry()
+	runner := &fakeSandboxRunner{}
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "instant")
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       t.TempDir(),
+		Shell:         fakeShellProfile(),
+		Sandbox:       policy,
+		SandboxRunner: runner,
+	})
+
+	out, _, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{"cmd": "hello"})
+	if err != nil {
+		t.Fatalf("exec_command failed: %v\n%s", err, out)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("sandbox runner calls = %d, want 1", runner.calls)
+	}
+	if len(runner.specs) != 1 || runner.specs[0].Binary != os.Args[0] || !containsString(runner.specs[0].Args, "hello") {
+		t.Fatalf("sandbox runner specs = %+v", runner.specs)
+	}
+}
+
+func TestBuiltins_ExecCommandSandboxErrorDoesNotStartCommand(t *testing.T) {
+	r := NewRegistry()
+	runner := &fakeSandboxRunner{err: errors.New("sandbox denied")}
+	t.Setenv("JUEX_FAKE_SHELL", "1")
+	t.Setenv("JUEX_FAKE_SHELL_MODE", "instant")
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       t.TempDir(),
+		Shell:         fakeShellProfile(),
+		Sandbox:       policy,
+		SandboxRunner: runner,
+	})
+
+	out, _, err := r.CallWithInfo(context.Background(), "exec_command", map[string]any{"cmd": "hello"})
+	if err == nil || !strings.Contains(err.Error(), "sandbox denied") {
+		t.Fatalf("err = %v, output=%q; want sandbox error", err, out)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("sandbox runner calls = %d, want 1", runner.calls)
+	}
+	if strings.Contains(out, "instant done") {
+		t.Fatalf("command appears to have started despite sandbox error: %q", out)
+	}
+}
+
 func TestFormatActiveShellSessionsPrompt(t *testing.T) {
 	exitCode := 0
 	got := FormatActiveShellSessionsPrompt([]ShellSessionInfo{
@@ -2907,4 +2997,13 @@ func shellSessionListFromInfo(t *testing.T, info CallInfo) ShellSessionListResul
 		t.Fatalf("structured result = %#v, want ShellSessionListResult", info.StructuredResult)
 	}
 	return result
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

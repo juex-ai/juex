@@ -10,12 +10,14 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 type runtimeStatusResponse struct {
 	WorkDir      string              `json:"work_dir"`
 	Provider     providerStatus      `json:"provider"`
 	Shell        config.ShellProfile `json:"shell"`
+	Sandbox      sandbox.Policy      `json:"sandbox"`
 	SystemPrompt systemPromptStatus  `json:"system_prompt"`
 	MCP          mcpStatus           `json:"mcp"`
 	Hooks        hooksStatus         `json:"hooks"`
@@ -129,6 +131,7 @@ func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusRespons
 		WorkDir:      status.WorkDir,
 		Provider:     providerStatusFromApp(status.Provider),
 		Shell:        status.Shell,
+		Sandbox:      status.Sandbox,
 		SystemPrompt: systemPromptStatusFromApp(status.SystemPrompt),
 		MCP:          mcpStatusFromApp(status.MCP),
 		Hooks:        hooksStatusFromApp(status.Hooks),

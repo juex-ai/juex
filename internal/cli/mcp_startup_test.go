@@ -62,6 +62,40 @@ func TestRunCmd_DryRunLoadsMCPAtStartup(t *testing.T) {
 	assertPathExists(t, marker)
 }
 
+func TestRunCmd_DryRunIncludesSandboxPolicy(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configFile, `sandbox:
+  enabled: true
+  file_system:
+    outside_workspace: read_only
+  network:
+    enabled: false
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &plan); err != nil {
+		t.Fatalf("decode dry-run JSON: %v\n%s", err, out.String())
+	}
+	if !plan.Sandbox.Enabled || plan.Sandbox.FileSystem.OutsideWorkspace != "read_only" || plan.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox = %+v", plan.Sandbox)
+	}
+}
+
 func TestRunCmd_DryRunExpandsMCPWorkDirForDifferentCWDs(t *testing.T) {
 	for _, name := range []string{"one", "two"} {
 		dir := filepath.Join(t.TempDir(), name)

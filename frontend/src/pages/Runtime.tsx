@@ -89,6 +89,25 @@ export function Runtime() {
                 </div>
               </dd>
               <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Sandbox
+              </dt>
+              <dd className="border-t px-3 py-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Badge
+                    variant={data.sandbox?.enabled ? "secondary" : "outline"}
+                    className="font-mono text-[11px]"
+                  >
+                    {data.sandbox?.enabled ? "enabled" : "disabled"}
+                  </Badge>
+                  <Badge variant="outline" className="font-mono text-[11px]">
+                    outside {data.sandbox?.file_system?.outside_workspace || "-"}
+                  </Badge>
+                  <Badge variant="outline" className="font-mono text-[11px]">
+                    network {data.sandbox?.network?.enabled ? "on" : "off"}
+                  </Badge>
+                </div>
+              </dd>
+              <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 Last refresh
               </dt>
               <dd className="border-t px-3 py-2 font-mono text-xs">

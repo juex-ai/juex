@@ -6,6 +6,18 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/sandbox"
+)
+
+type SandboxPolicy = sandbox.Policy
+type FileSystemSandboxPolicy = sandbox.FileSystemPolicy
+type OutsideWorkspaceAccess = sandbox.OutsideWorkspaceAccess
+type NetworkSandboxPolicy = sandbox.NetworkPolicy
+
+const (
+	OutsideWorkspaceReadWrite OutsideWorkspaceAccess = sandbox.OutsideWorkspaceReadWrite
+	OutsideWorkspaceReadOnly  OutsideWorkspaceAccess = sandbox.OutsideWorkspaceReadOnly
+	OutsideWorkspaceDenied    OutsideWorkspaceAccess = sandbox.OutsideWorkspaceDenied
 )
 
 // ProviderSelection is the resolved provider/model value passed to the LLM
@@ -152,4 +164,15 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		WorkingStateEnabled:   !c.DisableWorkingState,
 		ShowBuiltinHookTraces: c.ShowBuiltinHookTraces,
 	}
+}
+
+func (c Config) SandboxPolicy() sandbox.Policy {
+	policy := c.Sandbox
+	if policy.FileSystem.OutsideWorkspace == "" {
+		policy.FileSystem.OutsideWorkspace = sandbox.OutsideWorkspaceReadWrite
+	}
+	if !policy.Enabled && !policy.Network.Enabled && c.Sandbox == (sandbox.Policy{}) {
+		policy.Network.Enabled = true
+	}
+	return policy
 }
