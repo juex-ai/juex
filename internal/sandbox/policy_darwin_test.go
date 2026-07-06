@@ -60,7 +60,7 @@ func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(outside)
+	defer func() { _ = os.RemoveAll(outside) }()
 	policy := DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly
@@ -98,7 +98,7 @@ func TestDarwinReadOnlyBackendAllowsDeviceAndTempWrites(t *testing.T) {
 	}
 	work := t.TempDir()
 	tempPath := filepath.Join(os.TempDir(), "juex-sandbox-temp-"+strings.ReplaceAll(t.Name(), "/", "-"))
-	defer os.Remove(tempPath)
+	defer func() { _ = os.Remove(tempPath) }()
 	policy := DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadOnly

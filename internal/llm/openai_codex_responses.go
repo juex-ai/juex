@@ -250,10 +250,7 @@ func isRetryableCodexSSEReadError(err error) bool {
 		return false
 	}
 	var apiErr *openai.Error
-	if errors.As(readErr.cause, &apiErr) {
-		return false
-	}
-	return true
+	return !errors.As(readErr.cause, &apiErr)
 }
 
 func codexSSERetryDelay(attempt int) time.Duration {
