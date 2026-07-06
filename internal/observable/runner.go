@@ -78,6 +78,7 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	cmd := exec.CommandContext(runCtx, spec.Binary, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
+	configureObservableCommand(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -189,14 +190,13 @@ func (r *runner) readStream(stream string, reader io.Reader) {
 			var records []ObservationRecord
 			r.mu.Lock()
 			units, acceptErr := r.pipe.Accept(stream, buf[:n])
-			if acceptErr == nil {
-				for _, unit := range units {
-					flushed, addErr := r.batcher.Add(unit)
-					if addErr == nil {
-						records = append(records, flushed...)
-					}
+			for _, unit := range units {
+				flushed, addErr := r.batcher.Add(unit)
+				if addErr == nil {
+					records = append(records, flushed...)
 				}
-			} else {
+			}
+			if acceptErr != nil {
 				if _, addErr := r.batcher.Add(parseErrorUnit(stream, acceptErr)); addErr == nil {
 					flushed, flushErr := r.batcher.Flush("parse_error")
 					if flushErr == nil {

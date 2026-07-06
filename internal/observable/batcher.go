@@ -81,7 +81,6 @@ func (b *Batcher) Flush(reason string) ([]ObservationRecord, error) {
 		return nil, nil
 	}
 	current := b.batch
-	b.batch = nil
 	full := strings.Join(current.contents, "\n")
 	originalChars := len([]rune(full))
 	record := ObservationRecord{
@@ -112,6 +111,7 @@ func (b *Batcher) Flush(reason string) ([]ObservationRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	b.batch = nil
 	return []ObservationRecord{persisted}, nil
 }
 

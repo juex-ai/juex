@@ -125,6 +125,23 @@ func TestPipeline_JSONLInvalidLineReturnsError(t *testing.T) {
 	}
 }
 
+func TestPipeline_JSONLPreservesValidLinesAroundMalformedLine(t *testing.T) {
+	spec := validSpec("lark-events")
+	spec.Parser = &observable.ParserSpec{Type: "jsonl", ContentField: "content"}
+	pipe, err := observable.NewPipeline(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := []byte("{\"content\":\"before\"}\n{bad json}\n{\"content\":\"after\"}\n")
+	units, err := pipe.Accept("stdout", input)
+	if err == nil || !strings.Contains(err.Error(), "jsonl") {
+		t.Fatalf("err = %v, want jsonl parse error", err)
+	}
+	if len(units) != 2 || units[0].Content != "before" || units[1].Content != "after" {
+		t.Fatalf("units = %+v, want valid lines around malformed line", units)
+	}
+}
+
 func TestPipeline_JSONLFlushesFinalLineWithoutNewline(t *testing.T) {
 	spec := validSpec("lark-events")
 	spec.Parser = &observable.ParserSpec{

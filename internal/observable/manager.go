@@ -502,6 +502,9 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 		return nil
 	}
 	m.emitObservation(EventObservationRecorded, record, "")
+	if m.isClosed() {
+		return nil
+	}
 	if m.opts.Deliver != nil {
 		if err := m.opts.Deliver(ctx, record); err != nil {
 			updated, updateErr := m.updateObservation(record.ID, func(record ObservationRecord) ObservationRecord {
@@ -518,6 +521,15 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 		}
 	}
 	return nil
+}
+
+func (m *Manager) isClosed() bool {
+	if m == nil {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.closed
 }
 
 func (m *Manager) updateObservation(id string, update func(ObservationRecord) ObservationRecord) (ObservationRecord, error) {

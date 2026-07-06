@@ -94,17 +94,21 @@ func (p *Pipeline) acceptJSONL(stream string, data []byte) ([]ParsedUnit, error)
 		lines = lines[:len(lines)-1]
 	}
 	var out []ParsedUnit
+	var firstErr error
 	for _, line := range lines {
 		unit, ok, err := p.parseJSONLLine(stream, line)
 		if err != nil {
-			return nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		if !ok {
 			continue
 		}
 		out = append(out, p.filterUnit(unit)...)
 	}
-	return out, nil
+	return out, firstErr
 }
 
 func (p *Pipeline) Flush() ([]ParsedUnit, error) {
@@ -112,18 +116,22 @@ func (p *Pipeline) Flush() ([]ParsedUnit, error) {
 		return nil, nil
 	}
 	var out []ParsedUnit
+	var firstErr error
 	for stream, buffered := range p.buffers {
 		delete(p.buffers, stream)
 		unit, ok, err := p.parseJSONLLine(stream, buffered)
 		if err != nil {
-			return nil, err
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
 		if !ok {
 			continue
 		}
 		out = append(out, p.filterUnit(unit)...)
 	}
-	return out, nil
+	return out, firstErr
 }
 
 func (p *Pipeline) parseJSONLLine(stream, line string) (ParsedUnit, bool, error) {

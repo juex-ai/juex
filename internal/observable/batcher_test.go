@@ -117,6 +117,35 @@ func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 	}
 }
 
+func TestBatcher_KeepsBatchWhenPersistenceFails(t *testing.T) {
+	root := t.TempDir()
+	stateDir := root + "/state"
+	if err := os.WriteFile(stateDir, []byte("not a dir"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := observable.NewStore(stateDir, observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	if _, err := b.Add(parsedUnit("stdout", "retry me", fixedTime)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Flush("first"); err == nil {
+		t.Fatal("Flush() err = nil, want persistence failure")
+	}
+	if err := os.Remove(stateDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Flush("retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Content != "retry me" {
+		t.Fatalf("retry Flush() = %+v, want retained batch", got)
+	}
+}
+
 func parsedUnit(stream, content string, receivedAt time.Time) observable.ParsedUnit {
 	return observable.ParsedUnit{
 		Stream:     stream,

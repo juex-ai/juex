@@ -1360,6 +1360,44 @@ func TestPostCreateSession_ReturnsIDAndDir(t *testing.T) {
 	}
 }
 
+func TestPostCreateSession_ClosesPreviousPrimaryApp(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	create := func() string {
+		t.Helper()
+		resp, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("create status = %d body = %s", resp.StatusCode, body)
+		}
+		var parsed struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+			t.Fatal(err)
+		}
+		return parsed.ID
+	}
+
+	firstID := create()
+	if _, ok := srv.sessions.Load(firstID); !ok {
+		t.Fatalf("first session %q not open", firstID)
+	}
+	secondID := create()
+	if _, ok := srv.sessions.Load(secondID); !ok {
+		t.Fatalf("second session %q not open", secondID)
+	}
+	if _, ok := srv.sessions.Load(firstID); ok {
+		t.Fatalf("first primary session %q still open after creating %q", firstID, secondID)
+	}
+}
+
 func TestPostSessionActivate_PrimaryOnly(t *testing.T) {
 	srv := newTestServer(t)
 	firstID := "20260507T101010-first01"

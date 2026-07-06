@@ -10,6 +10,11 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
+const (
+	defaultObservationToolLimit = 20
+	maxObservationToolLimit     = 100
+)
+
 func RegisterTools(reg *tools.Registry, manager *Manager) error {
 	if reg == nil || manager == nil {
 		return nil
@@ -126,7 +131,7 @@ func observableTools(manager *Manager) []tools.Tool {
 				_ = ctx
 				records, err := manager.Observations(ObservationFilter{
 					ObservableID: optionalString(in, "id"),
-					Limit:        optionalInt(in, "limit"),
+					Limit:        boundedObservationLimit(in),
 				})
 				if err != nil {
 					return "", err
@@ -227,4 +232,15 @@ func optionalInt(in map[string]any, key string) int {
 	default:
 		return 0
 	}
+}
+
+func boundedObservationLimit(in map[string]any) int {
+	limit := optionalInt(in, "limit")
+	if limit <= 0 {
+		return defaultObservationToolLimit
+	}
+	if limit > maxObservationToolLimit {
+		return maxObservationToolLimit
+	}
+	return limit
 }

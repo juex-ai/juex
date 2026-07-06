@@ -454,6 +454,51 @@ func TestManager_OnExitNotifyNonzero(t *testing.T) {
 	}
 }
 
+func TestManager_CloseSuppressesProviderDelivery(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("close-delivery", "json-ready-then-wait")
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		_, err := os.Stat(dir + "/observable-ready")
+		return err == nil
+	})
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deliveredMu.Lock()
+	gotDelivered := append([]observable.ObservationRecord(nil), delivered...)
+	deliveredMu.Unlock()
+	if len(gotDelivered) != 0 {
+		t.Fatalf("delivered during Close = %+v, want provider delivery suppressed", gotDelivered)
+	}
+	records, err := mgr.Observations(observable.ObservationFilter{ObservableID: spec.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Content != "quiet observable" {
+		t.Fatalf("persisted observations after Close = %+v, want final flush persisted", records)
+	}
+}
+
 func TestManager_BadConfigDoesNotFailConstruction(t *testing.T) {
 	dir := t.TempDir()
 	path := configPath(dir)
