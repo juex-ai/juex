@@ -240,6 +240,7 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		return err
 	}
 	m.emitObservable(EventObservableStopped, status)
+	waitRunDone(run, 2*time.Second)
 	return nil
 }
 
@@ -359,12 +360,7 @@ func (m *Manager) Close() error {
 		}
 	}
 	for _, run := range runs {
-		if run.done != nil {
-			select {
-			case <-run.done:
-			case <-time.After(2 * time.Second):
-			}
-		}
+		waitRunDone(run, 2*time.Second)
 	}
 	return nil
 }
@@ -548,4 +544,16 @@ func statusFromSpec(spec Spec, state string) ObservableStatus {
 
 func newRunID() string {
 	return "run-" + time.Now().UTC().Format("20060102T150405.000000000")
+}
+
+func waitRunDone(run *observableRun, timeout time.Duration) {
+	if run == nil || run.done == nil {
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-run.done:
+	case <-timer.C:
+	}
 }

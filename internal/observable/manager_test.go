@@ -140,6 +140,45 @@ func TestManager_StopAndDelete(t *testing.T) {
 	}
 }
 
+func TestManager_DeleteWaitsForRunCleanup(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("delete-waits", "json-ready-then-wait")
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		_, err := os.Stat(dir + "/observable-ready")
+		return err == nil
+	})
+	if err := mgr.Delete(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	deliveredMu.Lock()
+	gotDelivered := append([]observable.ObservationRecord(nil), delivered...)
+	deliveredMu.Unlock()
+	if len(gotDelivered) != 1 || gotDelivered[0].Content != "quiet observable" {
+		t.Fatalf("delivered after delete = %+v, want flushed quiet observable", gotDelivered)
+	}
+}
+
 func TestManager_StartNoopsWhenRunAlreadyActive(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("active-run", "wait")
@@ -396,6 +435,11 @@ func TestObservableHelperProcess(t *testing.T) {
 		os.Exit(0)
 	case "json-then-wait":
 		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"quiet observable"}` + "\n")
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "json-ready-then-wait":
+		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"quiet observable"}` + "\n")
+		_ = os.WriteFile(os.Getenv("WORKDIR")+"/observable-ready", []byte("ready\n"), 0o644)
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
 	case "stderr-flood":
