@@ -390,7 +390,7 @@ func (m *Manager) configEditableLocked() error {
 
 func (m *Manager) waitRun(run *observableRun, r *runner) {
 	defer close(run.done)
-	err, exitCode := r.wait()
+	exitCode, err := r.wait()
 	flushed, flushErr := r.flush("exit")
 	if flushErr != nil && err == nil {
 		err = flushErr

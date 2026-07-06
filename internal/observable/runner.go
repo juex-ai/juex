@@ -98,7 +98,7 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	return cmd, nil
 }
 
-func (r *runner) wait() (error, *int) {
+func (r *runner) wait() (*int, error) {
 	if r == nil || r.cmd == nil {
 		return nil, nil
 	}
@@ -112,11 +112,11 @@ func (r *runner) wait() (error, *int) {
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return err, exitCode
+			return exitCode, err
 		}
-		return err, exitCode
+		return exitCode, err
 	}
-	return nil, exitCode
+	return exitCode, nil
 }
 
 func (r *runner) flush(reason string) ([]ObservationRecord, error) {

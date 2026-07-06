@@ -35,7 +35,7 @@ func TestManager_StartAllCapturesAndDeliversObservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	if err := mgr.StartAll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestManager_StopAndDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	if err := mgr.Start(context.Background(), spec.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestManager_StartupErrorRecordsErrored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	if err := mgr.Start(context.Background(), spec.ID); err == nil {
 		t.Fatal("expected start error")
 	}
@@ -143,7 +143,7 @@ func TestManager_BadConfigDoesNotFailConstruction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	status, ok := mgr.Status().ByID("bad-regex")
 	if !ok || status.State != observable.RunStateErrored || status.LastError == "" {
 		t.Fatalf("status = %+v ok=%v, want bad config surfaced as errored", status, ok)
@@ -177,7 +177,7 @@ func TestManager_EmitsLifecycleAndObservationEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	if err := mgr.Start(context.Background(), spec.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestManager_SandboxRunnerInvoked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
+	defer func() { _ = mgr.Close() }()
 	if err := mgr.Start(context.Background(), spec.ID); err != nil {
 		t.Fatal(err)
 	}
