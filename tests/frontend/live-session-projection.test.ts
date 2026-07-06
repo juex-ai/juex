@@ -269,6 +269,23 @@ test("projectLiveSessionEvent projects compact start and completion", () => {
   assert.equal(state.compactActive, true);
   assert.equal(state.messages.length, 1);
   assert.equal(state.messages[0].pending, true);
+  state = apply(state, {
+    id: "e-retry",
+    type: "llm.retry",
+    ts: "2026-06-15T00:00:00.500Z",
+    payload: {
+      purpose: "compaction",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      operation: "responses.sse",
+      attempt: 1,
+      max_attempts: 11,
+      retry_reason: "codex_sse_read",
+      will_retry: true,
+    },
+  });
+  assert.equal(state.compactActive, true);
+  assert.equal(state.turnActive, false);
 
   const completed = projectLiveSessionEvent(state, {
     id: "e2",

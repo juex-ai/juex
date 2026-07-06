@@ -263,7 +263,10 @@ export function projectLiveSessionEvent(
       };
       break;
     case "llm.retry":
-      next = { ...next, turnActive: true, status: { kind: "running" } };
+      next =
+        event.payload.purpose === "compaction"
+          ? { ...next, compactActive: true, status: { kind: "running" } }
+          : { ...next, turnActive: true, status: { kind: "running" } };
       break;
     case "tool.requested": {
       const name = event.payload.name || "?";
