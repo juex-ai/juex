@@ -24,13 +24,14 @@ type runnerOptions struct {
 }
 
 type runner struct {
-	opts    runnerOptions
-	pipe    *Pipeline
-	batcher *Batcher
-	cmd     *exec.Cmd
-	mu      sync.Mutex
-	wg      sync.WaitGroup
-	flushCh chan struct{}
+	opts       runnerOptions
+	pipe       *Pipeline
+	batcher    *Batcher
+	cmd        *exec.Cmd
+	mu         sync.Mutex
+	wg         sync.WaitGroup
+	deliveryWG sync.WaitGroup
+	flushCh    chan struct{}
 }
 
 func newRunner(opts runnerOptions) *runner {
@@ -118,6 +119,7 @@ func (r *runner) wait() (*int, error) {
 		close(r.flushCh)
 	}
 	r.wg.Wait()
+	r.deliveryWG.Wait()
 	var exitCode *int
 	if r.cmd.ProcessState != nil {
 		code := r.cmd.ProcessState.ExitCode()
@@ -139,7 +141,22 @@ func (r *runner) flush(reason string) ([]ObservationRecord, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.batcher.Flush(reason)
+	var firstErr error
+	units, err := r.pipe.Flush()
+	if err != nil {
+		firstErr = err
+		units = append(units, parseErrorUnit("", err))
+	}
+	for _, unit := range units {
+		if _, addErr := r.batcher.Add(unit); addErr != nil && firstErr == nil {
+			firstErr = addErr
+		}
+	}
+	flushed, err := r.batcher.Flush(reason)
+	if err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return flushed, firstErr
 }
 
 func (r *runner) flushLoop(stop <-chan struct{}) {
@@ -179,6 +196,13 @@ func (r *runner) readStream(stream string, reader io.Reader) {
 						records = append(records, flushed...)
 					}
 				}
+			} else {
+				if _, addErr := r.batcher.Add(parseErrorUnit(stream, acceptErr)); addErr == nil {
+					flushed, flushErr := r.batcher.Flush("parse_error")
+					if flushErr == nil {
+						records = append(records, flushed...)
+					}
+				}
 			}
 			r.mu.Unlock()
 			r.deliver(records)
@@ -197,8 +221,23 @@ func (r *runner) drainStream(reader io.Reader) {
 func (r *runner) deliver(records []ObservationRecord) {
 	for _, record := range records {
 		if r.opts.deliver != nil {
-			_ = r.opts.deliver(context.Background(), record)
+			record := record
+			r.deliveryWG.Add(1)
+			go func() {
+				defer r.deliveryWG.Done()
+				_ = r.opts.deliver(context.Background(), record)
+			}()
 		}
+	}
+}
+
+func parseErrorUnit(stream string, err error) ParsedUnit {
+	return ParsedUnit{
+		Stream:     stream,
+		Kind:       "observable_parse_error",
+		Severity:   "error",
+		Content:    err.Error(),
+		ReceivedAt: time.Now().UTC(),
 	}
 }
 

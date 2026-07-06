@@ -36,11 +36,13 @@ type Manager struct {
 }
 
 type observableRun struct {
-	id     string
-	runID  string
-	cancel context.CancelFunc
-	state  ObservableStatus
-	done   chan struct{}
+	id       string
+	runID    string
+	spec     Spec
+	cancel   context.CancelFunc
+	state    ObservableStatus
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 type StatusSnapshot struct {
@@ -115,37 +117,47 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	if m == nil {
 		return fmt.Errorf("observable: nil manager")
 	}
-	spec, err := m.specForStart(id)
-	if err != nil {
-		return err
-	}
-	if spec.Command == "" {
-		return nil
-	}
 	runID := newRunID()
 	runCtx, cancel := context.WithCancel(context.Background())
-	run := &observableRun{
-		id:     id,
-		runID:  runID,
-		cancel: cancel,
-		done:   make(chan struct{}),
-		state:  statusFromSpec(spec, RunStateStarting),
-	}
-	run.state.RunID = runID
-	run.state.StartedAt = time.Now().UTC()
-	if err := m.recordRun(RunRecord{ObservableID: id, RunID: runID, State: RunStateStarting, StartedAt: run.state.StartedAt}); err != nil {
-		cancel()
-		return err
-	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		cancel()
 		return fmt.Errorf("observable: manager closed")
 	}
+	if run := m.runs[id]; run != nil {
+		m.mu.Unlock()
+		cancel()
+		return nil
+	}
+	spec, ok := m.specs[id]
+	if !ok {
+		m.mu.Unlock()
+		cancel()
+		return fmt.Errorf("observable: unknown id %q", id)
+	}
+	if spec.Command == "" {
+		m.mu.Unlock()
+		cancel()
+		return nil
+	}
+	run := &observableRun{
+		id:     id,
+		runID:  runID,
+		spec:   spec,
+		cancel: cancel,
+		done:   make(chan struct{}),
+		state:  statusFromSpec(spec, RunStateStarting),
+	}
+	run.state.RunID = runID
+	run.state.StartedAt = time.Now().UTC()
 	m.runs[id] = run
 	m.lastStatus[id] = run.state
 	m.mu.Unlock()
+	if err := m.recordRun(RunRecord{ObservableID: id, RunID: runID, State: RunStateStarting, StartedAt: run.state.StartedAt}); err != nil {
+		m.failReservedRun(run, err)
+		return err
+	}
 
 	r := newRunner(runnerOptions{
 		spec:          spec,
@@ -170,13 +182,14 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		delete(m.runs, id)
 		m.mu.Unlock()
 		m.emitObservable(EventObservableErrored, status)
+		run.closeDone()
 		return err
 	}
 	run.state.State = RunStateRunning
 	run.state.PID = cmd.Process.Pid
 	m.setStatus(id, run.state)
 	if err := m.recordRun(RunRecord{ObservableID: id, RunID: runID, State: RunStateRunning, PID: cmd.Process.Pid, StartedAt: run.state.StartedAt}); err != nil {
-		cancel()
+		m.cleanupStartedRun(run, r, err)
 		return err
 	}
 	m.emitObservable(EventObservableStarted, run.state)
@@ -374,22 +387,6 @@ func (s StatusSnapshot) ByID(id string) (ObservableStatus, bool) {
 	return ObservableStatus{}, false
 }
 
-func (m *Manager) specForStart(id string) (Spec, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return Spec{}, fmt.Errorf("observable: manager closed")
-	}
-	if run := m.runs[id]; run != nil {
-		return Spec{}, nil
-	}
-	spec, ok := m.specs[id]
-	if !ok {
-		return Spec{}, fmt.Errorf("observable: unknown id %q", id)
-	}
-	return spec, nil
-}
-
 func (m *Manager) configEditableLocked() error {
 	if len(m.issues) == 0 {
 		return nil
@@ -398,7 +395,7 @@ func (m *Manager) configEditableLocked() error {
 }
 
 func (m *Manager) waitRun(run *observableRun, r *runner) {
-	defer close(run.done)
+	defer run.closeDone()
 	exitCode, err := r.wait()
 	flushed, flushErr := r.flush("exit")
 	if flushErr != nil && err == nil {
@@ -425,6 +422,52 @@ func (m *Manager) waitRun(run *observableRun, r *runner) {
 	m.mu.Unlock()
 	_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateExited, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, ExitCode: exitCode, Error: status.LastError})
 	m.emitObservable(EventObservableExited, status)
+	m.notifyOnExit(run, status, err)
+}
+
+func (m *Manager) notifyOnExit(run *observableRun, status ObservableStatus, err error) {
+	if m == nil || run == nil {
+		return
+	}
+	notify := run.spec.OnExit.Notify
+	if notify == "" || notify == "never" {
+		return
+	}
+	nonzero := err != nil
+	if status.ExitCode != nil && *status.ExitCode != 0 {
+		nonzero = true
+	}
+	if notify == "nonzero" && !nonzero {
+		return
+	}
+	severity := "info"
+	if nonzero {
+		severity = "error"
+	}
+	when := status.ExitedAt
+	if when.IsZero() {
+		when = time.Now().UTC()
+	}
+	content := fmt.Sprintf("observable %s exited", run.id)
+	if status.ExitCode != nil {
+		content = fmt.Sprintf("%s with code %d", content, *status.ExitCode)
+	}
+	if err != nil {
+		content = fmt.Sprintf("%s: %s", content, err.Error())
+	}
+	record, recordErr := m.RecordObservation(ObservationRecord{
+		ObservableID: run.id,
+		RunID:        run.runID,
+		Kind:         "observable_exit",
+		Severity:     severity,
+		WindowStart:  when,
+		WindowEnd:    when,
+		Content:      content,
+		State:        ObservationStateRecorded,
+	})
+	if recordErr == nil {
+		_ = m.deliverObservation(context.Background(), record)
+	}
 }
 
 func (m *Manager) recordRun(record RunRecord) error {
@@ -546,6 +589,13 @@ func newRunID() string {
 	return "run-" + time.Now().UTC().Format("20060102T150405.000000000")
 }
 
+func (r *observableRun) closeDone() {
+	if r == nil || r.done == nil {
+		return
+	}
+	r.doneOnce.Do(func() { close(r.done) })
+}
+
 func waitRunDone(run *observableRun, timeout time.Duration) {
 	if run == nil || run.done == nil {
 		return
@@ -556,4 +606,65 @@ func waitRunDone(run *observableRun, timeout time.Duration) {
 	case <-run.done:
 	case <-timer.C:
 	}
+}
+
+func (m *Manager) failReservedRun(run *observableRun, err error) {
+	if run == nil {
+		return
+	}
+	if run.cancel != nil {
+		run.cancel()
+	}
+	status := run.state
+	status.State = RunStateErrored
+	status.ExitedAt = time.Now().UTC()
+	if err != nil {
+		status.LastError = err.Error()
+	}
+	m.mu.Lock()
+	if m.runs[run.id] == run {
+		delete(m.runs, run.id)
+		m.lastStatus[run.id] = status
+	}
+	m.mu.Unlock()
+	_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateErrored, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, Error: status.LastError})
+	m.emitObservable(EventObservableErrored, status)
+	run.closeDone()
+}
+
+func (m *Manager) cleanupStartedRun(run *observableRun, r *runner, cause error) {
+	if run == nil {
+		return
+	}
+	if run.cancel != nil {
+		run.cancel()
+	}
+	exitCode, waitErr := r.wait()
+	flushed, flushErr := r.flush("start_failed")
+	for _, record := range flushed {
+		_ = m.deliverObservation(context.Background(), record)
+	}
+	status := run.state
+	status.State = RunStateErrored
+	status.ExitedAt = time.Now().UTC()
+	status.ExitCode = exitCode
+	status.LastError = firstErrorText(cause, waitErr, flushErr)
+	m.mu.Lock()
+	if m.runs[run.id] == run {
+		delete(m.runs, run.id)
+		m.lastStatus[run.id] = status
+	}
+	m.mu.Unlock()
+	_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateErrored, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, ExitCode: exitCode, Error: status.LastError})
+	m.emitObservable(EventObservableErrored, status)
+	run.closeDone()
+}
+
+func firstErrorText(errs ...error) string {
+	for _, err := range errs {
+		if err != nil {
+			return err.Error()
+		}
+	}
+	return ""
 }

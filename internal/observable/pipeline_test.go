@@ -125,6 +125,33 @@ func TestPipeline_JSONLInvalidLineReturnsError(t *testing.T) {
 	}
 }
 
+func TestPipeline_JSONLFlushesFinalLineWithoutNewline(t *testing.T) {
+	spec := validSpec("lark-events")
+	spec.Parser = &observable.ParserSpec{
+		Type:         "jsonl",
+		ContentField: "content",
+		KindField:    "type",
+	}
+	pipe, err := observable.NewPipeline(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	units, err := pipe.Accept("stdout", []byte(`{"type":"lark_notification","content":"last event"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 0 {
+		t.Fatalf("Accept units = %+v, want buffered final line", units)
+	}
+	units, err = pipe.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || units[0].Content != "last event" || units[0].Kind != "lark_notification" {
+		t.Fatalf("Flush units = %+v", units)
+	}
+}
+
 func TestPipeline_BinaryLikeOutputIsSanitized(t *testing.T) {
 	pipe, err := observable.NewPipeline(validSpec("binary"))
 	if err != nil {

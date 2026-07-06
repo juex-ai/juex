@@ -215,6 +215,83 @@ func TestManager_StartNoopsWhenRunAlreadyActive(t *testing.T) {
 	}
 }
 
+func TestManager_ConcurrentStartReservesSingleRun(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("concurrent-start", "wait")
+	writeObservableConfig(t, dir, spec)
+	runner := &blockingSandboxRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Sandbox: sandbox.Policy{
+			Enabled: true,
+			FileSystem: sandbox.FileSystemPolicy{
+				OutsideWorkspace: sandbox.OutsideWorkspaceReadWrite,
+			},
+			Network: sandbox.NetworkPolicy{Enabled: true},
+		},
+		SandboxRunner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	startErr := make(chan error, 1)
+	go func() { startErr <- mgr.Start(context.Background(), spec.ID) }()
+	select {
+	case <-runner.entered:
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("first Start did not enter sandbox runner")
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := runner.callCount(); got != 1 {
+		t.Fatalf("sandbox Prepare calls = %d, want 1", got)
+	}
+	close(runner.release)
+	if err := <-startErr; err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Stop(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManager_StartCleansUpWhenRunningRecordFails(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("record-fails", "wait")
+	writeObservableConfig(t, dir, spec)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Sandbox: sandbox.Policy{
+			Enabled: true,
+			FileSystem: sandbox.FileSystemPolicy{
+				OutsideWorkspace: sandbox.OutsideWorkspaceReadWrite,
+			},
+			Network: sandbox.NetworkPolicy{Enabled: true},
+		},
+		SandboxRunner: corruptRunsFileRunner{stateDir: stateDir(dir)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err == nil {
+		t.Fatal("Start() err = nil, want running record failure")
+	}
+	status, ok := mgr.Status().ByID(spec.ID)
+	if !ok || status.State != observable.RunStateErrored || status.LastError == "" {
+		t.Fatalf("status = %+v ok=%v, want errored status", status, ok)
+	}
+}
+
 func TestManager_StartupErrorRecordsErrored(t *testing.T) {
 	dir := t.TempDir()
 	spec := validSpec("missing")
@@ -300,6 +377,81 @@ func TestManager_DrainsUnwatchedStream(t *testing.T) {
 		defer deliveredMu.Unlock()
 		return len(delivered) == 1 && delivered[0].Content == "stdout survived stderr flood"
 	})
+}
+
+func TestManager_DeliversParseErrorObservation(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("bad-jsonl", "bad-jsonl")
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		deliveredMu.Lock()
+		defer deliveredMu.Unlock()
+		return len(delivered) == 1
+	})
+	deliveredMu.Lock()
+	got := delivered[0]
+	deliveredMu.Unlock()
+	if got.Kind != "observable_parse_error" || got.Severity != "error" || !strings.Contains(got.Content, "observable jsonl") {
+		t.Fatalf("parse error observation = %+v", got)
+	}
+}
+
+func TestManager_OnExitNotifyNonzero(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("exit-notify", "exit2")
+	spec.OnExit.Notify = "nonzero"
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		deliveredMu.Lock()
+		defer deliveredMu.Unlock()
+		return len(delivered) == 1
+	})
+	deliveredMu.Lock()
+	got := delivered[0]
+	deliveredMu.Unlock()
+	if got.Kind != "observable_exit" || got.Severity != "error" || !strings.Contains(got.Content, "code 2") {
+		t.Fatalf("exit observation = %+v", got)
+	}
 }
 
 func TestManager_BadConfigDoesNotFailConstruction(t *testing.T) {
@@ -409,6 +561,50 @@ func (r *recordingSandboxRunner) Prepare(ctx context.Context, req sandbox.Reques
 	return req.Spec, nil
 }
 
+type blockingSandboxRunner struct {
+	mu      sync.Mutex
+	calls   int
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingSandboxRunner) Prepare(ctx context.Context, req sandbox.Request) (sandbox.ExecSpec, error) {
+	r.mu.Lock()
+	r.calls++
+	if r.calls == 1 {
+		close(r.entered)
+	}
+	r.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return sandbox.ExecSpec{}, ctx.Err()
+	case <-r.release:
+		return req.Spec, nil
+	}
+}
+
+func (r *blockingSandboxRunner) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+type corruptRunsFileRunner struct {
+	stateDir string
+}
+
+func (r corruptRunsFileRunner) Prepare(ctx context.Context, req sandbox.Request) (sandbox.ExecSpec, error) {
+	_ = ctx
+	path := r.stateDir + "/runs.jsonl"
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return sandbox.ExecSpec{}, err
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		return sandbox.ExecSpec{}, err
+	}
+	return req.Spec, nil
+}
+
 func helperSpec(id, mode string) observable.Spec {
 	spec := validSpec(id)
 	spec.Command = os.Args[0]
@@ -442,6 +638,9 @@ func TestObservableHelperProcess(t *testing.T) {
 		_ = os.WriteFile(os.Getenv("WORKDIR")+"/observable-ready", []byte("ready\n"), 0o644)
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
+	case "bad-jsonl":
+		_, _ = os.Stdout.WriteString("{bad json}\n")
+		os.Exit(0)
 	case "stderr-flood":
 		_, _ = os.Stderr.WriteString(strings.Repeat("x", 2*1024*1024))
 		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"stdout survived stderr flood"}` + "\n")
@@ -449,6 +648,8 @@ func TestObservableHelperProcess(t *testing.T) {
 	case "wait":
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
+	case "exit2":
+		os.Exit(2)
 	default:
 		os.Exit(2)
 	}

@@ -95,18 +95,47 @@ func (p *Pipeline) acceptJSONL(stream string, data []byte) ([]ParsedUnit, error)
 	}
 	var out []ParsedUnit
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		unit, ok, err := p.parseJSONLLine(stream, line)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
 			continue
 		}
-		var obj map[string]any
-		if err := json.Unmarshal([]byte(line), &obj); err != nil {
-			return nil, fmt.Errorf("observable jsonl: parse line: %w", err)
-		}
-		unit := p.unitFromJSON(stream, obj, line)
 		out = append(out, p.filterUnit(unit)...)
 	}
 	return out, nil
+}
+
+func (p *Pipeline) Flush() ([]ParsedUnit, error) {
+	if p == nil || len(p.buffers) == 0 {
+		return nil, nil
+	}
+	var out []ParsedUnit
+	for stream, buffered := range p.buffers {
+		delete(p.buffers, stream)
+		unit, ok, err := p.parseJSONLLine(stream, buffered)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		out = append(out, p.filterUnit(unit)...)
+	}
+	return out, nil
+}
+
+func (p *Pipeline) parseJSONLLine(stream, line string) (ParsedUnit, bool, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ParsedUnit{}, false, nil
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(line), &obj); err != nil {
+		return ParsedUnit{}, false, fmt.Errorf("observable jsonl: parse line: %w", err)
+	}
+	return p.unitFromJSON(stream, obj, line), true, nil
 }
 
 func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) ParsedUnit {
