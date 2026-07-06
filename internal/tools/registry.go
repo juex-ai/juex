@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 )
@@ -199,7 +200,7 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		callCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 		defer cancel()
 	}
-	if err := callCtx.Err(); err != nil {
+	if err := cancellation.ContextError(callCtx); err != nil {
 		info.ErrorKind = errorclass.KindForError(err)
 		info.setObservation(ObservationOptions{
 			ToolName:  name,
@@ -229,7 +230,7 @@ func (r *Registry) CallWithInfo(ctx context.Context, name string, input map[stri
 		info.ErrorKind = string(errorclass.KindTimeout)
 		info.RawCause = rawCauseFor(rawErr, callCtx.Err().Error())
 		err = toolTimeoutError(name, timeoutSeconds)
-	} else if ctxErr := ctx.Err(); ctxErr != nil {
+	} else if ctxErr := cancellation.ContextError(ctx); ctxErr != nil {
 		err = ctxErr
 	}
 	if err != nil && info.ErrorKind == "" {

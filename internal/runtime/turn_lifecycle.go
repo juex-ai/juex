@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -76,7 +78,7 @@ func (l *turnLifecycle) runLocked(ctx context.Context) (turnLifecycleResult, err
 }
 
 func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int) error {
-	if err := ctx.Err(); err != nil {
+	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
 	if err := l.engine.drainPendingInputLocked(ctx, l.turnID); err != nil {
@@ -89,6 +91,9 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 	}
 	resp, err := l.engine.requestProviderTurnLocked(ctx, l.prepared, request)
 	if err != nil {
+		if contextErr := cancellation.ContextError(ctx); contextErr != nil && errors.Is(err, context.Canceled) {
+			return contextErr
+		}
 		if llm.IsContextOverflowError(err) && !l.retriedOverflow {
 			if _, compactErr := l.engine.compactLocked(ctx, l.turnID, l.prepared.systemPrompt, "overflow_retry", true, ""); compactErr != nil {
 				return fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr)
@@ -98,7 +103,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		}
 		return fmt.Errorf("llm: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
 
@@ -106,7 +111,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 	if err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
+	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
 	if len(recorded.toolCalls) > 0 {

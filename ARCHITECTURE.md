@@ -436,8 +436,12 @@ Deadline-shaped causes such as Go `context deadline exceeded`, SDK
 public timeout contract before they reach model-visible tool results, CLI JSON,
 or turn error events. Runtime events carry `error_kind: "timeout"` and
 `timed_out: true` for these cases; the original cause is kept separately in
-`raw_cause` for diagnostics. User cancellation remains `cancelled by user` and
-is not classified as timeout.
+`raw_cause` for diagnostics. Plain user cancellation remains
+`cancelled by user` and is not classified as timeout. Catchable process
+signals keep their identity instead: SIGINT is reported as
+`error_kind: "interrupted"`, SIGTERM/SIGHUP as `error_kind: "terminated"`,
+with `signal`, `signal_number`, and `interrupted` fields on turn error events
+and CLI JSON details.
 
 `exec_command` always starts the process through a shared in-memory session
 manager and waits only for the bounded yield window. If the process is still
@@ -691,9 +695,11 @@ the assistant finishes without queued input, the parent context/user stop
 cancels it, provider/tool/context work fails according to its existing
 contract, or context projection/compaction cannot recover. `llm.requested`
 keeps an `iter` counter for observability only; the counter does not stop the
-turn. User-initiated cancellation is normalized to `cancelled by user` before
-runtime error events or tool-result blocks are persisted, so CLI and Web
-interrupts share the same transcript semantics.
+turn. Plain user-initiated cancellation is normalized to `cancelled by user`
+before runtime error events or tool-result blocks are persisted. Contexts
+cancelled by an external process signal preserve the signal cause, so runtime
+events and tool-result blocks distinguish SIGINT/SIGTERM/SIGHUP from ordinary
+UI or API cancellation.
 
 Compaction policy defaults and the default context-window token count live on
 the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
@@ -751,10 +757,12 @@ redaction. The manifest lists every bundled payload file except
 `manifest.json` itself because the manifest hash would otherwise be
 self-referential.
 
-The CLI root wires Ctrl-C/SIGTERM into the Cobra command context. `run` and
-`repl` pass that context through `internal/app` to provider requests and tool
-calls. On cancellation, plain stderr and `run --json` errors use the same
-runtime-facing reason, `cancelled by user`.
+The CLI root wires Ctrl-C/SIGTERM, and SIGHUP on Unix, into a cause-aware Cobra
+command context. `run` and `repl` pass that context through `internal/app` to
+provider requests and tool calls. On plain cancellation, stderr and
+`run --json` use `cancelled by user`; on signal-triggered cancellation they use
+neutral signal-aware messages such as `run interrupted by signal SIGINT (2)` or
+`run terminated by signal SIGTERM (15)` plus structured signal details.
 
 Persistent flags inherited by all subcommands:
 

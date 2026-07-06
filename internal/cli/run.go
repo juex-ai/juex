@@ -45,6 +45,8 @@ type errorJSON struct {
 	Details    map[string]any `json:"details,omitempty"`
 }
 
+const externalStopSuggestion = "The run was stopped externally; check the terminal, parent process, benchmark runner, or supervisor logs for the reason."
+
 // dryRunPlan is the JSON shape emitted by `juex run --dry-run`.
 //
 // Derivable paths (memory_dir / sessions_dir under <work_dir>/.juex)
@@ -321,7 +323,11 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 	suggestion := "see events.jsonl in the session dir for full lifecycle trace"
 	err = cancellation.NormalizeError(err)
 	retryable := true
-	if cancellation.IsUserCancelled(err) {
+	details := signalDetails(err)
+	if details != nil {
+		suggestion = externalStopSuggestion
+		retryable = false
+	} else if cancellation.IsUserCancelled(err) {
 		suggestion = "rerun the command when ready"
 		retryable = false
 	}
@@ -331,6 +337,7 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 			Message:    errorclass.PublicMessage(err, errorclass.MessageOptions{}),
 			Suggestion: suggestion,
 			Retryable:  retryable,
+			Details:    details,
 		}
 		if a != nil && a.Session != nil {
 			body.SessionID = a.Session.ID
@@ -344,6 +351,9 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 }
 
 func errorType(err error) string {
+	if signalErr, ok := cancellation.AsSignalError(err); ok {
+		return string(signalErr.Kind)
+	}
 	if cancellation.IsUserCancelled(err) {
 		return "cancelled"
 	}
@@ -367,6 +377,18 @@ func errorType(err error) string {
 		return "dry_run_ok"
 	default:
 		return "general_error"
+	}
+}
+
+func signalDetails(err error) map[string]any {
+	signalErr, ok := cancellation.AsSignalError(err)
+	if !ok {
+		return nil
+	}
+	return map[string]any{
+		"signal":        signalErr.Signal,
+		"signal_number": signalErr.SignalNumber,
+		"interrupted":   true,
 	}
 }
 
