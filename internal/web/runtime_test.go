@@ -69,6 +69,9 @@ body`)
 	if got.Provider.ID != "openai" || got.Provider.Protocol != "openai/responses" || got.Provider.Model != "m" {
 		t.Fatalf("provider = %+v", got.Provider)
 	}
+	if got.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadWrite || !got.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox = %+v", got.Sandbox)
+	}
 	if got.WorkDir != work {
 		t.Fatalf("work_dir = %q, want %q", got.WorkDir, work)
 	}
@@ -186,6 +189,25 @@ func TestRuntimeStatusIncludesShellProfile(t *testing.T) {
 	}
 	if !foundPromptShell {
 		t.Fatalf("system prompt did not include shell profile: %+v", got.SystemPrompt.Items)
+	}
+}
+
+func TestRuntimeStatusIncludesSandboxPolicy(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Cfg.Sandbox = config.SandboxPolicy{
+		Enabled: true,
+		FileSystem: config.FileSystemSandboxPolicy{
+			OutsideWorkspace: config.OutsideWorkspaceReadOnly,
+		},
+		Network: config.NetworkSandboxPolicy{Enabled: false},
+	}
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Sandbox.Enabled || got.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadOnly || got.Sandbox.Network.Enabled {
+		t.Fatalf("sandbox = %+v", got.Sandbox)
 	}
 }
 

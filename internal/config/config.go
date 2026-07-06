@@ -14,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"gopkg.in/yaml.v3"
 )
 
@@ -44,6 +45,7 @@ type Config struct {
 	ShowBuiltinHookTraces     bool
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
+	Sandbox                   sandbox.Policy
 	EnableUserGlobalResources bool
 
 	HomeAgentsDir string // ~/.agents (user-global)
@@ -63,6 +65,7 @@ type fileConfig struct {
 	Hooks                     hooks.FileConfig `yaml:"hooks"`
 	Runtime                   runtimeConfig    `yaml:"runtime"`
 	Shell                     *ShellConfig     `yaml:"shell"`
+	Sandbox                   sandboxConfig    `yaml:"sandbox"`
 }
 
 type providerConfig struct {
@@ -189,6 +192,20 @@ type runtimeConfig struct {
 	ShowBuiltinHookTracesSet bool
 }
 
+type sandboxConfig struct {
+	Enabled    optionalBool            `yaml:"enabled"`
+	FileSystem sandboxFileSystemConfig `yaml:"file_system"`
+	Network    sandboxNetworkConfig    `yaml:"network"`
+}
+
+type sandboxFileSystemConfig struct {
+	OutsideWorkspace string `yaml:"outside_workspace"`
+}
+
+type sandboxNetworkConfig struct {
+	Enabled optionalBool `yaml:"enabled"`
+}
+
 func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 	if node == nil || node.Kind == 0 || node.Tag == "!!null" {
 		return nil
@@ -310,6 +327,7 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 		PendingInputTTL:           DefaultPendingInputTTL,
 		ExternalEventTTL:          DefaultExternalEventTTL,
 		ToolTimeout:               DefaultToolTimeout,
+		Sandbox:                   sandbox.DefaultPolicy(),
 		EnableUserGlobalResources: true,
 		providerConfigs:           map[string]providerConfig{},
 	}
@@ -520,6 +538,9 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, 
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyRuntimeConfig(cfg, fc.Runtime)
+	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
+		return fmt.Errorf("config: parse %s: %w", path, err)
+	}
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
 	}
@@ -895,6 +916,23 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	if c.ShowBuiltinHookTracesSet {
 		cfg.ShowBuiltinHookTraces = c.ShowBuiltinHookTraces
 	}
+}
+
+func applySandboxConfig(cfg *Config, c sandboxConfig) error {
+	if c.Enabled.Set {
+		cfg.Sandbox.Enabled = c.Enabled.Value
+	}
+	if strings.TrimSpace(c.FileSystem.OutsideWorkspace) != "" {
+		access := sandbox.OutsideWorkspaceAccess(strings.TrimSpace(c.FileSystem.OutsideWorkspace))
+		if err := sandbox.ValidateOutsideWorkspaceAccess(access); err != nil {
+			return err
+		}
+		cfg.Sandbox.FileSystem.OutsideWorkspace = access
+	}
+	if c.Network.Enabled.Set {
+		cfg.Sandbox.Network.Enabled = c.Network.Enabled.Value
+	}
+	return nil
 }
 
 func normalizeThinkingEffort(value string) (string, error) {

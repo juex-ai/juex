@@ -4,12 +4,16 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 type BuiltinOptions struct {
 	WorkDir            string
 	Shell              ShellProfile
 	ShellSessions      *ShellSessionManager
+	Sandbox            sandbox.Policy
+	SandboxRunner      sandbox.Runner
 	ToolTimeoutSeconds int
 	DisableApplyPatch  bool
 	Providers          []BuiltinProvider
@@ -32,6 +36,8 @@ type BuiltinProviderContext struct {
 	WorkDir            string
 	Shell              ShellProfile
 	ShellSessions      *ShellSessionManager
+	Sandbox            sandbox.Policy
+	SandboxRunner      sandbox.Runner
 	ToolTimeoutSeconds int
 	Options            BuiltinOptions
 }
@@ -87,6 +93,8 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		WorkDir:            workDir,
 		Shell:              shell,
 		ShellSessions:      shellSessions,
+		Sandbox:            opts.Sandbox,
+		SandboxRunner:      opts.SandboxRunner,
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 		Options:            opts,
 	}

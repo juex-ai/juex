@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -52,6 +53,7 @@ type RuntimeStatus struct {
 	WorkDir      string
 	Provider     RuntimeProviderStatus
 	Shell        config.ShellProfile
+	Sandbox      sandbox.Policy
 	SystemPrompt RuntimeSystemPromptStatus
 	MCP          RuntimeMCPStatus
 	Hooks        RuntimeHooksStatus
@@ -147,6 +149,7 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 		WorkDir:      s.absoluteWorkDir(),
 		Provider:     providerRuntimeStatusFromConfig(s.cfg),
 		Shell:        s.cfg.Shell,
+		Sandbox:      s.cfg.SandboxPolicy(),
 		SystemPrompt: systemPrompt,
 		MCP:          mcpStatus,
 		Hooks:        hooksStatus(resourceGraph.HooksConfig()),

@@ -106,6 +106,7 @@ juex/
 │   │   ├── compact.go
 │   │   ├── compaction_*.go
 │   │   └── context_*.go
+│   ├── sandbox/                 # command sandbox policy, backend selection, wrapping errors
 │   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
 │   └── web/                      # HTTP API, SSE, SPA asset embedding
 ├── tests/
@@ -403,7 +404,8 @@ with the standard `read` builtin against the path printed there.
 | `memory_delete` | remove an entry by name |
 
 `tools.RegisterBuiltins` receives `BuiltinOptions` fields for `WorkDir`,
-`Shell`, `ShellSessions`, `ToolTimeoutSeconds`, and `DisableApplyPatch`, then
+`Shell`, `ShellSessions`, `Sandbox`, `ToolTimeoutSeconds`, and
+`DisableApplyPatch`, then
 registers a declarative list of builtin providers for file, chunked write,
 shell, and search tool families. Callers that need custom composition can
 append to `tools.DefaultBuiltinProviders()` and pass the result through
@@ -455,6 +457,15 @@ prompt section on later turns and compaction requests; the section carries only
 session metadata and command summaries, not command output. Empty polls use
 their own observation window and do not fail or kill the process merely because
 `runtime.tool_timeout` is smaller.
+When `sandbox.enabled` is true, new `exec_command` processes must pass through
+the sandbox runner before `exec.Command` or PTY startup. The runner either
+returns a wrapped command spec that enforces the requested policy, or returns a
+fail-closed error that prevents process start. `write_stdin` never reparses
+sandbox config; it writes only to the already-created session, which keeps the
+creation-time policy. Restricted filesystem policies may still provide writable
+standard devices and temporary scratch paths because ordinary shells and build
+tools depend on them; those exceptions are backend-owned rather than model-owned
+tool parameters.
 Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
 matching Codex's unified exec behavior; Ctrl-C (`\x03`) is the supported
 follow-up exception and maps to shell-session interrupt. `tty: true` allocates
@@ -1028,6 +1039,15 @@ tool description. Windows native binaries prefer `pwsh` / `powershell.exe` befor
 `cmd.exe`; Linux and macOS binaries use POSIX shells; Linux binaries under WSL
 are marked with `environment: wsl` but still run POSIX unless `shell.profile:
 wsl` is configured explicitly.
+
+The resolved sandbox policy is included in `juex run --dry-run --json` and
+`/api/runtime`. Defaults are disabled sandbox, `outside_workspace: read_write`,
+and `network.enabled: true`. Enabling sandbox while the platform backend is
+unsupported or cannot enforce the requested filesystem/network policy returns a
+clear sandbox error instead of silently running the command in place. Backend
+wrappers are also responsible for preserving baseline shell usability such as
+`/dev/null`, `/tmp`, and DNS configuration when those can be provided without
+granting broad host filesystem writes.
 
 Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
 `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_API_MODEL`,

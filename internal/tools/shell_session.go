@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 const (
@@ -46,6 +48,9 @@ type ShellStartRequest struct {
 	Args            []string
 	Command         string
 	Cwd             string
+	WorkspaceRoots  []string
+	Sandbox         sandbox.Policy
+	SandboxRunner   sandbox.Runner
 	Yield           time.Duration
 	MaxOutputTokens int
 	TTY             bool
@@ -200,6 +205,10 @@ func (m *ShellSessionManager) Start(req ShellStartRequest) (ShellSessionResult, 
 	if callCtx == nil {
 		callCtx = context.Background()
 	}
+	spec, err := prepareShellExecSpec(callCtx, req)
+	if err != nil {
+		return ShellSessionResult{}, err
+	}
 
 	m.mu.Lock()
 	if m.closed {
@@ -210,12 +219,13 @@ func (m *ShellSessionManager) Start(req ShellStartRequest) (ShellSessionResult, 
 	m.mu.Unlock()
 
 	procCtx, cancel := context.WithCancel(m.baseCtx)
-	argv := append([]string(nil), req.Args...)
-	argv = append(argv, req.Command)
-	cmd := exec.CommandContext(procCtx, req.Binary, argv...)
-	workdir := req.Cwd
-	if req.Cwd != "" {
-		cmd.Dir = req.Cwd
+	cmd := exec.CommandContext(procCtx, spec.Binary, spec.Args...)
+	if len(spec.Env) > 0 {
+		cmd.Env = append([]string(nil), spec.Env...)
+	}
+	workdir := spec.Dir
+	if spec.Dir != "" {
+		cmd.Dir = spec.Dir
 	} else if cwd, err := os.Getwd(); err == nil {
 		workdir = cwd
 	}
@@ -268,6 +278,28 @@ func (m *ShellSessionManager) Start(req ShellStartRequest) (ShellSessionResult, 
 
 	session.waitFor(callCtx, defaultDuration(req.Yield, defaultShellExecYield), minShellYield, maxShellYield)
 	return session.snapshot(true, req.MaxOutputTokens), nil
+}
+
+func prepareShellExecSpec(ctx context.Context, req ShellStartRequest) (sandbox.ExecSpec, error) {
+	argv := append([]string(nil), req.Args...)
+	argv = append(argv, req.Command)
+	spec := sandbox.ExecSpec{
+		Binary: req.Binary,
+		Args:   argv,
+		Dir:    req.Cwd,
+	}
+	if !req.Sandbox.Enabled {
+		return spec, nil
+	}
+	runner := req.SandboxRunner
+	if runner == nil {
+		runner = sandbox.DefaultRunner{}
+	}
+	return runner.Prepare(ctx, sandbox.Request{
+		Policy:         req.Sandbox,
+		WorkspaceRoots: append([]string(nil), req.WorkspaceRoots...),
+		Spec:           spec,
+	})
 }
 
 func (m *ShellSessionManager) List(includeCompleted bool) []ShellSessionInfo {

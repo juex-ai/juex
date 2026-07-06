@@ -175,6 +175,7 @@ func New(opts Options) (*App, error) {
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              toolsShellProfile(cfg.Shell),
 		ShellSessions:      shellSessions,
+		Sandbox:            cfg.SandboxPolicy(),
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 	})
 

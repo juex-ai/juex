@@ -30,6 +30,22 @@ model: openai/gpt-4.1
 #   # args: ["-NoProfile", "-Command"]
 #   # path_style: windows
 
+# Optional OS-level sandbox for commands started by exec_command. Disabled
+# preserves the current in-place execution behavior. When enabled, commands
+# must start through a platform sandbox backend or fail closed with an
+# actionable error; Juex never silently falls back to unsandboxed execution.
+# Workspace files remain read/write. outside_workspace controls filesystem
+# access outside the workspace: read_write, read_only, or denied.
+# Restricted modes may still expose backend-owned device and temporary scratch
+# paths that standard shell tools require, without reopening arbitrary host
+# paths outside the workspace.
+# sandbox:
+#   enabled: false
+#   file_system:
+#     outside_workspace: read_write
+#   network:
+#     enabled: true
+
 # Optional runtime policy. Durations use Go duration syntax.
 # runtime:
 #   pending_input_ttl: 15m

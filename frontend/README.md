@@ -80,7 +80,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
-| `src/pages/Runtime.tsx` | MCP and skills detail view for `/runtime` |
+| `src/pages/Runtime.tsx` | Provider, shell, sandbox, MCP, hooks, system prompt, and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |
 

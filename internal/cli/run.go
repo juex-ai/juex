@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -64,6 +65,7 @@ type dryRunPlan struct {
 	ToolCount   int                 `json:"tool_count"`
 	Tools       []string            `json:"tools"`
 	Shell       config.ShellProfile `json:"shell"`
+	Sandbox     sandbox.Policy      `json:"sandbox"`
 	SkillCount  int                 `json:"skill_count"`
 	Skills      []skillSummary      `json:"skills,omitempty"`
 	MCP         app.MCPStatus       `json:"mcp"`
@@ -280,6 +282,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		ToolCount:   len(tools),
 		Tools:       tools,
 		Shell:       cfg.Shell,
+		Sandbox:     cfg.SandboxPolicy(),
 		SkillCount:  len(skillSummaries),
 		Skills:      skillSummaries,
 		MCP:         a.MCPStatus(),

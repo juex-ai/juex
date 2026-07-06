@@ -173,6 +173,18 @@ provider-visible text, conversation history, runtime events, or the Web UI with
 a compact placeholder that includes byte count, SHA-256, and first-bytes hex
 metadata.
 
+Commands started by `exec_command` may be protected by the optional top-level
+`sandbox` config. `sandbox.enabled: false` keeps the current in-place shell
+execution behavior. `sandbox.enabled: true` requires a platform sandbox backend
+before a new command starts; workspace files stay read/write, while
+`sandbox.file_system.outside_workspace` controls access outside the workspace
+with `read_write`, `read_only`, or `denied`, and `sandbox.network.enabled`
+controls network access. Restricted modes still provide the process with
+standard device and temporary scratch paths needed by normal shell tools, but
+do not silently reopen arbitrary user paths outside the workspace. Unsupported
+platforms, missing helpers, permissions errors, or policies a backend cannot
+enforce fail closed instead of falling back to unsandboxed execution.
+
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related
 paths, emits `tool.failure.recorded`, and lets later successful checks or

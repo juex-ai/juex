@@ -495,6 +495,15 @@ export interface RuntimeStatusResponse {
     };
   };
   shell: ShellProfile;
+  sandbox: {
+    enabled: boolean;
+    file_system: {
+      outside_workspace: "read_write" | "read_only" | "denied" | string;
+    };
+    network: {
+      enabled: boolean;
+    };
+  };
   system_prompt?: {
     count: number;
     items: SystemPromptEntry[];
