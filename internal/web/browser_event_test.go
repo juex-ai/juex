@@ -10,6 +10,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -258,9 +259,41 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-observable-started",
+			Type:      observable.EventObservableStarted,
+			Timestamp: ts.Add(7500 * time.Millisecond),
+			Payload: observable.ObservableEventPayload{
+				ID:    "lark-events",
+				State: observable.RunStateRunning,
+				RunID: "run-1",
+				PID:   1234,
+			},
+		},
+		{
+			ID:        "evt-observation-delivered",
+			Type:      observable.EventObservationDelivered,
+			Timestamp: ts.Add(8 * time.Second),
+			Payload: observable.ObservationEventPayload{
+				Observation: observable.ObservationRecord{
+					ID:            "obs-1",
+					ObservableID:  "lark-events",
+					RunID:         "run-1",
+					Kind:          "lark_notification",
+					Severity:      "info",
+					WindowStart:   ts,
+					WindowEnd:     ts.Add(time.Second),
+					Content:       "hello",
+					OriginalChars: 5,
+					State:         observable.ObservationStateDelivered,
+					CreatedAt:     ts.Add(8 * time.Second),
+					DeliveredAt:   ts.Add(8 * time.Second),
+				},
+			},
+		},
+		{
 			ID:        "evt-compact-started",
 			Type:      "context.compact.started",
-			Timestamp: ts.Add(8 * time.Second),
+			Timestamp: ts.Add(9 * time.Second),
 			TurnID:    "turn-1",
 			Payload: juexruntime.ContextCompactStartedPayload{
 				Reason:           "manual",
@@ -276,7 +309,7 @@ func browserEventFixtureEvents() []events.Event {
 		{
 			ID:        "evt-compact-completed",
 			Type:      "context.compact.completed",
-			Timestamp: ts.Add(9 * time.Second),
+			Timestamp: ts.Add(10 * time.Second),
 			TurnID:    "turn-1",
 			Payload: juexruntime.ContextCompactCompletedPayload{
 				MessageID:          "compact-1",
@@ -296,7 +329,7 @@ func browserEventFixtureEvents() []events.Event {
 		{
 			ID:        "evt-projection-applied",
 			Type:      "context.projection.applied",
-			Timestamp: ts.Add(10 * time.Second),
+			Timestamp: ts.Add(11 * time.Second),
 			TurnID:    "turn-1",
 			Payload: BrowserContextProjectionAppliedPayload{
 				UserInputsExternalized:        1,

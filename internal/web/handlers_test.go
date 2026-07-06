@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
@@ -148,6 +150,138 @@ func TestGetSessionsList_ReturnsKindAndActive(t *testing.T) {
 	if byID[sideID].Kind != session.KindSide || byID[sideID].Active {
 		t.Fatalf("side info = %+v", byID[sideID])
 	}
+}
+
+func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/observables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("list status = %d body = %s", resp.StatusCode, body)
+	}
+	var empty observable.StatusSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&empty); err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Observables) != 0 {
+		t.Fatalf("initial observables = %+v", empty.Observables)
+	}
+
+	t.Setenv("JUEX_WEB_OBSERVABLE_HELPER", "1")
+	createBody, err := json.Marshal(map[string]any{
+		"id":      "web-events",
+		"command": os.Args[0],
+		"args":    []string{"-test.run=TestWebObservableHelperProcess", "--", "json-once"},
+		"env":     map[string]string{"JUEX_WEB_OBSERVABLE_HELPER": "1"},
+		"streams": []string{"stdout"},
+		"parser": map[string]any{
+			"type":           "jsonl",
+			"content_field":  "content",
+			"kind_field":     "type",
+			"severity_field": "level",
+		},
+		"batch": map[string]any{"interval_seconds": 10, "max_chars": 1000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Post(ts.URL+"/api/observables", "application/json", bytes.NewReader(createBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create status = %d body = %s", resp.StatusCode, data)
+	}
+
+	waitUntilWeb(t, 5*time.Second, func() bool {
+		resp, err := http.Get(ts.URL + "/api/observables/web-events/observations?limit=5")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var parsed struct {
+			Observations []observable.ObservationRecord `json:"observations"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+			return false
+		}
+		return len(parsed.Observations) == 1 && parsed.Observations[0].Content == "hello from web observable"
+	})
+
+	resp, err = http.Get(ts.URL + "/api/observables/web-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("detail status = %d body = %s", resp.StatusCode, data)
+	}
+	var detail struct {
+		Observable   observable.ObservableStatus    `json:"observable"`
+		Observations []observable.ObservationRecord `json:"observations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Observable.ID != "web-events" || len(detail.Observations) != 1 {
+		t.Fatalf("detail = %+v", detail)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/web-events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete status = %d body = %s", resp.StatusCode, data)
+	}
+	resp, err = http.Get(ts.URL + "/api/observables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var after observable.StatusSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Observables) != 0 {
+		t.Fatalf("after delete = %+v", after.Observables)
+	}
+}
+
+func TestWebObservableHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_WEB_OBSERVABLE_HELPER") != "1" {
+		return
+	}
+	_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"hello from web observable"}` + "\n")
+	os.Exit(0)
+}
+
+func waitUntilWeb(t *testing.T, timeout time.Duration, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s", timeout)
 }
 
 func TestGetSessionShow_ReturnsTranscript(t *testing.T) {

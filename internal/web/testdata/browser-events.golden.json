@@ -140,9 +140,41 @@
     }
   },
   {
+    "id": "evt-observable-started",
+    "type": "observable.started",
+    "ts": "2026-06-15T00:00:07.5Z",
+    "payload": {
+      "id": "lark-events",
+      "state": "running",
+      "run_id": "run-1",
+      "pid": 1234
+    }
+  },
+  {
+    "id": "evt-observation-delivered",
+    "type": "observation.delivered",
+    "ts": "2026-06-15T00:00:08Z",
+    "payload": {
+      "observation": {
+        "id": "obs-1",
+        "observable_id": "lark-events",
+        "run_id": "run-1",
+        "kind": "lark_notification",
+        "severity": "info",
+        "window_start": "2026-06-15T00:00:00Z",
+        "window_end": "2026-06-15T00:00:01Z",
+        "content": "hello",
+        "original_chars": 5,
+        "state": "delivered",
+        "created_at": "2026-06-15T00:00:08Z",
+        "delivered_at": "2026-06-15T00:00:08Z"
+      }
+    }
+  },
+  {
     "id": "evt-compact-started",
     "type": "context.compact.started",
-    "ts": "2026-06-15T00:00:08Z",
+    "ts": "2026-06-15T00:00:09Z",
     "turn_id": "turn-1",
     "payload": {
       "reason": "manual",
@@ -158,7 +190,7 @@
   {
     "id": "evt-compact-completed",
     "type": "context.compact.completed",
-    "ts": "2026-06-15T00:00:09Z",
+    "ts": "2026-06-15T00:00:10Z",
     "turn_id": "turn-1",
     "payload": {
       "message_id": "compact-1",
@@ -178,7 +210,7 @@
   {
     "id": "evt-projection-applied",
     "type": "context.projection.applied",
-    "ts": "2026-06-15T00:00:10Z",
+    "ts": "2026-06-15T00:00:11Z",
     "turn_id": "turn-1",
     "payload": {
       "user_inputs_externalized": 1,

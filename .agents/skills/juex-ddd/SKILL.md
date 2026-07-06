@@ -61,6 +61,8 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Tool call | Canonical provider-requested operation represented as an `llm.Block` and normalized before execution | `internal/runtime`, `internal/tools` |
 | MCP server | Configured stdio process that contributes tools and notifications | `internal/mcp` |
 | MCP notification | External event that becomes pending input or a system-originated user turn | `internal/mcp`, `internal/app`, `internal/web` |
+| Observable | Workspace-local command-backed event source that watches stdout/stderr and turns parsed output into durable Observations | `internal/observable`, `internal/app` |
+| Observation | Durable, batched external signal delivered as pending input or a system-originated turn in the active primary session | `internal/observable`, `internal/app`, `internal/web` |
 | Skill | Markdown instruction package loaded into the system prompt and read by the model through tools | `internal/skills`, `internal/prompt` |
 | Memory entry | Work-local or user-global contextual material surfaced through memory tools and prompt sections | `internal/memory`, `internal/prompt` |
 | Prompt section | Named slice of the system prompt assembled from AGENTS, skills, memory, runtime metadata, and shell profile | `internal/prompt` |

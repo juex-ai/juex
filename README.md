@@ -2,7 +2,7 @@
 
 Juex is a small Go agent runtime packaged as one binary. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
-tools, MCP stdio tools, skills and hooks from local resource bundles,
+tools, workspace Observables, MCP stdio tools, skills and hooks from local resource bundles,
 work-local memory, and resumable session history.
 
 The project is intentionally narrow: it is a runtime for experimenting with
@@ -91,6 +91,9 @@ Juex keeps runtime state in the current work directory:
 │   ├── mcp.json
 │   └── skills/<skill>/SKILL.md
 ├── juex.yaml
+├── observables.json
+├── observables/
+│   └── observations.jsonl
 ├── history.json
 ├── memory/
 └── sessions/<id>/
@@ -188,6 +191,15 @@ temporary scratch paths needed by normal shell tools, but do not silently reopen
 arbitrary user paths outside the workspace. Unsupported platforms, missing
 helpers, permissions errors, or policies a backend cannot enforce fail closed
 instead of falling back to unsandboxed execution.
+
+Workspace Observables are command-backed event sources configured in
+`.juex/observables.json`. Juex starts configured Observables with the active
+primary app, captures bounded stdout/stderr batches, stores durable
+Observations under `.juex/observables/`, delivers them as external pending
+input to the active primary session, emits `observable.*` and `observation.*`
+events, and exposes status/history through the Web UI and the
+`observable_*` agent tools. Observables are workspace-local in the first
+version because they auto-start commands.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

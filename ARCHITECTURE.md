@@ -60,6 +60,7 @@ juex/
 │   ├── bundle/                   # portable debug bundle tar.gz creation
 │   ├── events/     bus.go        # in-process EventBus (glob)
 │   ├── hooks/                    # trusted lifecycle command hook execution
+│   ├── observable/               # workspace command observables + observation store/tools
 │   ├── observability/            # session-local logs, traces, spans, tool summaries
 │   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
@@ -196,7 +197,7 @@ type Message struct {
     ID         string
     Role       Role
     Blocks     []Block
-    Kind       string // "" | "mcp_event" | "compact"
+    Kind       string // "" | "mcp_event" | "observation" | "compact"
     Model      string
     Compaction *CompactionMetadata
 }
@@ -849,6 +850,8 @@ Routes:
 | GET | `/` | React SPA entry |
 | GET | `/sessions/<id>` | React SPA session route |
 | GET | `/runtime` | React SPA runtime route |
+| GET | `/observables` | React SPA Observables route |
+| GET | `/observables/<id>` | React SPA Observable detail route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/sessions` | JSON list |
 | POST | `/api/sessions` | create active primary session |
@@ -861,6 +864,13 @@ Routes:
 | GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
+| GET | `/api/observables` | list workspace Observables with runtime status |
+| POST | `/api/observables` | create and start an Observable |
+| GET | `/api/observables/<id>` | Observable status plus recent Observations |
+| POST | `/api/observables/<id>/start` | start a stopped or exited Observable |
+| POST | `/api/observables/<id>/stop` | stop a running Observable |
+| DELETE | `/api/observables/<id>` | delete an Observable spec and stop its process |
+| GET | `/api/observables/<id>/observations` | recent Observation history |
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |

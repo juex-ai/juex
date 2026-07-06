@@ -99,11 +99,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/content", s.handleFilesContent)
 	mux.HandleFunc("/api/files/raw", s.handleFilesRaw)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
+	mux.HandleFunc("/api/observables", s.handleObservables)
+	mux.HandleFunc("/api/observables/", s.dispatchObservable)
 	// SPA: anything else is the React app.
 	spa := spaHandler()
 	mux.Handle("/", spa)
 	mux.Handle("/sessions/", spa)
 	mux.Handle("/runtime", spa)
+	mux.Handle("/observables", spa)
+	mux.Handle("/observables/", spa)
 }
 
 // dispatchSession routes /api/sessions/<id>[/...] to the matching handler.

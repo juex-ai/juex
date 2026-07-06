@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/web"
 )
 
@@ -213,6 +216,82 @@ func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
 	t.Fatal("pending input never reached second provider call")
 }
 
+func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
+	work := t.TempDir()
+	writeE2EObservableConfig(t, work)
+	prov := &webProvider{steps: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "observable handled"), StopReason: llm.StopEndTurn},
+	}}
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	if c.ID == "" {
+		t.Fatal("no session id")
+	}
+
+	var snapshot struct {
+		Observables []observable.ObservableStatus `json:"observables"`
+	}
+	var records []observable.ObservationRecord
+	waitForCondition(t, 5*time.Second, func() bool {
+		resp, err := http.Get(ts.URL + "/api/observables")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		var next struct {
+			Observables []observable.ObservableStatus `json:"observables"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&next); err != nil {
+			return false
+		}
+		snapshot = next
+		if len(next.Observables) != 1 {
+			return false
+		}
+		last := next.Observables[0].LastObservation
+		if last.ID == "" || !strings.Contains(last.Content, "observable e2e payload") {
+			return false
+		}
+		fetched, err := fetchObservableRecords(ts.URL, next.Observables[0].ID)
+		if err != nil {
+			return false
+		}
+		records = fetched
+		return len(records) == 1 && records[0].State == observable.ObservationStateDelivered
+	})
+	got := snapshot.Observables[0]
+	if got.ID != "observable-e2e" {
+		t.Fatalf("observable id = %q", got.ID)
+	}
+	eventsData, err := os.ReadFile(filepath.Join(work, ".juex", "sessions", c.ID, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type":"observable.started"`, `"type":"observation.delivered"`} {
+		if !strings.Contains(string(eventsData), want) {
+			t.Fatalf("events missing %s:\n%s", want, eventsData)
+		}
+	}
+}
+
 type webStartTurnResponse struct {
 	TurnID string `json:"turn_id"`
 }
@@ -255,6 +334,18 @@ func waitForWebTranscript(t *testing.T, baseURL, sessionID, turnID string, timeo
 	t.Fatalf("timed out waiting for %s; last_state=%q last_error=%q last_messages=%+v", label, lastState, lastErr, lastMessages)
 }
 
+func waitForCondition(t *testing.T, timeout time.Duration, match func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if match() {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s", timeout)
+}
+
 func fetchWebTranscript(client *http.Client, baseURL, sessionID string) ([]webTranscriptMessage, error) {
 	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID)
 	if err != nil {
@@ -272,6 +363,69 @@ func fetchWebTranscript(client *http.Client, baseURL, sessionID string) ([]webTr
 		return nil, err
 	}
 	return parsed.Messages, nil
+}
+
+func fetchObservableRecords(baseURL, id string) ([]observable.ObservationRecord, error) {
+	resp, err := http.Get(baseURL + "/api/observables/" + id + "/observations")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("observations status=%d body=%s", resp.StatusCode, body)
+	}
+	var body struct {
+		Observations []observable.ObservationRecord `json:"observations"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return body.Observations, nil
+}
+
+func writeE2EObservableConfig(t *testing.T, work string) {
+	t.Helper()
+	cfg := map[string]any{
+		"observables": []map[string]any{
+			{
+				"id":      "observable-e2e",
+				"command": os.Args[0],
+				"args":    []string{"-test.run=TestE2EObservableHelperProcess"},
+				"env":     map[string]string{"JUEX_E2E_OBSERVABLE": "1"},
+				"streams": []string{"stdout"},
+				"parser": map[string]string{
+					"type":           "jsonl",
+					"content_field":  "content",
+					"kind_field":     "type",
+					"severity_field": "level",
+				},
+				"batch": map[string]int{
+					"interval_seconds": 5,
+					"max_chars":        1000,
+				},
+			},
+		},
+	}
+	body, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(work, ".juex", "observables.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(body, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestE2EObservableHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_E2E_OBSERVABLE") != "1" {
+		return
+	}
+	_, _ = os.Stdout.WriteString(`{"type":"e2e_event","level":"info","content":"observable e2e payload"}` + "\n")
+	os.Exit(0)
 }
 
 func fetchWebTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {
