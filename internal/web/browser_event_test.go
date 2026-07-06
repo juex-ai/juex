@@ -164,6 +164,29 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-llm-retry",
+			Type:      "llm.retry",
+			Timestamp: ts.Add(1500 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.LLMRetryPayload{
+				ProviderRetryDiagnostic: llm.ProviderRetryDiagnostic{
+					Provider:    "openai-codex",
+					Model:       "gpt-5.5",
+					Protocol:    llm.ProtocolOpenAICodexResponses,
+					Transport:   llm.CodexTransportSSE,
+					Operation:   "responses.sse",
+					Attempt:     1,
+					MaxAttempts: 11,
+					DelayMS:     100,
+					RetryReason: "codex_sse_read",
+					RawError:    "codex SSE read: stream error",
+					WillRetry:   true,
+				},
+				Purpose: "turn",
+				Iter:    testIntPtr(0),
+			},
+		},
+		{
 			ID:        "evt-tool-requested",
 			Type:      toolevents.RequestedType,
 			Timestamp: ts.Add(2 * time.Second),
@@ -284,6 +307,10 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 	}
+}
+
+func testIntPtr(v int) *int {
+	return &v
 }
 
 func browserEventFixtures() ([]BrowserEvent, error) {

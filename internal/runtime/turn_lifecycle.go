@@ -89,7 +89,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 	if err != nil {
 		return err
 	}
-	resp, err := l.engine.requestProviderTurnLocked(ctx, l.prepared, request)
+	resp, err := l.engine.requestProviderTurnLocked(ctx, l.turnID, l.prepared, request)
 	if err != nil {
 		if contextErr := cancellation.ContextError(ctx); contextErr != nil && errors.Is(err, context.Canceled) {
 			return contextErr

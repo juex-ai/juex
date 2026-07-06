@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -94,6 +95,52 @@ func TestRecorderDebugRecordsDebugEvents(t *testing.T) {
 	}
 }
 
+func TestRecorderRecordsLLMRetryDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("llm.retry", "t1", map[string]any{
+		"purpose":      "turn",
+		"iter":         0,
+		"provider":     "openai-codex",
+		"model":        "gpt-5.5",
+		"protocol":     llm.ProtocolOpenAICodexResponses,
+		"transport":    llm.CodexTransportSSE,
+		"operation":    "responses.sse",
+		"attempt":      1,
+		"max_attempts": 11,
+		"delay_ms":     100,
+		"retry_reason": "codex_sse_read",
+		"raw_error":    "codex SSE read: stream error",
+		"will_retry":   true,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
+	if len(trace) != 1 || trace[0].Event != "llm.retry" || trace[0].Level != "warn" || trace[0].Status != "retrying" {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if trace[0].Summary["provider"] != "openai-codex" || trace[0].Summary["attempt"] != float64(1) || trace[0].Summary["raw_error"] == "" {
+		t.Fatalf("retry summary = %+v", trace[0].Summary)
+	}
+	spans := readJSONLines[SpanRecord](t, filepath.Join(dir, "spans.jsonl"))
+	if len(spans) != 1 || spans[0].Name != "provider" || spans[0].Event != "instant" || spans[0].SpanID != "llm:t1:0" {
+		t.Fatalf("retry spans = %+v", spans)
+	}
+	debugData, err := os.ReadFile(filepath.Join(dir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(debugData), "llm.retry") || !strings.Contains(string(debugData), "codex_sse_read") {
+		t.Fatalf("debug log missing retry diagnostic: %s", debugData)
+	}
+}
+
 func TestRecorderCloseIsIdempotentAndPreventsReopen(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
@@ -128,6 +175,7 @@ func TestRecorderWritesSpanSchemaAndParents(t *testing.T) {
 	events := []events.Event{
 		event("turn.started", "turn-a", map[string]any{"input": "hi"}),
 		event("llm.requested", "turn-a", map[string]any{"iter": 0, "history_len": 1, "tool_count": 1}),
+		event("llm.retry", "turn-a", map[string]any{"purpose": "turn", "iter": 0, "provider": "openai-codex", "attempt": 1, "max_attempts": 11, "retry_reason": "codex_sse_read", "will_retry": true}),
 		event("llm.responded", "turn-a", map[string]any{"stop_reason": "tool_use", "duration_ms": 7}),
 		event(toolevents.RequestedType, "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "input": map[string]any{"path": "README.md"}}),
 		event(toolevents.CompletedType, "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "len": 42, "preview": "ok"}),
@@ -160,7 +208,7 @@ func TestRecorderWritesSpanSchemaAndParents(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"tool:end", "compaction:end", "hook:end", "finish:instant"} {
+	for _, want := range []string{"provider:instant", "provider:end", "tool:end", "compaction:end", "hook:end", "finish:instant"} {
 		if !seen[want] {
 			t.Fatalf("spans missing %s: %+v", want, spans)
 		}
@@ -349,7 +397,7 @@ func TestRecorderCapturesToolFailureLedgerEvents(t *testing.T) {
 	}
 }
 
-func event(typ, turnID string, payload map[string]any) events.Event {
+func event(typ, turnID string, payload any) events.Event {
 	return events.Event{
 		Type:      typ,
 		TurnID:    turnID,

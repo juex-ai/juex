@@ -262,6 +262,12 @@ export function projectLiveSessionEvent(
         status: { kind: "running" },
       };
       break;
+    case "llm.retry":
+      next =
+        event.payload.purpose === "compaction"
+          ? { ...next, compactActive: true, status: { kind: "running" } }
+          : { ...next, turnActive: true, status: { kind: "running" } };
+      break;
     case "tool.requested": {
       const name = event.payload.name || "?";
       next = {

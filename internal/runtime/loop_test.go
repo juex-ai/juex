@@ -76,6 +76,33 @@ func (p *captureOptionsProvider) CompleteWithOptions(ctx context.Context, sys st
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn}, nil
 }
 
+type retryDiagnosticProvider struct{}
+
+func (p retryDiagnosticProvider) Name() string { return "retry-diagnostic" }
+
+func (p retryDiagnosticProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p retryDiagnosticProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	if opts.RetryObserver != nil {
+		opts.RetryObserver(llm.ProviderRetryDiagnostic{
+			Provider:    "openai-codex",
+			Model:       "gpt-5.5",
+			Protocol:    llm.ProtocolOpenAICodexResponses,
+			Transport:   llm.CodexTransportSSE,
+			Operation:   "responses.sse",
+			Attempt:     1,
+			MaxAttempts: 11,
+			DelayMS:     100,
+			RetryReason: "codex_sse_read",
+			RawError:    "codex SSE read: stream error",
+			WillRetry:   true,
+		})
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn}, nil
+}
+
 type cancelBeforeToolProvider struct {
 	cancel context.CancelFunc
 }
@@ -1947,6 +1974,73 @@ func TestTurn_AllowsMoreThanLegacyIterationBudget(t *testing.T) {
 	}
 	if lastIter != toolTurns {
 		t.Fatalf("last llm.requested iter = %d, want %d", lastIter, toolTurns)
+	}
+}
+
+func TestTurn_EmitsLLMRetryDiagnostics(t *testing.T) {
+	eng, bus := newEngine(t, retryDiagnosticProvider{}, false)
+	var got []LLMRetryPayload
+	bus.Subscribe("llm.retry", func(e events.Event) {
+		payload, ok := e.Payload.(LLMRetryPayload)
+		if ok {
+			got = append(got, payload)
+		}
+	})
+
+	out, err := eng.Turn(context.Background(), "trigger provider retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q, want done", out)
+	}
+	if len(got) != 1 {
+		t.Fatalf("retry events = %+v, want one", got)
+	}
+	event := got[0]
+	if event.Provider != "openai-codex" || event.Model != "gpt-5.5" || event.Transport != llm.CodexTransportSSE {
+		t.Fatalf("retry identity = %+v", event)
+	}
+	if !event.WillRetry || event.Attempt != 1 || event.MaxAttempts != 11 || event.DelayMS != 100 || event.RetryReason != "codex_sse_read" {
+		t.Fatalf("retry diagnostic = %+v", event)
+	}
+	if event.Purpose != "turn" || event.Iter == nil || *event.Iter != 0 {
+		t.Fatalf("retry runtime context = %+v, want purpose turn iter 0", event)
+	}
+}
+
+func TestCompact_EmitsLLMRetryDiagnostics(t *testing.T) {
+	eng, bus := newEngine(t, retryDiagnosticProvider{}, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var got []LLMRetryPayload
+	bus.Subscribe("llm.retry", func(e events.Event) {
+		payload, ok := e.Payload.(LLMRetryPayload)
+		if ok {
+			got = append(got, payload)
+		}
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID == "" {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(got) != 1 {
+		t.Fatalf("retry events = %+v, want one", got)
+	}
+	event := got[0]
+	if event.Purpose != "compaction" || event.Iter != nil || event.Provider != "openai-codex" || !event.WillRetry {
+		t.Fatalf("retry event = %+v", event)
 	}
 }
 

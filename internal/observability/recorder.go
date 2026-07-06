@@ -352,6 +352,15 @@ func classify(ev events.Event) eventMeta {
 	if ev.Type == toolevents.OutputDeltaType {
 		meta.Level = LevelDebug
 	}
+	if ev.Type == "llm.retry" {
+		meta.Level = LevelWarn
+		if boolValue(payload["exhausted"]) {
+			meta.Status = "exhausted"
+			meta.ErrorKind = "provider_retry_exhausted"
+		} else if boolValue(payload["will_retry"]) {
+			meta.Status = "retrying"
+		}
+	}
 	if strings.HasPrefix(ev.Type, "tool.") {
 		meta.ArtifactPath = toolsFile
 		meta.Tool = toolRecord(ev, payload, meta)
@@ -366,9 +375,11 @@ func (r *Recorder) spanRecordLocked(ts time.Time, ev events.Event, meta eventMet
 	start := ts
 	if meta.SpanEvent == "start" {
 		r.spanStarts[meta.SpanID] = ts
-	} else if existing, ok := r.spanStarts[meta.SpanID]; ok {
-		start = existing
-		delete(r.spanStarts, meta.SpanID)
+	} else if meta.SpanEvent != "instant" {
+		if existing, ok := r.spanStarts[meta.SpanID]; ok {
+			start = existing
+			delete(r.spanStarts, meta.SpanID)
+		}
 	}
 	end := time.Time{}
 	if meta.SpanEvent != "start" {
@@ -446,6 +457,21 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("usage")
 		add("token_usage")
 		add("text")
+	case "llm.retry":
+		add("purpose")
+		add("iter")
+		add("provider")
+		add("model")
+		add("protocol")
+		add("transport")
+		add("operation")
+		add("attempt")
+		add("max_attempts")
+		add("delay_ms")
+		add("retry_reason")
+		add("raw_error")
+		add("will_retry")
+		add("exhausted")
 	case toolevents.RequestedType:
 		add("name")
 		add("tool_use_id")
@@ -567,10 +593,10 @@ func spanID(event, turnID string, p map[string]any) string {
 	switch event {
 	case "turn.started", "turn.completed", "turn.errored":
 		return "turn:" + turnID
-	case "llm.requested", "llm.responded":
+	case "llm.requested", "llm.responded", "llm.retry":
 		iter := stringValue(p["iter"])
 		if iter == "" {
-			iter = "0"
+			iter = firstNonEmpty(stringValue(p["purpose"]), "0")
 		}
 		return "llm:" + turnID + ":" + iter
 	case toolevents.RequestedType, toolevents.CompletedType, toolevents.ErroredType:
@@ -593,7 +619,7 @@ func parentID(event, turnID string) string {
 	switch event {
 	case "turn.started", "turn.completed", "turn.errored":
 		return ""
-	case "llm.requested", "llm.responded", toolevents.RequestedType, toolevents.CompletedType, toolevents.ErroredType, "context.compact.started", "context.compact.completed", "context.compact.errored", "hook.started", "hook.completed", "hook.errored", "finish.attempted":
+	case "llm.requested", "llm.responded", "llm.retry", toolevents.RequestedType, toolevents.CompletedType, toolevents.ErroredType, "context.compact.started", "context.compact.completed", "context.compact.errored", "hook.started", "hook.completed", "hook.errored", "finish.attempted":
 		return "turn:" + turnID
 	default:
 		return ""
@@ -608,7 +634,7 @@ func spanEvent(event string) string {
 		return "end"
 	case "turn.errored", toolevents.ErroredType, "context.compact.errored", "hook.errored":
 		return "error"
-	case "finish.attempted":
+	case "finish.attempted", "llm.retry":
 		return "instant"
 	default:
 		return ""
@@ -708,6 +734,15 @@ func int64Value(v any) int64 {
 
 func intValue(v any) int {
 	return int(int64Value(v))
+}
+
+func boolValue(v any) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	default:
+		return false
+	}
 }
 
 func stringValue(v any) string {

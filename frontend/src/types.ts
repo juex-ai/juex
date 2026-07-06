@@ -207,6 +207,7 @@ export const BROWSER_EVENT_TYPES = [
   "turn.errored",
   "llm.requested",
   "llm.responded",
+  "llm.retry",
   "tool.requested",
   "tool.completed",
   "tool.output_delta",
@@ -257,6 +258,23 @@ export interface LLMRequestedPayload {
   iter: number;
   history_len: number;
   tool_count: number;
+}
+
+export interface LLMRetryPayload {
+  purpose?: string;
+  iter?: number;
+  provider: string;
+  model: string;
+  protocol?: string;
+  transport?: string;
+  operation: string;
+  attempt: number;
+  max_attempts: number;
+  delay_ms?: number;
+  retry_reason: string;
+  raw_error?: string;
+  will_retry: boolean;
+  exhausted?: boolean;
 }
 
 export interface ToolCallPayload {
@@ -431,6 +449,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"turn.errored"> & { payload: TurnErroredPayload })
   | (BrowserEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
   | (BrowserEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
+  | (BrowserEventBase<"llm.retry"> & { payload: LLMRetryPayload })
   | (BrowserEventBase<"tool.requested"> & { payload: ToolRequestedPayload })
   | (BrowserEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
   | (BrowserEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })

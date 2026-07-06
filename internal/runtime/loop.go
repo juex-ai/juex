@@ -401,12 +401,28 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 	return providerTurnRequest{iter: iter, history: projectedHistory}, nil
 }
 
-func (e *Engine) requestProviderTurnLocked(ctx context.Context, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
+func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
 	return llm.CompleteWithOptions(ctx, e.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
 		Purpose:         "turn",
 		MaxOutputTokens: e.MaxOutputTokens,
 		CachePolicy:     e.cachePolicyLocked(),
+		RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
 	})
+}
+
+func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) func(llm.ProviderRetryDiagnostic) {
+	var iterCopy *int
+	if iter != nil {
+		value := *iter
+		iterCopy = &value
+	}
+	return func(d llm.ProviderRetryDiagnostic) {
+		e.emit(events.Event{Type: "llm.retry", TurnID: turnID, Payload: LLMRetryPayload{
+			ProviderRetryDiagnostic: d,
+			Purpose:                 purpose,
+			Iter:                    iterCopy,
+		}})
+	}
 }
 
 func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTurnContext, request providerTurnRequest, resp llm.Response) (recordedProviderResponse, error) {
