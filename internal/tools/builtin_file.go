@@ -7,23 +7,26 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 type FileToolProvider struct{}
 
 func (FileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
+	guard := sandbox.NewPathGuard(ctx.WorkDir, ctx.Sandbox)
 	out := []Tool{
-		readTool(ctx.WorkDir),
-		writeTool(ctx.WorkDir),
-		editTool(ctx.WorkDir),
+		readTool(ctx.WorkDir, guard),
+		writeTool(ctx.WorkDir, guard),
+		editTool(ctx.WorkDir, guard),
 	}
 	if !ctx.Options.DisableApplyPatch {
-		out = append(out, applyPatchTool(ctx.WorkDir))
+		out = append(out, applyPatchTool(ctx.WorkDir, guard))
 	}
 	return out
 }
 
-func readTool(workDir string) Tool {
+func readTool(workDir string, guard sandbox.PathGuard) Tool {
 	return Tool{
 		Name:        "read",
 		Description: "Read a UTF-8 text file. Returns the file contents. Optional offset (1-based line) and limit (max lines).",
@@ -42,6 +45,9 @@ func readTool(workDir string) Tool {
 				return "", fmt.Errorf("read: missing path")
 			}
 			path = resolveWorkPath(workDir, path)
+			if err := guard.Check(path); err != nil {
+				return "", fmt.Errorf("read: %w", err)
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return "", err
@@ -68,7 +74,7 @@ func readTool(workDir string) Tool {
 	}
 }
 
-func writeTool(workDir string) Tool {
+func writeTool(workDir string, guard sandbox.PathGuard) Tool {
 	return Tool{
 		Name:        "write",
 		Description: fmt.Sprintf("Write short content to a file, creating parent directories if needed. Overwrites existing files. For generated content longer than %d characters, use write_begin/write_chunk/write_commit instead.", chunkWriteRecommendedChunkChars),
@@ -87,6 +93,9 @@ func writeTool(workDir string) Tool {
 				return "", fmt.Errorf("write: missing path")
 			}
 			path = resolveWorkPath(workDir, path)
+			if err := guard.Check(path); err != nil {
+				return "", fmt.Errorf("write: %w", err)
+			}
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return "", err
 			}
@@ -98,7 +107,7 @@ func writeTool(workDir string) Tool {
 	}
 }
 
-func editTool(workDir string) Tool {
+func editTool(workDir string, guard sandbox.PathGuard) Tool {
 	return Tool{
 		Name:        "edit",
 		Description: "Replace `old` with `new` in the file at `path`. By default `old` must appear exactly once; set replace_all to replace every occurrence and optionally expected_replacements to require an exact count.",
@@ -132,6 +141,9 @@ func editTool(workDir string) Tool {
 				return "", fmt.Errorf("edit: missing required argument(s): %s (expected keys: path, old, new; received keys: %s)", strings.Join(missing, ", "), receivedArgumentKeys(in))
 			}
 			path = resolveWorkPath(workDir, path)
+			if err := guard.Check(path); err != nil {
+				return "", fmt.Errorf("edit: %w", err)
+			}
 			if expectedSet && expected != 1 && !replaceAll {
 				return "", fmt.Errorf("edit: expected_replacements greater than 1 requires replace_all")
 			}

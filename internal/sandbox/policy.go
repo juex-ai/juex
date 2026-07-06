@@ -15,7 +15,6 @@ type OutsideWorkspaceAccess string
 const (
 	OutsideWorkspaceReadWrite OutsideWorkspaceAccess = "read_write"
 	OutsideWorkspaceReadOnly  OutsideWorkspaceAccess = "read_only"
-	OutsideWorkspaceDenied    OutsideWorkspaceAccess = "denied"
 )
 
 type Policy struct {
@@ -26,6 +25,7 @@ type Policy struct {
 
 type FileSystemPolicy struct {
 	OutsideWorkspace OutsideWorkspaceAccess `json:"outside_workspace"`
+	BlockedPaths     []string               `json:"blocked_paths,omitempty"`
 }
 
 type NetworkPolicy struct {
@@ -46,10 +46,10 @@ func DefaultPolicy() Policy {
 
 func ValidateOutsideWorkspaceAccess(value OutsideWorkspaceAccess) error {
 	switch value {
-	case OutsideWorkspaceReadWrite, OutsideWorkspaceReadOnly, OutsideWorkspaceDenied:
+	case OutsideWorkspaceReadWrite, OutsideWorkspaceReadOnly:
 		return nil
 	default:
-		return fmt.Errorf("sandbox.file_system.outside_workspace must be one of read_write, read_only, denied, got %q", value)
+		return fmt.Errorf("sandbox.file_system.outside_workspace must be one of read_write, read_only, got %q", value)
 	}
 }
 
@@ -110,6 +110,9 @@ func cloneExecSpec(spec ExecSpec) ExecSpec {
 }
 
 func requestedPolicyText(policy Policy) string {
-	return "file_system.outside_workspace=" + string(policy.FileSystem.OutsideWorkspace) +
-		" network.enabled=" + strconv.FormatBool(policy.Network.Enabled)
+	text := "file_system.outside_workspace=" + string(policy.FileSystem.OutsideWorkspace)
+	if len(policy.FileSystem.BlockedPaths) > 0 {
+		text += " file_system.blocked_paths=" + strconv.Itoa(len(policy.FileSystem.BlockedPaths))
+	}
+	return text + " network.enabled=" + strconv.FormatBool(policy.Network.Enabled)
 }

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 const (
@@ -30,6 +32,7 @@ const (
 type chunkWriteManager struct {
 	mu       sync.Mutex
 	workDir  string
+	guard    sandbox.PathGuard
 	sessions map[string]*chunkWriteSession
 	now      func() time.Time
 }
@@ -52,14 +55,19 @@ type chunkWriteChunk struct {
 	chars   int
 }
 
-func newChunkWriteManager(workDir string) *chunkWriteManager {
+func newChunkWriteManager(workDir string, guards ...sandbox.PathGuard) *chunkWriteManager {
 	if workDir != "" {
 		if abs, err := filepath.Abs(workDir); err == nil {
 			workDir = abs
 		}
 	}
+	var guard sandbox.PathGuard
+	if len(guards) > 0 {
+		guard = guards[0]
+	}
 	return &chunkWriteManager{
 		workDir:  workDir,
+		guard:    guard,
 		sessions: map[string]*chunkWriteSession{},
 		now:      func() time.Time { return time.Now().UTC() },
 	}
@@ -210,6 +218,9 @@ func (m *chunkWriteManager) begin(path, mode string) (*chunkWriteSession, error)
 	if err != nil {
 		return nil, fmt.Errorf("write_begin: %w", err)
 	}
+	if err := m.guard.Check(abs); err != nil {
+		return nil, fmt.Errorf("write_begin: %w", err)
+	}
 	fileMode := os.FileMode(0o644)
 	if info, statErr := os.Stat(abs); statErr == nil {
 		if info.IsDir() {
@@ -313,6 +324,12 @@ func (m *chunkWriteManager) commit(writeID string, expectedChunks int, expectedH
 	}
 	delete(m.sessions, writeID)
 	m.mu.Unlock()
+	if err := m.guard.Check(session.abs); err != nil {
+		m.mu.Lock()
+		m.sessions[writeID] = session
+		m.mu.Unlock()
+		return chunkWriteCommitResult{}, fmt.Errorf("write_commit: %w", err)
+	}
 	if err := commitChunkWriteFile(session.abs, content, session.fileMode); err != nil {
 		m.mu.Lock()
 		m.sessions[writeID] = session

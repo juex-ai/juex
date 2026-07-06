@@ -465,7 +465,12 @@ sandbox config; it writes only to the already-created session, which keeps the
 creation-time policy. Restricted filesystem policies may still provide writable
 standard devices and temporary scratch paths because ordinary shells and build
 tools depend on them; those exceptions are backend-owned rather than model-owned
-tool parameters.
+tool parameters. `blocked_paths` is a filesystem carve-out layered on top of the
+selected preset; it is enforced by both sandbox command backends and builtin
+filesystem tools so sensitive paths stay inaccessible regardless of whether the
+broader preset is `read_write` or `read_only`. Linux bubblewrap cannot mask a
+blocked path that does not exist without creating a host-visible mountpoint, so
+that backend fails closed for missing blocked paths instead of creating them.
 Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
 matching Codex's unified exec behavior; Ctrl-C (`\x03`) is the supported
 follow-up exception and maps to shell-session interrupt. `tty: true` allocates
@@ -1042,12 +1047,13 @@ wsl` is configured explicitly.
 
 The resolved sandbox policy is included in `juex run --dry-run --json` and
 `/api/runtime`. Defaults are disabled sandbox, `outside_workspace: read_write`,
-and `network.enabled: true`. Enabling sandbox while the platform backend is
-unsupported or cannot enforce the requested filesystem/network policy returns a
-clear sandbox error instead of silently running the command in place. Backend
-wrappers are also responsible for preserving baseline shell usability such as
-`/dev/null`, `/tmp`, and DNS configuration when those can be provided without
-granting broad host filesystem writes.
+no blocked paths, and `network.enabled: true`. Enabling sandbox while the
+platform backend is unsupported or cannot enforce the requested
+filesystem/network policy returns a clear sandbox error instead of silently
+running the command in place. Backend wrappers are also responsible for
+preserving baseline shell usability such as `/dev/null`, `/tmp`, and DNS
+configuration when those can be provided without granting broad host filesystem
+writes.
 
 Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
 `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_API_MODEL`,

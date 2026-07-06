@@ -323,11 +323,16 @@ func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
 	if cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite || !cfg.Sandbox.Network.Enabled {
 		t.Fatalf("sandbox defaults = %+v", cfg.Sandbox)
 	}
+	if len(cfg.Sandbox.FileSystem.BlockedPaths) != 0 {
+		t.Fatalf("blocked paths default = %#v, want empty", cfg.Sandbox.FileSystem.BlockedPaths)
+	}
 
 	local := `sandbox:
   enabled: true
   file_system:
     outside_workspace: read_only
+    blocked_paths:
+      - ~/.ssh
   network:
     enabled: false
 `
@@ -338,6 +343,9 @@ func TestLoad_SandboxDefaultsAndOverrides(t *testing.T) {
 	}
 	if !cfg.Sandbox.Enabled || cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || cfg.Sandbox.Network.Enabled {
 		t.Fatalf("sandbox override = %+v", cfg.Sandbox)
+	}
+	if got, want := strings.Join(cfg.Sandbox.FileSystem.BlockedPaths, ","), "~/.ssh"; got != want {
+		t.Fatalf("blocked paths = %q, want %q", got, want)
 	}
 }
 
@@ -356,8 +364,15 @@ sandbox:
   enabled: true
   file_system:
     outside_workspace: read_only
+    blocked_paths:
+      - ~/.ssh
+      - .env
 `
 	local := `sandbox:
+  file_system:
+    blocked_paths:
+      - ~/.aws
+      - ~/.ssh
   network:
     enabled: false
 `
@@ -371,6 +386,10 @@ sandbox:
 	if !cfg.Sandbox.Enabled || cfg.Sandbox.FileSystem.OutsideWorkspace != OutsideWorkspaceReadOnly || cfg.Sandbox.Network.Enabled {
 		t.Fatalf("sandbox merged policy = %+v", cfg.Sandbox)
 	}
+	wantBlocked := []string{"~/.ssh", ".env", "~/.aws"}
+	if strings.Join(cfg.Sandbox.FileSystem.BlockedPaths, "\x00") != strings.Join(wantBlocked, "\x00") {
+		t.Fatalf("blocked paths = %#v, want %#v", cfg.Sandbox.FileSystem.BlockedPaths, wantBlocked)
+	}
 }
 
 func TestLoad_SandboxRejectsInvalidOutsideWorkspace(t *testing.T) {
@@ -383,8 +402,39 @@ func TestLoad_SandboxRejectsInvalidOutsideWorkspace(t *testing.T) {
 	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
 
 	_, err := LoadForWorkDir(work)
-	if err == nil || !strings.Contains(err.Error(), "sandbox.file_system.outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only, denied") {
+	if err == nil || !strings.Contains(err.Error(), "sandbox.file_system.outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only") {
 		t.Fatalf("err = %v, want sandbox enum error", err)
+	}
+}
+
+func TestLoad_SandboxRejectsDeniedOutsideWorkspace(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `sandbox:
+  file_system:
+    outside_workspace: denied
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(work)
+	if err == nil || !strings.Contains(err.Error(), "outside_workspace") || !strings.Contains(err.Error(), "read_write, read_only") {
+		t.Fatalf("err = %v, want denied to be rejected", err)
+	}
+}
+
+func TestLoad_SandboxRejectsEmptyBlockedPath(t *testing.T) {
+	prepareConfigTest(t)
+	work := t.TempDir()
+	body := `sandbox:
+  file_system:
+    blocked_paths:
+      - " "
+`
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), body)
+
+	_, err := LoadForWorkDir(work)
+	if err == nil || !strings.Contains(err.Error(), "blocked_paths") {
+		t.Fatalf("err = %v, want blocked_paths validation error", err)
 	}
 }
 

@@ -8,15 +8,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 type SearchToolProvider struct{}
 
 func (SearchToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
-	return []Tool{grepTool(ctx.WorkDir)}
+	return []Tool{grepTool(ctx.WorkDir, sandbox.NewPathGuard(ctx.WorkDir, ctx.Sandbox))}
 }
 
-func grepTool(defaultPath string) Tool {
+func grepTool(defaultPath string, guard sandbox.PathGuard) Tool {
 	return Tool{
 		Name:        "grep",
 		Description: "Recursively search for a Go-regexp pattern under `path` (file or directory). Output: `relative_path:line:content` (max 200 hits).",
@@ -41,6 +43,10 @@ func grepTool(defaultPath string) Tool {
 					path = "."
 				}
 			}
+			path = resolveWorkPath(defaultPath, path)
+			if err := guard.Check(path); err != nil {
+				return "", fmt.Errorf("grep: %w", err)
+			}
 			re, err := regexp.Compile(pattern)
 			if err != nil {
 				return "", fmt.Errorf("grep: bad pattern: %w", err)
@@ -51,6 +57,12 @@ func grepTool(defaultPath string) Tool {
 
 			walk := func(p string, d os.DirEntry, err error) error {
 				if err != nil {
+					return nil
+				}
+				if guard.IsBlocked(p) {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
 					return nil
 				}
 				if d.IsDir() {

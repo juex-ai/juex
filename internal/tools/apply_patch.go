@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 const (
@@ -74,7 +76,7 @@ type patchSnapshot struct {
 	mode    os.FileMode
 }
 
-func applyPatchTool(workDir string) Tool {
+func applyPatchTool(workDir string, guard sandbox.PathGuard) Tool {
 	return Tool{
 		Name:        "apply_patch",
 		Description: "Apply a Codex-style patch inside the workspace. Supports add, update, delete, and move operations. Input is {patch_text: \"*** Begin Patch\\n...\\n*** End Patch\"}.",
@@ -93,7 +95,7 @@ func applyPatchTool(workDir string) Tool {
 			if strings.TrimSpace(patchText) == "" {
 				return "", fmt.Errorf("apply_patch: missing patch_text")
 			}
-			summary, err := applyPatch(ctx, workDir, patchText)
+			summary, err := applyPatch(ctx, workDir, patchText, guard)
 			if err != nil {
 				return "", err
 			}
@@ -102,7 +104,7 @@ func applyPatchTool(workDir string) Tool {
 	}
 }
 
-func applyPatch(ctx context.Context, workDir, patchText string) (patchSummary, error) {
+func applyPatch(ctx context.Context, workDir, patchText string, guard sandbox.PathGuard) (patchSummary, error) {
 	ops, err := parsePatch(patchText)
 	if err != nil {
 		return patchSummary{}, err
@@ -111,7 +113,7 @@ func applyPatch(ctx context.Context, workDir, patchText string) (patchSummary, e
 	if err != nil {
 		return patchSummary{}, err
 	}
-	summary, err := planPatch(ws, ops)
+	summary, err := planPatch(ws, ops, guard)
 	if err != nil {
 		return patchSummary{}, err
 	}
@@ -269,13 +271,16 @@ func pathWithin(root, target string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func planPatch(ws patchWorkspace, ops []patchOperation) (patchSummary, error) {
+func planPatch(ws patchWorkspace, ops []patchOperation, guard sandbox.PathGuard) (patchSummary, error) {
 	var summary patchSummary
 	touched := map[string]bool{}
 	for _, op := range ops {
 		rel, abs, err := ws.resolve(op.path)
 		if err != nil {
 			return patchSummary{}, err
+		}
+		if err := guard.Check(abs); err != nil {
+			return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 		}
 		if touched[rel] {
 			return patchSummary{}, fmt.Errorf("apply_patch: duplicate operation for %s", rel)
@@ -296,6 +301,9 @@ func planPatch(ws patchWorkspace, ops []patchOperation) (patchSummary, error) {
 				moveRel, moveAbs, err = ws.resolve(op.moveTo)
 				if err != nil {
 					return patchSummary{}, err
+				}
+				if err := guard.Check(moveAbs); err != nil {
+					return patchSummary{}, fmt.Errorf("apply_patch: %w", err)
 				}
 				if moveRel == rel {
 					return patchSummary{}, fmt.Errorf("apply_patch: move target matches source for %s", rel)

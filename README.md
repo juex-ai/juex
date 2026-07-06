@@ -178,12 +178,16 @@ Commands started by `exec_command` may be protected by the optional top-level
 execution behavior. `sandbox.enabled: true` requires a platform sandbox backend
 before a new command starts; workspace files stay read/write, while
 `sandbox.file_system.outside_workspace` controls access outside the workspace
-with `read_write`, `read_only`, or `denied`, and `sandbox.network.enabled`
-controls network access. Restricted modes still provide the process with
-standard device and temporary scratch paths needed by normal shell tools, but
-do not silently reopen arbitrary user paths outside the workspace. Unsupported
-platforms, missing helpers, permissions errors, or policies a backend cannot
-enforce fail closed instead of falling back to unsandboxed execution.
+with `read_write` or `read_only`, and `sandbox.network.enabled` controls
+network access. Add `sandbox.file_system.blocked_paths` to make selected paths
+inaccessible even when the surrounding filesystem preset would otherwise allow
+them. On Linux command sandboxing, blocked paths must already exist because
+bubblewrap cannot safely mask missing paths without creating host-visible
+mountpoints. Restricted modes still provide the process with standard device and
+temporary scratch paths needed by normal shell tools, but do not silently reopen
+arbitrary user paths outside the workspace. Unsupported platforms, missing
+helpers, permissions errors, or policies a backend cannot enforce fail closed
+instead of falling back to unsandboxed execution.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

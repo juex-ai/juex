@@ -17,7 +17,6 @@ type NetworkSandboxPolicy = sandbox.NetworkPolicy
 const (
 	OutsideWorkspaceReadWrite OutsideWorkspaceAccess = sandbox.OutsideWorkspaceReadWrite
 	OutsideWorkspaceReadOnly  OutsideWorkspaceAccess = sandbox.OutsideWorkspaceReadOnly
-	OutsideWorkspaceDenied    OutsideWorkspaceAccess = sandbox.OutsideWorkspaceDenied
 )
 
 // ProviderSelection is the resolved provider/model value passed to the LLM
@@ -171,8 +170,15 @@ func (c Config) SandboxPolicy() sandbox.Policy {
 	if policy.FileSystem.OutsideWorkspace == "" {
 		policy.FileSystem.OutsideWorkspace = sandbox.OutsideWorkspaceReadWrite
 	}
-	if !policy.Enabled && !policy.Network.Enabled && c.Sandbox == (sandbox.Policy{}) {
+	if isZeroSandboxPolicy(c.Sandbox) {
 		policy.Network.Enabled = true
 	}
 	return policy
+}
+
+func isZeroSandboxPolicy(policy sandbox.Policy) bool {
+	return !policy.Enabled &&
+		policy.FileSystem.OutsideWorkspace == "" &&
+		len(policy.FileSystem.BlockedPaths) == 0 &&
+		!policy.Network.Enabled
 }
