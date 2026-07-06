@@ -85,6 +85,8 @@ type LLMRespondedPayload struct {
 	ContextUsage *llm.ContextUsage            `json:"context_usage,omitempty"`
 }
 
+type LLMRetryPayload = llm.ProviderRetryDiagnostic
+
 type FinishAttemptedPayload struct {
 	StopReason llm.StopReason `json:"stop_reason"`
 	OutputLen  int            `json:"output_len"`

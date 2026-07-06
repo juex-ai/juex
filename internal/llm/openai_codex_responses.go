@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"runtime"
 	"strings"
@@ -20,7 +19,8 @@ import (
 )
 
 const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
-const codexSSERetryBaseDelay = 100 * time.Millisecond
+
+var codexSSERetryBaseDelay = 100 * time.Millisecond
 
 type openAICodexResponsesProvider struct {
 	cfg       Config
@@ -108,12 +108,12 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 	case CodexTransportAuto:
 		resp, err = p.ws.Complete(ctx, params)
 		if err != nil {
-			resp, err = p.completeSSE(ctx, params)
+			resp, err = p.completeSSE(ctx, params, opts)
 		}
 	case CodexTransportWebSocket, CodexTransportWebSocketCached:
 		resp, err = p.ws.Complete(ctx, params)
 	default:
-		resp, err = p.completeSSE(ctx, params)
+		resp, err = p.completeSSE(ctx, params, opts)
 	}
 	if err != nil {
 		return Response{}, fmt.Errorf("openai codex responses: %w", err)
@@ -121,18 +121,26 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 	return p.responseFromCodexResponses(resp), nil
 }
 
-func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
-	for attempt := 0; attempt <= providerMaxRetries; attempt++ {
+func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (*responses.Response, error) {
+	maxAttempts := providerMaxRetries + 1
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		stream := p.client.Responses.NewStreaming(ctx, params)
 		resp, err := readCodexResponsesStream(stream)
 		_ = stream.Close()
 		if err == nil {
 			return resp, nil
 		}
-		if attempt == providerMaxRetries || !isRetryableCodexSSEReadError(err) || ctx.Err() != nil {
+		attemptNumber := attempt + 1
+		if ctx.Err() != nil || !isRetryableCodexSSEReadError(err) {
 			return nil, err
 		}
-		if err := waitCodexSSERetry(ctx, attempt); err != nil {
+		if attemptNumber >= maxAttempts {
+			p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, 0, false, true)
+			return nil, fmt.Errorf("codex SSE retry exhausted after %d attempts (max_attempts=%d): %w", attemptNumber, maxAttempts, err)
+		}
+		delay := codexSSERetryDelay(attempt)
+		p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, delay, true, false)
+		if err := waitCodexSSERetry(ctx, delay); err != nil {
 			return nil, err
 		}
 	}
@@ -241,29 +249,26 @@ func isRetryableCodexSSEReadError(err error) bool {
 	if errors.Is(readErr.cause, context.Canceled) || errors.Is(readErr.cause, context.DeadlineExceeded) {
 		return false
 	}
-	if errors.Is(readErr.cause, io.EOF) || errors.Is(readErr.cause, io.ErrUnexpectedEOF) {
-		return true
+	var apiErr *openai.Error
+	if errors.As(readErr.cause, &apiErr) {
+		return false
 	}
-	msg := strings.ToLower(readErr.cause.Error())
-	for _, needle := range []string{
-		"eof",
-		"connection reset",
-		"broken pipe",
-		"server closed idle connection",
-		"use of closed network connection",
-		"http2: client connection lost",
-		"stream reset",
-		"stream closed",
-	} {
-		if strings.Contains(msg, needle) {
-			return true
-		}
-	}
-	return false
+	return true
 }
 
-func waitCodexSSERetry(ctx context.Context, attempt int) error {
-	delay := time.Duration(attempt+1) * codexSSERetryBaseDelay
+func codexSSERetryDelay(attempt int) time.Duration {
+	return time.Duration(attempt+1) * codexSSERetryBaseDelay
+}
+
+func waitCodexSSERetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -272,6 +277,26 @@ func waitCodexSSERetry(ctx context.Context, attempt int) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func (p *openAICodexResponsesProvider) emitCodexSSERetryDiagnostic(opts CompleteOptions, err error, attempt, maxAttempts int, delay time.Duration, willRetry, exhausted bool) {
+	if opts.RetryObserver == nil {
+		return
+	}
+	opts.RetryObserver(ProviderRetryDiagnostic{
+		Provider:    p.profile.ID,
+		Model:       p.profile.Model,
+		Protocol:    p.profile.Protocol,
+		Transport:   CodexTransportSSE,
+		Operation:   "responses.sse",
+		Attempt:     attempt,
+		MaxAttempts: maxAttempts,
+		DelayMS:     delay.Milliseconds(),
+		RetryReason: "codex_sse_read",
+		RawError:    err.Error(),
+		WillRetry:   willRetry,
+		Exhausted:   exhausted,
+	})
 }
 
 func responseErrorMessage(resp responses.Response) string {

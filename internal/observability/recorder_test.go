@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -91,6 +92,46 @@ func TestRecorderDebugRecordsDebugEvents(t *testing.T) {
 	}
 	if !strings.Contains(string(debugData), "tool.output_delta") {
 		t.Fatalf("debug log missing event: %s", debugData)
+	}
+}
+
+func TestRecorderRecordsLLMRetryDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("llm.retry", "t1", llm.ProviderRetryDiagnostic{
+		Provider:    "openai-codex",
+		Model:       "gpt-5.5",
+		Protocol:    llm.ProtocolOpenAICodexResponses,
+		Transport:   llm.CodexTransportSSE,
+		Operation:   "responses.sse",
+		Attempt:     1,
+		MaxAttempts: 11,
+		DelayMS:     100,
+		RetryReason: "codex_sse_read",
+		RawError:    "codex SSE read: stream error",
+		WillRetry:   true,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
+	if len(trace) != 1 || trace[0].Event != "llm.retry" || trace[0].Level != "warn" || trace[0].Status != "retrying" {
+		t.Fatalf("trace = %+v", trace)
+	}
+	if trace[0].Summary["provider"] != "openai-codex" || trace[0].Summary["attempt"] != float64(1) || trace[0].Summary["raw_error"] == "" {
+		t.Fatalf("retry summary = %+v", trace[0].Summary)
+	}
+	debugData, err := os.ReadFile(filepath.Join(dir, "logs", "debug.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(debugData), "llm.retry") || !strings.Contains(string(debugData), "codex_sse_read") {
+		t.Fatalf("debug log missing retry diagnostic: %s", debugData)
 	}
 }
 
@@ -349,7 +390,7 @@ func TestRecorderCapturesToolFailureLedgerEvents(t *testing.T) {
 	}
 }
 
-func event(typ, turnID string, payload map[string]any) events.Event {
+func event(typ, turnID string, payload any) events.Event {
 	return events.Event{
 		Type:      typ,
 		TurnID:    turnID,

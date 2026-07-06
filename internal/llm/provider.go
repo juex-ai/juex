@@ -17,11 +17,27 @@ type CompleteOptions struct {
 	Purpose         string
 	MaxOutputTokens int
 	CachePolicy     CachePolicy
+	RetryObserver   func(ProviderRetryDiagnostic)
 }
 
 type CachePolicy struct {
 	StablePrefixKey string
 	Retention       string
+}
+
+type ProviderRetryDiagnostic struct {
+	Provider    string   `json:"provider"`
+	Model       string   `json:"model"`
+	Protocol    Protocol `json:"protocol,omitempty"`
+	Transport   string   `json:"transport,omitempty"`
+	Operation   string   `json:"operation"`
+	Attempt     int      `json:"attempt"`
+	MaxAttempts int      `json:"max_attempts"`
+	DelayMS     int64    `json:"delay_ms,omitempty"`
+	RetryReason string   `json:"retry_reason"`
+	RawError    string   `json:"raw_error,omitempty"`
+	WillRetry   bool     `json:"will_retry"`
+	Exhausted   bool     `json:"exhausted,omitempty"`
 }
 
 type ProviderWithOptions interface {

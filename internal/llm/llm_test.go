@@ -661,6 +661,167 @@ func TestOpenAICodexResponses_RetriesSSEReadEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAICodexResponses_RetriesSSEReadInternalErrorByCategory(t *testing.T) {
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       errReadCloser{err: errors.New("stream error: stream ID 37; INTERNAL_ERROR; received from peer")},
+				Request:    r,
+			}, nil
+		}
+		return codexCompletedTextResponse(r, "ok"), nil
+	})}
+	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	withOpts, ok := p.(ProviderWithOptions)
+	if !ok {
+		t.Fatal("openai-codex provider does not implement ProviderWithOptions")
+	}
+	var diagnostics []ProviderRetryDiagnostic
+
+	resp, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		RetryObserver: func(d ProviderRetryDiagnostic) {
+			diagnostics = append(diagnostics, d)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if resp.Message.FirstText() != "ok" {
+		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+	}
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics len = %d, want 1: %+v", len(diagnostics), diagnostics)
+	}
+	got := diagnostics[0]
+	if !got.WillRetry || got.Exhausted || got.Attempt != 1 || got.MaxAttempts != providerMaxRetries+1 || got.DelayMS <= 0 {
+		t.Fatalf("retry diagnostic = %+v", got)
+	}
+	if got.Provider != "openai-codex" || got.Model != "m" || got.Protocol != ProtocolOpenAICodexResponses || got.Transport != CodexTransportSSE {
+		t.Fatalf("provider diagnostic identity = %+v", got)
+	}
+	if got.RetryReason != "codex_sse_read" || !strings.Contains(got.RawError, "INTERNAL_ERROR") {
+		t.Fatalf("retry diagnostic reason/error = %+v", got)
+	}
+}
+
+func TestOpenAICodexResponses_DoesNotRetryContextSSEReadErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				attempts++
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       errReadCloser{err: tc.err},
+					Request:    r,
+				}, nil
+			})}
+			p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+			withOpts := p.(ProviderWithOptions)
+			var diagnostics []ProviderRetryDiagnostic
+
+			_, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+				RetryObserver: func(d ProviderRetryDiagnostic) {
+					diagnostics = append(diagnostics, d)
+				},
+			})
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("err = %v, want %v", err, tc.err)
+			}
+			if attempts != 1 {
+				t.Fatalf("attempts = %d, want 1", attempts)
+			}
+			if len(diagnostics) != 0 {
+				t.Fatalf("diagnostics = %+v, want none", diagnostics)
+			}
+		})
+	}
+}
+
+func TestOpenAICodexResponses_SSEReadRetryExhaustionReportsAttempts(t *testing.T) {
+	oldDelay := codexSSERetryBaseDelay
+	codexSSERetryBaseDelay = 0
+	t.Cleanup(func() { codexSSERetryBaseDelay = oldDelay })
+
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       errReadCloser{err: errors.New("stream error: stream ID 9; INTERNAL_ERROR; received from peer")},
+			Request:    r,
+		}, nil
+	})}
+	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	withOpts := p.(ProviderWithOptions)
+	var diagnostics []ProviderRetryDiagnostic
+
+	_, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		RetryObserver: func(d ProviderRetryDiagnostic) {
+			diagnostics = append(diagnostics, d)
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "codex SSE retry exhausted after 11 attempts") || !strings.Contains(err.Error(), "INTERNAL_ERROR") {
+		t.Fatalf("err = %v", err)
+	}
+	if attempts != providerMaxRetries+1 {
+		t.Fatalf("attempts = %d, want %d", attempts, providerMaxRetries+1)
+	}
+	if len(diagnostics) != providerMaxRetries+1 {
+		t.Fatalf("diagnostics len = %d, want %d: %+v", len(diagnostics), providerMaxRetries+1, diagnostics)
+	}
+	final := diagnostics[len(diagnostics)-1]
+	if final.WillRetry || !final.Exhausted || final.Attempt != providerMaxRetries+1 || final.DelayMS != 0 {
+		t.Fatalf("final diagnostic = %+v", final)
+	}
+}
+
+func TestOpenAICodexResponses_DoesNotRetrySemanticResponseFailure(t *testing.T) {
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"type":"response.failed","response":{"id":"resp_1","model":"m","status":"failed","error":{"message":"semantic failure","code":"server_error"}}}` + "\n\n",
+			)),
+			Request: r,
+		}, nil
+	})}
+	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+
+	_, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err == nil || !strings.Contains(err.Error(), "semantic failure") {
+		t.Fatalf("err = %v, want semantic failure", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
 func TestOpenAICodexResponses_RetriesStreamClosedBeforeCompleted(t *testing.T) {
 	attempts := 0
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -695,6 +856,18 @@ func TestOpenAICodexResponses_RetriesStreamClosedBeforeCompleted(t *testing.T) {
 	}
 	if resp.Message.FirstText() != "ok" {
 		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+	}
+}
+
+func codexCompletedTextResponse(r *http.Request, text string) *http.Response {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(
+			fmt.Sprintf(`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}}`+"\n\n", text),
+		)),
+		Request: r,
 	}
 }
 

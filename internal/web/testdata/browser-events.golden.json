@@ -42,6 +42,25 @@
     }
   },
   {
+    "id": "evt-llm-retry",
+    "type": "llm.retry",
+    "ts": "2026-06-15T00:00:01.5Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "provider": "openai-codex",
+      "model": "gpt-5.5",
+      "protocol": "openai-codex/responses",
+      "transport": "sse",
+      "operation": "responses.sse",
+      "attempt": 1,
+      "max_attempts": 11,
+      "delay_ms": 100,
+      "retry_reason": "codex_sse_read",
+      "raw_error": "codex SSE read: stream error",
+      "will_retry": true
+    }
+  },
+  {
     "id": "evt-tool-requested",
     "type": "tool.requested",
     "ts": "2026-06-15T00:00:02Z",

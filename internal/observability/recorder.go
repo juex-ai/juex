@@ -352,6 +352,15 @@ func classify(ev events.Event) eventMeta {
 	if ev.Type == toolevents.OutputDeltaType {
 		meta.Level = LevelDebug
 	}
+	if ev.Type == "llm.retry" {
+		meta.Level = LevelWarn
+		if boolValue(payload["exhausted"]) {
+			meta.Status = "exhausted"
+			meta.ErrorKind = "provider_retry_exhausted"
+		} else if boolValue(payload["will_retry"]) {
+			meta.Status = "retrying"
+		}
+	}
 	if strings.HasPrefix(ev.Type, "tool.") {
 		meta.ArtifactPath = toolsFile
 		meta.Tool = toolRecord(ev, payload, meta)
@@ -446,6 +455,19 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("usage")
 		add("token_usage")
 		add("text")
+	case "llm.retry":
+		add("provider")
+		add("model")
+		add("protocol")
+		add("transport")
+		add("operation")
+		add("attempt")
+		add("max_attempts")
+		add("delay_ms")
+		add("retry_reason")
+		add("raw_error")
+		add("will_retry")
+		add("exhausted")
 	case toolevents.RequestedType:
 		add("name")
 		add("tool_use_id")
@@ -708,6 +730,15 @@ func int64Value(v any) int64 {
 
 func intValue(v any) int {
 	return int(int64Value(v))
+}
+
+func boolValue(v any) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	default:
+		return false
+	}
 }
 
 func stringValue(v any) string {
