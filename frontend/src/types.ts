@@ -220,6 +220,14 @@ export const BROWSER_EVENT_TYPES = [
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",
+  "observable.started",
+  "observable.stopped",
+  "observable.exited",
+  "observable.errored",
+  "observation.recorded",
+  "observation.queued",
+  "observation.delivered",
+  "observation.dropped",
   "context.compact.skipped",
   "context.compact.started",
   "context.compact.completed",
@@ -395,6 +403,77 @@ export interface PendingInputRejectedPayload {
   reason: string;
 }
 
+export type ObservableRunState =
+  | "starting"
+  | "running"
+  | "stopped"
+  | "exited"
+  | "errored";
+
+export type ObservationState =
+  | "recorded"
+  | "queued"
+  | "delivered"
+  | "dropped";
+
+export interface ObservableBatchSpec {
+  interval_seconds: number;
+  max_chars: number;
+}
+
+export interface ObservableStatus {
+  id: string;
+  name?: string;
+  command: string;
+  args?: string[];
+  streams?: string[];
+  batch: ObservableBatchSpec;
+  state: ObservableRunState | string;
+  run_id?: string;
+  pid?: number;
+  started_at?: string;
+  exited_at?: string;
+  exit_code?: number;
+  last_error?: string;
+  last_observation?: ObservationRecord;
+}
+
+export interface ObservationRecord {
+  id: string;
+  observable_id: string;
+  run_id?: string;
+  kind: string;
+  severity: string;
+  stream?: string;
+  window_start: string;
+  window_end: string;
+  content: string;
+  original_chars: number;
+  truncated?: boolean;
+  artifact_path?: string;
+  state: ObservationState | string;
+  target_session?: string;
+  pending_input_id?: string;
+  created_at: string;
+  delivered_at?: string;
+  error?: string;
+}
+
+export interface ObservableEventPayload {
+  id: string;
+  name?: string;
+  state: ObservableRunState | string;
+  run_id?: string;
+  pid?: number;
+  exit_code?: number;
+  error?: string;
+}
+
+export interface ObservationEventPayload {
+  observation: ObservationRecord;
+  error?: string;
+}
+
 export interface ContextCompactSkippedPayload {
   reason: string;
   auto: boolean;
@@ -462,6 +541,14 @@ export type BrowserEvent =
   | (BrowserEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
   | (BrowserEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
   | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
+  | (BrowserEventBase<"observable.started"> & { payload: ObservableEventPayload })
+  | (BrowserEventBase<"observable.stopped"> & { payload: ObservableEventPayload })
+  | (BrowserEventBase<"observable.exited"> & { payload: ObservableEventPayload })
+  | (BrowserEventBase<"observable.errored"> & { payload: ObservableEventPayload })
+  | (BrowserEventBase<"observation.recorded"> & { payload: ObservationEventPayload })
+  | (BrowserEventBase<"observation.queued"> & { payload: ObservationEventPayload })
+  | (BrowserEventBase<"observation.delivered"> & { payload: ObservationEventPayload })
+  | (BrowserEventBase<"observation.dropped"> & { payload: ObservationEventPayload })
   | (BrowserEventBase<"context.compact.skipped"> & { payload: ContextCompactSkippedPayload })
   | (BrowserEventBase<"context.compact.started"> & { payload: ContextCompactStartedPayload })
   | (BrowserEventBase<"context.compact.completed"> & { payload: ContextCompactCompletedPayload })
@@ -537,6 +624,50 @@ export interface RuntimeStatusResponse {
   skills: {
     count: number;
     items: SkillInfo[];
+  };
+}
+
+export interface ObservablesListResponse {
+  observables: ObservableStatus[];
+}
+
+export interface ObservableDetailResponse {
+  observable: ObservableStatus;
+  observations: ObservationRecord[];
+}
+
+export interface ObservableObservationsResponse {
+  observations: ObservationRecord[];
+}
+
+export interface ObservableCreateRequest {
+  id: string;
+  name?: string;
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  streams?: string[];
+  defaults?: {
+    kind?: string;
+    severity?: string;
+  };
+  parser?: {
+    type: "text" | "jsonl" | string;
+    content_field?: string;
+    kind_field?: string;
+    severity_field?: string;
+    time_field?: string;
+  };
+  filters?: Array<{
+    contains?: string;
+    regex?: string;
+    kind?: string;
+    severity?: string;
+  }>;
+  batch: ObservableBatchSpec;
+  on_exit?: {
+    notify?: "never" | "always" | "nonzero" | string;
   };
 }
 

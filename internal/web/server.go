@@ -99,11 +99,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/content", s.handleFilesContent)
 	mux.HandleFunc("/api/files/raw", s.handleFilesRaw)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
+	mux.HandleFunc("/api/observables", s.handleObservables)
+	mux.HandleFunc("/api/observables/", s.dispatchObservable)
 	// SPA: anything else is the React app.
 	spa := spaHandler()
 	mux.Handle("/", spa)
 	mux.Handle("/sessions/", spa)
 	mux.Handle("/runtime", spa)
+	mux.Handle("/observables", spa)
+	mux.Handle("/observables/", spa)
 }
 
 // dispatchSession routes /api/sessions/<id>[/...] to the matching handler.
@@ -250,6 +254,24 @@ func (s *Server) closeActiveSession(id string) bool {
 	return true
 }
 
+func (s *Server) closeOtherPrimarySessions(activeID string) {
+	var ids []string
+	s.sessions.Range(func(key, value any) bool {
+		id, _ := key.(string)
+		as, _ := value.(*activeSession)
+		if id == "" || id == activeID || as == nil || as.app == nil || as.app.Session == nil {
+			return true
+		}
+		if session.NormalizeKind(as.app.Session.Kind) == session.KindPrimary {
+			ids = append(ids, id)
+		}
+		return true
+	})
+	for _, id := range ids {
+		s.closeActiveSession(id)
+	}
+}
+
 // validLoopback enforces "127.0.0.1" / "::1" / "localhost" hosts. The
 // CLI surfaces a usage error before Run is called, but defending in
 // depth here protects programmatic callers.
@@ -314,6 +336,9 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	as.turns = newWebTurnTransport(a)
 	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
 	s.sessions.Store(a.Session.ID, as)
+	if session.NormalizeKind(a.Session.Kind) == session.KindPrimary {
+		s.closeOtherPrimarySessions(a.Session.ID)
+	}
 	return as, nil
 }
 

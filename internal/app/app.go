@@ -30,6 +30,7 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
 	"github.com/juex-ai/juex/internal/observability"
+	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -86,6 +87,7 @@ type App struct {
 	cfg     config.Config
 	skills  []skills.Skill
 	mcp     MCPStatus
+	obsv    *observable.Manager
 
 	turnAdmission turnAdmission
 
@@ -306,8 +308,30 @@ func New(opts Options) (*App, error) {
 		closeSessionResources()
 		return nil, err
 	}
+	obsv, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath:    cfg.ObservablesConfigPath(),
+		StateDir:      cfg.ObservablesStateDir(),
+		WorkDir:       runtimePaths.WorkDir,
+		Shell:         cfg.Shell,
+		Sandbox:       cfg.SandboxPolicy(),
+		SandboxRunner: nil,
+		Bus:           bus,
+		Deliver:       a.HandleObservation,
+	})
+	if err != nil {
+		_ = a.detachObservability()
+		closeSessionResources()
+		return nil, err
+	}
+	a.obsv = obsv
+	if err := observable.RegisterTools(reg, obsv); err != nil {
+		_ = obsv.Close()
+		_ = a.detachObservability()
+		closeSessionResources()
+		return nil, err
+	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	a.cleanup = append(a.cleanup, shellSessions.Close, func() error {
+	a.cleanup = append(a.cleanup, obsv.Close, shellSessions.Close, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
@@ -358,6 +382,9 @@ func New(opts Options) (*App, error) {
 	if err := eng.RunSessionStartHooks(appCtx); err != nil {
 		_ = a.Close()
 		return nil, err
+	}
+	if sess.Kind == session.KindPrimary && obsv != nil {
+		_ = obsv.StartAll(appCtx)
 	}
 	appContextTransferred = true
 	return a, nil
@@ -537,6 +564,100 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	return err
 }
 
+func (a *App) HandleObservation(ctx context.Context, record observable.ObservationRecord) error {
+	if a == nil || a.Engine == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	msg, err := observationMessage(record)
+	if err != nil {
+		return err
+	}
+	pendingID := observationPendingInputID(record)
+	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
+		ID:  pendingID,
+		TTL: a.Engine.ExternalEventTTL,
+	}); err == nil {
+		a.markObservationQueued(record.ID, pendingID)
+		return nil
+	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
+		return err
+	}
+	_, err = a.Engine.TurnMessage(ctx, msg)
+	if err == nil {
+		a.markObservationDelivered(record.ID)
+	}
+	return err
+}
+
+func observationMessage(record observable.ObservationRecord) (llm.Message, error) {
+	body, err := json.Marshal(struct {
+		Kind            string `json:"kind"`
+		ObservationID   string `json:"observation_id"`
+		ObservableID    string `json:"observable_id"`
+		Severity        string `json:"severity"`
+		ObservationKind string `json:"observation_kind"`
+		WindowStart     string `json:"window_start"`
+		WindowEnd       string `json:"window_end"`
+		Content         string `json:"content"`
+		Truncated       bool   `json:"truncated"`
+		ArtifactPath    string `json:"artifact_path,omitempty"`
+	}{
+		Kind:            llm.MessageKindObservation,
+		ObservationID:   record.ID,
+		ObservableID:    record.ObservableID,
+		Severity:        record.Severity,
+		ObservationKind: record.Kind,
+		WindowStart:     record.WindowStart.UTC().Format(time.RFC3339Nano),
+		WindowEnd:       record.WindowEnd.UTC().Format(time.RFC3339Nano),
+		Content:         record.Content,
+		Truncated:       record.Truncated,
+		ArtifactPath:    record.ArtifactPath,
+	})
+	if err != nil {
+		return llm.Message{}, err
+	}
+	msg := llm.TextMessage(llm.RoleUser, string(body))
+	msg.Kind = llm.MessageKindObservation
+	return msg, nil
+}
+
+func observationPendingInputID(record observable.ObservationRecord) string {
+	return "observation-" + record.ID
+}
+
+func (a *App) markObservationQueued(id, pendingID string) {
+	if a == nil || a.obsv == nil {
+		return
+	}
+	_ = a.obsv.UpdateObservation(id, func(record observable.ObservationRecord) observable.ObservationRecord {
+		record.State = observable.ObservationStateQueued
+		record.PendingInputID = pendingID
+		if a.Session != nil {
+			record.TargetSession = a.Session.ID
+		}
+		return record
+	})
+}
+
+func (a *App) markObservationDelivered(id string) {
+	if a == nil || a.obsv == nil {
+		return
+	}
+	_ = a.obsv.UpdateObservation(id, func(record observable.ObservationRecord) observable.ObservationRecord {
+		record.State = observable.ObservationStateDelivered
+		record.DeliveredAt = time.Now().UTC()
+		if a.Session != nil {
+			record.TargetSession = a.Session.ID
+		}
+		return record
+	})
+}
+
 func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string {
 	body, err := json.Marshal(struct {
 		ServerName string         `json:"server_name"`
@@ -591,6 +712,13 @@ func (a *App) MCPStatus() MCPStatus {
 	status := a.mcp
 	status.Servers = append([]MCPServerStatus(nil), status.Servers...)
 	return status
+}
+
+func (a *App) Observables() *observable.Manager {
+	if a == nil {
+		return nil
+	}
+	return a.obsv
 }
 
 func buildMCPStatus(configured map[string]mcp.ServerSpec, toolCounts map[string]int, startupErrors map[string]string) MCPStatus {

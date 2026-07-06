@@ -11,6 +11,11 @@ import type {
   TurnStatusResponse,
   FileContentResponse,
   FileNode,
+  ObservableCreateRequest,
+  ObservableDetailResponse,
+  ObservableObservationsResponse,
+  ObservableStatus,
+  ObservablesListResponse,
   RuntimeStatusResponse,
 } from "./types";
 
@@ -177,6 +182,67 @@ export function getFileRawURL(path: string): string {
 
 export async function getRuntimeStatus(): Promise<RuntimeStatusResponse> {
   return jsonOrThrow(await fetch(`${BASE}/api/runtime`));
+}
+
+export async function listObservables(): Promise<ObservablesListResponse> {
+  return jsonOrThrow(await fetch(`${BASE}/api/observables`));
+}
+
+export async function createObservable(
+  input: ObservableCreateRequest,
+): Promise<ObservableStatus> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/observables`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function getObservable(
+  id: string,
+): Promise<ObservableDetailResponse> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}`),
+  );
+}
+
+export async function startObservable(id: string): Promise<ObservableStatus> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}/start`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function stopObservable(id: string): Promise<ObservableStatus> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}/stop`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function deleteObservable(
+  id: string,
+): Promise<{ deleted: string }> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  );
+}
+
+export async function listObservableObservations(
+  id: string,
+  limit = 50,
+): Promise<ObservableObservationsResponse> {
+  return jsonOrThrow(
+    await fetch(
+      `${BASE}/api/observables/${encodeURIComponent(id)}/observations?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  );
 }
 
 export { APIError };

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -46,6 +47,14 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{"pending_input.drained", func() any { return &juexruntime.PendingInputDrainedPayload{} }},
 	{"pending_input.dropped", func() any { return &juexruntime.PendingInputDroppedPayload{} }},
 	{"pending_input.rejected", func() any { return &juexruntime.PendingInputRejectedPayload{} }},
+	{observable.EventObservableStarted, func() any { return &observable.ObservableEventPayload{} }},
+	{observable.EventObservableStopped, func() any { return &observable.ObservableEventPayload{} }},
+	{observable.EventObservableExited, func() any { return &observable.ObservableEventPayload{} }},
+	{observable.EventObservableErrored, func() any { return &observable.ObservableEventPayload{} }},
+	{observable.EventObservationRecorded, func() any { return &observable.ObservationEventPayload{} }},
+	{observable.EventObservationQueued, func() any { return &observable.ObservationEventPayload{} }},
+	{observable.EventObservationDelivered, func() any { return &observable.ObservationEventPayload{} }},
+	{observable.EventObservationDropped, func() any { return &observable.ObservationEventPayload{} }},
 	{"context.compact.skipped", func() any { return &juexruntime.ContextCompactSkippedPayload{} }},
 	{"context.compact.started", func() any { return &juexruntime.ContextCompactStartedPayload{} }},
 	{"context.compact.completed", func() any { return &juexruntime.ContextCompactCompletedPayload{} }},

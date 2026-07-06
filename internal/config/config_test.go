@@ -26,6 +26,17 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
+func TestConfigObservablesPaths(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{WorkDir: dir}
+	if got, want := cfg.ObservablesConfigPath(), filepath.Join(dir, ".juex", "observables.json"); got != want {
+		t.Fatalf("ObservablesConfigPath() = %q, want %q", got, want)
+	}
+	if got, want := cfg.ObservablesStateDir(), filepath.Join(dir, ".juex", "observables"); got != want {
+		t.Fatalf("ObservablesStateDir() = %q, want %q", got, want)
+	}
+}
+
 func TestLoadFromFile_ModelIDCanContainSlash(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

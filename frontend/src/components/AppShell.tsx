@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
+  Activity,
   FolderIcon,
   FolderOpenIcon,
   HistoryIcon,
@@ -128,6 +129,7 @@ export function AppShell() {
   };
   const shellContextValue = useMemo(() => ({ setShellHeader }), []);
   const onRuntimePage = location.pathname === "/runtime";
+  const onObservablesPage = location.pathname.startsWith("/observables");
   const onHistoryPage = isHistoryPath(location.pathname);
 
   return (
@@ -186,6 +188,24 @@ export function AppShell() {
                 </div>
               ) : null}
               <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "text-muted-foreground hover:text-foreground",
+                        onObservablesPage && "bg-muted text-foreground",
+                      )}
+                    >
+                      <Link to="/observables" aria-label="Observables">
+                        <Activity className="size-4" />
+                      </Link>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Observables</TooltipContent>
+                </Tooltip>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

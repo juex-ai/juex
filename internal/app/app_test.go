@@ -17,6 +17,8 @@ import (
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/observable"
+	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -179,6 +181,76 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	}
 	if a.Engine.PendingInputTTL != 30*time.Minute || a.Engine.ExternalEventTTL != 48*time.Hour {
 		t.Fatalf("Engine pending TTLs = %s/%s", a.Engine.PendingInputTTL, a.Engine.ExternalEventTTL)
+	}
+}
+
+func TestApp_HandleObservationStartsTurnWhenNoActiveTurn(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	record := testObservationRecord("obs-delivered")
+	if err := a.HandleObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
+	}
+	got := prov.histories[0][0]
+	if got.Kind != llm.MessageKindObservation {
+		t.Fatalf("message kind = %q, want observation", got.Kind)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(got.FirstText()), &body); err != nil {
+		t.Fatalf("observation body is not JSON: %v\n%s", err, got.FirstText())
+	}
+	if body["observation_id"] != record.ID || body["observable_id"] != record.ObservableID {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestApp_HandleObservationQueuesDuringActiveTurn(t *testing.T) {
+	a, prov := newStubApp(t)
+	if err := a.Engine.ReserveTurnID("turn-active"); err != nil {
+		t.Fatal(err)
+	}
+	record := testObservationRecord("obs-queued")
+	if err := a.HandleObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if prov.calls != 0 {
+		t.Fatalf("provider calls = %d, want no direct turn", prov.calls)
+	}
+	records, err := a.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := records["observation-"+record.ID]
+	if pending.ID == "" {
+		t.Fatalf("pending records = %+v, want observation id", records)
+	}
+	if pending.Message.Kind != llm.MessageKindObservation || pending.State != runtime.PendingInputStatePending {
+		t.Fatalf("pending = %+v", pending)
+	}
+}
+
+func TestApp_RegistersObservableTools(t *testing.T) {
+	a, _ := newStubApp(t)
+	if _, ok := a.Engine.Tools.Get("observable_list"); !ok {
+		t.Fatal("observable_list tool missing")
+	}
+}
+
+func testObservationRecord(id string) observable.ObservationRecord {
+	now := time.Date(2026, 7, 6, 10, 0, 0, 0, time.UTC)
+	return observable.ObservationRecord{
+		ID:           id,
+		ObservableID: "lark-events",
+		Kind:         "lark_notification",
+		Severity:     "info",
+		WindowStart:  now,
+		WindowEnd:    now.Add(10 * time.Second),
+		Content:      "hello",
+		State:        observable.ObservationStateRecorded,
+		CreatedAt:    now,
 	}
 }
 

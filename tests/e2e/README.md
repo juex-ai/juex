@@ -34,6 +34,7 @@ go test ./tests/e2e -count=1
 | CLI schema | `TestLiveBinary_SchemaIncludesAllSubcommands` | The compiled binary exposes the documented command tree. |
 | Web turn API | `TestWeb_TurnRoundTripPersists` | Web session creation, turn submission, async completion, and persisted transcript reads. |
 | Web pending input | `TestWeb_PendingInputQueuesDuringActiveTurn` | A second web turn queues while a provider call is active, then drains into the next provider request. |
+| Web observables | `TestWeb_ObservablesStartAndSurfaceObservation` | Workspace observable config starts a real child process, records an Observation, delivers it to the active session, and exposes status through the Web API. |
 
 `TestLiveBinary_LoadsSkillsAndMCP` runs the Python fake MCP server through
 `uv run --project <repo> python ...`. The `mcp` SDK dependency is managed by
