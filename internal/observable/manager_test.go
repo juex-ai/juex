@@ -14,6 +14,7 @@ import (
 )
 
 const asyncWaitTimeout = 5 * time.Second
+const quietBatchWaitTimeout = 8 * time.Second
 
 func TestManager_StartAllCapturesAndDeliversObservation(t *testing.T) {
 	dir := t.TempDir()
@@ -56,6 +57,43 @@ func TestManager_StartAllCapturesAndDeliversObservation(t *testing.T) {
 	}
 	if len(listed) != 1 || listed[0].ID != gotDelivered[0].ID {
 		t.Fatalf("observations = %+v", listed)
+	}
+}
+
+func TestManager_StartAllContinuesAfterOneStartError(t *testing.T) {
+	dir := t.TempDir()
+	bad := validSpec("bad-start")
+	bad.Command = "definitely-not-a-juex-observable-helper"
+	good := helperSpec("good-start", "json-once")
+	writeObservableConfig(t, dir, bad, good)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.StartAll(context.Background()); err == nil {
+		t.Fatal("StartAll() err = nil, want first start error")
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		deliveredMu.Lock()
+		defer deliveredMu.Unlock()
+		return len(delivered) == 1
+	})
+	status, ok := mgr.Status().ByID("bad-start")
+	if !ok || status.State != observable.RunStateErrored {
+		t.Fatalf("bad status = %+v ok=%v, want errored", status, ok)
 	}
 }
 
@@ -102,6 +140,42 @@ func TestManager_StopAndDelete(t *testing.T) {
 	}
 }
 
+func TestManager_StartNoopsWhenRunAlreadyActive(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("active-run", "wait")
+	writeObservableConfig(t, dir, spec)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		status, ok := mgr.Status().ByID(spec.ID)
+		return ok && status.State == observable.RunStateRunning && status.RunID != ""
+	})
+	first, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RunID != second.RunID {
+		t.Fatalf("second Start changed run id: first=%q second=%q", first.RunID, second.RunID)
+	}
+}
+
 func TestManager_StartupErrorRecordsErrored(t *testing.T) {
 	dir := t.TempDir()
 	spec := validSpec("missing")
@@ -123,6 +197,70 @@ func TestManager_StartupErrorRecordsErrored(t *testing.T) {
 	if !ok || status.State != observable.RunStateErrored || status.LastError == "" {
 		t.Fatalf("status = %+v ok=%v, want errored", status, ok)
 	}
+}
+
+func TestManager_TimerFlushesQuietBatch(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("quiet-batch", "json-then-wait")
+	spec.Batch.IntervalSeconds = observable.MinBatchIntervalSeconds
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, quietBatchWaitTimeout, func() bool {
+		deliveredMu.Lock()
+		defer deliveredMu.Unlock()
+		return len(delivered) == 1 && delivered[0].Content == "quiet observable"
+	})
+}
+
+func TestManager_DrainsUnwatchedStream(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("stdout-only", "stderr-flood")
+	spec.Streams = []string{observable.StreamStdout}
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		deliveredMu.Lock()
+		defer deliveredMu.Unlock()
+		return len(delivered) == 1 && delivered[0].Content == "stdout survived stderr flood"
+	})
 }
 
 func TestManager_BadConfigDoesNotFailConstruction(t *testing.T) {
@@ -256,6 +394,14 @@ func TestObservableHelperProcess(t *testing.T) {
 	case "json-once":
 		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"hello from observable"}` + "\n")
 		os.Exit(0)
+	case "json-then-wait":
+		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"quiet observable"}` + "\n")
+		time.Sleep(30 * time.Second)
+		os.Exit(0)
+	case "stderr-flood":
+		_, _ = os.Stderr.WriteString(strings.Repeat("x", 2*1024*1024))
+		_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"stdout survived stderr flood"}` + "\n")
+		os.Exit(0)
 	case "wait":
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
@@ -264,9 +410,9 @@ func TestObservableHelperProcess(t *testing.T) {
 	}
 }
 
-func writeObservableConfig(t *testing.T, dir string, spec observable.Spec) {
+func writeObservableConfig(t *testing.T, dir string, specs ...observable.Spec) {
 	t.Helper()
-	if err := observable.SaveConfig(configPath(dir), observable.FileConfig{Observables: []observable.Spec{spec}}); err != nil {
+	if err := observable.SaveConfig(configPath(dir), observable.FileConfig{Observables: specs}); err != nil {
 		t.Fatal(err)
 	}
 }

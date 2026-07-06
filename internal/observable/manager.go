@@ -101,12 +101,14 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		ids = append(ids, id)
 	}
 	m.mu.Unlock()
+	sort.Strings(ids)
+	var firstErr error
 	for _, id := range ids {
-		if err := m.Start(ctx, id); err != nil {
-			return err
+		if err := m.Start(ctx, id); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func (m *Manager) Start(ctx context.Context, id string) error {
@@ -197,11 +199,10 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, erro
 		return ObservableStatus{}, fmt.Errorf("observable: duplicate id %q", normalized.ID)
 	}
 	cfg := FileConfig{Observables: append(append([]Spec(nil), m.cfg.Observables...), normalized)}
-	m.mu.Unlock()
 	if err := SaveConfig(m.opts.ConfigPath, cfg); err != nil {
+		m.mu.Unlock()
 		return ObservableStatus{}, err
 	}
-	m.mu.Lock()
 	m.cfg = cfg
 	m.specs[normalized.ID] = normalized
 	status := statusFromSpec(normalized, RunStateStopped)
@@ -258,18 +259,30 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	m.mu.Unlock()
 	_ = m.Stop(ctx, id)
 	m.mu.Lock()
-	delete(m.specs, id)
-	delete(m.runs, id)
-	delete(m.lastStatus, id)
+	if err := m.configEditableLocked(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if _, ok := m.specs[id]; !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("observable: unknown id %q", id)
+	}
 	cfg := FileConfig{Observables: make([]Spec, 0, len(m.specs))}
 	for _, spec := range m.cfg.Observables {
 		if spec.ID != id {
 			cfg.Observables = append(cfg.Observables, spec)
 		}
 	}
+	if err := SaveConfig(m.opts.ConfigPath, cfg); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	delete(m.specs, id)
+	delete(m.runs, id)
+	delete(m.lastStatus, id)
 	m.cfg = cfg
 	m.mu.Unlock()
-	return SaveConfig(m.opts.ConfigPath, cfg)
+	return nil
 }
 
 func (m *Manager) Status() StatusSnapshot {
@@ -371,7 +384,7 @@ func (m *Manager) specForStart(id string) (Spec, error) {
 	if m.closed {
 		return Spec{}, fmt.Errorf("observable: manager closed")
 	}
-	if run := m.runs[id]; run != nil && run.state.State == RunStateRunning {
+	if run := m.runs[id]; run != nil {
 		return Spec{}, nil
 	}
 	spec, ok := m.specs[id]

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/juex-ai/juex/internal/sandbox"
 )
@@ -29,6 +30,7 @@ type runner struct {
 	cmd     *exec.Cmd
 	mu      sync.Mutex
 	wg      sync.WaitGroup
+	flushCh chan struct{}
 }
 
 func newRunner(opts runnerOptions) *runner {
@@ -87,14 +89,23 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 		return nil, err
 	}
 	r.cmd = cmd
+	r.flushCh = make(chan struct{})
 	if r.watchesStream(StreamStdout) {
 		r.wg.Add(1)
 		go r.readStream(StreamStdout, stdout)
+	} else {
+		r.wg.Add(1)
+		go r.drainStream(stdout)
 	}
 	if r.watchesStream(StreamStderr) {
 		r.wg.Add(1)
 		go r.readStream(StreamStderr, stderr)
+	} else {
+		r.wg.Add(1)
+		go r.drainStream(stderr)
 	}
+	r.wg.Add(1)
+	go r.flushLoop(r.flushCh)
 	return cmd, nil
 }
 
@@ -103,6 +114,9 @@ func (r *runner) wait() (*int, error) {
 		return nil, nil
 	}
 	err := r.cmd.Wait()
+	if r.flushCh != nil {
+		close(r.flushCh)
+	}
 	r.wg.Wait()
 	var exitCode *int
 	if r.cmd.ProcessState != nil {
@@ -128,6 +142,27 @@ func (r *runner) flush(reason string) ([]ObservationRecord, error) {
 	return r.batcher.Flush(reason)
 }
 
+func (r *runner) flushLoop(stop <-chan struct{}) {
+	defer r.wg.Done()
+	ticker := time.NewTicker(flushPollInterval(time.Duration(r.opts.spec.Batch.IntervalSeconds) * time.Second))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			var records []ObservationRecord
+			r.mu.Lock()
+			flushed, err := r.batcher.FlushDue(time.Now().UTC(), "interval")
+			if err == nil {
+				records = append(records, flushed...)
+			}
+			r.mu.Unlock()
+			r.deliver(records)
+		}
+	}
+}
+
 func (r *runner) readStream(stream string, reader io.Reader) {
 	defer r.wg.Done()
 	buf := make([]byte, 4096)
@@ -146,16 +181,35 @@ func (r *runner) readStream(stream string, reader io.Reader) {
 				}
 			}
 			r.mu.Unlock()
-			for _, record := range records {
-				if r.opts.deliver != nil {
-					_ = r.opts.deliver(context.Background(), record)
-				}
-			}
+			r.deliver(records)
 		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+func (r *runner) drainStream(reader io.Reader) {
+	defer r.wg.Done()
+	_, _ = io.Copy(io.Discard, reader)
+}
+
+func (r *runner) deliver(records []ObservationRecord) {
+	for _, record := range records {
+		if r.opts.deliver != nil {
+			_ = r.opts.deliver(context.Background(), record)
+		}
+	}
+}
+
+func flushPollInterval(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return time.Second
+	}
+	if interval < time.Second {
+		return interval
+	}
+	return time.Second
 }
 
 func (r *runner) watchesStream(stream string) bool {

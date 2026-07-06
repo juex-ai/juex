@@ -126,8 +126,10 @@ func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) P
 			}
 		}
 		if parser.SeverityField != "" {
-			if value, ok := obj[parser.SeverityField].(string); ok && validSeverityValue(value) {
-				severity = value
+			if value, ok := obj[parser.SeverityField].(string); ok {
+				if normalized, ok := normalizeSeverityValue(value); ok {
+					severity = normalized
+				}
 			}
 		}
 	}
@@ -174,4 +176,15 @@ func (f compiledFilter) matches(content string) bool {
 
 func validSeverityValue(value string) bool {
 	return value == "info" || value == "warning" || value == "error" || value == "critical"
+}
+
+func normalizeSeverityValue(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "warn" {
+		value = "warning"
+	}
+	if !validSeverityValue(value) {
+		return "", false
+	}
+	return value, true
 }

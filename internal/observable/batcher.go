@@ -53,11 +53,26 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 			windowStart: unit.ReceivedAt,
 			windowEnd:   unit.ReceivedAt,
 		}
+	} else {
+		b.batch.severity = maxSeverity(b.batch.severity, unit.Severity)
 	}
 	b.batch.streams = append(b.batch.streams, unit.Stream)
 	b.batch.contents = append(b.batch.contents, unit.Content)
 	b.batch.windowEnd = unit.ReceivedAt
 	return emitted, nil
+}
+
+func (b *Batcher) FlushDue(now time.Time, reason string) ([]ObservationRecord, error) {
+	if b == nil || b.batch == nil || b.batch.windowStart.IsZero() {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if now.Sub(b.batch.windowStart) < time.Duration(b.spec.Batch.IntervalSeconds)*time.Second {
+		return nil, nil
+	}
+	return b.Flush(reason)
 }
 
 func (b *Batcher) Flush(reason string) ([]ObservationRecord, error) {
@@ -132,4 +147,24 @@ func previewContent(content string, max int) string {
 	head := available / 2
 	tail := available - head
 	return string(runes[:head]) + string(marker) + string(runes[len(runes)-tail:])
+}
+
+func maxSeverity(current, next string) string {
+	if severityRank(resolvedSeverity(next)) > severityRank(resolvedSeverity(current)) {
+		return resolvedSeverity(next)
+	}
+	return resolvedSeverity(current)
+}
+
+func severityRank(severity string) int {
+	switch resolvedSeverity(severity) {
+	case "critical":
+		return 4
+	case "error":
+		return 3
+	case "warning":
+		return 2
+	default:
+		return 1
+	}
 }

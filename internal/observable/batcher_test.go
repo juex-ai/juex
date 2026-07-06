@@ -45,6 +45,48 @@ func TestBatcher_EmptyFlushDoesNothing(t *testing.T) {
 	}
 }
 
+func TestBatcher_FlushDueFlushesQuietBatch(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	if got, err := b.Add(parsedUnit("stdout", "quiet", fixedTime)); err != nil || len(got) != 0 {
+		t.Fatalf("Add() = %+v, %v; want no immediate flush", got, err)
+	}
+	early, err := b.FlushDue(fixedTime.Add(time.Second), "interval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(early) != 0 {
+		t.Fatalf("early FlushDue() = %+v, want empty", early)
+	}
+	got, err := b.FlushDue(fixedTime.Add(11*time.Second), "interval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Content != "quiet" {
+		t.Fatalf("FlushDue() = %+v, want quiet record", got)
+	}
+}
+
+func TestBatcher_UsesHighestSeverityInWindow(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	if _, err := b.Add(parsedUnit("stdout", "info", fixedTime)); err != nil {
+		t.Fatal(err)
+	}
+	errUnit := parsedUnit("stderr", "error", fixedTime.Add(time.Second))
+	errUnit.Severity = "error"
+	if _, err := b.Add(errUnit); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Flush("shutdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Severity != "error" {
+		t.Fatalf("Flush() = %+v, want severity error", got)
+	}
+}
+
 func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 	spec := validSpec("large")
 	spec.Batch.MaxChars = 80

@@ -82,6 +82,33 @@ func TestPipeline_JSONLFieldMapping(t *testing.T) {
 	}
 }
 
+func TestPipeline_JSONLNormalizesSeverity(t *testing.T) {
+	spec := validSpec("lark-events")
+	spec.Parser = &observable.ParserSpec{
+		Type:          "jsonl",
+		ContentField:  "content",
+		SeverityField: "level",
+	}
+	pipe, err := observable.NewPipeline(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	units, err := pipe.Accept("stdout", []byte(`{"level":"WARN","content":"hello"}`+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || units[0].Severity != "warning" {
+		t.Fatalf("units = %+v, want warning severity", units)
+	}
+	units, err = pipe.Accept("stdout", []byte(`{"level":"ERROR","content":"boom"}`+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || units[0].Severity != "error" {
+		t.Fatalf("units = %+v, want error severity", units)
+	}
+}
+
 func TestPipeline_JSONLInvalidLineReturnsError(t *testing.T) {
 	spec := validSpec("lark-events")
 	spec.Parser = &observable.ParserSpec{Type: "jsonl", ContentField: "content"}
