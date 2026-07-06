@@ -120,6 +120,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 		Purpose:         "compaction",
 		MaxOutputTokens: policy.SummaryMaxTokens,
 		CachePolicy:     e.cachePolicyLocked(),
+		RetryObserver:   e.providerRetryObserverLocked(turnID, "compaction", nil),
 	})
 	if err != nil {
 		compactErr := fmt.Errorf("compact context: %w", err)

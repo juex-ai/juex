@@ -262,6 +262,9 @@ export function projectLiveSessionEvent(
         status: { kind: "running" },
       };
       break;
+    case "llm.retry":
+      next = { ...next, turnActive: true, status: { kind: "running" } };
+      break;
     case "tool.requested": {
       const name = event.payload.name || "?";
       next = {

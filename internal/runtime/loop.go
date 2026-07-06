@@ -406,10 +406,23 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		Purpose:         "turn",
 		MaxOutputTokens: e.MaxOutputTokens,
 		CachePolicy:     e.cachePolicyLocked(),
-		RetryObserver: func(d llm.ProviderRetryDiagnostic) {
-			e.emit(events.Event{Type: "llm.retry", TurnID: turnID, Payload: LLMRetryPayload(d)})
-		},
+		RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
 	})
+}
+
+func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) func(llm.ProviderRetryDiagnostic) {
+	var iterCopy *int
+	if iter != nil {
+		value := *iter
+		iterCopy = &value
+	}
+	return func(d llm.ProviderRetryDiagnostic) {
+		e.emit(events.Event{Type: "llm.retry", TurnID: turnID, Payload: LLMRetryPayload{
+			ProviderRetryDiagnostic: d,
+			Purpose:                 purpose,
+			Iter:                    iterCopy,
+		}})
+	}
 }
 
 func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTurnContext, request providerTurnRequest, resp llm.Response) (recordedProviderResponse, error) {

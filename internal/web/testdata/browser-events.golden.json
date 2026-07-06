@@ -57,7 +57,9 @@
       "delay_ms": 100,
       "retry_reason": "codex_sse_read",
       "raw_error": "codex SSE read: stream error",
-      "will_retry": true
+      "will_retry": true,
+      "purpose": "turn",
+      "iter": 0
     }
   },
   {

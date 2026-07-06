@@ -123,7 +123,7 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 
 func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (*responses.Response, error) {
 	maxAttempts := providerMaxRetries + 1
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := 0; ; attempt++ {
 		stream := p.client.Responses.NewStreaming(ctx, params)
 		resp, err := readCodexResponsesStream(stream)
 		_ = stream.Close()
@@ -144,7 +144,6 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("codex SSE retry exhausted")
 }
 
 func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []Message, tools []ToolSpec, opts CompleteOptions) responses.ResponseNewParams {

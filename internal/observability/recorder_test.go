@@ -101,18 +101,20 @@ func TestRecorderRecordsLLMRetryDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rec.Record(event("llm.retry", "t1", llm.ProviderRetryDiagnostic{
-		Provider:    "openai-codex",
-		Model:       "gpt-5.5",
-		Protocol:    llm.ProtocolOpenAICodexResponses,
-		Transport:   llm.CodexTransportSSE,
-		Operation:   "responses.sse",
-		Attempt:     1,
-		MaxAttempts: 11,
-		DelayMS:     100,
-		RetryReason: "codex_sse_read",
-		RawError:    "codex SSE read: stream error",
-		WillRetry:   true,
+	if err := rec.Record(event("llm.retry", "t1", map[string]any{
+		"purpose":      "turn",
+		"iter":         0,
+		"provider":     "openai-codex",
+		"model":        "gpt-5.5",
+		"protocol":     llm.ProtocolOpenAICodexResponses,
+		"transport":    llm.CodexTransportSSE,
+		"operation":    "responses.sse",
+		"attempt":      1,
+		"max_attempts": 11,
+		"delay_ms":     100,
+		"retry_reason": "codex_sse_read",
+		"raw_error":    "codex SSE read: stream error",
+		"will_retry":   true,
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -125,6 +127,10 @@ func TestRecorderRecordsLLMRetryDiagnostics(t *testing.T) {
 	}
 	if trace[0].Summary["provider"] != "openai-codex" || trace[0].Summary["attempt"] != float64(1) || trace[0].Summary["raw_error"] == "" {
 		t.Fatalf("retry summary = %+v", trace[0].Summary)
+	}
+	spans := readJSONLines[SpanRecord](t, filepath.Join(dir, "spans.jsonl"))
+	if len(spans) != 1 || spans[0].Name != "provider" || spans[0].Event != "instant" || spans[0].SpanID != "llm:t1:0" {
+		t.Fatalf("retry spans = %+v", spans)
 	}
 	debugData, err := os.ReadFile(filepath.Join(dir, "logs", "debug.log"))
 	if err != nil {
@@ -169,6 +175,7 @@ func TestRecorderWritesSpanSchemaAndParents(t *testing.T) {
 	events := []events.Event{
 		event("turn.started", "turn-a", map[string]any{"input": "hi"}),
 		event("llm.requested", "turn-a", map[string]any{"iter": 0, "history_len": 1, "tool_count": 1}),
+		event("llm.retry", "turn-a", map[string]any{"purpose": "turn", "iter": 0, "provider": "openai-codex", "attempt": 1, "max_attempts": 11, "retry_reason": "codex_sse_read", "will_retry": true}),
 		event("llm.responded", "turn-a", map[string]any{"stop_reason": "tool_use", "duration_ms": 7}),
 		event(toolevents.RequestedType, "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "input": map[string]any{"path": "README.md"}}),
 		event(toolevents.CompletedType, "turn-a", map[string]any{"name": "read", "tool_use_id": "tu1", "len": 42, "preview": "ok"}),
@@ -201,7 +208,7 @@ func TestRecorderWritesSpanSchemaAndParents(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"tool:end", "compaction:end", "hook:end", "finish:instant"} {
+	for _, want := range []string{"provider:instant", "provider:end", "tool:end", "compaction:end", "hook:end", "finish:instant"} {
 		if !seen[want] {
 			t.Fatalf("spans missing %s: %+v", want, spans)
 		}
