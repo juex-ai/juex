@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/cancellation"
@@ -69,6 +70,25 @@ func TestClassifyCancellationIsNotTimeout(t *testing.T) {
 	}
 	if msg := PublicMessage(err, MessageOptions{}); msg != cancellation.ErrUserCancelled.Error() {
 		t.Fatalf("PublicMessage = %q, want normalized cancellation", msg)
+	}
+}
+
+func TestClassifySignalCancellation(t *testing.T) {
+	err := cancellation.NewSignalError(syscall.SIGTERM)
+	got := Classify(err)
+	if got.Kind != KindTerminated || got.TimedOut {
+		t.Fatalf("Classify(signal) = %+v, want terminated", got)
+	}
+	if msg := PublicMessage(err, MessageOptions{}); msg != "run terminated by signal SIGTERM (15)" {
+		t.Fatalf("PublicMessage = %q", msg)
+	}
+	if strings.Contains(PublicMessage(err, MessageOptions{}), "by user") {
+		t.Fatalf("signal cancellation should not blame user: %q", PublicMessage(err, MessageOptions{}))
+	}
+
+	interruptErr := cancellation.NewSignalError(syscall.SIGINT)
+	if got := Classify(interruptErr); got.Kind != KindInterrupted {
+		t.Fatalf("Classify(SIGINT) = %+v, want interrupted", got)
 	}
 }
 

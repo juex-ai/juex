@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -38,12 +36,8 @@ const (
 // per error type (principle 6: stable exit codes).
 func Execute() int {
 	cmd := newRootCmd()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := cancellation.NotifyContext(context.Background())
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		stop()
-	}()
 	cmd.SetContext(ctx)
 	err := cmd.ExecuteContext(ctx)
 	if err == nil {
@@ -55,7 +49,7 @@ func Execute() int {
 		err = emitted.err
 		alreadyEmitted = true
 	}
-	err = cancellation.NormalizeError(err)
+	err = cancellation.NormalizeErrorWithContext(ctx, err)
 	var lockErr *session.LockError
 	if errors.As(err, &lockErr) {
 		printErrorIfNeeded(alreadyEmitted, err)

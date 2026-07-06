@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -761,6 +763,71 @@ func TestEmitRunError_CancelledJSON(t *testing.T) {
 	}
 	if body.WorkDir != "/work" {
 		t.Fatalf("work_dir = %q, want /work", body.WorkDir)
+	}
+}
+
+func TestEmitRunError_SignalJSON(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		wantError     string
+		wantMessage   string
+		wantSignal    string
+		wantSignalNum float64
+	}{
+		{
+			name:          "sigterm",
+			err:           cancellation.NewSignalError(syscall.SIGTERM),
+			wantError:     "terminated",
+			wantMessage:   "run terminated by signal SIGTERM (15)",
+			wantSignal:    "SIGTERM",
+			wantSignalNum: 15,
+		},
+		{
+			name:          "sigint",
+			err:           cancellation.NewSignalError(syscall.SIGINT),
+			wantError:     "interrupted",
+			wantMessage:   "run interrupted by signal SIGINT (2)",
+			wantSignal:    "SIGINT",
+			wantSignalNum: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			err := emitRunError(true, &stderr, tt.err, nil, "/work")
+			if err == nil {
+				t.Fatal("expected emitted error")
+			}
+			var body errorJSON
+			if jsonErr := json.Unmarshal(stderr.Bytes(), &body); jsonErr != nil {
+				t.Fatalf("stderr is not error JSON: %v\n%s", jsonErr, stderr.String())
+			}
+			if body.Error != tt.wantError {
+				t.Fatalf("error = %q, want %q; stderr=%s", body.Error, tt.wantError, stderr.String())
+			}
+			if body.Message != tt.wantMessage {
+				t.Fatalf("message = %q, want %q", body.Message, tt.wantMessage)
+			}
+			if strings.Contains(body.Message, "by user") {
+				t.Fatalf("message should not blame user: %q", body.Message)
+			}
+			if body.Suggestion != externalStopSuggestion {
+				t.Fatalf("suggestion = %q, want external stop suggestion", body.Suggestion)
+			}
+			if body.Retryable {
+				t.Fatal("retryable = true, want false")
+			}
+			if body.Details["signal"] != tt.wantSignal {
+				t.Fatalf("details.signal = %#v, want %s", body.Details["signal"], tt.wantSignal)
+			}
+			if body.Details["signal_number"] != tt.wantSignalNum {
+				t.Fatalf("details.signal_number = %#v, want %v", body.Details["signal_number"], tt.wantSignalNum)
+			}
+			if body.Details["interrupted"] != true {
+				t.Fatalf("details.interrupted = %#v, want true", body.Details["interrupted"])
+			}
+		})
 	}
 }
 

@@ -433,6 +433,9 @@ func summaryFor(event string, p map[string]any) map[string]any {
 		add("error_kind")
 		add("timed_out")
 		add("raw_cause")
+		add("signal")
+		add("signal_number")
+		add("interrupted")
 	case "llm.requested":
 		add("iter")
 		add("history_len")

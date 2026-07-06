@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1964,6 +1965,44 @@ func TestTurn_ContextCancellation(t *testing.T) {
 	}
 	if !errors.Is(err, cancellation.ErrUserCancelled) {
 		t.Fatalf("err = %v, want ErrUserCancelled", err)
+	}
+}
+
+func TestTurn_SignalCancellationEventPayload(t *testing.T) {
+	prov := &mockProvider{
+		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "x"), StopReason: llm.StopEndTurn}},
+		delay:  500 * time.Millisecond,
+	}
+	eng, bus := newEngine(t, prov, false)
+	var payload TurnErroredPayload
+	bus.Subscribe("turn.errored", func(e events.Event) {
+		payload, _ = e.Payload.(TurnErroredPayload)
+	})
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel(cancellation.NewSignalError(syscall.SIGTERM))
+	}()
+
+	_, err := eng.Turn(ctx, "hi")
+	if err == nil {
+		t.Fatal("expected signal cancellation error")
+	}
+	if signalErr, ok := cancellation.AsSignalError(err); !ok || signalErr.Signal != "SIGTERM" {
+		t.Fatalf("err = %T %v, want SIGTERM signal error", err, err)
+	}
+	if payload.Error != "run terminated by signal SIGTERM (15)" {
+		t.Fatalf("turn.errored error = %q", payload.Error)
+	}
+	if payload.ErrorKind != "terminated" {
+		t.Fatalf("turn.errored error_kind = %q, want terminated", payload.ErrorKind)
+	}
+	if payload.Signal != "SIGTERM" || payload.SignalNumber != 15 || !payload.Interrupted {
+		t.Fatalf("turn.errored payload = %+v, want signal metadata", payload)
+	}
+	if strings.Contains(payload.Error, "by user") {
+		t.Fatalf("turn.errored error should not blame user: %q", payload.Error)
 	}
 }
 

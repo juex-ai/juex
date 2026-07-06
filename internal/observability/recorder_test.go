@@ -273,6 +273,37 @@ func TestRecorderPreservesTimeoutRawCause(t *testing.T) {
 	}
 }
 
+func TestRecorderPreservesSignalMetadata(t *testing.T) {
+	dir := t.TempDir()
+	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Record(event("turn.errored", "t1", map[string]any{
+		"error":         "run terminated by signal SIGTERM (15)",
+		"error_kind":    "terminated",
+		"signal":        "SIGTERM",
+		"signal_number": 15,
+		"interrupted":   true,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	trace := readJSONLines[TraceRecord](t, filepath.Join(dir, "trace.jsonl"))
+	if len(trace) != 1 {
+		t.Fatalf("trace len = %d, want 1", len(trace))
+	}
+	if trace[0].ErrorKind != "terminated" {
+		t.Fatalf("error kind = %q, want terminated", trace[0].ErrorKind)
+	}
+	if trace[0].Summary["signal"] != "SIGTERM" || trace[0].Summary["signal_number"] != float64(15) || trace[0].Summary["interrupted"] != true {
+		t.Fatalf("trace summary = %+v, want signal metadata", trace[0].Summary)
+	}
+}
+
 func TestRecorderCapturesToolFailureLedgerEvents(t *testing.T) {
 	dir := t.TempDir()
 	rec, err := NewRecorder(Options{SessionID: "s1", SessionDir: dir, Debug: true})

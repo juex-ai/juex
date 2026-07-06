@@ -561,16 +561,27 @@ func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
 	}
 
 	var got struct {
-		Error      string `json:"error"`
-		Message    string `json:"message"`
-		Retryable  bool   `json:"retryable"`
-		SessionDir string `json:"session_dir"`
+		Error      string         `json:"error"`
+		Message    string         `json:"message"`
+		Suggestion string         `json:"suggestion"`
+		Retryable  bool           `json:"retryable"`
+		SessionDir string         `json:"session_dir"`
+		Details    map[string]any `json:"details"`
 	}
 	if jsonErr := json.Unmarshal(stderr.Bytes(), &got); jsonErr != nil {
 		t.Fatalf("stderr is not JSON: %v\n%s", jsonErr, stderr.String())
 	}
-	if got.Error != "cancelled" || got.Message != "cancelled by user" || got.Retryable {
-		t.Fatalf("cancel JSON = %+v; stderr=%s", got, stderr.String())
+	if got.Error != "interrupted" || got.Message != "run interrupted by signal SIGINT (2)" || got.Retryable {
+		t.Fatalf("interrupt JSON = %+v; stderr=%s", got, stderr.String())
+	}
+	if strings.Contains(got.Message, "by user") {
+		t.Fatalf("message should not blame user: %q", got.Message)
+	}
+	if got.Suggestion == "" || !strings.Contains(got.Suggestion, "stopped externally") {
+		t.Fatalf("suggestion = %q, want external stop guidance", got.Suggestion)
+	}
+	if got.Details["signal"] != "SIGINT" || got.Details["signal_number"] != float64(2) || got.Details["interrupted"] != true {
+		t.Fatalf("details = %+v, want SIGINT metadata", got.Details)
 	}
 	if got.SessionDir == "" {
 		t.Fatalf("stderr missing session_dir: %s", stderr.String())
@@ -579,9 +590,9 @@ func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
 		t.Fatalf("provider requests = %d, want only initial tool-use request", requestCount.Load())
 	}
 
-	assertConversationToolError(t, filepath.Join(got.SessionDir, "conversation.jsonl"), "call_exec_cancel", "cancelled by user")
+	assertConversationToolError(t, filepath.Join(got.SessionDir, "conversation.jsonl"), "call_exec_cancel", "run interrupted by signal SIGINT (2)")
 	eventsText := strings.Join(readLines(t, filepath.Join(got.SessionDir, "events.jsonl")), "\n")
-	for _, want := range []string{"tool.errored", "turn.errored", "cancelled by user"} {
+	for _, want := range []string{`"type":"tool.errored"`, `"type":"turn.errored"`, `"error_kind":"interrupted"`, `"signal":"SIGINT"`, `"signal_number":2`} {
 		if !strings.Contains(eventsText, want) {
 			t.Fatalf("events missing %q:\n%s", want, eventsText)
 		}

@@ -298,7 +298,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	var result turnLifecycleResult
 	result, err = lifecycle.runLocked(ctx)
 	if err != nil {
-		return "", e.failTurn(turnID, cancellation.NormalizeError(err))
+		return "", e.failTurn(turnID, cancellation.NormalizeErrorWithContext(ctx, err))
 	}
 	return result.output, nil
 }
@@ -796,7 +796,7 @@ func (e *Engine) markPendingInputMessageProcessed(msg llm.Message) error {
 }
 
 func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) error {
-	if err := ctx.Err(); err != nil {
+	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
 	e.pendingMu.Lock()
@@ -913,6 +913,11 @@ func (e *Engine) failTurn(turnID string, err error) error {
 		ErrorKind: string(classification.Kind),
 		TimedOut:  classification.TimedOut,
 		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
+	}
+	if signalErr, ok := cancellation.AsSignalError(err); ok {
+		payload.Signal = signalErr.Signal
+		payload.SignalNumber = signalErr.SignalNumber
+		payload.Interrupted = true
 	}
 	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: payload})
 	return err
