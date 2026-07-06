@@ -129,7 +129,7 @@ func NotifyContext(parent context.Context, signals ...os.Signal) (context.Contex
 			cancel(NewSignalError(sig))
 		case <-parent.Done():
 			signal.Stop(ch)
-			cancel(parent.Err())
+			cancel(context.Cause(parent))
 		case <-done:
 		}
 	}()

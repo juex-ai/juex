@@ -64,3 +64,18 @@ func TestContextErrorReturnsSignalCause(t *testing.T) {
 		t.Fatalf("ContextError = %#v, want signal cause", got)
 	}
 }
+
+func TestNotifyContextPreservesParentCancelCause(t *testing.T) {
+	parent, cancelParent := context.WithCancelCause(context.Background())
+	ctx, stop := NotifyContext(parent, os.Interrupt)
+	defer stop()
+
+	signalErr := NewSignalError(syscall.SIGTERM)
+	cancelParent(signalErr)
+	<-ctx.Done()
+
+	got := ContextError(ctx)
+	if got != signalErr {
+		t.Fatalf("ContextError = %#v, want parent signal cause", got)
+	}
+}
