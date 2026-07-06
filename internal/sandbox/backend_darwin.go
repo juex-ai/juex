@@ -23,9 +23,6 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 }
 
 func darwinProfile(policy Policy, workspaceRoots []string) (string, error) {
-	if policy.FileSystem.OutsideWorkspace == OutsideWorkspaceDenied {
-		return "", NewError(ErrorCodePolicyUnavailable, "darwin", "sandbox-exec", "profile", policy, "The current macOS backend cannot safely enforce denied outside-workspace reads for arbitrary shells; use read_only, set sandbox.enabled: false, or run with a stronger backend.", nil)
-	}
 	if err := ValidateOutsideWorkspaceAccess(policy.FileSystem.OutsideWorkspace); err != nil {
 		return "", err
 	}
@@ -38,6 +35,14 @@ func darwinProfile(policy Policy, workspaceRoots []string) (string, error) {
 			return "", NewError(ErrorCodePolicyUnavailable, "darwin", "sandbox-exec", "profile", policy, "A writable workspace root is required when outside_workspace is read_only.", nil)
 		}
 		fmt.Fprintf(&b, "(deny file-write* (require-not %s))\n", darwinWritablePathPredicate(roots))
+	}
+	for _, path := range normalizedBlockedPaths(firstWorkspaceRoot(workspaceRoots), policy.FileSystem.BlockedPaths) {
+		fmt.Fprintf(&b, "(deny file-read* (literal %s))\n", strconv.Quote(path))
+		fmt.Fprintf(&b, "(deny file-read* (subpath %s))\n", strconv.Quote(path))
+		fmt.Fprintf(&b, "(deny file-write* (literal %s))\n", strconv.Quote(path))
+		fmt.Fprintf(&b, "(deny file-write* (subpath %s))\n", strconv.Quote(path))
+		fmt.Fprintf(&b, "(deny file-write-unlink (literal %s))\n", strconv.Quote(path))
+		fmt.Fprintf(&b, "(deny file-write-unlink (subpath %s))\n", strconv.Quote(path))
 	}
 	if !policy.Network.Enabled {
 		b.WriteString("(deny network*)\n")

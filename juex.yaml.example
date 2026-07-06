@@ -35,7 +35,8 @@ model: openai/gpt-4.1
 # must start through a platform sandbox backend or fail closed with an
 # actionable error; Juex never silently falls back to unsandboxed execution.
 # Workspace files remain read/write. outside_workspace controls filesystem
-# access outside the workspace: read_write, read_only, or denied.
+# access outside the workspace: read_write or read_only. blocked_paths makes
+# selected paths inaccessible even when the preset would otherwise allow them.
 # Restricted modes may still expose backend-owned device and temporary scratch
 # paths that standard shell tools require, without reopening arbitrary host
 # paths outside the workspace.
@@ -43,6 +44,11 @@ model: openai/gpt-4.1
 #   enabled: false
 #   file_system:
 #     outside_workspace: read_write
+#     # Linux command sandboxing fails closed if a blocked path does not
+#     # already exist, because missing paths cannot be safely masked.
+#     blocked_paths:
+#       - ~/.ssh
+#       - ~/.aws
 #   network:
 #     enabled: true
 

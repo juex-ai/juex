@@ -29,3 +29,11 @@ func normalizedRoots(roots []string) []string {
 	}
 	return out
 }
+
+func firstWorkspaceRoot(roots []string) string {
+	normalized := normalizedRoots(roots)
+	if len(normalized) == 0 {
+		return ""
+	}
+	return normalized[0]
+}

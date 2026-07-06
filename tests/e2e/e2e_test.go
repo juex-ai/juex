@@ -1498,6 +1498,62 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	}
 }
 
+func TestEndToEnd_SandboxBlockedPathsStopBuiltinTools(t *testing.T) {
+	work := t.TempDir()
+	policy := config.SandboxPolicy{
+		Enabled: true,
+		FileSystem: config.FileSystemSandboxPolicy{
+			OutsideWorkspace: config.OutsideWorkspaceReadWrite,
+			BlockedPaths:     []string{"private"},
+		},
+		Network: config.NetworkSandboxPolicy{Enabled: true},
+	}
+	prov := &recordingProvider{
+		steps: []llm.Response{
+			{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+					{Type: llm.BlockToolUse, ToolUseID: "blocked-write", ToolName: "write", Input: map[string]any{"path": "private/secret.txt", "content": "x"}},
+				}},
+				StopReason: llm.StopToolUse,
+			},
+			{
+				Message:    llm.TextMessage(llm.RoleAssistant, "blocked path observed"),
+				StopReason: llm.StopEndTurn,
+			},
+		},
+	}
+	a, err := app.New(app.Options{
+		Config:   config.Config{ProviderProtocol: "openai/chat", WorkDir: work, Sandbox: policy},
+		Provider: prov,
+		WorkDir:  work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	out, err := a.Run(context.Background(), "try blocked write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "blocked path observed" {
+		t.Fatalf("out = %q", out)
+	}
+	if got := messagesText(prov.history[1]); !strings.Contains(got, "blocked path") {
+		t.Fatalf("provider history missing blocked path tool result:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(work, "private", "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("blocked write should not create file, stat err=%v", err)
+	}
+	eventsData, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(eventsData), `"type":"tool.errored"`) {
+		t.Fatalf("events missing tool.errored:\n%s", eventsData)
+	}
+}
+
 func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	work := t.TempDir()
 	prov := &recordingProvider{

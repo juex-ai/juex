@@ -26,6 +26,27 @@ func TestDarwinReadOnlyProfileRestrictsWritesOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestDarwinProfileBlocksConfiguredPaths(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.OutsideWorkspace = OutsideWorkspaceReadWrite
+	policy.FileSystem.BlockedPaths = []string{"/tmp/secret"}
+	profile, err := darwinProfile(policy, []string{"/tmp/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"(deny file-read* (literal \"/tmp/secret\"))",
+		"(deny file-read* (subpath \"/tmp/secret\"))",
+		"(deny file-write* (literal \"/tmp/secret\"))",
+		"(deny file-write-unlink (subpath \"/tmp/secret\"))",
+	} {
+		if !strings.Contains(profile, want) {
+			t.Fatalf("profile missing %q:\n%s", want, profile)
+		}
+	}
+}
+
 func TestDarwinReadOnlyBackendAllowsWorkspaceWriteOnly(t *testing.T) {
 	if _, err := exec.LookPath("sandbox-exec"); err != nil {
 		t.Skip("sandbox-exec unavailable")

@@ -199,7 +199,8 @@ type sandboxConfig struct {
 }
 
 type sandboxFileSystemConfig struct {
-	OutsideWorkspace string `yaml:"outside_workspace"`
+	OutsideWorkspace string   `yaml:"outside_workspace"`
+	BlockedPaths     []string `yaml:"blocked_paths"`
 }
 
 type sandboxNetworkConfig struct {
@@ -928,6 +929,13 @@ func applySandboxConfig(cfg *Config, c sandboxConfig) error {
 			return err
 		}
 		cfg.Sandbox.FileSystem.OutsideWorkspace = access
+	}
+	if len(c.FileSystem.BlockedPaths) > 0 {
+		paths, err := sandbox.AppendBlockedPaths(cfg.Sandbox.FileSystem.BlockedPaths, c.FileSystem.BlockedPaths)
+		if err != nil {
+			return err
+		}
+		cfg.Sandbox.FileSystem.BlockedPaths = paths
 	}
 	if c.Network.Enabled.Set {
 		cfg.Sandbox.Network.Enabled = c.Network.Enabled.Value

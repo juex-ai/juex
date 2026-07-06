@@ -16,6 +16,16 @@ func TestDefaultPolicy(t *testing.T) {
 	if policy.FileSystem.OutsideWorkspace != OutsideWorkspaceReadWrite || !policy.Network.Enabled {
 		t.Fatalf("policy = %+v", policy)
 	}
+	if len(policy.FileSystem.BlockedPaths) != 0 {
+		t.Fatalf("blocked paths = %#v, want empty", policy.FileSystem.BlockedPaths)
+	}
+}
+
+func TestValidateOutsideWorkspaceAccessRejectsDenied(t *testing.T) {
+	err := ValidateOutsideWorkspaceAccess(OutsideWorkspaceAccess("denied"))
+	if err == nil || !strings.Contains(err.Error(), "read_write, read_only") {
+		t.Fatalf("err = %v, want read_write/read_only enum error", err)
+	}
 }
 
 func TestDefaultRunnerReturnsOriginalSpecWhenDisabled(t *testing.T) {

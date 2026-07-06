@@ -24,6 +24,13 @@ func registerTestBuiltins(r *Registry, workDir string) {
 	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile()})
 }
 
+func registerSandboxedTestBuiltins(r *Registry, workDir string, blockedPaths []string) {
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.BlockedPaths = blockedPaths
+	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile(), Sandbox: policy})
+}
+
 func fakeShellProfile() ShellProfile {
 	return ShellProfile{
 		Profile:   "fake",
@@ -807,6 +814,47 @@ func TestBuiltins_FileToolsResolveRelativePathsFromWorkDir(t *testing.T) {
 	}
 }
 
+func TestBuiltins_FileToolsRespectSandboxBlockedPaths(t *testing.T) {
+	workDir := t.TempDir()
+	blockedDir := filepath.Join(workDir, "private")
+	if err := os.MkdirAll(blockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	blockedFile := filepath.Join(blockedDir, "secret.txt")
+	if err := os.WriteFile(blockedFile, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	publicFile := filepath.Join(workDir, "public.txt")
+	if err := os.WriteFile(publicFile, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerSandboxedTestBuiltins(r, workDir, []string{"private"})
+
+	if _, err := r.Call(context.Background(), "read", map[string]any{"path": "private/secret.txt"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("read blocked err = %v, want blocked path", err)
+	}
+	if _, err := r.Call(context.Background(), "write", map[string]any{"path": "private/new.txt", "content": "nope"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("write blocked err = %v, want blocked path", err)
+	}
+	if _, err := os.Stat(filepath.Join(blockedDir, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("blocked write created file, stat err=%v", err)
+	}
+	if _, err := r.Call(context.Background(), "edit", map[string]any{"path": "private/secret.txt", "old": "secret", "new": "open"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("edit blocked err = %v, want blocked path", err)
+	}
+	if data := mustReadFile(t, blockedFile); string(data) != "secret" {
+		t.Fatalf("blocked file changed: %q", data)
+	}
+	out, err := r.Call(context.Background(), "read", map[string]any{"path": "public.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "hello" {
+		t.Fatalf("public read = %q", out)
+	}
+}
+
 func TestRegisterBuiltinsApplyPatchSchemaAndDisable(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, t.TempDir())
@@ -1043,6 +1091,36 @@ func TestBuiltins_ApplyPatchRejectsSymlinkEscape(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(outside, "escape.txt")); !os.IsNotExist(statErr) {
 		t.Fatalf("escape file should not exist outside workspace, stat err=%v", statErr)
+	}
+}
+
+func TestBuiltins_ApplyPatchRespectsSandboxBlockedPathsBeforeReading(t *testing.T) {
+	workDir := t.TempDir()
+	blockedDir := filepath.Join(workDir, "private")
+	if err := os.MkdirAll(blockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(blockedDir, "secret.txt")
+	original := "secret\n"
+	if err := os.WriteFile(target, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerSandboxedTestBuiltins(r, workDir, []string{"private"})
+
+	_, err := r.Call(context.Background(), "apply_patch", map[string]any{"patch_text": strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: private/secret.txt",
+		"@@",
+		"-secret",
+		"+open",
+		"*** End Patch",
+	}, "\n")})
+	if err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("err = %v, want blocked path", err)
+	}
+	if data := mustReadFile(t, target); string(data) != original {
+		t.Fatalf("blocked file changed: %q", data)
 	}
 }
 
@@ -1443,6 +1521,22 @@ func TestBuiltins_ChunkedWriteRejectsUnsafePath(t *testing.T) {
 				t.Fatalf("err = %v, want unsafe path", err)
 			}
 		})
+	}
+}
+
+func TestBuiltins_ChunkedWriteRespectsSandboxBlockedPaths(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "private"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerSandboxedTestBuiltins(r, workDir, []string{"private"})
+
+	if _, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "private/long.md"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("write_begin err = %v, want blocked path", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "private", "long.md")); !os.IsNotExist(err) {
+		t.Fatalf("blocked chunked write created file, stat err=%v", err)
 	}
 }
 
@@ -2710,6 +2804,33 @@ func TestBuiltins_Grep(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("want 2 hits, got %d in:\n%s", len(lines), out)
+	}
+}
+
+func TestBuiltins_GrepRespectsSandboxBlockedPaths(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "public.txt"), []byte("needle public"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	blockedDir := filepath.Join(workDir, "private")
+	if err := os.MkdirAll(blockedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blockedDir, "secret.txt"), []byte("needle secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	registerSandboxedTestBuiltins(r, workDir, []string{"private"})
+
+	out, err := r.Call(context.Background(), "grep", map[string]any{"pattern": "needle", "path": "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "public.txt") || strings.Contains(out, "secret") {
+		t.Fatalf("grep output = %q, want public hit without blocked content", out)
+	}
+	if _, err := r.Call(context.Background(), "grep", map[string]any{"pattern": "needle", "path": "private"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("direct blocked grep err = %v, want blocked path", err)
 	}
 }
 
