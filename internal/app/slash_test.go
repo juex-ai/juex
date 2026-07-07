@@ -73,10 +73,13 @@ func TestParseSlashCommandRejectsArgumentsExplicitly(t *testing.T) {
 func TestStatusSnapshotNilApp(t *testing.T) {
 	var a *App
 	text := a.StatusSnapshot(time.Time{}).Text()
-	for _, want := range []string{"Juex status", "model: not configured", "skills: 0", "compact: 0, memory: 0 tokens", "success: llm n/a, tools n/a", "turn: idle", "queued input: 0"} {
+	for _, want := range []string{"model: not configured", "observables: 0/0 running, 0 errors", "skills: 0", "compact: 0, memory: 0 tokens", "success: llm n/a, tools n/a", "turn: idle", "queued input: 0"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "Juex status") {
+		t.Fatalf("status text should not include heading:\n%s", text)
 	}
 }
 
@@ -92,6 +95,20 @@ func TestStatusSnapshotTextSeparatesTurnAndQueue(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestStatusSnapshotTextIncludesObservableCounts(t *testing.T) {
+	text := (StatusSnapshot{
+		Observables: StatusObservablesSnapshot{
+			Configured: 3,
+			Running:    2,
+			Errors:     1,
+		},
+	}).Text()
+	want := statusLabel(statusIconObservable, "observables: 2/3 running, 1 errors")
+	if !strings.Contains(text, want) {
+		t.Fatalf("status text missing %q:\n%s", want, text)
 	}
 }
 
@@ -122,12 +139,12 @@ func TestStatusSnapshotTextUsesIntentionalIconLabels(t *testing.T) {
 		},
 	}).Text()
 	for _, want := range []string{
-		statusLabel(statusIconHeading, "Juex status"),
 		statusLabel(statusIconSession, "session:"),
 		statusLabel(statusIconSessionKind, "session kind:"),
 		statusLabel(statusIconWorkDir, "workdir:"),
 		statusLabel(statusIconProvider, "model:"),
 		statusLabel(statusIconMCP, "mcp:"),
+		statusLabel(statusIconObservable, "observables:"),
 		statusLabel(statusIconSkills, "skills:"),
 		statusLabel(statusIconTokens, "tokens:"),
 		statusLabel(statusIconContext, "context:"),
@@ -159,7 +176,7 @@ func TestStatusSnapshotTextUsesCompactModelAndCacheHit(t *testing.T) {
 	}).Text()
 	for _, want := range []string{
 		statusLabel(statusIconProvider, "model: ark:deepseek-v4-pro"),
-		statusLabel(statusIconContext, "context: 32047/256000 tokens, cache hit 37.5%"),
+		statusLabel(statusIconContext, "context: 32k/256k tokens, cache hit 37.5%"),
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
@@ -169,6 +186,22 @@ func TestStatusSnapshotTextUsesCompactModelAndCacheHit(t *testing.T) {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("status text should not include %q:\n%s", notWant, text)
 		}
+	}
+}
+
+func TestStatusSnapshotContextCacheHitUsesCachedInputTokens(t *testing.T) {
+	text := (StatusSnapshot{
+		ContextUsage: &llm.ContextUsage{
+			ContextWindow:     1_000_000,
+			InputTokens:       120_000,
+			OutputTokens:      500,
+			CachedInputTokens: 0,
+			TotalTokens:       120_500,
+		},
+	}).Text()
+	want := statusLabel(statusIconContext, "context: 120.5k/1m tokens, cache hit 0%")
+	if !strings.Contains(text, want) {
+		t.Fatalf("status text missing %q:\n%s", want, text)
 	}
 }
 
@@ -227,10 +260,13 @@ func TestApp_RunStatusSlashSkipsProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Juex status", "session:", "model:", "tokens:"} {
+	for _, want := range []string{"session:", "model:", "observables:", "tokens:"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("status output missing %q in:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "Juex status") {
+		t.Fatalf("status output should not include heading:\n%s", out)
 	}
 	if prov.calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.calls)
@@ -325,7 +361,7 @@ func TestApp_REPLProcessesStatusSlash(t *testing.T) {
 	if err := a.REPL(context.Background(), strings.NewReader("/status\n"), &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Juex status") {
+	if !strings.Contains(out.String(), "observables: 0/0 running, 0 errors") || strings.Contains(out.String(), "Juex status") {
 		t.Fatalf("repl output = %q", out.String())
 	}
 	if prov.calls != 0 {

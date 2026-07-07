@@ -212,13 +212,13 @@ func contextUsageFromPayload(payload any) (llm.ContextUsage, bool) {
 	return usage, true
 }
 
-// parseStartedAt extracts the timestamp prefix from a session id
+// parseStartedAt extracts the local-time timestamp prefix from a session id
 // (YYYYMMDDTHHMMSS-...). Falls back to fallback if the id is malformed.
 func parseStartedAt(id string, fallback time.Time) time.Time {
 	if len(id) < len(idTimeLayout) {
 		return fallback
 	}
-	t, err := time.ParseInLocation(idTimeLayout, id[:len(idTimeLayout)], time.UTC)
+	t, err := time.ParseInLocation(idTimeLayout, id[:len(idTimeLayout)], time.Local)
 	if err != nil {
 		return fallback
 	}

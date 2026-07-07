@@ -195,7 +195,7 @@ func TestList_ExtractsTurnsAndPreview(t *testing.T) {
 	if got[0].ContextUsage == nil || got[0].ContextUsage.TotalTokens != 10 {
 		t.Fatalf("context_usage = %+v, want latest total 10", got[0].ContextUsage)
 	}
-	want := time.Date(2026, 5, 6, 10, 35, 0, 0, time.UTC)
+	want := time.Date(2026, 5, 6, 10, 35, 0, 0, time.Local)
 	if !got[0].StartedAt.Equal(want) {
 		t.Errorf("started_at = %v, want %v", got[0].StartedAt, want)
 	}

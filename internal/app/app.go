@@ -832,8 +832,10 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
 }
 
 func FormatTokenUsage(usage llm.Usage) string {
-	return fmt.Sprintf("tokens: %d total (input %d, output %d)",
-		usage.TotalTokens(), usage.InputTokens, usage.OutputTokens)
+	return fmt.Sprintf("tokens: %s total (input %s, output %s)",
+		FormatCompactTokenCount(usage.TotalTokens()),
+		FormatCompactTokenCount(usage.InputTokens),
+		FormatCompactTokenCount(usage.OutputTokens))
 }
 
 // Close releases session file handles and MCP subprocesses.
