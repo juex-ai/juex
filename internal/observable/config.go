@@ -454,6 +454,9 @@ func validateScheduleSpec(spec Spec) (Spec, error) {
 	if err := rejectInactiveCommandFields(spec.Source); err != nil {
 		return Spec{}, err
 	}
+	if strings.TrimSpace(spec.Defaults.Kind) != "" || strings.TrimSpace(spec.Defaults.Severity) != "" {
+		return Spec{}, fmt.Errorf("schedule source cannot set defaults; use observation.kind and observation.severity")
+	}
 	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
 	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
 	spec.Observation.Content = strings.TrimSpace(spec.Observation.Content)

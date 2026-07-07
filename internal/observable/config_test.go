@@ -179,6 +179,19 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 			want: "source.timezone",
 		},
 		{
+			name: "schedule with top-level defaults",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "schedule-defaults",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeSchedule,
+					Interval: &observable.IntervalSchedule{EverySeconds: 60},
+				},
+				Defaults:    observable.Defaults{Severity: "critical"},
+				Observation: observable.ObservationSpec{Content: "hello"},
+			}}},
+			want: "cannot set defaults",
+		},
+		{
 			name: "schedule mixed with legacy command",
 			cfg: observable.FileConfig{Observables: []observable.Spec{{
 				ID:      "mixed-schedule",
