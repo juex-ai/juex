@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Activity, CalendarClock, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 
 import {
   deleteObservable,
@@ -13,6 +13,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ObservableStatus } from "@/types";
+
+const observableGridColumns =
+  "grid-cols-[24rem_minmax(8rem,0.6fr)_minmax(18rem,1.2fr)_minmax(18rem,1fr)_8rem]";
+const observableGridMinWidth = "min-w-[76rem]";
 
 export function Observables() {
   const navigate = useNavigate();
@@ -117,17 +121,35 @@ export function Observables() {
               No observables configured.
             </div>
           ) : (
-            <table className="w-full min-w-[62rem] text-left text-sm">
-              <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Observable</th>
-                  <th className="px-3 py-2 font-medium">State</th>
-                  <th className="px-3 py-2 font-medium">Source</th>
-                  <th className="px-3 py-2 font-medium">Last Observation</th>
-                  <th className="px-3 py-2 text-right font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
+            <div
+              className={cn("w-full text-left text-sm", observableGridMinWidth)}
+              role="table"
+              aria-label="Observables"
+            >
+              <div
+                className={cn(
+                  "grid bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground",
+                  observableGridColumns,
+                )}
+                role="row"
+              >
+                <div className="px-3 py-2 font-medium" role="columnheader">
+                  Observable
+                </div>
+                <div className="px-3 py-2 font-medium" role="columnheader">
+                  State
+                </div>
+                <div className="px-3 py-2 font-medium" role="columnheader">
+                  Source
+                </div>
+                <div className="px-3 py-2 font-medium" role="columnheader">
+                  Last Observation
+                </div>
+                <div className="px-3 py-2 text-right font-medium" role="columnheader">
+                  Actions
+                </div>
+              </div>
+              <div role="rowgroup">
                 {observables.map((item) => (
                   <ObservableRow
                     key={item.id}
@@ -136,8 +158,8 @@ export function Observables() {
                     onAction={runAction}
                   />
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -155,20 +177,24 @@ function ObservableRow({
   onAction: (id: string, action: "start" | "stop" | "delete") => Promise<void>;
 }) {
   const last = item.last_observation?.id ? item.last_observation : null;
+  const detailHref = `/observables/${encodeURIComponent(item.id)}`;
+  const detailLabel = `Open observable ${item.name || item.id}`;
+
   return (
-    <tr className="border-t">
-      <td className="px-3 py-2">
-        <Link
-          to={`/observables/${encodeURIComponent(item.id)}`}
-          className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded-md px-1 py-1 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/35"
-        >
-          <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary">
-            {item.source_type === "schedule" ? (
-              <CalendarClock className="size-4" />
-            ) : (
-              <Activity className="size-4" />
-            )}
-          </span>
+    <div
+      className={cn(
+        "group relative grid cursor-pointer border-t transition-colors hover:bg-muted/35 focus-within:bg-muted/40",
+        observableGridColumns,
+      )}
+      role="row"
+    >
+      <Link
+        to={detailHref}
+        className="absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35"
+        aria-label={detailLabel}
+      />
+      <div className="pointer-events-none relative z-10 min-w-0 px-3 py-2" role="cell">
+        <div className="pointer-events-none relative z-10 min-w-0 rounded-md px-1 py-1">
           <span className="min-w-0">
             <span className="block truncate font-medium text-foreground">
               {item.name || item.id}
@@ -177,13 +203,13 @@ function ObservableRow({
               {item.id}
             </span>
           </span>
-        </Link>
-      </td>
-      <td className="px-3 py-2">
+        </div>
+      </div>
+      <div className="pointer-events-none relative z-10 px-3 py-2" role="cell">
         <StateBadge state={item.state} />
-      </td>
-      <td className="max-w-[26rem] px-3 py-2">
-        <div className="min-w-0">
+      </div>
+      <div className="pointer-events-none relative z-10 min-w-0 px-3 py-2" role="cell">
+        <div className="pointer-events-none relative z-10 min-w-0">
           <div className="flex items-center gap-1.5">
             <Badge variant="outline" className="font-mono text-[11px]">
               {item.source_type || "command"}
@@ -198,10 +224,10 @@ function ObservableRow({
             </div>
           ) : null}
         </div>
-      </td>
-      <td className="max-w-[22rem] px-3 py-2">
+      </div>
+      <div className="pointer-events-none relative z-10 min-w-0 px-3 py-2" role="cell">
         {last ? (
-          <div className="min-w-0">
+          <div className="pointer-events-none relative z-10 min-w-0">
             <div className="truncate text-sm">{last.content || "-"}</div>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
               <span>{last.kind}</span>
@@ -210,10 +236,10 @@ function ObservableRow({
             </div>
           </div>
         ) : (
-          <span className="text-muted-foreground">-</span>
+          <span className="pointer-events-none relative z-10 text-muted-foreground">-</span>
         )}
-      </td>
-      <td className="px-3 py-2">
+      </div>
+      <div className="relative z-20 cursor-default px-3 py-2" role="cell">
         <div className="flex justify-end gap-1">
           {item.state === "running" ? (
             <Button
@@ -253,8 +279,8 @@ function ObservableRow({
             <Trash2 className="size-3.5" />
           </Button>
         </div>
-      </td>
-    </tr>
+      </div>
+    </div>
   );
 }
 
