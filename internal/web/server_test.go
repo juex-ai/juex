@@ -2,14 +2,19 @@ package web
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -126,6 +131,95 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	}
 	if _, ok := srv.sessions.Load(h.Active.ID); ok {
 		t.Fatalf("server opened runtime app for %s without provider config", h.Active.ID)
+	}
+}
+
+type cancelAwareProvider struct {
+	started  chan struct{}
+	canceled chan error
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (p *cancelAwareProvider) Name() string { return "cancel-aware" }
+func (p *cancelAwareProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-ctx.Done():
+		p.canceled <- ctx.Err()
+		return llm.Response{}, ctx.Err()
+	case <-p.release:
+		return llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "released"),
+			StopReason: llm.StopEndTurn,
+		}, nil
+	}
+}
+
+func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
+	provider := &cancelAwareProvider{
+		started:  make(chan struct{}),
+		canceled: make(chan error, 1),
+		release:  make(chan struct{}),
+	}
+	srv := NewServer(Options{
+		Cfg: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    t.TempDir(),
+			Compaction: config.DefaultCompactionConfig(),
+		},
+		Provider: provider,
+	})
+	defer srv.Close()
+
+	if _, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary); err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.handleMCPNotification(context.Background(), mcp.Notification{
+			ServerName: "test",
+			Method:     "notifications/message",
+			EventType:  "demo",
+			Content:    "trigger a turn",
+		})
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		close(provider.release)
+		t.Fatal("provider did not start")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		srv.Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		close(provider.release)
+		<-closed
+		t.Fatal("server close did not cancel MCP notification turn")
+	}
+	select {
+	case err := <-provider.canceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("provider cancel err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not observe context cancellation")
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, cancellation.ErrUserCancelled) {
+			t.Fatalf("notification err = %v, want ErrUserCancelled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("MCP notification handler did not return")
 	}
 }
 
