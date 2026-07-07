@@ -1301,6 +1301,9 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	if len(resp.Message.Blocks) == 0 || resp.Message.Blocks[0].Type != BlockReasoning || resp.Message.Blocks[0].Signature != "rs_1" {
 		t.Fatalf("reasoning block not preserved: %+v", resp.Message.Blocks)
 	}
+	if resp.Message.Blocks[0].Text != "thought summary" || !resp.Message.Blocks[0].Redacted || resp.Message.Blocks[0].Content == "" {
+		t.Fatalf("reasoning summary/replay metadata = %+v", resp.Message.Blocks[0])
+	}
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v", resp.Usage)
 	}
@@ -1505,6 +1508,9 @@ func TestOpenAICodexResponses_RoundTrip(t *testing.T) {
 	}
 	if len(resp.Message.Blocks) == 0 || resp.Message.Blocks[0].Type != BlockReasoning || resp.Message.Blocks[0].Signature != "rs_1" {
 		t.Fatalf("reasoning block not preserved: %+v", resp.Message.Blocks)
+	}
+	if resp.Message.Blocks[0].Text != "thought summary" || !resp.Message.Blocks[0].Redacted || resp.Message.Blocks[0].Content == "" {
+		t.Fatalf("codex reasoning summary/replay metadata = %+v", resp.Message.Blocks[0])
 	}
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v", resp.Usage)

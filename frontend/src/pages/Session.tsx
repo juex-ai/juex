@@ -56,9 +56,9 @@ import {
 } from "@/lib/message-copy";
 import {
   aggregateToolProcessStatus,
-  compactThinkingPreview,
   formatToolBatchTitle,
   formatToolProcessResultText,
+  thinkingProcessDisplay,
   toolDisplayName,
   toolProcessStatus,
   toolProcessStatusLabel,
@@ -1164,14 +1164,11 @@ function ThinkingProcessRow({
   redacted?: boolean;
   text: string;
 }) {
-  const content = redacted ? "[redacted by provider]" : text;
-  const preview = redacted
-    ? "Thinking [redacted]"
-    : `Thinking ${compactThinkingPreview(text) || "-"}`;
+  const display = thinkingProcessDisplay(text, redacted);
 
   return (
-    <ProcessDisclosure status="done" title={preview}>
-      <ProcessPayload label="Content" value={content || "-"} />
+    <ProcessDisclosure status="done" title={display.title}>
+      <ProcessPayload label="Content" value={display.content || "-"} />
     </ProcessDisclosure>
   );
 }

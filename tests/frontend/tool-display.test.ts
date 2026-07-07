@@ -6,6 +6,7 @@ import {
   compactThinkingPreview,
   formatToolBatchTitle,
   formatToolProcessResultText,
+  thinkingProcessDisplay,
   toolDisplayName,
   toolProcessStatus,
   toolProcessStatusLabel,
@@ -74,6 +75,17 @@ test("compactThinkingPreview truncates after twenty characters", () => {
     "inspect current layo...",
   );
   assert.equal(compactThinkingPreview("short thought"), "short thought");
+});
+
+test("thinkingProcessDisplay shows visible summaries even when replay content is redacted", () => {
+  assert.deepEqual(thinkingProcessDisplay("visible summary", true), {
+    content: "visible summary",
+    title: "Thinking visible summary",
+  });
+  assert.deepEqual(thinkingProcessDisplay("", true), {
+    content: "[redacted by provider]",
+    title: "Thinking [redacted]",
+  });
 });
 
 test("formatToolProcessResultText caps large process output", () => {

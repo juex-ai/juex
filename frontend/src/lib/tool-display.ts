@@ -69,6 +69,28 @@ export function compactThinkingPreview(text: string, limit = 20): string {
   return `${value.slice(0, limit)}...`;
 }
 
+export type ThinkingProcessDisplay = {
+  content: string;
+  title: string;
+};
+
+export function thinkingProcessDisplay(
+  text: string,
+  redacted?: boolean,
+): ThinkingProcessDisplay {
+  const hasVisibleText = text.trim().length > 0;
+  if (redacted && !hasVisibleText) {
+    return {
+      content: "[redacted by provider]",
+      title: "Thinking [redacted]",
+    };
+  }
+  return {
+    content: text,
+    title: `Thinking ${compactThinkingPreview(text) || "-"}`,
+  };
+}
+
 export function toolDisplayName(type: unknown, toolName?: unknown): string {
   const name =
     type === "dynamic-tool"
