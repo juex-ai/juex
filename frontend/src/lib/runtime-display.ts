@@ -1,4 +1,5 @@
 import type {
+  ContextUsage,
   GoalStatusSnapshot,
   RuntimeHooksStatus,
   WorkingState,
@@ -16,6 +17,20 @@ export function formatRuntimeTokenCount(value: number): string {
     }
   }
   return `${Math.round(value / 100_000) / 10}m`;
+}
+
+export function runtimeContextPercentLabel(usage?: ContextUsage): string {
+  const windowTokens = usage?.context_window ?? 0;
+  const totalTokens = usage?.total_tokens ?? 0;
+  if (!Number.isFinite(windowTokens) || windowTokens <= 0) return "-";
+  if (!Number.isFinite(totalTokens) || totalTokens <= 0) return "0%";
+  return formatRuntimePercent((totalTokens / windowTokens) * 100);
+}
+
+function formatRuntimePercent(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded}%`;
 }
 
 export type WorkingStateSectionKey =
@@ -97,6 +112,17 @@ export function runtimeWorkingStateBadgeLabel(
   if (snapshot?.disabled) return "state off";
   if (!snapshot) return "state none";
   return `state ${workingStatePresenceLabel(snapshot)}`;
+}
+
+export function runtimeSessionStateBadgeLabel(): string {
+  return "state";
+}
+
+export function runtimeSessionStateIsActive(
+  goal?: GoalStatusSnapshot,
+  snapshot?: WorkingStateStatusSnapshot,
+): boolean {
+  return runtimeGoalIsActive(goal) || Boolean(snapshot?.present);
 }
 
 export function workingStateRecords(
