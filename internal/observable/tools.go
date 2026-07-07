@@ -205,7 +205,7 @@ func scheduleSourceSchema() map[string]any {
 		},
 		"oneOf": []any{
 			map[string]any{"required": []any{"once"}},
-			map[string]any{"required": []any{"daily"}},
+			map[string]any{"required": []any{"daily", "timezone"}},
 			map[string]any{"required": []any{"interval"}},
 		},
 	}

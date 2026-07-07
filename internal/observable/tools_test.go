@@ -99,6 +99,12 @@ func TestObservableCreateSchemaGuidesSingleSourceShape(t *testing.T) {
 	}
 	if oneOf, ok := schedule["oneOf"].([]any); !ok || len(oneOf) != 3 {
 		t.Fatalf("schedule source oneOf = %#v, want once/daily/interval alternatives", schedule["oneOf"])
+	} else {
+		dailyBranch := schemaMapFromValue(t, oneOf[1])
+		req, ok := dailyBranch["required"].([]any)
+		if !ok || len(req) != 2 || req[0] != "daily" || req[1] != "timezone" {
+			t.Fatalf("schedule daily branch required = %#v, want daily and timezone", req)
+		}
 	}
 	for name, required := range map[string]string{
 		"once":     "at",
