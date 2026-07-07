@@ -200,7 +200,7 @@ func TestLoadConfig_ModelFlagOverridesConfig(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := `model: openai/gpt-default
+	body := `model: openai:gpt-default
 providers:
   - id: openai
     base_url: https://openai.example
@@ -217,7 +217,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "anthropic/claude-sonnet"})
+	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "anthropic:claude-sonnet"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ providers:
 func TestLoadConfig_ModelFlagUsesUserGlobalProviderFromEmptyWorkdir(t *testing.T) {
 	home := setHomeForCLITest(t)
 	work := t.TempDir()
-	body := `model: openai/gpt-default
+	body := `model: openai:gpt-default
 providers:
   - id: openai
     base_url: https://global.example
@@ -242,7 +242,7 @@ providers:
 		t.Fatal(err)
 	}
 
-	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "openai/gpt-global"})
+	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "openai:gpt-global"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,10 +258,24 @@ func TestLoadConfig_ModelFlagRejectsUnknownModelAsUsageError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := loadConfig(&persistentFlags{cwd: work, model: "openai/missing"})
+	_, err := loadConfig(&persistentFlags{cwd: work, model: "openai:missing"})
 	var usageErr *usageError
 	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--model:") {
 		t.Fatalf("err = %T %v, want usage error for --model", err, err)
+	}
+}
+
+func TestLoadConfig_ModelFlagRejectsSlashRefAsUsageError(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadConfig(&persistentFlags{cwd: work, model: "openai/missing"})
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "provider_id:model_id") {
+		t.Fatalf("err = %T %v, want provider_id:model_id usage error", err, err)
 	}
 }
 
@@ -380,7 +394,7 @@ func TestRunCmd_DryRunModelFlagOverridesConfig(t *testing.T) {
 	root.SetErr(&out)
 	dir := t.TempDir()
 	configFile := dir + "/juex.yaml"
-	body := `model: openai/gpt-default
+	body := `model: openai:gpt-default
 providers:
   - id: openai
     base_url: https://openai.example
@@ -396,7 +410,7 @@ providers:
 	if err := writeTextFile(configFile, body); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "--model", "anthropic/claude-sonnet", "run", "--dry-run", "--json", "hello"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "--model", "anthropic:claude-sonnet", "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
 	if _, ok := err.(*dryRunOK); !ok {
 		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
@@ -862,7 +876,7 @@ func writeJuexConfigFile(path, id, base, key, model string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	body := "model: " + id + "/" + model + "\n" +
+	body := "model: " + id + ":" + model + "\n" +
 		"providers:\n" +
 		"  - id: " + id + "\n" +
 		"    base_url: " + base + "\n" +

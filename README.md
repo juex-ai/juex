@@ -43,13 +43,13 @@ Fill in provider settings, then run:
 
 ```bash
 juex run "summarize this repository"
-juex --model openai/gpt-4.1 run "summarize this repository"
+juex --model openai:gpt-4.1 run "summarize this repository"
 juex --debug run --json "summarize this repository"
 juex repl
 juex serve
 ```
 
-`--model` uses the same `provider_id/model_id` format as config and can select
+`--model` uses the same `provider_id:model_id` format as config and can select
 any model declared in the merged provider config, including providers from
 `~/.juex/juex.yaml` when the current directory has no local config.
 
@@ -63,7 +63,7 @@ If you built from source without installing, use `./dist/juex` instead of
 | Command | Purpose |
 | --- | --- |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
-| `juex --model <provider>/<model> run "<prompt>"` | Override the configured model for this invocation. |
+| `juex --model <provider>:<model> run "<prompt>"` | Override the configured model for this invocation. |
 | `juex --debug run --json "<prompt>"` | Write detailed session logs, trace, span, and tool summary JSONL while emitting the normal run result. |
 | `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
 | `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |

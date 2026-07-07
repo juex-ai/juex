@@ -87,11 +87,11 @@ provider smoke and compaction eval commands below.
 
 Common selection and output flags are intentionally consistent across commands:
 
-- `provider_model_smoke.sh --only provider/model` runs one live provider smoke.
-- `compaction_eval.sh --only provider/model` runs one compaction eval; repeat
+- `provider_model_smoke.sh --only provider:model` runs one live provider smoke.
+- `compaction_eval.sh --only provider:model` runs one compaction eval; repeat
   the flag to run a small explicit set.
-- `development_eval.sh --only provider/model` passes the provider smoke scope.
-- `development_eval.sh --compaction-eval --compaction-only provider/model`
+- `development_eval.sh --only provider:model` passes the provider smoke scope.
+- `development_eval.sh --compaction-eval --compaction-only provider:model`
   passes the compaction scope.
 - `--report-dir` overrides the output directory for each command.
 
@@ -105,7 +105,7 @@ Report kinds are:
 
 ## Provider Smoke
 
-Run the rotating local provider/model smoke after building the binary:
+Run the rotating local provider:model smoke after building the binary:
 
 ```bash
 make build
@@ -114,7 +114,7 @@ bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 
 This reads credentials from `~/.juex/juex.yaml`, picks the next
 `provider_smoke_models` ref from `live-models.yaml`, and records the last
-successful ref in `.juex/live-model-rotation.json`. It copies one provider/model
+successful ref in `.juex/live-model-rotation.json`. It copies one provider:model
 at a time into an isolated temporary workdir, then runs a real compiled `juex`
 binary through one live agent workflow. The prompt requires the model to use
 `read`, `write`, `edit`, `grep`, `exec_command`, and `write_stdin` against
@@ -139,7 +139,7 @@ passing run requires:
   token;
 - expected `write`/`edit` file side effects on disk.
 
-A failed provider/model is not a skip; keep the report and explain whether the
+A failed provider:model is not a skip; keep the report and explain whether the
 problem is configuration, provider capability, prompt-following, or a JueX
 regression.
 
@@ -173,6 +173,6 @@ bash tests/eval/development_eval.sh
 ```
 
 Use `--compaction-eval` for compaction, context projection, reasoning replay,
-or long-session changes. The record links command logs, provider/model smoke
+or long-session changes. The record links command logs, provider:model smoke
 summary, and any scorecards so a later worker can tell whether behavior got
 better, stayed flat, or regressed.

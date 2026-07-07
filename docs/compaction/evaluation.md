@@ -112,7 +112,7 @@ details from `~/.juex/juex.yaml` by default. Override the source with
 `JUEX_PROVIDER_CONFIG=/path/to/juex.yaml` when testing another provider config,
 or pass explicit model refs on the command line for a focused run. For each
 selected model it writes a temporary work-local config containing only that
-provider/model, disables tool calling, enables compaction, and deletes the
+provider:model, disables tool calling, enables compaction, and deletes the
 temporary config after the run unless `KEEP_WORKDIR=1` is set.
 Set `JUEX_EVAL_TURN_TIMEOUT` to override the per-turn timeout (default 600s).
 

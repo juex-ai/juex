@@ -34,7 +34,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 	}{
 		{
 			name:                "openai responses sends reasoning effort",
-			modelRef:            "openai/gpt-test",
+			modelRef:            "openai:gpt-test",
 			wantPathSuffix:      "/responses",
 			wantReasoningEffort: "high",
 			providerYAML: `  - id: openai
@@ -64,7 +64,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 		},
 		{
 			name:                "custom openai chat defaults reasoning effort on",
-			modelRef:            "local-chat/chat-test",
+			modelRef:            "local-chat:chat-test",
 			wantPathSuffix:      "/chat/completions",
 			wantReasoningEffort: "xhigh",
 			providerYAML: `  - id: local-chat
@@ -79,7 +79,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 		},
 		{
 			name:                "deepseek preset uses openai chat reasoning effort",
-			modelRef:            "deepseek/deepseek-v4-pro",
+			modelRef:            "deepseek:deepseek-v4-pro",
 			wantPathSuffix:      "/chat/completions",
 			wantReasoningEffort: "max",
 			providerYAML: `  - id: deepseek
@@ -93,7 +93,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 		},
 		{
 			name:                  "capability can disable reasoning effort",
-			modelRef:              "local-chat/chat-test",
+			modelRef:              "local-chat:chat-test",
 			wantPathSuffix:        "/chat/completions",
 			wantNoReasoningEffort: true,
 			providerYAML: `  - id: local-chat
@@ -215,7 +215,7 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -311,7 +311,7 @@ func TestLiveBinary_CLIVerboseCompactsToolBatch(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	configBody := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	configBody := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -405,7 +405,7 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat/chat-test\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "model: local-chat:chat-test\nruntime:\n  tool_timeout: 1s\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -507,7 +507,7 @@ func main() {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -591,7 +591,7 @@ func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
 	defer srv.Close()
 
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+	body := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
@@ -680,7 +680,7 @@ func TestLiveBinary_ProviderErrorJSONIncludesSessionMetadata(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: openai/gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
+	body := "model: openai:gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
     protocol: openai/responses
     base_url: BASE_URL
     api_key: k
@@ -733,7 +733,7 @@ func TestLiveBinary_ProviderDeadlineErrorJSONIsTimeout(t *testing.T) {
 
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
-	body := "model: openai/gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
+	body := "model: openai:gpt-test\nproviders:\n" + strings.ReplaceAll(`  - id: openai
     protocol: openai/responses
     base_url: BASE_URL
     api_key: k

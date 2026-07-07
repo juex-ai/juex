@@ -301,7 +301,7 @@ must set `providers[].protocol` explicitly. Known presets own their protocol:
 `deepseek` uses `openai/chat` with reasoning effort enabled. To use another
 OpenAI-compatible Chat provider, define a custom `providers[].id`, set
 `providers[].protocol: openai/chat`, and point the top-level `model` at that
-provider/model pair. Custom `openai/chat` profiles enable reasoning effort by
+provider:model pair. Custom `openai/chat` profiles enable reasoning effort by
 default; set `providers[].capabilities.reasoning_effort: false` only when an
 endpoint rejects that field.
 `internal/config` resolves `ProviderSelection` into a `ProviderProfile`; the
@@ -342,7 +342,7 @@ adapters: malformed persisted transcripts are repaired by the session/runtime
 boundary before a provider request is assembled, while adapters fail loudly if
 an invalid transcript still reaches the protocol edge.
 Malformed provider stream events are wrapped as `StreamParseError` with a
-stable kind, provider/model identity, event type, optional content block index,
+stable kind, provider:model identity, event type, optional content block index,
 and a bounded raw event preview.
 
 Capability gates decide which request features are sent. If a profile disables
@@ -922,7 +922,7 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
 
 ```yaml
-model: openai/gpt-4.1
+model: openai:gpt-4.1
 enable_user_global_resources: true
 shell:
   profile: auto
@@ -978,7 +978,7 @@ compaction:
 
 | Field | Description |
 |---|---|
-| `model` | active model reference in `provider_id/model_id` form |
+| `model` | active model reference in `provider_id:model_id` form |
 | `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `~/.juex/extensions` |
 | `shell` | optional object; omitted or `{}` means `profile: auto`; scalar values are rejected |
 | `shell.profile` | `auto`, `powershell`, `cmd`, `bash`, `zsh`, `sh`, `git-bash`, `wsl`, or `custom`; auto uses the Juex process runtime OS |
@@ -1031,14 +1031,14 @@ compaction:
 Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
 `.juex` directory) < `--config <path>` (if supplied) < `os.Environ` <
-explicit CLI flags. `--model provider_id/model_id` selects a configured
-provider/model after YAML merge and wins over `PROVIDER_API_ID`,
+explicit CLI flags. `--model provider_id:model_id` selects a configured
+provider:model after YAML merge and wins over `PROVIDER_API_ID`,
 `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`; non-conflicting env overrides
 such as `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_THINKING_EFFORT`,
 and `PROVIDER_CONTEXT_WINDOW` still apply. `.env` is no longer read by default.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
-provider_id/model_id` or override a few fields while inheriting missing values
+provider_id:model_id` or override a few fields while inheriting missing values
 from `~/.juex/juex.yaml`. The legacy top-level `provider:` block is not
 supported. `shell` is an object-level override rather than a deep merge:
 workspace `shell: {}` resets any user-global shell config back to auto.
@@ -1351,7 +1351,7 @@ hallucinations).
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
 | `make provider-smoke` | build-dependent rotating live smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
-| `make development-eval` | deterministic tests, build, rotating live provider/model smoke, and a redacted validation record |
+| `make development-eval` | deterministic tests, build, rotating live provider:model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
 
 ### `goreleaser`
@@ -1433,7 +1433,7 @@ There are two live layers:
 
 - `go test -tags=integration ./tests/e2e/... -run Live -count=1`
   uses selected repo-local configs for CI/manual integration.
-- `make provider-smoke` reads the provider/model refs from
+- `make provider-smoke` reads the provider:model refs from
   `tests/eval/live-models.yaml`, verifies the selected ref exists in
   `~/.juex/juex.yaml`, then runs a three-turn real binary smoke and writes a
   redacted report under `.tmp/reports/provider-model-smoke/`. By default it
@@ -1443,7 +1443,7 @@ There are two live layers:
 
 Every feature validation should leave a development record with
 `make development-eval` or `bash tests/eval/development_eval.sh`.
-The record captures the commit, command exits, provider/model smoke summary,
+The record captures the commit, command exits, provider:model smoke summary,
 and any quality evaluation results. The live compaction quality evaluation is
 documented in `docs/compaction/evaluation.md` and run with
 `tests/eval/compaction_eval.sh`; use it when compaction, context projection,

@@ -47,7 +47,7 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configBody := "model: openai/m\n" +
+	configBody := "model: openai:m\n" +
 		"providers:\n" +
 		"  - id: openai\n" +
 		"    base_url: https://example\n" +
@@ -144,7 +144,7 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configBody := "model: openai/m\n" +
+	configBody := "model: openai:m\n" +
 		"providers:\n" +
 		"  - id: openai\n" +
 		"    base_url: https://example\n" +
@@ -216,7 +216,7 @@ func TestLiveBinary_ModelFlagUsesUserGlobalProvider(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	configBody := `model: openai/gpt-default
+	configBody := `model: openai:gpt-default
 providers:
   - id: openai
     base_url: https://global.example
@@ -231,7 +231,7 @@ providers:
 
 	cmd := exec.Command(bin,
 		"--cwd", work,
-		"--model", "openai/gpt-global",
+		"--model", "openai:gpt-global",
 		"run", "--dry-run", "--json", "x")
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,

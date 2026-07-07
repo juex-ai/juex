@@ -29,13 +29,13 @@ def add_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "models",
         nargs="*",
-        help="Explicit provider/model refs. Prefer --only for new usage. Defaults to one rotated ref.",
+        help="Explicit provider:model refs. Prefer --only for new usage. Defaults to one rotated ref.",
     )
     parser.add_argument(
         "--only",
         action="append",
         default=[],
-        help="Run one explicit provider/model ref. May be repeated.",
+        help="Run one explicit provider:model ref. May be repeated.",
     )
     parser.add_argument("--all-models", action="store_true", help="Run every ref in compaction_eval_models.")
     parser.add_argument(
@@ -71,7 +71,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 def run(args: argparse.Namespace) -> int:
     explicit_models = [*(args.only or []), *(args.models or [])]
     if args.all_models and explicit_models:
-        raise ValueError("--all-models cannot be combined with --only or positional provider/model refs")
+        raise ValueError("--all-models cannot be combined with --only or positional provider:model refs")
     juex = pathlib.Path(args.juex)
     if not os.access(juex, os.X_OK):
         raise ValueError(f"Missing executable {args.juex}. Run: make build")
@@ -116,15 +116,23 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib.Path, temp_dirs: list[pathlib.Path]) -> int:
-    safe = model.replace("/", "__")
-    if "/" not in model:
-        print(f"FAIL {model}: invalid model ref format (expected provider/model)", file=sys.stderr)
-        return 1
-    provider_id, model_id = model.split("/", 1)
+def parse_model_ref(model: str) -> tuple[str, str, str]:
+    model = model.strip()
+    if ":" not in model:
+        raise ValueError("invalid model ref format (expected provider:model)")
+    provider_id, model_id = (part.strip() for part in model.split(":", 1))
     if not provider_id or not model_id:
-        print(f"FAIL {model}: invalid model ref format (expected provider/model)", file=sys.stderr)
+        raise ValueError("invalid model ref format (expected provider:model)")
+    return f"{provider_id}:{model_id}", provider_id, model_id
+
+
+def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib.Path, temp_dirs: list[pathlib.Path]) -> int:
+    try:
+        model, provider_id, model_id = parse_model_ref(model)
+    except ValueError:
+        print(f"FAIL {model}: invalid model ref format (expected provider:model)", file=sys.stderr)
         return 1
+    safe = model.replace(":", "__").replace("/", "__")
     work = pathlib.Path(tempfile.mkdtemp(prefix=f"juex-compaction-eval.{safe}."))
     temp_dirs.append(work)
     out_dir = out_root / safe
@@ -144,7 +152,7 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
         err = out_dir / "config-error.txt"
         err.write_text(str(exc), encoding="utf-8")
         write_failure_scorecard(model, work, out_dir, "config", "no", "not captured", err, args.keep_workdir, args.context_window, args.turn_timeout)
-        print(f"FAIL {model}: provider/model not found in {args.config}", file=sys.stderr)
+        print(f"FAIL {model}: provider:model not found in {args.config}", file=sys.stderr)
         return 1
 
     prompts = write_prompts(work)

@@ -105,8 +105,8 @@ type providerCompatConfig struct {
 
 type CompactionConfig = runtimepolicy.CompactionPolicy
 
-// ModelRef is the provider/model selector used by the top-level config model.
-// The provider id may not contain "/", while the model id may contain slashes
+// ModelRef is the provider:model selector used by the top-level config model.
+// The provider id may not contain ":", while the model id may contain slashes
 // for OpenAI-compatible proxy model names such as meta-llama/Llama-3.
 type ModelRef struct {
 	ProviderID string
@@ -114,9 +114,9 @@ type ModelRef struct {
 }
 
 func ParseModelRef(ref string) (ModelRef, error) {
-	parts := strings.SplitN(strings.TrimSpace(ref), "/", 2)
+	parts := strings.SplitN(strings.TrimSpace(ref), ":", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return ModelRef{}, fmt.Errorf("config: model must be provider_id/model, got %q", ref)
+		return ModelRef{}, fmt.Errorf("config: model must be provider_id:model_id, got %q", ref)
 	}
 	return ModelRef{ProviderID: strings.TrimSpace(parts[0]), ModelID: strings.TrimSpace(parts[1])}, nil
 }
@@ -125,11 +125,11 @@ func (r ModelRef) String() string {
 	if r.ProviderID == "" && r.ModelID == "" {
 		return ""
 	}
-	return r.ProviderID + "/" + r.ModelID
+	return r.ProviderID + ":" + r.ModelID
 }
 
-// ApplyModelOverride selects a configured provider/model using the same
-// provider_id/model_id grammar as the top-level YAML model field.
+// ApplyModelOverride selects a configured provider:model using the same
+// provider_id:model_id grammar as the top-level YAML model field.
 func (c *Config) ApplyModelOverride(ref string) error {
 	trimmed := strings.TrimSpace(ref)
 	modelRef, err := ParseModelRef(trimmed)
@@ -642,6 +642,9 @@ func applyProvidersConfig(cfg *Config, providers []providerConfig) error {
 		id := strings.TrimSpace(p.ID)
 		if id == "" {
 			return fmt.Errorf("provider id is required")
+		}
+		if strings.Contains(id, ":") {
+			return fmt.Errorf("provider %q id must not contain ':'", id)
 		}
 		p.ID = id
 		for i := range p.Models {

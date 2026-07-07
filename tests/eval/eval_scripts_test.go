@@ -23,32 +23,32 @@ func TestLiveModelRotationScript(t *testing.T) {
 	state := filepath.Join(work, "rotation.json")
 	if err := os.WriteFile(modelList, []byte(strings.Join([]string{
 		"provider_smoke_models:",
-		"  - provider/a",
-		"  - provider/b",
-		"  - provider/c",
+		"  - provider:a",
+		"  - provider:b",
+		"  - provider:c",
 		"compaction_eval_models:",
-		"  - compaction/a",
-		"  - compaction/b",
+		"  - compaction:a",
+		"  - compaction:b",
 		"",
 	}, "\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := runRotation(t, root, modelList, state, "select", "--section", "provider_smoke_models"); got != "provider/a" {
-		t.Fatalf("initial provider selection = %q, want provider/a", got)
+	if got := runRotation(t, root, modelList, state, "select", "--section", "provider_smoke_models"); got != "provider:a" {
+		t.Fatalf("initial provider selection = %q, want provider:a", got)
 	}
 	if _, err := os.Stat(state); !os.IsNotExist(err) {
 		t.Fatalf("select should not create state file, stat err=%v", err)
 	}
 
-	runRotation(t, root, modelList, state, "mark-success", "--section", "provider_smoke_models", "--model", "provider/a")
-	if got := runRotation(t, root, modelList, state, "select", "--section", "provider_smoke_models"); got != "provider/b" {
-		t.Fatalf("rotated provider selection = %q, want provider/b", got)
+	runRotation(t, root, modelList, state, "mark-success", "--section", "provider_smoke_models", "--model", "provider:a")
+	if got := runRotation(t, root, modelList, state, "select", "--section", "provider_smoke_models"); got != "provider:b" {
+		t.Fatalf("rotated provider selection = %q, want provider:b", got)
 	}
 
-	runRotation(t, root, modelList, state, "mark-success", "--section", "compaction_eval_models", "--model", "compaction/a")
-	if got := runRotation(t, root, modelList, state, "select", "--section", "compaction_eval_models"); got != "compaction/b" {
-		t.Fatalf("rotated compaction selection = %q, want compaction/b", got)
+	runRotation(t, root, modelList, state, "mark-success", "--section", "compaction_eval_models", "--model", "compaction:a")
+	if got := runRotation(t, root, modelList, state, "select", "--section", "compaction_eval_models"); got != "compaction:b" {
+		t.Fatalf("rotated compaction selection = %q, want compaction:b", got)
 	}
 
 	raw, err := os.ReadFile(state)
@@ -63,11 +63,11 @@ func TestLiveModelRotationScript(t *testing.T) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatal(err)
 	}
-	if got := parsed.Sections["provider_smoke_models"].LastSuccessful; got != "provider/a" {
-		t.Fatalf("provider last_successful = %q, want provider/a", got)
+	if got := parsed.Sections["provider_smoke_models"].LastSuccessful; got != "provider:a" {
+		t.Fatalf("provider last_successful = %q, want provider:a", got)
 	}
-	if got := parsed.Sections["compaction_eval_models"].LastSuccessful; got != "compaction/a" {
-		t.Fatalf("compaction last_successful = %q, want compaction/a", got)
+	if got := parsed.Sections["compaction_eval_models"].LastSuccessful; got != "compaction:a" {
+		t.Fatalf("compaction last_successful = %q, want compaction:a", got)
 	}
 }
 
@@ -136,11 +136,11 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 		"    compaction_eval=True,",
 		"    run_id='unit',",
 		"    provider_timeout=7,",
-		"    provider_only='ark/model',",
+		"    provider_only='ark:model',",
 		"    provider_all_models=False,",
 		"    provider_all_config_models=False,",
 		"    compaction_all_models=False,",
-		"    compaction_only=['openai/model', 'ark/other'],",
+		"    compaction_only=['openai:model', 'ark:other'],",
 		")",
 		"steps, _, _ = cli.development_steps(args, Path('reports'))",
 		"print(json.dumps([{'label': label, 'command': command} for label, command in steps]))",
@@ -156,13 +156,13 @@ func TestEvalDevelopmentStepBuilderUsesConsistentFlags(t *testing.T) {
 	}
 
 	providerCmd := findEvalCommand(t, steps, "provider-model-smoke")
-	assertCommandFlagValue(t, providerCmd, "--only", "ark/model")
+	assertCommandFlagValue(t, providerCmd, "--only", "ark:model")
 	assertCommandHasFlag(t, providerCmd, "--report-dir")
 	assertCommandLacks(t, providerCmd, "--provider-only")
 
 	compactionCmd := findEvalCommand(t, steps, "compaction-eval")
-	assertCommandFlagValue(t, compactionCmd, "--only", "openai/model")
-	assertCommandFlagValue(t, compactionCmd, "--only", "ark/other")
+	assertCommandFlagValue(t, compactionCmd, "--only", "openai:model")
+	assertCommandFlagValue(t, compactionCmd, "--only", "ark:other")
 	assertCommandHasFlag(t, compactionCmd, "--report-dir")
 	assertCommandLacks(t, compactionCmd, "--out-root")
 }
@@ -225,6 +225,55 @@ func TestEvalDefaultReportDirsUseTmpRoot(t *testing.T) {
 		"        pass",
 		"    else:",
 		"        raise AssertionError(f'expected invalid run_id: {bad_run_id!r}')",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalWriteSelectedConfigUsesColonModelRef(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"cfg = {'providers': [{'id': 'openrouter', 'models': [{'id': 'meta-llama/llama-3'}]}]}",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    out = Path(tmp) / 'juex.yaml'",
+		"    helper.write_selected_config(cfg, 'openrouter', 'meta-llama/llama-3', out)",
+		"    text = out.read_text(encoding='utf-8')",
+		"    assert 'model: openrouter:meta-llama/llama-3' in text, text",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestEvalCompactionModelRefParserTrimsWhitespace(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"from tests.eval.juex_eval import compaction",
+		"model, provider, model_id = compaction.parse_model_ref('  openrouter : meta-llama/llama-3  ')",
+		"assert model == 'openrouter:meta-llama/llama-3', model",
+		"assert provider == 'openrouter', provider",
+		"assert model_id == 'meta-llama/llama-3', model_id",
+		"for bad in ['openrouter/meta', ' : model', 'provider: ']:",
+		"    try:",
+		"        compaction.parse_model_ref(bad)",
+		"    except ValueError:",
+		"        pass",
+		"    else:",
+		"        raise AssertionError(f'expected invalid model ref: {bad!r}')",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

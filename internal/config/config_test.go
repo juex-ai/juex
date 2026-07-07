@@ -41,7 +41,7 @@ func TestLoadFromFile_ModelIDCanContainSlash(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: local-proxy/meta-llama/Llama-3-8b-chat
+	body := `model: local-proxy:meta-llama/Llama-3-8b-chat
 providers:
   - id: local-proxy
     protocol: openai/chat
@@ -63,23 +63,43 @@ providers:
 }
 
 func TestParseModelRef(t *testing.T) {
-	ref, err := ParseModelRef(" local-proxy/meta-llama/Llama-3-8b-chat ")
+	ref, err := ParseModelRef(" local-proxy:meta-llama/Llama-3-8b-chat ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ref.ProviderID != "local-proxy" || ref.ModelID != "meta-llama/Llama-3-8b-chat" {
 		t.Fatalf("ref = %+v", ref)
 	}
-	if got := ref.String(); got != "local-proxy/meta-llama/Llama-3-8b-chat" {
+	if got := ref.String(); got != "local-proxy:meta-llama/Llama-3-8b-chat" {
 		t.Fatalf("String() = %q", got)
 	}
 
-	for _, raw := range []string{"", "provider-only", "/model", "provider/"} {
+	for _, raw := range []string{"", "provider-only", "/model", "provider/", "provider/model", ":model", "provider:"} {
 		t.Run(raw, func(t *testing.T) {
-			if _, err := ParseModelRef(raw); err == nil {
-				t.Fatalf("ParseModelRef(%q) returned nil error", raw)
+			if _, err := ParseModelRef(raw); err == nil || !strings.Contains(err.Error(), "provider_id:model_id") {
+				t.Fatalf("ParseModelRef(%q) err = %v, want provider_id:model_id error", raw, err)
 			}
 		})
+	}
+}
+
+func TestLoadFromFileRejectsProviderIDWithModelSeparator(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: bad:provider:gpt
+providers:
+  - id: bad:provider
+    base_url: https://bad.example
+    api_key: sk-bad
+    models:
+      - id: gpt
+`
+	writeTextFile(t, configPath, body)
+
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), `provider "bad:provider" id must not contain ':'`) {
+		t.Fatalf("err = %v, want provider id separator error", err)
 	}
 }
 
@@ -87,7 +107,7 @@ func TestConfigApplyModelOverride(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-default
+	body := `model: openai:gpt-default
 providers:
   - id: openai
     base_url: https://openai.example
@@ -108,7 +128,7 @@ providers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := cfg.ApplyModelOverride(" local-proxy/meta-llama/Llama-3-8b-chat "); err != nil {
+	if err := cfg.ApplyModelOverride(" local-proxy:meta-llama/Llama-3-8b-chat "); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.ProviderID != "local-proxy" || cfg.ProviderProtocol != "openai/chat" || cfg.BaseURL != "https://local.example" || cfg.APIKey != "sk-local" || cfg.Model != "meta-llama/Llama-3-8b-chat" || cfg.ContextWindow != 32000 {
@@ -126,8 +146,8 @@ func TestConfigApplyModelOverrideRejectsUnknownModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = cfg.ApplyModelOverride("openai/missing")
-	if err == nil || !strings.Contains(err.Error(), `model "openai/missing" references unknown model "missing" for provider "openai"`) {
+	err = cfg.ApplyModelOverride("openai:missing")
+	if err == nil || !strings.Contains(err.Error(), `model "openai:missing" references unknown model "missing" for provider "openai"`) {
 		t.Fatalf("err = %v, want unknown model error", err)
 	}
 }
@@ -136,7 +156,7 @@ func TestLoadFromFileWithModelOverrideKeepsNonSelectorEnv(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-default
+	body := `model: openai:gpt-default
 providers:
   - id: openai
     base_url: https://openai.example
@@ -155,7 +175,7 @@ providers:
 	t.Setenv("PROVIDER_API_BASE", "https://env.example")
 	t.Setenv("PROVIDER_API_KEY", "sk-env")
 
-	cfg, err := LoadFromFileForWorkDirWithModelOverride(configPath, dir, "anthropic/claude-sonnet")
+	cfg, err := LoadFromFileForWorkDirWithModelOverride(configPath, dir, "anthropic:claude-sonnet")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +248,7 @@ func TestLoadFromFile_UnknownYAMLFieldErrors(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-test
+	body := `model: openai:gpt-test
 providers:
   - id: openai
     unknown_field: true
@@ -266,7 +286,7 @@ func TestLoad_WorkConfigFallsBackToGlobalProviderFields(t *testing.T) {
 	work := t.TempDir()
 	t.Chdir(work)
 	writeJuexConfig(t, filepath.Join(home, ".juex", "juex.yaml"), "openai", "https://global.example", "sk-global", "gpt-global")
-	body := `model: openai/gpt-local
+	body := `model: openai:gpt-local
 providers:
   - id: openai
     models:
@@ -292,7 +312,7 @@ func TestLoad_LegacyRuntimeBudgetKeysAreIgnored(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
 	t.Chdir(work)
-	global := `model: openai/gpt-global
+	global := `model: openai:gpt-global
 providers:
   - id: openai
     base_url: https://global.example
@@ -364,7 +384,7 @@ func TestLoad_SandboxMergesAcrossConfigLayers(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
 	t.Chdir(work)
-	global := `model: openai/gpt-global
+	global := `model: openai:gpt-global
 providers:
   - id: openai
     base_url: https://global.example
@@ -452,7 +472,7 @@ func TestLoad_SandboxRejectsEmptyBlockedPath(t *testing.T) {
 func TestLoad_GlobalHooksDoNotRequireTrust(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
-	body := `model: openai/gpt-global
+	body := `model: openai:gpt-global
 providers:
   - id: openai
     base_url: https://global.example
@@ -479,7 +499,7 @@ hooks:
 func TestLoad_ProjectHooksRequireTrust(t *testing.T) {
 	prepareConfigTest(t)
 	work := t.TempDir()
-	body := `model: openai/gpt-local
+	body := `model: openai:gpt-local
 providers:
   - id: openai
     base_url: https://local.example
@@ -503,7 +523,7 @@ hooks:
 func TestLoad_HooksMergeInConfigOrder(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
-	global := `model: openai/gpt-global
+	global := `model: openai:gpt-global
 providers:
   - id: openai
     base_url: https://global.example
@@ -516,7 +536,7 @@ hooks:
       events: [UserPromptSubmit]
       command: ["echo", "{}"]
 `
-	local := `model: openai/gpt-global
+	local := `model: openai:gpt-global
 hooks:
   trusted: true
   commands:
@@ -546,7 +566,7 @@ func TestLoad_WorkShellEmptyResetsGlobalShell(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
 	t.Chdir(work)
-	global := `model: openai/gpt-global
+	global := `model: openai:gpt-global
 providers:
   - id: openai
     base_url: https://global.example
@@ -1029,7 +1049,7 @@ func TestLoadFromFile_ThinkingEffort(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1055,7 +1075,7 @@ func TestLoadFromFile_ThinkingEffortAllowedValues(t *testing.T) {
 			prepareConfigTest(t)
 			dir := t.TempDir()
 			configPath := filepath.Join(dir, "juex.yaml")
-			body := fmt.Sprintf(`model: openai/gpt-4
+			body := fmt.Sprintf(`model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1081,7 +1101,7 @@ func TestLoadFromFile_TrimsThinkingEffort(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1105,7 +1125,7 @@ func TestLoadFromFile_RejectsInvalidThinkingEffort(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1161,7 +1181,7 @@ func TestLoadFromFile_ContextWindow(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1185,7 +1205,7 @@ func TestLoadFromFile_CompactionConfig(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1230,7 +1250,7 @@ func TestLoadFromFile_LegacyRuntimeBudgetKeysAreIgnored(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1256,7 +1276,7 @@ func TestLoadFromFile_PendingInputRuntimeTTL(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1296,7 +1316,7 @@ func TestLoadFromFile_InvalidPendingInputRuntimeTTL(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1318,7 +1338,7 @@ func TestLoadFromFile_InvalidToolTimeout(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-4
+	body := `model: openai:gpt-4
 providers:
   - id: openai
     base_url: https://example.com
@@ -1380,7 +1400,7 @@ func TestLoadFromFile_ProviderProfile(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: deepseek/deepseek-chat
+	body := `model: deepseek:deepseek-chat
 providers:
   - id: deepseek
     protocol: openai/chat
@@ -1458,7 +1478,7 @@ func TestLoadFromFile_ProviderCompatRejectsInvalidCodexTransport(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
-	body := `model: openai/gpt-test
+	body := `model: openai:gpt-test
 providers:
   - id: openai
     api_key: sk-x
@@ -1620,7 +1640,7 @@ func TestLoadFromFile_CustomProtocolOverridesRuntimePresetIdentity(t *testing.T)
 	work := t.TempDir()
 	writeOpenAICodexConfig(t, filepath.Join(work, ".juex", "juex.yaml"), "")
 	overrideConfig := filepath.Join(work, "override.yaml")
-	body := `model: local-proxy/custom-model
+	body := `model: local-proxy:custom-model
 providers:
   - id: local-proxy
     protocol: openai/chat
@@ -1675,7 +1695,7 @@ func prepareConfigTest(t *testing.T) string {
 
 func writeJuexConfig(t *testing.T, path, id, base, key, model string) {
 	t.Helper()
-	body := "model: " + id + "/" + model + "\n" +
+	body := "model: " + id + ":" + model + "\n" +
 		"providers:\n" +
 		"  - id: " + id + "\n" +
 		"    base_url: " + base + "\n" +
@@ -1687,7 +1707,7 @@ func writeJuexConfig(t *testing.T, path, id, base, key, model string) {
 
 func writeOpenAICodexConfig(t *testing.T, path, apiKey string) {
 	t.Helper()
-	body := "model: openai-codex/gpt-test\n" +
+	body := "model: openai-codex:gpt-test\n" +
 		"providers:\n" +
 		"  - id: openai-codex\n"
 	if apiKey != "" {

@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     add_development_args(development_parser)
 
-    provider_parser = sub.add_parser("provider-smoke", help="Run live provider/model smoke tests.")
+    provider_parser = sub.add_parser("provider-smoke", help="Run live provider:model smoke tests.")
     add_provider_args(provider_parser)
 
     compaction_parser = sub.add_parser("compaction", help="Run live compaction quality evaluation.")
@@ -78,7 +78,7 @@ def add_development_args(parser: argparse.ArgumentParser) -> None:
         "--provider-only",
         dest="provider_only",
         default=os.environ.get("JUEX_PROVIDER_SMOKE_ONLY") or "",
-        help="Only run this provider/model ref for provider smoke.",
+        help="Only run this provider:model ref for provider smoke.",
     )
     parser.add_argument("--provider-timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
     parser.add_argument("--provider-all-models", action="store_true")
@@ -93,7 +93,7 @@ def add_development_args(parser: argparse.ArgumentParser) -> None:
         dest="compaction_only",
         action="append",
         default=[],
-        help="Only run this provider/model ref for compaction eval. May be repeated.",
+        help="Only run this provider:model ref for compaction eval. May be repeated.",
     )
 
 
@@ -121,7 +121,7 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
         "--all-config-models",
         action="store_true",
         default=truthy(os.environ.get("JUEX_PROVIDER_SMOKE_ALL_CONFIG_MODELS")),
-        help="Run every provider/model found in the provider config.",
+        help="Run every provider:model found in the provider config.",
     )
     parser.add_argument("--work-root", default=os.environ.get("JUEX_PROVIDER_SMOKE_ROOT") or "")
     parser.add_argument(
@@ -136,7 +136,7 @@ def add_provider_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--only",
         default=os.environ.get("JUEX_PROVIDER_SMOKE_ONLY") or "",
-        help="Run one provider/model ref, or every model for one provider id.",
+        help="Run one provider:model ref, or every model for one provider id.",
     )
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_TIMEOUT") or "240"))
     parser.add_argument("--retries", type=int, default=int(os.environ.get("JUEX_PROVIDER_SMOKE_RETRIES") or "1"))
