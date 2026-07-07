@@ -274,8 +274,8 @@ func TestLoadConfig_ModelFlagRejectsSlashRefAsUsageError(t *testing.T) {
 
 	_, err := loadConfig(&persistentFlags{cwd: work, model: "openai/missing"})
 	var usageErr *usageError
-	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "provider_id:model_id") {
-		t.Fatalf("err = %T %v, want provider_id:model_id usage error", err, err)
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "provider:model") {
+		t.Fatalf("err = %T %v, want provider:model usage error", err, err)
 	}
 }
 

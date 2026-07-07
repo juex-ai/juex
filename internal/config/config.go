@@ -116,7 +116,7 @@ type ModelRef struct {
 func ParseModelRef(ref string) (ModelRef, error) {
 	parts := strings.SplitN(strings.TrimSpace(ref), ":", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return ModelRef{}, fmt.Errorf("config: model must be provider_id:model_id, got %q", ref)
+		return ModelRef{}, fmt.Errorf("config: model must be provider:model, got %q", ref)
 	}
 	return ModelRef{ProviderID: strings.TrimSpace(parts[0]), ModelID: strings.TrimSpace(parts[1])}, nil
 }
@@ -129,7 +129,7 @@ func (r ModelRef) String() string {
 }
 
 // ApplyModelOverride selects a configured provider:model using the same
-// provider_id:model_id grammar as the top-level YAML model field.
+// provider:model grammar as the top-level YAML model field.
 func (c *Config) ApplyModelOverride(ref string) error {
 	trimmed := strings.TrimSpace(ref)
 	modelRef, err := ParseModelRef(trimmed)

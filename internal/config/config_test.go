@@ -76,8 +76,8 @@ func TestParseModelRef(t *testing.T) {
 
 	for _, raw := range []string{"", "provider-only", "/model", "provider/", "provider/model", ":model", "provider:"} {
 		t.Run(raw, func(t *testing.T) {
-			if _, err := ParseModelRef(raw); err == nil || !strings.Contains(err.Error(), "provider_id:model_id") {
-				t.Fatalf("ParseModelRef(%q) err = %v, want provider_id:model_id error", raw, err)
+			if _, err := ParseModelRef(raw); err == nil || !strings.Contains(err.Error(), "provider:model") {
+				t.Fatalf("ParseModelRef(%q) err = %v, want provider:model error", raw, err)
 			}
 		})
 	}
