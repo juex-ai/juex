@@ -194,7 +194,7 @@ function ObservableRow({
           </div>
           {item.source_type === "schedule" ? (
             <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-              next {humanAgo(item.schedule?.next_occurrence)}
+              next {formatDateTime(item.schedule?.next_occurrence)}
             </div>
           ) : null}
         </div>
@@ -263,6 +263,13 @@ function sourceSummary(item: ObservableStatus): string {
     return item.schedule?.summary || "schedule";
   }
   return [item.command, ...(item.args ?? [])].filter(Boolean).join(" ") || "command";
+}
+
+function formatDateTime(iso?: string): string {
+  if (!iso) return "-";
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return iso;
+  return date.toLocaleString();
 }
 
 export function StateBadge({ state }: { state: string }) {

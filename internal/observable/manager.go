@@ -216,7 +216,7 @@ func (m *Manager) startCommandRun(ctx context.Context, runCtx context.Context, r
 
 func (m *Manager) startScheduleRun(ctx context.Context, run *observableRun) error {
 	run.state.State = RunStateRunning
-	m.setStatus(run.id, m.statusWithScheduleSnapshot(run.state))
+	m.setStatus(run.id, run.state)
 	if err := m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateRunning, StartedAt: run.state.StartedAt}); err != nil {
 		m.failReservedRun(run, err)
 		return err

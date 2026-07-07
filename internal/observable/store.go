@@ -139,13 +139,6 @@ func (s *Store) RecordObservation(record ObservationRecord) (ObservationRecord, 
 	if err != nil {
 		return ObservationRecord{}, err
 	}
-	if record.SourceEventID != "" {
-		for _, existing := range records {
-			if existing.SourceEventID == record.SourceEventID {
-				return existing, nil
-			}
-		}
-	}
 	if existing, ok := records[record.ID]; ok {
 		return existing, nil
 	}
