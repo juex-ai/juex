@@ -166,7 +166,11 @@ export function projectLiveBrowserEvent(
   event: BrowserEvent,
 ): SessionReadResult {
   const result = projectLiveSessionEvent(state.projection, event);
-  return withProjectionResult(state, result.state, result.effects);
+  return withProjectionResult(
+    projectSessionMetadataEvent(state, event),
+    result.state,
+    result.effects,
+  );
 }
 
 export function projectTurnStatus(
@@ -359,6 +363,20 @@ function markProjectionDoneSoon(
   return {
     state: { ...state, projection: markProjectionDone(state.projection) },
     effects: [...effects, { type: "scheduleIdleStatus" }],
+  };
+}
+
+function projectSessionMetadataEvent(
+  state: SessionReadState,
+  event: BrowserEvent,
+): SessionReadState {
+  if (event.type !== "goal.updated" || !state.data) return state;
+  return {
+    ...state,
+    data: {
+      ...state.data,
+      goal: event.payload,
+    },
   };
 }
 

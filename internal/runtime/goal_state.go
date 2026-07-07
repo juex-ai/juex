@@ -430,6 +430,7 @@ func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
 		VerificationMethod: snapshot.VerificationMethod,
 		ContinuationCount:  snapshot.ContinuationCount,
 		Status:             snapshot.Status,
+		UpdatedAt:          snapshot.UpdatedAt,
 	}
 }
 

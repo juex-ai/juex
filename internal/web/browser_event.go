@@ -47,6 +47,7 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{"pending_input.drained", func() any { return &juexruntime.PendingInputDrainedPayload{} }},
 	{"pending_input.dropped", func() any { return &juexruntime.PendingInputDroppedPayload{} }},
 	{"pending_input.rejected", func() any { return &juexruntime.PendingInputRejectedPayload{} }},
+	{"goal.updated", func() any { return &juexruntime.GoalUpdatedPayload{} }},
 	{observable.EventObservableStarted, func() any { return &observable.ObservableEventPayload{} }},
 	{observable.EventObservableStopped, func() any { return &observable.ObservableEventPayload{} }},
 	{observable.EventObservableExited, func() any { return &observable.ObservableEventPayload{} }},

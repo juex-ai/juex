@@ -224,6 +224,7 @@ export const BROWSER_EVENT_TYPES = [
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",
+  "goal.updated",
   "observable.started",
   "observable.stopped",
   "observable.exited",
@@ -538,6 +539,8 @@ export interface ContextProjectionAppliedPayload {
   reasoning_content_bytes_stripped?: number;
 }
 
+export type GoalUpdatedPayload = GoalStatusSnapshot;
+
 export type BrowserEvent =
   | (BrowserEventBase<"turn.started"> & { payload: TurnStartedPayload })
   | (BrowserEventBase<"turn.completed"> & { payload: TurnCompletedPayload })
@@ -557,6 +560,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
   | (BrowserEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
   | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
+  | (BrowserEventBase<"goal.updated"> & { payload: GoalUpdatedPayload })
   | (BrowserEventBase<"observable.started"> & { payload: ObservableEventPayload })
   | (BrowserEventBase<"observable.stopped"> & { payload: ObservableEventPayload })
   | (BrowserEventBase<"observable.exited"> & { payload: ObservableEventPayload })

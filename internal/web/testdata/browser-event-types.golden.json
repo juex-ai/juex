@@ -17,6 +17,7 @@
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",
+  "goal.updated",
   "observable.started",
   "observable.stopped",
   "observable.exited",
