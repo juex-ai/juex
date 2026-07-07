@@ -284,6 +284,78 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_CLIVerboseCompactsToolBatch(t *testing.T) {
+	bin := buildJuex(t)
+
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch requestCount.Add(1) {
+		case 1:
+			writeJSON(t, w, chatToolCallsResponse([]providerToolCall{
+				{ID: "call_read_a", Name: "read", Arguments: map[string]any{"path": "a.txt"}},
+				{ID: "call_read_b", Name: "read", Arguments: map[string]any{"path": "b.txt"}},
+			}))
+		case 2:
+			writeJSON(t, w, chatCompletionResponseMap("verbose compact complete"))
+		default:
+			t.Errorf("unexpected provider request %d: %+v", requestCount.Load(), body)
+			writeJSON(t, w, chatCompletionResponseMap("unexpected"))
+		}
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	configBody := "model: local-chat/chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+    protocol: openai/chat
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: chat-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, configBody); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeText(filepath.Join(work, "a.txt"), "alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeText(filepath.Join(work, "b.txt"), "bravo"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "--verbose", "run", "--new", "read both files")
+	home := t.TempDir()
+	cmd.Env = isolatedJuexBinaryEnv(home)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("juex verbose run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "verbose compact complete") {
+		t.Fatalf("stdout missing final assistant text:\n%s", stdout.String())
+	}
+	errText := stderr.String()
+	for _, want := range []string{"… 2 read", "● 2 read"} {
+		if !strings.Contains(errText, want) {
+			t.Fatalf("stderr missing compact batch line %q:\n%s", want, errText)
+		}
+	}
+	for _, unwanted := range []string{`"path":"a.txt"`, `"path":"b.txt"`, "call_read_a", "call_read_b"} {
+		if strings.Contains(errText, unwanted) {
+			t.Fatalf("stderr leaked per-tool detail %q:\n%s", unwanted, errText)
+		}
+	}
+	if strings.Contains(errText, "\x1b[") || strings.Contains(errText, "\r") {
+		t.Fatalf("non-TTY verbose stderr contains terminal control artifacts:\n%q", errText)
+	}
+}
+
 func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
 	bin := buildJuex(t)
 
@@ -760,6 +832,41 @@ func chatToolCallResponse(callID, name string, arguments map[string]any) map[str
 						"arguments": string(args),
 					},
 				}},
+			},
+			"finish_reason": "tool_calls",
+		}},
+		"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+	}
+}
+
+type providerToolCall struct {
+	ID        string
+	Name      string
+	Arguments map[string]any
+}
+
+func chatToolCallsResponse(calls []providerToolCall) map[string]any {
+	toolCalls := make([]any, 0, len(calls))
+	for _, call := range calls {
+		args, _ := json.Marshal(call.Arguments)
+		toolCalls = append(toolCalls, map[string]any{
+			"id":   call.ID,
+			"type": "function",
+			"function": map[string]any{
+				"name":      call.Name,
+				"arguments": string(args),
+			},
+		})
+	}
+	return map[string]any{
+		"id":     "chatcmpl_tool_batch",
+		"object": "chat.completion",
+		"choices": []any{map[string]any{
+			"index": 0,
+			"message": map[string]any{
+				"role":       "assistant",
+				"content":    "",
+				"tool_calls": toolCalls,
 			},
 			"finish_reason": "tool_calls",
 		}},
