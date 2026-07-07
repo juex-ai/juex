@@ -31,8 +31,8 @@ const jsonTokenStyles = {
   },
 } satisfies Record<string, Pick<LightCodeToken, "color" | "darkColor">>;
 
-const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[Ee][+-]?\d+)?/;
-const jsonLiteralPattern = /^(?:true|false|null)\b/;
+const jsonNumberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[Ee][+-]?\d+)?/y;
+const jsonLiteralPattern = /(?:true|false|null)\b/y;
 const jsonPunctuation = new Set(["{", "}", "[", "]", ":", ","]);
 
 const normalizeLanguage = (language: LightCodeLanguage) =>
@@ -83,10 +83,12 @@ const readPlainText = (line: string, start: number) => {
     if (char === '"' || jsonPunctuation.has(char)) {
       break;
     }
-    if (line.slice(cursor).match(jsonNumberPattern)) {
+    jsonNumberPattern.lastIndex = cursor;
+    if (jsonNumberPattern.test(line)) {
       break;
     }
-    if (line.slice(cursor).match(jsonLiteralPattern)) {
+    jsonLiteralPattern.lastIndex = cursor;
+    if (jsonLiteralPattern.test(line)) {
       break;
     }
     cursor += 1;
@@ -111,8 +113,9 @@ const tokenizeJsonLine = (line: string): LightCodeToken[] => {
       continue;
     }
 
-    const numberMatch = line.slice(cursor).match(jsonNumberPattern);
-    if (numberMatch?.[0]) {
+    jsonNumberPattern.lastIndex = cursor;
+    const numberMatch = jsonNumberPattern.exec(line);
+    if (numberMatch) {
       tokens.push({
         content: numberMatch[0],
         ...jsonTokenStyles.number,
@@ -121,8 +124,9 @@ const tokenizeJsonLine = (line: string): LightCodeToken[] => {
       continue;
     }
 
-    const literalMatch = line.slice(cursor).match(jsonLiteralPattern);
-    if (literalMatch?.[0]) {
+    jsonLiteralPattern.lastIndex = cursor;
+    const literalMatch = jsonLiteralPattern.exec(line);
+    if (literalMatch) {
       tokens.push({
         content: literalMatch[0],
         ...jsonTokenStyles.literal,

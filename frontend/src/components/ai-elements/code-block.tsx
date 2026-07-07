@@ -127,12 +127,22 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
 });
 
 // Token cache
-const tokensCache = new Map<string, TokenizedCode>();
+const tokensCache = new Map<CodeBlockLanguage, Map<string, TokenizedCode>>();
 
-const getTokensCacheKey = (code: string, language: CodeBlockLanguage) => {
-  const start = code.slice(0, 100);
-  const end = code.length > 100 ? code.slice(-100) : "";
-  return `${language}:${code.length}:${start}:${end}`;
+const getCachedTokens = (code: string, language: CodeBlockLanguage) =>
+  tokensCache.get(language)?.get(code);
+
+const setCachedTokens = (
+  code: string,
+  language: CodeBlockLanguage,
+  tokenized: TokenizedCode
+) => {
+  let languageCache = tokensCache.get(language);
+  if (!languageCache) {
+    languageCache = new Map<string, TokenizedCode>();
+    tokensCache.set(language, languageCache);
+  }
+  languageCache.set(code, tokenized);
 };
 
 // Synchronous lightweight highlight for tool payload previews.
@@ -140,15 +150,13 @@ export const highlightCode = (
   code: string,
   language: CodeBlockLanguage
 ): TokenizedCode => {
-  const tokensCacheKey = getTokensCacheKey(code, language);
-
-  const cached = tokensCache.get(tokensCacheKey);
+  const cached = getCachedTokens(code, language);
   if (cached) {
     return cached;
   }
 
   const tokenized = highlightLightCode(code, language);
-  tokensCache.set(tokensCacheKey, tokenized);
+  setCachedTokens(code, language, tokenized);
   return tokenized;
 };
 
