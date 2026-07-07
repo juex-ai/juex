@@ -7,7 +7,6 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { juexCodeThemes } from "@/lib/code-theme";
-import { streamdownCodePlugin } from "@/lib/streamdown-code-plugin";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
@@ -208,7 +207,7 @@ export type ReasoningContentProps = ComponentProps<
   children: string;
 };
 
-const streamdownPlugins = { cjk, code: streamdownCodePlugin, math, mermaid };
+const streamdownPlugins = { cjk, math, mermaid };
 
 export const ReasoningContent = memo(
   ({ className, children, ...props }: ReasoningContentProps) => (

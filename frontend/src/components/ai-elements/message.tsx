@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/tooltip";
 import { juexCodeThemes } from "@/lib/code-theme";
 import { messageResponseClassName } from "@/lib/message-rendering";
-import { streamdownCodePlugin } from "@/lib/streamdown-code-plugin";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
@@ -325,7 +324,7 @@ export const MessageBranchPage = ({
 
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
-const streamdownPlugins = { cjk, code: streamdownCodePlugin, math, mermaid };
+const streamdownPlugins = { cjk, math, mermaid };
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
