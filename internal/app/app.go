@@ -601,8 +601,8 @@ func observationMessage(record observable.ObservationRecord) (llm.Message, error
 		ObservableID    string `json:"observable_id"`
 		Severity        string `json:"severity"`
 		ObservationKind string `json:"observation_kind"`
-		WindowStart     string `json:"window_start"`
-		WindowEnd       string `json:"window_end"`
+		WindowStart     int64  `json:"window_start"`
+		WindowEnd       int64  `json:"window_end"`
 		Content         string `json:"content"`
 		Truncated       bool   `json:"truncated"`
 		ArtifactPath    string `json:"artifact_path,omitempty"`
@@ -612,8 +612,8 @@ func observationMessage(record observable.ObservationRecord) (llm.Message, error
 		ObservableID:    record.ObservableID,
 		Severity:        record.Severity,
 		ObservationKind: record.Kind,
-		WindowStart:     record.WindowStart.UTC().Format(time.RFC3339Nano),
-		WindowEnd:       record.WindowEnd.UTC().Format(time.RFC3339Nano),
+		WindowStart:     record.WindowStart.UnixMilli(),
+		WindowEnd:       record.WindowEnd.UnixMilli(),
 		Content:         record.Content,
 		Truncated:       record.Truncated,
 		ArtifactPath:    record.ArtifactPath,

@@ -226,15 +226,36 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("detail status = %d body = %s", resp.StatusCode, data)
 	}
+	detailBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var detail struct {
 		Observable   observable.ObservableStatus    `json:"observable"`
 		Observations []observable.ObservationRecord `json:"observations"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+	if err := json.Unmarshal(detailBody, &detail); err != nil {
 		t.Fatal(err)
 	}
 	if detail.Observable.ID != "web-events" || len(detail.Observations) != 1 {
 		t.Fatalf("detail = %+v", detail)
+	}
+	var rawDetail struct {
+		Observations []map[string]any `json:"observations"`
+	}
+	if err := json.Unmarshal(detailBody, &rawDetail); err != nil {
+		t.Fatal(err)
+	}
+	if len(rawDetail.Observations) != 1 {
+		t.Fatalf("raw detail = %+v", rawDetail)
+	}
+	windowStart := rawDetail.Observations[0]["window_start"]
+	if _, ok := windowStart.(float64); !ok {
+		t.Fatalf("window_start = %T(%v), want JSON number", windowStart, windowStart)
+	}
+	createdAt := rawDetail.Observations[0]["created_at"]
+	if _, ok := createdAt.(float64); !ok {
+		t.Fatalf("created_at = %T(%v), want JSON number", createdAt, createdAt)
 	}
 
 	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/web-events", nil)

@@ -64,6 +64,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/loading-state.ts` | pure loading-state display text helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
+| `src/lib/observation-time.ts` | pure helpers for local Observation timestamp and window display |
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
 | `src/lib/route-state.ts` | pure route matching helpers for shell state |
 | `src/lib/runtime-display.ts` | pure runtime and session-state display formatting helpers |

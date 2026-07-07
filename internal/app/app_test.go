@@ -205,6 +205,10 @@ func TestApp_HandleObservationStartsTurnWhenNoActiveTurn(t *testing.T) {
 	if body["observation_id"] != record.ID || body["observable_id"] != record.ObservableID {
 		t.Fatalf("body = %+v", body)
 	}
+	if body["window_start"] != float64(record.WindowStart.UnixMilli()) ||
+		body["window_end"] != float64(record.WindowEnd.UnixMilli()) {
+		t.Fatalf("body window timestamps = %+v", body)
+	}
 }
 
 func TestApp_HandleObservationQueuesDuringActiveTurn(t *testing.T) {

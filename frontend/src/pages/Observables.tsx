@@ -312,10 +312,10 @@ export function StateBadge({ state }: { state: string }) {
   );
 }
 
-export function humanAgo(iso?: string): string {
-  if (!iso) return "-";
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return iso;
+export function humanAgo(value?: number | string): string {
+  if (value === undefined || value === "") return "-";
+  const t = new Date(value).getTime();
+  if (!Number.isFinite(t)) return String(value);
   const diff = Date.now() - t;
   const sec = Math.max(0, Math.round(diff / 1000));
   if (sec < 60) return "just now";
@@ -325,5 +325,5 @@ export function humanAgo(iso?: string): string {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.round(hr / 24);
   if (day < 7) return `${day}d ago`;
-  return new Date(iso).toLocaleDateString();
+  return new Date(value).toLocaleDateString();
 }

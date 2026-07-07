@@ -174,13 +174,13 @@
         "run_id": "run-1",
         "kind": "lark_notification",
         "severity": "info",
-        "window_start": "2026-06-15T00:00:00Z",
-        "window_end": "2026-06-15T00:00:01Z",
+        "window_start": 1781481600000,
+        "window_end": 1781481601000,
         "content": "hello",
         "original_chars": 5,
         "state": "delivered",
-        "created_at": "2026-06-15T00:00:08Z",
-        "delivered_at": "2026-06-15T00:00:08Z"
+        "created_at": 1781481608000,
+        "delivered_at": 1781481608000
       }
     }
   },
