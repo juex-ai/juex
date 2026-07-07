@@ -618,8 +618,18 @@ func (m *Manager) emitScheduledOccurrence(ctx context.Context, run *observableRu
 	if err := m.recordScheduleState(run.id, observedAt, occurrence.ScheduledAt); err != nil {
 		return record, false, err
 	}
-	_ = m.deliverObservation(ctx, record)
+	m.deliverScheduledObservation(ctx, record)
 	return record, true, nil
+}
+
+func (m *Manager) deliverScheduledObservation(ctx context.Context, record ObservationRecord) {
+	deliverCtx := context.Background()
+	if ctx != nil {
+		deliverCtx = context.WithoutCancel(ctx)
+	}
+	go func() {
+		_ = m.deliverObservation(deliverCtx, record)
+	}()
 }
 
 func (m *Manager) recordScheduleState(id string, evaluatedAt time.Time, emittedAt time.Time) error {
