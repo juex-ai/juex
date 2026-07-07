@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatMCPEventForDisplay,
+  formatObservationEventForDisplay,
   oneLinePreview,
   parseMCPEventText,
 } from "../../frontend/src/lib/mcp-events.ts";
@@ -72,5 +73,20 @@ test("formatMCPEventForDisplay keeps full content as copy text", () => {
     content: "line 1\n\nline 2",
     preview: "line 1 line 2",
     copyText: "line 1\n\nline 2",
+  });
+});
+
+test("formatObservationEventForDisplay previews observation JSON content", () => {
+  const body = JSON.stringify({
+    kind: "observation",
+    observable_id: "lark-events",
+    content: "deployment finished: build 42",
+  });
+
+  assert.deepEqual(formatObservationEventForDisplay(body), {
+    label: "observation:event",
+    content: body,
+    preview: "deployment finished: build 42",
+    copyText: body,
   });
 });

@@ -1,4 +1,11 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Tooltip,
@@ -65,7 +72,10 @@ import {
   type ToolProcessStatus,
 } from "@/lib/tool-display";
 import { sessionPreviewTitle } from "@/lib/session-title";
-import { formatMCPEventForDisplay } from "@/lib/mcp-events";
+import {
+  formatMCPEventForDisplay,
+  formatObservationEventForDisplay,
+} from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
 import {
   WORKING_STATE_SECTIONS,
@@ -1070,14 +1080,21 @@ function MessageGroupView({
   // already shows the current session-level model in that case.
   const showModel = group.role === "assistant" && !!group.model;
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
+  const isObservationEvent =
+    group.role === "user" && group.kind === "observation";
   const isHookEvent = group.kind === "hook_event";
   const isCompact = group.kind === "compact";
   const isPendingCompact = group.kind === LOCAL_COMPACT_PENDING_KIND;
   const copyText = messageGroupCopyText(group);
   const canCopyMessage = !isPendingCompact && messageGroupCanCopy(group);
 
-  if (isMCPEvent) {
-    return <MCPEventGroup group={group} />;
+  if (isMCPEvent || isObservationEvent) {
+    return (
+      <ExternalEventGroup
+        group={group}
+        eventKind={isObservationEvent ? "observation" : "mcp"}
+      />
+    );
   }
 
   if (isHookEvent) {
@@ -1364,14 +1381,26 @@ function SlashCommandMessage({ text }: { text: string }) {
   );
 }
 
-function MCPEventGroup({ group }: { group: MessageGroup }) {
+function ExternalEventGroup({
+  eventKind,
+  group,
+}: {
+  eventKind: "mcp" | "observation";
+  group: MessageGroup;
+}) {
   const isEmpty = group.units.length === 0;
   return (
     <div className="flex w-full justify-center px-2 py-0.5">
       <div className="flex w-full max-w-[min(34rem,100%)] flex-col gap-2">
         {group.units.map((unit, i) => {
           if (unit.kind !== "text") return null;
-          return <MCPEventMessage key={i} text={unit.block.text} />;
+          return (
+            <ExternalEventMessage
+              key={i}
+              eventKind={eventKind}
+              text={unit.block.text}
+            />
+          );
         })}
         {group.pending && isEmpty ? (
           <div className="text-center text-sm text-muted-foreground">...</div>
@@ -1544,21 +1573,38 @@ function CopyTextButton({
   );
 }
 
-function MCPEventMessage({ text }: { text: string }) {
+function ExternalEventMessage({
+  eventKind,
+  text,
+}: {
+  eventKind: "mcp" | "observation";
+  text: string;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const event = formatMCPEventForDisplay(text);
-  const toggleLabel = expanded ? "Collapse MCP event" : "Expand MCP event";
+  const event = useMemo(
+    () =>
+      eventKind === "observation"
+        ? formatObservationEventForDisplay(text)
+        : formatMCPEventForDisplay(text),
+    [eventKind, text],
+  );
+  const eventName =
+    eventKind === "observation" ? "observation event" : "MCP event";
+  const toggleLabel = expanded ? `Collapse ${eventName}` : `Expand ${eventName}`;
 
   return (
     <div
       className="w-full overflow-hidden rounded-lg border border-juex-gold-300 bg-juex-gold-50/95 text-juex-gold-900 shadow-[var(--shadow-xs)] dark:border-juex-gold-400/25 dark:bg-juex-gold-400/10 dark:text-juex-gold-400"
-      data-mcp-event-message
+      data-external-event-message
+      data-external-event-kind={eventKind}
+      data-mcp-event-message={eventKind === "mcp" ? "" : undefined}
     >
       <div className="flex min-w-0 items-center gap-2 px-3 py-2 text-xs">
         <RadioIcon className="size-3.5 shrink-0" aria-hidden="true" />
         <span
           className="min-w-0 max-w-[48%] shrink-0 truncate font-mono font-semibold sm:max-w-[18rem]"
-          data-mcp-event-label
+          data-external-event-label
+          data-mcp-event-label={eventKind === "mcp" ? "" : undefined}
         >
           {event.label}
         </span>
@@ -1568,11 +1614,16 @@ function MCPEventMessage({ text }: { text: string }) {
         />
         <span
           className="min-w-0 flex-1 truncate text-[12px] text-juex-ink-600 dark:text-juex-cream-100/75"
-          data-mcp-event-preview
+          data-external-event-preview
+          data-mcp-event-preview={eventKind === "mcp" ? "" : undefined}
         >
           {event.preview}
         </span>
-        <span className="shrink-0" data-mcp-event-copy>
+        <span
+          className="shrink-0"
+          data-external-event-copy
+          data-mcp-event-copy={eventKind === "mcp" ? "" : undefined}
+        >
           <CopyTextButton
             text={event.copyText}
             className="size-7 border border-transparent text-current opacity-80 hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:text-current hover:opacity-100 focus-visible:ring-ring dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10"
@@ -1588,7 +1639,8 @@ function MCPEventMessage({ text }: { text: string }) {
           aria-expanded={expanded}
           aria-label={toggleLabel}
           title={toggleLabel}
-          data-mcp-event-toggle
+          data-external-event-toggle
+          data-mcp-event-toggle={eventKind === "mcp" ? "" : undefined}
           onClick={() => setExpanded((value) => !value)}
         >
           <ChevronDownIcon
@@ -1600,7 +1652,8 @@ function MCPEventMessage({ text }: { text: string }) {
       {expanded ? (
         <div
           className="border-t border-juex-gold-300/75 px-3 py-3 text-[13px] leading-6 text-juex-ink-900 dark:border-juex-gold-400/20 dark:text-juex-cream-50"
-          data-mcp-event-body
+          data-external-event-body
+          data-mcp-event-body={eventKind === "mcp" ? "" : undefined}
         >
           <MessageResponse className="break-words">{event.content}</MessageResponse>
         </div>

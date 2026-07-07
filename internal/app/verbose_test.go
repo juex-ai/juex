@@ -114,6 +114,54 @@ func TestVerbose_TypedPayloads(t *testing.T) {
 	}
 }
 
+func TestVerbose_TurnStartedObservationUsesEventLabel(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{
+			Input: `{"kind":"observation","content":"deploy finished: build 42"}`,
+			Kind:  llm.MessageKindObservation,
+		}},
+	})
+
+	if !strings.Contains(out, "› event: deploy finished: build 42") {
+		t.Fatalf("missing event label in transcript:\n%s", out)
+	}
+	if strings.Contains(out, "› user:") {
+		t.Fatalf("observation should not be printed as user input:\n%s", out)
+	}
+}
+
+func TestVerbose_TurnStartedMCPEventUsesEventLabel(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{
+			Input: `alpha:message:{"content":"hello from mcp"}`,
+			Kind:  llm.MessageKindMCPEvent,
+		}},
+	})
+
+	if !strings.Contains(out, "› event: hello from mcp") {
+		t.Fatalf("missing MCP event label in transcript:\n%s", out)
+	}
+	if strings.Contains(out, "› user:") {
+		t.Fatalf("MCP event should not be printed as user input:\n%s", out)
+	}
+}
+
+func TestVerbose_TurnStartedEventUsesGoldTTYColor(t *testing.T) {
+	var buf bytes.Buffer
+	vp := newVerbosePrinter(&buf)
+	vp.isTTY = true
+
+	vp.handle(events.Event{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{
+		Input: `{"content":"release done"}`,
+		Kind:  llm.MessageKindObservation,
+	}})
+
+	out := buf.String()
+	if !strings.Contains(out, "\x1b[33m› event: release done\x1b[0m") {
+		t.Fatalf("event line should use gold TTY color, got %q", out)
+	}
+}
+
 func TestVerbose_ToolError(t *testing.T) {
 	out := emitAll([]events.Event{
 		{Type: toolevents.RequestedType, Payload: map[string]any{"name": "read", "tool_use_id": "call_read", "input": map[string]any{"path": "/no/such"}}},

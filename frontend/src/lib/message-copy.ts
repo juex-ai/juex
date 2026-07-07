@@ -35,7 +35,13 @@ export function messageGroupCopyText(group: MessageGroup): string {
 }
 
 export function messageGroupCanCopy(group: MessageGroup): boolean {
-  if (group.kind === "compact" || group.kind === "mcp_event") return false;
+  if (
+    group.kind === "compact" ||
+    group.kind === "mcp_event" ||
+    group.kind === "observation"
+  ) {
+    return false;
+  }
   return Boolean(messageGroupCopyText(group));
 }
 
