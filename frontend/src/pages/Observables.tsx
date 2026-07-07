@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { Activity, CalendarClock, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 
 import {
   deleteObservable,
@@ -120,7 +120,7 @@ export function Observables() {
             <table className="w-full min-w-[62rem] text-left text-sm">
               <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
                 <tr>
-                  <th className="px-3 py-2 font-medium">Observable</th>
+                  <th className="w-[24rem] px-3 py-2 font-medium">Observable</th>
                   <th className="px-3 py-2 font-medium">State</th>
                   <th className="px-3 py-2 font-medium">Source</th>
                   <th className="px-3 py-2 font-medium">Last Observation</th>
@@ -133,6 +133,9 @@ export function Observables() {
                     key={item.id}
                     item={item}
                     busy={busyID === item.id}
+                    onOpen={(id) =>
+                      navigate(`/observables/${encodeURIComponent(id)}`)
+                    }
                     onAction={runAction}
                   />
                 ))}
@@ -148,27 +151,31 @@ export function Observables() {
 function ObservableRow({
   item,
   busy,
+  onOpen,
   onAction,
 }: {
   item: ObservableStatus;
   busy: boolean;
+  onOpen: (id: string) => void;
   onAction: (id: string, action: "start" | "stop" | "delete") => Promise<void>;
 }) {
   const last = item.last_observation?.id ? item.last_observation : null;
   return (
-    <tr className="border-t">
-      <td className="px-3 py-2">
-        <Link
-          to={`/observables/${encodeURIComponent(item.id)}`}
-          className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded-md px-1 py-1 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/35"
-        >
-          <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary">
-            {item.source_type === "schedule" ? (
-              <CalendarClock className="size-4" />
-            ) : (
-              <Activity className="size-4" />
-            )}
-          </span>
+    <tr
+      className="cursor-pointer border-t transition-colors hover:bg-muted/35 focus-visible:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35"
+      role="link"
+      tabIndex={0}
+      aria-label={`Open observable ${item.name || item.id}`}
+      onClick={() => onOpen(item.id)}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onOpen(item.id);
+      }}
+    >
+      <td className="w-[24rem] max-w-[24rem] px-3 py-2">
+        <div className="min-w-0 rounded-md px-1 py-1">
           <span className="min-w-0">
             <span className="block truncate font-medium text-foreground">
               {item.name || item.id}
@@ -177,7 +184,7 @@ function ObservableRow({
               {item.id}
             </span>
           </span>
-        </Link>
+        </div>
       </td>
       <td className="px-3 py-2">
         <StateBadge state={item.state} />
@@ -223,7 +230,10 @@ function ObservableRow({
               title="Stop"
               aria-label="Stop observable"
               disabled={busy}
-              onClick={() => void onAction(item.id, "stop")}
+              onClick={(event) => {
+                event.stopPropagation();
+                void onAction(item.id, "stop");
+              }}
             >
               <Pause className="size-3.5" />
             </Button>
@@ -235,7 +245,10 @@ function ObservableRow({
               title="Start"
               aria-label="Start observable"
               disabled={busy}
-              onClick={() => void onAction(item.id, "start")}
+              onClick={(event) => {
+                event.stopPropagation();
+                void onAction(item.id, "start");
+              }}
             >
               <Play className="size-3.5" />
             </Button>
@@ -247,7 +260,10 @@ function ObservableRow({
             title="Delete"
             aria-label="Delete observable"
             disabled={busy}
-            onClick={() => void onAction(item.id, "delete")}
+            onClick={(event) => {
+              event.stopPropagation();
+              void onAction(item.id, "delete");
+            }}
             className="text-muted-foreground hover:text-destructive"
           >
             <Trash2 className="size-3.5" />
