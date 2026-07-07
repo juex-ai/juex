@@ -1,4 +1,5 @@
 import type { ToolUIPartState } from "../components/ai-elements/_local-types";
+import { formatToolResultText } from "./tool-result-output.ts";
 
 const STATUS_LABELS: Record<ToolUIPartState, string> = {
   "approval-requested": "approval",
@@ -12,6 +13,60 @@ const STATUS_LABELS: Record<ToolUIPartState, string> = {
 
 export function toolStatusLabel(status: ToolUIPartState): string {
   return STATUS_LABELS[status];
+}
+
+export type ToolProcessStatus = "running" | "failed" | "done";
+
+const PROCESS_STATUS_LABELS: Record<ToolProcessStatus, string> = {
+  running: "running",
+  failed: "failed",
+  done: "success",
+};
+
+export function toolProcessStatus(status: ToolUIPartState): ToolProcessStatus {
+  switch (status) {
+    case "output-available":
+      return "done";
+    case "output-denied":
+    case "output-error":
+      return "failed";
+    default:
+      return "running";
+  }
+}
+
+export function aggregateToolProcessStatus(
+  statuses: readonly ToolUIPartState[],
+): ToolProcessStatus {
+  const compact = statuses.map(toolProcessStatus);
+  if (compact.includes("running")) return "running";
+  if (compact.includes("failed")) return "failed";
+  return "done";
+}
+
+export function toolProcessStatusLabel(status: ToolProcessStatus): string {
+  return PROCESS_STATUS_LABELS[status];
+}
+
+export function formatToolProcessResultText(content: string): string {
+  return formatToolResultText(content).text;
+}
+
+export function formatToolBatchTitle(names: readonly string[]): string {
+  const counts = new Map<string, number>();
+  for (const rawName of names) {
+    const name = typeof rawName === "string" && rawName.trim() ? rawName : "tool";
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([name, count]) => `${count} ${name}`)
+    .join(", ");
+}
+
+export function compactThinkingPreview(text: string, limit = 20): string {
+  const value = text.trim();
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}...`;
 }
 
 export function toolDisplayName(type: unknown, toolName?: unknown): string {

@@ -36,6 +36,10 @@ export interface ToolResultBlock extends BlockBase {
   tool_use_id?: string;
   content: string;
   is_error?: boolean;
+  // UI-local live projection marker. Persisted history omits this field; it
+  // lets the session transcript keep streamed tool output in a running state
+  // until the final tool.completed/tool.errored event arrives.
+  streaming?: boolean;
 }
 
 export type Block = TextBlock | ReasoningBlock | ToolUseBlock | ToolResultBlock;

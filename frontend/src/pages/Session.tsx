@@ -20,18 +20,6 @@ import {
   MessageResponse,
 } from "@/components/ai-elements/message";
 import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
-import {
-  Tool,
-  ToolContent,
-  ToolHeader,
-  ToolInput,
-  ToolOutput,
-} from "@/components/ai-elements/tool";
-import {
   PromptInput,
   PromptInputFooter,
   PromptInputSubmit,
@@ -44,6 +32,7 @@ import {
   messagesToGroups,
   toolState,
   type MessageGroup,
+  type ToolDisplayUnit,
 } from "@/lib/display-units";
 import {
   COMPACTING_SUBMIT_HINT,
@@ -65,6 +54,16 @@ import {
   messageGroupCopyText,
   type CopyTooltipMode,
 } from "@/lib/message-copy";
+import {
+  aggregateToolProcessStatus,
+  compactThinkingPreview,
+  formatToolBatchTitle,
+  formatToolProcessResultText,
+  toolDisplayName,
+  toolProcessStatus,
+  toolProcessStatusLabel,
+  type ToolProcessStatus,
+} from "@/lib/tool-display";
 import { sessionPreviewTitle } from "@/lib/session-title";
 import { formatMCPEventForDisplay } from "@/lib/mcp-events";
 import { cn } from "@/lib/utils";
@@ -1112,8 +1111,8 @@ function MessageGroupView({
         ) : null}
         {group.units.map((unit, i) => {
           if (unit.kind === "text") {
-            if (isCompact) {
-              return <CompactMessage key={i} text={unit.block.text} />;
+            if (group.role === "assistant") {
+              return <AssistantPlainText key={i} text={unit.block.text} />;
             }
             return (
               <MessageContent key={i}>
@@ -1123,47 +1122,18 @@ function MessageGroupView({
           }
           if (unit.kind === "reasoning") {
             const text = unit.block.text ?? unit.block.content ?? "";
-            if (unit.block.redacted) {
-              return (
-                <Reasoning key={i} isStreaming={false}>
-                  <ReasoningTrigger>Thinking [redacted]</ReasoningTrigger>
-                  <ReasoningContent>
-                    [redacted by provider]
-                  </ReasoningContent>
-                </Reasoning>
-              );
-            }
             return (
-              <Reasoning key={i} isStreaming={false}>
-                <ReasoningTrigger />
-                <ReasoningContent>{text}</ReasoningContent>
-              </Reasoning>
+              <ThinkingProcessRow
+                key={i}
+                redacted={unit.block.redacted}
+                text={text}
+              />
             );
           }
-          // unit.kind === "tool"
-          const state = toolState(unit.use, unit.result);
-          const toolName = unit.use?.tool_name ?? "tool";
-          return (
-            <Tool
-              key={i}
-              defaultOpen={state === "output-error" || state === "input-available"}
-            >
-              <ToolHeader
-                type={`tool-${toolName}`}
-                state={state}
-                timeoutSeconds={unit.use?.timeout_seconds}
-              />
-              <ToolContent>
-                {unit.use ? <ToolInput input={unit.use.input} /> : null}
-                {unit.result ? (
-                  <ToolOutput
-                    output={unit.result.is_error ? null : unit.result.content}
-                    errorText={unit.result.is_error ? unit.result.content : undefined}
-                  />
-                ) : null}
-              </ToolContent>
-            </Tool>
-          );
+          if (unit.kind === "tool_batch") {
+            return <ToolBatchProcessRow key={i} tools={unit.tools} />;
+          }
+          return <ToolProcessRow key={i} tool={unit} />;
         })}
         {group.pending && isEmpty ? (
           <div className="animate-pulse text-sm text-muted-foreground">...</div>
@@ -1177,6 +1147,211 @@ function MessageGroupView({
       </div>
     </Message>
   );
+}
+
+function AssistantPlainText({ text }: { text: string }) {
+  return (
+    <div className="max-w-[min(100%,42rem)] text-[14.5px] leading-7 text-foreground">
+      <MessageResponse>{text}</MessageResponse>
+    </div>
+  );
+}
+
+function ThinkingProcessRow({
+  redacted,
+  text,
+}: {
+  redacted?: boolean;
+  text: string;
+}) {
+  const content = redacted ? "[redacted by provider]" : text;
+  const preview = redacted
+    ? "Thinking [redacted]"
+    : `Thinking ${compactThinkingPreview(text) || "-"}`;
+
+  return (
+    <ProcessDisclosure status="done" title={preview}>
+      <ProcessPayload label="Content" value={content || "-"} />
+    </ProcessDisclosure>
+  );
+}
+
+function ToolBatchProcessRow({ tools }: { tools: ToolDisplayUnit[] }) {
+  const title = formatToolBatchTitle(tools.map(toolProcessName));
+  const status = aggregateToolProcessStatus(
+    tools.map((tool) => toolState(tool.use, tool.result)),
+  );
+
+  return (
+    <ProcessDisclosure
+      status={status}
+      title={title || "tool batch"}
+    >
+      <div className="flex flex-col gap-1.5">
+        {tools.map((tool, index) => (
+          <ToolProcessRow
+            key={tool.use?.tool_use_id ?? tool.result?.tool_use_id ?? index}
+            tool={tool}
+            nested
+          />
+        ))}
+      </div>
+    </ProcessDisclosure>
+  );
+}
+
+function ToolProcessRow({
+  nested = false,
+  tool,
+}: {
+  nested?: boolean;
+  tool: ToolDisplayUnit;
+}) {
+  const state = toolState(tool.use, tool.result);
+  const status = toolProcessStatus(state);
+  const name = toolProcessName(tool);
+  const hasContent = Boolean(tool.use || tool.result);
+
+  return (
+    <ProcessDisclosure
+      status={status}
+      title={name}
+      nested={nested}
+    >
+      {hasContent ? (
+        <div className="flex flex-col gap-2">
+          {tool.use ? (
+            <ProcessPayload
+              label="Parameters"
+              value={formatToolInput(tool.use.input)}
+            />
+          ) : null}
+          {tool.result ? (
+            <ProcessPayload
+              label={tool.result.is_error ? "Error" : "Result"}
+              tone={tool.result.is_error ? "error" : "muted"}
+              value={
+                tool.result.content
+                  ? formatToolProcessResultText(tool.result.content)
+                  : "-"
+              }
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </ProcessDisclosure>
+  );
+}
+
+function ProcessDisclosure({
+  children,
+  nested = false,
+  status,
+  title,
+}: {
+  children: ReactNode;
+  nested?: boolean;
+  status: ToolProcessStatus;
+  title: string;
+}) {
+  const [isOpen, setIsOpen] = useState(
+    status === "running" || status === "failed",
+  );
+
+  useEffect(() => {
+    if (status === "running" || status === "failed") {
+      setIsOpen(true);
+    }
+  }, [status]);
+
+  return (
+    <details
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      className={cn(
+        "group/process-row w-full rounded-sm border-l border-border/70 pl-2",
+        nested && "ml-2 border-border/50",
+      )}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 py-1 font-mono text-[11px] leading-5 text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+        <ProcessStatusIndicator status={status} />
+        <span className="sr-only">{toolProcessStatusLabel(status)}</span>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <ChevronDownIcon
+          className="size-3 shrink-0 transition-transform group-open/process-row:rotate-180"
+          aria-hidden="true"
+        />
+      </summary>
+      <div className="ml-5 flex flex-col gap-2 pb-2 pt-0.5">{children}</div>
+    </details>
+  );
+}
+
+function ProcessStatusIndicator({ status }: { status: ToolProcessStatus }) {
+  if (status === "running") {
+    return (
+      <LoaderCircleIcon
+        className="size-3 shrink-0 animate-spin text-muted-foreground"
+        aria-hidden="true"
+      />
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "size-2.5 shrink-0 rounded-full",
+        status === "failed" ? "bg-juex-error" : "bg-juex-done",
+      )}
+      aria-hidden="true"
+    />
+  );
+}
+
+function ProcessPayload({
+  label,
+  tone = "muted",
+  value,
+}: {
+  label: string;
+  tone?: "muted" | "error";
+  value: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <div
+        className={cn(
+          "font-mono text-[10px] uppercase tracking-normal",
+          tone === "error" ? "text-juex-error" : "text-muted-foreground",
+        )}
+      >
+        {label}
+      </div>
+      <pre
+        className={cn(
+          "max-h-72 overflow-auto whitespace-pre-wrap break-words rounded border px-2 py-1.5 font-mono text-[11px] leading-relaxed",
+          tone === "error"
+            ? "border-juex-error/25 bg-juex-error-bg/40 text-juex-error"
+            : "border-border/60 bg-muted/35 text-foreground",
+        )}
+      >
+        {value}
+      </pre>
+    </div>
+  );
+}
+
+function toolProcessName(tool: ToolDisplayUnit): string {
+  const raw = tool.use?.tool_name ?? "tool";
+  return toolDisplayName(`tool-${raw}`);
+}
+
+function formatToolInput(input: Record<string, unknown> | undefined): string {
+  if (input === undefined) return "{}";
+  try {
+    return JSON.stringify(input, null, 2);
+  } catch {
+    return String(input);
+  }
 }
 
 function SlashCommandMessage({ text }: { text: string }) {

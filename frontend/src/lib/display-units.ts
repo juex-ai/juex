@@ -9,14 +9,24 @@ import type {
 } from "@/types";
 import type { ToolUIPartState } from "@/components/ai-elements/_local-types";
 
+export type ToolDisplayUnit = {
+  kind: "tool";
+  use: ToolUseBlock | null;
+  result: ToolResultBlock | null;
+};
+
+export type ToolBatchDisplayUnit = {
+  kind: "tool_batch";
+  tools: ToolDisplayUnit[];
+};
+
 export type DisplayUnit =
   | { kind: "text"; block: TextBlock }
   | { kind: "reasoning"; block: ReasoningBlock }
-  | {
-      kind: "tool";
-      use: ToolUseBlock | null;
-      result: ToolResultBlock | null;
-    };
+  | ToolDisplayUnit
+  | ToolBatchDisplayUnit;
+
+type UnbatchedDisplayUnit = Exclude<DisplayUnit, ToolBatchDisplayUnit>;
 
 export type MessageGroup = {
   key: string;
@@ -48,11 +58,11 @@ export function messagesToGroups(
 ): MessageGroup[] {
   if (!messages?.length) return [];
   const groups: MessageGroup[] = [];
-  const toolById = new Map<string, Extract<DisplayUnit, { kind: "tool" }>>();
+  const toolById = new Map<string, ToolDisplayUnit>();
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
-    const units: DisplayUnit[] = [];
+    const units: UnbatchedDisplayUnit[] = [];
     for (const block of msg.blocks ?? []) {
       switch (block.type) {
         case "text":
@@ -94,7 +104,7 @@ export function messagesToGroups(
       role: msg.role,
       kind: msg.kind,
       pending,
-      units,
+      units: foldToolBatches(units),
       model: msg.model,
     });
   }
@@ -102,11 +112,38 @@ export function messagesToGroups(
   return groups;
 }
 
+function foldToolBatches(units: UnbatchedDisplayUnit[]): DisplayUnit[] {
+  const folded: DisplayUnit[] = [];
+  let batch: ToolDisplayUnit[] = [];
+
+  const flushBatch = () => {
+    if (batch.length === 1) {
+      folded.push(batch[0]);
+    } else if (batch.length > 1) {
+      folded.push({ kind: "tool_batch", tools: batch });
+    }
+    batch = [];
+  };
+
+  for (const unit of units) {
+    if (unit.kind === "tool") {
+      batch.push(unit);
+      continue;
+    }
+    flushBatch();
+    folded.push(unit);
+  }
+  flushBatch();
+
+  return folded;
+}
+
 export function toolState(
   use: ToolUseBlock | null,
   result: ToolResultBlock | null,
 ): ToolUIPartState {
   if (result?.is_error) return "output-error";
+  if (result?.streaming) return "input-available";
   if (result) return "output-available";
   if (use) return "input-available";
   // Should not happen — a tool unit always has at least one side.

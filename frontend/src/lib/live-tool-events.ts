@@ -88,6 +88,7 @@ export function applyToolOutputDeltaToMessages(
     type: "tool_result",
     tool_use_id: update.toolUseID,
     content: update.text,
+    streaming: true,
   };
   return upsertToolResultBlock(messages, update, block, "append");
 }
@@ -353,16 +354,20 @@ function mergeToolResultBlock(
     return {
       ...current,
       content: capLiveToolOutput(current.content + incoming.content),
+      streaming: true,
     };
   }
   if (incoming.is_error) {
-    return { ...current, content: incoming.content, is_error: true };
+    const next = { ...current, content: incoming.content, is_error: true };
+    delete next.streaming;
+    return next;
   }
   const next = {
     ...current,
     content: current.content || incoming.content,
   };
   delete next.is_error;
+  delete next.streaming;
   return next;
 }
 

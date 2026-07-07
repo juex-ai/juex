@@ -6,7 +6,10 @@ import {
   applyToolRequestedToMessages,
   applyToolResultToMessages,
 } from "../../frontend/src/lib/live-tool-events.ts";
-import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
+import {
+  messagesToGroups,
+  toolState,
+} from "../../frontend/src/lib/display-units.ts";
 import type { Message } from "../../frontend/src/types.ts";
 
 test("applyToolRequestedToMessages adds a running tool block to a pending assistant", () => {
@@ -128,6 +131,7 @@ test("applyToolOutputDeltaToMessages appends a live tool result", () => {
         type: "tool_result",
         tool_use_id: "tool-1",
         content: "pulling layer\n",
+        streaming: true,
       },
     ],
   });
@@ -162,6 +166,7 @@ test("applyToolOutputDeltaToMessages creates a named placeholder for missed requ
           type: "tool_result",
           tool_use_id: "tool-1",
           content: "pulling layer\n",
+          streaming: true,
         },
       ],
     },
@@ -195,6 +200,7 @@ test("applyToolOutputDeltaToMessages updates an existing live tool result", () =
       type: "tool_result",
       tool_use_id: "tool-1",
       content: "first\nsecond\n",
+      streaming: true,
     },
   ]);
 });
@@ -486,6 +492,7 @@ test("applyToolOutputDeltaToMessages keeps live output after the matching later 
         type: "tool_result",
         tool_use_id: "streaming-tool",
         content: "live output\n",
+        streaming: true,
       },
     ],
   });
@@ -494,5 +501,37 @@ test("applyToolOutputDeltaToMessages keeps live output after the matching later 
   assert.equal(liveUnit?.kind, "tool");
   if (liveUnit?.kind === "tool") {
     assert.equal(liveUnit.result?.content, "live output\n");
+    assert.equal(toolState(liveUnit.use, liveUnit.result), "input-available");
+  }
+});
+
+test("applyToolResultToMessages finalizes a streamed tool result", () => {
+  const streamed = applyToolOutputDeltaToMessages([], {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "exec_command",
+    text: "live output\n",
+  });
+
+  let groups = messagesToGroups(streamed);
+  let unit = groups[0].units[0];
+  assert.equal(unit?.kind, "tool");
+  if (unit?.kind === "tool") {
+    assert.equal(toolState(unit.use, unit.result), "input-available");
+  }
+
+  const completed = applyToolResultToMessages(streamed, {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "exec_command",
+    content: "final output\n",
+  });
+
+  groups = messagesToGroups(completed);
+  unit = groups[0].units[0];
+  assert.equal(unit?.kind, "tool");
+  if (unit?.kind === "tool") {
+    assert.equal(unit.result?.content, "live output\n");
+    assert.equal(toolState(unit.use, unit.result), "output-available");
   }
 });
