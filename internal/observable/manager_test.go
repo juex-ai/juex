@@ -677,6 +677,49 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 	}
 }
 
+func TestManager_IntervalStartupPreservesFirstBaselineBeforeEmission(t *testing.T) {
+	dir := t.TempDir()
+	baseline := time.Now().UTC().Add(2 * time.Second)
+	now := baseline.Add(30 * time.Second)
+	spec := observable.Spec{
+		ID: "interval-baseline",
+		Source: observable.SourceSpec{
+			Type:     observable.SourceTypeSchedule,
+			Interval: &observable.IntervalSchedule{EverySeconds: 60},
+			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
+		},
+		Observation: observable.ObservationSpec{Content: "Check deployment status."},
+	}
+	writeObservableConfig(t, dir, spec)
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    spec.ID,
+		LastEvaluatedAt: baseline,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, ok, err := store.ScheduleState(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !state.LastEvaluatedAt.Equal(baseline) || !state.LastEmittedScheduledAt.IsZero() {
+		t.Fatalf("schedule state = %+v ok=%v, want baseline preserved before first emission", state, ok)
+	}
+}
+
 func TestManager_SandboxRunnerInvoked(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("sandboxed", "json-once")

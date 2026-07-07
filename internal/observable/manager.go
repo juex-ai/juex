@@ -530,7 +530,14 @@ func (m *Manager) evaluateScheduleStartup(ctx context.Context, run *observableRu
 		}
 		return m.recordScheduleState(run.id, now, latest.ScheduledAt)
 	}
+	if !missed && shouldPreserveIntervalStartupBaseline(run.spec, state) {
+		return m.recordScheduleState(run.id, state.LastEvaluatedAt, state.LastEmittedScheduledAt)
+	}
 	return m.recordScheduleState(run.id, now, state.LastEmittedScheduledAt)
+}
+
+func shouldPreserveIntervalStartupBaseline(spec Spec, state ScheduleStateRecord) bool {
+	return spec.Source.Interval != nil && !state.LastEvaluatedAt.IsZero() && state.LastEmittedScheduledAt.IsZero()
 }
 
 func (m *Manager) scheduleLoop(run *observableRun) {
