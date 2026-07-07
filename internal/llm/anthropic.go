@@ -267,9 +267,13 @@ func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic
 func toAnthropicTools(tools []ToolSpec, cachePrompt bool, cacheRetention string) []anthropic.ToolUnionParam {
 	out := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for i, t := range tools {
+		normalized := normalizedFunctionParameters(t.Schema)
 		schema := anthropic.ToolInputSchemaParam{
-			Properties: normalizedFunctionProperties(t.Schema),
+			Properties: normalized["properties"],
 			Required:   normalizedFunctionRequired(t.Schema),
+		}
+		if additionalProperties, ok := normalized["additionalProperties"]; ok && additionalProperties != nil {
+			schema.ExtraFields = map[string]any{"additionalProperties": additionalProperties}
 		}
 		tool := anthropic.ToolParam{
 			Name:        t.Name,

@@ -270,13 +270,7 @@ func TestAnthropic_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	}
 	tool, _ := tools[0].(map[string]any)
 	inputSchema, _ := tool["input_schema"].(map[string]any)
-	props, ok := inputSchema["properties"].(map[string]any)
-	if !ok || props == nil {
-		t.Fatalf("properties should be an empty object, got %+v in schema %+v", inputSchema["properties"], inputSchema)
-	}
-	if len(props) != 0 {
-		t.Fatalf("properties = %+v, want empty object", props)
-	}
+	assertEmptyProperties(t, inputSchema)
 }
 
 func TestAnthropic_CompleteOptionsAddsCacheControlAndRecordsCacheReadTokens(t *testing.T) {
@@ -2147,6 +2141,14 @@ func TestIsContextOverflowError(t *testing.T) {
 
 func assertEmptyProperties(t *testing.T, schema map[string]any) {
 	t.Helper()
+	assertObjectWithEmptyProperties(t, schema)
+	if schema["additionalProperties"] != false {
+		t.Fatalf("additionalProperties = %+v, want false in empty object schema %+v", schema["additionalProperties"], schema)
+	}
+}
+
+func assertObjectWithEmptyProperties(t *testing.T, schema map[string]any) {
+	t.Helper()
 	if schema["type"] != "object" {
 		t.Fatalf("schema type = %v, want object in %+v", schema["type"], schema)
 	}
@@ -2669,14 +2671,78 @@ func TestProjectProviderTranscriptCompactsAfterFiltering(t *testing.T) {
 
 func TestNormalizedFunctionParametersDefaults(t *testing.T) {
 	schema := normalizedFunctionParameters(map[string]any{"required": []any{"path", 3}})
-	assertEmptyProperties(t, schema)
+	assertObjectWithEmptyProperties(t, schema)
+	if _, ok := schema["additionalProperties"]; ok {
+		t.Fatalf("required-only schema should stay open, got %+v", schema)
+	}
 	req := normalizedFunctionRequired(schema)
 	if len(req) != 1 || req[0] != "path" {
 		t.Fatalf("required = %+v, want [path]", req)
 	}
+	noArgs := normalizedFunctionParameters(map[string]any{"type": "object"})
+	assertEmptyProperties(t, noArgs)
 	props := normalizedFunctionProperties(map[string]any{"properties": map[string]any{"path": map[string]any{"type": "string"}}})
 	if _, ok := props["path"]; !ok {
 		t.Fatalf("properties = %+v, want path", props)
+	}
+}
+
+func TestNormalizedFunctionParametersKeepsExplicitOpenEmptyObject(t *testing.T) {
+	schema := normalizedFunctionParameters(map[string]any{"type": "object", "properties": map[string]any{}})
+	assertObjectWithEmptyProperties(t, schema)
+	if _, ok := schema["additionalProperties"]; ok {
+		t.Fatalf("explicit empty properties schema should stay open, got %+v", schema)
+	}
+}
+
+func TestNormalizedFunctionParametersPreservesExplicitAdditionalProperties(t *testing.T) {
+	schema := normalizedFunctionParameters(map[string]any{"type": "object", "additionalProperties": true})
+	assertObjectWithEmptyProperties(t, schema)
+	if schema["additionalProperties"] != true {
+		t.Fatalf("additionalProperties = %+v, want true", schema["additionalProperties"])
+	}
+}
+
+func TestNormalizedFunctionParametersKeepsComposedSchemasOpen(t *testing.T) {
+	cases := map[string]map[string]any{
+		"oneOf": {
+			"type": "object",
+			"oneOf": []any{
+				map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"query": map[string]any{"type": "string"}},
+					"required":   []any{"query"},
+				},
+			},
+		},
+		"ref": {
+			"type": "object",
+			"$ref": "#/$defs/query",
+			"$defs": map[string]any{
+				"query": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"query": map[string]any{"type": "string"}},
+					"required":   []any{"query"},
+				},
+			},
+		},
+	}
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			schema := normalizedFunctionParameters(input)
+			assertObjectWithEmptyProperties(t, schema)
+			if _, ok := schema["additionalProperties"]; ok {
+				t.Fatalf("composed schema should stay open, got %+v", schema)
+			}
+		})
+	}
+}
+
+func TestNormalizedFunctionParametersKeepsPropertyCountSchemasOpen(t *testing.T) {
+	schema := normalizedFunctionParameters(map[string]any{"type": "object", "minProperties": 1})
+	assertObjectWithEmptyProperties(t, schema)
+	if _, ok := schema["additionalProperties"]; ok {
+		t.Fatalf("property-count schema should stay open, got %+v", schema)
 	}
 }
 

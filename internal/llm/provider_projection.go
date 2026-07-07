@@ -72,7 +72,41 @@ func normalizedFunctionParameters(schema map[string]any) map[string]any {
 	if out["properties"] == nil {
 		out["properties"] = map[string]any{}
 	}
+	if shouldCloseImplicitNoArgumentSchema(schema, out) {
+		out["additionalProperties"] = false
+	}
 	return out
+}
+
+func shouldCloseImplicitNoArgumentSchema(original, normalized map[string]any) bool {
+	if _, ok := normalized["additionalProperties"]; ok {
+		return false
+	}
+	if _, ok := original["properties"]; ok {
+		return false
+	}
+	props, ok := normalized["properties"].(map[string]any)
+	if !ok || len(props) != 0 {
+		return false
+	}
+	if len(functionRequired(normalized)) != 0 {
+		return false
+	}
+	for key := range original {
+		if !isNoArgumentSchemaMetadata(key) {
+			return false
+		}
+	}
+	return true
+}
+
+func isNoArgumentSchemaMetadata(key string) bool {
+	switch key {
+	case "type", "title", "description", "$schema", "$id", "default", "examples", "deprecated", "readOnly", "writeOnly":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizedFunctionProperties(schema map[string]any) map[string]any {
@@ -86,7 +120,11 @@ func normalizedFunctionProperties(schema map[string]any) map[string]any {
 
 func normalizedFunctionRequired(schema map[string]any) []string {
 	normalized := normalizedFunctionParameters(schema)
-	switch req := normalized["required"].(type) {
+	return functionRequired(normalized)
+}
+
+func functionRequired(schema map[string]any) []string {
+	switch req := schema["required"].(type) {
 	case []string:
 		return append([]string(nil), req...)
 	case []any:
