@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -22,6 +23,16 @@ const (
 	MinBatchIntervalSeconds = 5
 	MaxBatchIntervalSeconds = 86400
 	MaxBatchChars           = 1000
+
+	SourceTypeCommand  = "command"
+	SourceTypeSchedule = "schedule"
+
+	ScheduleCatchUpNone   = "none"
+	ScheduleCatchUpLatest = "latest"
+
+	DefaultScheduleKind       = "heartbeat"
+	MaxScheduleContentChars   = 1000
+	MinIntervalScheduleSecond = 60
 )
 
 type FileConfig struct {
@@ -35,9 +46,14 @@ type ConfigIssue struct {
 }
 
 type Spec struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name,omitempty"`
-	Command  string            `json:"command"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name,omitempty"`
+	Source      SourceSpec      `json:"source,omitempty"`
+	Observation ObservationSpec `json:"observation,omitempty"`
+
+	// Legacy command shorthand. It remains accepted on read and through older
+	// callers, but explicit source config is the preferred persisted shape.
+	Command  string            `json:"command,omitempty"`
 	Args     []string          `json:"args,omitempty"`
 	CWD      string            `json:"cwd,omitempty"`
 	Env      map[string]string `json:"env,omitempty"`
@@ -45,8 +61,142 @@ type Spec struct {
 	Defaults Defaults          `json:"defaults,omitempty"`
 	Parser   *ParserSpec       `json:"parser,omitempty"`
 	Filters  []FilterSpec      `json:"filters,omitempty"`
-	Batch    BatchSpec         `json:"batch"`
+	Batch    BatchSpec         `json:"batch,omitempty"`
 	OnExit   OnExitSpec        `json:"on_exit,omitempty"`
+}
+
+type SourceSpec struct {
+	Type string `json:"type,omitempty"`
+
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	CWD     string            `json:"cwd,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Streams []string          `json:"streams,omitempty"`
+	Parser  *ParserSpec       `json:"parser,omitempty"`
+	Filters []FilterSpec      `json:"filters,omitempty"`
+	Batch   BatchSpec         `json:"batch,omitempty"`
+	OnExit  OnExitSpec        `json:"on_exit,omitempty"`
+
+	Timezone string            `json:"timezone,omitempty"`
+	Once     *OnceSchedule     `json:"once,omitempty"`
+	Daily    *DailySchedule    `json:"daily,omitempty"`
+	Interval *IntervalSchedule `json:"interval,omitempty"`
+	CatchUp  CatchUpSpec       `json:"catch_up,omitempty"`
+}
+
+type OnceSchedule struct {
+	At string `json:"at"`
+}
+
+type DailySchedule struct {
+	Times    []string `json:"times"`
+	Weekdays []string `json:"weekdays,omitempty"`
+}
+
+type IntervalSchedule struct {
+	EverySeconds int `json:"every_seconds"`
+}
+
+type CatchUpSpec struct {
+	Mode               string `json:"mode,omitempty"`
+	MaxLatenessMinutes int    `json:"max_lateness_minutes,omitempty"`
+}
+
+type ObservationSpec struct {
+	Kind     string `json:"kind,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	Content  string `json:"content,omitempty"`
+}
+
+func (spec Spec) MarshalJSON() ([]byte, error) {
+	type specJSON struct {
+		ID          string            `json:"id"`
+		Name        string            `json:"name,omitempty"`
+		Source      *SourceSpec       `json:"source,omitempty"`
+		Observation *ObservationSpec  `json:"observation,omitempty"`
+		Command     string            `json:"command,omitempty"`
+		Args        []string          `json:"args,omitempty"`
+		CWD         string            `json:"cwd,omitempty"`
+		Env         map[string]string `json:"env,omitempty"`
+		Streams     []string          `json:"streams,omitempty"`
+		Defaults    *Defaults         `json:"defaults,omitempty"`
+		Parser      *ParserSpec       `json:"parser,omitempty"`
+		Filters     []FilterSpec      `json:"filters,omitempty"`
+		Batch       *BatchSpec        `json:"batch,omitempty"`
+		OnExit      *OnExitSpec       `json:"on_exit,omitempty"`
+	}
+	out := specJSON{
+		ID:      spec.ID,
+		Name:    spec.Name,
+		Command: spec.Command,
+		Args:    spec.Args,
+		CWD:     spec.CWD,
+		Env:     spec.Env,
+		Streams: spec.Streams,
+		Parser:  spec.Parser,
+		Filters: spec.Filters,
+	}
+	if spec.Source.Type != "" {
+		out.Source = &spec.Source
+	}
+	if spec.Observation != (ObservationSpec{}) {
+		out.Observation = &spec.Observation
+	}
+	if spec.Defaults != (Defaults{}) {
+		out.Defaults = &spec.Defaults
+	}
+	if spec.Batch != (BatchSpec{}) {
+		out.Batch = &spec.Batch
+	}
+	if spec.OnExit != (OnExitSpec{}) {
+		out.OnExit = &spec.OnExit
+	}
+	return json.Marshal(out)
+}
+
+func (source SourceSpec) MarshalJSON() ([]byte, error) {
+	type sourceJSON struct {
+		Type     string            `json:"type,omitempty"`
+		Command  string            `json:"command,omitempty"`
+		Args     []string          `json:"args,omitempty"`
+		CWD      string            `json:"cwd,omitempty"`
+		Env      map[string]string `json:"env,omitempty"`
+		Streams  []string          `json:"streams,omitempty"`
+		Parser   *ParserSpec       `json:"parser,omitempty"`
+		Filters  []FilterSpec      `json:"filters,omitempty"`
+		Batch    *BatchSpec        `json:"batch,omitempty"`
+		OnExit   *OnExitSpec       `json:"on_exit,omitempty"`
+		Timezone string            `json:"timezone,omitempty"`
+		Once     *OnceSchedule     `json:"once,omitempty"`
+		Daily    *DailySchedule    `json:"daily,omitempty"`
+		Interval *IntervalSchedule `json:"interval,omitempty"`
+		CatchUp  *CatchUpSpec      `json:"catch_up,omitempty"`
+	}
+	out := sourceJSON{
+		Type:     source.Type,
+		Command:  source.Command,
+		Args:     source.Args,
+		CWD:      source.CWD,
+		Env:      source.Env,
+		Streams:  source.Streams,
+		Parser:   source.Parser,
+		Filters:  source.Filters,
+		Timezone: source.Timezone,
+		Once:     source.Once,
+		Daily:    source.Daily,
+		Interval: source.Interval,
+	}
+	if source.Batch != (BatchSpec{}) {
+		out.Batch = &source.Batch
+	}
+	if source.OnExit != (OnExitSpec{}) {
+		out.OnExit = &source.OnExit
+	}
+	if source.CatchUp != (CatchUpSpec{}) {
+		out.CatchUp = &source.CatchUp
+	}
+	return json.Marshal(out)
 }
 
 type Defaults struct {
@@ -146,6 +296,7 @@ func SaveConfig(path string, cfg FileConfig) error {
 	if err != nil {
 		return err
 	}
+	cfg = PreferredConfig(cfg)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -190,30 +341,67 @@ func ValidateConfig(cfg FileConfig) (FileConfig, error) {
 func ValidateSpec(spec Spec) (Spec, error) {
 	spec.ID = strings.TrimSpace(spec.ID)
 	spec.Command = strings.TrimSpace(spec.Command)
+	spec.Source.Type = strings.TrimSpace(spec.Source.Type)
 	if !validID(spec.ID) {
 		return Spec{}, fmt.Errorf("id must use lower-case letters, digits, '_' or '-'")
 	}
-	if spec.Command == "" {
-		return Spec{}, fmt.Errorf("command is required")
+	if spec.Source.Type == "" {
+		if hasLegacyCommandShorthand(spec) {
+			spec.Source.Type = SourceTypeCommand
+			spec.Source.Command = spec.Command
+			spec.Source.Args = append([]string(nil), spec.Args...)
+			spec.Source.CWD = spec.CWD
+			spec.Source.Env = cloneStringMap(spec.Env)
+			spec.Source.Streams = append([]string(nil), spec.Streams...)
+			spec.Source.Parser = cloneParserSpec(spec.Parser)
+			spec.Source.Filters = append([]FilterSpec(nil), spec.Filters...)
+			spec.Source.Batch = spec.Batch
+			spec.Source.OnExit = spec.OnExit
+		} else {
+			return Spec{}, fmt.Errorf("source.type is required")
+		}
+	} else if hasLegacyCommandShorthand(spec) && !legacyMirrorsCommandSource(spec) {
+		return Spec{}, fmt.Errorf("legacy command shorthand cannot be mixed with explicit source")
 	}
-	if len(spec.Streams) == 0 {
-		spec.Streams = []string{StreamStdout, StreamStderr}
+	switch spec.Source.Type {
+	case SourceTypeCommand:
+		return validateCommandSpec(spec)
+	case SourceTypeSchedule:
+		return validateScheduleSpec(spec)
+	default:
+		return Spec{}, fmt.Errorf("source.type must be command or schedule, got %q", spec.Source.Type)
 	}
-	for _, stream := range spec.Streams {
+}
+
+func validateCommandSpec(spec Spec) (Spec, error) {
+	spec.Source.Command = strings.TrimSpace(spec.Source.Command)
+	if spec.Source.Command == "" {
+		return Spec{}, fmt.Errorf("source.command is required")
+	}
+	if len(spec.Source.Streams) == 0 {
+		spec.Source.Streams = []string{StreamStdout, StreamStderr}
+	}
+	for _, stream := range spec.Source.Streams {
 		switch stream {
 		case StreamStdout, StreamStderr:
 		default:
 			return Spec{}, fmt.Errorf("stream must be stdout or stderr, got %q", stream)
 		}
 	}
+	if spec.Observation.Kind != "" && spec.Defaults.Kind == "" {
+		spec.Defaults.Kind = spec.Observation.Kind
+	}
+	if spec.Observation.Severity != "" && spec.Defaults.Severity == "" {
+		spec.Defaults.Severity = spec.Observation.Severity
+	}
 	if err := validateSeverity("defaults.severity", spec.Defaults.Severity); err != nil {
 		return Spec{}, err
 	}
-	if spec.Parser != nil {
-		parserType := spec.Parser.Type
+	if spec.Source.Parser != nil {
+		parserType := spec.Source.Parser.Type
 		if parserType == "" {
 			parserType = ParserText
-			spec.Parser.Type = parserType
+			spec.Source.Parser.Type = parserType
 		}
 		switch parserType {
 		case ParserText, ParserJSONL:
@@ -221,13 +409,13 @@ func ValidateSpec(spec Spec) (Spec, error) {
 			return Spec{}, fmt.Errorf("parser.type must be text or jsonl, got %q", parserType)
 		}
 	}
-	if spec.Batch.IntervalSeconds < MinBatchIntervalSeconds || spec.Batch.IntervalSeconds > MaxBatchIntervalSeconds {
+	if spec.Source.Batch.IntervalSeconds < MinBatchIntervalSeconds || spec.Source.Batch.IntervalSeconds > MaxBatchIntervalSeconds {
 		return Spec{}, fmt.Errorf("batch.interval_seconds must be between %d and %d", MinBatchIntervalSeconds, MaxBatchIntervalSeconds)
 	}
-	if spec.Batch.MaxChars < 1 || spec.Batch.MaxChars > MaxBatchChars {
+	if spec.Source.Batch.MaxChars < 1 || spec.Source.Batch.MaxChars > MaxBatchChars {
 		return Spec{}, fmt.Errorf("batch.max_chars must be between 1 and %d", MaxBatchChars)
 	}
-	for i, filter := range spec.Filters {
+	for i, filter := range spec.Source.Filters {
 		hasContains := strings.TrimSpace(filter.Contains) != ""
 		hasRegex := strings.TrimSpace(filter.Regex) != ""
 		if hasContains == hasRegex {
@@ -242,10 +430,88 @@ func ValidateSpec(spec Spec) (Spec, error) {
 			}
 		}
 	}
-	switch spec.OnExit.Notify {
+	switch spec.Source.OnExit.Notify {
 	case "", "never", "always", "nonzero":
 	default:
-		return Spec{}, fmt.Errorf("on_exit.notify must be never, always, or nonzero, got %q", spec.OnExit.Notify)
+		return Spec{}, fmt.Errorf("on_exit.notify must be never, always, or nonzero, got %q", spec.Source.OnExit.Notify)
+	}
+	spec.Command = spec.Source.Command
+	spec.Args = append([]string(nil), spec.Source.Args...)
+	spec.CWD = spec.Source.CWD
+	spec.Env = cloneStringMap(spec.Source.Env)
+	spec.Streams = append([]string(nil), spec.Source.Streams...)
+	spec.Parser = cloneParserSpec(spec.Source.Parser)
+	spec.Filters = append([]FilterSpec(nil), spec.Source.Filters...)
+	spec.Batch = spec.Source.Batch
+	spec.OnExit = spec.Source.OnExit
+	return spec, nil
+}
+
+func validateScheduleSpec(spec Spec) (Spec, error) {
+	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
+	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
+	spec.Observation.Content = strings.TrimSpace(spec.Observation.Content)
+	if spec.Observation.Kind == "" {
+		spec.Observation.Kind = DefaultScheduleKind
+	}
+	if err := validateSeverity("observation.severity", spec.Observation.Severity); err != nil {
+		return Spec{}, err
+	}
+	if spec.Observation.Severity == "" {
+		spec.Observation.Severity = DefaultSeverity
+	}
+	if spec.Observation.Content == "" {
+		return Spec{}, fmt.Errorf("observation.content is required for schedule sources")
+	}
+	if len([]rune(spec.Observation.Content)) > MaxScheduleContentChars {
+		return Spec{}, fmt.Errorf("observation.content must be at most %d characters", MaxScheduleContentChars)
+	}
+	enabled := 0
+	if spec.Source.Once != nil {
+		enabled++
+		if _, err := parseOnceAt(spec.Source.Once.At); err != nil {
+			return Spec{}, err
+		}
+	}
+	if spec.Source.Daily != nil {
+		enabled++
+		if _, err := time.LoadLocation(strings.TrimSpace(spec.Source.Timezone)); err != nil {
+			return Spec{}, fmt.Errorf("source.timezone must be a valid IANA timezone: %w", err)
+		}
+		if len(spec.Source.Daily.Times) == 0 {
+			return Spec{}, fmt.Errorf("source.daily.times is required")
+		}
+		for _, value := range spec.Source.Daily.Times {
+			if _, err := parseDailyClock(value); err != nil {
+				return Spec{}, err
+			}
+		}
+		for _, value := range spec.Source.Daily.Weekdays {
+			if _, ok := weekdayNumber(value); !ok {
+				return Spec{}, fmt.Errorf("source.daily.weekdays contains invalid weekday %q", value)
+			}
+		}
+	}
+	if spec.Source.Interval != nil {
+		enabled++
+		if spec.Source.Interval.EverySeconds < MinIntervalScheduleSecond {
+			return Spec{}, fmt.Errorf("source.interval.every_seconds must be at least %d", MinIntervalScheduleSecond)
+		}
+	}
+	if enabled != 1 {
+		return Spec{}, fmt.Errorf("schedule source must set exactly one of once, daily, or interval")
+	}
+	if spec.Source.CatchUp.Mode == "" {
+		spec.Source.CatchUp.Mode = ScheduleCatchUpNone
+	}
+	switch spec.Source.CatchUp.Mode {
+	case ScheduleCatchUpNone:
+	case ScheduleCatchUpLatest:
+		if spec.Source.CatchUp.MaxLatenessMinutes < 1 || spec.Source.CatchUp.MaxLatenessMinutes > 1440 {
+			return Spec{}, fmt.Errorf("source.catch_up.max_lateness_minutes must be between 1 and 1440")
+		}
+	default:
+		return Spec{}, fmt.Errorf("source.catch_up.mode must be none or latest, got %q", spec.Source.CatchUp.Mode)
 	}
 	return spec, nil
 }
@@ -258,6 +524,150 @@ func ExpandVariables(value, workDir string) string {
 		"$JUEX_WORKDIR", workDir,
 	)
 	return replacer.Replace(value)
+}
+
+func PreferredConfig(cfg FileConfig) FileConfig {
+	out := FileConfig{Observables: make([]Spec, 0, len(cfg.Observables))}
+	for _, spec := range cfg.Observables {
+		out.Observables = append(out.Observables, PreferredSpec(spec))
+	}
+	return out
+}
+
+func PreferredSpec(spec Spec) Spec {
+	switch spec.Source.Type {
+	case SourceTypeCommand:
+		spec.Source.Command = spec.Command
+		spec.Source.Args = append([]string(nil), spec.Args...)
+		spec.Source.CWD = spec.CWD
+		spec.Source.Env = cloneStringMap(spec.Env)
+		spec.Source.Streams = append([]string(nil), spec.Streams...)
+		spec.Source.Parser = cloneParserSpec(spec.Parser)
+		spec.Source.Filters = append([]FilterSpec(nil), spec.Filters...)
+		spec.Source.Batch = spec.Batch
+		spec.Source.OnExit = spec.OnExit
+		spec.Command = ""
+		spec.Args = nil
+		spec.CWD = ""
+		spec.Env = nil
+		spec.Streams = nil
+		spec.Parser = nil
+		spec.Filters = nil
+		spec.Batch = BatchSpec{}
+		spec.OnExit = OnExitSpec{}
+	case SourceTypeSchedule:
+		spec.Command = ""
+		spec.Args = nil
+		spec.CWD = ""
+		spec.Env = nil
+		spec.Streams = nil
+		spec.Defaults = Defaults{}
+		spec.Parser = nil
+		spec.Filters = nil
+		spec.Batch = BatchSpec{}
+		spec.OnExit = OnExitSpec{}
+	}
+	return spec
+}
+
+func hasLegacyCommandShorthand(spec Spec) bool {
+	return strings.TrimSpace(spec.Command) != "" ||
+		len(spec.Args) > 0 ||
+		strings.TrimSpace(spec.CWD) != "" ||
+		len(spec.Env) > 0 ||
+		len(spec.Streams) > 0 ||
+		spec.Defaults != (Defaults{}) ||
+		spec.Parser != nil ||
+		len(spec.Filters) > 0 ||
+		spec.Batch != (BatchSpec{}) ||
+		spec.OnExit != (OnExitSpec{})
+}
+
+func legacyMirrorsCommandSource(spec Spec) bool {
+	if spec.Source.Type != SourceTypeCommand {
+		return false
+	}
+	if strings.TrimSpace(spec.Command) != strings.TrimSpace(spec.Source.Command) {
+		return false
+	}
+	if !stringSlicesEqual(spec.Args, spec.Source.Args) {
+		return false
+	}
+	if spec.CWD != spec.Source.CWD || !stringMapsEqual(spec.Env, spec.Source.Env) {
+		return false
+	}
+	if !stringSlicesEqual(spec.Streams, spec.Source.Streams) {
+		return false
+	}
+	if !parserSpecEqual(spec.Parser, spec.Source.Parser) {
+		return false
+	}
+	if !filterSpecsEqual(spec.Filters, spec.Source.Filters) {
+		return false
+	}
+	return spec.Batch == spec.Source.Batch && spec.OnExit == spec.Source.OnExit
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringMapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, av := range a {
+		if b[key] != av {
+			return false
+		}
+	}
+	return true
+}
+
+func parserSpecEqual(a, b *ParserSpec) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func filterSpecsEqual(a, b []FilterSpec) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneParserSpec(in *ParserSpec) *ParserSpec {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 func validID(id string) bool {

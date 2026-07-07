@@ -421,13 +421,24 @@ export interface ObservableBatchSpec {
   max_chars: number;
 }
 
+export interface ObservableScheduleStatus {
+  summary?: string;
+  timezone?: string;
+  catch_up_mode?: string;
+  next_occurrence?: string;
+  last_evaluated_at?: string;
+  last_emitted_scheduled_at?: string;
+}
+
 export interface ObservableStatus {
   id: string;
   name?: string;
+  source_type?: "command" | "schedule" | string;
   command: string;
   args?: string[];
   streams?: string[];
   batch: ObservableBatchSpec;
+  schedule?: ObservableScheduleStatus;
   state: ObservableRunState | string;
   run_id?: string;
   pid?: number;
@@ -442,6 +453,7 @@ export interface ObservationRecord {
   id: string;
   observable_id: string;
   run_id?: string;
+  source_event_id?: string;
   kind: string;
   severity: string;
   stream?: string;

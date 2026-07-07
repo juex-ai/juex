@@ -60,7 +60,7 @@ juex/
 │   ├── bundle/                   # portable debug bundle tar.gz creation
 │   ├── events/     bus.go        # in-process EventBus (glob)
 │   ├── hooks/                    # trusted lifecycle command hook execution
-│   ├── observable/               # workspace command observables + observation store/tools
+│   ├── observable/               # workspace Observable sources, schedule state, observation store/tools
 │   ├── observability/            # session-local logs, traces, spans, tool summaries
 │   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
@@ -869,7 +869,7 @@ Routes:
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |
 | POST | `/api/observables/<id>/start` | start a stopped or exited Observable |
 | POST | `/api/observables/<id>/stop` | stop a running Observable |
-| DELETE | `/api/observables/<id>` | delete an Observable spec and stop its process |
+| DELETE | `/api/observables/<id>` | delete an Observable spec and stop its source |
 | GET | `/api/observables/<id>/observations` | recent Observation history |
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |

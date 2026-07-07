@@ -1,6 +1,7 @@
 package observable_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -34,6 +35,46 @@ func TestLoadConfig_DefaultsStreamsAndValidatesBatch(t *testing.T) {
 	got := cfg.Observables[0]
 	if got.ID != "lark-events" || !reflect.DeepEqual(got.Streams, []string{"stdout", "stderr"}) {
 		t.Fatalf("spec defaults = %+v", got)
+	}
+}
+
+func TestLoadConfig_AcceptsExplicitCommandSource(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"observables":[{"id":"lark-events","source":{"type":"command","command":"lark-cli","args":["watch","--json"],"streams":["stdout"],"parser":{"type":"jsonl","content_field":"content"},"batch":{"interval_seconds":10,"max_chars":1000}},"observation":{"kind":"lark_notification","severity":"info"}}]}`
+	path := filepath.Join(dir, "observables.json")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := observable.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Observables[0]
+	if got.Source.Type != observable.SourceTypeCommand || got.Command != "lark-cli" || got.Parser == nil || got.Defaults.Kind != "lark_notification" {
+		t.Fatalf("explicit command source = %+v", got)
+	}
+}
+
+func TestValidateConfig_AcceptsScheduleSource(t *testing.T) {
+	cfg, err := observable.ValidateConfig(observable.FileConfig{Observables: []observable.Spec{{
+		ID: "weekday-brief",
+		Source: observable.SourceSpec{
+			Type:     observable.SourceTypeSchedule,
+			Timezone: "Asia/Shanghai",
+			Daily: &observable.DailySchedule{
+				Times:    []string{"09:00"},
+				Weekdays: []string{"mon", "tue", "wed", "thu", "fri"},
+			},
+			CatchUp: observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 120},
+		},
+		Observation: observable.ObservationSpec{Content: "Prepare a work brief."},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Observables[0]
+	if got.Observation.Kind != observable.DefaultScheduleKind || got.Observation.Severity != observable.DefaultSeverity {
+		t.Fatalf("schedule defaults = %+v", got.Observation)
 	}
 }
 
@@ -114,6 +155,42 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 			}},
 			want: "regex",
 		},
+		{
+			name: "schedule without content",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "empty-schedule",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeSchedule,
+					Interval: &observable.IntervalSchedule{EverySeconds: 60},
+				},
+			}}},
+			want: "observation.content",
+		},
+		{
+			name: "schedule mixed with legacy command",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID:      "mixed-schedule",
+				Command: "echo",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeSchedule,
+					Interval: &observable.IntervalSchedule{EverySeconds: 60},
+				},
+				Observation: observable.ObservationSpec{Content: "hello"},
+			}}},
+			want: "legacy command",
+		},
+		{
+			name: "interval too small",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "small-schedule",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeSchedule,
+					Interval: &observable.IntervalSchedule{EverySeconds: 59},
+				},
+				Observation: observable.ObservationSpec{Content: "hello"},
+			}}},
+			want: "every_seconds",
+		},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +216,46 @@ func TestSaveConfig_FormatsStableJSON(t *testing.T) {
 	text := string(body)
 	if !strings.HasSuffix(text, "\n") || !strings.Contains(text, "\n  \"observables\": [") {
 		t.Fatalf("saved JSON = %q, want indented JSON ending with newline", text)
+	}
+}
+
+func TestSaveConfig_PersistsPreferredSourceShape(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "observables.json")
+	cfg := observable.FileConfig{Observables: []observable.Spec{
+		validSpec("lark-events"),
+		{
+			ID: "weekday-brief",
+			Source: observable.SourceSpec{
+				Type:     observable.SourceTypeSchedule,
+				Timezone: "Asia/Shanghai",
+				Daily:    &observable.DailySchedule{Times: []string{"09:00"}},
+				CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
+			},
+			Observation: observable.ObservationSpec{Content: "Prepare a work brief."},
+		},
+	}}
+	if err := observable.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if strings.Contains(text, `"interval_seconds": 0`) || strings.Contains(text, `"on_exit": {}`) {
+		t.Fatalf("saved JSON kept empty structs:\n%s", text)
+	}
+	if !strings.Contains(text, `"type": "schedule"`) || !strings.Contains(text, `"type": "command"`) {
+		t.Fatalf("saved JSON missing source types:\n%s", text)
+	}
+	var parsed struct {
+		Observables []map[string]any `json:"observables"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := parsed.Observables[0]["command"]; ok {
+		t.Fatalf("saved JSON kept legacy top-level command:\n%s", text)
 	}
 }
 

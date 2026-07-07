@@ -81,7 +81,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
 | `src/pages/Observables.tsx` | workspace Observable list, status, and start/stop/delete controls |
-| `src/pages/ObservableDetail.tsx` | Observable command details and recent Observation history |
+| `src/pages/ObservableDetail.tsx` | Observable source details and recent Observation history |
 | `src/pages/Runtime.tsx` | Provider, shell, sandbox, MCP, hooks, system prompt, and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Activity, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Activity, CalendarClock, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 
 import {
   deleteObservable,
@@ -117,12 +117,12 @@ export function Observables() {
               No observables configured.
             </div>
           ) : (
-            <table className="w-full min-w-[58rem] text-left text-sm">
+            <table className="w-full min-w-[62rem] text-left text-sm">
               <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 font-medium">Observable</th>
                   <th className="px-3 py-2 font-medium">State</th>
-                  <th className="px-3 py-2 font-medium">Command</th>
+                  <th className="px-3 py-2 font-medium">Source</th>
                   <th className="px-3 py-2 font-medium">Last Observation</th>
                   <th className="px-3 py-2 text-right font-medium">Actions</th>
                 </tr>
@@ -163,7 +163,11 @@ function ObservableRow({
           className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded-md px-1 py-1 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/35"
         >
           <span className="flex size-8 items-center justify-center rounded-md bg-primary/10 text-primary">
-            <Activity className="size-4" />
+            {item.source_type === "schedule" ? (
+              <CalendarClock className="size-4" />
+            ) : (
+              <Activity className="size-4" />
+            )}
           </span>
           <span className="min-w-0">
             <span className="block truncate font-medium text-foreground">
@@ -178,8 +182,22 @@ function ObservableRow({
       <td className="px-3 py-2">
         <StateBadge state={item.state} />
       </td>
-      <td className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs">
-        {[item.command, ...(item.args ?? [])].join(" ")}
+      <td className="max-w-[26rem] px-3 py-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <Badge variant="outline" className="font-mono text-[11px]">
+              {item.source_type || "command"}
+            </Badge>
+            <span className="truncate font-mono text-xs">
+              {sourceSummary(item)}
+            </span>
+          </div>
+          {item.source_type === "schedule" ? (
+            <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+              next {humanAgo(item.schedule?.next_occurrence)}
+            </div>
+          ) : null}
+        </div>
       </td>
       <td className="max-w-[22rem] px-3 py-2">
         {last ? (
@@ -238,6 +256,13 @@ function ObservableRow({
       </td>
     </tr>
   );
+}
+
+function sourceSummary(item: ObservableStatus): string {
+  if (item.source_type === "schedule") {
+    return item.schedule?.summary || "schedule";
+  }
+  return [item.command, ...(item.args ?? [])].filter(Boolean).join(" ") || "command";
 }
 
 export function StateBadge({ state }: { state: string }) {

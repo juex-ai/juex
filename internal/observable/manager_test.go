@@ -562,6 +562,121 @@ func TestManager_EmitsLifecycleAndObservationEvents(t *testing.T) {
 	})
 }
 
+func TestManager_ScheduleSourceDeliversOnceObservation(t *testing.T) {
+	dir := t.TempDir()
+	spec := scheduleOnceSpec("check-deploy", time.Now().UTC().Add(150*time.Millisecond))
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		deliveredMu.Lock()
+		defer deliveredMu.Unlock()
+		return len(delivered) == 1
+	})
+	deliveredMu.Lock()
+	got := delivered[0]
+	deliveredMu.Unlock()
+	if got.SourceEventID == "" || got.Kind != "reminder" || got.Content != "Check deployment status." {
+		t.Fatalf("scheduled observation = %+v", got)
+	}
+	status, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.SourceType != observable.SourceTypeSchedule || status.Schedule == nil {
+		t.Fatalf("schedule status = %+v", status)
+	}
+}
+
+func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	scheduledAt := fixedTime.Add(-time.Minute)
+	spec := scheduleOnceSpec("catch-up-once", scheduledAt)
+	spec.Source.CatchUp = observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10}
+	writeObservableConfig(t, dir, spec)
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    spec.ID,
+		LastEvaluatedAt: fixedTime.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var firstMu sync.Mutex
+	var firstDelivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        fixedNow,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			firstMu.Lock()
+			defer firstMu.Unlock()
+			firstDelivered = append(firstDelivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		firstMu.Lock()
+		defer firstMu.Unlock()
+		return len(firstDelivered) == 1
+	})
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var secondMu sync.Mutex
+	var secondDelivered []observable.ObservationRecord
+	mgr2, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        fixedNow,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			secondMu.Lock()
+			defer secondMu.Unlock()
+			secondDelivered = append(secondDelivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr2.Close() }()
+	if err := mgr2.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	secondMu.Lock()
+	gotSecond := len(secondDelivered)
+	secondMu.Unlock()
+	if gotSecond != 0 {
+		t.Fatalf("second startup delivered %d observations, want 0", gotSecond)
+	}
+}
+
 func TestManager_SandboxRunnerInvoked(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("sandboxed", "json-once")
@@ -663,6 +778,24 @@ func helperSpec(id, mode string) observable.Spec {
 		SeverityField: "level",
 	}
 	return spec
+}
+
+func scheduleOnceSpec(id string, at time.Time) observable.Spec {
+	return observable.Spec{
+		ID: id,
+		Source: observable.SourceSpec{
+			Type: observable.SourceTypeSchedule,
+			Once: &observable.OnceSchedule{
+				At: at.UTC().Format(time.RFC3339Nano),
+			},
+			CatchUp: observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
+		},
+		Observation: observable.ObservationSpec{
+			Kind:     "reminder",
+			Severity: "info",
+			Content:  "Check deployment status.",
+		},
+	}
 }
 
 func TestObservableHelperProcess(t *testing.T) {

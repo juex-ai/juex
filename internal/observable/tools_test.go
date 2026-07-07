@@ -85,6 +85,41 @@ func TestObservableToolsCreateListDelete(t *testing.T) {
 	}
 }
 
+func TestObservableToolsCreateScheduleSource(t *testing.T) {
+	mgr := newToolTestManager(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]any{
+		"id": "weekday-brief",
+		"source": map[string]any{
+			"type":     "schedule",
+			"timezone": "Asia/Shanghai",
+			"daily": map[string]any{
+				"times":    []any{"09:00"},
+				"weekdays": []any{"mon", "tue", "wed", "thu", "fri"},
+			},
+			"catch_up": map[string]any{
+				"mode":                 "latest",
+				"max_lateness_minutes": float64(120),
+			},
+		},
+		"observation": map[string]any{
+			"kind":     "heartbeat",
+			"severity": "info",
+			"content":  "Prepare a concise work brief.",
+		},
+	}
+	out, _, err := reg.CallWithInfo(context.Background(), "observable_create", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"source_type": "schedule"`) {
+		t.Fatalf("create schedule output = %s", out)
+	}
+}
+
 func TestObservableToolsObservations(t *testing.T) {
 	mgr := newToolTestManager(t)
 	rec, err := mgr.RecordObservation(observation("lark-events", "hello", fixedTime))
