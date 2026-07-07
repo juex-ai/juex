@@ -97,6 +97,30 @@ func TestManager_StartAllContinuesAfterOneStartError(t *testing.T) {
 	}
 }
 
+func TestManager_CountsSummarizesRuntimeStates(t *testing.T) {
+	dir := t.TempDir()
+	bad := validSpec("bad-count")
+	bad.Command = "definitely-not-a-juex-observable-helper"
+	good := helperSpec("good-count", "quiet")
+	writeObservableConfig(t, dir, bad, good)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver:    func(context.Context, observable.ObservationRecord) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	_ = mgr.StartAll(context.Background())
+
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		counts := mgr.Counts()
+		return counts.Configured == 2 && counts.Running == 1 && counts.Errors == 1
+	})
+}
+
 func TestManager_StopAndDelete(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("waiter", "wait")

@@ -98,6 +98,23 @@ func TestStatusSnapshotTextSeparatesTurnAndQueue(t *testing.T) {
 	}
 }
 
+func TestStatusSnapshotTextShowsStartedAtInLocalTime(t *testing.T) {
+	originalLocal := time.Local
+	loc := time.FixedZone("JST", 9*60*60)
+	time.Local = loc
+	t.Cleanup(func() { time.Local = originalLocal })
+
+	text := (StatusSnapshot{
+		SessionID: "20260707T180000-abc12345",
+		Turns:     2,
+		StartedAt: time.Date(2026, 7, 7, 18, 0, 0, 0, time.UTC),
+	}).Text()
+	want := "session: 20260707T180000-abc12345 (started 2026-07-08 03:00:00, 2 turns)"
+	if !strings.Contains(text, want) {
+		t.Fatalf("status text missing local started_at %q:\n%s", want, text)
+	}
+}
+
 func TestStatusSnapshotTextIncludesObservableCounts(t *testing.T) {
 	text := (StatusSnapshot{
 		Observables: StatusObservablesSnapshot{
@@ -202,6 +219,19 @@ func TestStatusSnapshotContextCacheHitUsesCachedInputTokens(t *testing.T) {
 	want := statusLabel(statusIconContext, "context: 120.5k/1m tokens, cache hit 0%")
 	if !strings.Contains(text, want) {
 		t.Fatalf("status text missing %q:\n%s", want, text)
+	}
+}
+
+func TestFormatCompactTokenCountPromotesRoundedThresholds(t *testing.T) {
+	cases := map[int]string{
+		999_949:     "999.9k",
+		999_950:     "1m",
+		999_950_000: "1b",
+	}
+	for value, want := range cases {
+		if got := FormatCompactTokenCount(value); got != want {
+			t.Fatalf("FormatCompactTokenCount(%d) = %q, want %q", value, got, want)
+		}
 	}
 }
 

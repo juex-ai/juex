@@ -52,6 +52,12 @@ type StatusSnapshot struct {
 	Observables []ObservableStatus `json:"observables"`
 }
 
+type StatusCounts struct {
+	Configured int
+	Running    int
+	Errors     int
+}
+
 type ObservableStatus struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name,omitempty"`
@@ -367,6 +373,24 @@ func (m *Manager) Status() StatusSnapshot {
 		return out.Observables[i].ID < out.Observables[j].ID
 	})
 	return out
+}
+
+func (m *Manager) Counts() StatusCounts {
+	if m == nil {
+		return StatusCounts{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	counts := StatusCounts{Configured: len(m.lastStatus)}
+	for _, status := range m.lastStatus {
+		switch status.State {
+		case RunStateRunning:
+			counts.Running++
+		case RunStateErrored:
+			counts.Errors++
+		}
+	}
+	return counts
 }
 
 func (m *Manager) StatusByID(id string) (ObservableStatus, error) {

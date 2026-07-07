@@ -151,6 +151,7 @@ type StatusSnapshot struct {
 	Active       bool                        `json:"active"`
 	WorkDir      string                      `json:"work_dir"`
 	Turns        int                         `json:"turns"`
+	StartedAt    time.Time                   `json:"started_at"`
 	LastActiveAt time.Time                   `json:"last_active_at"`
 	Provider     ProviderStatusSnapshot      `json:"provider"`
 	MCP          MCPStatus                   `json:"mcp"`
@@ -218,6 +219,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		sessionID    string
 		sessionDir   string
 		turns        int
+		startedAt    time.Time
 		lastActiveAt time.Time
 		sessionKind  string
 		active       bool
@@ -233,6 +235,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		sessionKind = info.Kind
 		active = info.Active
 		turns = info.Turns
+		startedAt = info.StartedAt
 		lastActiveAt = info.LastActiveAt
 		tokenUsage = info.TokenUsage
 		if info.ContextUsage != nil {
@@ -259,6 +262,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		Active:       active,
 		WorkDir:      a.cfg.WorkDir,
 		Turns:        turns,
+		StartedAt:    startedAt,
 		LastActiveAt: lastActiveAt,
 		Provider:     a.providerStatusSnapshot(),
 		MCP:          a.MCPStatus(),
@@ -290,7 +294,7 @@ func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {
 func (s StatusSnapshot) Text() string {
 	var lines []string
 	if s.SessionID != "" {
-		lines = append(lines, statusLabel(statusIconSession, fmt.Sprintf("session: %s (%d turns)", s.SessionID, s.Turns)))
+		lines = append(lines, statusLabel(statusIconSession, formatSessionStatus(s.SessionID, s.Turns, s.StartedAt)))
 	}
 	if s.SessionKind != "" {
 		state := "inactive"
@@ -353,17 +357,23 @@ func observablesStatusFromManager(manager *observable.Manager) StatusObservables
 	if manager == nil {
 		return StatusObservablesSnapshot{}
 	}
-	snapshot := manager.Status()
-	status := StatusObservablesSnapshot{Configured: len(snapshot.Observables)}
-	for _, item := range snapshot.Observables {
-		switch item.State {
-		case observable.RunStateRunning:
-			status.Running++
-		case observable.RunStateErrored:
-			status.Errors++
-		}
+	counts := manager.Counts()
+	return StatusObservablesSnapshot{
+		Configured: counts.Configured,
+		Running:    counts.Running,
+		Errors:     counts.Errors,
 	}
-	return status
+}
+
+func formatSessionStatus(sessionID string, turns int, startedAt time.Time) string {
+	if startedAt.IsZero() {
+		return fmt.Sprintf("session: %s (%d turns)", sessionID, turns)
+	}
+	return fmt.Sprintf("session: %s (started %s, %d turns)", sessionID, formatStatusLocalTime(startedAt), turns)
+}
+
+func formatStatusLocalTime(t time.Time) string {
+	return t.Local().Format("2006-01-02 15:04:05")
 }
 
 func compactionStatusFromHistory(history []llm.Message) StatusCompactionSnapshot {
@@ -465,7 +475,15 @@ func FormatCompactTokenCount(value int) string {
 	}
 	for _, unit := range units {
 		if value >= int(unit.value) {
-			return trimCompactFloat(float64(value)/unit.value) + unit.suffix
+			formatted := trimCompactFloat(float64(value)/unit.value) + unit.suffix
+			switch formatted {
+			case "1000k":
+				return "1m"
+			case "1000m":
+				return "1b"
+			default:
+				return formatted
+			}
 		}
 	}
 	return fmt.Sprintf("%d", value)
