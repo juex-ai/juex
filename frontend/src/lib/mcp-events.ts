@@ -1,4 +1,4 @@
-export type MCPEventDisplay = {
+export type ExternalEventDisplay = {
   label: string;
   content: string;
   preview: string;
@@ -7,8 +7,34 @@ export type MCPEventDisplay = {
 
 const FALLBACK_LABEL = "mcp:event";
 
-export function formatMCPEventForDisplay(text: string): MCPEventDisplay {
-  const event = parseMCPEventText(text);
+export type MCPEventDisplay = ExternalEventDisplay;
+
+export function formatMCPEventForDisplay(text: string): ExternalEventDisplay {
+  return formatExternalEventForDisplay(text, {
+    fallbackLabel: FALLBACK_LABEL,
+    parseColonPrefix: true,
+  });
+}
+
+export function formatObservationEventForDisplay(
+  text: string,
+): ExternalEventDisplay {
+  return formatExternalEventForDisplay(text, {
+    fallbackLabel: "observation:event",
+    parseColonPrefix: false,
+  });
+}
+
+export function formatExternalEventForDisplay(
+  text: string,
+  opts: {
+    fallbackLabel: string;
+    parseColonPrefix: boolean;
+  },
+): ExternalEventDisplay {
+  const event = opts.parseColonPrefix
+    ? parseColonEventText(text, opts.fallbackLabel)
+    : { label: opts.fallbackLabel, content: text };
   const previewText = paramsContentPreview(event.content) ?? event.content;
   return {
     ...event,
@@ -21,16 +47,26 @@ export function parseMCPEventText(text: string): {
   label: string;
   content: string;
 } {
+  return parseColonEventText(text, FALLBACK_LABEL);
+}
+
+function parseColonEventText(
+  text: string,
+  fallbackLabel: string,
+): {
+  label: string;
+  content: string;
+} {
   const first = text.indexOf(":");
   const second = first >= 0 ? text.indexOf(":", first + 1) : -1;
   if (first < 0 || second < 0) {
-    return { label: FALLBACK_LABEL, content: text };
+    return { label: fallbackLabel, content: text };
   }
 
   const source = text.slice(0, first).trim();
   const eventType = text.slice(first + 1, second).trim();
   if (!source || !eventType) {
-    return { label: FALLBACK_LABEL, content: text };
+    return { label: fallbackLabel, content: text };
   }
 
   return {

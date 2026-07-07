@@ -112,6 +112,21 @@ test("messageGroupCanCopy skips compact markers", () => {
   );
 });
 
+test("messageGroupCanCopy skips external event messages", () => {
+  for (const kind of ["mcp_event", "observation"]) {
+    assert.equal(
+      messageGroupCanCopy({
+        key: kind,
+        role: "user",
+        kind,
+        pending: false,
+        units: [{ kind: "text", block: { type: "text", text: "event body" } }],
+      }),
+      false,
+    );
+  }
+});
+
 test("copyButtonTooltip supports copied-only compact feedback", () => {
   const args = {
     mode: "copied-only" as const,

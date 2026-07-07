@@ -61,7 +61,7 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		payload, _ := payloadAs[runtimeevents.TurnStartedPayload](e.Payload)
 		vp.turn = 0
 		vp.tStart = time.Now()
-		vp.printlnDim("› user: " + truncOneLine(payload.Input, 200))
+		vp.printTurnStarted(payload)
 	case "llm.requested":
 		vp.turn++
 		vp.printlnDim(fmt.Sprintf("[turn %d]", vp.turn))
@@ -122,6 +122,64 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		payload, _ := payloadAs[runtimeevents.TurnErroredPayload](e.Payload)
 		vp.printlnRed("✗ " + payload.Error)
 	}
+}
+
+func (vp *verbosePrinter) printTurnStarted(payload runtimeevents.TurnStartedPayload) {
+	input := verboseTurnStartInput(payload.Input, payload.Kind)
+	if verboseTurnStartIsEvent(payload.Kind) {
+		vp.printlnGold("› event: " + truncOneLine(input, 200))
+		return
+	}
+	vp.printlnDim("› user: " + truncOneLine(input, 200))
+}
+
+func verboseTurnStartIsEvent(kind string) bool {
+	switch kind {
+	case llm.MessageKindMCPEvent, llm.MessageKindObservation:
+		return true
+	default:
+		return false
+	}
+}
+
+func verboseTurnStartInput(input, kind string) string {
+	switch kind {
+	case llm.MessageKindObservation:
+		if content := jsonContentField(input); content != "" {
+			return content
+		}
+	case llm.MessageKindMCPEvent:
+		if content := mcpEventContent(input); content != "" {
+			return content
+		}
+	}
+	return input
+}
+
+func mcpEventContent(input string) string {
+	first := strings.Index(input, ":")
+	if first < 0 {
+		return ""
+	}
+	second := strings.Index(input[first+1:], ":")
+	if second < 0 {
+		return ""
+	}
+	content := input[first+1+second+1:]
+	if preview := jsonContentField(content); preview != "" {
+		return preview
+	}
+	return strings.TrimSpace(content)
+}
+
+func jsonContentField(input string) string {
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(input), &body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.Content)
 }
 
 func payloadAs[T any](v any) (T, bool) {
@@ -210,6 +268,14 @@ func (vp *verbosePrinter) printlnRed(s string) {
 func (vp *verbosePrinter) printlnGreen(s string) {
 	if vp.isTTY {
 		fmt.Fprintln(vp.w, "\x1b[32m"+s+"\x1b[0m")
+	} else {
+		fmt.Fprintln(vp.w, s)
+	}
+}
+
+func (vp *verbosePrinter) printlnGold(s string) {
+	if vp.isTTY {
+		fmt.Fprintln(vp.w, "\x1b[33m"+s+"\x1b[0m")
 	} else {
 		fmt.Fprintln(vp.w, s)
 	}
