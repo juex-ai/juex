@@ -391,10 +391,15 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 			return Spec{}, fmt.Errorf("stream must be stdout or stderr, got %q", stream)
 		}
 	}
-	if spec.Observation.Kind != "" && spec.Defaults.Kind == "" {
+	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
+	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
+	if spec.Observation.Kind != "" {
 		spec.Defaults.Kind = spec.Observation.Kind
 	}
-	if spec.Observation.Severity != "" && spec.Defaults.Severity == "" {
+	if err := validateSeverity("observation.severity", spec.Observation.Severity); err != nil {
+		return Spec{}, err
+	}
+	if spec.Observation.Severity != "" {
 		spec.Defaults.Severity = spec.Observation.Severity
 	}
 	if err := validateSeverity("defaults.severity", spec.Defaults.Severity); err != nil {

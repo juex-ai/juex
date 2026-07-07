@@ -333,6 +333,22 @@ func TestSaveConfig_CommandSourceWithDefaultsRoundTrips(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_CommandObservationOverridesStaleDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "observables.json")
+	body := `{"observables":[{"id":"with-defaults","source":{"type":"command","command":"juex-observable-test","batch":{"interval_seconds":10,"max_chars":1000}},"observation":{"kind":"new_kind","severity":"critical"},"defaults":{"kind":"old_kind","severity":"warning"}}]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := observable.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Observables[0]
+	if got.Defaults.Kind != "new_kind" || got.Defaults.Severity != "critical" {
+		t.Fatalf("command defaults = %+v, want preferred observation values", got.Defaults)
+	}
+}
+
 func TestExpandVariables(t *testing.T) {
 	got := observable.ExpandVariables("$WORKDIR/${JUEX_WORKDIR}/$JUEX_WORKDIR/${WORKDIR}", "/tmp/work")
 	if got != "/tmp/work//tmp/work//tmp/work//tmp/work" {
