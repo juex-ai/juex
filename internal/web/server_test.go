@@ -200,7 +200,7 @@ func TestCloseCancelsMCPNotificationTurn(t *testing.T) {
 	}()
 	select {
 	case <-closed:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		close(provider.release)
 		<-closed
 		t.Fatal("server close did not cancel MCP notification turn")

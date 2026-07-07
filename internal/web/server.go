@@ -67,6 +67,7 @@ type activeSession struct {
 	workCtx    context.Context
 	workCancel context.CancelFunc
 	workWG     sync.WaitGroup
+	closeOnce  sync.Once
 }
 
 func NewServer(opts Options) *Server {
@@ -231,17 +232,19 @@ func (as *activeSession) close() {
 	if as == nil {
 		return
 	}
-	as.cancelWork()
-	if as.turns != nil {
-		as.turns.close()
-	}
-	as.workWG.Wait()
-	if as.bcast != nil {
-		as.bcast.close()
-	}
-	if as.app != nil {
-		as.app.Close()
-	}
+	as.closeOnce.Do(func() {
+		as.cancelWork()
+		if as.turns != nil {
+			as.turns.close()
+		}
+		as.workWG.Wait()
+		if as.bcast != nil {
+			as.bcast.close()
+		}
+		if as.app != nil {
+			as.app.Close()
+		}
+	})
 }
 
 // workContext ties server-origin work, such as MCP notifications, to session shutdown.
@@ -258,14 +261,11 @@ func (as *activeSession) workContext(parent context.Context) (context.Context, c
 		cancel()
 		return ctx, cancel
 	}
-	go func() {
-		select {
-		case <-parent.Done():
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	return ctx, cancel
+	stop := context.AfterFunc(parent, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 // Close cancels running turns and releases every active session.
@@ -466,7 +466,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 			queuedMu.Unlock()
 			return
 		}
-		if err := s.handleMCPNotification(ctx, n); err != nil {
+		if err := s.handleMCPNotification(context.Background(), n); err != nil {
 			s.logVerbose("juex serve: MCP notification dropped: %v", err)
 		}
 	}
