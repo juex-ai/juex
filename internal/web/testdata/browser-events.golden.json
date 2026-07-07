@@ -140,6 +140,19 @@
     }
   },
   {
+    "id": "evt-goal-updated",
+    "type": "goal.updated",
+    "ts": "2026-06-15T00:00:07.2Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "description": "ship the fix",
+      "verification_method": "tests pass",
+      "continuation_count": 2,
+      "status": "in_progress",
+      "updated_at": "2026-06-15T00:00:07.2Z"
+    }
+  },
+  {
     "id": "evt-observable-started",
     "type": "observable.started",
     "ts": "2026-06-15T00:00:07.5Z",

@@ -140,6 +140,43 @@ test("projectLiveBrowserEvent carries projection effects through controller", ()
   ]);
 });
 
+test("projectLiveBrowserEvent refreshes session goal state", () => {
+  const initial = projectSessionLoaded(
+    createSessionReadState(),
+    {
+      ...session("s1", []),
+      goal: {
+        status: "in_progress",
+        description: "old goal",
+        verification_method: "old checks",
+        continuation_count: 7,
+        updated_at: "2026-06-15T00:00:00Z",
+      },
+    },
+  );
+
+  const result = projectLiveBrowserEvent(initial, {
+    id: "evt-goal",
+    type: "goal.updated",
+    ts: "2026-06-15T00:01:00Z",
+    turn_id: "turn-1",
+    payload: {
+      status: "success",
+      description: "new goal",
+      updated_at: "2026-06-15T00:01:00Z",
+    },
+  });
+
+  assert.deepEqual(result.state.data?.goal, {
+    status: "success",
+    description: "new goal",
+    updated_at: "2026-06-15T00:01:00Z",
+  });
+  assert.equal(result.state.data?.id, "s1");
+  assert.deepEqual(result.effects, []);
+  assert.deepEqual(result.state.projection.status, { kind: "idle" });
+});
+
 test("projectTurnStatus reconciles running and done states", () => {
   let state = createSessionReadState();
   let result = projectTurnStatus(state, { state: "running", pending_count: 2 });

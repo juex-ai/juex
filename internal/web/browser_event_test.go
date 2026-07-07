@@ -259,6 +259,19 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-goal-updated",
+			Type:      "goal.updated",
+			Timestamp: ts.Add(7200 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.GoalUpdatedPayload{
+				Description:        "ship the fix",
+				VerificationMethod: "tests pass",
+				ContinuationCount:  2,
+				Status:             juexruntime.GoalStatusInProgress,
+				UpdatedAt:          ts.Add(7200 * time.Millisecond),
+			},
+		},
+		{
 			ID:        "evt-observable-started",
 			Type:      observable.EventObservableStarted,
 			Timestamp: ts.Add(7500 * time.Millisecond),

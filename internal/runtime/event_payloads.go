@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"time"
+
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
@@ -158,6 +160,7 @@ type GoalUpdatedPayload struct {
 	VerificationMethod string     `json:"verification_method,omitempty"`
 	ContinuationCount  int        `json:"continuation_count,omitempty"`
 	Status             GoalStatus `json:"status,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
 }
 
 type GoalContinuedPayload struct {
