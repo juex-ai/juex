@@ -1109,9 +1109,6 @@ function MessageGroupView({
         ) : null}
         {group.units.map((unit, i) => {
           if (unit.kind === "text") {
-            if (isCompact) {
-              return <CompactMessage key={i} text={unit.block.text} />;
-            }
             if (group.role === "assistant") {
               return <AssistantPlainText key={i} text={unit.block.text} />;
             }
@@ -1259,8 +1256,20 @@ function ProcessDisclosure({
   status: ToolProcessStatus;
   title: string;
 }) {
+  const [isOpen, setIsOpen] = useState(
+    status === "running" || status === "failed",
+  );
+
+  useEffect(() => {
+    if (status === "running" || status === "failed") {
+      setIsOpen(true);
+    }
+  }, [status]);
+
   return (
     <details
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
       className={cn(
         "group/process-row w-full rounded-sm border-l border-border/70 pl-2",
         nested && "ml-2 border-border/50",
