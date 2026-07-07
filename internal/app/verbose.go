@@ -18,8 +18,8 @@ import (
 // verbosePrinter formats lifecycle events into a human-readable transcript
 // with a spinning loading indicator while the LLM is thinking. Unlike a raw
 // event dump it foregrounds the things a human cares about: the model's
-// thinking content, its text response, each tool call + result, and the
-// total turn duration.
+// thinking content, its text response, compact tool batch status, and the total
+// turn duration.
 //
 // On a non-TTY writer the spinner is suppressed and we print plain status
 // lines instead so CI logs stay readable.
@@ -30,6 +30,9 @@ type verbosePrinter struct {
 	mu     sync.Mutex
 	turn   int
 	tStart time.Time
+
+	toolBatch       *verboseToolBatch
+	lastToolLineKey string
 }
 
 func newVerbosePrinter(w io.Writer) *verbosePrinter {
@@ -79,15 +82,21 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		if payloadFieldPresent(e.Payload, "token_usage") {
 			vp.printlnDim("  " + FormatTokenUsage(payload.TokenUsage))
 		}
+		if len(payload.ToolCalls) > 0 {
+			vp.startToolBatch(payload.ToolCalls)
+		}
 	case toolevents.RequestedType:
 		payload, _ := payloadAs[toolevents.RequestedPayload](e.Payload)
-		vp.printlnDim("  → " + payload.Name + "(" + oneLineJSON(payload.Input) + ")")
+		vp.markToolRunning(payload.ToolUseID, payload.Name)
 	case toolevents.CompletedType:
 		payload, _ := payloadAs[toolevents.CompletedPayload](e.Payload)
-		vp.printlnDim(fmt.Sprintf("  ← %s: ok (%d bytes)", payload.Name, payload.Len))
+		vp.markToolDone(payload.ToolUseID, payload.Name)
 	case toolevents.ErroredType:
 		payload, _ := payloadAs[toolevents.ErroredPayload](e.Payload)
-		vp.printlnRed(fmt.Sprintf("  ← %s: ERROR %s", payload.Name, payload.Error))
+		vp.markToolFailed(payload.ToolUseID, payload.Name)
+	case toolevents.OutputDeltaType:
+		payload, _ := payloadAs[toolevents.OutputDeltaPayload](e.Payload)
+		vp.markToolOutputDelta(payload.ToolUseID, payload.Name)
 	case "pending_input.queued":
 		payload, _ := payloadAs[runtimeevents.PendingInputQueuedPayload](e.Payload)
 		if payload.MaxPendingInputs > 0 {
@@ -198,6 +207,14 @@ func (vp *verbosePrinter) printlnRed(s string) {
 	}
 }
 
+func (vp *verbosePrinter) printlnGreen(s string) {
+	if vp.isTTY {
+		fmt.Fprintln(vp.w, "\x1b[32m"+s+"\x1b[0m")
+	} else {
+		fmt.Fprintln(vp.w, s)
+	}
+}
+
 // truncOneLine collapses newlines into spaces and truncates with an
 // ellipsis so multi-line user prompts don't blow up the transcript.
 func truncOneLine(s string, max int) string {
@@ -206,19 +223,6 @@ func truncOneLine(s string, max int) string {
 		return s[:max] + "..."
 	}
 	return s
-}
-
-// oneLineJSON serialises v to a compact JSON one-liner. Used to render
-// tool inputs in the transcript without exploding them across lines.
-func oneLineJSON(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Sprintf("%v", v)
-	}
-	if len(b) > 200 {
-		return string(b[:200]) + "..."
-	}
-	return string(b)
 }
 
 // ---- spinner ----
