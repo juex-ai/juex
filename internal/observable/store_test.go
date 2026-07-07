@@ -107,6 +107,53 @@ func TestStore_RecordObservationDeduplicatesSourceEventID(t *testing.T) {
 	}
 }
 
+func TestStore_DropRecordedScheduleObservations(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	scheduleRecord, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID:  "weekday-brief",
+		SourceEventID: "schedule:weekday-brief:2026-07-06T01:00:00Z",
+		Kind:          "heartbeat",
+		Severity:      "info",
+		WindowStart:   fixedTime,
+		WindowEnd:     fixedTime,
+		Content:       "queued reminder",
+		State:         observable.ObservationStateRecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRecord, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID:  "weekday-brief",
+		SourceEventID: "command:weekday-brief:1",
+		Kind:          "heartbeat",
+		Severity:      "info",
+		WindowStart:   fixedTime,
+		WindowEnd:     fixedTime,
+		Content:       "command result",
+		State:         observable.ObservationStateRecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DropRecordedScheduleObservations("weekday-brief", "observable deleted"); err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.ListObservations(observable.ObservationFilter{ObservableID: "weekday-brief"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]observable.ObservationRecord{}
+	for _, record := range records {
+		byID[record.ID] = record
+	}
+	if got := byID[scheduleRecord.ID]; got.State != observable.ObservationStateDropped || got.Error != "observable deleted" {
+		t.Fatalf("schedule record after drop = %+v", got)
+	}
+	if got := byID[otherRecord.ID]; got.State != observable.ObservationStateRecorded {
+		t.Fatalf("non-schedule record after drop = %+v", got)
+	}
+}
+
 func TestStore_ScheduleStateUsesLatestRecord(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
 	if err := store.RecordScheduleState(observable.ScheduleStateRecord{

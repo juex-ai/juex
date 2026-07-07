@@ -163,8 +163,12 @@ func occurrenceFor(spec Spec, scheduledAt time.Time) ScheduledOccurrence {
 	}
 }
 
+func scheduleSourceEventPrefix(observableID string) string {
+	return fmt.Sprintf("schedule:%s:", observableID)
+}
+
 func scheduleSourceEventID(observableID string, scheduledAt time.Time) string {
-	return fmt.Sprintf("schedule:%s:%s", observableID, scheduledAt.UTC().Format(time.RFC3339Nano))
+	return scheduleSourceEventPrefix(observableID) + scheduledAt.UTC().Format(time.RFC3339Nano)
 }
 
 func scheduleSummary(spec Spec) string {

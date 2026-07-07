@@ -276,13 +276,19 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	if run != nil {
 		run.cancel()
 	}
+	stoppedAt := m.now()
 	status.State = RunStateStopped
-	status.ExitedAt = time.Now().UTC()
+	status.ExitedAt = stoppedAt
 	status.LastError = ""
 	m.setStatus(id, status)
 	m.mu.Lock()
 	delete(m.runs, id)
 	m.mu.Unlock()
+	if run != nil && run.spec.Source.Type == SourceTypeSchedule {
+		if err := m.recordPausedScheduleState(id, stoppedAt); err != nil {
+			return err
+		}
+	}
 	if err := m.recordRun(RunRecord{ObservableID: id, RunID: status.RunID, State: RunStateStopped, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt}); err != nil {
 		return err
 	}
@@ -327,6 +333,10 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	}
 	if m.store != nil {
 		if err := m.store.ClearScheduleState(id); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+		if err := m.store.DropRecordedScheduleObservations(id, "observable deleted"); err != nil {
 			m.mu.Unlock()
 			return err
 		}
@@ -515,13 +525,18 @@ func (m *Manager) evaluateScheduleStartup(ctx context.Context, run *observableRu
 	if m == nil || run == nil || m.store == nil {
 		return nil
 	}
-	if err := m.recoverRecordedScheduleObservations(ctx, run); err != nil {
-		return err
-	}
 	now := m.now()
 	state, ok, err := m.store.ScheduleState(run.id)
 	if err != nil {
 		return err
+	}
+	if ok && state.Paused {
+		return m.recordScheduleState(run.id, now, state.LastEmittedScheduledAt)
+	}
+	if ok {
+		if err := m.recoverRecordedScheduleObservations(ctx, run); err != nil {
+			return err
+		}
 	}
 	if !ok || state.LastEvaluatedAt.IsZero() {
 		return m.recordScheduleState(run.id, now, time.Time{})
@@ -562,7 +577,7 @@ func (m *Manager) recoverRecordedScheduleObservations(ctx context.Context, run *
 	if ctx != nil {
 		deliverCtx = context.WithoutCancel(ctx)
 	}
-	prefix := "schedule:" + run.id + ":"
+	prefix := scheduleSourceEventPrefix(run.id)
 	for i := len(records) - 1; i >= 0; i-- {
 		record := records[i]
 		if record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, prefix) {
@@ -675,6 +690,28 @@ func (m *Manager) recordScheduleState(id string, evaluatedAt time.Time, emittedA
 	return m.store.RecordScheduleState(ScheduleStateRecord{
 		ObservableID:           id,
 		LastEvaluatedAt:        evaluatedAt.UTC(),
+		LastEmittedScheduledAt: emittedAt.UTC(),
+		UpdatedAt:              m.now(),
+	})
+}
+
+func (m *Manager) recordPausedScheduleState(id string, pausedAt time.Time) error {
+	if m == nil || m.store == nil {
+		return nil
+	}
+	if pausedAt.IsZero() {
+		pausedAt = m.now()
+	}
+	var emittedAt time.Time
+	if state, ok, err := m.store.ScheduleState(id); err != nil {
+		return err
+	} else if ok {
+		emittedAt = state.LastEmittedScheduledAt
+	}
+	return m.store.RecordScheduleState(ScheduleStateRecord{
+		ObservableID:           id,
+		Paused:                 true,
+		LastEvaluatedAt:        pausedAt.UTC(),
 		LastEmittedScheduledAt: emittedAt.UTC(),
 		UpdatedAt:              m.now(),
 	})

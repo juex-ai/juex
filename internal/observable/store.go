@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -66,6 +67,7 @@ type ObservationRecord struct {
 type ScheduleStateRecord struct {
 	ObservableID           string    `json:"observable_id"`
 	Deleted                bool      `json:"deleted,omitempty"`
+	Paused                 bool      `json:"paused,omitempty"`
 	LastEvaluatedAt        time.Time `json:"last_evaluated_at,omitempty"`
 	LastEmittedScheduledAt time.Time `json:"last_emitted_scheduled_at,omitempty"`
 	UpdatedAt              time.Time `json:"updated_at"`
@@ -216,6 +218,35 @@ func (s *Store) FindObservationBySourceEventID(sourceEventID string) (Observatio
 		}
 	}
 	return ObservationRecord{}, false, nil
+}
+
+func (s *Store) DropRecordedScheduleObservations(observableID string, reason string) error {
+	if s == nil {
+		return fmt.Errorf("observable store: nil")
+	}
+	observableID = stringsTrimSpace(observableID)
+	if observableID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := filepath.Join(s.root, "observations.jsonl")
+	records, err := loadObservations(path)
+	if err != nil {
+		return err
+	}
+	prefix := scheduleSourceEventPrefix(observableID)
+	for _, record := range records {
+		if record.ObservableID != observableID || record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, prefix) {
+			continue
+		}
+		record.State = ObservationStateDropped
+		record.Error = reason
+		if err := appendJSONL(path, record); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) LatestScheduleStates() (map[string]ScheduleStateRecord, error) {
