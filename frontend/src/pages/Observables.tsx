@@ -155,16 +155,24 @@ function ObservableRow({
   onAction: (id: string, action: "start" | "stop" | "delete") => Promise<void>;
 }) {
   const last = item.last_observation?.id ? item.last_observation : null;
+  const detailHref = `/observables/${encodeURIComponent(item.id)}`;
+  const detailLabel = `Open observable ${item.name || item.id}`;
+  const cellLinkClass =
+    "absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35";
+  const cellLink = (focusable = false) => (
+    <Link
+      to={detailHref}
+      className={cellLinkClass}
+      aria-label={focusable ? detailLabel : undefined}
+      aria-hidden={focusable ? undefined : true}
+      tabIndex={focusable ? undefined : -1}
+    />
+  );
+
   return (
-    <tr
-      className="group relative cursor-pointer border-t transition-colors hover:bg-muted/35 focus-within:bg-muted/40"
-    >
-      <td className="w-[24rem] max-w-[24rem] px-3 py-2">
-        <Link
-          to={`/observables/${encodeURIComponent(item.id)}`}
-          className="absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35"
-          aria-label={`Open observable ${item.name || item.id}`}
-        />
+    <tr className="group cursor-pointer border-t transition-colors hover:bg-muted/35 focus-within:bg-muted/40">
+      <td className="relative w-[24rem] max-w-[24rem] px-3 py-2">
+        {cellLink(true)}
         <div className="pointer-events-none relative z-10 min-w-0 rounded-md px-1 py-1">
           <span className="min-w-0">
             <span className="block truncate font-medium text-foreground">
@@ -176,11 +184,15 @@ function ObservableRow({
           </span>
         </div>
       </td>
-      <td className="pointer-events-none relative z-10 px-3 py-2">
-        <StateBadge state={item.state} />
+      <td className="relative px-3 py-2">
+        {cellLink()}
+        <div className="pointer-events-none relative z-10">
+          <StateBadge state={item.state} />
+        </div>
       </td>
-      <td className="pointer-events-none relative z-10 max-w-[26rem] px-3 py-2">
-        <div className="min-w-0">
+      <td className="relative max-w-[26rem] px-3 py-2">
+        {cellLink()}
+        <div className="pointer-events-none relative z-10 min-w-0">
           <div className="flex items-center gap-1.5">
             <Badge variant="outline" className="font-mono text-[11px]">
               {item.source_type || "command"}
@@ -196,9 +208,10 @@ function ObservableRow({
           ) : null}
         </div>
       </td>
-      <td className="pointer-events-none relative z-10 max-w-[22rem] px-3 py-2">
+      <td className="relative max-w-[22rem] px-3 py-2">
+        {cellLink()}
         {last ? (
-          <div className="min-w-0">
+          <div className="pointer-events-none relative z-10 min-w-0">
             <div className="truncate text-sm">{last.content || "-"}</div>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
               <span>{last.kind}</span>
@@ -207,10 +220,10 @@ function ObservableRow({
             </div>
           </div>
         ) : (
-          <span className="text-muted-foreground">-</span>
+          <span className="pointer-events-none relative z-10 text-muted-foreground">-</span>
         )}
       </td>
-      <td className="relative z-20 px-3 py-2">
+      <td className="relative cursor-default px-3 py-2">
         <div className="flex justify-end gap-1">
           {item.state === "running" ? (
             <Button

@@ -16,19 +16,28 @@ test("Observables table title column does not render source icons", () => {
 
 test("Observables table uses an accessible full-row link target", () => {
   assert.match(observablesPageSource, /import \{ Link, useNavigate \}/);
-  assert.match(observablesPageSource, /<Link\s+to=\{`\/observables\/\$\{encodeURIComponent\(item\.id\)\}`\}/);
   assert.match(
     observablesPageSource,
-    /className="absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring\/35"/,
+    /const detailHref = `\/observables\/\$\{encodeURIComponent\(item\.id\)\}`;/,
   );
+  assert.match(observablesPageSource, /<Link\s+to=\{detailHref\}/);
+  assert.match(
+    observablesPageSource,
+    /"absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring\/35"/,
+  );
+  assert.match(observablesPageSource, /tabIndex=\{focusable \? undefined : -1\}/);
   assert.doesNotMatch(observablesPageSource, /role="link"/);
   assert.doesNotMatch(observablesPageSource, /onClick=\{\(\) => onOpen\(item\.id\)\}/);
 });
 
-test("Observables table keeps action buttons above the row link", () => {
+test("Observables table does not anchor the link overlay to the row", () => {
+  assert.doesNotMatch(
+    observablesPageSource,
+    /<tr className="[^"]*\brelative\b[^"]*"/,
+  );
   assert.match(
     observablesPageSource,
-    /<td className="relative z-20 px-3 py-2">/,
+    /<td className="relative cursor-default px-3 py-2">/,
   );
   assert.doesNotMatch(observablesPageSource, /event\.stopPropagation\(\)/);
 });
@@ -40,6 +49,6 @@ test("Observables table gives the title column more room", () => {
   );
   assert.match(
     observablesPageSource,
-    /<td className="w-\[24rem\] max-w-\[24rem\] px-3 py-2">/,
+    /<td className="relative w-\[24rem\] max-w-\[24rem\] px-3 py-2">/,
   );
 });
