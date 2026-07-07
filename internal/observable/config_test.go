@@ -55,6 +55,27 @@ func TestLoadConfig_AcceptsExplicitCommandSource(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_DefaultsCommandSourceBatch(t *testing.T) {
+	cfg, err := observable.ValidateConfig(observable.FileConfig{Observables: []observable.Spec{{
+		ID: "lark-events",
+		Source: observable.SourceSpec{
+			Type:    observable.SourceTypeCommand,
+			Command: "lark-cli",
+		},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Observables[0]
+	if got.Source.Batch.IntervalSeconds != observable.DefaultBatchIntervalSeconds ||
+		got.Source.Batch.MaxChars != observable.DefaultBatchMaxChars {
+		t.Fatalf("source batch defaults = %+v", got.Source.Batch)
+	}
+	if got.Batch != got.Source.Batch {
+		t.Fatalf("legacy batch mirror = %+v, source = %+v", got.Batch, got.Source.Batch)
+	}
+}
+
 func TestValidateConfig_AcceptsScheduleSource(t *testing.T) {
 	cfg, err := observable.ValidateConfig(observable.FileConfig{Observables: []observable.Spec{{
 		ID: "weekday-brief",
