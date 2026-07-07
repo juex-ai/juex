@@ -80,10 +80,10 @@ import { cn } from "@/lib/utils";
 import {
   WORKING_STATE_SECTIONS,
   formatRuntimeTimestamp,
-  runtimeGoalBadgeLabel,
   runtimeGoalContinuationLabel,
-  runtimeGoalIsActive,
-  runtimeWorkingStateBadgeLabel,
+  runtimeContextPercentLabel,
+  runtimeSessionStateBadgeLabel,
+  runtimeSessionStateIsActive,
   workingStatePresenceLabel,
   workingStateRecords,
   workingStateSectionCounts,
@@ -128,6 +128,7 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  CircleGaugeIcon,
   CopyIcon,
   LoaderCircleIcon,
   RadioIcon,
@@ -483,8 +484,8 @@ export function Session() {
                     <ContextUsageLabel
                       usage={contextUsage}
                       activeContext={activeContext}
+                      tokenUsage={tokenUsage}
                     />
-                    <TokenUsageLabel usage={tokenUsage} />
                     <SessionRuntimeStateBadges data={data} />
                   </PromptInputTools>
                   <div className="flex shrink-0 items-center gap-1">
@@ -667,20 +668,16 @@ function LoadOlderMessagesControl({
 
 function SessionRuntimeStateBadges({ data }: { data: SessionShowResponse }) {
   return (
-    <>
-      <SessionStateBadge
-        label={runtimeGoalBadgeLabel(data.goal)}
-        tone={runtimeGoalIsActive(data.goal) ? "active" : "muted"}
-      >
-        <GoalStateTooltip goal={data.goal} />
-      </SessionStateBadge>
-      <SessionStateBadge
-        label={runtimeWorkingStateBadgeLabel(data.working_state)}
-        tone={data.working_state?.present ? "active" : "muted"}
-      >
-        <WorkingStateTooltip snapshot={data.working_state} />
-      </SessionStateBadge>
-    </>
+    <SessionStateBadge
+      label={runtimeSessionStateBadgeLabel()}
+      tone={
+        runtimeSessionStateIsActive(data.goal, data.working_state)
+          ? "active"
+          : "muted"
+      }
+    >
+      <SessionStateTooltip goal={data.goal} snapshot={data.working_state} />
+    </SessionStateBadge>
   );
 }
 
@@ -740,6 +737,23 @@ function GoalStateTooltip({ goal }: { goal?: GoalStatusSnapshot }) {
       />
       <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(goal.updated_at)} />
     </RuntimeTooltipPanel>
+  );
+}
+
+function SessionStateTooltip({
+  goal,
+  snapshot,
+}: {
+  goal?: GoalStatusSnapshot;
+  snapshot?: WorkingStateStatusSnapshot;
+}) {
+  return (
+    <div className="space-y-3">
+      <GoalStateTooltip goal={goal} />
+      <div className="border-t border-border/60 pt-3">
+        <WorkingStateTooltip snapshot={snapshot} />
+      </div>
+    </div>
   );
 }
 
@@ -841,24 +855,6 @@ function RuntimeTooltipRecords({
 function formatConfidence(value: number): string {
   if (!Number.isFinite(value)) return "-";
   return `${Math.round(value * 100)}%`;
-}
-
-function TokenUsageLabel({ usage }: { usage: TokenUsage }) {
-  const input = usage?.input_tokens ?? 0;
-  const output = usage?.output_tokens ?? 0;
-  const total = input + output;
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex shrink-0 items-center rounded-full border border-transparent bg-muted px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
-          tokens {formatTokenCount(total)}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent>
-        {formatTokenCount(input)} in / {formatTokenCount(output)} out
-      </TooltipContent>
-    </Tooltip>
-  );
 }
 
 function ComposerFeedback({
@@ -969,23 +965,31 @@ function ReadOnlySessionBar({ data }: { data: SessionShowResponse }) {
 function ContextUsageLabel({
   usage,
   activeContext,
+  tokenUsage,
 }: {
   usage?: ContextUsage;
   activeContext?: ActiveContextSnapshot | null;
+  tokenUsage: TokenUsage;
 }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex shrink-0 items-center rounded-full border border-transparent bg-muted px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
-          context {usage ? formatTokenCount(usage.total_tokens) : "-"}
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-transparent bg-muted px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
+          <CircleGaugeIcon className="size-3" aria-hidden="true" />
+          context {runtimeContextPercentLabel(usage)}
         </span>
       </TooltipTrigger>
       <TooltipContent className="block max-w-sm space-y-1.5 px-3 py-2 font-mono text-xs">
         {usage ? (
-          <ContextUsageTooltip usage={usage} activeContext={activeContext} />
+          <ContextUsageTooltip
+            usage={usage}
+            activeContext={activeContext}
+            tokenUsage={tokenUsage}
+          />
         ) : (
           <>
             <div>No context usage yet</div>
+            <TokenUsageTooltipLine usage={tokenUsage} />
             <ActiveContextDebugLine snapshot={activeContext} />
           </>
         )}
@@ -997,9 +1001,11 @@ function ContextUsageLabel({
 function ContextUsageTooltip({
   usage,
   activeContext,
+  tokenUsage,
 }: {
   usage: ContextUsage;
   activeContext?: ActiveContextSnapshot | null;
+  tokenUsage: TokenUsage;
 }) {
   const windowTokens = usage.context_window ?? 0;
   const percent =
@@ -1013,6 +1019,7 @@ function ContextUsageTooltip({
         {formatTokenCount(usage.total_tokens)}/{formatTokenCount(windowTokens)} tokens (
         {formatPercent(percent)})
       </div>
+      <TokenUsageTooltipLine usage={tokenUsage} />
       {usage.cached_input_tokens ? (
         <div>
           cached input: {formatTokenCount(usage.cached_input_tokens)} tokens (
@@ -1032,6 +1039,16 @@ function ContextUsageTooltip({
       </div>
       <ActiveContextDebugLine snapshot={activeContext} />
     </>
+  );
+}
+
+function TokenUsageTooltipLine({ usage }: { usage: TokenUsage }) {
+  const input = usage?.input_tokens ?? 0;
+  const output = usage?.output_tokens ?? 0;
+  return (
+    <div>
+      tokens: {formatTokenCount(input)} in / {formatTokenCount(output)} out
+    </div>
   );
 }
 

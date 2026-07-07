@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 
 import {
   formatRuntimeTokenCount,
+  runtimeContextPercentLabel,
   runtimeGoalBadgeLabel,
   runtimeGoalContinuationLabel,
   runtimeGoalIsActive,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
+  runtimeSessionStateBadgeLabel,
+  runtimeSessionStateIsActive,
   runtimeWorkingStateBadgeLabel,
   workingStatePresenceLabel,
   workingStateRecordCount,
@@ -21,6 +24,37 @@ test("formatRuntimeTokenCount keeps sub-thousand counts exact", () => {
 test("formatRuntimeTokenCount formats large counts without 1000k", () => {
   assert.equal(formatRuntimeTokenCount(999_950), "1m");
   assert.equal(formatRuntimeTokenCount(1_250_000), "1.3m");
+});
+
+test("runtimeContextPercentLabel summarizes context window usage", () => {
+  assert.equal(runtimeContextPercentLabel(undefined), "-");
+  assert.equal(
+    runtimeContextPercentLabel({
+      context_window: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 42,
+    }),
+    "-",
+  );
+  assert.equal(
+    runtimeContextPercentLabel({
+      context_window: 10_000,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 5_950,
+    }),
+    "59.5%",
+  );
+  assert.equal(
+    runtimeContextPercentLabel({
+      context_window: 10_000,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+    }),
+    "0%",
+  );
 });
 
 test("runtimeHooksSummaryLabel pluralizes configured hooks", () => {
@@ -99,6 +133,27 @@ test("workingStateSectionCounts summarizes sidecar records", () => {
   assert.equal(
     runtimeWorkingStateBadgeLabel({ present: true, state: countsState() }),
     "state 4",
+  );
+});
+
+test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
+  assert.equal(runtimeSessionStateBadgeLabel(), "state");
+});
+
+test("runtimeSessionStateIsActive merges goal and working-state presence", () => {
+  assert.equal(runtimeSessionStateIsActive(undefined, undefined), false);
+  assert.equal(runtimeSessionStateIsActive({ status: "in_progress" }, undefined), true);
+  assert.equal(
+    runtimeSessionStateIsActive(undefined, { present: true, state: { version: 1 } }),
+    true,
+  );
+  assert.equal(
+    runtimeSessionStateIsActive(undefined, {
+      disabled: true,
+      present: false,
+      state: { version: 1 },
+    }),
+    false,
   );
 });
 
