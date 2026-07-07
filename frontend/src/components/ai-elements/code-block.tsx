@@ -1,7 +1,6 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { juexCodeThemes } from "@/lib/code-theme";
 import { writeClipboardText } from "@/lib/clipboard";
 import {
   Select,
@@ -10,6 +9,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  highlightLightCode,
+  type LightCodeLanguage,
+  type LightCodeToken,
+} from "@/lib/light-code-highlight";
 import { cn } from "@/lib/utils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import type { ComponentProps, CSSProperties, HTMLAttributes } from "react";
@@ -23,54 +27,26 @@ import {
   useRef,
   useState,
 } from "react";
-import type {
-  BundledLanguage,
-  BundledTheme,
-  HighlighterGeneric,
-  ThemedToken,
-} from "shiki";
-import { createHighlighter } from "shiki";
-
-// Shiki uses bitflags for font styles: 1=italic, 2=bold, 4=underline
-// oxlint-disable-next-line eslint(no-bitwise)
-const isItalic = (fontStyle: number | undefined) => fontStyle && fontStyle & 1;
-// oxlint-disable-next-line eslint(no-bitwise)
-const isBold = (fontStyle: number | undefined) => fontStyle && fontStyle & 2;
-const isUnderline = (fontStyle: number | undefined) =>
-  // oxlint-disable-next-line eslint(no-bitwise)
-  fontStyle && fontStyle & 4;
 
 type ShikiCSSProperties = CSSProperties & Record<`--${string}`, string>;
 
-const shikiStyleValue = (
-  value: string | undefined,
-  property: "backgroundColor" | "color"
-): ShikiCSSProperties => {
-  if (!value) {
-    return {};
-  }
+type CodeBlockLanguage = LightCodeLanguage;
+type CodeToken = LightCodeToken;
 
-  const [base, ...customProperties] = value.split(";");
+const tokenStyle = (token: CodeToken): ShikiCSSProperties => {
   const style: ShikiCSSProperties = {};
-  if (base) {
-    style[property] = base;
+  if (token.color) {
+    style.color = token.color;
   }
-
-  for (const declaration of customProperties) {
-    const [name, ...rawValue] = declaration.split(":");
-    const variableName = name?.trim();
-    const variableValue = rawValue.join(":").trim();
-    if (variableName.startsWith("--") && variableValue) {
-      style[variableName as `--${string}`] = variableValue;
-    }
+  if (token.darkColor) {
+    style["--shiki-dark"] = token.darkColor;
   }
-
   return style;
 };
 
 // Transform tokens to include pre-computed keys to avoid noArrayIndexKey lint
 interface KeyedToken {
-  token: ThemedToken;
+  token: CodeToken;
   key: string;
 }
 interface KeyedLine {
@@ -78,7 +54,7 @@ interface KeyedLine {
   key: string;
 }
 
-const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
+const addKeysToTokens = (lines: CodeToken[][]): KeyedLine[] =>
   lines.map((line, lineIdx) => ({
     key: `line-${lineIdx}`,
     tokens: line.map((token, tokenIdx) => ({
@@ -88,19 +64,10 @@ const addKeysToTokens = (lines: ThemedToken[][]): KeyedLine[] =>
   }));
 
 // Token rendering component
-const TokenSpan = ({ token }: { token: ThemedToken }) => (
+const TokenSpan = ({ token }: { token: CodeToken }) => (
   <span
     className="dark:!bg-transparent dark:!text-[var(--shiki-dark,var(--juex-code-fg))]"
-    style={
-      {
-        backgroundColor: token.bgColor,
-        color: token.color,
-        fontStyle: isItalic(token.fontStyle) ? "italic" : undefined,
-        fontWeight: isBold(token.fontStyle) ? "bold" : undefined,
-        textDecoration: isUnderline(token.fontStyle) ? "underline" : undefined,
-        ...token.htmlStyle,
-      } as CSSProperties
-    }
+    style={tokenStyle(token)}
   >
     {token.content}
   </span>
@@ -140,12 +107,12 @@ const LineSpan = ({
 // Types
 type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
-  language: BundledLanguage;
+  language: CodeBlockLanguage;
   showLineNumbers?: boolean;
 };
 
 interface TokenizedCode {
-  tokens: ThemedToken[][];
+  tokens: CodeToken[][];
   fg: string;
   bg: string;
 }
@@ -159,120 +126,38 @@ const CodeBlockContext = createContext<CodeBlockContextType>({
   code: "",
 });
 
-// Highlighter cache (singleton per language)
-const highlighterCache = new Map<
-  string,
-  Promise<HighlighterGeneric<BundledLanguage, BundledTheme>>
->();
-
 // Token cache
-const tokensCache = new Map<string, TokenizedCode>();
+const tokensCache = new Map<CodeBlockLanguage, Map<string, TokenizedCode>>();
 
-// Subscribers for async token updates
-const subscribers = new Map<string, Set<(result: TokenizedCode) => void>>();
+const getCachedTokens = (code: string, language: CodeBlockLanguage) =>
+  tokensCache.get(language)?.get(code);
 
-const getTokensCacheKey = (code: string, language: BundledLanguage) => {
-  const start = code.slice(0, 100);
-  const end = code.length > 100 ? code.slice(-100) : "";
-  return `${language}:${code.length}:${start}:${end}`;
-};
-
-const getHighlighter = (
-  language: BundledLanguage
-): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> => {
-  const cached = highlighterCache.get(language);
-  if (cached) {
-    return cached;
+const setCachedTokens = (
+  code: string,
+  language: CodeBlockLanguage,
+  tokenized: TokenizedCode
+) => {
+  let languageCache = tokensCache.get(language);
+  if (!languageCache) {
+    languageCache = new Map<string, TokenizedCode>();
+    tokensCache.set(language, languageCache);
   }
-
-  const highlighterPromise = createHighlighter({
-    langs: [language],
-    themes: juexCodeThemes,
-  });
-
-  highlighterCache.set(language, highlighterPromise);
-  return highlighterPromise;
+  languageCache.set(code, tokenized);
 };
 
-// Create raw tokens for immediate display while highlighting loads
-const createRawTokens = (code: string): TokenizedCode => ({
-  bg: "transparent",
-  fg: "inherit",
-  tokens: code.split("\n").map((line) =>
-    line === ""
-      ? []
-      : [
-          {
-            color: "inherit",
-            content: line,
-          } as ThemedToken,
-        ]
-  ),
-});
-
-// Synchronous highlight with callback for async results
+// Synchronous lightweight highlight for tool payload previews.
 export const highlightCode = (
   code: string,
-  language: BundledLanguage,
-  // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-callbacks)
-  callback?: (result: TokenizedCode) => void
-): TokenizedCode | null => {
-  const tokensCacheKey = getTokensCacheKey(code, language);
-
-  // Return cached result if available
-  const cached = tokensCache.get(tokensCacheKey);
+  language: CodeBlockLanguage
+): TokenizedCode => {
+  const cached = getCachedTokens(code, language);
   if (cached) {
     return cached;
   }
 
-  // Subscribe callback if provided
-  if (callback) {
-    if (!subscribers.has(tokensCacheKey)) {
-      subscribers.set(tokensCacheKey, new Set());
-    }
-    subscribers.get(tokensCacheKey)?.add(callback);
-  }
-
-  // Start highlighting in background - fire-and-forget async pattern
-  getHighlighter(language)
-    // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then)
-    .then((highlighter) => {
-      const availableLangs = highlighter.getLoadedLanguages();
-      const langToUse = availableLangs.includes(language) ? language : "text";
-
-      const result = highlighter.codeToTokens(code, {
-        lang: langToUse,
-        themes: {
-          dark: juexCodeThemes[1],
-          light: juexCodeThemes[0],
-        },
-      });
-
-      const tokenized: TokenizedCode = {
-        bg: result.bg ?? "transparent",
-        fg: result.fg ?? "inherit",
-        tokens: result.tokens,
-      };
-
-      // Cache the result
-      tokensCache.set(tokensCacheKey, tokenized);
-
-      // Notify all subscribers
-      const subs = subscribers.get(tokensCacheKey);
-      if (subs) {
-        for (const sub of subs) {
-          sub(tokenized);
-        }
-        subscribers.delete(tokensCacheKey);
-      }
-    })
-    // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then), eslint-plugin-promise(prefer-await-to-callbacks)
-    .catch((error) => {
-      console.error("Failed to highlight code:", error);
-      subscribers.delete(tokensCacheKey);
-    });
-
-  return null;
+  const tokenized = highlightLightCode(code, language);
+  setCachedTokens(code, language, tokenized);
+  return tokenized;
 };
 
 const CodeBlockBody = memo(
@@ -287,8 +172,8 @@ const CodeBlockBody = memo(
   }) => {
     const preStyle = useMemo(
       () => ({
-        ...shikiStyleValue(tokenized.bg, "backgroundColor"),
-        ...shikiStyleValue(tokenized.fg, "color"),
+        backgroundColor: tokenized.bg,
+        color: tokenized.fg,
       }),
       [tokenized.bg, tokenized.fg]
     );
@@ -407,46 +292,13 @@ export const CodeBlockContent = ({
   showLineNumbers = false,
 }: {
   code: string;
-  language: BundledLanguage;
+  language: CodeBlockLanguage;
   showLineNumbers?: boolean;
 }) => {
-  // Memoized raw tokens for immediate display
-  const rawTokens = useMemo(() => createRawTokens(code), [code]);
-
-  // Synchronous cache lookup — avoids setState in effect for cached results
-  const syncTokens = useMemo(
-    () => highlightCode(code, language) ?? rawTokens,
-    [code, language, rawTokens]
+  const tokenized = useMemo(
+    () => highlightCode(code, language),
+    [code, language]
   );
-
-  // Async highlighting result (populated after shiki loads)
-  const [asyncTokens, setAsyncTokens] = useState<TokenizedCode | null>(null);
-  const asyncKeyRef = useRef({ code, language });
-
-  // Invalidate stale async tokens synchronously during render
-  if (
-    asyncKeyRef.current.code !== code ||
-    asyncKeyRef.current.language !== language
-  ) {
-    asyncKeyRef.current = { code, language };
-    setAsyncTokens(null);
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-
-    highlightCode(code, language, (result) => {
-      if (!cancelled) {
-        setAsyncTokens(result);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [code, language]);
-
-  const tokenized = asyncTokens ?? syncTokens;
 
   return (
     <div className="relative overflow-auto">
