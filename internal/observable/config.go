@@ -576,7 +576,6 @@ func hasLegacyCommandShorthand(spec Spec) bool {
 		strings.TrimSpace(spec.CWD) != "" ||
 		len(spec.Env) > 0 ||
 		len(spec.Streams) > 0 ||
-		spec.Defaults != (Defaults{}) ||
 		spec.Parser != nil ||
 		len(spec.Filters) > 0 ||
 		spec.Batch != (BatchSpec{}) ||

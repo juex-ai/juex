@@ -560,9 +560,7 @@ func (m *Manager) scheduleLoop(run *observableRun) {
 		timer := time.NewTimer(delay)
 		select {
 		case <-run.ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			stopScheduleTimer(timer)
 			return
 		case <-timer.C:
 			if _, _, err := m.emitScheduledOccurrence(context.Background(), run, next, m.now()); err != nil {
@@ -570,6 +568,16 @@ func (m *Manager) scheduleLoop(run *observableRun) {
 				return
 			}
 		}
+	}
+}
+
+func stopScheduleTimer(timer *time.Timer) {
+	if timer == nil || timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
 	}
 }
 

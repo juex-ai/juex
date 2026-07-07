@@ -259,6 +259,29 @@ func TestSaveConfig_PersistsPreferredSourceShape(t *testing.T) {
 	}
 }
 
+func TestSaveConfig_CommandSourceWithDefaultsRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "observables.json")
+	spec := validSpec("with-defaults")
+	spec.Defaults = observable.Defaults{Kind: "lark_notification", Severity: "info"}
+	if err := observable.SaveConfig(path, observable.FileConfig{Observables: []observable.Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, issues, err := observable.LoadConfigLenient(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("LoadConfigLenient issues = %+v, want none", issues)
+	}
+	if len(cfg.Observables) != 1 {
+		t.Fatalf("observables = %+v, want one command observable", cfg.Observables)
+	}
+	got := cfg.Observables[0]
+	if got.Source.Type != observable.SourceTypeCommand || got.Defaults.Kind != "lark_notification" || got.Defaults.Severity != "info" {
+		t.Fatalf("round-tripped command observable = %+v", got)
+	}
+}
+
 func TestExpandVariables(t *testing.T) {
 	got := observable.ExpandVariables("$WORKDIR/${JUEX_WORKDIR}/$JUEX_WORKDIR/${WORKDIR}", "/tmp/work")
 	if got != "/tmp/work//tmp/work//tmp/work//tmp/work" {
