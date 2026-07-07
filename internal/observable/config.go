@@ -20,9 +20,11 @@ const (
 	ParserText  = "text"
 	ParserJSONL = "jsonl"
 
-	MinBatchIntervalSeconds = 5
-	MaxBatchIntervalSeconds = 86400
-	MaxBatchChars           = 1000
+	MinBatchIntervalSeconds     = 5
+	MaxBatchIntervalSeconds     = 86400
+	MaxBatchChars               = 1000
+	DefaultBatchIntervalSeconds = MinBatchIntervalSeconds
+	DefaultBatchMaxChars        = MaxBatchChars
 
 	SourceTypeCommand  = "command"
 	SourceTypeSchedule = "schedule"
@@ -380,6 +382,12 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 	}
 	if spec.Source.Command == "" {
 		return Spec{}, fmt.Errorf("source.command is required")
+	}
+	if spec.Source.Batch.IntervalSeconds == 0 {
+		spec.Source.Batch.IntervalSeconds = DefaultBatchIntervalSeconds
+	}
+	if spec.Source.Batch.MaxChars == 0 {
+		spec.Source.Batch.MaxChars = DefaultBatchMaxChars
 	}
 	if len(spec.Source.Streams) == 0 {
 		spec.Source.Streams = []string{StreamStdout, StreamStderr}

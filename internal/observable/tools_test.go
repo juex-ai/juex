@@ -37,8 +37,87 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 	if !ok {
 		t.Fatal("observable_create missing")
 	}
-	if !strings.Contains(create.Description, "Call observable_list before creating") || !strings.Contains(create.Description, "Deleting is permanent") {
+	if !strings.Contains(create.Description, "Call observable_list first") ||
+		!strings.Contains(create.Description, "batch defaults are safe") ||
+		!strings.Contains(create.Description, "schedule sources do not run commands") {
 		t.Fatalf("description = %q", create.Description)
+	}
+}
+
+func TestObservableCreateSchemaGuidesSingleSourceShape(t *testing.T) {
+	mgr := newToolTestManager(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	create, ok := reg.Get("observable_create")
+	if !ok {
+		t.Fatal("observable_create missing")
+	}
+	if got := create.Schema["additionalProperties"]; got != false {
+		t.Fatalf("create schema additionalProperties = %v, want false", got)
+	}
+	props := schemaMap(t, create.Schema, "properties")
+	for _, legacy := range []string{"command", "args", "cwd", "env", "streams", "defaults", "parser", "filters", "batch", "on_exit"} {
+		if _, ok := props[legacy]; ok {
+			t.Fatalf("create schema exposes legacy top-level %q: %#v", legacy, props[legacy])
+		}
+	}
+	source := schemaMapFromValue(t, props["source"])
+	oneOf, ok := source["oneOf"].([]any)
+	if !ok || len(oneOf) != 2 {
+		t.Fatalf("source oneOf = %#v, want two source shapes", source["oneOf"])
+	}
+	command := schemaMapFromValue(t, oneOf[0])
+	schedule := schemaMapFromValue(t, oneOf[1])
+	if command["additionalProperties"] != false || schedule["additionalProperties"] != false {
+		t.Fatalf("source shapes must be closed: command=%v schedule=%v", command["additionalProperties"], schedule["additionalProperties"])
+	}
+	commandProps := schemaMap(t, command, "properties")
+	if _, ok := commandProps["batch"]; !ok {
+		t.Fatalf("command source missing batch property: %#v", commandProps)
+	}
+	if _, ok := commandProps["interval"]; ok {
+		t.Fatalf("command source exposes schedule interval: %#v", commandProps["interval"])
+	}
+	for _, name := range []string{"parser", "batch", "on_exit"} {
+		if schemaMapFromValue(t, commandProps[name])["additionalProperties"] != false {
+			t.Fatalf("%s schema is open: %#v", name, commandProps[name])
+		}
+	}
+	filters := schemaMapFromValue(t, commandProps["filters"])
+	filter := schemaMapFromValue(t, filters["items"])
+	if filter["additionalProperties"] != false {
+		t.Fatalf("filter item schema is open: %#v", filters["items"])
+	}
+	if oneOf, ok := filter["oneOf"].([]any); !ok || len(oneOf) != 2 {
+		t.Fatalf("filter item oneOf = %#v, want contains/regex alternatives", filter["oneOf"])
+	}
+	scheduleProps := schemaMap(t, schedule, "properties")
+	if _, ok := scheduleProps["command"]; ok {
+		t.Fatalf("schedule source exposes command: %#v", scheduleProps["command"])
+	}
+	if oneOf, ok := schedule["oneOf"].([]any); !ok || len(oneOf) != 3 {
+		t.Fatalf("schedule source oneOf = %#v, want once/daily/interval alternatives", schedule["oneOf"])
+	} else {
+		dailyBranch := schemaMapFromValue(t, oneOf[1])
+		req, ok := dailyBranch["required"].([]any)
+		if !ok || len(req) != 2 || req[0] != "daily" || req[1] != "timezone" {
+			t.Fatalf("schedule daily branch required = %#v, want daily and timezone", req)
+		}
+	}
+	for name, required := range map[string]string{
+		"once":     "at",
+		"daily":    "times",
+		"interval": "every_seconds",
+	} {
+		req, ok := schemaMapFromValue(t, scheduleProps[name])["required"].([]any)
+		if !ok || len(req) != 1 || req[0] != required {
+			t.Fatalf("%s required = %#v, want %q", name, req, required)
+		}
+	}
+	if schemaMapFromValue(t, scheduleProps["interval"])["additionalProperties"] != false {
+		t.Fatalf("interval schema is open: %#v", scheduleProps["interval"])
 	}
 }
 
@@ -120,6 +199,42 @@ func TestObservableToolsCreateScheduleSource(t *testing.T) {
 	}
 }
 
+func TestObservableToolsCreateCommandSourceDefaultsBatch(t *testing.T) {
+	mgr, config := newToolTestManagerWithConfigPath(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]any{
+		"id": "lark-events",
+		"source": map[string]any{
+			"type":    "command",
+			"command": "echo",
+			"args":    []any{"hello"},
+		},
+	}
+	out, _, err := reg.CallWithInfo(context.Background(), "observable_create", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"source_type": "command"`) {
+		t.Fatalf("create command output = %s", out)
+	}
+	cfg, err := observable.LoadConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Observables) != 1 {
+		t.Fatalf("observables = %+v, want one", cfg.Observables)
+	}
+	got := cfg.Observables[0]
+	if got.Source.Batch.IntervalSeconds != observable.DefaultBatchIntervalSeconds ||
+		got.Source.Batch.MaxChars != observable.DefaultBatchMaxChars {
+		body, _ := json.MarshalIndent(cfg, "", "  ")
+		t.Fatalf("persisted command config missing batch defaults: %s", body)
+	}
+}
+
 func TestObservableToolsObservations(t *testing.T) {
 	mgr := newToolTestManager(t)
 	rec, err := mgr.RecordObservation(observation("lark-events", "hello", fixedTime))
@@ -185,10 +300,16 @@ func TestObservableToolsObservationsBoundsLimit(t *testing.T) {
 }
 
 func newToolTestManager(t *testing.T) *observable.Manager {
+	mgr, _ := newToolTestManagerWithConfigPath(t)
+	return mgr
+}
+
+func newToolTestManagerWithConfigPath(t *testing.T) (*observable.Manager, string) {
 	t.Helper()
 	dir := t.TempDir()
+	config := configPath(dir)
 	mgr, err := observable.NewManager(observable.ManagerOptions{
-		ConfigPath: configPath(dir),
+		ConfigPath: config,
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 	})
@@ -196,5 +317,23 @@ func newToolTestManager(t *testing.T) *observable.Manager {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = mgr.Close() })
-	return mgr
+	return mgr, config
+}
+
+func schemaMap(t *testing.T, schema map[string]any, key string) map[string]any {
+	t.Helper()
+	value, ok := schema[key]
+	if !ok {
+		t.Fatalf("schema missing key %q: %#v", key, schema)
+	}
+	return schemaMapFromValue(t, value)
+}
+
+func schemaMapFromValue(t *testing.T, value any) map[string]any {
+	t.Helper()
+	schema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("schema value = %#v, want map[string]any", value)
+	}
+	return schema
 }

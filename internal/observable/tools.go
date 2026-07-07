@@ -29,15 +29,16 @@ func RegisterTools(reg *tools.Registry, manager *Manager) error {
 
 func observableTools(manager *Manager) []tools.Tool {
 	idSchema := map[string]any{
-		"type":       "object",
-		"required":   []any{"id"},
-		"properties": map[string]any{"id": map[string]any{"type": "string"}},
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"id"},
+		"properties":           map[string]any{"id": map[string]any{"type": "string"}},
 	}
 	return []tools.Tool{
 		{
 			Name:        "observable_list",
 			Description: "List configured JueX Observables and their runtime status. Call this before creating a new Observable to avoid duplicates.",
-			Schema:      map[string]any{"type": "object", "properties": map[string]any{}},
+			Schema:      map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 			Handler: func(ctx context.Context, in map[string]any) (string, error) {
 				_ = ctx
 				_ = in
@@ -46,7 +47,7 @@ func observableTools(manager *Manager) []tools.Tool {
 		},
 		{
 			Name:        "observable_create",
-			Description: "Create a workspace-local Observable with a command or schedule source, write .juex/observables.json, and start it immediately. Call observable_list before creating; avoid duplicate or near-duplicate Observables. For heartbeat or reminder needs, prefer source.type=\"schedule\" instead of creating a command wrapper. Prefer JSONL parsers for structured event commands and filters for high-volume commands. Stopping is temporary. Deleting is permanent.",
+			Description: "Create a workspace-local Observable with exactly one source shape and start it immediately. Call observable_list first and avoid duplicates. Use source.type=\"command\" to run a process and batch its output; batch defaults are safe if omitted. Use source.type=\"schedule\" only to emit observation.content at scheduled times; schedule sources do not run commands. Do not mix top-level command fields with source. Stopping is temporary; deleting is permanent.",
 			Schema:      specSchema(),
 			Handler: func(ctx context.Context, in map[string]any) (string, error) {
 				var spec Spec
@@ -121,7 +122,8 @@ func observableTools(manager *Manager) []tools.Tool {
 			Name:        "observable_observations",
 			Description: "List recent durable Observations, optionally for one Observable id. Results are bounded and include truncation/artifact metadata.",
 			Schema: map[string]any{
-				"type": "object",
+				"type":                 "object",
+				"additionalProperties": false,
 				"properties": map[string]any{
 					"id":    map[string]any{"type": "string"},
 					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
@@ -144,77 +146,76 @@ func observableTools(manager *Manager) []tools.Tool {
 
 func specSchema() map[string]any {
 	return map[string]any{
-		"type":     "object",
-		"required": []any{"id"},
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"id", "source"},
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string"},
 			"name":        map[string]any{"type": "string"},
 			"source":      sourceSchema(),
 			"observation": observationSchema(),
-			"command":     map[string]any{"type": "string"},
-			"args":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"cwd":         map[string]any{"type": "string"},
-			"env":         map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
-			"streams":     streamSchema(),
-			"defaults": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"kind":     map[string]any{"type": "string"},
-					"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
-				},
-			},
-			"parser":  parserSchema(),
-			"filters": map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
-			"batch":   batchSchema(),
 		},
 	}
 }
 
 func sourceSchema() map[string]any {
 	return map[string]any{
-		"type":     "object",
-		"required": []any{"type"},
+		"type":        "object",
+		"description": "Choose either the command source shape or the schedule source shape. Do not combine command fields with schedule fields.",
+		"oneOf":       []any{commandSourceSchema(), scheduleSourceSchema()},
+	}
+}
+
+func commandSourceSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"title":                "Command source",
+		"description":          "Runs a command and batches stdout/stderr into Observations. Use this for recurring command output; omit batch to use safe defaults.",
+		"additionalProperties": false,
+		"required":             []any{"type", "command"},
 		"properties": map[string]any{
-			"type":     map[string]any{"type": "string", "enum": []any{SourceTypeCommand, SourceTypeSchedule}},
-			"command":  map[string]any{"type": "string"},
-			"args":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"cwd":      map[string]any{"type": "string"},
-			"env":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
-			"streams":  streamSchema(),
-			"parser":   parserSchema(),
-			"filters":  map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
-			"batch":    batchSchema(),
-			"on_exit":  map[string]any{"type": "object", "properties": map[string]any{"notify": map[string]any{"type": "string", "enum": []any{"never", "always", "nonzero"}}}},
+			"type":    map[string]any{"type": "string", "enum": []any{SourceTypeCommand}},
+			"command": map[string]any{"type": "string"},
+			"args":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"cwd":     map[string]any{"type": "string"},
+			"env":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"streams": streamSchema(),
+			"parser":  parserSchema(),
+			"filters": map[string]any{"type": "array", "items": filterSchema()},
+			"batch":   batchSchema(),
+			"on_exit": onExitSchema(),
+		},
+	}
+}
+
+func scheduleSourceSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"title":                "Schedule source",
+		"description":          "Emits observation.content at the configured time. It does not run command, args, parser, filters, batch, or on_exit.",
+		"additionalProperties": false,
+		"required":             []any{"type"},
+		"properties": map[string]any{
+			"type":     map[string]any{"type": "string", "enum": []any{SourceTypeSchedule}},
 			"timezone": map[string]any{"type": "string", "description": "IANA timezone for daily schedules, for example Asia/Shanghai"},
-			"once": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"at": map[string]any{"type": "string", "description": "RFC3339 timestamp with timezone"}},
-			},
-			"daily": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^\\d\\d:\\d\\d$"}},
-					"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}}},
-				},
-			},
-			"interval": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"every_seconds": map[string]any{"type": "integer", "minimum": MinIntervalScheduleSecond}},
-			},
-			"catch_up": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"mode":                 map[string]any{"type": "string", "enum": []any{ScheduleCatchUpNone, ScheduleCatchUpLatest}},
-					"max_lateness_minutes": map[string]any{"type": "integer", "minimum": 1, "maximum": 1440},
-				},
-			},
+			"once":     onceScheduleSchema(),
+			"daily":    dailyScheduleSchema(),
+			"interval": intervalScheduleSchema(),
+			"catch_up": catchUpSchema(),
+		},
+		"oneOf": []any{
+			map[string]any{"required": []any{"once"}},
+			map[string]any{"required": []any{"daily", "timezone"}},
+			map[string]any{"required": []any{"interval"}},
 		},
 	}
 }
 
 func observationSchema() map[string]any {
 	return map[string]any{
-		"type": "object",
+		"type":                 "object",
+		"description":          "For schedule sources, content is required and becomes the scheduled Observation text. For command sources, kind and severity set output defaults.",
+		"additionalProperties": false,
 		"properties": map[string]any{
 			"kind":     map[string]any{"type": "string"},
 			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
@@ -225,7 +226,8 @@ func observationSchema() map[string]any {
 
 func parserSchema() map[string]any {
 	return map[string]any{
-		"type": "object",
+		"type":                 "object",
+		"additionalProperties": false,
 		"properties": map[string]any{
 			"type":           map[string]any{"type": "string", "enum": []any{"text", "jsonl"}},
 			"content_field":  map[string]any{"type": "string"},
@@ -236,13 +238,87 @@ func parserSchema() map[string]any {
 	}
 }
 
+func filterSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"description":          "Keep output lines matching exactly one predicate: contains or regex.",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"contains": map[string]any{"type": "string"},
+			"regex":    map[string]any{"type": "string"},
+			"kind":     map[string]any{"type": "string"},
+			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
+		},
+		"oneOf": []any{
+			map[string]any{"required": []any{"contains"}},
+			map[string]any{"required": []any{"regex"}},
+		},
+	}
+}
+
 func batchSchema() map[string]any {
 	return map[string]any{
-		"type":     "object",
-		"required": []any{"interval_seconds", "max_chars"},
+		"type":                 "object",
+		"additionalProperties": false,
+		"description":          "Optional for command sources; omitted values default to a safe 5 second interval and 1000 character batch.",
 		"properties": map[string]any{
 			"interval_seconds": map[string]any{"type": "integer", "minimum": MinBatchIntervalSeconds, "maximum": MaxBatchIntervalSeconds},
 			"max_chars":        map[string]any{"type": "integer", "minimum": 1, "maximum": MaxBatchChars},
+		},
+	}
+}
+
+func onExitSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"notify": map[string]any{"type": "string", "enum": []any{"never", "always", "nonzero"}},
+		},
+	}
+}
+
+func onceScheduleSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"at"},
+		"properties": map[string]any{
+			"at": map[string]any{"type": "string", "description": "RFC3339 timestamp with timezone"},
+		},
+	}
+}
+
+func dailyScheduleSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"times"},
+		"properties": map[string]any{
+			"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^\\d\\d:\\d\\d$"}},
+			"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}}},
+		},
+	}
+}
+
+func intervalScheduleSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"every_seconds"},
+		"properties": map[string]any{
+			"every_seconds": map[string]any{"type": "integer", "minimum": MinIntervalScheduleSecond},
+		},
+	}
+}
+
+func catchUpSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"mode":                 map[string]any{"type": "string", "enum": []any{ScheduleCatchUpNone, ScheduleCatchUpLatest}},
+			"max_lateness_minutes": map[string]any{"type": "integer", "minimum": 1, "maximum": 1440},
 		},
 	}
 }
