@@ -86,12 +86,29 @@ func TestObservableCreateSchemaGuidesSingleSourceShape(t *testing.T) {
 		}
 	}
 	filters := schemaMapFromValue(t, commandProps["filters"])
-	if schemaMapFromValue(t, filters["items"])["additionalProperties"] != false {
+	filter := schemaMapFromValue(t, filters["items"])
+	if filter["additionalProperties"] != false {
 		t.Fatalf("filter item schema is open: %#v", filters["items"])
+	}
+	if oneOf, ok := filter["oneOf"].([]any); !ok || len(oneOf) != 2 {
+		t.Fatalf("filter item oneOf = %#v, want contains/regex alternatives", filter["oneOf"])
 	}
 	scheduleProps := schemaMap(t, schedule, "properties")
 	if _, ok := scheduleProps["command"]; ok {
 		t.Fatalf("schedule source exposes command: %#v", scheduleProps["command"])
+	}
+	if oneOf, ok := schedule["oneOf"].([]any); !ok || len(oneOf) != 3 {
+		t.Fatalf("schedule source oneOf = %#v, want once/daily/interval alternatives", schedule["oneOf"])
+	}
+	for name, required := range map[string]string{
+		"once":     "at",
+		"daily":    "times",
+		"interval": "every_seconds",
+	} {
+		req, ok := schemaMapFromValue(t, scheduleProps[name])["required"].([]any)
+		if !ok || len(req) != 1 || req[0] != required {
+			t.Fatalf("%s required = %#v, want %q", name, req, required)
+		}
 	}
 	if schemaMapFromValue(t, scheduleProps["interval"])["additionalProperties"] != false {
 		t.Fatalf("interval schema is open: %#v", scheduleProps["interval"])

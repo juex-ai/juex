@@ -203,6 +203,11 @@ func scheduleSourceSchema() map[string]any {
 			"interval": intervalScheduleSchema(),
 			"catch_up": catchUpSchema(),
 		},
+		"oneOf": []any{
+			map[string]any{"required": []any{"once"}},
+			map[string]any{"required": []any{"daily"}},
+			map[string]any{"required": []any{"interval"}},
+		},
 	}
 }
 
@@ -244,6 +249,10 @@ func filterSchema() map[string]any {
 			"kind":     map[string]any{"type": "string"},
 			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
 		},
+		"oneOf": []any{
+			map[string]any{"required": []any{"contains"}},
+			map[string]any{"required": []any{"regex"}},
+		},
 	}
 }
 
@@ -273,6 +282,7 @@ func onceScheduleSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
+		"required":             []any{"at"},
 		"properties": map[string]any{
 			"at": map[string]any{"type": "string", "description": "RFC3339 timestamp with timezone"},
 		},
@@ -283,6 +293,7 @@ func dailyScheduleSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
+		"required":             []any{"times"},
 		"properties": map[string]any{
 			"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^\\d\\d:\\d\\d$"}},
 			"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}}},
@@ -294,6 +305,7 @@ func intervalScheduleSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
+		"required":             []any{"every_seconds"},
 		"properties": map[string]any{
 			"every_seconds": map[string]any{"type": "integer", "minimum": MinIntervalScheduleSecond},
 		},
