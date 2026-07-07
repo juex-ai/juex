@@ -1170,11 +1170,7 @@ function ThinkingProcessRow({
     : `Thinking ${compactThinkingPreview(text) || "-"}`;
 
   return (
-    <ProcessDisclosure
-      status="done"
-      title={preview}
-      ariaLabel="Thinking details"
-    >
+    <ProcessDisclosure status="done" title={preview}>
       <ProcessPayload label="Content" value={content || "-"} />
     </ProcessDisclosure>
   );
@@ -1190,7 +1186,6 @@ function ToolBatchProcessRow({ tools }: { tools: ToolDisplayUnit[] }) {
     <ProcessDisclosure
       status={status}
       title={title || "tool batch"}
-      ariaLabel="Tool batch details"
     >
       <div className="flex flex-col gap-1.5">
         {tools.map((tool, index) => (
@@ -1221,7 +1216,6 @@ function ToolProcessRow({
     <ProcessDisclosure
       status={status}
       title={name}
-      ariaLabel={`${name} tool details`}
       nested={nested}
     >
       {hasContent ? (
@@ -1250,13 +1244,11 @@ function ToolProcessRow({
 }
 
 function ProcessDisclosure({
-  ariaLabel,
   children,
   nested = false,
   status,
   title,
 }: {
-  ariaLabel: string;
   children: ReactNode;
   nested?: boolean;
   status: ToolProcessStatus;
@@ -1281,10 +1273,7 @@ function ProcessDisclosure({
         nested && "ml-2 border-border/50",
       )}
     >
-      <summary
-        aria-label={ariaLabel}
-        className="flex cursor-pointer list-none items-center gap-2 py-1 font-mono text-[11px] leading-5 text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
-      >
+      <summary className="flex cursor-pointer list-none items-center gap-2 py-1 font-mono text-[11px] leading-5 text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
         <ProcessStatusIndicator status={status} />
         <span className="sr-only">{toolProcessStatusLabel(status)}</span>
         <span className="min-w-0 flex-1 truncate">{title}</span>
