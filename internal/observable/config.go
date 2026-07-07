@@ -375,6 +375,9 @@ func ValidateSpec(spec Spec) (Spec, error) {
 
 func validateCommandSpec(spec Spec) (Spec, error) {
 	spec.Source.Command = strings.TrimSpace(spec.Source.Command)
+	if err := rejectInactiveScheduleFields(spec.Source); err != nil {
+		return Spec{}, err
+	}
 	if spec.Source.Command == "" {
 		return Spec{}, fmt.Errorf("source.command is required")
 	}
@@ -448,6 +451,9 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 }
 
 func validateScheduleSpec(spec Spec) (Spec, error) {
+	if err := rejectInactiveCommandFields(spec.Source); err != nil {
+		return Spec{}, err
+	}
 	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
 	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
 	spec.Observation.Content = strings.TrimSpace(spec.Observation.Content)
@@ -518,6 +524,64 @@ func validateScheduleSpec(spec Spec) (Spec, error) {
 		return Spec{}, fmt.Errorf("source.catch_up.mode must be none or latest, got %q", spec.Source.CatchUp.Mode)
 	}
 	return spec, nil
+}
+
+func rejectInactiveCommandFields(source SourceSpec) error {
+	var fields []string
+	if strings.TrimSpace(source.Command) != "" {
+		fields = append(fields, "source.command")
+	}
+	if len(source.Args) > 0 {
+		fields = append(fields, "source.args")
+	}
+	if strings.TrimSpace(source.CWD) != "" {
+		fields = append(fields, "source.cwd")
+	}
+	if len(source.Env) > 0 {
+		fields = append(fields, "source.env")
+	}
+	if len(source.Streams) > 0 {
+		fields = append(fields, "source.streams")
+	}
+	if source.Parser != nil {
+		fields = append(fields, "source.parser")
+	}
+	if len(source.Filters) > 0 {
+		fields = append(fields, "source.filters")
+	}
+	if source.Batch != (BatchSpec{}) {
+		fields = append(fields, "source.batch")
+	}
+	if source.OnExit != (OnExitSpec{}) {
+		fields = append(fields, "source.on_exit")
+	}
+	if len(fields) > 0 {
+		return fmt.Errorf("schedule source cannot set command fields: %s", strings.Join(fields, ", "))
+	}
+	return nil
+}
+
+func rejectInactiveScheduleFields(source SourceSpec) error {
+	var fields []string
+	if strings.TrimSpace(source.Timezone) != "" {
+		fields = append(fields, "source.timezone")
+	}
+	if source.Once != nil {
+		fields = append(fields, "source.once")
+	}
+	if source.Daily != nil {
+		fields = append(fields, "source.daily")
+	}
+	if source.Interval != nil {
+		fields = append(fields, "source.interval")
+	}
+	if source.CatchUp != (CatchUpSpec{}) {
+		fields = append(fields, "source.catch_up")
+	}
+	if len(fields) > 0 {
+		return fmt.Errorf("command source cannot set schedule fields: %s", strings.Join(fields, ", "))
+	}
+	return nil
 }
 
 func ExpandVariables(value, workDir string) string {

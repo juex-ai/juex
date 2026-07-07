@@ -192,6 +192,32 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 			want: "legacy command",
 		},
 		{
+			name: "schedule mixed with command source field",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "mixed-schedule-source",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeSchedule,
+					Command:  "echo",
+					Interval: &observable.IntervalSchedule{EverySeconds: 60},
+				},
+				Observation: observable.ObservationSpec{Content: "hello"},
+			}}},
+			want: "command fields",
+		},
+		{
+			name: "command mixed with schedule source field",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "mixed-command-source",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeCommand,
+					Command:  "echo",
+					Interval: &observable.IntervalSchedule{EverySeconds: 60},
+					Batch:    observable.BatchSpec{IntervalSeconds: 10, MaxChars: 1000},
+				},
+			}}},
+			want: "schedule fields",
+		},
+		{
 			name: "interval too small",
 			cfg: observable.FileConfig{Observables: []observable.Spec{{
 				ID: "small-schedule",
