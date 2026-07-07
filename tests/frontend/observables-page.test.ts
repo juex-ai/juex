@@ -9,26 +9,28 @@ const observablesPageSource = readFileSync(
 
 test("Observables table title column does not render source icons", () => {
   assert.equal(
-    /\bActivity\b|\bCalendarClock\b|<Link\b/.test(observablesPageSource),
+    /\bActivity\b|\bCalendarClock\b/.test(observablesPageSource),
     false,
   );
 });
 
-test("Observables table uses the row as the detail navigation target", () => {
-  assert.match(observablesPageSource, /role="link"/);
-  assert.match(observablesPageSource, /tabIndex=\{0\}/);
-  assert.match(observablesPageSource, /onClick=\{\(\) => onOpen\(item\.id\)\}/);
+test("Observables table uses an accessible full-row link target", () => {
+  assert.match(observablesPageSource, /import \{ Link, useNavigate \}/);
+  assert.match(observablesPageSource, /<Link\s+to=\{`\/observables\/\$\{encodeURIComponent\(item\.id\)\}`\}/);
   assert.match(
     observablesPageSource,
-    /if \(event\.target !== event\.currentTarget\) return;/,
+    /className="absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring\/35"/,
   );
+  assert.doesNotMatch(observablesPageSource, /role="link"/);
+  assert.doesNotMatch(observablesPageSource, /onClick=\{\(\) => onOpen\(item\.id\)\}/);
 });
 
-test("Observables table action buttons do not trigger row navigation", () => {
-  const stopPropagationCount =
-    observablesPageSource.match(/event\.stopPropagation\(\)/g)?.length ?? 0;
-
-  assert.equal(stopPropagationCount, 3);
+test("Observables table keeps action buttons above the row link", () => {
+  assert.match(
+    observablesPageSource,
+    /<td className="relative z-20 px-3 py-2">/,
+  );
+  assert.doesNotMatch(observablesPageSource, /event\.stopPropagation\(\)/);
 });
 
 test("Observables table gives the title column more room", () => {
