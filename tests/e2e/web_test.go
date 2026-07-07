@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -289,6 +290,90 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 		if !strings.Contains(string(eventsData), want) {
 			t.Fatalf("events missing %s:\n%s", want, eventsData)
 		}
+	}
+}
+
+func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
+	work := t.TempDir()
+	prov := &webProvider{steps: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "schedule handled"), StopReason: llm.StopEndTurn},
+	}}
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	created.Body.Close()
+	if c.ID == "" {
+		t.Fatal("no session id")
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"id": "schedule-e2e",
+		"source": map[string]any{
+			"type": "schedule",
+			"once": map[string]any{
+				"at": time.Now().UTC().Add(150 * time.Millisecond).Format(time.RFC3339Nano),
+			},
+		},
+		"observation": map[string]any{
+			"kind":     "heartbeat",
+			"severity": "info",
+			"content":  "schedule e2e payload",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/observables", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("create schedule status=%d body=%s", resp.StatusCode, respBody)
+	}
+	resp.Body.Close()
+
+	var snapshot struct {
+		Observables []observable.ObservableStatus `json:"observables"`
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		resp, err := http.Get(ts.URL + "/api/observables")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return false
+		}
+		var next struct {
+			Observables []observable.ObservableStatus `json:"observables"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&next); err != nil {
+			return false
+		}
+		snapshot = next
+		if len(next.Observables) != 1 || next.Observables[0].SourceType != observable.SourceTypeSchedule {
+			return false
+		}
+		last := next.Observables[0].LastObservation
+		return last.SourceEventID != "" && last.Content == "schedule e2e payload" && last.State == observable.ObservationStateDelivered
+	})
+	if got := snapshot.Observables[0]; got.Schedule == nil || got.Schedule.LastEmittedScheduledAt == nil {
+		t.Fatalf("schedule status = %+v", got)
 	}
 }
 

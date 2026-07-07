@@ -175,24 +175,51 @@ export function ObservableDetail() {
                   <DetailRow label="State">
                     <StateBadge state={observable.state} />
                   </DetailRow>
-                  <DetailRow label="Command">
-                    <span className="break-all font-mono text-xs">
-                      {[observable.command, ...(observable.args ?? [])].join(
-                        " ",
-                      )}
-                    </span>
+                  <DetailRow label="Source">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className="font-mono text-[11px]">
+                        {observable.source_type || "command"}
+                      </Badge>
+                      <span className="break-all font-mono text-xs">
+                        {detailSourceSummary(observable)}
+                      </span>
+                    </div>
                   </DetailRow>
-                  <DetailRow label="Streams">
-                    <span className="font-mono text-xs">
-                      {(observable.streams ?? []).join(", ") || "-"}
-                    </span>
-                  </DetailRow>
-                  <DetailRow label="Batch">
-                    <span className="font-mono text-xs">
-                      {observable.batch?.interval_seconds ?? "-"}s /{" "}
-                      {observable.batch?.max_chars ?? "-"} chars
-                    </span>
-                  </DetailRow>
+                  {observable.source_type === "schedule" ? (
+                    <>
+                      <DetailRow label="Next">
+                        <span className="font-mono text-xs">
+                          {formatDateTime(observable.schedule?.next_occurrence)}
+                        </span>
+                      </DetailRow>
+                      <DetailRow label="Last emitted">
+                        <span className="font-mono text-xs">
+                          {formatDateTime(
+                            observable.schedule?.last_emitted_scheduled_at,
+                          )}
+                        </span>
+                      </DetailRow>
+                      <DetailRow label="Catch-up">
+                        <span className="font-mono text-xs">
+                          {observable.schedule?.catch_up_mode || "-"}
+                        </span>
+                      </DetailRow>
+                    </>
+                  ) : (
+                    <>
+                      <DetailRow label="Streams">
+                        <span className="font-mono text-xs">
+                          {(observable.streams ?? []).join(", ") || "-"}
+                        </span>
+                      </DetailRow>
+                      <DetailRow label="Batch">
+                        <span className="font-mono text-xs">
+                          {observable.batch?.interval_seconds ?? "-"}s /{" "}
+                          {observable.batch?.max_chars ?? "-"} chars
+                        </span>
+                      </DetailRow>
+                    </>
+                  )}
                   <DetailRow label="Run">
                     <span className="break-all font-mono text-xs">
                       {observable.run_id || "-"}
@@ -297,6 +324,7 @@ function ObservationList({
               {record.truncated ? (
                 <span>truncated {record.original_chars} chars</span>
               ) : null}
+              {record.source_event_id ? <span>{record.source_event_id}</span> : null}
               {record.artifact_path ? <span>{record.artifact_path}</span> : null}
               {record.error ? <span className="text-destructive">{record.error}</span> : null}
             </div>
@@ -305,4 +333,20 @@ function ObservationList({
       </div>
     </div>
   );
+}
+
+function detailSourceSummary(observable: ObservableDetailResponse["observable"]): string {
+  if (observable.source_type === "schedule") {
+    return observable.schedule?.summary || "schedule";
+  }
+  return [observable.command, ...(observable.args ?? [])]
+    .filter(Boolean)
+    .join(" ") || "command";
+}
+
+function formatDateTime(iso?: string): string {
+  if (!iso) return "-";
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return iso;
+  return date.toLocaleString();
 }

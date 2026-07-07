@@ -46,7 +46,7 @@ func observableTools(manager *Manager) []tools.Tool {
 		},
 		{
 			Name:        "observable_create",
-			Description: "Create a workspace-local Observable, write .juex/observables.json, and start it immediately. Call observable_list before creating; avoid duplicate or near-duplicate Observables. Prefer JSONL parsers for structured event commands and filters for high-volume commands. Stopping is temporary. Deleting is permanent.",
+			Description: "Create a workspace-local Observable with a command or schedule source, write .juex/observables.json, and start it immediately. Call observable_list before creating; avoid duplicate or near-duplicate Observables. For heartbeat or reminder needs, prefer source.type=\"schedule\" instead of creating a command wrapper. Prefer JSONL parsers for structured event commands and filters for high-volume commands. Stopping is temporary. Deleting is permanent.",
 			Schema:      specSchema(),
 			Handler: func(ctx context.Context, in map[string]any) (string, error) {
 				var spec Spec
@@ -145,15 +145,17 @@ func observableTools(manager *Manager) []tools.Tool {
 func specSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []any{"id", "command", "batch"},
+		"required": []any{"id"},
 		"properties": map[string]any{
-			"id":      map[string]any{"type": "string"},
-			"name":    map[string]any{"type": "string"},
-			"command": map[string]any{"type": "string"},
-			"args":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"cwd":     map[string]any{"type": "string"},
-			"env":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
-			"streams": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"stdout", "stderr"}}},
+			"id":          map[string]any{"type": "string"},
+			"name":        map[string]any{"type": "string"},
+			"source":      sourceSchema(),
+			"observation": observationSchema(),
+			"command":     map[string]any{"type": "string"},
+			"args":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"cwd":         map[string]any{"type": "string"},
+			"env":         map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"streams":     streamSchema(),
 			"defaults": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -161,27 +163,92 @@ func specSchema() map[string]any {
 					"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
 				},
 			},
-			"parser": map[string]any{
+			"parser":  parserSchema(),
+			"filters": map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+			"batch":   batchSchema(),
+		},
+	}
+}
+
+func sourceSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []any{"type"},
+		"properties": map[string]any{
+			"type":     map[string]any{"type": "string", "enum": []any{SourceTypeCommand, SourceTypeSchedule}},
+			"command":  map[string]any{"type": "string"},
+			"args":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"cwd":      map[string]any{"type": "string"},
+			"env":      map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"streams":  streamSchema(),
+			"parser":   parserSchema(),
+			"filters":  map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+			"batch":    batchSchema(),
+			"on_exit":  map[string]any{"type": "object", "properties": map[string]any{"notify": map[string]any{"type": "string", "enum": []any{"never", "always", "nonzero"}}}},
+			"timezone": map[string]any{"type": "string", "description": "IANA timezone for daily schedules, for example Asia/Shanghai"},
+			"once": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"at": map[string]any{"type": "string", "description": "RFC3339 timestamp with timezone"}},
+			},
+			"daily": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"type":           map[string]any{"type": "string", "enum": []any{"text", "jsonl"}},
-					"content_field":  map[string]any{"type": "string"},
-					"kind_field":     map[string]any{"type": "string"},
-					"severity_field": map[string]any{"type": "string"},
-					"time_field":     map[string]any{"type": "string"},
+					"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^\\d\\d:\\d\\d$"}},
+					"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}}},
 				},
 			},
-			"filters": map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
-			"batch": map[string]any{
-				"type":     "object",
-				"required": []any{"interval_seconds", "max_chars"},
+			"interval": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"every_seconds": map[string]any{"type": "integer", "minimum": MinIntervalScheduleSecond}},
+			},
+			"catch_up": map[string]any{
+				"type": "object",
 				"properties": map[string]any{
-					"interval_seconds": map[string]any{"type": "integer", "minimum": MinBatchIntervalSeconds, "maximum": MaxBatchIntervalSeconds},
-					"max_chars":        map[string]any{"type": "integer", "minimum": 1, "maximum": MaxBatchChars},
+					"mode":                 map[string]any{"type": "string", "enum": []any{ScheduleCatchUpNone, ScheduleCatchUpLatest}},
+					"max_lateness_minutes": map[string]any{"type": "integer", "minimum": 1, "maximum": 1440},
 				},
 			},
 		},
 	}
+}
+
+func observationSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"kind":     map[string]any{"type": "string"},
+			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
+			"content":  map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
+		},
+	}
+}
+
+func parserSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"type":           map[string]any{"type": "string", "enum": []any{"text", "jsonl"}},
+			"content_field":  map[string]any{"type": "string"},
+			"kind_field":     map[string]any{"type": "string"},
+			"severity_field": map[string]any{"type": "string"},
+			"time_field":     map[string]any{"type": "string"},
+		},
+	}
+}
+
+func batchSchema() map[string]any {
+	return map[string]any{
+		"type":     "object",
+		"required": []any{"interval_seconds", "max_chars"},
+		"properties": map[string]any{
+			"interval_seconds": map[string]any{"type": "integer", "minimum": MinBatchIntervalSeconds, "maximum": MaxBatchIntervalSeconds},
+			"max_chars":        map[string]any{"type": "integer", "minimum": 1, "maximum": MaxBatchChars},
+		},
+	}
+}
+
+func streamSchema() map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"stdout", "stderr"}}}
 }
 
 func jsonString(value any) (string, error) {

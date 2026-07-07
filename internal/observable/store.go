@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,6 +46,7 @@ type ObservationRecord struct {
 	ID             string    `json:"id"`
 	ObservableID   string    `json:"observable_id"`
 	RunID          string    `json:"run_id,omitempty"`
+	SourceEventID  string    `json:"source_event_id,omitempty"`
 	Kind           string    `json:"kind"`
 	Severity       string    `json:"severity"`
 	Stream         string    `json:"stream,omitempty"`
@@ -60,6 +62,15 @@ type ObservationRecord struct {
 	CreatedAt      time.Time `json:"created_at"`
 	DeliveredAt    time.Time `json:"delivered_at,omitempty"`
 	Error          string    `json:"error,omitempty"`
+}
+
+type ScheduleStateRecord struct {
+	ObservableID           string    `json:"observable_id"`
+	Deleted                bool      `json:"deleted,omitempty"`
+	Paused                 bool      `json:"paused,omitempty"`
+	LastEvaluatedAt        time.Time `json:"last_evaluated_at,omitempty"`
+	LastEmittedScheduledAt time.Time `json:"last_emitted_scheduled_at,omitempty"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 type StoreOptions struct {
@@ -191,6 +202,109 @@ func (s *Store) ListObservations(filter ObservationFilter) ([]ObservationRecord,
 	return out, nil
 }
 
+func (s *Store) FindObservationBySourceEventID(sourceEventID string) (ObservationRecord, bool, error) {
+	if s == nil || sourceEventID == "" {
+		return ObservationRecord{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	if err != nil {
+		return ObservationRecord{}, false, err
+	}
+	for _, record := range records {
+		if record.SourceEventID == sourceEventID {
+			return record, true, nil
+		}
+	}
+	return ObservationRecord{}, false, nil
+}
+
+func (s *Store) DropRecordedScheduleObservations(observableID string, reason string) error {
+	if s == nil {
+		return fmt.Errorf("observable store: nil")
+	}
+	observableID = stringsTrimSpace(observableID)
+	if observableID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := filepath.Join(s.root, "observations.jsonl")
+	records, err := loadObservations(path)
+	if err != nil {
+		return err
+	}
+	prefix := scheduleSourceEventPrefix(observableID)
+	for _, record := range records {
+		if record.ObservableID != observableID || record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, prefix) {
+			continue
+		}
+		record.State = ObservationStateDropped
+		record.Error = reason
+		if err := appendJSONL(path, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) LatestScheduleStates() (map[string]ScheduleStateRecord, error) {
+	if s == nil {
+		return map[string]ScheduleStateRecord{}, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]ScheduleStateRecord{}
+	err := readJSONL(filepath.Join(s.root, "schedule_state.jsonl"), func(record ScheduleStateRecord) {
+		if record.ObservableID == "" {
+			return
+		}
+		if record.Deleted {
+			delete(out, record.ObservableID)
+			return
+		}
+		out[record.ObservableID] = record
+	})
+	return out, err
+}
+
+func (s *Store) ScheduleState(id string) (ScheduleStateRecord, bool, error) {
+	states, err := s.LatestScheduleStates()
+	if err != nil {
+		return ScheduleStateRecord{}, false, err
+	}
+	record, ok := states[id]
+	return record, ok, nil
+}
+
+func (s *Store) RecordScheduleState(record ScheduleStateRecord) error {
+	if s == nil {
+		return fmt.Errorf("observable store: nil")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if record.UpdatedAt.IsZero() {
+		record.UpdatedAt = s.now().UTC()
+	}
+	return appendJSONL(filepath.Join(s.root, "schedule_state.jsonl"), record)
+}
+
+func (s *Store) ClearScheduleState(id string) error {
+	if s == nil {
+		return fmt.Errorf("observable store: nil")
+	}
+	id = stringsTrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	return s.RecordScheduleState(ScheduleStateRecord{
+		ObservableID: id,
+		Deleted:      true,
+		UpdatedAt:    s.now().UTC(),
+	})
+}
+
 func (s *Store) ArtifactPath(observableID, observationID string) string {
 	if s == nil {
 		return ""
@@ -199,6 +313,10 @@ func (s *Store) ArtifactPath(observableID, observationID string) string {
 }
 
 func BuildObservationID(record ObservationRecord) string {
+	if record.SourceEventID != "" {
+		sum := sha256.Sum256([]byte(record.ObservableID + "\x00" + record.SourceEventID))
+		return "obs-" + hex.EncodeToString(sum[:8])
+	}
 	contentHash := sha256.Sum256([]byte(record.Content))
 	key := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
 		record.ObservableID,

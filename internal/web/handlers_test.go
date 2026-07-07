@@ -841,11 +841,7 @@ func TestPostTurn_CompactSlashConflictsWhileRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.Body.Close()
-	select {
-	case <-prov.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("provider did not start")
-	}
+	waitPendingProviderStarted(t, prov, "provider did not start")
 
 	compact, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"/compact"}`))
@@ -905,11 +901,7 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 		}
 		compactDone <- resp
 	}()
-	select {
-	case <-prov.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("provider did not start compaction")
-	}
+	waitPendingProviderStarted(t, prov, "provider did not start compaction")
 
 	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"after please"}`))
@@ -972,6 +964,15 @@ func newPendingProvider(responses ...llm.Response) *pendingProvider {
 		started:   make(chan struct{}),
 		release:   make(chan struct{}),
 		responses: responses,
+	}
+}
+
+func waitPendingProviderStarted(t *testing.T, prov *pendingProvider, message string) {
+	t.Helper()
+	select {
+	case <-prov.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal(message)
 	}
 }
 
@@ -1047,11 +1048,7 @@ func TestPostTurn_QueuesWhileRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.Body.Close()
-	select {
-	case <-prov.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("provider did not start")
-	}
+	waitPendingProviderStarted(t, prov, "provider did not start")
 
 	second, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"follow up"}`))

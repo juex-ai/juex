@@ -192,14 +192,16 @@ arbitrary user paths outside the workspace. Unsupported platforms, missing
 helpers, permissions errors, or policies a backend cannot enforce fail closed
 instead of falling back to unsandboxed execution.
 
-Workspace Observables are command-backed event sources configured in
+Workspace Observables are source-backed event sources configured in
 `.juex/observables.json`. Juex starts configured Observables with the active
-primary app, captures bounded stdout/stderr batches, stores durable
-Observations under `.juex/observables/`, delivers them as external pending
-input to the active primary session, emits `observable.*` and `observation.*`
-events, and exposes status/history through the Web UI and the
-`observable_*` agent tools. Observables are workspace-local in the first
-version because they auto-start commands.
+primary app, stores durable Observations under `.juex/observables/`, delivers
+them as external pending input to the active primary session, emits
+`observable.*` and `observation.*` events, and exposes status/history through
+the Web UI and the `observable_*` agent tools. Command sources capture bounded
+stdout/stderr batches from managed commands. Schedule sources emit one-shot,
+daily, or interval Observations without an external wrapper and persist
+schedule state under `.juex/observables/`. Observables are workspace-local in
+the first version.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status note:** This plan describes the first command-source Observables
+milestone. The follow-up schedule-source work in
+`docs/superpowers/specs/2026-07-07-observable-schedule-sources.md` extends
+Observables into a source-backed model with both command and schedule sources.
+
 **Goal:** Build JueX Observables: workspace-local command sources that emit durable, bounded Observations into the active primary session.
 
 **Architecture:** Add a focused `internal/observable` package for config, process lifecycle, parsing, batching, persistence, and management tools. Compose it from `internal/app`, deliver Observations through the existing runtime pending-input path, and expose list/detail/control surfaces through Web and frontend.

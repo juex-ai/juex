@@ -562,6 +562,323 @@ func TestManager_EmitsLifecycleAndObservationEvents(t *testing.T) {
 	})
 }
 
+func TestManager_ScheduleSourceDeliversOnceObservation(t *testing.T) {
+	dir := t.TempDir()
+	spec := scheduleOnceSpec("check-deploy", time.Now().UTC().Add(150*time.Millisecond))
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		deliveredMu.Lock()
+		defer deliveredMu.Unlock()
+		return len(delivered) == 1
+	})
+	deliveredMu.Lock()
+	got := delivered[0]
+	deliveredMu.Unlock()
+	if got.SourceEventID == "" || got.Kind != "reminder" || got.Content != "Check deployment status." {
+		t.Fatalf("scheduled observation = %+v", got)
+	}
+	status, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.SourceType != observable.SourceTypeSchedule || status.Schedule == nil {
+		t.Fatalf("schedule status = %+v", status)
+	}
+}
+
+func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	scheduledAt := fixedTime.Add(-time.Minute)
+	spec := scheduleOnceSpec("catch-up-once", scheduledAt)
+	spec.Source.CatchUp = observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10}
+	writeObservableConfig(t, dir, spec)
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    spec.ID,
+		LastEvaluatedAt: fixedTime.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var firstMu sync.Mutex
+	var firstDelivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        fixedNow,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			firstMu.Lock()
+			defer firstMu.Unlock()
+			firstDelivered = append(firstDelivered, record)
+			store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
+			return store.UpdateObservation(record.ID, func(record observable.ObservationRecord) observable.ObservationRecord {
+				record.State = observable.ObservationStateDelivered
+				return record
+			})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, asyncWaitTimeout, func() bool {
+		firstMu.Lock()
+		defer firstMu.Unlock()
+		return len(firstDelivered) == 1
+	})
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var secondMu sync.Mutex
+	var secondDelivered []observable.ObservationRecord
+	mgr2, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        fixedNow,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			secondMu.Lock()
+			defer secondMu.Unlock()
+			secondDelivered = append(secondDelivered, record)
+			store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
+			return store.UpdateObservation(record.ID, func(record observable.ObservationRecord) observable.ObservationRecord {
+				record.State = observable.ObservationStateDelivered
+				return record
+			})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr2.Close() }()
+	if err := mgr2.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	secondMu.Lock()
+	gotSecond := len(secondDelivered)
+	secondMu.Unlock()
+	if gotSecond != 0 {
+		t.Fatalf("second startup delivered %d observations, want 0", gotSecond)
+	}
+}
+
+func TestManager_DeleteClearsScheduleStateBeforeRecreate(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC().Add(5 * time.Second)
+	spec := observable.Spec{
+		ID: "recreate-schedule",
+		Source: observable.SourceSpec{
+			Type:     observable.SourceTypeSchedule,
+			Interval: &observable.IntervalSchedule{EverySeconds: 60},
+			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
+		},
+		Observation: observable.ObservationSpec{
+			Kind:     "reminder",
+			Severity: "info",
+			Content:  "Recreated schedule should not inherit old cursor.",
+		},
+	}
+	writeObservableConfig(t, dir, spec)
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    spec.ID,
+		LastEvaluatedAt: now.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	staleRecord, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID:  spec.ID,
+		SourceEventID: "schedule:" + spec.ID + ":" + now.Add(-time.Minute).Format(time.RFC3339Nano),
+		Kind:          "reminder",
+		Severity:      "info",
+		WindowStart:   now.Add(-time.Minute),
+		WindowEnd:     now.Add(-time.Minute),
+		Content:       "Stale reminder from deleted schedule.",
+		State:         observable.ObservationStateRecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        func() time.Time { return now },
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Delete(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if state, ok, err := store.ScheduleState(spec.ID); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("schedule state after delete = %+v, want cleared", state)
+	}
+	records, err := store.ListObservations(observable.ObservationFilter{ObservableID: spec.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].ID != staleRecord.ID || records[0].State != observable.ObservationStateDropped {
+		t.Fatalf("stale observations after delete = %+v, want dropped %s", records, staleRecord.ID)
+	}
+	if _, err := mgr.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	deliveredMu.Lock()
+	gotDelivered := len(delivered)
+	deliveredMu.Unlock()
+	if gotDelivered != 0 {
+		t.Fatalf("recreated schedule delivered %d stale catch-up observations, want 0", gotDelivered)
+	}
+}
+
+func TestManager_StoppedScheduleRestartsWithoutCatchUp(t *testing.T) {
+	dir := t.TempDir()
+	startedAt := time.Now().UTC().Add(5 * time.Second)
+	now := startedAt
+	spec := observable.Spec{
+		ID: "paused-schedule",
+		Source: observable.SourceSpec{
+			Type:     observable.SourceTypeSchedule,
+			Interval: &observable.IntervalSchedule{EverySeconds: 60},
+			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
+		},
+		Observation: observable.ObservationSpec{Kind: "reminder", Severity: "info", Content: "Paused schedules should not catch up."},
+	}
+	writeObservableConfig(t, dir, spec)
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        func() time.Time { return now },
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	now = startedAt.Add(30 * time.Second)
+	if err := mgr.Stop(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
+	state, ok, err := store.ScheduleState(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !state.Paused {
+		t.Fatalf("state after stop = %+v ok=%v, want paused", state, ok)
+	}
+	now = startedAt.Add(2 * time.Minute)
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	deliveredMu.Lock()
+	gotDelivered := len(delivered)
+	deliveredMu.Unlock()
+	if gotDelivered != 0 {
+		t.Fatalf("restart delivered %d catch-up observations, want 0", gotDelivered)
+	}
+	state, ok, err = store.ScheduleState(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || state.Paused || !state.LastEvaluatedAt.Equal(now) || !state.LastEmittedScheduledAt.IsZero() {
+		t.Fatalf("state after restart = %+v ok=%v, want unpaused baseline at restart", state, ok)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManager_IntervalStartupPreservesFirstBaselineBeforeEmission(t *testing.T) {
+	dir := t.TempDir()
+	baseline := time.Now().UTC().Add(2 * time.Second)
+	now := baseline.Add(30 * time.Second)
+	spec := observable.Spec{
+		ID: "interval-baseline",
+		Source: observable.SourceSpec{
+			Type:     observable.SourceTypeSchedule,
+			Interval: &observable.IntervalSchedule{EverySeconds: 60},
+			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
+		},
+		Observation: observable.ObservationSpec{Content: "Check deployment status."},
+	}
+	writeObservableConfig(t, dir, spec)
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    spec.ID,
+		LastEvaluatedAt: baseline,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	state, ok, err := store.ScheduleState(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !state.LastEvaluatedAt.Equal(baseline) || !state.LastEmittedScheduledAt.IsZero() {
+		t.Fatalf("schedule state = %+v ok=%v, want baseline preserved before first emission", state, ok)
+	}
+}
+
 func TestManager_SandboxRunnerInvoked(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("sandboxed", "json-once")
@@ -663,6 +980,24 @@ func helperSpec(id, mode string) observable.Spec {
 		SeverityField: "level",
 	}
 	return spec
+}
+
+func scheduleOnceSpec(id string, at time.Time) observable.Spec {
+	return observable.Spec{
+		ID: id,
+		Source: observable.SourceSpec{
+			Type: observable.SourceTypeSchedule,
+			Once: &observable.OnceSchedule{
+				At: at.UTC().Format(time.RFC3339Nano),
+			},
+			CatchUp: observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
+		},
+		Observation: observable.ObservationSpec{
+			Kind:     "reminder",
+			Severity: "info",
+			Content:  "Check deployment status.",
+		},
+	}
 }
 
 func TestObservableHelperProcess(t *testing.T) {
