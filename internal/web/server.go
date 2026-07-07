@@ -63,8 +63,10 @@ type activeSession struct {
 	bcast     *broadcaster
 	StartedAt time.Time
 
-	turns  *webTurnTransport
-	workWG sync.WaitGroup
+	turns      *webTurnTransport
+	workCtx    context.Context
+	workCancel context.CancelFunc
+	workWG     sync.WaitGroup
 }
 
 func NewServer(opts Options) *Server {
@@ -218,6 +220,54 @@ func waitForStartup(done <-chan struct{}, timeout time.Duration) {
 	}
 }
 
+func (as *activeSession) cancelWork() {
+	if as == nil || as.workCancel == nil {
+		return
+	}
+	as.workCancel()
+}
+
+func (as *activeSession) close() {
+	if as == nil {
+		return
+	}
+	as.cancelWork()
+	if as.turns != nil {
+		as.turns.close()
+	}
+	as.workWG.Wait()
+	if as.bcast != nil {
+		as.bcast.close()
+	}
+	if as.app != nil {
+		as.app.Close()
+	}
+}
+
+// workContext ties server-origin work, such as MCP notifications, to session shutdown.
+func (as *activeSession) workContext(parent context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if as != nil && as.workCtx != nil {
+		base = as.workCtx
+	}
+	ctx, cancel := context.WithCancel(base)
+	if parent == nil {
+		return ctx, cancel
+	}
+	if err := parent.Err(); err != nil {
+		cancel()
+		return ctx, cancel
+	}
+	go func() {
+		select {
+		case <-parent.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	return ctx, cancel
+}
+
 // Close cancels running turns and releases every active session.
 func (s *Server) Close() {
 	s.createMu.Lock()
@@ -230,13 +280,13 @@ func (s *Server) Close() {
 	}
 	s.closed = true
 	s.closeMu.Unlock()
+	s.sessions.Range(func(_, v any) bool {
+		v.(*activeSession).cancelWork()
+		return true
+	})
 	s.closeMCPManager()
 	s.sessions.Range(func(_, v any) bool {
-		as := v.(*activeSession)
-		as.turns.close()
-		as.workWG.Wait()
-		as.bcast.close()
-		as.app.Close()
+		v.(*activeSession).close()
 		return true
 	})
 }
@@ -246,11 +296,7 @@ func (s *Server) closeActiveSession(id string) bool {
 	if !ok {
 		return false
 	}
-	as := v.(*activeSession)
-	as.turns.close()
-	as.workWG.Wait()
-	as.bcast.close()
-	as.app.Close()
+	v.(*activeSession).close()
 	return true
 }
 
@@ -328,10 +374,13 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		s.logVerbose("juex serve: open session failed: %v", err)
 		return nil, err
 	}
+	workCtx, workCancel := context.WithCancel(context.Background())
 	as := &activeSession{
-		app:       a,
-		bcast:     newBroadcaster(),
-		StartedAt: time.Now(),
+		app:        a,
+		bcast:      newBroadcaster(),
+		StartedAt:  time.Now(),
+		workCtx:    workCtx,
+		workCancel: workCancel,
 	}
 	as.turns = newWebTurnTransport(a)
 	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
@@ -417,7 +466,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 			queuedMu.Unlock()
 			return
 		}
-		if err := s.handleMCPNotification(context.Background(), n); err != nil {
+		if err := s.handleMCPNotification(ctx, n); err != nil {
 			s.logVerbose("juex serve: MCP notification dropped: %v", err)
 		}
 	}
@@ -503,10 +552,12 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 		s.createMu.Unlock()
 		return context.Canceled
 	}
+	workCtx, cancel := as.workContext(ctx)
 	as.workWG.Add(1)
 	s.createMu.Unlock()
 	defer as.workWG.Done()
-	return as.app.HandleMCPNotification(ctx, n)
+	defer cancel()
+	return as.app.HandleMCPNotification(workCtx, n)
 }
 
 func (s *Server) activePrimarySessionID() (string, bool, error) {
