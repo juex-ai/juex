@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -514,6 +515,9 @@ func (m *Manager) evaluateScheduleStartup(ctx context.Context, run *observableRu
 	if m == nil || run == nil || m.store == nil {
 		return nil
 	}
+	if err := m.recoverRecordedScheduleObservations(ctx, run); err != nil {
+		return err
+	}
 	now := m.now()
 	state, ok, err := m.store.ScheduleState(run.id)
 	if err != nil {
@@ -544,6 +548,29 @@ func (m *Manager) evaluateScheduleStartup(ctx context.Context, run *observableRu
 
 func shouldPreserveIntervalStartupBaseline(spec Spec, state ScheduleStateRecord) bool {
 	return spec.Source.Interval != nil && !state.LastEvaluatedAt.IsZero() && state.LastEmittedScheduledAt.IsZero()
+}
+
+func (m *Manager) recoverRecordedScheduleObservations(ctx context.Context, run *observableRun) error {
+	if m == nil || run == nil || m.store == nil || m.opts.Deliver == nil {
+		return nil
+	}
+	records, err := m.store.ListObservations(ObservationFilter{ObservableID: run.id})
+	if err != nil {
+		return err
+	}
+	deliverCtx := context.Background()
+	if ctx != nil {
+		deliverCtx = context.WithoutCancel(ctx)
+	}
+	prefix := "schedule:" + run.id + ":"
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		if record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, prefix) {
+			continue
+		}
+		_ = m.deliverObservation(deliverCtx, record)
+	}
+	return nil
 }
 
 func (m *Manager) scheduleLoop(run *observableRun) {

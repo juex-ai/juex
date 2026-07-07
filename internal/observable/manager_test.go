@@ -630,7 +630,11 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 			firstMu.Lock()
 			defer firstMu.Unlock()
 			firstDelivered = append(firstDelivered, record)
-			return nil
+			store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
+			return store.UpdateObservation(record.ID, func(record observable.ObservationRecord) observable.ObservationRecord {
+				record.State = observable.ObservationStateDelivered
+				return record
+			})
 		},
 	})
 	if err != nil {
@@ -658,7 +662,11 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 			secondMu.Lock()
 			defer secondMu.Unlock()
 			secondDelivered = append(secondDelivered, record)
-			return nil
+			store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
+			return store.UpdateObservation(record.ID, func(record observable.ObservationRecord) observable.ObservationRecord {
+				record.State = observable.ObservationStateDelivered
+				return record
+			})
 		},
 	})
 	if err != nil {
