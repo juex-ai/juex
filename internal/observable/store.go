@@ -170,11 +170,26 @@ func (r *ObservationRecord) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func normalizeObservationRecordTimes(record ObservationRecord) ObservationRecord {
+	record.WindowStart = normalizeObservationTime(record.WindowStart)
+	record.WindowEnd = normalizeObservationTime(record.WindowEnd)
+	record.CreatedAt = normalizeObservationTime(record.CreatedAt)
+	record.DeliveredAt = normalizeObservationTime(record.DeliveredAt)
+	return record
+}
+
+func normalizeObservationTime(value time.Time) time.Time {
+	if value.IsZero() {
+		return time.Time{}
+	}
+	return value.UTC().Truncate(time.Millisecond)
+}
+
 func observationUnixMilli(value time.Time) int64 {
 	if value.IsZero() {
 		return 0
 	}
-	return value.UnixMilli()
+	return normalizeObservationTime(value).UnixMilli()
 }
 
 func (t *observationJSONTime) UnmarshalJSON(data []byte) error {
@@ -266,6 +281,7 @@ func (s *Store) RecordObservation(record ObservationRecord) (ObservationRecord, 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record = normalizeObservationRecordTimes(record)
 	if record.ID == "" {
 		record.ID = BuildObservationID(record)
 	}
@@ -275,6 +291,7 @@ func (s *Store) RecordObservation(record ObservationRecord) (ObservationRecord, 
 	if record.CreatedAt.IsZero() {
 		record.CreatedAt = s.now().UTC()
 	}
+	record = normalizeObservationRecordTimes(record)
 	if record.OriginalChars == 0 {
 		record.OriginalChars = len([]rune(record.Content))
 	}
@@ -306,7 +323,7 @@ func (s *Store) UpdateObservation(id string, update func(ObservationRecord) Obse
 	if !ok {
 		return ErrObservationNotFound
 	}
-	updated := update(record)
+	updated := normalizeObservationRecordTimes(update(record))
 	if updated.ID == "" {
 		updated.ID = id
 	}

@@ -187,6 +187,39 @@ func TestStore_RecordObservationPersistsUnixMillisecondTimestamps(t *testing.T) 
 	}
 }
 
+func TestStore_RecordObservationNormalizesTimesBeforeBuildingID(t *testing.T) {
+	root := t.TempDir()
+	store := observable.NewStore(root, observable.StoreOptions{Now: fixedNow})
+	windowStart := fixedTime.Add(123456 * time.Nanosecond)
+	windowEnd := fixedTime.Add(10*time.Second + 987654*time.Nanosecond)
+	record, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID: "lark-events",
+		RunID:        "run-1",
+		Kind:         "lark_notification",
+		Severity:     "info",
+		WindowStart:  windowStart,
+		WindowEnd:    windowEnd,
+		Content:      "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.WindowStart.Equal(windowStart.UTC().Truncate(time.Millisecond)) ||
+		!record.WindowEnd.Equal(windowEnd.UTC().Truncate(time.Millisecond)) {
+		t.Fatalf("record times were not normalized: %+v", record)
+	}
+	loaded, err := store.ListObservations(observable.ObservationFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded observations = %+v", loaded)
+	}
+	if loaded[0].ID != record.ID || observable.BuildObservationID(loaded[0]) != record.ID {
+		t.Fatalf("loaded observation id = %q, record id = %q", loaded[0].ID, record.ID)
+	}
+}
+
 func TestStore_RecordObservationDeduplicatesSourceEventID(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
 	rec := observable.ObservationRecord{

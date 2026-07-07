@@ -312,8 +312,16 @@ export function StateBadge({ state }: { state: string }) {
   );
 }
 
-export function humanAgo(value?: number | string): string {
-  if (value === undefined || value === "") return "-";
+export function humanAgo(value?: number | string | null): string {
+  if (
+    value === undefined ||
+    value === null ||
+    value === "" ||
+    value === 0 ||
+    value === "0"
+  ) {
+    return "-";
+  }
   const t = new Date(value).getTime();
   if (!Number.isFinite(t)) return String(value);
   const diff = Date.now() - t;

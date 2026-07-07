@@ -1,7 +1,15 @@
 export type ObservationTimestamp = number | string | null | undefined;
 
 export function formatObservationTimestamp(value: ObservationTimestamp): string {
-  if (value === null || value === undefined || value === "") return "-";
+  if (
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    value === 0 ||
+    value === "0"
+  ) {
+    return "-";
+  }
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return String(value);
   const dateText = [

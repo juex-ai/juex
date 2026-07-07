@@ -24,5 +24,7 @@ test("formatObservationWindow renders a local second-precision range", () => {
 
 test("formatObservationTimestamp keeps invalid values visible", () => {
   assert.equal(formatObservationTimestamp(undefined), "-");
+  assert.equal(formatObservationTimestamp(0), "-");
+  assert.equal(formatObservationTimestamp("0"), "-");
   assert.equal(formatObservationTimestamp("not-a-date"), "not-a-date");
 });

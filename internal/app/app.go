@@ -612,8 +612,8 @@ func observationMessage(record observable.ObservationRecord) (llm.Message, error
 		ObservableID:    record.ObservableID,
 		Severity:        record.Severity,
 		ObservationKind: record.Kind,
-		WindowStart:     record.WindowStart.UnixMilli(),
-		WindowEnd:       record.WindowEnd.UnixMilli(),
+		WindowStart:     observationTimeMillis(record.WindowStart),
+		WindowEnd:       observationTimeMillis(record.WindowEnd),
 		Content:         record.Content,
 		Truncated:       record.Truncated,
 		ArtifactPath:    record.ArtifactPath,
@@ -624,6 +624,13 @@ func observationMessage(record observable.ObservationRecord) (llm.Message, error
 	msg := llm.TextMessage(llm.RoleUser, string(body))
 	msg.Kind = llm.MessageKindObservation
 	return msg, nil
+}
+
+func observationTimeMillis(value time.Time) int64 {
+	if value.IsZero() {
+		return 0
+	}
+	return value.UTC().Truncate(time.Millisecond).UnixMilli()
 }
 
 func observationPendingInputID(record observable.ObservationRecord) string {
