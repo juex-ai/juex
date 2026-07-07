@@ -369,7 +369,7 @@ func successRatesFromSessionStats(stats session.RuntimeStats) StatusSuccessRates
 func formatModelSnapshot(p ProviderStatusSnapshot) string {
 	switch {
 	case p.ID != "" && p.Model != "":
-		return p.ID + "/" + p.Model
+		return p.ID + ":" + p.Model
 	case p.Model != "":
 		return p.Model
 	case p.ID != "":

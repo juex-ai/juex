@@ -167,7 +167,7 @@ func newRootCmd() *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
-	cmd.PersistentFlags().StringVar(&flags.model, "model", "", "model override in provider_id/model_id form")
+	cmd.PersistentFlags().StringVar(&flags.model, "model", "", "model override in provider_id:model_id form")
 	cmd.PersistentFlags().StringVar(&flags.enableUserGlobalResources, "enable-user-global-resources", "", "enable user-global ~/.agents resources (true/false or 1/0; default from config)")
 	if flag := cmd.PersistentFlags().Lookup("enable-user-global-resources"); flag != nil {
 		flag.NoOptDefVal = "true"

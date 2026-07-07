@@ -33,7 +33,7 @@ help:
 	@echo "  snapshot      goreleaser cross-platform snapshot (dist/)"
 	@echo "  release-dry   goreleaser release without publishing"
 	@echo "  integration   go test -tags=integration ./tests/e2e/..."
-	@echo "  provider-smoke live rotating provider/model smoke from tests/eval/live-models.yaml"
+	@echo "  provider-smoke live rotating provider:model smoke from tests/eval/live-models.yaml"
 	@echo "  development-eval standard post-development validation record"
 	@echo "  clean         remove dist/"
 

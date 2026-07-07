@@ -109,7 +109,7 @@ def default_report_dir(kind: str, run_id: str) -> pathlib.Path:
 def provider_smoke(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="provider_model_smoke.sh",
-        description="Run live multi-turn smoke tests for selected provider/model refs.",
+        description="Run live multi-turn smoke tests for selected provider:model refs.",
     )
     parser.add_argument("--juex", default=env_default("JUEX_BIN", default_juex_bin()))
     parser.add_argument("--config", default=env_default("JUEX_PROVIDER_CONFIG", str(pathlib.Path.home() / ".juex" / "juex.yaml")))
@@ -124,7 +124,7 @@ def provider_smoke(argv: list[str]) -> int:
         "--all-config-models",
         action="store_true",
         default=env_bool("JUEX_PROVIDER_SMOKE_ALL_CONFIG_MODELS"),
-        help="Run every provider/model found in the provider config.",
+        help="Run every provider:model found in the provider config.",
     )
     parser.add_argument("--work-root", default=env_default("JUEX_PROVIDER_SMOKE_ROOT", ""))
     parser.add_argument("--report-dir", default=env_default("JUEX_PROVIDER_SMOKE_REPORT_DIR", ""))
@@ -360,7 +360,7 @@ def enumerate_provider_matrix(cfg: dict[str, Any]) -> list[MatrixRow]:
                     reasoning_effort_capability=reasoning_effort,
                     tools_capability=tools,
                     thinking_effort=thinking_effort,
-                    ref=f"{provider_id}/{model_id}",
+                    ref=f"{provider_id}:{model_id}",
                 )
             )
     return rows
@@ -758,7 +758,7 @@ def write_selected_config(
         capabilities["tools"] = False
         provider["capabilities"] = capabilities
     out: dict[str, Any] = {
-        "model": f"{provider_id}/{model_id}",
+        "model": f"{provider_id}:{model_id}",
         "enable_user_global_resources": False,
         "providers": [provider],
     }
@@ -779,7 +779,7 @@ def selected_provider_model(cfg: dict[str, Any], provider_id: str, model_id: str
         for model in provider.get("models") or []:
             if model_id_from(model) == model_id:
                 return provider, model
-        raise ValueError(f"model not found: {provider_id}/{model_id}")
+        raise ValueError(f"model not found: {provider_id}:{model_id}")
     raise ValueError(f"provider not found: {provider_id}")
 
 

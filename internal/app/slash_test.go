@@ -158,14 +158,14 @@ func TestStatusSnapshotTextUsesCompactModelAndCacheHit(t *testing.T) {
 		},
 	}).Text()
 	for _, want := range []string{
-		statusLabel(statusIconProvider, "model: ark/deepseek-v4-pro"),
+		statusLabel(statusIconProvider, "model: ark:deepseek-v4-pro"),
 		statusLabel(statusIconContext, "context: 32047/256000 tokens, cache hit 37.5%"),
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
 		}
 	}
-	for _, notWant := range []string{"openai/chat", "ark:deepseek-v4-pro", "https://ark.cn-beijing.volces.com"} {
+	for _, notWant := range []string{"openai/chat", "https://ark.cn-beijing.volces.com"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("status text should not include %q:\n%s", notWant, text)
 		}

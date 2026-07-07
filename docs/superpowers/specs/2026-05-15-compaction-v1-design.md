@@ -48,7 +48,7 @@ That is the right storage baseline, but it has three practical gaps:
 - No deletion or rewriting of old transcript lines.
 - No full OpenClaw-style ContextEngine, plugin hook system, checkpoint system,
   or provider-owned compaction lifecycle.
-- No complete provider/model catalog. This change continues to use
+- No complete provider and model catalog. This change continues to use
   `provider.context_window` as the primary configured limit.
 - No guarantee that every third-party provider has an optimal token strategy.
   V1 should be stable, observable, and easy to refine.
