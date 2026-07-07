@@ -5,8 +5,10 @@ import {
   aggregateToolProcessStatus,
   compactThinkingPreview,
   formatToolBatchTitle,
+  formatToolProcessResultText,
   toolDisplayName,
   toolProcessStatus,
+  toolProcessStatusLabel,
   toolStatusLabel,
   toolTimeoutLabel,
 } from "../../frontend/src/lib/tool-display.ts";
@@ -35,6 +37,9 @@ test("tool process status maps UI states to compact indicators", () => {
   assert.equal(toolProcessStatus("input-available"), "running");
   assert.equal(toolProcessStatus("output-error"), "failed");
   assert.equal(toolProcessStatus("output-available"), "done");
+  assert.equal(toolProcessStatusLabel("running"), "running");
+  assert.equal(toolProcessStatusLabel("failed"), "failed");
+  assert.equal(toolProcessStatusLabel("done"), "success");
 });
 
 test("aggregateToolProcessStatus prioritizes running over failed over done", () => {
@@ -69,4 +74,13 @@ test("compactThinkingPreview truncates after twenty characters", () => {
     "inspect current layo...",
   );
   assert.equal(compactThinkingPreview("short thought"), "short thought");
+});
+
+test("formatToolProcessResultText caps large process output", () => {
+  assert.equal(
+    formatToolProcessResultText("alpha\n".repeat(140)).includes(
+      "[tool result truncated:",
+    ),
+    true,
+  );
 });

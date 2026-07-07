@@ -1,4 +1,5 @@
 import type { ToolUIPartState } from "../components/ai-elements/_local-types";
+import { formatToolResultText } from "./tool-result-output.ts";
 
 const STATUS_LABELS: Record<ToolUIPartState, string> = {
   "approval-requested": "approval",
@@ -15,6 +16,12 @@ export function toolStatusLabel(status: ToolUIPartState): string {
 }
 
 export type ToolProcessStatus = "running" | "failed" | "done";
+
+const PROCESS_STATUS_LABELS: Record<ToolProcessStatus, string> = {
+  running: "running",
+  failed: "failed",
+  done: "success",
+};
 
 export function toolProcessStatus(status: ToolUIPartState): ToolProcessStatus {
   switch (status) {
@@ -35,6 +42,14 @@ export function aggregateToolProcessStatus(
   if (compact.includes("running")) return "running";
   if (compact.includes("failed")) return "failed";
   return "done";
+}
+
+export function toolProcessStatusLabel(status: ToolProcessStatus): string {
+  return PROCESS_STATUS_LABELS[status];
+}
+
+export function formatToolProcessResultText(content: string): string {
+  return formatToolResultText(content).text;
 }
 
 export function formatToolBatchTitle(names: readonly string[]): string {

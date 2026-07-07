@@ -58,8 +58,10 @@ import {
   aggregateToolProcessStatus,
   compactThinkingPreview,
   formatToolBatchTitle,
+  formatToolProcessResultText,
   toolDisplayName,
   toolProcessStatus,
+  toolProcessStatusLabel,
   type ToolProcessStatus,
 } from "@/lib/tool-display";
 import { sessionPreviewTitle } from "@/lib/session-title";
@@ -1234,7 +1236,11 @@ function ToolProcessRow({
             <ProcessPayload
               label={tool.result.is_error ? "Error" : "Result"}
               tone={tool.result.is_error ? "error" : "muted"}
-              value={tool.result.content || "-"}
+              value={
+                tool.result.content
+                  ? formatToolProcessResultText(tool.result.content)
+                  : "-"
+              }
             />
           ) : null}
         </div>
@@ -1280,6 +1286,7 @@ function ProcessDisclosure({
         className="flex cursor-pointer list-none items-center gap-2 py-1 font-mono text-[11px] leading-5 text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden"
       >
         <ProcessStatusIndicator status={status} />
+        <span className="sr-only">{toolProcessStatusLabel(status)}</span>
         <span className="min-w-0 flex-1 truncate">{title}</span>
         <ChevronDownIcon
           className="size-3 shrink-0 transition-transform group-open/process-row:rotate-180"
