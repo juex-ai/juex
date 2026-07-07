@@ -886,6 +886,11 @@ func TestFormatTokenUsage(t *testing.T) {
 	if got != want {
 		t.Fatalf("FormatTokenUsage() = %q, want %q", got, want)
 	}
+	got = FormatTokenUsage(llm.Usage{InputTokens: 1_250, OutputTokens: 2_000_000})
+	want = "tokens: 2m total (input 1.3k, output 2m)"
+	if got != want {
+		t.Fatalf("FormatTokenUsage() = %q, want %q", got, want)
+	}
 }
 
 func TestApp_REPLProcessesMultipleLines(t *testing.T) {

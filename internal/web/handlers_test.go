@@ -713,7 +713,10 @@ func TestPostTurn_StatusSlashReturnsCommand(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Command.Name != "/status" || !strings.Contains(parsed.Command.Text, "Juex status") || parsed.TurnID != "" {
+	if parsed.Command.Name != "/status" ||
+		!strings.Contains(parsed.Command.Text, "observables: 0/0 running, 0 errors") ||
+		strings.Contains(parsed.Command.Text, "Juex status") ||
+		parsed.TurnID != "" {
 		t.Fatalf("parsed = %+v", parsed)
 	}
 	prov.mu.Lock()

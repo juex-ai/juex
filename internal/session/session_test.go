@@ -57,6 +57,26 @@ func TestSession_NewWithOptionsPersistsKind(t *testing.T) {
 	}
 }
 
+func TestSession_NewIDUsesUTCTimePrefix(t *testing.T) {
+	before := time.Now().UTC().Add(-1 * time.Second)
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	after := time.Now().UTC().Add(1 * time.Second)
+	if len(s.ID) < len(idTimeLayout) {
+		t.Fatalf("session id = %q, missing time prefix", s.ID)
+	}
+	got, err := time.ParseInLocation(idTimeLayout, s.ID[:len(idTimeLayout)], time.UTC)
+	if err != nil {
+		t.Fatalf("parse session id %q: %v", s.ID, err)
+	}
+	if got.Before(before) || got.After(after) {
+		t.Fatalf("session id UTC prefix = %v, want between %v and %v", got, before, after)
+	}
+}
+
 func TestAcquireSessionLockConflictsUntilClosed(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "20260529T120000-locktest")

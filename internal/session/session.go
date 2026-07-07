@@ -417,7 +417,7 @@ func newID() string {
 	if _, err := cryptorand.Read(b[:]); err != nil {
 		panic(fmt.Errorf("session: random id bytes: %w", err))
 	}
-	return time.Now().UTC().Format("20060102T150405") + "-" + hex.EncodeToString(b[:])
+	return time.Now().UTC().Format(idTimeLayout) + "-" + hex.EncodeToString(b[:])
 }
 
 func newMessageID() string {

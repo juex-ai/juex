@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
@@ -149,9 +151,11 @@ type StatusSnapshot struct {
 	Active       bool                        `json:"active"`
 	WorkDir      string                      `json:"work_dir"`
 	Turns        int                         `json:"turns"`
+	StartedAt    time.Time                   `json:"started_at"`
 	LastActiveAt time.Time                   `json:"last_active_at"`
 	Provider     ProviderStatusSnapshot      `json:"provider"`
 	MCP          MCPStatus                   `json:"mcp"`
+	Observables  StatusObservablesSnapshot   `json:"observables"`
 	SkillCount   int                         `json:"skill_count"`
 	TokenUsage   llm.Usage                   `json:"token_usage"`
 	TokenTotal   int                         `json:"token_total"`
@@ -174,6 +178,12 @@ type StatusCompactionSnapshot struct {
 	MemoryTokens int `json:"memory_tokens"`
 }
 
+type StatusObservablesSnapshot struct {
+	Configured int `json:"configured"`
+	Running    int `json:"running"`
+	Errors     int `json:"errors"`
+}
+
 type StatusSuccessRatesSnapshot struct {
 	LLMRequests   int `json:"llm_requests"`
 	LLMSuccesses  int `json:"llm_successes"`
@@ -182,12 +192,12 @@ type StatusSuccessRatesSnapshot struct {
 }
 
 const (
-	statusIconHeading     = "\U0001F4CA"
 	statusIconSession     = "\U0001F4AC"
 	statusIconSessionKind = "\U0001F4CC"
 	statusIconWorkDir     = "\U0001F4C1"
 	statusIconProvider    = "\U0001F916"
 	statusIconMCP         = "\U0001F50C"
+	statusIconObservable  = "\U0001F52D"
 	statusIconSkills      = "\U0001F9E9"
 	statusIconTokens      = "\U0001F522"
 	statusIconContext     = "\U0001F9E0"
@@ -209,6 +219,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		sessionID    string
 		sessionDir   string
 		turns        int
+		startedAt    time.Time
 		lastActiveAt time.Time
 		sessionKind  string
 		active       bool
@@ -224,6 +235,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		sessionKind = info.Kind
 		active = info.Active
 		turns = info.Turns
+		startedAt = info.StartedAt
 		lastActiveAt = info.LastActiveAt
 		tokenUsage = info.TokenUsage
 		if info.ContextUsage != nil {
@@ -234,6 +246,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		compaction = compactionStatusFromHistory(history)
 		successRates = successRatesFromSessionStats(a.Session.RuntimeStats())
 	}
+	observables := observablesStatusFromManager(a.obsv)
 	pending := runtime.PendingInputStatus{}
 	var goal *runtime.GoalStatusSnapshot
 	if a.Engine != nil {
@@ -249,9 +262,11 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 		Active:       active,
 		WorkDir:      a.cfg.WorkDir,
 		Turns:        turns,
+		StartedAt:    startedAt,
 		LastActiveAt: lastActiveAt,
 		Provider:     a.providerStatusSnapshot(),
 		MCP:          a.MCPStatus(),
+		Observables:  observables,
 		SkillCount:   len(a.skills),
 		TokenUsage:   tokenUsage,
 		TokenTotal:   tokenUsage.TotalTokens(),
@@ -278,9 +293,8 @@ func (a *App) providerStatusSnapshot() ProviderStatusSnapshot {
 
 func (s StatusSnapshot) Text() string {
 	var lines []string
-	lines = append(lines, statusLabel(statusIconHeading, "Juex status"))
 	if s.SessionID != "" {
-		lines = append(lines, statusLabel(statusIconSession, fmt.Sprintf("session: %s (%d turns)", s.SessionID, s.Turns)))
+		lines = append(lines, statusLabel(statusIconSession, formatSessionStatus(s.SessionID, s.Turns, s.StartedAt)))
 	}
 	if s.SessionKind != "" {
 		state := "inactive"
@@ -294,6 +308,7 @@ func (s StatusSnapshot) Text() string {
 	}
 	lines = append(lines, statusLabel(statusIconProvider, "model: "+formatModelSnapshot(s.Provider)))
 	lines = append(lines, statusLabel(statusIconMCP, fmt.Sprintf("mcp: %d/%d connected, %d errors", s.MCP.Connected, s.MCP.Configured, s.MCP.Errors)))
+	lines = append(lines, statusLabel(statusIconObservable, formatObservablesStatus(s.Observables)))
 	lines = append(lines, statusLabel(statusIconSkills, fmt.Sprintf("skills: %d", s.SkillCount)))
 	lines = append(lines, statusLabel(statusIconTokens, FormatTokenUsage(s.TokenUsage)))
 	if s.ContextUsage != nil {
@@ -338,6 +353,29 @@ func statusLabel(icon, text string) string {
 	return icon + " " + text
 }
 
+func observablesStatusFromManager(manager *observable.Manager) StatusObservablesSnapshot {
+	if manager == nil {
+		return StatusObservablesSnapshot{}
+	}
+	counts := manager.Counts()
+	return StatusObservablesSnapshot{
+		Configured: counts.Configured,
+		Running:    counts.Running,
+		Errors:     counts.Errors,
+	}
+}
+
+func formatSessionStatus(sessionID string, turns int, startedAt time.Time) string {
+	if startedAt.IsZero() {
+		return fmt.Sprintf("session: %s (%d turns)", sessionID, turns)
+	}
+	return fmt.Sprintf("session: %s (started %s, %d turns)", sessionID, formatStatusLocalTime(startedAt), turns)
+}
+
+func formatStatusLocalTime(t time.Time) string {
+	return t.Local().Format("2006-01-02 15:04:05")
+}
+
 func compactionStatusFromHistory(history []llm.Message) StatusCompactionSnapshot {
 	var status StatusCompactionSnapshot
 	for _, msg := range history {
@@ -380,17 +418,21 @@ func formatModelSnapshot(p ProviderStatusSnapshot) string {
 }
 
 func formatContextUsage(usage llm.ContextUsage) string {
-	tokens := fmt.Sprintf("%d tokens", usage.TotalTokens)
+	tokens := fmt.Sprintf("%s tokens", FormatCompactTokenCount(usage.TotalTokens))
 	if usage.ContextWindow > 0 {
-		tokens = fmt.Sprintf("%d/%d tokens", usage.TotalTokens, usage.ContextWindow)
+		tokens = fmt.Sprintf("%s/%s tokens", FormatCompactTokenCount(usage.TotalTokens), FormatCompactTokenCount(usage.ContextWindow))
 	}
 	return fmt.Sprintf("%s, cache hit %s", tokens, percent(usage.CachedInputTokens, usage.InputTokens))
+}
+
+func formatObservablesStatus(status StatusObservablesSnapshot) string {
+	return fmt.Sprintf("observables: %d/%d running, %d errors", status.Running, status.Configured, status.Errors)
 }
 
 func formatCompactionStatus(status StatusCompactionSnapshot) string {
 	memory := "0 tokens"
 	if status.MemoryTokens > 0 {
-		memory = fmt.Sprintf("~%d tokens", status.MemoryTokens)
+		memory = fmt.Sprintf("~%s tokens", FormatCompactTokenCount(status.MemoryTokens))
 	}
 	return fmt.Sprintf("compact: %d, memory: %s", status.Count, memory)
 }
@@ -417,4 +459,40 @@ func percent(numerator, denominator int) string {
 		return fmt.Sprintf("%.0f%%", rate)
 	}
 	return fmt.Sprintf("%.1f%%", rate)
+}
+
+func FormatCompactTokenCount(value int) string {
+	if value <= 0 {
+		return "0"
+	}
+	units := []struct {
+		suffix string
+		value  float64
+	}{
+		{"b", 1_000_000_000},
+		{"m", 1_000_000},
+		{"k", 1_000},
+	}
+	for _, unit := range units {
+		if value >= int(unit.value) {
+			formatted := trimCompactFloat(float64(value)/unit.value) + unit.suffix
+			switch formatted {
+			case "1000k":
+				return "1m"
+			case "1000m":
+				return "1b"
+			default:
+				return formatted
+			}
+		}
+	}
+	return fmt.Sprintf("%d", value)
+}
+
+func trimCompactFloat(value float64) string {
+	rounded := math.Round(value*10) / 10
+	if rounded == math.Trunc(rounded) {
+		return fmt.Sprintf("%.0f", rounded)
+	}
+	return fmt.Sprintf("%.1f", rounded)
 }

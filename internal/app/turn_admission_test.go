@@ -130,7 +130,9 @@ func TestAdmitTurnStatusSlashAllowedWhileRunning(t *testing.T) {
 	if result.Kind != TurnAdmissionCommandCompleted {
 		t.Fatalf("kind = %s, want %s; error=%+v", result.Kind, TurnAdmissionCommandCompleted, result.Error)
 	}
-	if result.Command == nil || result.Command.Name != SlashStatus || !strings.Contains(result.Command.Text, "Juex status") {
+	if result.Command == nil || result.Command.Name != SlashStatus ||
+		!strings.Contains(result.Command.Text, "observables: 0/0 running, 0 errors") ||
+		strings.Contains(result.Command.Text, "Juex status") {
 		t.Fatalf("command = %+v", result.Command)
 	}
 	if prov.calls != 0 {
