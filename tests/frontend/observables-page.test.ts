@@ -53,4 +53,13 @@ test("Observables table gives the title column more room", () => {
     observablesPageSource,
     /observableGridColumns/,
   );
+  assert.match(
+    observablesPageSource,
+    /const observableGridMinWidth = "min-w-\[76rem\]";/,
+  );
+  assert.match(
+    observablesPageSource,
+    /className=\{cn\("w-full text-left text-sm", observableGridMinWidth\)\}/,
+  );
+  assert.doesNotMatch(observablesPageSource, /min-w-\[62rem\]/);
 });

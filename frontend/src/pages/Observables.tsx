@@ -16,6 +16,7 @@ import type { ObservableStatus } from "@/types";
 
 const observableGridColumns =
   "grid-cols-[24rem_minmax(8rem,0.6fr)_minmax(18rem,1.2fr)_minmax(18rem,1fr)_8rem]";
+const observableGridMinWidth = "min-w-[76rem]";
 
 export function Observables() {
   const navigate = useNavigate();
@@ -121,7 +122,7 @@ export function Observables() {
             </div>
           ) : (
             <div
-              className="w-full min-w-[62rem] text-left text-sm"
+              className={cn("w-full text-left text-sm", observableGridMinWidth)}
               role="table"
               aria-label="Observables"
             >
