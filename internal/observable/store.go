@@ -65,6 +65,7 @@ type ObservationRecord struct {
 
 type ScheduleStateRecord struct {
 	ObservableID           string    `json:"observable_id"`
+	Deleted                bool      `json:"deleted,omitempty"`
 	LastEvaluatedAt        time.Time `json:"last_evaluated_at,omitempty"`
 	LastEmittedScheduledAt time.Time `json:"last_emitted_scheduled_at,omitempty"`
 	UpdatedAt              time.Time `json:"updated_at"`
@@ -225,9 +226,14 @@ func (s *Store) LatestScheduleStates() (map[string]ScheduleStateRecord, error) {
 	defer s.mu.Unlock()
 	out := map[string]ScheduleStateRecord{}
 	err := readJSONL(filepath.Join(s.root, "schedule_state.jsonl"), func(record ScheduleStateRecord) {
-		if record.ObservableID != "" {
-			out[record.ObservableID] = record
+		if record.ObservableID == "" {
+			return
 		}
+		if record.Deleted {
+			delete(out, record.ObservableID)
+			return
+		}
+		out[record.ObservableID] = record
 	})
 	return out, err
 }
@@ -251,6 +257,21 @@ func (s *Store) RecordScheduleState(record ScheduleStateRecord) error {
 		record.UpdatedAt = s.now().UTC()
 	}
 	return appendJSONL(filepath.Join(s.root, "schedule_state.jsonl"), record)
+}
+
+func (s *Store) ClearScheduleState(id string) error {
+	if s == nil {
+		return fmt.Errorf("observable store: nil")
+	}
+	id = stringsTrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	return s.RecordScheduleState(ScheduleStateRecord{
+		ObservableID: id,
+		Deleted:      true,
+		UpdatedAt:    s.now().UTC(),
+	})
 }
 
 func (s *Store) ArtifactPath(observableID, observationID string) string {

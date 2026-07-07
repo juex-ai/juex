@@ -132,6 +132,39 @@ func TestStore_ScheduleStateUsesLatestRecord(t *testing.T) {
 	}
 }
 
+func TestStore_ClearScheduleStateTombstonesLatestRecord(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:           "weekday-brief",
+		LastEvaluatedAt:        fixedTime,
+		LastEmittedScheduledAt: fixedTime.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearScheduleState("weekday-brief"); err != nil {
+		t.Fatal(err)
+	}
+	if state, ok, err := store.ScheduleState("weekday-brief"); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("schedule state = %+v, want tombstoned", state)
+	}
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:           "weekday-brief",
+		LastEvaluatedAt:        fixedTime.Add(time.Hour),
+		LastEmittedScheduledAt: fixedTime,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, ok, err := store.ScheduleState("weekday-brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !state.LastEvaluatedAt.Equal(fixedTime.Add(time.Hour)) || !state.LastEmittedScheduledAt.Equal(fixedTime) {
+		t.Fatalf("schedule state after recreate = %+v ok=%v", state, ok)
+	}
+}
+
 func TestStore_UpdateAndListObservations(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
 	first, err := store.RecordObservation(observation("lark-events", "first", fixedTime))

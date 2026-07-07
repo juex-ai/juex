@@ -324,6 +324,12 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return err
 	}
+	if m.store != nil {
+		if err := m.store.ClearScheduleState(id); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+	}
 	delete(m.specs, id)
 	delete(m.runs, id)
 	delete(m.lastStatus, id)

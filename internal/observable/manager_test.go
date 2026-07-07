@@ -677,6 +677,68 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 	}
 }
 
+func TestManager_DeleteClearsScheduleStateBeforeRecreate(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC().Add(5 * time.Second)
+	spec := observable.Spec{
+		ID: "recreate-schedule",
+		Source: observable.SourceSpec{
+			Type:     observable.SourceTypeSchedule,
+			Interval: &observable.IntervalSchedule{EverySeconds: 60},
+			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
+		},
+		Observation: observable.ObservationSpec{
+			Kind:     "reminder",
+			Severity: "info",
+			Content:  "Recreated schedule should not inherit old cursor.",
+		},
+	}
+	writeObservableConfig(t, dir, spec)
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
+	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
+		ObservableID:    spec.ID,
+		LastEvaluatedAt: now.Add(-2 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var deliveredMu sync.Mutex
+	var delivered []observable.ObservationRecord
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        func() time.Time { return now },
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+			deliveredMu.Lock()
+			defer deliveredMu.Unlock()
+			delivered = append(delivered, record)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Delete(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if state, ok, err := store.ScheduleState(spec.ID); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("schedule state after delete = %+v, want cleared", state)
+	}
+	if _, err := mgr.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	deliveredMu.Lock()
+	gotDelivered := len(delivered)
+	deliveredMu.Unlock()
+	if gotDelivered != 0 {
+		t.Fatalf("recreated schedule delivered %d stale catch-up observations, want 0", gotDelivered)
+	}
+}
+
 func TestManager_IntervalStartupPreservesFirstBaselineBeforeEmission(t *testing.T) {
 	dir := t.TempDir()
 	baseline := time.Now().UTC().Add(2 * time.Second)
