@@ -23,32 +23,34 @@ test("Observables table uses an accessible full-row link target", () => {
   assert.match(observablesPageSource, /<Link\s+to=\{detailHref\}/);
   assert.match(
     observablesPageSource,
-    /"absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring\/35"/,
+    /className="absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring\/35"/,
   );
-  assert.match(observablesPageSource, /tabIndex=\{focusable \? undefined : -1\}/);
   assert.doesNotMatch(observablesPageSource, /role="link"/);
   assert.doesNotMatch(observablesPageSource, /onClick=\{\(\) => onOpen\(item\.id\)\}/);
 });
 
-test("Observables table does not anchor the link overlay to the row", () => {
-  assert.doesNotMatch(
-    observablesPageSource,
-    /<tr className="[^"]*\brelative\b[^"]*"/,
-  );
+test("Observables table anchors the link overlay to a non-table grid row", () => {
+  assert.match(observablesPageSource, /role="table"/);
+  assert.match(observablesPageSource, /role="rowgroup"/);
+  assert.match(observablesPageSource, /role="columnheader"/);
+  assert.match(observablesPageSource, /role="cell"/);
   assert.match(
     observablesPageSource,
-    /<td className="relative cursor-default px-3 py-2">/,
+    /"group relative grid cursor-pointer border-t transition-colors hover:bg-muted\/35 focus-within:bg-muted\/40"/,
   );
+  assert.doesNotMatch(observablesPageSource, /<table\b/);
+  assert.doesNotMatch(observablesPageSource, /<tr\b/);
+  assert.doesNotMatch(observablesPageSource, /<td\b/);
   assert.doesNotMatch(observablesPageSource, /event\.stopPropagation\(\)/);
 });
 
 test("Observables table gives the title column more room", () => {
   assert.match(
     observablesPageSource,
-    /<th className="w-\[24rem\] px-3 py-2 font-medium">Observable<\/th>/,
+    /"grid-cols-\[24rem_minmax\(8rem,0\.6fr\)_minmax\(18rem,1\.2fr\)_minmax\(18rem,1fr\)_8rem\]"/,
   );
   assert.match(
     observablesPageSource,
-    /<td className="relative w-\[24rem\] max-w-\[24rem\] px-3 py-2">/,
+    /observableGridColumns/,
   );
 });
