@@ -205,6 +205,27 @@ func TestApp_HandleObservationStartsTurnWhenNoActiveTurn(t *testing.T) {
 	if body["observation_id"] != record.ID || body["observable_id"] != record.ObservableID {
 		t.Fatalf("body = %+v", body)
 	}
+	if body["window_start"] != float64(record.WindowStart.UnixMilli()) ||
+		body["window_end"] != float64(record.WindowEnd.UnixMilli()) {
+		t.Fatalf("body window timestamps = %+v", body)
+	}
+}
+
+func TestObservationMessageZeroWindowTimestampsAreZero(t *testing.T) {
+	record := testObservationRecord("obs-zero-window")
+	record.WindowStart = time.Time{}
+	record.WindowEnd = time.Time{}
+	msg, err := observationMessage(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(msg.FirstText()), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["window_start"] != float64(0) || body["window_end"] != float64(0) {
+		t.Fatalf("body window timestamps = %+v, want zeros", body)
+	}
 }
 
 func TestApp_HandleObservationQueuesDuringActiveTurn(t *testing.T) {

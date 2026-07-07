@@ -12,9 +12,13 @@ import {
 import { useShellTitle } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  formatObservationTimestamp,
+  formatObservationWindow,
+} from "@/lib/observation-time";
 import { cn } from "@/lib/utils";
 import type { ObservableDetailResponse, ObservationRecord } from "@/types";
-import { humanAgo, StateBadge } from "@/pages/Observables";
+import { StateBadge } from "@/pages/Observables";
 
 export function ObservableDetail() {
   const { id = "" } = useParams<{ id: string }>();
@@ -313,7 +317,7 @@ function ObservationList({
                 {record.state || "-"}
               </Badge>
               <span className="font-mono text-[11px] text-muted-foreground">
-                {humanAgo(record.created_at)}
+                {formatObservationTimestamp(record.created_at)}
               </span>
             </div>
             <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/60 px-3 py-2 font-mono text-xs text-foreground">
@@ -321,8 +325,14 @@ function ObservationList({
             </pre>
             <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
               <span>{record.id}</span>
+              <span>
+                window {formatObservationWindow(record.window_start, record.window_end)}
+              </span>
               {record.truncated ? (
                 <span>truncated {record.original_chars} chars</span>
+              ) : null}
+              {record.delivered_at ? (
+                <span>delivered {formatObservationTimestamp(record.delivered_at)}</span>
               ) : null}
               {record.source_event_id ? <span>{record.source_event_id}</span> : null}
               {record.artifact_path ? <span>{record.artifact_path}</span> : null}

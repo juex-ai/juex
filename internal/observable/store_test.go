@@ -1,8 +1,11 @@
 package observable_test
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +75,148 @@ func TestStore_RecordObservationDeduplicatesStableID(t *testing.T) {
 	}
 	if len(observations) != 1 {
 		t.Fatalf("observations len = %d, want 1", len(observations))
+	}
+}
+
+func TestObservationRecordJSONUsesUnixMilliseconds(t *testing.T) {
+	deliveredAt := fixedTime.Add(15 * time.Second)
+	record := observable.ObservationRecord{
+		ID:            "obs-1",
+		ObservableID:  "lark-events",
+		RunID:         "run-1",
+		Kind:          "lark_notification",
+		Severity:      "info",
+		WindowStart:   fixedTime,
+		WindowEnd:     fixedTime.Add(10 * time.Second),
+		Content:       "hello",
+		OriginalChars: 5,
+		State:         observable.ObservationStateDelivered,
+		CreatedAt:     fixedTime.Add(12 * time.Second),
+		DeliveredAt:   deliveredAt,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "2026-07-06T") {
+		t.Fatalf("observation JSON still contains RFC3339 timestamps: %s", data)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONMillis(t, raw, "window_start", fixedTime)
+	assertJSONMillis(t, raw, "window_end", fixedTime.Add(10*time.Second))
+	assertJSONMillis(t, raw, "created_at", fixedTime.Add(12*time.Second))
+	assertJSONMillis(t, raw, "delivered_at", deliveredAt)
+
+	var decoded observable.ObservationRecord
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.WindowStart.Equal(record.WindowStart) ||
+		!decoded.WindowEnd.Equal(record.WindowEnd) ||
+		!decoded.CreatedAt.Equal(record.CreatedAt) ||
+		!decoded.DeliveredAt.Equal(record.DeliveredAt) {
+		t.Fatalf("decoded times = %+v, want %+v", decoded, record)
+	}
+}
+
+func TestObservationRecordJSONAcceptsLegacyRFC3339Timestamps(t *testing.T) {
+	data := []byte(`{
+		"id":"obs-legacy",
+		"observable_id":"lark-events",
+		"kind":"lark_notification",
+		"severity":"info",
+		"window_start":"2026-07-06T10:00:00Z",
+		"window_end":"2026-07-06T10:00:10Z",
+		"content":"hello",
+		"original_chars":5,
+		"state":"delivered",
+		"created_at":"2026-07-06T10:00:12Z",
+		"delivered_at":"2026-07-06T10:00:15Z"
+	}`)
+	var decoded observable.ObservationRecord
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.WindowStart.Equal(fixedTime) ||
+		!decoded.WindowEnd.Equal(fixedTime.Add(10*time.Second)) ||
+		!decoded.CreatedAt.Equal(fixedTime.Add(12*time.Second)) ||
+		!decoded.DeliveredAt.Equal(fixedTime.Add(15*time.Second)) {
+		t.Fatalf("decoded legacy observation = %+v", decoded)
+	}
+}
+
+func TestStore_RecordObservationPersistsUnixMillisecondTimestamps(t *testing.T) {
+	root := t.TempDir()
+	store := observable.NewStore(root, observable.StoreOptions{Now: fixedNow})
+	record, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID: "lark-events",
+		RunID:        "run-1",
+		Kind:         "lark_notification",
+		Severity:     "info",
+		WindowStart:  fixedTime,
+		WindowEnd:    fixedTime.Add(10 * time.Second),
+		Content:      "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "observations.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "2026-07-06T") {
+		t.Fatalf("observations.jsonl still contains RFC3339 timestamps: %s", data)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(data))), &raw); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONMillis(t, raw, "window_start", record.WindowStart)
+	assertJSONMillis(t, raw, "window_end", record.WindowEnd)
+	assertJSONMillis(t, raw, "created_at", record.CreatedAt)
+
+	loaded, err := store.ListObservations(observable.ObservationFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || !loaded[0].CreatedAt.Equal(fixedTime) {
+		t.Fatalf("loaded observations = %+v", loaded)
+	}
+}
+
+func TestStore_RecordObservationNormalizesTimesBeforeBuildingID(t *testing.T) {
+	root := t.TempDir()
+	store := observable.NewStore(root, observable.StoreOptions{Now: fixedNow})
+	windowStart := fixedTime.Add(123456 * time.Nanosecond)
+	windowEnd := fixedTime.Add(10*time.Second + 987654*time.Nanosecond)
+	record, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID: "lark-events",
+		RunID:        "run-1",
+		Kind:         "lark_notification",
+		Severity:     "info",
+		WindowStart:  windowStart,
+		WindowEnd:    windowEnd,
+		Content:      "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.WindowStart.Equal(windowStart.UTC().Truncate(time.Millisecond)) ||
+		!record.WindowEnd.Equal(windowEnd.UTC().Truncate(time.Millisecond)) {
+		t.Fatalf("record times were not normalized: %+v", record)
+	}
+	loaded, err := store.ListObservations(observable.ObservationFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded observations = %+v", loaded)
+	}
+	if loaded[0].ID != record.ID || observable.BuildObservationID(loaded[0]) != record.ID {
+		t.Fatalf("loaded observation id = %q, record id = %q", loaded[0].ID, record.ID)
 	}
 }
 
@@ -274,5 +419,16 @@ func observation(id, content string, ts time.Time) observable.ObservationRecord 
 		WindowStart:  ts,
 		WindowEnd:    ts.Add(10 * time.Second),
 		Content:      content,
+	}
+}
+
+func assertJSONMillis(t *testing.T, raw map[string]any, field string, want time.Time) {
+	t.Helper()
+	got, ok := raw[field].(float64)
+	if !ok {
+		t.Fatalf("%s = %T(%v), want JSON number", field, raw[field], raw[field])
+	}
+	if got != float64(want.UnixMilli()) {
+		t.Fatalf("%s = %.0f, want %d", field, got, want.UnixMilli())
 	}
 }

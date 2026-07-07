@@ -462,8 +462,8 @@ export interface ObservationRecord {
   kind: string;
   severity: string;
   stream?: string;
-  window_start: string;
-  window_end: string;
+  window_start: number;
+  window_end: number;
   content: string;
   original_chars: number;
   truncated?: boolean;
@@ -471,8 +471,8 @@ export interface ObservationRecord {
   state: ObservationState | string;
   target_session?: string;
   pending_input_id?: string;
-  created_at: string;
-  delivered_at?: string;
+  created_at: number;
+  delivered_at?: number;
   error?: string;
 }
 
