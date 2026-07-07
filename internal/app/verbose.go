@@ -157,15 +157,11 @@ func verboseTurnStartInput(input, kind string) string {
 }
 
 func mcpEventContent(input string) string {
-	first := strings.Index(input, ":")
-	if first < 0 {
+	parts := strings.SplitN(input, ":", 3)
+	if len(parts) < 3 {
 		return ""
 	}
-	second := strings.Index(input[first+1:], ":")
-	if second < 0 {
-		return ""
-	}
-	content := input[first+1+second+1:]
+	content := parts[2]
 	if preview := jsonContentField(content); preview != "" {
 		return preview
 	}

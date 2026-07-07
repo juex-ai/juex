@@ -1,4 +1,11 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   Tooltip,
@@ -1574,11 +1581,15 @@ function ExternalEventMessage({
   text: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const event =
-    eventKind === "observation"
-      ? formatObservationEventForDisplay(text)
-      : formatMCPEventForDisplay(text);
-  const eventName = eventKind === "observation" ? "observation event" : "MCP event";
+  const event = useMemo(
+    () =>
+      eventKind === "observation"
+        ? formatObservationEventForDisplay(text)
+        : formatMCPEventForDisplay(text),
+    [eventKind, text],
+  );
+  const eventName =
+    eventKind === "observation" ? "observation event" : "MCP event";
   const toggleLabel = expanded ? `Collapse ${eventName}` : `Expand ${eventName}`;
 
   return (
