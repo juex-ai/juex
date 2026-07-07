@@ -167,6 +167,18 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 			want: "observation.content",
 		},
 		{
+			name: "daily schedule without timezone",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "daily-no-timezone",
+				Source: observable.SourceSpec{
+					Type:  observable.SourceTypeSchedule,
+					Daily: &observable.DailySchedule{Times: []string{"09:00"}},
+				},
+				Observation: observable.ObservationSpec{Content: "hello"},
+			}}},
+			want: "source.timezone",
+		},
+		{
 			name: "schedule mixed with legacy command",
 			cfg: observable.FileConfig{Observables: []observable.Spec{{
 				ID:      "mixed-schedule",

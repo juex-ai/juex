@@ -475,7 +475,11 @@ func validateScheduleSpec(spec Spec) (Spec, error) {
 	}
 	if spec.Source.Daily != nil {
 		enabled++
-		if _, err := time.LoadLocation(strings.TrimSpace(spec.Source.Timezone)); err != nil {
+		spec.Source.Timezone = strings.TrimSpace(spec.Source.Timezone)
+		if spec.Source.Timezone == "" {
+			return Spec{}, fmt.Errorf("source.timezone is required for daily schedules")
+		}
+		if _, err := time.LoadLocation(spec.Source.Timezone); err != nil {
 			return Spec{}, fmt.Errorf("source.timezone must be a valid IANA timezone: %w", err)
 		}
 		if len(spec.Source.Daily.Times) == 0 {
