@@ -15,18 +15,20 @@ test("user message chrome uses a weak card treatment", () => {
   const user = messageContentRoleClassName("user");
 
   assert.match(base, /text-\[14\.5px\]/);
-  assert.match(user, /group-\[\.is-user\]:bg-card/);
-  assert.match(user, /group-\[\.is-user\]:border-border/);
-  assert.match(user, /group-\[\.is-user\]:text-card-foreground/);
+  assert.match(base, /bg-card/);
+  assert.match(base, /border-border/);
+  assert.match(base, /text-card-foreground/);
   assert.match(user, /group-\[\.is-user\]:ml-auto/);
   assert.doesNotMatch(user, /bg-juex-user/);
   assert.doesNotMatch(user, /text-juex-user-foreground/);
 });
 
 test("assistant message chrome keeps card treatment", () => {
+  const base = messageContentBaseClassName();
   const assistant = messageContentRoleClassName("assistant");
 
-  assert.match(assistant, /group-\[\.is-assistant\]:bg-card/);
-  assert.match(assistant, /group-\[\.is-assistant\]:border-border/);
-  assert.match(assistant, /group-\[\.is-assistant\]:text-card-foreground/);
+  assert.match(base, /bg-card/);
+  assert.match(base, /border-border/);
+  assert.match(base, /text-card-foreground/);
+  assert.match(assistant, /group-\[\.is-assistant\]:rounded-tl-\[6px\]/);
 });
