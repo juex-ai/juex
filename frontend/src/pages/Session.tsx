@@ -76,6 +76,11 @@ import {
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
 } from "@/lib/mcp-events";
+import {
+  externalEventBodyClassName,
+  externalEventCopyClassName,
+  externalEventRowClassName,
+} from "@/lib/message-rendering";
 import { cn } from "@/lib/utils";
 import {
   WORKING_STATE_SECTIONS,
@@ -130,6 +135,7 @@ import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
 import {
   CheckIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   ChevronUpIcon,
   CircleGaugeIcon,
   CopyIcon,
@@ -1623,12 +1629,12 @@ function ExternalEventMessage({
 
   return (
     <div
-      className="w-full overflow-hidden rounded-lg border border-juex-gold-300 bg-juex-gold-50/95 text-juex-gold-900 shadow-[var(--shadow-xs)] dark:border-juex-gold-400/25 dark:bg-juex-gold-400/10 dark:text-juex-gold-400"
+      className="w-full text-juex-gold-900 dark:text-juex-gold-400"
       data-external-event-message
       data-external-event-kind={eventKind}
       data-mcp-event-message={eventKind === "mcp" ? "" : undefined}
     >
-      <div className="flex min-w-0 items-center gap-2 px-3 py-2 text-xs">
+      <div className={externalEventRowClassName()}>
         <RadioIcon className="size-3.5 shrink-0" aria-hidden="true" />
         <span
           className="min-w-0 max-w-[48%] shrink-0 truncate font-mono font-semibold sm:max-w-[18rem]"
@@ -1648,23 +1654,9 @@ function ExternalEventMessage({
         >
           {event.preview}
         </span>
-        <span
-          className="shrink-0"
-          data-external-event-copy
-          data-mcp-event-copy={eventKind === "mcp" ? "" : undefined}
-        >
-          <CopyTextButton
-            text={event.copyText}
-            className="size-7 border border-transparent text-current opacity-80 hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:text-current hover:opacity-100 focus-visible:ring-ring dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10"
-            copiedTooltip="Copied to clipboard"
-            idleTooltip="Copy event content"
-            label="Copy event content"
-            size="icon-sm"
-          />
-        </span>
         <button
           type="button"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-current opacity-80 transition hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-current opacity-80 transition hover:bg-juex-gold-100 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-juex-gold-400/10"
           aria-expanded={expanded}
           aria-label={toggleLabel}
           title={toggleLabel}
@@ -1672,18 +1664,32 @@ function ExternalEventMessage({
           data-mcp-event-toggle={eventKind === "mcp" ? "" : undefined}
           onClick={() => setExpanded((value) => !value)}
         >
-          <ChevronDownIcon
-            className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
-            aria-hidden="true"
-          />
+          {expanded ? (
+            <ChevronDownIcon className="size-3.5" aria-hidden="true" />
+          ) : (
+            <ChevronRightIcon className="size-3.5" aria-hidden="true" />
+          )}
         </button>
       </div>
       {expanded ? (
         <div
-          className="border-t border-juex-gold-300/75 px-3 py-3 text-[13px] leading-6 text-juex-ink-900 dark:border-juex-gold-400/20 dark:text-juex-cream-50"
+          className={externalEventBodyClassName()}
           data-external-event-body
           data-mcp-event-body={eventKind === "mcp" ? "" : undefined}
         >
+          <span
+            data-external-event-copy
+            data-mcp-event-copy={eventKind === "mcp" ? "" : undefined}
+          >
+            <CopyTextButton
+              text={event.copyText}
+              className={externalEventCopyClassName()}
+              copiedTooltip="Copied to clipboard"
+              idleTooltip="Copy event content"
+              label="Copy event content"
+              size="icon-sm"
+            />
+          </span>
           <MessageResponse className="break-words">{event.content}</MessageResponse>
         </div>
       ) : null}

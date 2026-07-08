@@ -246,13 +246,15 @@ at the top of the transcript and prepends the previous message window. Sessions
 with compaction start at the latest compact divider when that tail fits the
 default window, so old pre-compact context stays out of the first render.
 
-MCP channel events render as centered external-event bubbles with a small radio
-icon and a monospace `<mcp_name>:<event_type>` label. When the event body is a
-full JSON-RPC `params` object, the header preview uses `params.content`, while
-the expanded body shows the full params JSON including metadata. They are
-collapsed by default; the chevron control expands the bubble to show the full
-event body. A copy icon before the chevron copies the full event content, not
-the folded preview or label. Event bubbles use the gold ramp, not blue or teal.
+MCP and observation channel events render as centered external-event text rows:
+a small radio icon, monospace `<event_source>:<event_type>` label, muted dot,
+folded preview, and chevron. They are not chat bubbles and do not use rounded
+borders or card backgrounds in the collapsed state. When the event body is a
+full JSON-RPC `params` object, the row preview uses `params.content`, while the
+expanded body shows the full params JSON including metadata. Collapsed chevrons
+point right; expanded chevrons point down. The copy icon belongs to the
+expanded body, sits in that body's top-right corner, and appears on hover/focus.
+External events use the gold ramp, not blue or teal.
 
 Context compaction renders as a centered transcript divider: horizontal rules
 with a compact `Context compacted` button between them. Clicking the label
@@ -346,9 +348,10 @@ render as right-aligned card-like bubbles with normal card foreground text,
 subtle borders, and a tighter top-right corner so they read as authored input
 without competing with assistant output. Assistant messages render as
 left-aligned paper bubbles with a warm border and a tighter top-left corner.
-Reasoning and tool sub-units render as siblings of `<MessageContent>`. MCP
-external events bypass the normal user message wrapper and render in a centered
-transcript lane so they do not read as human-authored messages.
+Reasoning and tool sub-units render as siblings of `<MessageContent>`. MCP and
+observation external events bypass the normal user message wrapper and render
+as low-emphasis text rows in a centered transcript lane so they do not read as
+human-authored messages.
 
 ### 7.6 Text rendering
 
