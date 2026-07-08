@@ -140,7 +140,6 @@ import {
 import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
 import {
   CheckIcon,
-  ChevronDownIcon,
   ChevronRightIcon,
   ChevronUpIcon,
   CircleGaugeIcon,
@@ -1641,13 +1640,21 @@ function ExternalEventMessage({
   const toggleLabel = expanded ? `Collapse ${eventName}` : `Expand ${eventName}`;
 
   return (
-    <div
-      className="w-full text-juex-gold-900 dark:text-juex-gold-400"
+    <details
+      open={expanded}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+      className="group/external-event w-full"
       data-external-event-message
       data-external-event-kind={eventKind}
       data-mcp-event-message={eventKind === "mcp" ? "" : undefined}
     >
-      <div className={externalEventRowClassName()}>
+      <summary
+        className={externalEventRowClassName()}
+        aria-label={toggleLabel}
+        title={toggleLabel}
+        data-external-event-toggle
+        data-mcp-event-toggle={eventKind === "mcp" ? "" : undefined}
+      >
         <RadioIcon className="size-3.5 shrink-0" aria-hidden="true" />
         <span
           className="min-w-0 max-w-[48%] shrink-0 truncate font-mono font-semibold sm:max-w-[18rem]"
@@ -1661,29 +1668,17 @@ function ExternalEventMessage({
           aria-hidden="true"
         />
         <span
-          className="min-w-0 flex-1 truncate text-[12px] text-juex-ink-600 dark:text-juex-cream-100/75"
+          className="min-w-0 flex-1 truncate text-[12px] text-current opacity-75"
           data-external-event-preview
           data-mcp-event-preview={eventKind === "mcp" ? "" : undefined}
         >
           {event.preview}
         </span>
-        <button
-          type="button"
-          className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-transparent text-current opacity-80 transition hover:bg-juex-gold-100 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-juex-gold-400/10"
-          aria-expanded={expanded}
-          aria-label={toggleLabel}
-          title={toggleLabel}
-          data-external-event-toggle
-          data-mcp-event-toggle={eventKind === "mcp" ? "" : undefined}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {expanded ? (
-            <ChevronDownIcon className="size-3.5" aria-hidden="true" />
-          ) : (
-            <ChevronRightIcon className="size-3.5" aria-hidden="true" />
-          )}
-        </button>
-      </div>
+        <ChevronRightIcon
+          className="size-3.5 shrink-0 transition-transform group-open/external-event:rotate-90"
+          aria-hidden="true"
+        />
+      </summary>
       {expanded ? (
         <div
           className={externalEventBodyClassName()}
@@ -1706,6 +1701,6 @@ function ExternalEventMessage({
           <MessageResponse className="break-words">{event.content}</MessageResponse>
         </div>
       ) : null}
-    </div>
+    </details>
   );
 }
