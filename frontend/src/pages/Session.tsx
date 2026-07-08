@@ -80,6 +80,12 @@ import {
   externalEventBodyClassName,
   externalEventCopyClassName,
   externalEventRowClassName,
+  processDisclosureBodyClassName,
+  processDisclosureClassName,
+  processDisclosureSummaryClassName,
+  processStatusDotClassName,
+  thinkingDisclosureBodyClassName,
+  thinkingDisclosureSummaryClassName,
 } from "@/lib/message-rendering";
 import { cn } from "@/lib/utils";
 import {
@@ -1216,12 +1222,29 @@ function ThinkingProcessRow({
   redacted?: boolean;
   text: string;
 }) {
+  const [isOpen, setIsOpen] = useState(false);
   const display = thinkingProcessDisplay(text, redacted);
 
   return (
-    <ProcessDisclosure status="done" title={display.title}>
-      <ProcessPayload label="Content" value={display.content || "-"} />
-    </ProcessDisclosure>
+    <details
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      className="group/thinking-row w-full"
+    >
+      <summary className={thinkingDisclosureSummaryClassName()}>
+        <span className="min-w-0 truncate">Thinking</span>
+        {isOpen ? (
+          <ChevronDownIcon className="size-3 shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronRightIcon className="size-3 shrink-0" aria-hidden="true" />
+        )}
+      </summary>
+      <div className={thinkingDisclosureBodyClassName()}>
+        <MessageResponse className="break-words">
+          {display.content || "-"}
+        </MessageResponse>
+      </div>
+    </details>
   );
 }
 
@@ -1317,21 +1340,19 @@ function ProcessDisclosure({
     <details
       open={isOpen}
       onToggle={(event) => setIsOpen(event.currentTarget.open)}
-      className={cn(
-        "group/process-row w-full rounded-sm border-l border-border/70 pl-2",
-        nested && "ml-2 border-border/50",
-      )}
+      className={processDisclosureClassName(nested)}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-2 py-1 font-mono text-[11px] leading-5 text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+      <summary className={processDisclosureSummaryClassName()}>
         <ProcessStatusIndicator status={status} />
         <span className="sr-only">{toolProcessStatusLabel(status)}</span>
-        <span className="min-w-0 flex-1 truncate">{title}</span>
-        <ChevronDownIcon
-          className="size-3 shrink-0 transition-transform group-open/process-row:rotate-180"
-          aria-hidden="true"
-        />
+        <span className="min-w-0 truncate">{title}</span>
+        {isOpen ? (
+          <ChevronDownIcon className="size-3 shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronRightIcon className="size-3 shrink-0" aria-hidden="true" />
+        )}
       </summary>
-      <div className="ml-5 flex flex-col gap-2 pb-2 pt-0.5">{children}</div>
+      <div className={processDisclosureBodyClassName()}>{children}</div>
     </details>
   );
 }
@@ -1347,9 +1368,8 @@ function ProcessStatusIndicator({ status }: { status: ToolProcessStatus }) {
   }
   return (
     <span
-      className={cn(
-        "size-2.5 shrink-0 rounded-full",
-        status === "failed" ? "bg-juex-error" : "bg-juex-done",
+      className={processStatusDotClassName(
+        status === "failed" ? "failed" : "done",
       )}
       aria-hidden="true"
     />

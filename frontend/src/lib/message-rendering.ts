@@ -19,6 +19,23 @@ const EXTERNAL_EVENT_BODY_CLASS_NAME =
 const EXTERNAL_EVENT_COPY_CLASS_NAME =
   "absolute right-2 top-2 size-7 border border-transparent text-current opacity-0 transition-opacity hover:border-juex-gold-300 hover:bg-juex-gold-100 hover:text-current hover:opacity-100 focus-visible:ring-ring group-hover:opacity-100 group-focus-within:opacity-100 dark:hover:border-juex-gold-400/30 dark:hover:bg-juex-gold-400/10";
 
+const PROCESS_DISCLOSURE_CLASS_NAME = "group/process-row w-full";
+
+const PROCESS_DISCLOSURE_SUMMARY_CLASS_NAME =
+  "inline-flex max-w-full cursor-pointer list-none items-center gap-2 py-1 font-mono text-[11px] leading-5 text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden";
+
+const PROCESS_DISCLOSURE_BODY_CLASS_NAME =
+  "ml-5 flex flex-col gap-2 pb-2 pt-0.5";
+
+const PROCESS_STATUS_DOT_BASE_CLASS_NAME =
+  "size-[5px] shrink-0 rounded-full";
+
+const THINKING_DISCLOSURE_SUMMARY_CLASS_NAME =
+  "inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-1 font-mono text-[11px] leading-5 text-muted-foreground/75 outline-none transition hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden";
+
+const THINKING_DISCLOSURE_BODY_CLASS_NAME =
+  "ml-5 max-w-[min(100%,42rem)] pb-2 pt-0.5 text-[13px] leading-6 text-foreground/80";
+
 export function messageResponseClassName(className?: string) {
   return className
     ? `${MESSAGE_RESPONSE_CLASS_NAME} ${className}`
@@ -45,4 +62,32 @@ export function externalEventBodyClassName() {
 
 export function externalEventCopyClassName() {
   return EXTERNAL_EVENT_COPY_CLASS_NAME;
+}
+
+export function processDisclosureClassName(nested = false) {
+  return nested
+    ? `${PROCESS_DISCLOSURE_CLASS_NAME} ml-2`
+    : PROCESS_DISCLOSURE_CLASS_NAME;
+}
+
+export function processDisclosureSummaryClassName() {
+  return PROCESS_DISCLOSURE_SUMMARY_CLASS_NAME;
+}
+
+export function processDisclosureBodyClassName() {
+  return PROCESS_DISCLOSURE_BODY_CLASS_NAME;
+}
+
+export function processStatusDotClassName(status: "done" | "failed") {
+  return `${PROCESS_STATUS_DOT_BASE_CLASS_NAME} ${
+    status === "failed" ? "bg-juex-error" : "bg-juex-done"
+  }`;
+}
+
+export function thinkingDisclosureSummaryClassName() {
+  return THINKING_DISCLOSURE_SUMMARY_CLASS_NAME;
+}
+
+export function thinkingDisclosureBodyClassName() {
+  return THINKING_DISCLOSURE_BODY_CLASS_NAME;
 }

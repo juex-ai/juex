@@ -364,17 +364,22 @@ mix a foreign editor background into chat.
 
 ### 7.7 Reasoning
 
-`<Reasoning>` is collapsible. Trigger reads `Thinking...` with a chevron that
-rotates on open; body is the reasoning text rendered through streamdown. The
-block is transparent with a dashed warm border and muted ink text. We pass
-`isStreaming={false}` because blocks arrive complete, not token-streamed.
-Redacted reasoning is rendered with trigger text `Thinking [redacted]` and body
-`[redacted by provider]`.
+Reasoning renders as a low-emphasis process row, not a bubble. The collapsed
+trigger is the fixed muted label `Thinking` followed immediately by the
+chevron; it does not expose a preview of the reasoning text and it does not
+show a green status dot. Collapsed chevrons point right and expanded chevrons
+point down. The expanded body renders the reasoning text directly through
+streamdown without a `CONTENT` label. Redacted reasoning keeps its provider
+redaction text in the expanded body.
 
 ### 7.8 Tool
 
-`<Tool>` is a single collapsible card that represents a `tool_use` +
-`tool_result` pair. Live tool event projection happens in
+Tool process rows are compact collapsible transcript metadata for a `tool_use`
++ `tool_result` pair. They do not use left-border, rounded, shadowed, or
+bracket-like chrome. Their status dot is intentionally small; running tools
+keep the loader icon size unchanged. The chevron follows the tool name inline
+instead of aligning to the far right, with right/down directions for
+collapsed/expanded states. Live tool event projection happens in
 `src/lib/live-session-projection.ts`, using `src/lib/live-tool-events.ts` for
 the transcript block updates. The render layer in `pages/Session.tsx` calls
 `toDisplayUnits` from `src/lib/display-units.ts` to fold the two blocks into
@@ -391,15 +396,9 @@ one display unit (see §13).
 `<ToolHeader>` displays the derived tool name without a transport prefix. The
 render layer may pass `type={\`tool-${tool_name}\`}` for compatibility, but
 `src/lib/tool-display.ts` strips `tool-` and falls back to `tool` for missing
-names. The header uses the tool accent token, a small status dot, mono naming,
-and a compact status chip. `<ToolInput input={…}>` renders the parameter JSON
-via the standalone AI Elements `CodeBlock` (which uses shiki for
-highlighting). The parameters block must use high-contrast text in dark mode
-and share the same code surface tokens as markdown code blocks.
-`<ToolOutput output={…}>` wraps the result; when the result is an error we
-pass `output={null}` and put the error string in `errorText` so it renders once
-and in the destructive theme. Tools in `input-available` and `output-error`
-states default to open; successful results stay closed until the user expands.
+names. Expanded tool parameters and results use compact labeled payload blocks;
+error results use the destructive tone. Running and failed tools default open;
+successful results stay closed until the user expands.
 
 ### 7.9 Composer
 
