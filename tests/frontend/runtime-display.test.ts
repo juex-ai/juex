@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   formatRuntimeTokenCount,
+  runtimeContextModelLabel,
   runtimeContextPercentLabel,
+  runtimeContextWindowDetailLabel,
   runtimeGoalBadgeLabel,
   runtimeGoalContinuationLabel,
   runtimeGoalIsActive,
@@ -11,6 +13,7 @@ import {
   runtimeHooksSummaryLabel,
   runtimeSessionStateBadgeLabel,
   runtimeSessionStateIsActive,
+  runtimeTokenUsageDetailLabel,
   runtimeWorkingStateBadgeLabel,
   workingStatePresenceLabel,
   workingStateRecordCount,
@@ -54,6 +57,41 @@ test("runtimeContextPercentLabel summarizes context window usage", () => {
       total_tokens: 0,
     }),
     "0%",
+  );
+});
+
+test("runtime context tooltip labels separate model, window, and total tokens", () => {
+  assert.equal(
+    runtimeContextModelLabel({
+      model: " clip-local:gemini-3.1-pro-low ",
+      context_window: 256_000,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 156_800,
+    }),
+    "clip-local:gemini-3.1-pro-low",
+  );
+  assert.equal(
+    runtimeContextWindowDetailLabel({
+      model: "clip-local:gemini-3.1-pro-low",
+      context_window: 256_000,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 156_800,
+    }),
+    "context window: 156.8k/256k tokens (61.3%)",
+  );
+  assert.equal(
+    runtimeTokenUsageDetailLabel({
+      input_tokens: 22_900_000,
+      output_tokens: 39_300,
+    }),
+    "total tokens: 22.9m in / 39.3k out",
+  );
+  assert.equal(runtimeContextModelLabel(undefined), "unknown");
+  assert.equal(
+    runtimeContextWindowDetailLabel(undefined),
+    "context window: 0/0 tokens (0%)",
   );
 });
 
