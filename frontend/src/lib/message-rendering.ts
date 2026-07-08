@@ -43,7 +43,7 @@ const THINKING_DISCLOSURE_SUMMARY_CLASS_NAME =
   "inline-flex max-w-full cursor-pointer list-none items-center gap-1.5 py-1 font-mono text-[11px] leading-5 text-muted-foreground/75 outline-none transition hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden";
 
 const THINKING_DISCLOSURE_BODY_CLASS_NAME =
-  "ml-5 max-w-[min(100%,42rem)] pb-2 pt-0.5 text-[13px] leading-6 text-foreground/80";
+  "ml-5 max-h-[15rem] max-w-[min(100%,42rem)] overflow-auto rounded-md border border-border/70 bg-muted/25 px-3 py-2.5 text-[13px] leading-6 text-foreground/80";
 
 export function messageResponseClassName(className?: string) {
   return className
