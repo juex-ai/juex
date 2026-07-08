@@ -1222,22 +1222,16 @@ function ThinkingProcessRow({
   redacted?: boolean;
   text: string;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
   const display = thinkingProcessDisplay(text, redacted);
 
   return (
-    <details
-      open={isOpen}
-      onToggle={(event) => setIsOpen(event.currentTarget.open)}
-      className="group/thinking-row w-full"
-    >
+    <details className="group/thinking-row w-full">
       <summary className={thinkingDisclosureSummaryClassName()}>
         <span className="min-w-0 truncate">Thinking</span>
-        {isOpen ? (
-          <ChevronDownIcon className="size-3 shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRightIcon className="size-3 shrink-0" aria-hidden="true" />
-        )}
+        <ChevronRightIcon
+          className="size-3 shrink-0 transition-transform group-open/thinking-row:rotate-90"
+          aria-hidden="true"
+        />
       </summary>
       <div className={thinkingDisclosureBodyClassName()}>
         <MessageResponse className="break-words">
@@ -1346,11 +1340,10 @@ function ProcessDisclosure({
         <ProcessStatusIndicator status={status} />
         <span className="sr-only">{toolProcessStatusLabel(status)}</span>
         <span className="min-w-0 truncate">{title}</span>
-        {isOpen ? (
-          <ChevronDownIcon className="size-3 shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRightIcon className="size-3 shrink-0" aria-hidden="true" />
-        )}
+        <ChevronRightIcon
+          className="size-3 shrink-0 transition-transform group-open/process-row:rotate-90"
+          aria-hidden="true"
+        />
       </summary>
       <div className={processDisclosureBodyClassName()}>{children}</div>
     </details>
