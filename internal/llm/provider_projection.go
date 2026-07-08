@@ -62,10 +62,7 @@ func projectProviderBlock(b Block) Block {
 }
 
 func normalizedFunctionParameters(schema map[string]any) map[string]any {
-	out := make(map[string]any, len(schema)+2)
-	for k, v := range schema {
-		out[k] = v
-	}
+	out := normalizeFunctionSchemaObject(schema)
 	if out["type"] == nil || out["type"] == "" {
 		out["type"] = "object"
 	}
@@ -76,6 +73,172 @@ func normalizedFunctionParameters(schema map[string]any) map[string]any {
 		out["additionalProperties"] = false
 	}
 	return out
+}
+
+// normalizeFunctionSchemaObject projects rich JSON Schema into the conservative
+// subset accepted by OpenAI-compatible tool APIs and Gemini-backed proxies.
+// Runtime tool handlers still validate the full semantic contract.
+func normalizeFunctionSchemaObject(schema map[string]any) map[string]any {
+	out := make(map[string]any, len(schema)+2)
+	var compositions []any
+	for k, v := range schema {
+		switch k {
+		case "oneOf", "anyOf", "allOf":
+			compositions = append(compositions, v)
+		case "properties":
+			out[k] = normalizeFunctionSchemaPropertiesValue(v)
+		default:
+			out[k] = normalizeFunctionSchemaValue(v)
+		}
+	}
+	for _, composition := range compositions {
+		mergeFunctionSchemaComposition(out, composition)
+	}
+	return out
+}
+
+func normalizeFunctionSchemaPropertiesValue(value any) any {
+	props, ok := value.(map[string]any)
+	if !ok {
+		return normalizeFunctionSchemaValue(value)
+	}
+	out := make(map[string]any, len(props))
+	for name, prop := range props {
+		out[name] = normalizeFunctionSchemaValue(prop)
+	}
+	return out
+}
+
+func normalizeFunctionSchemaValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return normalizeFunctionSchemaObject(v)
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, normalizeFunctionSchemaValue(item))
+		}
+		return out
+	case []map[string]any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, normalizeFunctionSchemaValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func mergeFunctionSchemaComposition(out map[string]any, composition any) {
+	var branches []any
+	switch c := composition.(type) {
+	case []any:
+		branches = c
+	case []map[string]any:
+		branches = make([]any, 0, len(c))
+		for _, branch := range c {
+			branches = append(branches, branch)
+		}
+	default:
+		return
+	}
+	for _, branch := range branches {
+		branchSchema, ok := branch.(map[string]any)
+		if !ok {
+			continue
+		}
+		mergeFunctionSchemaObjectBranch(out, normalizeFunctionSchemaObject(branchSchema))
+	}
+}
+
+func mergeFunctionSchemaObjectBranch(out, branch map[string]any) {
+	branchProps, ok := branch["properties"].(map[string]any)
+	if !ok || len(branchProps) == 0 {
+		return
+	}
+	if out["type"] == nil && branch["type"] == "object" {
+		out["type"] = "object"
+	}
+	outProps, ok := out["properties"].(map[string]any)
+	if !ok || outProps == nil {
+		outProps = map[string]any{}
+		out["properties"] = outProps
+	}
+	for name, prop := range branchProps {
+		if existing, exists := outProps[name]; exists {
+			outProps[name] = mergeFunctionSchemaProperty(existing, prop)
+			continue
+		}
+		outProps[name] = prop
+	}
+}
+
+func mergeFunctionSchemaProperty(existing, incoming any) any {
+	existingSchema, ok := existing.(map[string]any)
+	if !ok {
+		return existing
+	}
+	incomingSchema, ok := incoming.(map[string]any)
+	if !ok {
+		return existing
+	}
+	if existingSchema["type"] == nil && incomingSchema["type"] != nil {
+		existingSchema["type"] = incomingSchema["type"]
+	}
+	if existingSchema["enum"] == nil && incomingSchema["enum"] != nil {
+		existingSchema["enum"] = incomingSchema["enum"]
+		return existingSchema
+	}
+	if merged, ok := mergeFunctionSchemaEnums(existingSchema["enum"], incomingSchema["enum"]); ok {
+		existingSchema["enum"] = merged
+	}
+	return existingSchema
+}
+
+func mergeFunctionSchemaEnums(existing, incoming any) ([]any, bool) {
+	left, ok := schemaEnumValues(existing)
+	if !ok {
+		return nil, false
+	}
+	right, ok := schemaEnumValues(incoming)
+	if !ok {
+		return nil, false
+	}
+	out := make([]any, 0, len(left)+len(right))
+	seen := map[string]bool{}
+	for _, value := range append(left, right...) {
+		key := schemaEnumKey(value)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, value)
+	}
+	return out, true
+}
+
+func schemaEnumValues(value any) ([]any, bool) {
+	switch v := value.(type) {
+	case []any:
+		return append([]any(nil), v...), true
+	case []string:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, item)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func schemaEnumKey(value any) string {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(body)
 }
 
 func shouldCloseImplicitNoArgumentSchema(original, normalized map[string]any) bool {
