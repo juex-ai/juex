@@ -49,7 +49,7 @@ juex repl
 juex serve
 ```
 
-`--model` uses the same `provider_id:model_id` format as config and can select
+`--model` uses the same `provider:model` format as config and can select
 any model declared in the merged provider config, including providers from
 `~/.juex/juex.yaml` when the current directory has no local config.
 
