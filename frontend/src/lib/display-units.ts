@@ -39,6 +39,10 @@ export type MessageGroup = {
   model?: string;
 };
 
+export function messageGroupShouldShowModel(group: MessageGroup): boolean {
+  return group.role === "assistant" && !group.kind && Boolean(group.model);
+}
+
 function normalizeTextBlock(block: TextBlock): TextBlock {
   // Older transcripts can contain {"type":"text"} for empty provider output.
   if (typeof block.text === "string") return block;
