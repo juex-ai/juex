@@ -47,19 +47,27 @@ test("external event row renders as inline text instead of a bubble", () => {
   assert.match(row, /flex/);
   assert.match(row, /items-center/);
   assert.match(row, /text-juex-gold-900/);
+  assert.match(row, /cursor-pointer/);
+  assert.match(row, /list-none/);
+  assert.match(row, /hover:text-/);
+  assert.match(row, /focus-visible:ring/);
   assert.doesNotMatch(row, /rounded/);
   assert.doesNotMatch(row, /border/);
   assert.doesNotMatch(row, /bg-juex-gold/);
   assert.doesNotMatch(row, /shadow/);
 });
 
-test("external event expanded body owns a hover-revealed copy action", () => {
+test("external event expanded body scrolls inside a bordered area", () => {
   const body = externalEventBodyClassName();
   const copy = externalEventCopyClassName();
 
   assert.match(body, /relative/);
   assert.match(body, /group/);
-  assert.match(body, /border-t/);
+  assert.match(body, /rounded/);
+  assert.match(body, /border/);
+  assert.match(body, /max-h-\[15rem\]/);
+  assert.match(body, /overflow-auto/);
+  assert.match(body, /leading-6/);
   assert.match(copy, /absolute/);
   assert.match(copy, /right-2/);
   assert.match(copy, /top-2/);
