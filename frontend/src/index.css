@@ -38,8 +38,6 @@
   --color-juex-ink-900: var(--juex-ink-900);
   --color-juex-ink-600: var(--juex-ink-600);
   --color-juex-ink-400: var(--juex-ink-400);
-  --color-juex-user: var(--juex-user);
-  --color-juex-user-foreground: var(--juex-user-foreground);
   --color-juex-assistant: var(--juex-assistant);
   --color-juex-thinking: var(--juex-thinking);
   --color-juex-tool: var(--juex-tool);
@@ -153,8 +151,6 @@
     --juex-tool-header: #f3eefb;
     --juex-tool-surface: #fbf8ff;
     --juex-thinking: var(--juex-ink-600);
-    --juex-user: var(--juex-forest-700);
-    --juex-user-foreground: var(--juex-cream-50);
     --juex-assistant: var(--juex-info);
     --juex-done: var(--juex-forest-500);
     --juex-pending: var(--juex-gold-700);
@@ -247,8 +243,6 @@
       --juex-tool-header: #0d3a2f;
       --juex-tool-surface: #073126;
       --juex-thinking: var(--juex-forest-300);
-      --juex-user: #105c48;
-      --juex-user-foreground: var(--juex-cream-50);
       --juex-assistant: var(--juex-cream-50);
       --juex-done: var(--juex-forest-300);
       --juex-pending: var(--juex-gold-400);
@@ -296,8 +290,6 @@
     --juex-tool-header: #0d3a2f;
     --juex-tool-surface: #073126;
     --juex-thinking: var(--juex-forest-300);
-    --juex-user: #105c48;
-    --juex-user-foreground: var(--juex-cream-50);
     --juex-assistant: var(--juex-cream-50);
     --juex-done: var(--juex-forest-300);
     --juex-pending: var(--juex-gold-400);

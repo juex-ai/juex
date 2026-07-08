@@ -12,7 +12,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { juexCodeThemes } from "@/lib/code-theme";
-import { messageResponseClassName } from "@/lib/message-rendering";
+import {
+  messageContentBaseClassName,
+  messageContentRoleClassName,
+  messageResponseClassName,
+} from "@/lib/message-rendering";
 import { cn } from "@/lib/utils";
 import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
@@ -55,9 +59,9 @@ export const MessageContent = ({
 }: MessageContentProps) => (
   <div
     className={cn(
-      "flex w-fit min-w-0 flex-col gap-2 overflow-hidden text-[14.5px] leading-[1.6]",
-      "group-[.is-user]:ml-auto group-[.is-user]:max-w-[92%] group-[.is-user]:rounded-[18px] group-[.is-user]:rounded-tr-[6px] group-[.is-user]:border group-[.is-user]:border-juex-forest-800/10 group-[.is-user]:bg-juex-user group-[.is-user]:px-4 group-[.is-user]:py-3 group-[.is-user]:text-juex-user-foreground group-[.is-user]:shadow-[var(--shadow-xs)] group-[.is-user]:dark:border-juex-gold-400/15 sm:group-[.is-user]:max-w-[78%]",
-      "group-[.is-assistant]:max-w-[96%] group-[.is-assistant]:rounded-[18px] group-[.is-assistant]:rounded-tl-[6px] group-[.is-assistant]:border group-[.is-assistant]:border-border group-[.is-assistant]:bg-card group-[.is-assistant]:px-4 group-[.is-assistant]:py-3 group-[.is-assistant]:text-card-foreground group-[.is-assistant]:shadow-[var(--shadow-xs)] sm:group-[.is-assistant]:max-w-[82%]",
+      messageContentBaseClassName(),
+      messageContentRoleClassName("user"),
+      messageContentRoleClassName("assistant"),
       className
     )}
     {...props}

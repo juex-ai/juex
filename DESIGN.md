@@ -342,12 +342,13 @@ size. Copy stays short and descriptive, such as `Loading conversation` or
 ### 7.5 Message
 
 `<Message from={role}>` (AI Elements) is the unit per message. User messages
-render as right-aligned forest bubbles with cream text and a tighter top-right
-corner. Assistant messages render as left-aligned paper bubbles with a warm
-border and a tighter top-left corner. Reasoning and tool sub-units render as
-siblings of `<MessageContent>`. MCP external events bypass the normal user
-message wrapper and render in a centered transcript lane so they do not read as
-human-authored messages.
+render as right-aligned card-like bubbles with normal card foreground text,
+subtle borders, and a tighter top-right corner so they read as authored input
+without competing with assistant output. Assistant messages render as
+left-aligned paper bubbles with a warm border and a tighter top-left corner.
+Reasoning and tool sub-units render as siblings of `<MessageContent>`. MCP
+external events bypass the normal user message wrapper and render in a centered
+transcript lane so they do not read as human-authored messages.
 
 ### 7.6 Text rendering
 
@@ -497,7 +498,6 @@ The role tokens map the design system into runtime states:
 ```css
 @layer base {
   :root {
-    --juex-user:       var(--juex-forest-700);
     --juex-assistant:  var(--juex-info);
     --juex-thinking:   var(--juex-ink-600);
     --juex-tool:       #6e4ea3;
@@ -505,14 +505,11 @@ The role tokens map the design system into runtime states:
     --juex-error:      #b03a2e;
     --juex-done:       var(--juex-forest-500);
     --juex-pending:    var(--juex-gold-700);
-    --juex-user-foreground: var(--juex-cream-50);
     --juex-tool-border: #ded1ef;
     --juex-tool-header: #f3eefb;
     --juex-tool-surface: #fbf8ff;
   }
   .dark {
-    --juex-user:       #105c48;
-    --juex-user-foreground: var(--juex-cream-50);
     --juex-assistant:  var(--juex-cream-50);
     --juex-thinking:   var(--juex-forest-300);
     --juex-tool:       #d8c8ff;
