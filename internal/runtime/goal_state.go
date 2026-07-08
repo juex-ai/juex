@@ -606,11 +606,7 @@ func writeGoalContextList(b *strings.Builder, label string, values []string) {
 		return
 	}
 	fmt.Fprintf(b, "- %s:\n", label)
-	for i, value := range values {
-		if i >= 12 {
-			fmt.Fprintf(b, "  - %d additional item(s) omitted\n", len(values)-i)
-			break
-		}
+	for _, value := range values {
 		value = compactGoalContextLine(value)
 		if value == "" {
 			continue

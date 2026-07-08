@@ -3,6 +3,7 @@ package runtime
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -162,5 +163,26 @@ func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "complete docs") || !strings.Contains(rendered, "reviewed by tester") {
 		t.Fatalf("provider context should collapse multiline values:\n%s", rendered)
+	}
+}
+
+func TestGoalStateProviderContextRendersAllStoredContractItems(t *testing.T) {
+	criteria := make([]string, 24)
+	for i := range criteria {
+		criteria[i] = "criterion-" + strconv.Itoa(i+1)
+	}
+	state := GoalState{
+		Description:        "complete task",
+		AcceptanceCriteria: criteria,
+	}
+	rendered, ok := state.RenderProviderContext()
+	if !ok {
+		t.Fatal("expected provider context")
+	}
+	if !strings.Contains(rendered, "criterion-24") {
+		t.Fatalf("provider context should render every stored criterion:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "omitted") {
+		t.Fatalf("provider context should not hide stored goal requirements:\n%s", rendered)
 	}
 }
