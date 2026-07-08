@@ -2718,7 +2718,7 @@ func TestNormalizedFunctionParametersFlattensComposedObjectProperties(t *testing
 		"properties": map[string]any{
 			"source": map[string]any{
 				"type": "object",
-				"oneOf": []any{
+				"oneOf": []map[string]any{
 					map[string]any{
 						"type": "object",
 						"properties": map[string]any{
@@ -2733,7 +2733,7 @@ func TestNormalizedFunctionParametersFlattensComposedObjectProperties(t *testing
 										"contains": map[string]any{"type": "string"},
 										"regex":    map[string]any{"type": "string"},
 									},
-									"oneOf": []any{
+									"oneOf": []map[string]any{
 										map[string]any{"required": []any{"contains"}},
 										map[string]any{"required": []any{"regex"}},
 									},
@@ -2747,7 +2747,7 @@ func TestNormalizedFunctionParametersFlattensComposedObjectProperties(t *testing
 							"type":     map[string]any{"type": "string", "enum": []any{"schedule"}},
 							"interval": map[string]any{"type": "object"},
 						},
-						"oneOf": []any{
+						"oneOf": []map[string]any{
 							map[string]any{"required": []any{"interval"}},
 						},
 					},

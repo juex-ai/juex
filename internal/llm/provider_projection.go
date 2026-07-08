@@ -119,14 +119,28 @@ func normalizeFunctionSchemaValue(value any) any {
 			out = append(out, normalizeFunctionSchemaValue(item))
 		}
 		return out
+	case []map[string]any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, normalizeFunctionSchemaValue(item))
+		}
+		return out
 	default:
 		return value
 	}
 }
 
 func mergeFunctionSchemaComposition(out map[string]any, composition any) {
-	branches, ok := composition.([]any)
-	if !ok {
+	var branches []any
+	switch c := composition.(type) {
+	case []any:
+		branches = c
+	case []map[string]any:
+		branches = make([]any, 0, len(c))
+		for _, branch := range c {
+			branches = append(branches, branch)
+		}
+	default:
 		return
 	}
 	for _, branch := range branches {
