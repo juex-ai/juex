@@ -2161,6 +2161,15 @@ func assertObjectWithEmptyProperties(t *testing.T, schema map[string]any) {
 	}
 }
 
+func schemaValueMap(t *testing.T, value any) map[string]any {
+	t.Helper()
+	out, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("schema value = %#v, want map[string]any", value)
+	}
+	return out
+}
+
 func TestToolCallArgumentsUsesEmptyObjectForNilInput(t *testing.T) {
 	if got := toolCallArguments("", nil); got != "{}" {
 		t.Fatalf("nil arguments = %q, want {}", got)
@@ -2703,38 +2712,95 @@ func TestNormalizedFunctionParametersPreservesExplicitAdditionalProperties(t *te
 	}
 }
 
-func TestNormalizedFunctionParametersKeepsComposedSchemasOpen(t *testing.T) {
-	cases := map[string]map[string]any{
-		"oneOf": {
-			"type": "object",
-			"oneOf": []any{
-				map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"query": map[string]any{"type": "string"}},
-					"required":   []any{"query"},
-				},
-			},
-		},
-		"ref": {
-			"type": "object",
-			"$ref": "#/$defs/query",
-			"$defs": map[string]any{
-				"query": map[string]any{
-					"type":       "object",
-					"properties": map[string]any{"query": map[string]any{"type": "string"}},
-					"required":   []any{"query"},
+func TestNormalizedFunctionParametersFlattensComposedObjectProperties(t *testing.T) {
+	input := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"source": map[string]any{
+				"type": "object",
+				"oneOf": []any{
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":    map[string]any{"type": "string", "enum": []any{"command"}},
+							"command": map[string]any{"type": "string"},
+							"filters": map[string]any{
+								"type": "array",
+								"items": map[string]any{
+									"type":                 "object",
+									"additionalProperties": false,
+									"properties": map[string]any{
+										"contains": map[string]any{"type": "string"},
+										"regex":    map[string]any{"type": "string"},
+									},
+									"oneOf": []any{
+										map[string]any{"required": []any{"contains"}},
+										map[string]any{"required": []any{"regex"}},
+									},
+								},
+							},
+						},
+					},
+					map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":     map[string]any{"type": "string", "enum": []any{"schedule"}},
+							"interval": map[string]any{"type": "object"},
+						},
+						"oneOf": []any{
+							map[string]any{"required": []any{"interval"}},
+						},
+					},
 				},
 			},
 		},
 	}
-	for name, input := range cases {
-		t.Run(name, func(t *testing.T) {
-			schema := normalizedFunctionParameters(input)
-			assertObjectWithEmptyProperties(t, schema)
-			if _, ok := schema["additionalProperties"]; ok {
-				t.Fatalf("composed schema should stay open, got %+v", schema)
-			}
-		})
+
+	normalized := normalizedFunctionParameters(input)
+	source := schemaValueMap(t, schemaValueMap(t, normalized["properties"])["source"])
+	if _, ok := source["oneOf"]; ok {
+		t.Fatalf("source oneOf should be flattened for provider schemas: %+v", source)
+	}
+	sourceProps := schemaValueMap(t, source["properties"])
+	for _, want := range []string{"type", "command", "filters", "interval"} {
+		if _, ok := sourceProps[want]; !ok {
+			t.Fatalf("source properties missing %q: %+v", want, sourceProps)
+		}
+	}
+	filterItems := schemaValueMap(t, schemaValueMap(t, sourceProps["filters"])["items"])
+	if filterItems["type"] != "object" {
+		t.Fatalf("filter item type = %v, want object in %+v", filterItems["type"], filterItems)
+	}
+	if _, ok := filterItems["oneOf"]; ok {
+		t.Fatalf("filter item oneOf should be dropped for provider schemas: %+v", filterItems)
+	}
+	filterProps := schemaValueMap(t, filterItems["properties"])
+	for _, want := range []string{"contains", "regex"} {
+		if _, ok := filterProps[want]; !ok {
+			t.Fatalf("filter properties missing %q: %+v", want, filterProps)
+		}
+	}
+	originalSource := schemaValueMap(t, schemaValueMap(t, input["properties"])["source"])
+	if _, ok := originalSource["oneOf"]; !ok {
+		t.Fatalf("normalization mutated input schema: %+v", input)
+	}
+}
+
+func TestNormalizedFunctionParametersKeepsRefSchemasOpen(t *testing.T) {
+	schema := normalizedFunctionParameters(map[string]any{
+		"type": "object",
+		"$ref": "#/$defs/query",
+		"$defs": map[string]any{
+			"query": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"query": map[string]any{"type": "string"}},
+				"required":   []any{"query"},
+			},
+		},
+	})
+	assertObjectWithEmptyProperties(t, schema)
+	if _, ok := schema["additionalProperties"]; ok {
+		t.Fatalf("ref schema should stay open, got %+v", schema)
 	}
 }
 

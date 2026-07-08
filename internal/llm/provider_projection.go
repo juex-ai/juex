@@ -62,10 +62,7 @@ func projectProviderBlock(b Block) Block {
 }
 
 func normalizedFunctionParameters(schema map[string]any) map[string]any {
-	out := make(map[string]any, len(schema)+2)
-	for k, v := range schema {
-		out[k] = v
-	}
+	out := normalizeFunctionSchemaObject(schema)
 	if out["type"] == nil || out["type"] == "" {
 		out["type"] = "object"
 	}
@@ -76,6 +73,90 @@ func normalizedFunctionParameters(schema map[string]any) map[string]any {
 		out["additionalProperties"] = false
 	}
 	return out
+}
+
+// normalizeFunctionSchemaObject projects rich JSON Schema into the conservative
+// subset accepted by OpenAI-compatible tool APIs and Gemini-backed proxies.
+// Runtime tool handlers still validate the full semantic contract.
+func normalizeFunctionSchemaObject(schema map[string]any) map[string]any {
+	out := make(map[string]any, len(schema)+2)
+	var compositions []any
+	for k, v := range schema {
+		switch k {
+		case "oneOf", "anyOf", "allOf":
+			compositions = append(compositions, v)
+		case "properties":
+			out[k] = normalizeFunctionSchemaPropertiesValue(v)
+		default:
+			out[k] = normalizeFunctionSchemaValue(v)
+		}
+	}
+	for _, composition := range compositions {
+		mergeFunctionSchemaComposition(out, composition)
+	}
+	return out
+}
+
+func normalizeFunctionSchemaPropertiesValue(value any) any {
+	props, ok := value.(map[string]any)
+	if !ok {
+		return normalizeFunctionSchemaValue(value)
+	}
+	out := make(map[string]any, len(props))
+	for name, prop := range props {
+		out[name] = normalizeFunctionSchemaValue(prop)
+	}
+	return out
+}
+
+func normalizeFunctionSchemaValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return normalizeFunctionSchemaObject(v)
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, normalizeFunctionSchemaValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func mergeFunctionSchemaComposition(out map[string]any, composition any) {
+	branches, ok := composition.([]any)
+	if !ok {
+		return
+	}
+	for _, branch := range branches {
+		branchSchema, ok := branch.(map[string]any)
+		if !ok {
+			continue
+		}
+		mergeFunctionSchemaObjectBranch(out, normalizeFunctionSchemaObject(branchSchema))
+	}
+}
+
+func mergeFunctionSchemaObjectBranch(out, branch map[string]any) {
+	branchProps, ok := branch["properties"].(map[string]any)
+	if !ok || len(branchProps) == 0 {
+		return
+	}
+	if out["type"] == nil && branch["type"] == "object" {
+		out["type"] = "object"
+	}
+	outProps, ok := out["properties"].(map[string]any)
+	if !ok || outProps == nil {
+		outProps = map[string]any{}
+		out["properties"] = outProps
+	}
+	for name, prop := range branchProps {
+		if _, exists := outProps[name]; exists {
+			continue
+		}
+		outProps[name] = prop
+	}
 }
 
 func shouldCloseImplicitNoArgumentSchema(original, normalized map[string]any) bool {
