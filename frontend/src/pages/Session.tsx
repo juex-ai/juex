@@ -36,6 +36,7 @@ import {
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import {
+  messageGroupShouldShowModel,
   messagesToGroups,
   toolState,
   type MessageGroup,
@@ -1121,7 +1122,7 @@ function MessageGroupView({
   // Per-message model (stamped at generation time). Falls back to nothing
   // for older messages that pre-date the persistence change; the header
   // already shows the current session-level model in that case.
-  const showModel = group.role === "assistant" && !!group.model;
+  const showModel = messageGroupShouldShowModel(group);
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
   const isObservationEvent =
     group.role === "user" && group.kind === "observation";
