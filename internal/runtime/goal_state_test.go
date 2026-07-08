@@ -136,8 +136,8 @@ func TestGoalStateStoreReadsLegacyGoalStateDefensively(t *testing.T) {
 
 func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 	state := GoalState{
-		Description:            "complete docs",
-		AcceptanceCriteria:     []string{"reviewed", "published"},
+		Description:            "complete\ndocs",
+		AcceptanceCriteria:     []string{"reviewed\nby tester", "published"},
 		RequiredArtifacts:      []string{"docs/guide.md"},
 		ArtifactRequirements:   []string{"guide explains migration"},
 		ValidationRequirements: []string{"markdown links pass"},
@@ -159,5 +159,8 @@ func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("provider context missing %q:\n%s", want, rendered)
 		}
+	}
+	if !strings.Contains(rendered, "complete docs") || !strings.Contains(rendered, "reviewed by tester") {
+		t.Fatalf("provider context should collapse multiline values:\n%s", rendered)
 	}
 }

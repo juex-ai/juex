@@ -594,7 +594,7 @@ func (s GoalState) RenderProviderContext() (string, bool) {
 }
 
 func writeGoalContextValue(b *strings.Builder, label, value string) {
-	value = strings.TrimSpace(value)
+	value = compactGoalContextLine(value)
 	if value == "" {
 		return
 	}
@@ -611,6 +611,14 @@ func writeGoalContextList(b *strings.Builder, label string, values []string) {
 			fmt.Fprintf(b, "  - %d additional item(s) omitted\n", len(values)-i)
 			break
 		}
+		value = compactGoalContextLine(value)
+		if value == "" {
+			continue
+		}
 		fmt.Fprintf(b, "  - %s\n", value)
 	}
+}
+
+func compactGoalContextLine(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
