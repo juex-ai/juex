@@ -693,9 +693,14 @@ export interface ObservableCreateRequest {
 
 export interface GoalStatusSnapshot {
   description?: string;
+  acceptance_criteria?: string[];
+  required_artifacts?: string[];
+  artifact_requirements?: string[];
+  validation_requirements?: string[];
   verification_method?: string;
   continuation_count?: number;
   status?: string;
+  status_reason?: string;
   updated_at?: string;
 }
 
@@ -729,8 +734,11 @@ export interface WorkingState {
   artifacts?: WorkingStateRecord[];
   checks?: WorkingStateRecord[];
   open_issues?: WorkingStateRecord[];
+  tool_failures?: WorkingStateRecord[];
   last_successful_checks?: WorkingStateRecord[];
   stale_checks?: WorkingStateRecord[];
+  active_processes?: WorkingStateRecord[];
+  runtime_budget?: WorkingStateRecord[];
 }
 
 export interface WorkingStateRecord {

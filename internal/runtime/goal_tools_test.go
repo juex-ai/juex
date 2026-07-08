@@ -24,13 +24,19 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	}
 
 	if _, err := reg.Call(context.Background(), GoalToolCreate, map[string]any{
-		"description":         "finish the feature",
-		"verification_method": "go test ./...",
+		"description":             "finish the feature",
+		"acceptance_criteria":     []any{"command succeeds", "artifact is updated"},
+		"required_artifacts":      []any{"docs/contract.md"},
+		"artifact_requirements":   []any{"document names the contract boundary"},
+		"validation_requirements": []any{"go test ./..."},
+		"verification_method":     "go test ./...",
+		"status_reason":           "created from taskline spec",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := reg.Call(context.Background(), GoalToolUpdate, map[string]any{
-		"status": string(GoalStatusSuccess),
+		"status":        string(GoalStatusSuccess),
+		"status_reason": "validated by tests",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +44,15 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"present":true`, `"description":"finish the feature"`, `"status":"success"`} {
+	for _, want := range []string{
+		`"present":true`,
+		`"description":"finish the feature"`,
+		`"acceptance_criteria":["command succeeds","artifact is updated"]`,
+		`"required_artifacts":["docs/contract.md"]`,
+		`"validation_requirements":["go test ./..."]`,
+		`"status":"success"`,
+		`"status_reason":"validated by tests"`,
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("get missing %s:\n%s", want, out)
 		}

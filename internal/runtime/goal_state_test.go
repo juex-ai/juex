@@ -12,23 +12,37 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	now := time.Date(2026, 6, 22, 10, 0, 0, 0, time.UTC)
 	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{Now: func() time.Time { return now }})
 
-	state, err := store.Create("ship feature with api_key=secret", "run focused tests")
+	state, err := store.CreateWithContract(GoalStateCreate{
+		Description:            "ship feature with api_key=secret",
+		AcceptanceCriteria:     []string{"tests pass", "artifact exists"},
+		RequiredArtifacts:      []string{"dist/report.json"},
+		ArtifactRequirements:   []string{"report is valid JSON"},
+		ValidationRequirements: []string{"go test ./..."},
+		VerificationMethod:     "run focused tests",
+		StatusReason:           "waiting for validation",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusInProgress || state.Description == "" {
+	if state.Status != GoalStatusInProgress || state.Description == "" || len(state.AcceptanceCriteria) != 2 || len(state.RequiredArtifacts) != 1 {
 		t.Fatalf("created state = %+v", state)
 	}
 	if strings.Contains(state.Description, "secret") {
 		t.Fatalf("description not redacted: %q", state.Description)
 	}
 
-	state, err = store.Update(GoalStateUpdate{Status: GoalStatusSuccess})
+	reason := "all validation passed"
+	validation := []string{"go test ./internal/runtime"}
+	state, err = store.Update(GoalStateUpdate{
+		Status:                 GoalStatusSuccess,
+		StatusReason:           &reason,
+		ValidationRequirements: &validation,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess {
-		t.Fatalf("status = %q", state.Status)
+	if state.Status != GoalStatusSuccess || state.StatusReason != reason || strings.Join(state.ValidationRequirements, ",") != validation[0] {
+		t.Fatalf("updated state = %+v", state)
 	}
 
 	data, err := os.ReadFile(filepath.Join(store.SessionDir, "goal_state.json"))
@@ -39,6 +53,11 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	for _, forbidden := range []string{"objective", "evidence", "budget", "blocked_reason", "next_user_input", "last_progress", "last_check", "secret"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("goal_state.json contains old or unredacted field %q:\n%s", forbidden, text)
+		}
+	}
+	for _, want := range []string{`"acceptance_criteria"`, `"required_artifacts"`, `"validation_requirements"`, `"status_reason"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("goal_state.json missing %s:\n%s", want, text)
 		}
 	}
 }
@@ -53,14 +72,23 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 		t.Fatalf("no goal should not block: %+v", decision)
 	}
 
-	if _, err := store.Create("finish task", "tests pass"); err != nil {
+	if _, err := store.CreateWithContract(GoalStateCreate{
+		Description:            "finish task",
+		AcceptanceCriteria:     []string{"tests pass"},
+		RequiredArtifacts:      []string{"artifact.txt"},
+		ValidationRequirements: []string{"go test ./..."},
+		VerificationMethod:     "tests pass",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	decision, err = store.CompletionGateDecision()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !decision.BlockStop || decision.Reason != "goal_in_progress" || !strings.Contains(decision.ContinuePrompt, "finish task") {
+	if !decision.BlockStop || decision.Reason != "goal_in_progress" ||
+		!strings.Contains(decision.ContinuePrompt, "Current goal contract") ||
+		!strings.Contains(decision.ContinuePrompt, "artifact.txt") ||
+		!strings.Contains(decision.ContinuePrompt, "tests pass") {
 		t.Fatalf("in-progress decision = %+v", decision)
 	}
 	if err := store.RecordContinuation(decision); err != nil {
@@ -103,5 +131,33 @@ func TestGoalStateStoreReadsLegacyGoalStateDefensively(t *testing.T) {
 	}
 	if state.Description != "legacy objective" || state.Status != GoalStatusSuccess || state.ContinuationCount != 2 {
 		t.Fatalf("legacy state = %+v", state)
+	}
+}
+
+func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
+	state := GoalState{
+		Description:            "complete docs",
+		AcceptanceCriteria:     []string{"reviewed", "published"},
+		RequiredArtifacts:      []string{"docs/guide.md"},
+		ArtifactRequirements:   []string{"guide explains migration"},
+		ValidationRequirements: []string{"markdown links pass"},
+		VerificationMethod:     "run docs check",
+		Status:                 GoalStatusInProgress,
+		StatusReason:           "docs still need review",
+	}
+	rendered, ok := state.RenderProviderContext()
+	if !ok {
+		t.Fatal("expected provider context")
+	}
+	for _, want := range []string{
+		"Current goal contract",
+		"acceptance criteria",
+		"required artifacts",
+		"validation requirements",
+		"status reason",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("provider context missing %q:\n%s", want, rendered)
+		}
 	}
 }

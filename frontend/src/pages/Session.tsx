@@ -731,9 +731,26 @@ function GoalStateTooltip({ goal }: { goal?: GoalStatusSnapshot }) {
       <RuntimeTooltipRow label="status" value={goal.status || "unknown"} />
       <RuntimeTooltipRow label="description" value={goal.description || "-"} />
       <RuntimeTooltipRow
+        label="criteria"
+        value={runtimeListValue(goal.acceptance_criteria)}
+      />
+      <RuntimeTooltipRow
+        label="artifacts"
+        value={runtimeListValue(goal.required_artifacts)}
+      />
+      <RuntimeTooltipRow
+        label="artifact rules"
+        value={runtimeListValue(goal.artifact_requirements)}
+      />
+      <RuntimeTooltipRow
+        label="validation"
+        value={runtimeListValue(goal.validation_requirements)}
+      />
+      <RuntimeTooltipRow
         label="verification"
         value={goal.verification_method || "-"}
       />
+      <RuntimeTooltipRow label="reason" value={goal.status_reason || "-"} />
       <RuntimeTooltipRow
         label="continuations"
         value={runtimeGoalContinuationLabel(goal)}
@@ -822,6 +839,11 @@ function RuntimeTooltipRow({ label, value }: { label: string; value: string }) {
       <span className="min-w-0 break-words text-popover-foreground">{value}</span>
     </div>
   );
+}
+
+function runtimeListValue(values?: string[]): string {
+  const text = values?.map((value) => value.trim()).filter(Boolean).join("; ");
+  return text || "-";
 }
 
 function RuntimeTooltipRecords({

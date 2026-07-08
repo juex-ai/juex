@@ -24,18 +24,38 @@ const (
 )
 
 type GoalState struct {
-	Version            int        `json:"version"`
-	Description        string     `json:"description,omitempty"`
-	VerificationMethod string     `json:"verification_method,omitempty"`
-	ContinuationCount  int        `json:"continuation_count,omitempty"`
-	Status             GoalStatus `json:"status,omitempty"`
-	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
+	Version                int        `json:"version"`
+	Description            string     `json:"description,omitempty"`
+	AcceptanceCriteria     []string   `json:"acceptance_criteria,omitempty"`
+	RequiredArtifacts      []string   `json:"required_artifacts,omitempty"`
+	ArtifactRequirements   []string   `json:"artifact_requirements,omitempty"`
+	ValidationRequirements []string   `json:"validation_requirements,omitempty"`
+	VerificationMethod     string     `json:"verification_method,omitempty"`
+	ContinuationCount      int        `json:"continuation_count,omitempty"`
+	Status                 GoalStatus `json:"status,omitempty"`
+	StatusReason           string     `json:"status_reason,omitempty"`
+	UpdatedAt              time.Time  `json:"updated_at,omitempty"`
 }
 
 type GoalStateUpdate struct {
-	Description        *string    `json:"description,omitempty"`
-	VerificationMethod *string    `json:"verification_method,omitempty"`
-	Status             GoalStatus `json:"status,omitempty"`
+	Description            *string    `json:"description,omitempty"`
+	AcceptanceCriteria     *[]string  `json:"acceptance_criteria,omitempty"`
+	RequiredArtifacts      *[]string  `json:"required_artifacts,omitempty"`
+	ArtifactRequirements   *[]string  `json:"artifact_requirements,omitempty"`
+	ValidationRequirements *[]string  `json:"validation_requirements,omitempty"`
+	VerificationMethod     *string    `json:"verification_method,omitempty"`
+	Status                 GoalStatus `json:"status,omitempty"`
+	StatusReason           *string    `json:"status_reason,omitempty"`
+}
+
+type GoalStateCreate struct {
+	Description            string   `json:"description,omitempty"`
+	AcceptanceCriteria     []string `json:"acceptance_criteria,omitempty"`
+	RequiredArtifacts      []string `json:"required_artifacts,omitempty"`
+	ArtifactRequirements   []string `json:"artifact_requirements,omitempty"`
+	ValidationRequirements []string `json:"validation_requirements,omitempty"`
+	VerificationMethod     string   `json:"verification_method,omitempty"`
+	StatusReason           string   `json:"status_reason,omitempty"`
 }
 
 type GoalStateOptions struct {
@@ -59,11 +79,16 @@ type GoalGateDecision struct {
 }
 
 type GoalStatusSnapshot struct {
-	Description        string     `json:"description,omitempty"`
-	VerificationMethod string     `json:"verification_method,omitempty"`
-	ContinuationCount  int        `json:"continuation_count,omitempty"`
-	Status             GoalStatus `json:"status,omitempty"`
-	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
+	Description            string     `json:"description,omitempty"`
+	AcceptanceCriteria     []string   `json:"acceptance_criteria,omitempty"`
+	RequiredArtifacts      []string   `json:"required_artifacts,omitempty"`
+	ArtifactRequirements   []string   `json:"artifact_requirements,omitempty"`
+	ValidationRequirements []string   `json:"validation_requirements,omitempty"`
+	VerificationMethod     string     `json:"verification_method,omitempty"`
+	ContinuationCount      int        `json:"continuation_count,omitempty"`
+	Status                 GoalStatus `json:"status,omitempty"`
+	StatusReason           string     `json:"status_reason,omitempty"`
+	UpdatedAt              time.Time  `json:"updated_at,omitempty"`
 }
 
 func NewGoalStateStore(sessionDir string, opts GoalStateOptions) *GoalStateStore {
@@ -88,23 +113,35 @@ func (s *GoalStateStore) Snapshot() (GoalState, error) {
 }
 
 func (s *GoalStateStore) Create(description, verificationMethod string) (GoalState, error) {
+	return s.CreateWithContract(GoalStateCreate{
+		Description:        description,
+		VerificationMethod: verificationMethod,
+	})
+}
+
+func (s *GoalStateStore) CreateWithContract(create GoalStateCreate) (GoalState, error) {
 	if s == nil {
 		return GoalState{Version: 1}, nil
 	}
-	description = sanitizeGoalText(description)
-	verificationMethod = sanitizeGoalText(verificationMethod)
+	description := sanitizeGoalText(create.Description)
+	verificationMethod := sanitizeGoalText(create.VerificationMethod)
 	if description == "" {
 		return GoalState{}, fmt.Errorf("goal description is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	state := GoalState{
-		Version:            1,
-		Description:        description,
-		VerificationMethod: verificationMethod,
-		ContinuationCount:  0,
-		Status:             GoalStatusInProgress,
-		UpdatedAt:          s.now(),
+		Version:                1,
+		Description:            description,
+		AcceptanceCriteria:     sanitizeGoalTextList(create.AcceptanceCriteria),
+		RequiredArtifacts:      sanitizeGoalTextList(create.RequiredArtifacts),
+		ArtifactRequirements:   sanitizeGoalTextList(create.ArtifactRequirements),
+		ValidationRequirements: sanitizeGoalTextList(create.ValidationRequirements),
+		VerificationMethod:     verificationMethod,
+		ContinuationCount:      0,
+		Status:                 GoalStatusInProgress,
+		StatusReason:           sanitizeGoalText(create.StatusReason),
+		UpdatedAt:              s.now(),
 	}
 	if err := s.saveLocked(state); err != nil {
 		return GoalState{}, err
@@ -134,11 +171,26 @@ func (s *GoalStateStore) Update(update GoalStateUpdate) (GoalState, error) {
 	if update.VerificationMethod != nil {
 		state.VerificationMethod = sanitizeGoalText(*update.VerificationMethod)
 	}
+	if update.AcceptanceCriteria != nil {
+		state.AcceptanceCriteria = sanitizeGoalTextList(*update.AcceptanceCriteria)
+	}
+	if update.RequiredArtifacts != nil {
+		state.RequiredArtifacts = sanitizeGoalTextList(*update.RequiredArtifacts)
+	}
+	if update.ArtifactRequirements != nil {
+		state.ArtifactRequirements = sanitizeGoalTextList(*update.ArtifactRequirements)
+	}
+	if update.ValidationRequirements != nil {
+		state.ValidationRequirements = sanitizeGoalTextList(*update.ValidationRequirements)
+	}
 	if update.Status != "" {
 		if err := validateGoalStatus(update.Status); err != nil {
 			return GoalState{}, err
 		}
 		state.Status = update.Status
+	}
+	if update.StatusReason != nil {
+		state.StatusReason = sanitizeGoalText(*update.StatusReason)
 	}
 	if state.Status == "" {
 		state.Status = GoalStatusInProgress
@@ -167,12 +219,9 @@ func (s *GoalStateStore) CompletionGateDecision() (GoalGateDecision, error) {
 		return GoalGateDecision{Status: state.Status, ContinuationCount: state.ContinuationCount}, nil
 	}
 	prompt := "The current session goal is still in progress. Continue working toward the goal, or call update_goal with status success or failure when the goal is complete or cannot be completed."
-	if state.Description != "" || state.VerificationMethod != "" {
-		prompt = "The current session goal is still in progress.\n\nGoal: " + state.Description
-		if state.VerificationMethod != "" {
-			prompt += "\nVerification: " + state.VerificationMethod
-		}
-		prompt += "\n\nContinue working, or call update_goal with status success or failure when the goal is complete or cannot be completed."
+	if contract, ok := state.RenderProviderContext(); ok {
+		prompt = "The current session goal is still in progress.\n\n" + contract +
+			"\n\nContinue working, or call update_goal with status success or failure when the goal is complete or cannot be completed."
 	}
 	return GoalGateDecision{
 		Status:            state.Status,
@@ -213,15 +262,20 @@ func (s *GoalStateStore) StatusSnapshot() (*GoalStatusSnapshot, error) {
 }
 
 func (s GoalState) StatusSnapshot() *GoalStatusSnapshot {
-	if strings.TrimSpace(s.Description) == "" && s.Status == "" {
+	if !s.present() {
 		return nil
 	}
 	return &GoalStatusSnapshot{
-		Description:        s.Description,
-		VerificationMethod: s.VerificationMethod,
-		ContinuationCount:  s.ContinuationCount,
-		Status:             s.Status,
-		UpdatedAt:          s.UpdatedAt,
+		Description:            s.Description,
+		AcceptanceCriteria:     append([]string(nil), s.AcceptanceCriteria...),
+		RequiredArtifacts:      append([]string(nil), s.RequiredArtifacts...),
+		ArtifactRequirements:   append([]string(nil), s.ArtifactRequirements...),
+		ValidationRequirements: append([]string(nil), s.ValidationRequirements...),
+		VerificationMethod:     s.VerificationMethod,
+		ContinuationCount:      s.ContinuationCount,
+		Status:                 s.Status,
+		StatusReason:           s.StatusReason,
+		UpdatedAt:              s.UpdatedAt,
 	}
 }
 
@@ -297,10 +351,15 @@ func normalizeGoalState(state GoalState) GoalState {
 	state.Version = 1
 	state.Description = sanitizeGoalText(state.Description)
 	state.VerificationMethod = sanitizeGoalText(state.VerificationMethod)
+	state.AcceptanceCriteria = sanitizeGoalTextList(state.AcceptanceCriteria)
+	state.RequiredArtifacts = sanitizeGoalTextList(state.RequiredArtifacts)
+	state.ArtifactRequirements = sanitizeGoalTextList(state.ArtifactRequirements)
+	state.ValidationRequirements = sanitizeGoalTextList(state.ValidationRequirements)
+	state.StatusReason = sanitizeGoalText(state.StatusReason)
 	if state.ContinuationCount < 0 {
 		state.ContinuationCount = 0
 	}
-	if state.Description != "" || state.Status != "" {
+	if state.present() {
 		if state.Status == "" {
 			state.Status = GoalStatusInProgress
 		}
@@ -406,6 +465,22 @@ func (e *Engine) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {
 	return store.StatusSnapshot()
 }
 
+func (e *Engine) goalStateContextSnapshot() (string, bool) {
+	store := e.goalStateStoreLocked()
+	if store == nil {
+		return "", false
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		return "", false
+	}
+	return state.RenderProviderContext()
+}
+
+func (e *Engine) goalStateContextLocked() (string, bool) {
+	return e.goalStateContextSnapshot()
+}
+
 func (e *Engine) emitGoalUpdated(turnID string) {
 	if e == nil {
 		return
@@ -426,11 +501,16 @@ func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
 		return GoalUpdatedPayload{}
 	}
 	return GoalUpdatedPayload{
-		Description:        snapshot.Description,
-		VerificationMethod: snapshot.VerificationMethod,
-		ContinuationCount:  snapshot.ContinuationCount,
-		Status:             snapshot.Status,
-		UpdatedAt:          snapshot.UpdatedAt,
+		Description:            snapshot.Description,
+		AcceptanceCriteria:     append([]string(nil), snapshot.AcceptanceCriteria...),
+		RequiredArtifacts:      append([]string(nil), snapshot.RequiredArtifacts...),
+		ArtifactRequirements:   append([]string(nil), snapshot.ArtifactRequirements...),
+		ValidationRequirements: append([]string(nil), snapshot.ValidationRequirements...),
+		VerificationMethod:     snapshot.VerificationMethod,
+		ContinuationCount:      snapshot.ContinuationCount,
+		Status:                 snapshot.Status,
+		StatusReason:           snapshot.StatusReason,
+		UpdatedAt:              snapshot.UpdatedAt,
 	}
 }
 
@@ -450,9 +530,87 @@ func goalContinuedPayload(decision GoalGateDecision, snapshot *GoalStatusSnapsho
 func redactGoalState(state GoalState) GoalState {
 	state.Description = sanitizeGoalText(state.Description)
 	state.VerificationMethod = sanitizeGoalText(state.VerificationMethod)
+	state.AcceptanceCriteria = sanitizeGoalTextList(state.AcceptanceCriteria)
+	state.RequiredArtifacts = sanitizeGoalTextList(state.RequiredArtifacts)
+	state.ArtifactRequirements = sanitizeGoalTextList(state.ArtifactRequirements)
+	state.ValidationRequirements = sanitizeGoalTextList(state.ValidationRequirements)
+	state.StatusReason = sanitizeGoalText(state.StatusReason)
 	return state
 }
 
 func sanitizeGoalText(text string) string {
 	return sanitizeWorkingStateText(text)
+}
+
+func sanitizeGoalTextList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	const maxGoalListItems = 24
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = sanitizeGoalText(strings.TrimSpace(value))
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+		if len(out) >= maxGoalListItems {
+			break
+		}
+	}
+	return out
+}
+
+func (s GoalState) present() bool {
+	return strings.TrimSpace(s.Description) != "" ||
+		len(s.AcceptanceCriteria) > 0 ||
+		len(s.RequiredArtifacts) > 0 ||
+		len(s.ArtifactRequirements) > 0 ||
+		len(s.ValidationRequirements) > 0 ||
+		strings.TrimSpace(s.VerificationMethod) != "" ||
+		s.Status != "" ||
+		strings.TrimSpace(s.StatusReason) != ""
+}
+
+func (s GoalState) RenderProviderContext() (string, bool) {
+	if !s.present() {
+		return "", false
+	}
+	var b strings.Builder
+	b.WriteString("Current goal contract (model-owned; update with update_goal when the contract or evidence changes):\n")
+	writeGoalContextValue(&b, "description", s.Description)
+	writeGoalContextList(&b, "acceptance criteria", s.AcceptanceCriteria)
+	writeGoalContextList(&b, "required artifacts", s.RequiredArtifacts)
+	writeGoalContextList(&b, "artifact requirements", s.ArtifactRequirements)
+	writeGoalContextList(&b, "validation requirements", s.ValidationRequirements)
+	writeGoalContextValue(&b, "verification", s.VerificationMethod)
+	if s.Status != "" {
+		writeGoalContextValue(&b, "status", string(s.Status))
+	}
+	writeGoalContextValue(&b, "status reason", s.StatusReason)
+	return strings.TrimRight(b.String(), "\n"), true
+}
+
+func writeGoalContextValue(b *strings.Builder, label, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	fmt.Fprintf(b, "- %s: %s\n", label, value)
+}
+
+func writeGoalContextList(b *strings.Builder, label string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "- %s:\n", label)
+	for i, value := range values {
+		if i >= 12 {
+			fmt.Fprintf(b, "  - %d additional item(s) omitted\n", len(values)-i)
+			break
+		}
+		fmt.Fprintf(b, "  - %s\n", value)
+	}
 }
