@@ -21,11 +21,20 @@ const EXTERNAL_EVENT_COPY_CLASS_NAME =
 
 const PROCESS_DISCLOSURE_CLASS_NAME = "group/process-row w-full";
 
+const PROCESS_DISCLOSURE_NESTED_CLASS_NAME =
+  "group/nested-process-row w-full ml-2";
+
 const PROCESS_DISCLOSURE_SUMMARY_CLASS_NAME =
   "inline-flex max-w-full cursor-pointer list-none items-center gap-2 py-1 font-mono text-[11px] leading-5 text-muted-foreground outline-none transition hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden";
 
 const PROCESS_DISCLOSURE_BODY_CLASS_NAME =
   "ml-5 flex flex-col gap-2 pb-2 pt-0.5";
+
+const PROCESS_DISCLOSURE_CHEVRON_CLASS_NAME =
+  "size-3 shrink-0 transition-transform group-open/process-row:rotate-90";
+
+const PROCESS_DISCLOSURE_NESTED_CHEVRON_CLASS_NAME =
+  "size-3 shrink-0 transition-transform group-open/nested-process-row:rotate-90";
 
 const PROCESS_STATUS_DOT_BASE_CLASS_NAME =
   "size-[5px] shrink-0 rounded-full";
@@ -66,12 +75,22 @@ export function externalEventCopyClassName() {
 
 export function processDisclosureClassName(nested = false) {
   return nested
-    ? `${PROCESS_DISCLOSURE_CLASS_NAME} ml-2`
+    ? PROCESS_DISCLOSURE_NESTED_CLASS_NAME
     : PROCESS_DISCLOSURE_CLASS_NAME;
 }
 
 export function processDisclosureSummaryClassName() {
   return PROCESS_DISCLOSURE_SUMMARY_CLASS_NAME;
+}
+
+export function processDisclosureChevronClassName(nested = false) {
+  return nested
+    ? PROCESS_DISCLOSURE_NESTED_CHEVRON_CLASS_NAME
+    : PROCESS_DISCLOSURE_CHEVRON_CLASS_NAME;
+}
+
+export function processDisclosureDefaultOpen() {
+  return false;
 }
 
 export function processDisclosureBodyClassName() {

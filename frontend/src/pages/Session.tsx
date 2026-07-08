@@ -81,7 +81,9 @@ import {
   externalEventCopyClassName,
   externalEventRowClassName,
   processDisclosureBodyClassName,
+  processDisclosureChevronClassName,
   processDisclosureClassName,
+  processDisclosureDefaultOpen,
   processDisclosureSummaryClassName,
   processStatusDotClassName,
   thinkingDisclosureBodyClassName,
@@ -1319,15 +1321,7 @@ function ProcessDisclosure({
   status: ToolProcessStatus;
   title: string;
 }) {
-  const [isOpen, setIsOpen] = useState(
-    status === "running" || status === "failed",
-  );
-
-  useEffect(() => {
-    if (status === "running" || status === "failed") {
-      setIsOpen(true);
-    }
-  }, [status]);
+  const [isOpen, setIsOpen] = useState(processDisclosureDefaultOpen());
 
   return (
     <details
@@ -1340,7 +1334,7 @@ function ProcessDisclosure({
         <span className="sr-only">{toolProcessStatusLabel(status)}</span>
         <span className="min-w-0 truncate">{title}</span>
         <ChevronRightIcon
-          className="size-3 shrink-0 transition-transform group-open/process-row:rotate-90"
+          className={processDisclosureChevronClassName(nested)}
           aria-hidden="true"
         />
       </summary>

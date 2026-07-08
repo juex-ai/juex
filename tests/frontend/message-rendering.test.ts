@@ -7,7 +7,9 @@ import {
   messageContentBaseClassName,
   messageContentRoleClassName,
   messageResponseClassName,
+  processDisclosureChevronClassName,
   processDisclosureClassName,
+  processDisclosureDefaultOpen,
   processDisclosureSummaryClassName,
   processStatusDotClassName,
   thinkingDisclosureBodyClassName,
@@ -81,11 +83,28 @@ test("process disclosure chrome does not look like a bracketed bubble", () => {
   const summary = processDisclosureSummaryClassName();
 
   assert.match(root, /w-full/);
+  assert.match(root, /group\/process-row/);
   assert.doesNotMatch(root, /border-l/);
   assert.doesNotMatch(root, /rounded/);
   assert.doesNotMatch(root, /shadow/);
   assert.match(summary, /inline-flex/);
   assert.doesNotMatch(summary, /flex-1/);
+});
+
+test("nested process disclosures only rotate their own chevrons", () => {
+  const nested = processDisclosureClassName(true);
+  const rootChevron = processDisclosureChevronClassName();
+  const nestedChevron = processDisclosureChevronClassName(true);
+
+  assert.match(nested, /group\/nested-process-row/);
+  assert.doesNotMatch(nested, /group\/process-row\b/);
+  assert.match(rootChevron, /group-open\/process-row:rotate-90/);
+  assert.match(nestedChevron, /group-open\/nested-process-row:rotate-90/);
+  assert.doesNotMatch(nestedChevron, /group-open\/process-row:rotate-90/);
+});
+
+test("process disclosures default closed for every status", () => {
+  assert.equal(processDisclosureDefaultOpen(), false);
 });
 
 test("process status dots are smaller while thinking has no dot contract", () => {
