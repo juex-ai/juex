@@ -89,6 +89,10 @@ test("runtime context tooltip labels separate model, window, and total tokens", 
     "total tokens: 22.9m in / 39.3k out",
   );
   assert.equal(runtimeContextModelLabel(undefined), "unknown");
+  assert.equal(
+    runtimeContextWindowDetailLabel(undefined),
+    "context window: 0/0 tokens (0%)",
+  );
 });
 
 test("runtimeHooksSummaryLabel pluralizes configured hooks", () => {

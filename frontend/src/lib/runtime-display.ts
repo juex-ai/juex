@@ -32,9 +32,11 @@ export function runtimeContextModelLabel(usage?: ContextUsage): string {
   return usage?.model?.trim() || "unknown";
 }
 
-export function runtimeContextWindowDetailLabel(usage: ContextUsage): string {
-  const windowTokens = usage.context_window ?? 0;
-  const totalTokens = usage.total_tokens ?? 0;
+export function runtimeContextWindowDetailLabel(
+  usage?: ContextUsage | null,
+): string {
+  const windowTokens = usage?.context_window ?? 0;
+  const totalTokens = usage?.total_tokens ?? 0;
   const percent =
     windowTokens > 0 ? (totalTokens / windowTokens) * 100 : 0;
   const current = formatRuntimeTokenCount(totalTokens);
