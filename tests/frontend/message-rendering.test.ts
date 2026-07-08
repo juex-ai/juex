@@ -7,6 +7,11 @@ import {
   messageContentBaseClassName,
   messageContentRoleClassName,
   messageResponseClassName,
+  processDisclosureClassName,
+  processDisclosureSummaryClassName,
+  processStatusDotClassName,
+  thinkingDisclosureBodyClassName,
+  thinkingDisclosureSummaryClassName,
 } from "../../frontend/src/lib/message-rendering.ts";
 
 test("messageResponseClassName preserves explicit paragraph newlines", () => {
@@ -61,4 +66,39 @@ test("external event expanded body owns a hover-revealed copy action", () => {
   assert.match(copy, /opacity-0/);
   assert.match(copy, /group-hover:opacity-100/);
   assert.match(copy, /group-focus-within:opacity-100/);
+});
+
+test("process disclosure chrome does not look like a bracketed bubble", () => {
+  const root = processDisclosureClassName();
+  const summary = processDisclosureSummaryClassName();
+
+  assert.match(root, /w-full/);
+  assert.doesNotMatch(root, /border-l/);
+  assert.doesNotMatch(root, /rounded/);
+  assert.doesNotMatch(root, /shadow/);
+  assert.match(summary, /inline-flex/);
+  assert.doesNotMatch(summary, /flex-1/);
+});
+
+test("process status dots are smaller while thinking has no dot contract", () => {
+  const dot = processStatusDotClassName("done");
+  const failedDot = processStatusDotClassName("failed");
+  const thinking = thinkingDisclosureSummaryClassName();
+
+  assert.match(dot, /size-\[5px\]/);
+  assert.match(dot, /bg-juex-done/);
+  assert.match(failedDot, /bg-juex-error/);
+  assert.doesNotMatch(thinking, /bg-juex-done/);
+  assert.doesNotMatch(thinking, /rounded-full/);
+});
+
+test("thinking disclosure uses muted title and direct body content", () => {
+  const summary = thinkingDisclosureSummaryClassName();
+  const body = thinkingDisclosureBodyClassName();
+
+  assert.match(summary, /text-muted-foreground/);
+  assert.match(summary, /inline-flex/);
+  assert.doesNotMatch(summary, /text-juex-done/);
+  assert.match(body, /text-foreground/);
+  assert.doesNotMatch(body, /uppercase/);
 });
