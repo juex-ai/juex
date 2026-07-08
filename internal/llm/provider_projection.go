@@ -166,11 +166,79 @@ func mergeFunctionSchemaObjectBranch(out, branch map[string]any) {
 		out["properties"] = outProps
 	}
 	for name, prop := range branchProps {
-		if _, exists := outProps[name]; exists {
+		if existing, exists := outProps[name]; exists {
+			outProps[name] = mergeFunctionSchemaProperty(existing, prop)
 			continue
 		}
 		outProps[name] = prop
 	}
+}
+
+func mergeFunctionSchemaProperty(existing, incoming any) any {
+	existingSchema, ok := existing.(map[string]any)
+	if !ok {
+		return existing
+	}
+	incomingSchema, ok := incoming.(map[string]any)
+	if !ok {
+		return existing
+	}
+	if existingSchema["type"] == nil && incomingSchema["type"] != nil {
+		existingSchema["type"] = incomingSchema["type"]
+	}
+	if existingSchema["enum"] == nil && incomingSchema["enum"] != nil {
+		existingSchema["enum"] = incomingSchema["enum"]
+		return existingSchema
+	}
+	if merged, ok := mergeFunctionSchemaEnums(existingSchema["enum"], incomingSchema["enum"]); ok {
+		existingSchema["enum"] = merged
+	}
+	return existingSchema
+}
+
+func mergeFunctionSchemaEnums(existing, incoming any) ([]any, bool) {
+	left, ok := schemaEnumValues(existing)
+	if !ok {
+		return nil, false
+	}
+	right, ok := schemaEnumValues(incoming)
+	if !ok {
+		return nil, false
+	}
+	out := make([]any, 0, len(left)+len(right))
+	seen := map[string]bool{}
+	for _, value := range append(left, right...) {
+		key := schemaEnumKey(value)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, value)
+	}
+	return out, true
+}
+
+func schemaEnumValues(value any) ([]any, bool) {
+	switch v := value.(type) {
+	case []any:
+		return append([]any(nil), v...), true
+	case []string:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, item)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func schemaEnumKey(value any) string {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(body)
 }
 
 func shouldCloseImplicitNoArgumentSchema(original, normalized map[string]any) bool {

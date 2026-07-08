@@ -2767,6 +2767,10 @@ func TestNormalizedFunctionParametersFlattensComposedObjectProperties(t *testing
 			t.Fatalf("source properties missing %q: %+v", want, sourceProps)
 		}
 	}
+	typeEnum, ok := schemaValueMap(t, sourceProps["type"])["enum"].([]any)
+	if !ok || len(typeEnum) != 2 || typeEnum[0] != "command" || typeEnum[1] != "schedule" {
+		t.Fatalf("source type enum = %#v, want command and schedule", schemaValueMap(t, sourceProps["type"])["enum"])
+	}
 	filterItems := schemaValueMap(t, schemaValueMap(t, sourceProps["filters"])["items"])
 	if filterItems["type"] != "object" {
 		t.Fatalf("filter item type = %v, want object in %+v", filterItems["type"], filterItems)
