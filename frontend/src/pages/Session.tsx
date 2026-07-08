@@ -1321,7 +1321,7 @@ function ProcessDisclosure({
   status: ToolProcessStatus;
   title: string;
 }) {
-  const [isOpen, setIsOpen] = useState(processDisclosureDefaultOpen);
+  const [isOpen, setIsOpen] = useState(processDisclosureDefaultOpen());
 
   return (
     <details
