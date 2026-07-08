@@ -1225,13 +1225,17 @@ func waitForHTTPTranscript(t *testing.T, baseURL, sessionID, turnID string, time
 	var lastErr, lastState string
 	var lastMessages []testTranscriptMessage
 	for time.Now().Before(deadline) {
+		matched := false
 		messages, err := fetchHTTPTranscript(client, baseURL, sessionID)
 		if err != nil {
 			lastErr = err.Error()
 		} else {
 			lastMessages = messages
 			if match(messages) {
-				return
+				matched = true
+				if turnID == "" {
+					return
+				}
 			}
 		}
 		if turnID != "" {
@@ -1243,7 +1247,12 @@ func waitForHTTPTranscript(t *testing.T, baseURL, sessionID, turnID string, time
 				if state == "errored" {
 					t.Fatalf("turn %s errored while waiting for %s: %s", turnID, label, turnErr)
 				}
+				if matched && state == "done" {
+					return
+				}
 			}
+		} else if matched {
+			return
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
