@@ -111,6 +111,8 @@ test("thinkingProcessVisibleText does not expose redacted encrypted content", ()
     }),
     "plain content fallback",
   );
+  assert.equal(thinkingProcessVisibleText(null), "");
+  assert.equal(thinkingProcessVisibleText(undefined), "");
 });
 
 test("formatToolProcessResultText caps large process output", () => {

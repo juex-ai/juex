@@ -76,13 +76,14 @@ export type ThinkingProcessDisplay = {
 };
 
 export function thinkingProcessVisibleText(
-  block: Pick<ReasoningBlock, "content" | "redacted" | "text">,
+  block?: Pick<ReasoningBlock, "content" | "redacted" | "text"> | null,
 ): string {
+  if (!block) return "";
   if (typeof block.text === "string" && block.text.trim().length > 0) {
     return block.text;
   }
   if (block.redacted) return "";
-  return block.content ?? "";
+  return typeof block.content === "string" ? block.content : "";
 }
 
 export function thinkingProcessDisplay(
