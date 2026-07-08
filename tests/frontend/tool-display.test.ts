@@ -7,6 +7,7 @@ import {
   formatToolBatchTitle,
   formatToolProcessResultText,
   thinkingProcessDisplay,
+  thinkingProcessVisibleText,
   toolDisplayName,
   toolProcessStatus,
   toolProcessStatusLabel,
@@ -83,9 +84,35 @@ test("thinkingProcessDisplay shows visible summaries even when replay content is
     title: "Thinking visible summary",
   });
   assert.deepEqual(thinkingProcessDisplay("", true), {
-    content: "[redacted by provider]",
+    content: "[redacted]",
     title: "Thinking [redacted]",
   });
+});
+
+test("thinkingProcessVisibleText does not expose redacted encrypted content", () => {
+  assert.equal(
+    thinkingProcessVisibleText({
+      text: "visible summary",
+      content: "encrypted payload",
+      redacted: true,
+    }),
+    "visible summary",
+  );
+  assert.equal(
+    thinkingProcessVisibleText({
+      content: "encrypted payload",
+      redacted: true,
+    }),
+    "",
+  );
+  assert.equal(
+    thinkingProcessVisibleText({
+      content: "plain content fallback",
+    }),
+    "plain content fallback",
+  );
+  assert.equal(thinkingProcessVisibleText(null), "");
+  assert.equal(thinkingProcessVisibleText(undefined), "");
 });
 
 test("formatToolProcessResultText caps large process output", () => {

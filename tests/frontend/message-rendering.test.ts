@@ -126,6 +126,11 @@ test("thinking disclosure uses muted title and direct body content", () => {
   assert.match(summary, /text-muted-foreground/);
   assert.match(summary, /inline-flex/);
   assert.doesNotMatch(summary, /text-juex-done/);
+  assert.match(body, /max-h-\[15rem\]/);
+  assert.match(body, /overflow-auto/);
+  assert.match(body, /rounded/);
+  assert.match(body, /border/);
+  assert.match(body, /leading-6/);
   assert.match(body, /text-foreground/);
   assert.doesNotMatch(body, /uppercase/);
 });

@@ -66,6 +66,7 @@ import {
   formatToolBatchTitle,
   formatToolProcessResultText,
   thinkingProcessDisplay,
+  thinkingProcessVisibleText,
   toolDisplayName,
   toolProcessStatus,
   toolProcessStatusLabel,
@@ -1180,7 +1181,7 @@ function MessageGroupView({
             );
           }
           if (unit.kind === "reasoning") {
-            const text = unit.block.text ?? unit.block.content ?? "";
+            const text = thinkingProcessVisibleText(unit.block);
             return (
               <ThinkingProcessRow
                 key={i}

@@ -1,4 +1,5 @@
 import type { ToolUIPartState } from "../components/ai-elements/_local-types";
+import type { ReasoningBlock } from "../types";
 import { formatToolResultText } from "./tool-result-output.ts";
 
 const STATUS_LABELS: Record<ToolUIPartState, string> = {
@@ -74,6 +75,17 @@ export type ThinkingProcessDisplay = {
   title: string;
 };
 
+export function thinkingProcessVisibleText(
+  block?: Pick<ReasoningBlock, "content" | "redacted" | "text"> | null,
+): string {
+  if (!block) return "";
+  if (typeof block.text === "string" && block.text.trim().length > 0) {
+    return block.text;
+  }
+  if (block.redacted) return "";
+  return typeof block.content === "string" ? block.content : "";
+}
+
 export function thinkingProcessDisplay(
   text: string,
   redacted?: boolean,
@@ -81,7 +93,7 @@ export function thinkingProcessDisplay(
   const hasVisibleText = text.trim().length > 0;
   if (redacted && !hasVisibleText) {
     return {
-      content: "[redacted by provider]",
+      content: "[redacted]",
       title: "Thinking [redacted]",
     };
   }
