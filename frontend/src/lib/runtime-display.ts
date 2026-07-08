@@ -2,6 +2,7 @@ import type {
   ContextUsage,
   GoalStatusSnapshot,
   RuntimeHooksStatus,
+  TokenUsage,
   WorkingState,
   WorkingStateRecord,
   WorkingStateStatusSnapshot,
@@ -25,6 +26,28 @@ export function runtimeContextPercentLabel(usage?: ContextUsage): string {
   if (!Number.isFinite(windowTokens) || windowTokens <= 0) return "-";
   if (!Number.isFinite(totalTokens) || totalTokens <= 0) return "0%";
   return formatRuntimePercent((totalTokens / windowTokens) * 100);
+}
+
+export function runtimeContextModelLabel(usage?: ContextUsage): string {
+  return usage?.model?.trim() || "unknown";
+}
+
+export function runtimeContextWindowDetailLabel(usage: ContextUsage): string {
+  const windowTokens = usage.context_window ?? 0;
+  const totalTokens = usage.total_tokens ?? 0;
+  const percent =
+    windowTokens > 0 ? (totalTokens / windowTokens) * 100 : 0;
+  const current = formatRuntimeTokenCount(totalTokens);
+  const window = formatRuntimeTokenCount(windowTokens);
+  return `context window: ${current}/${window} tokens (${formatRuntimePercent(percent)})`;
+}
+
+export function runtimeTokenUsageDetailLabel(usage?: TokenUsage): string {
+  const input = usage?.input_tokens ?? 0;
+  const output = usage?.output_tokens ?? 0;
+  const inputLabel = formatRuntimeTokenCount(input);
+  const outputLabel = formatRuntimeTokenCount(output);
+  return `total tokens: ${inputLabel} in / ${outputLabel} out`;
 }
 
 function formatRuntimePercent(value: number): string {

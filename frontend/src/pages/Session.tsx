@@ -80,10 +80,13 @@ import { cn } from "@/lib/utils";
 import {
   WORKING_STATE_SECTIONS,
   formatRuntimeTimestamp,
-  runtimeGoalContinuationLabel,
+  runtimeContextModelLabel,
   runtimeContextPercentLabel,
+  runtimeContextWindowDetailLabel,
+  runtimeGoalContinuationLabel,
   runtimeSessionStateBadgeLabel,
   runtimeSessionStateIsActive,
+  runtimeTokenUsageDetailLabel,
   workingStatePresenceLabel,
   workingStateRecords,
   workingStateSectionCounts,
@@ -1008,17 +1011,10 @@ function ContextUsageTooltip({
   tokenUsage: TokenUsage;
 }) {
   const windowTokens = usage.context_window ?? 0;
-  const percent =
-    windowTokens > 0
-      ? Math.round((usage.total_tokens / windowTokens) * 1000) / 10
-      : 0;
   return (
     <>
-      <div>
-        {(usage.model && usage.model.trim()) || "unknown"}{" "}
-        {formatTokenCount(usage.total_tokens)}/{formatTokenCount(windowTokens)} tokens (
-        {formatPercent(percent)})
-      </div>
+      <div>{runtimeContextModelLabel(usage)}</div>
+      <div>{runtimeContextWindowDetailLabel(usage)}</div>
       <TokenUsageTooltipLine usage={tokenUsage} />
       {usage.cached_input_tokens ? (
         <div>
@@ -1043,13 +1039,7 @@ function ContextUsageTooltip({
 }
 
 function TokenUsageTooltipLine({ usage }: { usage: TokenUsage }) {
-  const input = usage?.input_tokens ?? 0;
-  const output = usage?.output_tokens ?? 0;
-  return (
-    <div>
-      tokens: {formatTokenCount(input)} in / {formatTokenCount(output)} out
-    </div>
-  );
+  return <div>{runtimeTokenUsageDetailLabel(usage)}</div>;
 }
 
 function ActiveContextDebugLine({
