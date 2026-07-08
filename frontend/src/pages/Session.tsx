@@ -1650,7 +1650,6 @@ function ExternalEventMessage({
     >
       <summary
         className={externalEventRowClassName()}
-        aria-label={toggleLabel}
         title={toggleLabel}
         data-external-event-toggle
         data-mcp-event-toggle={eventKind === "mcp" ? "" : undefined}
