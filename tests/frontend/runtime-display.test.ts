@@ -161,16 +161,21 @@ test("workingStateSectionCounts summarizes sidecar records", () => {
       goal: { text: "ship it" },
       hard_constraints: [{ text: "test first" }],
       open_issues: [{ text: "missing e2e" }, { text: "missing docs" }],
+      tool_failures: [{ text: "exec_command failed" }],
+      active_processes: [{ text: "session 7 running" }],
     },
   });
   assert.equal(counts.find((item) => item.key === "goal")?.count, 1);
   assert.equal(counts.find((item) => item.key === "hard_constraints")?.count, 1);
   assert.equal(counts.find((item) => item.key === "open_issues")?.count, 2);
+  assert.equal(counts.find((item) => item.key === "tool_failures")?.count, 1);
+  assert.equal(counts.find((item) => item.key === "active_processes")?.count, 1);
+  assert.equal(counts.find((item) => item.key === "runtime_budget")?.count, 0);
   assert.equal(counts.find((item) => item.key === "stale_checks")?.count, 0);
-  assert.equal(workingStateRecordCount({ present: true, state: countsState() }), 4);
+  assert.equal(workingStateRecordCount({ present: true, state: countsState() }), 6);
   assert.equal(
     runtimeWorkingStateBadgeLabel({ present: true, state: countsState() }),
-    "state 4",
+    "state 6",
   );
 });
 
@@ -201,5 +206,7 @@ function countsState() {
     goal: { text: "ship it" },
     hard_constraints: [{ text: "test first" }],
     open_issues: [{ text: "missing e2e" }, { text: "missing docs" }],
+    tool_failures: [{ text: "exec_command failed" }],
+    active_processes: [{ text: "session 7 running" }],
   };
 }

@@ -85,15 +85,14 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	}
 	_, history := session.Snapshot(time.Now().UTC())
 	snap := assembleActiveContext(history, incoming)
-	if text, ok := e.workingStateContextSnapshot(); ok {
-		msg := workingStateContextMessage(text)
-		out := make([]llm.Message, 0, len(snap.Messages)+1)
-		out = append(out, msg)
-		out = append(out, snap.Messages...)
-		snap.Messages = out
-		snap.EstimatedTokens = estimateMessageTokens(out)
+	var contextMessages []llm.Message
+	if text, ok := e.goalStateContextSnapshot(); ok {
+		contextMessages = append(contextMessages, goalStateContextMessage(text))
 	}
-	return snap
+	if text, ok := e.workingStateContextSnapshot(); ok {
+		contextMessages = append(contextMessages, workingStateContextMessage(text))
+	}
+	return prependRuntimeContextMessages(snap, contextMessages...)
 }
 
 func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
@@ -101,13 +100,30 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 		return ActiveContextSnapshot{}
 	}
 	snap := assembleActiveContext(e.Session.History, incoming)
-	if text, ok := e.workingStateContextLocked(); ok {
-		msg := workingStateContextMessage(text)
-		out := make([]llm.Message, 0, len(snap.Messages)+1)
-		out = append(out, msg)
-		out = append(out, snap.Messages...)
-		snap.Messages = out
-		snap.EstimatedTokens = estimateMessageTokens(out)
+	var contextMessages []llm.Message
+	if text, ok := e.goalStateContextLocked(); ok {
+		contextMessages = append(contextMessages, goalStateContextMessage(text))
 	}
+	if text, ok := e.workingStateContextLocked(); ok {
+		contextMessages = append(contextMessages, workingStateContextMessage(text))
+	}
+	return prependRuntimeContextMessages(snap, contextMessages...)
+}
+
+func goalStateContextMessage(text string) llm.Message {
+	msg := llm.TextMessage(llm.RoleUser, text)
+	msg.ID = "runtime-goal-contract"
+	return msg
+}
+
+func prependRuntimeContextMessages(snap ActiveContextSnapshot, messages ...llm.Message) ActiveContextSnapshot {
+	if len(messages) == 0 {
+		return snap
+	}
+	out := make([]llm.Message, 0, len(snap.Messages)+len(messages))
+	out = append(out, messages...)
+	out = append(out, snap.Messages...)
+	snap.Messages = out
+	snap.EstimatedTokens = estimateMessageTokens(out)
 	return snap
 }

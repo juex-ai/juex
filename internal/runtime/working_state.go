@@ -27,10 +27,16 @@ const (
 	workingStateChecksResolvedLimit               = 0
 	workingStateOpenIssuesActiveLimit             = 16
 	workingStateOpenIssuesResolvedLimit           = 4
+	workingStateToolFailuresActiveLimit           = 16
+	workingStateToolFailuresResolvedLimit         = 4
 	workingStateLastSuccessfulChecksActiveLimit   = 12
 	workingStateLastSuccessfulChecksResolvedLimit = 0
 	workingStateStaleChecksActiveLimit            = 12
 	workingStateStaleChecksResolvedLimit          = 4
+	workingStateActiveProcessesActiveLimit        = 16
+	workingStateActiveProcessesResolvedLimit      = 4
+	workingStateRuntimeBudgetActiveLimit          = 4
+	workingStateRuntimeBudgetResolvedLimit        = 0
 )
 
 type WorkingStateSource string
@@ -134,8 +140,11 @@ type WorkingState struct {
 	Artifacts            []WorkingStateRecord `json:"artifacts,omitempty"`
 	Checks               []WorkingStateRecord `json:"checks,omitempty"`
 	OpenIssues           []WorkingStateRecord `json:"open_issues,omitempty"`
+	ToolFailures         []WorkingStateRecord `json:"tool_failures,omitempty"`
 	LastSuccessfulChecks []WorkingStateRecord `json:"last_successful_checks,omitempty"`
 	StaleChecks          []WorkingStateRecord `json:"stale_checks,omitempty"`
+	ActiveProcesses      []WorkingStateRecord `json:"active_processes,omitempty"`
+	RuntimeBudget        []WorkingStateRecord `json:"runtime_budget,omitempty"`
 }
 
 type WorkingStateStatusSnapshot struct {
@@ -151,8 +160,11 @@ type WorkingStatePatch struct {
 	Artifacts            []WorkingStateRecord `json:"artifacts,omitempty"`
 	Checks               []WorkingStateRecord `json:"checks,omitempty"`
 	OpenIssues           []WorkingStateRecord `json:"open_issues,omitempty"`
+	ToolFailures         []WorkingStateRecord `json:"tool_failures,omitempty"`
 	LastSuccessfulChecks []WorkingStateRecord `json:"last_successful_checks,omitempty"`
 	StaleChecks          []WorkingStateRecord `json:"stale_checks,omitempty"`
+	ActiveProcesses      []WorkingStateRecord `json:"active_processes,omitempty"`
+	RuntimeBudget        []WorkingStateRecord `json:"runtime_budget,omitempty"`
 }
 
 type WorkingStateOptions struct {
@@ -258,8 +270,11 @@ func (s *WorkingStateStore) ApplyPatch(patch WorkingStatePatch) error {
 	changed = mergeWorkingStateSection(&state.Artifacts, patch.Artifacts, "artifacts", now, "") || changed
 	changed = mergeWorkingStateSection(&state.Checks, patch.Checks, "checks", now, "") || changed
 	changed = mergeWorkingStateSection(&state.OpenIssues, patch.OpenIssues, "open_issues", now, "") || changed
+	changed = mergeWorkingStateSection(&state.ToolFailures, patch.ToolFailures, "tool_failures", now, "") || changed
 	changed = mergeWorkingStateSection(&state.LastSuccessfulChecks, patch.LastSuccessfulChecks, "last_successful_checks", now, "") || changed
 	changed = mergeWorkingStateSection(&state.StaleChecks, patch.StaleChecks, "stale_checks", now, "") || changed
+	changed = mergeWorkingStateSection(&state.ActiveProcesses, patch.ActiveProcesses, "active_processes", now, "") || changed
+	changed = mergeWorkingStateSection(&state.RuntimeBudget, patch.RuntimeBudget, "runtime_budget", now, "") || changed
 	if !changed {
 		return nil
 	}
@@ -335,6 +350,7 @@ func (s *WorkingStateStore) RecordSuccessfulCheck(obs WorkingStateCheckObservati
 	mergeWorkingStateSection(&state.LastSuccessfulChecks, []WorkingStateRecord{rec}, "last_successful_checks", now, WorkingStateSourceToolResult)
 	resolveWorkingStateRecords(state.StaleChecks, paths, now)
 	resolveWorkingStateRecords(state.OpenIssues, paths, now)
+	resolveWorkingStateRecords(state.ToolFailures, paths, now)
 	state.UpdatedAt = now
 	return s.saveLocked(state)
 }
@@ -355,14 +371,20 @@ func (s *WorkingStateStore) RecordOpenIssue(obs WorkingStateIssueObservation) er
 	if text == "" {
 		text = fmt.Sprintf("tool %s failed", obs.ToolName)
 	}
-	return s.ApplyPatch(WorkingStatePatch{OpenIssues: []WorkingStateRecord{{
+	rec := WorkingStateRecord{
 		ID:           workingStateToolRecordID("issue", obs.ToolName, obs.ToolUseID, obs.RelatedPaths),
 		Text:         text,
 		Source:       WorkingStateSourceToolResult,
 		Confidence:   confidence,
 		Severity:     severity,
 		RelatedPaths: obs.RelatedPaths,
-	}}})
+	}
+	failure := rec
+	failure.ID = workingStateToolRecordID("tool_failure", obs.ToolName, obs.ToolUseID, obs.RelatedPaths)
+	return s.ApplyPatch(WorkingStatePatch{
+		OpenIssues:   []WorkingStateRecord{rec},
+		ToolFailures: []WorkingStateRecord{failure},
+	})
 }
 
 func (s *WorkingStateStore) RecordArtifactMutation(toolName, toolUseID string, paths []string) error {
@@ -450,25 +472,31 @@ func (p WorkingStatePatch) empty() bool {
 		len(p.Artifacts) == 0 &&
 		len(p.Checks) == 0 &&
 		len(p.OpenIssues) == 0 &&
+		len(p.ToolFailures) == 0 &&
 		len(p.LastSuccessfulChecks) == 0 &&
-		len(p.StaleChecks) == 0
+		len(p.StaleChecks) == 0 &&
+		len(p.ActiveProcesses) == 0 &&
+		len(p.RuntimeBudget) == 0
 }
 
 func (s WorkingState) RenderProviderContext() (string, bool) {
 	var b strings.Builder
 	writeHeader := func(title string) {
 		if b.Len() == 0 {
-			b.WriteString("Runtime working state (advisory; do not override fresh verified evidence; low-confidence records are not blockers)\n")
+			b.WriteString("Current working observations (runtime-observed; advisory; do not redefine the goal contract; low-confidence records are not blockers)\n")
 		}
 		b.WriteString(title)
 		b.WriteString(":\n")
 	}
 	if s.Goal != nil && s.Goal.active() {
-		writeHeader("Goal")
+		writeHeader("Observed summary")
 		writeWorkingStateRecord(&b, *s.Goal)
 	}
 	writeWorkingStateSection(&b, "Hard constraints", s.HardConstraints, writeHeader)
 	writeWorkingStateSection(&b, "Open issues", s.OpenIssues, writeHeader)
+	writeWorkingStateSection(&b, "Tool failures", s.ToolFailures, writeHeader)
+	writeWorkingStateSection(&b, "Active processes", s.ActiveProcesses, writeHeader)
+	writeWorkingStateSection(&b, "Runtime budget", s.RuntimeBudget, writeHeader)
 	writeWorkingStateSection(&b, "Last successful checks", s.LastSuccessfulChecks, writeHeader)
 	writeWorkingStateSection(&b, "Stale checks", s.StaleChecks, writeHeader)
 	writeWorkingStateSection(&b, "Artifacts", s.Artifacts, writeHeader)
@@ -621,8 +649,11 @@ func defaultWorkingStatePatchSource(patch *WorkingStatePatch, source WorkingStat
 	defaultRecordSource(patch.Artifacts, source)
 	defaultRecordSource(patch.Checks, source)
 	defaultRecordSource(patch.OpenIssues, source)
+	defaultRecordSource(patch.ToolFailures, source)
 	defaultRecordSource(patch.LastSuccessfulChecks, source)
 	defaultRecordSource(patch.StaleChecks, source)
+	defaultRecordSource(patch.ActiveProcesses, source)
+	defaultRecordSource(patch.RuntimeBudget, source)
 }
 
 func defaultRecordSource(records []WorkingStateRecord, source WorkingStateSource) {
@@ -740,8 +771,11 @@ func pruneWorkingState(state WorkingState) WorkingState {
 	state.Artifacts = pruneWorkingStateRecords(state.Artifacts, workingStateArtifactsActiveLimit, workingStateArtifactsResolvedLimit)
 	state.Checks = pruneWorkingStateRecords(state.Checks, workingStateChecksActiveLimit, workingStateChecksResolvedLimit)
 	state.OpenIssues = pruneWorkingStateRecords(state.OpenIssues, workingStateOpenIssuesActiveLimit, workingStateOpenIssuesResolvedLimit)
+	state.ToolFailures = pruneWorkingStateRecords(state.ToolFailures, workingStateToolFailuresActiveLimit, workingStateToolFailuresResolvedLimit)
 	state.LastSuccessfulChecks = pruneWorkingStateRecords(state.LastSuccessfulChecks, workingStateLastSuccessfulChecksActiveLimit, workingStateLastSuccessfulChecksResolvedLimit)
 	state.StaleChecks = pruneWorkingStateRecords(state.StaleChecks, workingStateStaleChecksActiveLimit, workingStateStaleChecksResolvedLimit)
+	state.ActiveProcesses = pruneWorkingStateRecords(state.ActiveProcesses, workingStateActiveProcessesActiveLimit, workingStateActiveProcessesResolvedLimit)
+	state.RuntimeBudget = pruneWorkingStateRecords(state.RuntimeBudget, workingStateRuntimeBudgetActiveLimit, workingStateRuntimeBudgetResolvedLimit)
 	return state
 }
 
@@ -983,8 +1017,11 @@ func redactWorkingState(state WorkingState) WorkingState {
 	state.Artifacts = redactWorkingStateRecords(state.Artifacts)
 	state.Checks = redactWorkingStateRecords(state.Checks)
 	state.OpenIssues = redactWorkingStateRecords(state.OpenIssues)
+	state.ToolFailures = redactWorkingStateRecords(state.ToolFailures)
 	state.LastSuccessfulChecks = redactWorkingStateRecords(state.LastSuccessfulChecks)
 	state.StaleChecks = redactWorkingStateRecords(state.StaleChecks)
+	state.ActiveProcesses = redactWorkingStateRecords(state.ActiveProcesses)
+	state.RuntimeBudget = redactWorkingStateRecords(state.RuntimeBudget)
 	return state
 }
 

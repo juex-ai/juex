@@ -1355,14 +1355,18 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_create_1", ToolName: GoalToolCreate, Input: map[string]any{
-				"description":         "ship this",
-				"verification_method": "tests pass",
+				"description":             "ship this",
+				"acceptance_criteria":     []any{"tests pass"},
+				"required_artifacts":      []any{"artifact.txt"},
+				"validation_requirements": []any{"go test ./..."},
+				"verification_method":     "tests pass",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_update_1", ToolName: GoalToolUpdate, Input: map[string]any{
-				"status": string(GoalStatusSuccess),
+				"status":        string(GoalStatusSuccess),
+				"status_reason": "tests passed",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
@@ -1385,7 +1389,9 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if len(prov.histories) != 4 {
 		t.Fatalf("provider calls = %d", len(prov.histories))
 	}
-	if got := prov.histories[2][len(prov.histories[2])-1].FirstText(); !strings.Contains(got, "current session goal is still in progress") {
+	if got := prov.histories[2][len(prov.histories[2])-1].FirstText(); !strings.Contains(got, "current session goal is still in progress") ||
+		!strings.Contains(got, "Current goal contract") ||
+		!strings.Contains(got, "artifact.txt") {
 		t.Fatalf("goal continuation = %q", got)
 	}
 	if atomic.LoadInt32(&continued) != 1 {
@@ -1395,7 +1401,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess || state.ContinuationCount != 1 {
+	if state.Status != GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || len(state.RequiredArtifacts) != 1 {
 		t.Fatalf("goal state = %+v", state)
 	}
 }

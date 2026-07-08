@@ -350,7 +350,7 @@ func TestWorkingStateActiveContextInjectionEmptyAndDisabled(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.WorkingState = NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})
 
-	if got := messagesText(eng.ActiveContext().Messages); strings.Contains(got, "Runtime working state") {
+	if got := messagesText(eng.ActiveContext().Messages); strings.Contains(got, "Current working observations") {
 		t.Fatalf("empty sidecar should not be injected:\n%s", got)
 	}
 	if err := eng.WorkingState.ApplyPatch(WorkingStatePatch{HardConstraints: []WorkingStateRecord{{
@@ -361,12 +361,12 @@ func TestWorkingStateActiveContextInjectionEmptyAndDisabled(t *testing.T) {
 	}}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := messagesText(eng.ActiveContext().Messages); !strings.Contains(got, "Runtime working state") || !strings.Contains(got, "keep the API stable") {
+	if got := messagesText(eng.ActiveContext().Messages); !strings.Contains(got, "Current working observations") || !strings.Contains(got, "keep the API stable") {
 		t.Fatalf("sidecar not injected:\n%s", got)
 	}
 
 	eng.DisableWorkingState = true
-	if got := messagesText(eng.ActiveContext().Messages); strings.Contains(got, "Runtime working state") {
+	if got := messagesText(eng.ActiveContext().Messages); strings.Contains(got, "Current working observations") {
 		t.Fatalf("disabled sidecar should not be injected:\n%s", got)
 	}
 }
@@ -392,7 +392,7 @@ func TestActiveContextDoesNotWaitForTurnLock(t *testing.T) {
 	select {
 	case got := <-done:
 		eng.mu.Unlock()
-		if !strings.Contains(got, "Runtime working state") || !strings.Contains(got, "render while a turn is running") || !strings.Contains(got, "hi") {
+		if !strings.Contains(got, "Current working observations") || !strings.Contains(got, "render while a turn is running") || !strings.Contains(got, "hi") {
 			t.Fatalf("active context = %q", got)
 		}
 	case <-time.After(200 * time.Millisecond):
@@ -580,8 +580,8 @@ func TestWorkingStateToolResultsUpdateSidecarAndRedactSecrets(t *testing.T) {
 	if len(state.Artifacts) == 0 || len(state.LastSuccessfulChecks) == 0 {
 		t.Fatalf("state missing artifact/check: %+v", state)
 	}
-	if len(activeWorkingStateRecords(state.OpenIssues)) != 0 {
-		t.Fatalf("open issue should be resolved: %+v", state.OpenIssues)
+	if len(activeWorkingStateRecords(state.OpenIssues)) != 0 || len(activeWorkingStateRecords(state.ToolFailures)) != 0 {
+		t.Fatalf("failure observations should be resolved: open=%+v failures=%+v", state.OpenIssues, state.ToolFailures)
 	}
 	data, err := os.ReadFile(filepath.Join(eng.Session.Dir, "working_state.json"))
 	if err != nil {
@@ -589,6 +589,49 @@ func TestWorkingStateToolResultsUpdateSidecarAndRedactSecrets(t *testing.T) {
 	}
 	if strings.Contains(string(data), "super-secret-token") || !strings.Contains(string(data), "[REDACTED]") {
 		t.Fatalf("working state file did not redact secret:\n%s", string(data))
+	}
+}
+
+func TestWorkingStateToolFailureObservationIsDistinctFromOpenIssue(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "artifact.txt")
+	store := NewWorkingStateStore(t.TempDir(), WorkingStateOptions{})
+
+	if err := store.RecordOpenIssue(WorkingStateIssueObservation{
+		ToolName:     "exec_command",
+		ToolUseID:    "call-1",
+		Text:         "command failed",
+		Severity:     WorkingStateSeverityHigh,
+		Confidence:   0.90,
+		RelatedPaths: []string{target},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activeWorkingStateRecords(state.OpenIssues)) != 1 || len(activeWorkingStateRecords(state.ToolFailures)) != 1 {
+		t.Fatalf("expected open issue and tool failure: %+v", state)
+	}
+	rendered, ok := state.RenderProviderContext()
+	if !ok || !strings.Contains(rendered, "Current working observations") || !strings.Contains(rendered, "Tool failures") {
+		t.Fatalf("provider context missing tool failures:\n%s", rendered)
+	}
+
+	if err := store.RecordSuccessfulCheck(WorkingStateCheckObservation{
+		ToolName:     "exec_command",
+		ToolUseID:    "call-2",
+		Text:         "artifact check passed",
+		RelatedPaths: []string{target},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(activeWorkingStateRecords(state.OpenIssues)) != 0 || len(activeWorkingStateRecords(state.ToolFailures)) != 0 {
+		t.Fatalf("successful check should resolve related failure records: %+v", state)
 	}
 }
 

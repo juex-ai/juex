@@ -927,7 +927,7 @@ func TestEndToEnd_WorkingStateSurvivesCompaction(t *testing.T) {
 		t.Fatalf("provider calls = %d", len(prov.history))
 	}
 	afterCompact := messagesText(prov.history[2])
-	for _, want := range []string{"Runtime working state", "bind local services to 0.0.0.0", "CI status still needs confirmation"} {
+	for _, want := range []string{"Current working observations", "bind local services to 0.0.0.0", "CI status still needs confirmation"} {
 		if !strings.Contains(afterCompact, want) {
 			t.Fatalf("post-compaction provider history missing %q:\n%s", want, afterCompact)
 		}
@@ -968,7 +968,7 @@ func TestEndToEnd_WorkingStateDisabledLeavesRunUnchanged(t *testing.T) {
 	if len(prov.history) != 1 || len(prov.history[0]) != 1 {
 		t.Fatalf("history shape changed: %+v", prov.history)
 	}
-	if got := messagesText(prov.history[0]); strings.Contains(got, "Runtime working state") || !strings.Contains(got, "plain turn") {
+	if got := messagesText(prov.history[0]); strings.Contains(got, "Current working observations") || !strings.Contains(got, "plain turn") {
 		t.Fatalf("unexpected provider context:\n%s", got)
 	}
 	if _, err := os.Stat(filepath.Join(a.Session.Dir, "working_state.json")); !os.IsNotExist(err) {
@@ -1561,8 +1561,11 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-create", ToolName: runtime.GoalToolCreate, Input: map[string]any{
-						"description":         "ship goal state",
-						"verification_method": "completion checks pass",
+						"description":             "ship goal state",
+						"acceptance_criteria":     []any{"completion checks pass"},
+						"required_artifacts":      []any{"goal_state.json"},
+						"validation_requirements": []any{"events include goal.continued"},
+						"verification_method":     "completion checks pass",
 					}},
 				}},
 				StopReason: llm.StopToolUse,
@@ -1574,7 +1577,8 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-success", ToolName: runtime.GoalToolUpdate, Input: map[string]any{
-						"status": string(runtime.GoalStatusSuccess),
+						"status":        string(runtime.GoalStatusSuccess),
+						"status_reason": "continuation gate fired and final answer was verified",
 					}},
 				}},
 				StopReason: llm.StopToolUse,
@@ -1608,14 +1612,23 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	if len(prov.history) != 4 {
 		t.Fatalf("provider calls = %d", len(prov.history))
 	}
-	if got := prov.history[2][len(prov.history[2])-1].FirstText(); !strings.Contains(got, "current session goal is still in progress") {
+	if got := prov.history[2][len(prov.history[2])-1].FirstText(); !strings.Contains(got, "current session goal is still in progress") ||
+		!strings.Contains(got, "Current goal contract") ||
+		!strings.Contains(got, "goal_state.json") {
 		t.Fatalf("goal continuation = %q", got)
 	}
 	goalData, err := os.ReadFile(filepath.Join(a.Session.Dir, "goal_state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"description": "ship goal state"`, `"continuation_count": 1`, `"status": "success"`} {
+	for _, want := range []string{
+		`"description": "ship goal state"`,
+		`"required_artifacts": [`,
+		`"goal_state.json"`,
+		`"continuation_count": 1`,
+		`"status": "success"`,
+		`"status_reason": "continuation gate fired and final answer was verified"`,
+	} {
 		if !strings.Contains(string(goalData), want) {
 			t.Fatalf("goal_state.json missing %s:\n%s", want, goalData)
 		}
