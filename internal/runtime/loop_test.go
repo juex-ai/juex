@@ -1853,6 +1853,73 @@ func TestTurn_AdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.
 	}
 }
 
+func TestTurn_CompactedAdmittedPendingInputWithExistingMessageIDIsNotReplayed(t *testing.T) {
+	root := t.TempDir()
+	sess, err := session.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }})
+	record, err := store.Enqueue(llm.TextMessage(llm.RoleUser, "already appended before compact"), PendingInputOptions{ID: "event-1", TTL: time.Hour}, "turn-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkAdmitted([]string{record.ID}, "turn-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Append(record.Message); err != nil {
+		t.Fatal(err)
+	}
+	compact := llm.TextMessage(llm.RoleUser, "summary")
+	compact.ID = "compact-1"
+	compact.Kind = llm.MessageKindCompact
+	if err := sess.Append(compact); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := session.Load(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reloaded.Close() })
+	if got := len(reloaded.History); got != 1 || reloaded.History[0].ID != "compact-1" {
+		t.Fatalf("active history = %+v, want only compact marker", reloaded.History)
+	}
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng := newEngineForSession(t, reloaded, prov)
+	if _, err := eng.Turn(context.Background(), "fresh input"); err != nil {
+		t.Fatal(err)
+	}
+	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != "fresh input" {
+		t.Fatalf("last provider message = %q, want no duplicate replay", got)
+	}
+	_, full, err := session.LoadInfo(sess.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, msg := range full {
+		if msg.ID == record.MessageID {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("persisted message %q count = %d, want 1", record.MessageID, seen)
+	}
+	records, err := store.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[record.ID].State != PendingInputStateProcessed {
+		t.Fatalf("state = %q, want processed", records[record.ID].State)
+	}
+}
+
 func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing.T) {
 	root := t.TempDir()
 	sess, err := session.New(root)

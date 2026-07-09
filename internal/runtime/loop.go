@@ -719,12 +719,7 @@ func (e *Engine) sessionHasMessageIDLocked(id string) bool {
 	if e == nil || e.Session == nil || id == "" {
 		return false
 	}
-	for _, msg := range e.Session.History {
-		if msg.ID == id {
-			return true
-		}
-	}
-	return false
+	return e.Session.HasMessageID(id)
 }
 
 func pendingRecordIDs(pending []queuedPendingInput) []string {

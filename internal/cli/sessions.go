@@ -235,7 +235,7 @@ func newSessionsContextCmd(flags *persistentFlags) *cobra.Command {
 			}
 			id := args[0]
 			dir := filepath.Join(cfg.SessionsDir(), id)
-			_, msgs, err := session.LoadInfo(dir)
+			msgs, err := session.LoadActiveMessages(dir)
 			if err != nil {
 				if os.IsNotExist(err) {
 					return &notFoundError{msg: "session not found: " + id}

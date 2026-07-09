@@ -136,12 +136,6 @@ type sessionMessageWindow struct {
 	Limit  int
 }
 
-type sessionMessagePage struct {
-	Messages        []llm.Message
-	HasMoreBefore   bool
-	OldestMessageID string
-}
-
 func messagesForSessionResponse(msgs []llm.Message) []llm.Message {
 	if msgs == nil {
 		return []llm.Message{}
@@ -157,15 +151,19 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	}
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
-		info, msgs := as.app.Session.Snapshot(time.Now().UTC())
+		info := as.app.Session.Info(time.Now().UTC())
 		info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 			return
 		}
-		page, err := selectSessionMessagePage(msgs, window)
+		page, err := as.app.Session.TranscriptMessagePage(window.Before, window.Limit)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			if errors.Is(err, session.ErrBeforeMessageNotFound) {
+				writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 			return
 		}
 		goal, workingState := s.sessionStateStatus(as.app.Session.Dir, as)
@@ -182,18 +180,17 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	info, msgs, err := session.LoadInfo(dir)
+	info, page, err := session.LoadInfoPage(dir, window.Before, window.Limit)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 			return
 		}
+		if errors.Is(err, session.ErrBeforeMessageNotFound) {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	page, err := selectSessionMessagePage(msgs, window)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 	info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
@@ -262,60 +259,6 @@ func parseSessionMessageWindow(r *http.Request) (sessionMessageWindow, error) {
 	}
 	window.Before = strings.TrimSpace(q.Get("before"))
 	return window, nil
-}
-
-func selectSessionMessagePage(msgs []llm.Message, window sessionMessageWindow) (sessionMessagePage, error) {
-	if msgs == nil {
-		msgs = []llm.Message{}
-	}
-	start := 0
-	end := len(msgs)
-	if window.Before != "" {
-		index := sessionMessageIndex(msgs, window.Before)
-		if index < 0 {
-			return sessionMessagePage{}, fmt.Errorf("before message not found: %s", window.Before)
-		}
-		end = index
-	} else if compactIndex := latestCompactMessageIndex(msgs); compactIndex >= 0 {
-		start = compactIndex
-	}
-	if window.Limit > 0 && end-start > window.Limit {
-		start = end - window.Limit
-	}
-	if start < 0 {
-		start = 0
-	}
-	if end < start {
-		end = start
-	}
-	pageMessages := msgs[start:end]
-	oldestID := ""
-	if len(pageMessages) > 0 {
-		oldestID = pageMessages[0].ID
-	}
-	return sessionMessagePage{
-		Messages:        pageMessages,
-		HasMoreBefore:   start > 0,
-		OldestMessageID: oldestID,
-	}, nil
-}
-
-func latestCompactMessageIndex(msgs []llm.Message) int {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Kind == llm.MessageKindCompact {
-			return i
-		}
-	}
-	return -1
-}
-
-func sessionMessageIndex(msgs []llm.Message, id string) int {
-	for i, msg := range msgs {
-		if msg.ID == id {
-			return i
-		}
-	}
-	return -1
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id string) {
@@ -400,7 +343,7 @@ func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	_, msgs, err := session.LoadInfo(dir)
+	msgs, err := session.LoadActiveMessages(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
