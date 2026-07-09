@@ -131,7 +131,7 @@ configuration lives at `~/.juex/juex.yaml`.
 Skills are exposed with progressive disclosure. The system prompt contains a
 compact, budgeted skill catalog instead of every full `SKILL.md`; the model can
 call `skill_search` to discover catalog entries and `skill_load` to read the
-full markdown body when a skill is relevant. Configure `skills.include` or
+full markdown body plus its source path when a skill is relevant. Configure `skills.include` or
 `skills.exclude` to manually control which merged skills enter the catalog, and
 `skills.prompt_budget_chars` to tune the initial catalog budget. `juex repl`
 and `juex run --verbose` print a resource summary, while `juex run --dry-run

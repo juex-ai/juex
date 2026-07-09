@@ -98,7 +98,13 @@ func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded != body {
+	if !strings.Contains(loaded, "Path: "+filepath.Join(skillDir, "SKILL.md")) {
+		t.Fatalf("skill_load = %q, want SKILL.md path", loaded)
+	}
+	if !strings.Contains(loaded, "Directory: "+skillDir) {
+		t.Fatalf("skill_load = %q, want skill directory", loaded)
+	}
+	if !strings.Contains(loaded, body) {
 		t.Fatalf("skill_load = %q, want full body", loaded)
 	}
 	if _, err := a.Engine.Tools.Call(context.Background(), "skill_load", map[string]any{"name": nil}); err == nil || !strings.Contains(err.Error(), "name is required") {

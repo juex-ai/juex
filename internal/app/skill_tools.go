@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/juex-ai/juex/internal/config"
@@ -73,7 +74,7 @@ func registerSkillTools(reg *tools.Registry, loader *skills.Loader) error {
 	}
 	return reg.Register(tools.Tool{
 		Name:        "skill_load",
-		Description: "Load the full SKILL.md body for a skill by name. Call this before following a skill from the compact skill catalog.",
+		Description: "Load a skill by name, including its SKILL.md path, directory, source, and full markdown body. Call this before following a skill from the compact skill catalog.",
 		Schema: map[string]any{
 			"type":     "object",
 			"required": []string{"name"},
@@ -99,9 +100,13 @@ func registerSkillTools(reg *tools.Registry, loader *skills.Loader) error {
 			if err != nil {
 				return "", err
 			}
-			return string(data), nil
+			return formatSkillLoadResult(skill, string(data)), nil
 		},
 	})
+}
+
+func formatSkillLoadResult(skill skills.Skill, body string) string {
+	return fmt.Sprintf("Skill: %s\nSource: %s\nPath: %s\nDirectory: %s\n\n--- SKILL.md ---\n%s", skill.Name, skill.Source, skill.Path, filepath.Dir(skill.Path), body)
 }
 
 type skillSearchResult struct {
