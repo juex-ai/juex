@@ -101,6 +101,9 @@ func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
 	if loaded != body {
 		t.Fatalf("skill_load = %q, want full body", loaded)
 	}
+	if _, err := a.Engine.Tools.Call(context.Background(), "skill_load", map[string]any{"name": nil}); err == nil || !strings.Contains(err.Error(), "name is required") {
+		t.Fatalf("skill_load nil name error = %v, want name required", err)
+	}
 }
 
 func TestAppShellHelperProcess(t *testing.T) {

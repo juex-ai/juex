@@ -260,24 +260,18 @@ func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetRepo
 	renderLines := func(skills []Skill, descLimit int) []string {
 		lines := make([]string, 0, len(skills))
 		for _, s := range skills {
-			desc := strings.TrimSpace(s.Description)
-			if descLimit > 0 {
-				desc = trimRunes(desc, descLimit)
-			}
-			if desc == "" {
-				desc = "no description"
-			}
-			lines = append(lines, fmt.Sprintf("- **%s** (%s) — %s", s.Name, s.Source, desc))
+			lines = append(lines, promptSkillLine(s, descLimit))
 		}
 		return lines
 	}
+	header := sb.String()
 	fullLines := renderLines(all, 0)
-	full := promptSectionWithLines(sb.String(), fullLines)
+	full := promptSectionWithLines(header, fullLines)
 	if budgetChars <= 0 || len(full) <= budgetChars {
 		return full, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(full)}
 	}
 	compactLines := renderLines(all, 120)
-	compact := promptSectionWithLines(sb.String(), compactLines)
+	compact := promptSectionWithLines(header, compactLines)
 	if len(compact) <= budgetChars {
 		return compact, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(compact), Compacted: true}
 	}
@@ -288,19 +282,32 @@ func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetRepo
 		}
 		return ordered[i].Name < ordered[j].Name
 	})
-	var kept []Skill
+	keptLines := make([]string, 0, len(ordered))
 	var omitted []PromptOmittedSkill
+	usedChars := len(header)
 	for _, s := range ordered {
-		candidate := append(append([]Skill(nil), kept...), s)
-		candidateSection := promptSectionWithLines(sb.String(), renderLines(candidate, 80))
-		if len(candidateSection) <= budgetChars {
-			kept = candidate
+		line := promptSkillLine(s, 80)
+		nextChars := usedChars + len(line) + 1
+		if nextChars <= budgetChars {
+			keptLines = append(keptLines, line)
+			usedChars = nextChars
 			continue
 		}
 		omitted = append(omitted, PromptOmittedSkill{Name: s.Name, Source: s.Source, Reason: "prompt budget"})
 	}
-	section := promptSectionWithLines(sb.String(), renderLines(kept, 80))
+	section := promptSectionWithLines(header, keptLines)
 	return section, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(section), Compacted: true, Omitted: omitted}
+}
+
+func promptSkillLine(s Skill, descLimit int) string {
+	desc := strings.TrimSpace(s.Description)
+	if descLimit > 0 {
+		desc = trimRunes(desc, descLimit)
+	}
+	if desc == "" {
+		desc = "no description"
+	}
+	return fmt.Sprintf("- **%s** (%s) — %s", s.Name, s.Source, desc)
 }
 
 func promptSectionWithLines(header string, lines []string) string {

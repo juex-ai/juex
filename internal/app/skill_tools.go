@@ -86,7 +86,8 @@ func registerSkillTools(reg *tools.Registry, loader *skills.Loader) error {
 		},
 		Handler: func(ctx context.Context, input map[string]any) (string, error) {
 			_ = ctx
-			name := strings.TrimSpace(fmt.Sprint(input["name"]))
+			name, _ := input["name"].(string)
+			name = strings.TrimSpace(name)
 			if name == "" {
 				return "", fmt.Errorf("skill_load: name is required")
 			}
