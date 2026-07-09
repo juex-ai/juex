@@ -7,11 +7,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/cancellation"
+	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -676,6 +679,34 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 	}
 }
 
+func TestMergeInitConfigFileTightensSecretFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file mode bits do not model Unix secret permissions")
+	}
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	if err := writeJuexConfigFile(path, "openai", "https://old.example", "sk-old", "gpt-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := mergeInitConfigFile(path, initProviderSpec{
+		ID:     "openai",
+		APIKey: "sk-new",
+		Model:  "gpt-new",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config mode = %o, want 600", got)
+	}
+}
+
 func TestInitCmd_UserScopeIgnoresBrokenWorkspaceConfig(t *testing.T) {
 	home := setHomeForCLITest(t)
 	root := newRootCmd()
@@ -701,6 +732,26 @@ func TestInitCmd_UserScopeIgnoresBrokenWorkspaceConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".juex", "juex.yaml")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLoadInitConfigForCheckIgnoresBrokenWorkspaceConfig(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeTextFile(filepath.Join(work, ".juex", "juex.yaml"), "model: [broken\n"); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(target, "openai", "https://example.invalid", "sk-user", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadInitConfigForCheck(target, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4.1" || cfg.APIKey != "sk-user" {
+		t.Fatalf("cfg = %+v", cfg)
 	}
 }
 
@@ -749,6 +800,44 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("missing check %q in:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestDoctorCredentialsCheckWarnsForLocalOrCustomProvidersWithoutAPIKey(t *testing.T) {
+	local := doctorCredentialsCheck(config.Config{
+		ProviderID:       "openai",
+		ProviderProtocol: string(llm.ProtocolOpenAIChat),
+		BaseURL:          "http://127.0.0.1:11434/v1",
+		Model:            "local-model",
+	})
+	if local.Status != doctorStatusWarn {
+		t.Fatalf("local status = %s, want warn", local.Status)
+	}
+
+	custom := doctorCredentialsCheck(config.Config{
+		ProviderID:       "local-proxy",
+		ProviderProtocol: string(llm.ProtocolOpenAIChat),
+		BaseURL:          "https://proxy.example",
+		Model:            "model",
+	})
+	if custom.Status != doctorStatusWarn {
+		t.Fatalf("custom status = %s, want warn", custom.Status)
+	}
+
+	cloud := doctorCredentialsCheck(config.Config{
+		ProviderID:       "openai",
+		ProviderProtocol: string(llm.ProtocolOpenAIResponses),
+		Model:            "gpt-4.1",
+	})
+	if cloud.Status != doctorStatusFail {
+		t.Fatalf("cloud status = %s, want fail", cloud.Status)
+	}
+}
+
+func TestDoctorWorkdirCheckMissingJuexIsHealthy(t *testing.T) {
+	check := doctorWorkdirCheck(t.TempDir())
+	if check.Status != doctorStatusOK {
+		t.Fatalf("workdir status = %s, want ok: %+v", check.Status, check)
 	}
 }
 

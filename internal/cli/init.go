@@ -83,7 +83,7 @@ Use --scope workspace to write the current workspace .juex/juex.yaml.`,
 			cmdPrintln(cmd, fmt.Sprintf("Wrote %s", target))
 			cmdPrintln(cmd, result)
 			if !opts.skipCheck {
-				if err := runInitHelloCheck(cmd.Context(), workDir); err != nil {
+				if err := runInitHelloCheck(cmd.Context(), target, workDir); err != nil {
 					return err
 				}
 				cmdPrintln(cmd, "Provider hello check passed.")
@@ -309,12 +309,19 @@ func mergeInitConfigFile(path string, spec initProviderSpec) (string, error) {
 	enc := yaml.NewEncoder(f)
 	enc.SetIndent(2)
 	encodeErr := enc.Encode(doc)
+	closeEncErr := enc.Close()
 	closeErr := f.Close()
 	if encodeErr != nil {
 		return "", encodeErr
 	}
+	if closeEncErr != nil {
+		return "", closeEncErr
+	}
 	if closeErr != nil {
 		return "", closeErr
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", err
 	}
 	if exists {
 		return "Merged provider settings without overwriting existing provider fields.", nil
@@ -442,22 +449,33 @@ func newModelNode(id string) *yaml.Node {
 }
 
 func validateInitConfig(path, workDir string) error {
-	validateWorkDir := workDir
-	workspaceConfig := (config.Config{WorkDir: workDir}).RuntimePaths().RuntimeConfigPath
-	if cleanPath(path) != cleanPath(workspaceConfig) {
-		tmp, err := os.MkdirTemp("", "juex-init-validate-")
-		if err == nil {
-			defer func() {
-				_ = os.RemoveAll(tmp)
-			}()
-			validateWorkDir = tmp
-		}
-	}
+	validateWorkDir, cleanup := initConfigCheckWorkDir(path, workDir)
+	defer cleanup()
 	_, err := config.LoadFromFileForWorkDir(path, validateWorkDir)
 	if err != nil {
 		return fmt.Errorf("init: wrote %s but config validation failed: %w", path, err)
 	}
 	return nil
+}
+
+func initConfigCheckWorkDir(path, workDir string) (string, func()) {
+	workspaceConfig := (config.Config{WorkDir: workDir}).RuntimePaths().RuntimeConfigPath
+	if cleanPath(path) == cleanPath(workspaceConfig) {
+		return workDir, func() {}
+	}
+	tmp, err := os.MkdirTemp("", "juex-init-validate-")
+	if err != nil {
+		return workDir, func() {}
+	}
+	return tmp, func() {
+		_ = os.RemoveAll(tmp)
+	}
+}
+
+func loadInitConfigForCheck(path, workDir string) (config.Config, error) {
+	checkWorkDir, cleanup := initConfigCheckWorkDir(path, workDir)
+	defer cleanup()
+	return config.LoadFromFileForWorkDir(path, checkWorkDir)
 }
 
 func cleanPath(path string) string {
@@ -467,8 +485,8 @@ func cleanPath(path string) string {
 	return filepath.Clean(path)
 }
 
-func runInitHelloCheck(ctx context.Context, workDir string) error {
-	cfg, err := config.LoadForWorkDir(workDir)
+func runInitHelloCheck(ctx context.Context, path, workDir string) error {
+	cfg, err := loadInitConfigForCheck(path, workDir)
 	if err != nil {
 		return err
 	}

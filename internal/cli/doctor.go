@@ -3,10 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -163,18 +164,41 @@ func doctorConfigCheck(cfg config.Config) doctorCheck {
 
 func doctorCredentialsCheck(cfg config.Config) doctorCheck {
 	if strings.TrimSpace(cfg.APIKey) == "" {
+		status := doctorStatusFail
+		if providerAllowsMissingAPIKey(cfg) {
+			status = doctorStatusWarn
+		}
 		suggestion := "set providers[].api_key or PROVIDER_API_KEY"
 		if cfg.ProviderID == "openai-codex" || cfg.ProviderProtocol == string(llm.ProtocolOpenAICodexResponses) {
 			suggestion = "run Codex login or set providers[].api_key"
 		}
 		return doctorCheck{
 			Name:       "credentials",
-			Status:     doctorStatusFail,
+			Status:     status,
 			Message:    "selected provider has no API key",
 			Suggestion: suggestion,
 		}
 	}
 	return doctorCheck{Name: "credentials", Status: doctorStatusOK, Message: "credentials available"}
+}
+
+func providerAllowsMissingAPIKey(cfg config.Config) bool {
+	if !isKnownInitProvider(cfg.ProviderID) {
+		return true
+	}
+	if raw := strings.TrimSpace(cfg.BaseURL); raw != "" {
+		u, err := url.Parse(raw)
+		if err == nil {
+			host := u.Hostname()
+			if strings.EqualFold(host, "localhost") {
+				return true
+			}
+			if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func doctorConnectivityCheck(ctx context.Context, cfg config.Config, offline bool) doctorCheck {
@@ -224,7 +248,7 @@ func doctorWorkdirCheck(workDir string) doctorCheck {
 	juexDir := filepath.Join(workDir, ".juex")
 	if st, err := os.Stat(juexDir); err != nil {
 		if os.IsNotExist(err) {
-			return doctorCheck{Name: "workdir", Status: doctorStatusWarn, Message: ".juex directory does not exist yet", Suggestion: "run `juex init --scope workspace` to create workspace config"}
+			return doctorCheck{Name: "workdir", Status: doctorStatusOK, Message: ".juex directory does not exist yet"}
 		}
 		return doctorCheck{Name: "workdir", Status: doctorStatusFail, Message: err.Error(), Suggestion: "check workdir permissions"}
 	} else if !st.IsDir() {
@@ -275,19 +299,6 @@ func commandExecutable(command string) error {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return fmt.Errorf("command is empty")
-	}
-	if strings.ContainsAny(command, `/\`) || filepath.IsAbs(command) {
-		st, err := os.Stat(command)
-		if err != nil {
-			return err
-		}
-		if st.IsDir() {
-			return fmt.Errorf("is a directory")
-		}
-		if runtime.GOOS != "windows" && st.Mode()&0o111 == 0 {
-			return fmt.Errorf("is not executable")
-		}
-		return nil
 	}
 	_, err := exec.LookPath(command)
 	return err
