@@ -1389,10 +1389,18 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if len(prov.histories) != 4 {
 		t.Fatalf("provider calls = %d", len(prov.histories))
 	}
-	if got := prov.histories[2][len(prov.histories[2])-1].FirstText(); !strings.Contains(got, "current session goal is still in progress") ||
-		!strings.Contains(got, "Current goal contract") ||
-		!strings.Contains(got, "artifact.txt") {
+	continuationHistory := prov.histories[2]
+	if len(continuationHistory) < 2 {
+		t.Fatalf("continuation history = %+v", continuationHistory)
+	}
+	if got := continuationHistory[len(continuationHistory)-2].FirstText(); !strings.Contains(got, "current session goal is still in progress") {
 		t.Fatalf("goal continuation = %q", got)
+	}
+	goalContext := continuationHistory[len(continuationHistory)-1]
+	if goalContext.Kind != llm.MessageKindRuntimeContext ||
+		!strings.Contains(goalContext.FirstText(), "Current goal contract") ||
+		!strings.Contains(goalContext.FirstText(), "artifact.txt") {
+		t.Fatalf("goal runtime context = %+v", goalContext)
 	}
 	if atomic.LoadInt32(&continued) != 1 {
 		t.Fatalf("goal.continued events = %d", continued)

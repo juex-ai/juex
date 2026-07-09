@@ -36,6 +36,22 @@ func TestSelectCompactionInput_DoesNotOrphanToolResult(t *testing.T) {
 	}
 }
 
+func TestSelectCompactionInput_IgnoresRuntimeContextAsTailTurnStart(t *testing.T) {
+	runtimeContext := testMsg("runtime-working-state", llm.RoleUser, "Current working observations")
+	runtimeContext.Kind = llm.MessageKindRuntimeContext
+	h := []llm.Message{
+		testMsg("m1", llm.RoleUser, "old question"),
+		testMsg("m2", llm.RoleAssistant, "old answer"),
+		testMsg("m3", llm.RoleUser, "recent question"),
+		runtimeContext,
+	}
+
+	sel := selectCompactionInput(h, compactionPolicy{KeepRecentTokens: 1000, TailTurns: 1})
+	if len(sel.RetainedTail) != 2 || sel.RetainedTail[0].ID != "m3" {
+		t.Fatalf("tail = %+v, want recent user turn plus runtime context", sel.RetainedTail)
+	}
+}
+
 func testMsg(id string, role llm.Role, text string) llm.Message {
 	m := llm.TextMessage(role, text)
 	m.ID = id

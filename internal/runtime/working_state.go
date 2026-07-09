@@ -509,6 +509,7 @@ func (s WorkingState) RenderProviderContext() (string, bool) {
 func workingStateContextMessage(text string) llm.Message {
 	msg := llm.TextMessage(llm.RoleUser, text)
 	msg.ID = "runtime-working-state"
+	msg.Kind = llm.MessageKindRuntimeContext
 	return msg
 }
 

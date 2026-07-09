@@ -92,7 +92,7 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if text, ok := e.workingStateContextSnapshot(); ok {
 		contextMessages = append(contextMessages, workingStateContextMessage(text))
 	}
-	return prependRuntimeContextMessages(snap, contextMessages...)
+	return appendRuntimeContextMessages(snap, contextMessages...)
 }
 
 func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
@@ -107,22 +107,23 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 	if text, ok := e.workingStateContextLocked(); ok {
 		contextMessages = append(contextMessages, workingStateContextMessage(text))
 	}
-	return prependRuntimeContextMessages(snap, contextMessages...)
+	return appendRuntimeContextMessages(snap, contextMessages...)
 }
 
 func goalStateContextMessage(text string) llm.Message {
 	msg := llm.TextMessage(llm.RoleUser, text)
 	msg.ID = "runtime-goal-contract"
+	msg.Kind = llm.MessageKindRuntimeContext
 	return msg
 }
 
-func prependRuntimeContextMessages(snap ActiveContextSnapshot, messages ...llm.Message) ActiveContextSnapshot {
+func appendRuntimeContextMessages(snap ActiveContextSnapshot, messages ...llm.Message) ActiveContextSnapshot {
 	if len(messages) == 0 {
 		return snap
 	}
 	out := make([]llm.Message, 0, len(snap.Messages)+len(messages))
-	out = append(out, messages...)
 	out = append(out, snap.Messages...)
+	out = append(out, messages...)
 	snap.Messages = out
 	snap.EstimatedTokens = estimateMessageTokens(out)
 	return snap

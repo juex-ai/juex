@@ -371,6 +371,47 @@ func TestWorkingStateActiveContextInjectionEmptyAndDisabled(t *testing.T) {
 	}
 }
 
+func TestActiveContextAppendsRuntimeContextAfterDurableHistory(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	eng.WorkingState = NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})
+
+	if _, err := eng.GoalState.CreateWithContract(GoalStateCreate{
+		Description:        "ship cache fix",
+		AcceptanceCriteria: []string{"history cache breakpoint is stable"},
+		VerificationMethod: "go test ./internal/llm ./internal/runtime",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.WorkingState.ApplyPatch(WorkingStatePatch{HardConstraints: []WorkingStateRecord{{
+		Text:     "preserve durable prompt prefix",
+		Severity: WorkingStateSeverityHigh,
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	durable := llm.TextMessage(llm.RoleUser, "durable user turn")
+	durable.ID = "durable-user"
+	if err := eng.Session.Append(durable); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := eng.ActiveContext().Messages
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want durable + goal + working state: %+v", len(messages), messages)
+	}
+	if messages[0].ID != "durable-user" {
+		t.Fatalf("runtime context should not precede durable history: %+v", messages)
+	}
+	for _, msg := range messages[1:] {
+		if msg.Kind != llm.MessageKindRuntimeContext {
+			t.Fatalf("runtime context kind = %q, want %q for %+v", msg.Kind, llm.MessageKindRuntimeContext, msg)
+		}
+	}
+	if messages[1].ID != "runtime-goal-contract" || messages[2].ID != "runtime-working-state" {
+		t.Fatalf("runtime context order = %+v", messages[1:])
+	}
+}
+
 func TestActiveContextDoesNotWaitForTurnLock(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)
 	eng.WorkingState = NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})

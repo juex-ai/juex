@@ -102,7 +102,7 @@ func protectToolPairCut(work []llm.Message, cut int) int {
 }
 
 func isUserTurnStart(m llm.Message) bool {
-	if m.Role != llm.RoleUser || m.Kind == llm.MessageKindCompact {
+	if m.Role != llm.RoleUser || m.Kind == llm.MessageKindCompact || m.Kind == llm.MessageKindRuntimeContext {
 		return false
 	}
 	for _, b := range m.Blocks {

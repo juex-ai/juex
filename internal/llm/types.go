@@ -38,6 +38,10 @@ const (
 	// persisted transcript keeps the original messages; provider calls only
 	// include the latest compact summary plus later messages.
 	MessageKindCompact = "compact"
+	// MessageKindRuntimeContext marks transient provider-visible runtime
+	// advisory context. It is assembled per request and should not be treated as
+	// durable user input for cache breakpoints or compaction turn boundaries.
+	MessageKindRuntimeContext = "runtime_context"
 )
 
 type Block struct {

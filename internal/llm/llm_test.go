@@ -286,7 +286,12 @@ func TestAnthropic_CompleteOptionsAddsCacheControlAndRecordsCacheReadTokens(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := CompleteWithOptions(context.Background(), p, "system text", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
+	runtimeContext := TextMessage(RoleUser, "runtime state changes every turn")
+	runtimeContext.Kind = MessageKindRuntimeContext
+	resp, err := CompleteWithOptions(context.Background(), p, "system text", []Message{
+		TextMessage(RoleUser, "hello"),
+		runtimeContext,
+	}, []ToolSpec{
 		{Name: "read", Description: "read a file", Schema: map[string]any{"type": "object"}},
 	}, CompleteOptions{CachePolicy: CachePolicy{StablePrefixKey: "juex-cache-key", Retention: "1h"}})
 	if err != nil {
@@ -311,8 +316,47 @@ func TestAnthropic_CompleteOptionsAddsCacheControlAndRecordsCacheReadTokens(t *t
 	if cacheControl["type"] != "ephemeral" || cacheControl["ttl"] != "1h" {
 		t.Fatalf("tool cache_control = %+v", cacheControl)
 	}
+	msgs, _ := capturedBody["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %+v", capturedBody["messages"])
+	}
+	durableContent, _ := msgs[0].(map[string]any)["content"].([]any)
+	if len(durableContent) != 1 {
+		t.Fatalf("durable message content = %+v", msgs[0])
+	}
+	durableBlock, _ := durableContent[0].(map[string]any)
+	cacheControl, _ = durableBlock["cache_control"].(map[string]any)
+	if cacheControl["type"] != "ephemeral" || cacheControl["ttl"] != "1h" {
+		t.Fatalf("history cache_control should be on durable history block, got %+v", durableBlock)
+	}
+	runtimeContent, _ := msgs[1].(map[string]any)["content"].([]any)
+	if len(runtimeContent) != 1 {
+		t.Fatalf("runtime message content = %+v", msgs[1])
+	}
+	runtimeBlock, _ := runtimeContent[0].(map[string]any)
+	if _, ok := runtimeBlock["cache_control"]; ok {
+		t.Fatalf("runtime context must not carry history cache_control: %+v", runtimeBlock)
+	}
 	if resp.Usage.CachedInputTokens != 64 {
 		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	}
+}
+
+func TestProviderContextPreservesRuntimeContextKindBoundary(t *testing.T) {
+	runtimeContext := TextMessage(RoleUser, "Current working observations")
+	runtimeContext.Kind = MessageKindRuntimeContext
+	ctx, err := BuildProviderContext([]Message{
+		TextMessage(RoleUser, "durable user input"),
+		runtimeContext,
+	}, presetProfile("anthropic"), ProviderContextOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctx.Messages) != 2 {
+		t.Fatalf("messages len = %d, want durable and runtime context split: %+v", len(ctx.Messages), ctx.Messages)
+	}
+	if ctx.Messages[1].Kind != MessageKindRuntimeContext {
+		t.Fatalf("runtime context kind = %q, want %q", ctx.Messages[1].Kind, MessageKindRuntimeContext)
 	}
 }
 
