@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  messageGroupShouldShowModel,
-  messagesToGroups,
-} from "../../frontend/src/lib/display-units.ts";
+import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
 import {
   messageGroupCanCopy,
   messageGroupCopyText,
@@ -87,48 +84,5 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
       ["tool-2", "memory_write", "second"],
       ["tool-3", "update_goal", "third"],
     ],
-  );
-});
-
-test("messageGroupShouldShowModel only shows normal assistant model labels", () => {
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "assistant-normal",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "gpt-test",
-    }),
-    true,
-  );
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "assistant-system",
-      role: "assistant",
-      kind: "system_status",
-      pending: false,
-      units: [],
-      model: "gpt-test",
-    }),
-    false,
-  );
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "user-with-model",
-      role: "user",
-      pending: false,
-      units: [],
-      model: "gpt-test",
-    }),
-    false,
-  );
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "assistant-no-model",
-      role: "assistant",
-      pending: false,
-      units: [],
-    }),
-    false,
   );
 });

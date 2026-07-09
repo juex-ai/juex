@@ -6,6 +6,7 @@ import {
   externalEventRowClassName,
   messageContentBaseClassName,
   messageContentRoleClassName,
+  messageGroupShouldShowModel,
   messageResponseClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
@@ -41,6 +42,49 @@ test("assistant message chrome keeps card treatment", () => {
   assert.match(base, /border-border/);
   assert.match(base, /text-card-foreground/);
   assert.match(assistant, /group-\[\.is-assistant\]:rounded-tl-\[6px\]/);
+});
+
+test("message model labels only render for normal assistant messages", () => {
+  assert.equal(
+    messageGroupShouldShowModel({
+      key: "assistant-normal",
+      role: "assistant",
+      pending: false,
+      units: [],
+      model: "gpt-test",
+    }),
+    true,
+  );
+  assert.equal(
+    messageGroupShouldShowModel({
+      key: "assistant-system",
+      role: "assistant",
+      kind: "system_status",
+      pending: false,
+      units: [],
+      model: "gpt-test",
+    }),
+    false,
+  );
+  assert.equal(
+    messageGroupShouldShowModel({
+      key: "user-with-model",
+      role: "user",
+      pending: false,
+      units: [],
+      model: "gpt-test",
+    }),
+    false,
+  );
+  assert.equal(
+    messageGroupShouldShowModel({
+      key: "assistant-no-model",
+      role: "assistant",
+      pending: false,
+      units: [],
+    }),
+    false,
+  );
 });
 
 test("external event row renders as inline text instead of a bubble", () => {

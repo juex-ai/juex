@@ -36,7 +36,6 @@ import {
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import {
-  messageGroupShouldShowModel,
   messagesToGroups,
   toolState,
   type MessageGroup,
@@ -82,6 +81,7 @@ import {
   externalEventBodyClassName,
   externalEventCopyClassName,
   externalEventRowClassName,
+  messageGroupShouldShowModel,
   processDisclosureBodyClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,

@@ -95,7 +95,8 @@ juex/
 │   │   ├── types.ts                # mirror of API/session DTOs + browser event contract
 │   │   ├── lib/
 │   │   │   ├── utils.ts            # shadcn `cn` helper
-│   │   │   └── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
+│   │   │   ├── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
+│   │   │   └── message-rendering.ts # message chrome and display-policy helpers
 │   │   ├── pages/
 │   │   │   ├── Sessions.tsx        # /
 │   │   │   ├── Session.tsx         # /sessions/:id; send access follows kind + active state
