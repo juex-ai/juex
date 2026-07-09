@@ -63,3 +63,28 @@ func TestBuildProviderContextRejectsCanonicalDanglingToolUse(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestBuildProviderContextRejectsImageBeforePendingToolResult(t *testing.T) {
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "call_image",
+			ToolName:  "render_chart",
+		}}},
+		{Role: RoleUser, Blocks: []Block{
+			{Type: BlockImage, Media: &MediaRef{ArtifactPath: ".juex/artifacts/media/s/image.png", MediaType: "image/png"}},
+			{Type: BlockToolResult, ToolUseID: "call_image", ToolName: "render_chart", Content: "chart"},
+		}},
+	}
+
+	_, err := BuildProviderContext(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true, Vision: true},
+	}, ProviderContextOptions{})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "call_image") ||
+		!strings.Contains(err.Error(), "before message 2 block 1") {
+		t.Fatalf("error = %v", err)
+	}
+}

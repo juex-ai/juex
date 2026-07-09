@@ -756,6 +756,9 @@ func mergeProviderCapabilitiesConfig(base, override providerCapabilitiesConfig) 
 	if override.Tools != nil {
 		base.Tools = override.Tools
 	}
+	if override.Vision != nil {
+		base.Vision = override.Vision
+	}
 	if override.Streaming != nil {
 		base.Streaming = override.Streaming
 	}

@@ -1500,6 +1500,39 @@ providers:
 	}
 }
 
+func TestLoadFromFile_ProviderVisionCapabilitySurvivesMerge(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: local:vision-model
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://local.example
+    api_key: sk-local
+    capabilities:
+      vision: true
+    models:
+      - id: vision-model
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderCapabilities.Vision == nil || !*cfg.ProviderCapabilities.Vision {
+		t.Fatalf("provider vision override = %+v, want true", cfg.ProviderCapabilities.Vision)
+	}
+	profile, err := cfg.ProviderProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !profile.Capabilities.Vision {
+		t.Fatalf("profile capabilities = %+v, want provider-level vision enabled", profile.Capabilities)
+	}
+}
+
 func TestLoadFromFile_OpenAICodexIDUsesDefaultCodexAuth(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

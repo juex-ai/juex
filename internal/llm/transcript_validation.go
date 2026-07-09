@@ -48,6 +48,8 @@ func providerVisibleValidationBoundary(block Block) bool {
 	switch block.Type {
 	case BlockText:
 		return block.Text != ""
+	case BlockImage:
+		return true
 	case BlockReasoning:
 		return block.Text != "" || block.Content != ""
 	case BlockToolUse:
