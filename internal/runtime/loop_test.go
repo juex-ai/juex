@@ -1043,6 +1043,109 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	}
 }
 
+func TestCompactStartedIncludesToolSchemaBudget(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	eng.Tools.MustRegister(tools.Tool{
+		Name:        "large_schema_tool",
+		Description: strings.Repeat("tool schema description ", 80),
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"payload": map[string]any{"type": "string", "description": strings.Repeat("payload ", 120)},
+			},
+		},
+		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	withoutTools := eng.estimateContextTokens("system", nil, eng.activeContextLocked().Messages)
+	var started ContextCompactStartedPayload
+	bus.Subscribe("context.compact.started", func(e events.Event) {
+		started = e.Payload.(ContextCompactStartedPayload)
+	})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
+		t.Fatal(err)
+	}
+	if started.TokensBefore <= withoutTools {
+		t.Fatalf("tokens_before = %d, want above message-only estimate %d", started.TokensBefore, withoutTools)
+	}
+}
+
+func TestCompactUsesSummaryProviderWhenConfigured(t *testing.T) {
+	main := &namedCompactionProvider{name: "main:model", text: "main summary"}
+	summary := &namedCompactionProvider{name: "summary:model", text: "custom summary"}
+	eng, _ := newEngine(t, main, false)
+	eng.SummaryProvider = summary
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.calls != 1 || main.calls != 0 {
+		t.Fatalf("provider calls: summary=%d main=%d", summary.calls, main.calls)
+	}
+	if result.SummaryModel != "summary:model" {
+		t.Fatalf("summary model = %q", result.SummaryModel)
+	}
+}
+
+func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
+	main := &namedCompactionProvider{name: "main:model", text: "main summary"}
+	summary := &namedCompactionProvider{name: "summary:model", err: errors.New("summary model unavailable")}
+	eng, bus := newEngine(t, main, false)
+	eng.SummaryProvider = summary
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.SummaryModel = "summary:model"
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(e events.Event) {
+		fallback = e.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.calls != 1 || main.calls != 1 {
+		t.Fatalf("provider calls: summary=%d main=%d", summary.calls, main.calls)
+	}
+	if result.SummaryModel != "main:model" {
+		t.Fatalf("summary model = %q", result.SummaryModel)
+	}
+	if fallback.ConfiguredModel != "summary:model" || fallback.FallbackModel != "main:model" || !strings.Contains(fallback.Error, "unavailable") {
+		t.Fatalf("fallback payload = %+v", fallback)
+	}
+}
+
 func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1187,6 +1290,31 @@ func (p *budgetedCompactionProvider) CompleteWithOptions(ctx context.Context, sy
 		return llm.Response{}, fmt.Errorf("context_length_exceeded: compaction request has %d tokens", p.compactionTokens)
 	}
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "bounded summary"), StopReason: llm.StopEndTurn}, nil
+}
+
+type namedCompactionProvider struct {
+	name  string
+	text  string
+	err   error
+	calls int
+}
+
+func (p *namedCompactionProvider) Name() string { return p.name }
+
+func (p *namedCompactionProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *namedCompactionProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	p.calls++
+	if p.err != nil {
+		return llm.Response{}, p.err
+	}
+	text := p.text
+	if text == "" {
+		text = "summary"
+	}
+	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, text), StopReason: llm.StopEndTurn}, nil
 }
 
 func TestTurn_PersistsEmptyAssistantResponse(t *testing.T) {

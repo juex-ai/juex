@@ -30,5 +30,6 @@
   "context.compact.started",
   "context.compact.completed",
   "context.compact.errored",
+  "context.compact.summary_model_fallback",
   "context.projection.applied"
 ]

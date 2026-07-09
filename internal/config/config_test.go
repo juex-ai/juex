@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/llm"
 )
 
 func TestLoadFromFile(t *testing.T) {
@@ -1257,6 +1259,7 @@ compaction:
   reserve_tokens: 1000
   keep_recent_tokens: 2000
   tail_turns: 3
+  summary_model: compact:gpt-4-mini
   summary_max_tokens: 777
   tool_result_max_chars: 888
 `
@@ -1266,8 +1269,76 @@ compaction:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.TailTurns != 3 || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
+	if cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.TailTurns != 3 || cfg.Compaction.SummaryModel != "compact:gpt-4-mini" || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
 		t.Fatalf("Compaction = %+v", cfg.Compaction)
+	}
+}
+
+func TestConfig_ProviderProfileForModelRef(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai:gpt-4
+providers:
+  - id: openai
+    base_url: https://main.example.com
+    api_key: sk-main
+    models:
+      - id: gpt-4
+  - id: compact
+    protocol: openai/chat
+    base_url: https://compact.example.com
+    api_key: sk-compact
+    models:
+      - id: gpt-4-mini
+        thinking_effort: low
+compaction:
+  summary_model: compact:gpt-4-mini
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFileForWorkDir(configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := cfg.ProviderProfileForModelRef(cfg.Compaction.SummaryModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "compact" || profile.Protocol != llm.ProtocolOpenAIChat || profile.BaseURL != "https://compact.example.com" || profile.APIKey != "sk-compact" || profile.Model != "gpt-4-mini" || profile.ThinkingEffort != "low" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
+func TestConfig_ProviderProfileForModelRefKeepsEnvCredentials(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: local:gpt-4
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://main.example.com
+    models:
+      - id: gpt-4
+      - id: gpt-4-mini
+compaction:
+  summary_model: local:gpt-4-mini
+`
+	writeTextFile(t, configPath, body)
+	t.Setenv("PROVIDER_API_BASE", "https://env.example.com")
+	t.Setenv("PROVIDER_API_KEY", "sk-env")
+
+	cfg, err := LoadFromFileForWorkDir(configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := cfg.ProviderProfileForModelRef(cfg.Compaction.SummaryModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "local" || profile.Protocol != llm.ProtocolOpenAIChat || profile.BaseURL != "https://env.example.com" || profile.APIKey != "sk-env" || profile.Model != "gpt-4-mini" {
+		t.Fatalf("profile = %+v", profile)
 	}
 }
 

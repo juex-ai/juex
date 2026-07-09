@@ -57,6 +57,32 @@ func (c Config) ProviderSelection() ProviderSelection {
 	}
 }
 
+func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, error) {
+	cfg := c
+	if err := cfg.ApplyModelOverride(ref); err != nil {
+		return ProviderSelection{}, err
+	}
+	if err := applyOSEnvExcept(&cfg, map[string]struct{}{
+		"PROVIDER_API_ID":       {},
+		"PROVIDER_API_PROTOCOL": {},
+		"PROVIDER_API_MODEL":    {},
+	}); err != nil {
+		return ProviderSelection{}, err
+	}
+	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+		return ProviderSelection{}, err
+	}
+	return cfg.ProviderSelection(), nil
+}
+
+func (c Config) ProviderProfileForModelRef(ref string) (llm.ProviderProfile, error) {
+	selection, err := c.ProviderSelectionForModelRef(ref)
+	if err != nil {
+		return llm.ProviderProfile{}, err
+	}
+	return selection.ProviderProfile()
+}
+
 func (s ProviderSelection) ProviderProfile() (llm.ProviderProfile, error) {
 	if s.ID == "" && s.Protocol == "" {
 		return llm.ProviderProfile{}, fmt.Errorf("config: provider id/protocol is empty")

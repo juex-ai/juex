@@ -213,7 +213,8 @@ the Web UI and the `observable_*` agent tools. Command sources capture bounded
 stdout/stderr batches from managed commands. Schedule sources emit one-shot,
 daily, or interval Observations without an external wrapper and persist
 schedule state under `.juex/observables/`. Observables are workspace-local in
-the first version.
+the first version. Created Observables may omit `id` when `name` can be
+slugged into a stable lower-case id.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

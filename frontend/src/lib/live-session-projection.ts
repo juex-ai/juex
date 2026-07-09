@@ -392,6 +392,7 @@ export function projectLiveSessionEvent(
       };
       effects.push({ type: "refresh", preserveLiveMessages: true });
       break;
+    case "context.compact.summary_model_fallback":
     case "context.compact.skipped":
     case "context.projection.applied":
       break;
