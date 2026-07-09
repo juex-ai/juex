@@ -69,11 +69,10 @@ type Dir struct {
 }
 
 type Loader struct {
-	dirs         []Dir // ordered: lowest precedence first
-	policy       Policy
-	skills       map[string]Skill
-	filtered     []FilteredSkill
-	promptReport PromptBudgetReport
+	dirs     []Dir // ordered: lowest precedence first
+	policy   Policy
+	skills   map[string]Skill
+	filtered []FilteredSkill
 }
 
 // NewLoader creates a loader. dirs are scanned in the supplied order; later
@@ -106,7 +105,6 @@ func NewLoaderFromDirsWithOptions(dirs []Dir, opts LoaderOptions) *Loader {
 func (l *Loader) Load() error {
 	l.skills = make(map[string]Skill)
 	l.filtered = nil
-	l.promptReport = PromptBudgetReport{}
 	for _, dir := range l.dirs {
 		if strings.TrimSpace(dir.Path) == "" {
 			continue
@@ -236,7 +234,7 @@ func (l *Loader) Policy() Policy {
 }
 
 func (l *Loader) PromptReport() PromptBudgetReport {
-	report := l.promptReport
+	_, report := l.promptSectionAndReport()
 	report.Omitted = append([]PromptOmittedSkill(nil), report.Omitted...)
 	return report
 }
@@ -244,13 +242,17 @@ func (l *Loader) PromptReport() PromptBudgetReport {
 // PromptSection renders the skills index for the system prompt. Each skill
 // is listed compactly; full skill bodies are loaded on demand with skill_load.
 func (l *Loader) PromptSection() string {
+	section, _ := l.promptSectionAndReport()
+	return section
+}
+
+func (l *Loader) promptSectionAndReport() (string, PromptBudgetReport) {
 	all := l.All()
 	if len(all) == 0 {
-		return ""
+		return "", PromptBudgetReport{}
 	}
 	section, report := renderPromptSection(all, l.policy.PromptBudgetChars)
-	l.promptReport = report
-	return section
+	return section, report
 }
 
 func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetReport) {

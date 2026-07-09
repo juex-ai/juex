@@ -283,7 +283,6 @@ func loadRuntimeSkills(dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSki
 	if err := skillLoader.Load(); err != nil {
 		return RuntimeSkillsStatus{}, nil, err
 	}
-	_ = skillLoader.PromptSection()
 	loadedSkills := skillLoader.All()
 	items := make([]RuntimeSkillInfo, 0, len(loadedSkills))
 	for _, skill := range loadedSkills {
