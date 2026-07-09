@@ -58,8 +58,8 @@ func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits
 	sum := sha256.Sum256(data)
 	sha := hex.EncodeToString(sum[:])
 	name := sha + ext
-	dir := filepath.Join(workDir, ".juex", "artifacts", "media", sessionID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir, err := ensureSessionMediaDir(workDir, sessionID)
+	if err != nil {
 		return MediaRef{}, fmt.Errorf("user media: create media dir: %w", err)
 	}
 	path := filepath.Join(dir, name)
@@ -202,6 +202,27 @@ func imageDimensions(data []byte) (int, int, bool) {
 		return 0, 0, false
 	}
 	return cfg.Width, cfg.Height, true
+}
+
+func ensureSessionMediaDir(workDir, sessionID string) (string, error) {
+	dir := workDir
+	for _, elem := range []string{".juex", "artifacts", "media", sessionID} {
+		dir = filepath.Join(dir, elem)
+		if err := os.Mkdir(dir, 0o700); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%s is a symlink", dir)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", dir)
+		}
+	}
+	return dir, nil
 }
 
 func writeIfMissing(path string, data []byte) error {

@@ -247,8 +247,13 @@ export function projectLiveSessionEvent(
   const effects: LiveSessionProjectionEffect[] = [];
 
   switch (event.type) {
-    case "turn.started":
-      next = consumeQueuedInput(next, event.payload.input, event.payload.kind);
+    case "turn.started": {
+      const consumed = consumeQueuedInput(
+        next,
+        event.payload.input,
+        event.payload.kind,
+      );
+      next = consumed.state;
       next = {
         ...next,
         messages: appendLiveTurnToMessages(
@@ -257,11 +262,13 @@ export function projectLiveSessionEvent(
           event.payload.input,
           event.payload.kind,
           "event",
+          consumed.item?.attachments,
         ),
         turnActive: true,
         status: { kind: "running" },
       };
       break;
+    }
     case "llm.requested":
       next = { ...next, turnActive: true, status: { kind: "running" } };
       break;
@@ -470,21 +477,28 @@ function consumeQueuedInput(
   state: LiveSessionProjection,
   input: string | undefined,
   kind: string | undefined,
-): LiveSessionProjection {
-  if (!input) return state;
-  const index = state.queuedInput.items.findIndex(
-    (item) => item.input === input && item.kind === kind,
+): { state: LiveSessionProjection; item?: QueuedInput } {
+  const normalizedInput = input ?? "";
+  let index = state.queuedInput.items.findIndex(
+    (item) => item.input === normalizedInput && item.kind === kind,
   );
-  if (index < 0) return state;
+  if (index < 0 && normalizedInput === "" && state.queuedInput.items.length > 0) {
+    index = 0;
+  }
+  if (index < 0) return { state };
+  const item = state.queuedInput.items[index];
   return {
-    ...state,
-    queuedInput: {
-      ...state.queuedInput,
-      items: [
-        ...state.queuedInput.items.slice(0, index),
-        ...state.queuedInput.items.slice(index + 1),
-      ],
+    state: {
+      ...state,
+      queuedInput: {
+        ...state.queuedInput,
+        items: [
+          ...state.queuedInput.items.slice(0, index),
+          ...state.queuedInput.items.slice(index + 1),
+        ],
+      },
     },
+    item,
   };
 }
 

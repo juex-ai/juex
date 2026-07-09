@@ -235,6 +235,38 @@ test("projectQueuedInput keeps image attachments for drained queued turns", () =
   assert.deepEqual(queued?.blocks, [{ type: "image", media: imageMedia }]);
 });
 
+test("projectLiveSessionEvent preserves queued attachments when SSE omits them", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(state, "queued image", undefined, 1, [imageMedia]);
+  state = apply(state, {
+    id: "e1",
+    type: "pending_input.queued",
+    ts: "2026-06-15T00:00:00Z",
+    payload: { input: "queued image", pending_count: 1 },
+  });
+
+  assert.deepEqual(state.queuedInput.items[0]?.attachments, [imageMedia]);
+});
+
+test("projectLiveSessionEvent promotes image-only queued turns with attachments", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(state, "", undefined, 1, [imageMedia]);
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-image",
+    payload: { input: "" },
+  });
+
+  assert.equal(state.queuedInput.items.length, 0);
+  assert.deepEqual(state.messages[0]?.blocks, [
+    { type: "image", media: imageMedia },
+  ]);
+  assert.equal(state.messages[1]?.role, "assistant");
+  assert.equal(state.messages[1]?.pending, true);
+});
+
 test("projectSessionTurnStatus does not duplicate an existing assistant turn", () => {
   const state = projectSessionTurnStatus(
     {

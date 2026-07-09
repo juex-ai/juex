@@ -104,6 +104,42 @@ func TestStoreUploadConcurrentSameImage(t *testing.T) {
 	}
 }
 
+func TestStoreUploadRejectsSymlinkedMediaRoots(t *testing.T) {
+	data := testPNG(t)
+	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
+	cases := []string{
+		".juex",
+		filepath.Join(".juex", "artifacts"),
+		filepath.Join(".juex", "artifacts", "media"),
+		filepath.Join(".juex", "artifacts", "media", "session-1"),
+	}
+	for _, linkRel := range cases {
+		t.Run(linkRel, func(t *testing.T) {
+			workDir := t.TempDir()
+			outside := t.TempDir()
+			linkPath := filepath.Join(workDir, linkRel)
+			if err := os.MkdirAll(filepath.Dir(linkPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, linkPath); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+
+			_, err := StoreUpload(workDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+			if err == nil {
+				t.Fatalf("StoreUpload accepted symlinked media root %s", linkRel)
+			}
+			entries, readErr := os.ReadDir(outside)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("upload wrote through symlinked media root %s into %s", linkRel, outside)
+			}
+		})
+	}
+}
+
 func TestValidateSessionMediaRefsAcceptsStoredImage(t *testing.T) {
 	workDir := t.TempDir()
 	data := testPNG(t)

@@ -31,7 +31,8 @@ export function enqueueQueuedInput(
     id: existing?.id ?? `queued-${nextSeq++}`,
     input: input ?? "",
     kind,
-    attachments,
+    attachments:
+      attachments.length > 0 ? attachments : (existing?.attachments ?? []),
   });
 
   if (pendingCount > 0) {
@@ -39,15 +40,16 @@ export function enqueueQueuedInput(
     if (current.length === pendingCount) {
       const index = pendingCount - 1;
       const existing = current[index];
+      const nextItem = makeItem(existing);
       if (
-        existing?.input === (input ?? "") &&
-        existing.kind === kind &&
-        sameAttachments(existing.attachments, attachments)
+        existing?.input === nextItem.input &&
+        existing.kind === nextItem.kind &&
+        sameAttachments(existing.attachments, nextItem.attachments ?? [])
       ) {
         return state;
       }
       const next = [...current];
-      next[index] = makeItem(existing);
+      next[index] = nextItem;
       return { items: next, nextSeq };
     }
   }
