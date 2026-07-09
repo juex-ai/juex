@@ -42,11 +42,14 @@ import (
 type Options struct {
 	Config   config.Config
 	Provider llm.Provider // optional; if nil, derived from Config
-	Verbose  bool
-	Debug    bool
-	LogLevel string
-	Stderr   io.Writer
-	WorkDir  string // if set, overrides Config.WorkDir
+	// SummaryProvider, when set, overrides compaction.summary_model provider
+	// construction. It is primarily useful for tests and embedded callers.
+	SummaryProvider llm.Provider
+	Verbose         bool
+	Debug           bool
+	LogLevel        string
+	Stderr          io.Writer
+	WorkDir         string // if set, overrides Config.WorkDir
 	// MCPManager, when set, provides process-scoped MCP clients owned by
 	// the caller. App registers proxy tools into its per-session registry
 	// but does not close the manager.
@@ -152,6 +155,18 @@ func New(opts Options) (*App, error) {
 			return nil, err
 		}
 		provider = p
+	}
+	summaryProvider := opts.SummaryProvider
+	if summaryProvider == nil && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
+		profile, err := cfg.ProviderProfileForModelRef(runtimeLimits.Compaction.SummaryModel)
+		if err != nil {
+			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
+		}
+		p, err := llm.NewProvider(profile)
+		if err != nil {
+			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)
+		}
+		summaryProvider = p
 	}
 
 	bus := events.NewBus()
@@ -260,12 +275,13 @@ func New(opts Options) (*App, error) {
 	}
 
 	eng := &runtime.Engine{
-		Provider: provider,
-		Tools:    reg,
-		Bus:      bus,
-		Session:  sess,
-		Prompt:   pb,
-		Hooks:    hookRunner,
+		Provider:        provider,
+		SummaryProvider: summaryProvider,
+		Tools:           reg,
+		Bus:             bus,
+		Session:         sess,
+		Prompt:          pb,
+		Hooks:           hookRunner,
 		HookContext: hooks.Request{
 			CWD:              runtimePaths.WorkDir,
 			WorkspaceRoots:   []string{runtimePaths.WorkDir},
@@ -351,7 +367,10 @@ func New(opts Options) (*App, error) {
 		}
 		a.mcp = buildMCPStatus(nil, opts.MCPManager.ToolCounts(), opts.MCPManager.StartupErrors())
 	} else if len(mcpConfigs) > 0 {
-		connectOpts := mcp.ConnectOptions{}
+		connectOpts := mcp.ConnectOptions{
+			Stderr:        stderr,
+			ForwardStderr: opts.Verbose,
+		}
 		if sess.Kind == session.KindPrimary {
 			connectOpts.EnableClaudeChannel = true
 			connectOpts.OnNotification = func(n mcp.Notification) {

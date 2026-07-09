@@ -9,6 +9,7 @@ type Policy struct {
 	ReserveTokens              int
 	KeepRecentTokens           int
 	TailTurns                  int
+	SummaryModel               string
 	SummaryMaxTokens           int
 	ToolResultMaxChars         int
 	UserInputInlineMaxBytes    int
@@ -100,6 +101,7 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 		ReserveTokens:              reserve,
 		KeepRecentTokens:           keep,
 		TailTurns:                  tailTurns,
+		SummaryModel:               policy.SummaryModel,
 		SummaryMaxTokens:           summaryMax,
 		ToolResultMaxChars:         toolMax,
 		UserInputInlineMaxBytes:    userInlineMax,

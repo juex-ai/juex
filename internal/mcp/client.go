@@ -83,6 +83,7 @@ type Client struct {
 	closed atomic.Bool
 
 	onNotification func(Notification)
+	stderrTail     *stderrTailBuffer
 }
 
 // Notification is a server-initiated MCP JSON-RPC notification that Juex
@@ -99,7 +100,14 @@ type Notification struct {
 type ConnectOptions struct {
 	OnNotification      func(Notification)
 	EnableClaudeChannel bool
+	// Stderr receives MCP server stderr only when ForwardStderr is true.
+	// Stderr is always retained in a bounded diagnostic tail for startup
+	// errors so normal CLI output is not polluted by server logs.
+	Stderr        io.Writer
+	ForwardStderr bool
 }
+
+const mcpStderrTailBytes = 32 * 1024
 
 // ServerError marks an MCP setup failure with the server name that produced
 // it so callers can surface per-server diagnostics.
@@ -147,7 +155,6 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 	}
 	cmd := exec.CommandContext(ctx, spec.Command, spec.Args...)
 	cmd.Env = mergeEnv(spec.Env)
-	cmd.Stderr = os.Stderr // forward server logs
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -157,6 +164,11 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 	if err != nil {
 		return nil, err
 	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderrTail := newStderrTailBuffer(mcpStderrTailBytes)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("mcp[%s]: start: %w", name, err)
 	}
@@ -167,8 +179,10 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 		in:             stdin,
 		pending:        make(map[string]chan rpcCallResult),
 		onNotification: opts.OnNotification,
+		stderrTail:     stderrTail,
 	}
 	go c.readLoop(stdout)
+	go copyServerStderr(name, stderr, stderrTail, opts)
 
 	capabilities := map[string]any{}
 	if opts.EnableClaudeChannel {
@@ -182,12 +196,12 @@ func ConnectWithOptions(ctx context.Context, name string, spec ServerSpec, opts 
 		"clientInfo":      map[string]any{"name": clientName, "version": clientVersion},
 	}); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("mcp[%s]: initialize: %w", name, err)
+		return nil, c.withStderrTail(fmt.Errorf("mcp[%s]: initialize: %w", name, err))
 	}
 	// notifications/initialized — no id, no response expected
 	if err := c.notify("notifications/initialized", map[string]any{}); err != nil {
 		c.Close()
-		return nil, err
+		return nil, c.withStderrTail(err)
 	}
 	return c, nil
 }
@@ -198,7 +212,7 @@ func (c *Client) Name() string { return c.name }
 func (c *Client) ListTools(ctx context.Context) ([]ToolDescriptor, error) {
 	resp, err := c.call(ctx, "tools/list", map[string]any{})
 	if err != nil {
-		return nil, err
+		return nil, c.withStderrTail(err)
 	}
 	var payload struct {
 		Tools []ToolDescriptor `json:"tools"`
@@ -508,4 +522,104 @@ func mergeEnv(extra map[string]string) []string {
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+func copyServerStderr(name string, r io.Reader, tail *stderrTailBuffer, opts ConnectOptions) {
+	if tail == nil {
+		tail = newStderrTailBuffer(mcpStderrTailBytes)
+	}
+	writers := []io.Writer{tail}
+	if opts.ForwardStderr && opts.Stderr != nil {
+		writers = append(writers, newLinePrefixWriter(opts.Stderr, fmt.Sprintf("[mcp:%s] ", name)))
+	}
+	_, _ = io.Copy(io.MultiWriter(writers...), r)
+}
+
+func (c *Client) withStderrTail(err error) error {
+	if err == nil || c == nil || c.stderrTail == nil {
+		return err
+	}
+	tail := strings.TrimSpace(c.stderrTail.String())
+	if tail == "" {
+		return err
+	}
+	return fmt.Errorf("%w\nmcp stderr tail:\n%s", err, tail)
+}
+
+type stderrTailBuffer struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func newStderrTailBuffer(max int) *stderrTailBuffer {
+	if max <= 0 {
+		max = mcpStderrTailBytes
+	}
+	return &stderrTailBuffer{max: max}
+}
+
+func (b *stderrTailBuffer) Write(p []byte) (int, error) {
+	if b == nil {
+		return len(p), nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(p) >= b.max {
+		b.buf = append(b.buf[:0], p[len(p)-b.max:]...)
+		return len(p), nil
+	}
+	b.buf = append(b.buf, p...)
+	if overflow := len(b.buf) - b.max; overflow > 0 {
+		copy(b.buf, b.buf[overflow:])
+		b.buf = b.buf[:b.max]
+	}
+	return len(p), nil
+}
+
+func (b *stderrTailBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(append([]byte(nil), b.buf...))
+}
+
+type linePrefixWriter struct {
+	mu          sync.Mutex
+	w           io.Writer
+	prefix      string
+	atLineStart bool
+}
+
+func newLinePrefixWriter(w io.Writer, prefix string) io.Writer {
+	return &linePrefixWriter{w: w, prefix: prefix, atLineStart: true}
+}
+
+func (w *linePrefixWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := len(p)
+	for len(p) > 0 {
+		if w.atLineStart {
+			if _, err := io.WriteString(w.w, w.prefix); err != nil {
+				return 0, err
+			}
+			w.atLineStart = false
+		}
+		i := strings.IndexByte(string(p), '\n')
+		if i < 0 {
+			if _, err := w.w.Write(p); err != nil {
+				return 0, err
+			}
+			return n, nil
+		}
+		if _, err := w.w.Write(p[:i+1]); err != nil {
+			return 0, err
+		}
+		w.atLineStart = true
+		p = p[i+1:]
+	}
+	return n, nil
 }

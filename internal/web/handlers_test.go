@@ -176,7 +176,7 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 
 	t.Setenv("JUEX_WEB_OBSERVABLE_HELPER", "1")
 	createBody, err := json.Marshal(map[string]any{
-		"id":      "web-events",
+		"name":    "Web Events",
 		"command": os.Args[0],
 		"args":    []string{"-test.run=TestWebObservableHelperProcess", "--", "json-once"},
 		"env":     map[string]string{"JUEX_WEB_OBSERVABLE_HELPER": "1"},

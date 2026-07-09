@@ -9,9 +9,12 @@ written in Python). Run through the repo uv environment:
 
 Exposes one tool, `echo`, that mirrors the input string back as text.
 """
+import sys
+
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("fake-mcp")
+print("JUEX-FAKE-MCP-STDERR marker", file=sys.stderr)
 
 
 @mcp.tool()

@@ -988,6 +988,7 @@ compaction:
   reserve_tokens: 16384
   keep_recent_tokens: 20000
   tail_turns: 2
+  summary_model: ""
   summary_max_tokens: 2048
   tool_result_max_chars: 2000
   user_input_inline_max_bytes: 65536
@@ -1044,6 +1045,7 @@ compaction:
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
 | `compaction.tail_turns` | minimum recent user turns retained verbatim |
+| `compaction.summary_model` | optional `provider:model` used only for compaction summary calls; if omitted or if the summary provider fails, compaction uses the active model |
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
 | `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `.juex/artifacts/user-inputs/` and replaced by a stable preview before provider calls |

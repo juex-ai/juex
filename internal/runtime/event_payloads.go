@@ -227,6 +227,12 @@ type ContextCompactErroredPayload struct {
 	Error  string `json:"error"`
 }
 
+type ContextCompactSummaryFallbackPayload struct {
+	ConfiguredModel string `json:"configured_model,omitempty"`
+	FallbackModel   string `json:"fallback_model,omitempty"`
+	Error           string `json:"error"`
+}
+
 type ContextCompactCompletedPayload struct {
 	MessageID          string `json:"message_id"`
 	Reason             string `json:"reason"`
