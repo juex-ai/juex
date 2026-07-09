@@ -2,12 +2,18 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -730,6 +736,333 @@ func TestBuiltins_ReadWriteEdit(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if string(data) != "hello Juex" {
 		t.Fatalf("after edit: %q", string(data))
+	}
+}
+
+func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
+	workDir := t.TempDir()
+	imagePath := filepath.Join(workDir, "shot.png")
+	source := testPNG(t, 2, 1)
+	if err := os.WriteFile(imagePath, source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "shot.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"[image 2x1", "image/png", "bytes"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("read output = %q, want substring %q", out, want)
+		}
+	}
+	media, ok := MediaRefFromStructuredResult(info.StructuredResult)
+	if !ok || media == nil {
+		t.Fatalf("structured result = %#v, want media", info.StructuredResult)
+	}
+	if media.MediaType != "image/png" || media.Width != 2 || media.Height != 1 {
+		t.Fatalf("media = %+v, want png 2x1", media)
+	}
+	if media.OriginalBytes != len(source) {
+		t.Fatalf("original bytes = %d, want %d", media.OriginalBytes, len(source))
+	}
+	if !strings.HasPrefix(filepath.ToSlash(media.ArtifactPath), ".juex/artifacts/media/read/") {
+		t.Fatalf("artifact path = %q, want read media artifact", media.ArtifactPath)
+	}
+	cached, err := os.ReadFile(filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath)))
+	if err != nil {
+		t.Fatalf("read cached media: %v", err)
+	}
+	sum := sha256.Sum256(cached)
+	if got := hex.EncodeToString(sum[:]); got != media.SHA256 {
+		t.Fatalf("sha = %q, want cached file sha %q", media.SHA256, got)
+	}
+	sentinel := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	artifactPath := filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath))
+	if err := os.Chtimes(artifactPath, sentinel, sentinel); err != nil {
+		t.Fatalf("set cached media time: %v", err)
+	}
+	if _, _, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "shot.png"}); err != nil {
+		t.Fatal(err)
+	}
+	stat, err := os.Stat(artifactPath)
+	if err != nil {
+		t.Fatalf("stat cached media: %v", err)
+	}
+	if !stat.ModTime().Equal(sentinel) {
+		t.Fatalf("cached media mtime = %s, want unchanged %s", stat.ModTime(), sentinel)
+	}
+
+	if err := os.WriteFile(artifactPath, []byte("stale artifact bytes"), 0o644); err != nil {
+		t.Fatalf("poison cached media: %v", err)
+	}
+	if _, _, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "shot.png"}); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("read repaired media: %v", err)
+	}
+	if !bytes.Equal(repaired, cached) {
+		t.Fatalf("cached media was not repaired")
+	}
+}
+
+func TestBuiltins_ReadImageRequiresMagicBytes(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "fake.png"), []byte("not really an image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "fake.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "not really an image" {
+		t.Fatalf("read output = %q, want text fallback", out)
+	}
+	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
+		t.Fatalf("structured result = %#v, want no media", info.StructuredResult)
+	}
+}
+
+func TestBuiltins_ReadImageOmitsUnreadableImagePayload(t *testing.T) {
+	workDir := t.TempDir()
+	truncatedPNG := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
+	if err := os.WriteFile(filepath.Join(workDir, "truncated.png"), truncatedPNG, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "truncated.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"image omitted", "dimensions unknown for image/png"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("read output = %q, want substring %q", out, want)
+		}
+	}
+	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
+		t.Fatalf("structured result = %#v, want no media", info.StructuredResult)
+	}
+}
+
+func TestBuiltins_ReadImageRejectsOffsetLimit(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "shot.png"), testPNG(t, 2, 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, _, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "shot.png", "offset": 1})
+	if err == nil || !strings.Contains(err.Error(), "offset and limit are not supported for image files") {
+		t.Fatalf("err = %v, want image offset error", err)
+	}
+}
+
+func TestBuiltins_ReadImageDownsamplesLongSide(t *testing.T) {
+	workDir := t.TempDir()
+	sourcePath := filepath.Join(workDir, "wide.png")
+	source := testPNG(t, 2101, 3)
+	if err := os.WriteFile(sourcePath, source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "wide.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, ok := MediaRefFromStructuredResult(info.StructuredResult)
+	if !ok || media == nil {
+		t.Fatalf("structured result = %#v, want media", info.StructuredResult)
+	}
+	if media.Width > readImageMaxSide || media.Height > readImageMaxSide {
+		t.Fatalf("media dimensions = %dx%d, want max side <= %d", media.Width, media.Height, readImageMaxSide)
+	}
+	cached, err := os.Open(filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath)))
+	if err != nil {
+		t.Fatalf("open cached media: %v", err)
+	}
+	defer cached.Close()
+	cfg, err := png.DecodeConfig(cached)
+	if err != nil {
+		t.Fatalf("decode cached png: %v", err)
+	}
+	if cfg.Width > readImageMaxSide || cfg.Height > readImageMaxSide {
+		t.Fatalf("cached dimensions = %dx%d, want max side <= %d", cfg.Width, cfg.Height, readImageMaxSide)
+	}
+	original, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	originalCfg, err := png.DecodeConfig(original)
+	if err != nil {
+		t.Fatalf("decode original png: %v", err)
+	}
+	if originalCfg.Width != 2101 {
+		t.Fatalf("original width = %d, want source untouched", originalCfg.Width)
+	}
+}
+
+func TestBuiltins_ReadImageDownsampleFailureStillReturnsMedia(t *testing.T) {
+	workDir := t.TempDir()
+	source := corruptLargePNG(2101, 3)
+	if err := os.WriteFile(filepath.Join(workDir, "corrupt.png"), source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "corrupt.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "[image 2101x3") || strings.Contains(out, "\x89PNG") {
+		t.Fatalf("read output = %q, want media summary without raw png bytes", out)
+	}
+	media, ok := MediaRefFromStructuredResult(info.StructuredResult)
+	if !ok || media == nil {
+		t.Fatalf("structured result = %#v, want media", info.StructuredResult)
+	}
+	cached, err := os.ReadFile(filepath.Join(workDir, filepath.FromSlash(media.ArtifactPath)))
+	if err != nil {
+		t.Fatalf("read cached media: %v", err)
+	}
+	if string(cached) != string(source) {
+		t.Fatalf("cached media changed on downsample failure")
+	}
+}
+
+func TestBuiltins_ReadImageOmitsUnsafePixelCount(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "huge.png"), corruptLargePNG(20000, 20000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "huge.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "image omitted") || !strings.Contains(out, "pixel count") {
+		t.Fatalf("read output = %q, want pixel-limit omission", out)
+	}
+	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
+		t.Fatalf("structured result = %#v, want no media for unsafe pixel count", info.StructuredResult)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex", "artifacts", "media", "read")); !os.IsNotExist(err) {
+		t.Fatalf("unsafe image should not create media artifact dir, stat err=%v", err)
+	}
+}
+
+func TestBuiltins_ReadImageOmitsOversizeNonDownsampledFormat(t *testing.T) {
+	workDir := t.TempDir()
+	source := append([]byte("RIFF\x00\x00\x00\x00WEBP"), bytes.Repeat([]byte("x"), readImageMaxBytes+1)...)
+	if err := os.WriteFile(filepath.Join(workDir, "large.webp"), source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "large.webp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "image omitted") || !strings.Contains(out, "non-downsampled image/webp") {
+		t.Fatalf("read output = %q, want oversize webp omission", out)
+	}
+	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
+		t.Fatalf("structured result = %#v, want no media for oversized webp", info.StructuredResult)
+	}
+}
+
+func TestBuiltins_ReadImageReturnsWebPDimensions(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "small.webp"), testWebPVP8X(640, 480), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	_, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "small.webp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, ok := MediaRefFromStructuredResult(info.StructuredResult)
+	if !ok || media == nil {
+		t.Fatalf("structured result = %#v, want webp media", info.StructuredResult)
+	}
+	if media.Width != 640 || media.Height != 480 {
+		t.Fatalf("webp dimensions = %dx%d, want 640x480", media.Width, media.Height)
+	}
+}
+
+func TestBuiltins_ReadImageOmitsLargeWebPDimensions(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "wide.webp"), testWebPVP8X(readImageMaxSide+1, 10), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "wide.webp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "image omitted") || !strings.Contains(out, "dimensions") {
+		t.Fatalf("read output = %q, want webp dimension omission", out)
+	}
+	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
+		t.Fatalf("structured result = %#v, want no media for oversized webp dimensions", info.StructuredResult)
+	}
+}
+
+func TestBuiltins_ReadImageOmitsReencodedOversizeImage(t *testing.T) {
+	workDir := t.TempDir()
+	source := highEntropyPNG(t, 1500, 1500)
+	if len(source) <= readImageMaxBytes {
+		t.Fatalf("test image size = %d, want > %d", len(source), readImageMaxBytes)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "noise.png"), source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRegistry()
+	registerTestBuiltins(r, workDir)
+
+	out, info, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "noise.png"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "image omitted") || !strings.Contains(out, "after downsampling") {
+		t.Fatalf("read output = %q, want re-encoded byte-limit omission", out)
+	}
+	if media, ok := MediaRefFromStructuredResult(info.StructuredResult); ok || media != nil {
+		t.Fatalf("structured result = %#v, want no media for oversized re-encode", info.StructuredResult)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex", "artifacts", "media", "read")); !os.IsNotExist(err) {
+		t.Fatalf("oversized re-encode should not create media artifact dir, stat err=%v", err)
 	}
 }
 
@@ -2968,6 +3301,82 @@ func TestBuiltins_ExecCommandDefaultsToWorkDir(t *testing.T) {
 	if !strings.Contains(out, filepath.Base(dir)) {
 		t.Fatalf("shell defaulted to %q, want under %s", out, dir)
 	}
+}
+
+func testPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x % 255), G: uint8(y % 255), B: 0x88, A: 0xff})
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func highEntropyPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	state := uint32(1)
+	for i := 0; i < len(img.Pix); i += 4 {
+		state = state*1664525 + 1013904223
+		img.Pix[i] = byte(state >> 24)
+		state = state*1664525 + 1013904223
+		img.Pix[i+1] = byte(state >> 24)
+		state = state*1664525 + 1013904223
+		img.Pix[i+2] = byte(state >> 24)
+		img.Pix[i+3] = 0xff
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func testWebPVP8X(width, height int) []byte {
+	payload := make([]byte, 10)
+	writeLittleEndian24(payload[4:7], uint32(width-1))
+	writeLittleEndian24(payload[7:10], uint32(height-1))
+	var b bytes.Buffer
+	b.WriteString("RIFF")
+	_ = binary.Write(&b, binary.LittleEndian, uint32(4+8+len(payload)))
+	b.WriteString("WEBP")
+	b.WriteString("VP8X")
+	_ = binary.Write(&b, binary.LittleEndian, uint32(len(payload)))
+	b.Write(payload)
+	return b.Bytes()
+}
+
+func writeLittleEndian24(dst []byte, value uint32) {
+	dst[0] = byte(value)
+	dst[1] = byte(value >> 8)
+	dst[2] = byte(value >> 16)
+}
+
+func corruptLargePNG(width, height int) []byte {
+	var b bytes.Buffer
+	b.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	writePNGChunk(&b, []byte("IHDR"), []byte{
+		byte(width >> 24), byte(width >> 16), byte(width >> 8), byte(width),
+		byte(height >> 24), byte(height >> 16), byte(height >> 8), byte(height),
+		8, 2, 0, 0, 0,
+	})
+	writePNGChunk(&b, []byte("IDAT"), []byte("not-zlib-data"))
+	writePNGChunk(&b, []byte("IEND"), nil)
+	return b.Bytes()
+}
+
+func writePNGChunk(b *bytes.Buffer, kind []byte, data []byte) {
+	_ = binary.Write(b, binary.BigEndian, uint32(len(data)))
+	b.Write(kind)
+	b.Write(data)
+	sum := crc32.ChecksumIEEE(append(append([]byte{}, kind...), data...))
+	_ = binary.Write(b, binary.BigEndian, sum)
 }
 
 func TestBuiltins_GrepDefaultsToWorkDir(t *testing.T) {

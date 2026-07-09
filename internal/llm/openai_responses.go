@@ -186,6 +186,16 @@ func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) respo
 					content = toolResultContentWithMediaReference(b)
 				}
 				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(b.ToolUseID, content))
+				if b.Media != nil {
+					if dataURL, ok := imageDataURL(profile.WorkDir, b.Media); ok {
+						imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
+						imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
+						out = appendResponseMessage(out, RoleUser, nil, responses.ResponseInputMessageContentListParam{
+							responses.ResponseInputContentParamOfInputText(openAIToolResultImageAttribution(b)),
+							imagePart,
+						})
+					}
+				}
 			case BlockReasoning:
 				if b.Signature == "" {
 					continue
