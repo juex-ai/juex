@@ -1416,8 +1416,13 @@ tools into multiple per-session registries. In `serve`, session tool handlers
 forward calls into the shared manager; closing a session does not close MCP.
 
 Claude channel notifications preserve the full JSON-RPC `params` object. They
-are formatted as `<mcp_name>:<event_type>:<params_json>` and run through the
-normal Agent turn loop as `mcp_event` user messages. `params.content` remains a
+run through the normal Agent turn loop as `mcp_event` user messages rendered as
+structured text: server, method, event type, content, metadata, and selected
+params. `params.attachments` may contain
+`[{ "path": "...", "media_type": "..." }]`, using the same workdir-bounded
+validation as Observable attachments. Valid image attachments become image
+blocks on the incoming user message; invalid attachments are called out in the
+structured text instead of being silently dropped. `params.content` remains a
 display preview, while metadata under `params.meta` is visible to the Agent.
 For `run` and `repl`, notifications target the command's only primary app. For
 `serve`, notifications target `<WorkDir>/.juex/history.json.active`: the active

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/juex-ai/juex/internal/eventmedia"
 )
 
 type BatcherOptions struct {
@@ -21,6 +23,7 @@ type Batcher struct {
 type activeBatch struct {
 	streams     []string
 	contents    []string
+	attachments []eventmedia.AttachmentRef
 	kind        string
 	severity    string
 	windowStart time.Time
@@ -58,6 +61,7 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	}
 	b.batch.streams = append(b.batch.streams, unit.Stream)
 	b.batch.contents = append(b.batch.contents, unit.Content)
+	b.batch.attachments = append(b.batch.attachments, unit.Attachments...)
 	b.batch.windowEnd = unit.ReceivedAt
 	return emitted, nil
 }
@@ -92,6 +96,7 @@ func (b *Batcher) Flush(reason string) ([]ObservationRecord, error) {
 		WindowStart:   current.windowStart,
 		WindowEnd:     current.windowEnd,
 		Content:       full,
+		Attachments:   append([]eventmedia.AttachmentRef(nil), current.attachments...),
 		OriginalChars: originalChars,
 		State:         ObservationStateRecorded,
 	}

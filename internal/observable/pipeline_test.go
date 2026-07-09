@@ -82,6 +82,31 @@ func TestPipeline_JSONLFieldMapping(t *testing.T) {
 	}
 }
 
+func TestPipeline_JSONLAttachmentFieldMapping(t *testing.T) {
+	spec := validSpec("lark-events")
+	spec.Parser = &observable.ParserSpec{
+		Type:             "jsonl",
+		ContentField:     "content",
+		AttachmentsField: "attachments",
+	}
+	pipe, err := observable.NewPipeline(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := `{"content":"image event","attachments":[{"path":".juex/inbox/photo.png","media_type":"image/png"}]}` + "\n"
+	units, err := pipe.Accept("stdout", []byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 {
+		t.Fatalf("units = %+v, want one unit", units)
+	}
+	got := units[0].Attachments
+	if len(got) != 1 || got[0].Path != ".juex/inbox/photo.png" || got[0].MediaType != "image/png" {
+		t.Fatalf("attachments = %+v", got)
+	}
+}
+
 func TestPipeline_JSONLNormalizesSeverity(t *testing.T) {
 	spec := validSpec("lark-events")
 	spec.Parser = &observable.ParserSpec{

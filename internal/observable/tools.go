@@ -217,9 +217,10 @@ func observationSchema() map[string]any {
 		"description":          "For schedule sources, content is required and becomes the scheduled Observation text. For command sources, kind and severity set output defaults.",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"kind":     map[string]any{"type": "string"},
-			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
-			"content":  map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
+			"kind":        map[string]any{"type": "string"},
+			"severity":    map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
+			"content":     map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
+			"attachments": map[string]any{"type": "array", "items": attachmentSchema()},
 		},
 	}
 }
@@ -234,6 +235,22 @@ func parserSchema() map[string]any {
 			"kind_field":     map[string]any{"type": "string"},
 			"severity_field": map[string]any{"type": "string"},
 			"time_field":     map[string]any{"type": "string"},
+			"attachments_field": map[string]any{
+				"type":        "string",
+				"description": "JSONL field containing an array of attachment objects with path and optional media_type.",
+			},
+		},
+	}
+}
+
+func attachmentSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"path"},
+		"properties": map[string]any{
+			"path":       map[string]any{"type": "string"},
+			"media_type": map[string]any{"type": "string"},
 		},
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/juex-ai/juex/internal/eventmedia"
 )
 
 const (
@@ -27,6 +29,8 @@ const (
 	ObservationStateQueued    = "queued"
 	ObservationStateDelivered = "delivered"
 	ObservationStateDropped   = "dropped"
+
+	ObservationAttachmentStateError = "attachment_error"
 )
 
 var ErrObservationNotFound = errors.New("observable: observation not found")
@@ -43,69 +47,78 @@ type RunRecord struct {
 }
 
 type ObservationRecord struct {
-	ID             string    `json:"id"`
-	ObservableID   string    `json:"observable_id"`
-	RunID          string    `json:"run_id,omitempty"`
-	SourceEventID  string    `json:"source_event_id,omitempty"`
-	Kind           string    `json:"kind"`
-	Severity       string    `json:"severity"`
-	Stream         string    `json:"stream,omitempty"`
-	WindowStart    time.Time `json:"window_start"`
-	WindowEnd      time.Time `json:"window_end"`
-	Content        string    `json:"content"`
-	OriginalChars  int       `json:"original_chars"`
-	Truncated      bool      `json:"truncated,omitempty"`
-	ArtifactPath   string    `json:"artifact_path,omitempty"`
-	State          string    `json:"state"`
-	TargetSession  string    `json:"target_session,omitempty"`
-	PendingInputID string    `json:"pending_input_id,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	DeliveredAt    time.Time `json:"delivered_at,omitempty"`
-	Error          string    `json:"error,omitempty"`
+	ID               string                     `json:"id"`
+	ObservableID     string                     `json:"observable_id"`
+	RunID            string                     `json:"run_id,omitempty"`
+	SourceEventID    string                     `json:"source_event_id,omitempty"`
+	Kind             string                     `json:"kind"`
+	Severity         string                     `json:"severity"`
+	Stream           string                     `json:"stream,omitempty"`
+	WindowStart      time.Time                  `json:"window_start"`
+	WindowEnd        time.Time                  `json:"window_end"`
+	Content          string                     `json:"content"`
+	Attachments      []eventmedia.AttachmentRef `json:"attachments,omitempty"`
+	AttachmentState  string                     `json:"attachment_state,omitempty"`
+	AttachmentErrors []string                   `json:"attachment_errors,omitempty"`
+	OriginalChars    int                        `json:"original_chars"`
+	Truncated        bool                       `json:"truncated,omitempty"`
+	ArtifactPath     string                     `json:"artifact_path,omitempty"`
+	State            string                     `json:"state"`
+	TargetSession    string                     `json:"target_session,omitempty"`
+	PendingInputID   string                     `json:"pending_input_id,omitempty"`
+	CreatedAt        time.Time                  `json:"created_at"`
+	DeliveredAt      time.Time                  `json:"delivered_at,omitempty"`
+	Error            string                     `json:"error,omitempty"`
 }
 
 type observationRecordJSON struct {
-	ID             string `json:"id"`
-	ObservableID   string `json:"observable_id"`
-	RunID          string `json:"run_id,omitempty"`
-	SourceEventID  string `json:"source_event_id,omitempty"`
-	Kind           string `json:"kind"`
-	Severity       string `json:"severity"`
-	Stream         string `json:"stream,omitempty"`
-	WindowStart    int64  `json:"window_start"`
-	WindowEnd      int64  `json:"window_end"`
-	Content        string `json:"content"`
-	OriginalChars  int    `json:"original_chars"`
-	Truncated      bool   `json:"truncated,omitempty"`
-	ArtifactPath   string `json:"artifact_path,omitempty"`
-	State          string `json:"state"`
-	TargetSession  string `json:"target_session,omitempty"`
-	PendingInputID string `json:"pending_input_id,omitempty"`
-	CreatedAt      int64  `json:"created_at"`
-	DeliveredAt    *int64 `json:"delivered_at,omitempty"`
-	Error          string `json:"error,omitempty"`
+	ID               string                     `json:"id"`
+	ObservableID     string                     `json:"observable_id"`
+	RunID            string                     `json:"run_id,omitempty"`
+	SourceEventID    string                     `json:"source_event_id,omitempty"`
+	Kind             string                     `json:"kind"`
+	Severity         string                     `json:"severity"`
+	Stream           string                     `json:"stream,omitempty"`
+	WindowStart      int64                      `json:"window_start"`
+	WindowEnd        int64                      `json:"window_end"`
+	Content          string                     `json:"content"`
+	Attachments      []eventmedia.AttachmentRef `json:"attachments,omitempty"`
+	AttachmentState  string                     `json:"attachment_state,omitempty"`
+	AttachmentErrors []string                   `json:"attachment_errors,omitempty"`
+	OriginalChars    int                        `json:"original_chars"`
+	Truncated        bool                       `json:"truncated,omitempty"`
+	ArtifactPath     string                     `json:"artifact_path,omitempty"`
+	State            string                     `json:"state"`
+	TargetSession    string                     `json:"target_session,omitempty"`
+	PendingInputID   string                     `json:"pending_input_id,omitempty"`
+	CreatedAt        int64                      `json:"created_at"`
+	DeliveredAt      *int64                     `json:"delivered_at,omitempty"`
+	Error            string                     `json:"error,omitempty"`
 }
 
 type observationRecordDecodeJSON struct {
-	ID             string              `json:"id"`
-	ObservableID   string              `json:"observable_id"`
-	RunID          string              `json:"run_id,omitempty"`
-	SourceEventID  string              `json:"source_event_id,omitempty"`
-	Kind           string              `json:"kind"`
-	Severity       string              `json:"severity"`
-	Stream         string              `json:"stream,omitempty"`
-	WindowStart    observationJSONTime `json:"window_start"`
-	WindowEnd      observationJSONTime `json:"window_end"`
-	Content        string              `json:"content"`
-	OriginalChars  int                 `json:"original_chars"`
-	Truncated      bool                `json:"truncated,omitempty"`
-	ArtifactPath   string              `json:"artifact_path,omitempty"`
-	State          string              `json:"state"`
-	TargetSession  string              `json:"target_session,omitempty"`
-	PendingInputID string              `json:"pending_input_id,omitempty"`
-	CreatedAt      observationJSONTime `json:"created_at"`
-	DeliveredAt    observationJSONTime `json:"delivered_at,omitempty"`
-	Error          string              `json:"error,omitempty"`
+	ID               string                     `json:"id"`
+	ObservableID     string                     `json:"observable_id"`
+	RunID            string                     `json:"run_id,omitempty"`
+	SourceEventID    string                     `json:"source_event_id,omitempty"`
+	Kind             string                     `json:"kind"`
+	Severity         string                     `json:"severity"`
+	Stream           string                     `json:"stream,omitempty"`
+	WindowStart      observationJSONTime        `json:"window_start"`
+	WindowEnd        observationJSONTime        `json:"window_end"`
+	Content          string                     `json:"content"`
+	Attachments      []eventmedia.AttachmentRef `json:"attachments,omitempty"`
+	AttachmentState  string                     `json:"attachment_state,omitempty"`
+	AttachmentErrors []string                   `json:"attachment_errors,omitempty"`
+	OriginalChars    int                        `json:"original_chars"`
+	Truncated        bool                       `json:"truncated,omitempty"`
+	ArtifactPath     string                     `json:"artifact_path,omitempty"`
+	State            string                     `json:"state"`
+	TargetSession    string                     `json:"target_session,omitempty"`
+	PendingInputID   string                     `json:"pending_input_id,omitempty"`
+	CreatedAt        observationJSONTime        `json:"created_at"`
+	DeliveredAt      observationJSONTime        `json:"delivered_at,omitempty"`
+	Error            string                     `json:"error,omitempty"`
 }
 
 type observationJSONTime struct {
@@ -119,25 +132,28 @@ func (r ObservationRecord) MarshalJSON() ([]byte, error) {
 		deliveredAt = &value
 	}
 	return json.Marshal(observationRecordJSON{
-		ID:             r.ID,
-		ObservableID:   r.ObservableID,
-		RunID:          r.RunID,
-		SourceEventID:  r.SourceEventID,
-		Kind:           r.Kind,
-		Severity:       r.Severity,
-		Stream:         r.Stream,
-		WindowStart:    observationUnixMilli(r.WindowStart),
-		WindowEnd:      observationUnixMilli(r.WindowEnd),
-		Content:        r.Content,
-		OriginalChars:  r.OriginalChars,
-		Truncated:      r.Truncated,
-		ArtifactPath:   r.ArtifactPath,
-		State:          r.State,
-		TargetSession:  r.TargetSession,
-		PendingInputID: r.PendingInputID,
-		CreatedAt:      observationUnixMilli(r.CreatedAt),
-		DeliveredAt:    deliveredAt,
-		Error:          r.Error,
+		ID:               r.ID,
+		ObservableID:     r.ObservableID,
+		RunID:            r.RunID,
+		SourceEventID:    r.SourceEventID,
+		Kind:             r.Kind,
+		Severity:         r.Severity,
+		Stream:           r.Stream,
+		WindowStart:      observationUnixMilli(r.WindowStart),
+		WindowEnd:        observationUnixMilli(r.WindowEnd),
+		Content:          r.Content,
+		Attachments:      append([]eventmedia.AttachmentRef(nil), r.Attachments...),
+		AttachmentState:  r.AttachmentState,
+		AttachmentErrors: append([]string(nil), r.AttachmentErrors...),
+		OriginalChars:    r.OriginalChars,
+		Truncated:        r.Truncated,
+		ArtifactPath:     r.ArtifactPath,
+		State:            r.State,
+		TargetSession:    r.TargetSession,
+		PendingInputID:   r.PendingInputID,
+		CreatedAt:        observationUnixMilli(r.CreatedAt),
+		DeliveredAt:      deliveredAt,
+		Error:            r.Error,
 	})
 }
 
@@ -147,25 +163,28 @@ func (r *ObservationRecord) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = ObservationRecord{
-		ID:             raw.ID,
-		ObservableID:   raw.ObservableID,
-		RunID:          raw.RunID,
-		SourceEventID:  raw.SourceEventID,
-		Kind:           raw.Kind,
-		Severity:       raw.Severity,
-		Stream:         raw.Stream,
-		WindowStart:    raw.WindowStart.Time,
-		WindowEnd:      raw.WindowEnd.Time,
-		Content:        raw.Content,
-		OriginalChars:  raw.OriginalChars,
-		Truncated:      raw.Truncated,
-		ArtifactPath:   raw.ArtifactPath,
-		State:          raw.State,
-		TargetSession:  raw.TargetSession,
-		PendingInputID: raw.PendingInputID,
-		CreatedAt:      raw.CreatedAt.Time,
-		DeliveredAt:    raw.DeliveredAt.Time,
-		Error:          raw.Error,
+		ID:               raw.ID,
+		ObservableID:     raw.ObservableID,
+		RunID:            raw.RunID,
+		SourceEventID:    raw.SourceEventID,
+		Kind:             raw.Kind,
+		Severity:         raw.Severity,
+		Stream:           raw.Stream,
+		WindowStart:      raw.WindowStart.Time,
+		WindowEnd:        raw.WindowEnd.Time,
+		Content:          raw.Content,
+		Attachments:      append([]eventmedia.AttachmentRef(nil), raw.Attachments...),
+		AttachmentState:  raw.AttachmentState,
+		AttachmentErrors: append([]string(nil), raw.AttachmentErrors...),
+		OriginalChars:    raw.OriginalChars,
+		Truncated:        raw.Truncated,
+		ArtifactPath:     raw.ArtifactPath,
+		State:            raw.State,
+		TargetSession:    raw.TargetSession,
+		PendingInputID:   raw.PendingInputID,
+		CreatedAt:        raw.CreatedAt.Time,
+		DeliveredAt:      raw.DeliveredAt.Time,
+		Error:            raw.Error,
 	}
 	return nil
 }
@@ -496,10 +515,24 @@ func BuildObservationID(record ObservationRecord) string {
 		record.WindowEnd.UTC().Format(time.RFC3339Nano),
 		record.Kind,
 		record.Severity,
-		hex.EncodeToString(contentHash[:]),
+		hex.EncodeToString(contentHash[:])+attachmentKey(record.Attachments),
 	)
 	sum := sha256.Sum256([]byte(key))
 	return "obs-" + hex.EncodeToString(sum[:8])
+}
+
+func attachmentKey(refs []eventmedia.AttachmentRef) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, ref := range refs {
+		sb.WriteByte('\x00')
+		sb.WriteString(strings.TrimSpace(ref.Path))
+		sb.WriteByte('\x00')
+		sb.WriteString(strings.TrimSpace(ref.MediaType))
+	}
+	return sb.String()
 }
 
 func appendJSONL(path string, value any) error {

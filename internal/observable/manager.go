@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
@@ -429,6 +430,23 @@ func (m *Manager) UpdateObservation(id string, update func(ObservationRecord) Ob
 	return nil
 }
 
+func (m *Manager) MarkObservationAttachmentError(id string, messages []string) error {
+	if m == nil || m.store == nil || len(messages) == 0 {
+		return nil
+	}
+	updated, err := m.updateObservation(id, func(record ObservationRecord) ObservationRecord {
+		record.AttachmentState = ObservationAttachmentStateError
+		record.AttachmentErrors = append([]string(nil), messages...)
+		record.Error = strings.Join(messages, "; ")
+		return record
+	})
+	if err != nil {
+		return err
+	}
+	m.emitObservation(EventObservationErrored, updated, updated.Error)
+	return nil
+}
+
 func (m *Manager) Close() error {
 	if m == nil {
 		return nil
@@ -684,6 +702,7 @@ func (m *Manager) emitScheduledOccurrence(ctx context.Context, run *observableRu
 		WindowStart:   occurrence.ScheduledAt,
 		WindowEnd:     observedAt,
 		Content:       run.spec.Observation.Content,
+		Attachments:   append([]eventmedia.AttachmentRef(nil), run.spec.Observation.Attachments...),
 		State:         ObservationStateRecorded,
 	})
 	if err != nil {
