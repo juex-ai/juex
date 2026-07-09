@@ -87,6 +87,14 @@ type LLMRespondedPayload struct {
 	ContextUsage *llm.ContextUsage            `json:"context_usage,omitempty"`
 }
 
+type LLMOutputDeltaPayload struct {
+	Iter  int    `json:"iter"`
+	Model string `json:"model,omitempty"`
+	Kind  string `json:"kind"`
+	Index int    `json:"index"`
+	Text  string `json:"text"`
+}
+
 type LLMRetryPayload struct {
 	llm.ProviderRetryDiagnostic
 	Purpose string `json:"purpose,omitempty"`

@@ -409,11 +409,24 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 }
 
 func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
+	model := ""
+	if e.Provider != nil {
+		model = e.Provider.Name()
+	}
 	return llm.CompleteWithOptions(ctx, e.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
 		Purpose:         "turn",
 		MaxOutputTokens: e.MaxOutputTokens,
 		CachePolicy:     e.cachePolicyLocked(),
 		RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
+		OnDelta: func(delta llm.StreamDelta) {
+			e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Payload: LLMOutputDeltaPayload{
+				Iter:  request.iter,
+				Model: model,
+				Kind:  delta.Kind,
+				Index: delta.Index,
+				Text:  delta.Text,
+			}})
+		},
 	})
 }
 

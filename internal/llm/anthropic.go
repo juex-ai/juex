@@ -97,20 +97,44 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 
 	msg := anthropic.Message{}
 	streamDiagnostics := &anthropicStreamDiagnostics{}
-	stream := p.client.Messages.NewStreaming(ctx, params, option.WithMiddleware(streamDiagnostics.middleware))
+	idleTimeout := streamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+	defer stopIdle()
+	stream := p.client.Messages.NewStreaming(streamCtx, params, option.WithMiddleware(streamDiagnostics.middleware))
 	for stream.Next() {
+		resetIdle()
 		event := stream.Current()
+		emitAnthropicStreamDelta(opts.OnDelta, event)
 		if err := msg.Accumulate(event); err != nil {
 			return Response{}, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
 		}
 	}
 	if err := stream.Err(); err != nil {
+		if idleExpired() {
+			return Response{}, fmt.Errorf("anthropic stream idle timeout after %s: %w", idleTimeout, err)
+		}
 		if streamErr := anthropicStreamParseErrorFromDiagnostics(p.Name(), streamDiagnostics, err); streamErr != nil {
 			return Response{}, streamErr
 		}
 		return Response{}, fmt.Errorf("anthropic: %w", err)
 	}
 	return p.responseFromMessage(&msg), nil
+}
+
+func emitAnthropicStreamDelta(onDelta func(StreamDelta), event anthropic.MessageStreamEventUnion) {
+	if onDelta == nil || event.Type != "content_block_delta" {
+		return
+	}
+	switch event.Delta.Type {
+	case "thinking_delta":
+		if event.Delta.Thinking != "" {
+			onDelta(StreamDelta{Kind: "reasoning", Index: int(event.Index), Text: event.Delta.Thinking})
+		}
+	case "text_delta":
+		if event.Delta.Text != "" {
+			onDelta(StreamDelta{Kind: "text", Index: int(event.Index), Text: event.Delta.Text})
+		}
+	}
 }
 
 func anthropicStreamParseErrorFromEvent(provider string, event anthropic.MessageStreamEventUnion, cause error) *StreamParseError {

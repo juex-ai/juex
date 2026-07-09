@@ -78,6 +78,25 @@ func (p *captureOptionsProvider) CompleteWithOptions(ctx context.Context, sys st
 	return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn}, nil
 }
 
+type streamDeltaProvider struct{}
+
+func (p streamDeltaProvider) Name() string { return "streaming-mock:model" }
+
+func (p streamDeltaProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p streamDeltaProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	if opts.OnDelta != nil {
+		opts.OnDelta(llm.StreamDelta{Kind: "reasoning", Index: 0, Text: "thinking "})
+		opts.OnDelta(llm.StreamDelta{Kind: "text", Index: 1, Text: "hello"})
+	}
+	return llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "hello"),
+		StopReason: llm.StopEndTurn,
+	}, nil
+}
+
 type retryDiagnosticProvider struct{}
 
 func (p retryDiagnosticProvider) Name() string { return "retry-diagnostic" }
@@ -293,6 +312,39 @@ func TestTurn_ReturnsImagePlaceholderForImageOnlyResponse(t *testing.T) {
 	}
 	if out != "[图片: chart.png (640x480, 2.0 KB)]" {
 		t.Fatalf("out = %q", out)
+	}
+}
+
+func TestTurn_EmitsLLMOutputDeltaEvents(t *testing.T) {
+	eng, bus := newEngine(t, streamDeltaProvider{}, false)
+	var got []events.Event
+	bus.Subscribe("llm.output_delta", func(e events.Event) {
+		got = append(got, e)
+	})
+
+	out, err := eng.Turn(context.Background(), "stream please")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "hello" {
+		t.Fatalf("out = %q, want hello", out)
+	}
+	if len(got) != 2 {
+		t.Fatalf("delta events = %+v, want two", got)
+	}
+	first, ok := got[0].Payload.(LLMOutputDeltaPayload)
+	if !ok {
+		t.Fatalf("first payload type = %T", got[0].Payload)
+	}
+	if got[0].TurnID == "" || first.Iter != 0 || first.Model != "streaming-mock:model" || first.Kind != "reasoning" || first.Index != 0 || first.Text != "thinking " {
+		t.Fatalf("first delta event = %+v payload=%+v", got[0], first)
+	}
+	second, ok := got[1].Payload.(LLMOutputDeltaPayload)
+	if !ok {
+		t.Fatalf("second payload type = %T", got[1].Payload)
+	}
+	if second.Iter != 0 || second.Model != "streaming-mock:model" || second.Kind != "text" || second.Index != 1 || second.Text != "hello" {
+		t.Fatalf("second delta payload = %+v", second)
 	}
 }
 

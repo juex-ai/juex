@@ -75,6 +75,34 @@ func writeAnthropicTextStreamWithCache(w http.ResponseWriter, model, text, stopR
 	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
 }
 
+func writeAnthropicThinkingAndTextStream(w http.ResponseWriter, model string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	fmt.Fprint(w, "event: message_start\n")
+	fmt.Fprintf(w, `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}`+"\n\n", model)
+	fmt.Fprint(w, "event: content_block_start\n")
+	fmt.Fprint(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan "}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"then "}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_1"}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_stop\n")
+	fmt.Fprint(w, `data: {"type":"content_block_stop","index":0}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_start\n")
+	fmt.Fprint(w, `data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello "}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"stream"}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_stop\n")
+	fmt.Fprint(w, `data: {"type":"content_block_stop","index":1}`+"\n\n")
+	fmt.Fprint(w, "event: message_delta\n")
+	fmt.Fprint(w, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}`+"\n\n")
+	fmt.Fprint(w, "event: message_stop\n")
+	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+}
+
 func testImageMedia(t *testing.T) *MediaRef {
 	t.Helper()
 	dir := t.TempDir()
@@ -529,6 +557,54 @@ func TestProviderContextPreservesRuntimeContextKindBoundary(t *testing.T) {
 	}
 	if ctx.Messages[1].Kind != MessageKindRuntimeContext {
 		t.Fatalf("runtime context kind = %q, want %q", ctx.Messages[1].Kind, MessageKindRuntimeContext)
+	}
+}
+
+func TestAnthropic_CompleteOptionsEmitsStreamDeltas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeAnthropicThinkingAndTextStream(w, "claude-test")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withOpts := p.(ProviderWithOptions)
+	var deltas []StreamDelta
+	resp, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, nil, CompleteOptions{
+		OnDelta: func(delta StreamDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	if resp.Message.FirstText() != "hello stream" {
+		t.Fatalf("text = %q", resp.Message.FirstText())
+	}
+	want := []StreamDelta{
+		{Kind: "reasoning", Index: 0, Text: "plan "},
+		{Kind: "reasoning", Index: 0, Text: "then "},
+		{Kind: "text", Index: 1, Text: "hello "},
+		{Kind: "text", Index: 1, Text: "stream"},
+	}
+	if !slices.Equal(deltas, want) {
+		t.Fatalf("deltas = %+v, want %+v", deltas, want)
+	}
+}
+
+func TestStreamIdleContextCancelsAfterTimeout(t *testing.T) {
+	ctx, _, stop, expired := newStreamIdleContext(context.Background(), 10*time.Millisecond)
+	defer stop()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("stream idle context did not cancel")
+	}
+	if !expired() {
+		t.Fatal("expired = false, want true")
 	}
 }
 
@@ -1066,6 +1142,44 @@ func TestOpenAICodexResponses_RetriesStreamClosedBeforeCompleted(t *testing.T) {
 	}
 	if resp.Message.FirstText() != "ok" {
 		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+	}
+}
+
+func TestOpenAICodexResponses_EmitsOutputTextDeltas(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"hi "}` + "\n\n" +
+					`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"there"}` + "\n\n" +
+					`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hi there","annotations":[]}]}]}}` + "\n\n",
+			)),
+			Request: r,
+		}, nil
+	})}
+	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	withOpts := p.(ProviderWithOptions)
+	var deltas []StreamDelta
+
+	resp, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		OnDelta: func(delta StreamDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	if resp.Message.FirstText() != "hi there" {
+		t.Fatalf("text = %q, want hi there", resp.Message.FirstText())
+	}
+	want := []StreamDelta{
+		{Kind: "text", Index: 0, Text: "hi "},
+		{Kind: "text", Index: 0, Text: "there"},
+	}
+	if !slices.Equal(deltas, want) {
+		t.Fatalf("deltas = %+v, want %+v", deltas, want)
 	}
 }
 

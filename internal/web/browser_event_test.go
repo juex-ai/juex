@@ -188,6 +188,19 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-llm-delta",
+			Type:      "llm.output_delta",
+			Timestamp: ts.Add(1750 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.LLMOutputDeltaPayload{
+				Iter:  0,
+				Model: "gpt-test",
+				Kind:  "text",
+				Index: 0,
+				Text:  "streaming ",
+			},
+		},
+		{
 			ID:        "evt-tool-requested",
 			Type:      toolevents.RequestedType,
 			Timestamp: ts.Add(2 * time.Second),
