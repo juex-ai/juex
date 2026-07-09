@@ -19,6 +19,12 @@ const (
 	OutsideWorkspaceReadOnly  OutsideWorkspaceAccess = sandbox.OutsideWorkspaceReadOnly
 )
 
+type SkillPolicy struct {
+	Include           []string
+	Exclude           []string
+	PromptBudgetChars int
+}
+
 // ProviderSelection is the resolved provider/model value passed to the LLM
 // boundary. It contains no provider construction behavior.
 type ProviderSelection struct {
@@ -155,6 +161,24 @@ func (c Config) ResourcePaths() ResourcePaths {
 		paths.MCPConfigPaths = append(paths.MCPConfigPaths, filepath.Join(paths.ProjectAgentsDir, "mcp.json"))
 	}
 	return paths
+}
+
+func (c Config) SkillPolicy() SkillPolicy {
+	policy := SkillPolicy{
+		Include:           append([]string(nil), c.Skills.Include...),
+		Exclude:           append([]string(nil), c.Skills.Exclude...),
+		PromptBudgetChars: c.Skills.PromptBudgetChars,
+	}
+	if policy.PromptBudgetChars <= 0 {
+		policy.PromptBudgetChars = DefaultSkillPromptBudgetChars
+	}
+	if c.ContextWindow > 0 {
+		contextBudget := c.ContextWindow * 2 / 100 * 4
+		if contextBudget > 0 && contextBudget < policy.PromptBudgetChars {
+			policy.PromptBudgetChars = contextBudget
+		}
+	}
+	return policy
 }
 
 // RuntimeLimits contains runtime policy values after config resolution.

@@ -62,6 +62,46 @@ providers:
 	}
 }
 
+func TestLoadFromFileSkillsConfig(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: openai:gpt-4
+skills:
+  include: [" taskline-management ", "", taskline-management, juex-ddd]
+  exclude: [ignored-when-include-is-set]
+  prompt_budget_chars: 4096
+providers:
+  - id: openai
+    api_key: sk
+    models:
+      - id: gpt-4
+`
+	writeTextFile(t, configPath, body)
+
+	cfg, err := LoadFromFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Skills.Include, ","); got != "taskline-management,juex-ddd" {
+		t.Fatalf("include = %q", got)
+	}
+	if got := strings.Join(cfg.Skills.Exclude, ","); got != "ignored-when-include-is-set" {
+		t.Fatalf("exclude = %q", got)
+	}
+	if cfg.Skills.PromptBudgetChars != 4096 {
+		t.Fatalf("prompt budget = %d", cfg.Skills.PromptBudgetChars)
+	}
+}
+
+func TestConfigSkillPolicyUsesContextBudgetCap(t *testing.T) {
+	cfg := Config{ContextWindow: 1000, Skills: DefaultSkillsConfig()}
+	policy := cfg.SkillPolicy()
+	if policy.PromptBudgetChars != 80 {
+		t.Fatalf("prompt budget = %d, want 80", policy.PromptBudgetChars)
+	}
+}
+
 func TestParseModelRef(t *testing.T) {
 	ref, err := ParseModelRef(" local-proxy:meta-llama/Llama-3-8b-chat ")
 	if err != nil {

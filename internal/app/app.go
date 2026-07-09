@@ -181,13 +181,13 @@ func New(opts Options) (*App, error) {
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 	})
 
-	skillLoader := skills.NewLoaderFromDirs(resourceGraph.SkillDirs())
+	skillLoader := skills.NewLoaderFromDirsWithOptions(resourceGraph.SkillDirs(), skillLoaderOptions(cfg))
 	if err := skillLoader.Load(); err != nil {
 		return nil, err
 	}
-	// Skills are surfaced via the system prompt's "Available Skills"
-	// section (each entry includes its absolute path); the model loads a
-	// skill body with the standard `read` builtin. No dedicated tool.
+	if err := registerSkillTools(reg, skillLoader, runtimePaths.WorkDir, cfg.SandboxPolicy()); err != nil {
+		return nil, err
+	}
 
 	memStore := memory.NewStore(runtimePaths.MemoryDir)
 	if err := memStore.RegisterTools(reg); err != nil {

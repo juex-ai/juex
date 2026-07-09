@@ -46,6 +46,7 @@ type Config struct {
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
+	Skills                    SkillsConfig
 	EnableUserGlobalResources bool
 
 	HomeAgentsDir string // ~/.agents (user-global)
@@ -66,6 +67,7 @@ type fileConfig struct {
 	Runtime                   runtimeConfig    `yaml:"runtime"`
 	Shell                     *ShellConfig     `yaml:"shell"`
 	Sandbox                   sandboxConfig    `yaml:"sandbox"`
+	Skills                    skillsConfig     `yaml:"skills"`
 }
 
 type providerConfig struct {
@@ -208,6 +210,18 @@ type sandboxNetworkConfig struct {
 	Enabled optionalBool `yaml:"enabled"`
 }
 
+type SkillsConfig struct {
+	Include           []string
+	Exclude           []string
+	PromptBudgetChars int
+}
+
+type skillsConfig struct {
+	Include           *[]string `yaml:"include"`
+	Exclude           *[]string `yaml:"exclude"`
+	PromptBudgetChars int       `yaml:"prompt_budget_chars"`
+}
+
 func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 	if node == nil || node.Kind == 0 || node.Tag == "!!null" {
 		return nil
@@ -274,6 +288,7 @@ const DefaultContextWindow = runtimepolicy.DefaultContextWindowTokens
 const DefaultPendingInputTTL = 15 * time.Minute
 const DefaultExternalEventTTL = 24 * time.Hour
 const DefaultToolTimeout = 60 * time.Second
+const DefaultSkillPromptBudgetChars = 8000
 
 var providerEnvKeys = []string{"PROVIDER_API_ID", "PROVIDER_API_PROTOCOL", "PROVIDER_API_BASE", "PROVIDER_API_KEY", "PROVIDER_API_MODEL", "PROVIDER_THINKING_EFFORT", "PROVIDER_CONTEXT_WINDOW"}
 
@@ -330,6 +345,7 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 		ExternalEventTTL:          DefaultExternalEventTTL,
 		ToolTimeout:               DefaultToolTimeout,
 		Sandbox:                   sandbox.DefaultPolicy(),
+		Skills:                    DefaultSkillsConfig(),
 		EnableUserGlobalResources: true,
 		providerConfigs:           map[string]providerConfig{},
 	}
@@ -540,6 +556,9 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, 
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyRuntimeConfig(cfg, fc.Runtime)
+	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
+		return fmt.Errorf("config: parse %s: %w", path, err)
+	}
 	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
 		return fmt.Errorf("config: parse %s: %w", path, err)
 	}
@@ -626,6 +645,43 @@ func parseRuntimePositiveInt(field string, node *yaml.Node) (int, error) {
 		return 0, fmt.Errorf("runtime.%s must be positive", field)
 	}
 	return n, nil
+}
+
+func DefaultSkillsConfig() SkillsConfig {
+	return SkillsConfig{PromptBudgetChars: DefaultSkillPromptBudgetChars}
+}
+
+func applySkillsConfig(cfg *Config, fileSkills skillsConfig) error {
+	if fileSkills.Include != nil {
+		cfg.Skills.Include = cleanStringList(*fileSkills.Include)
+	}
+	if fileSkills.Exclude != nil {
+		cfg.Skills.Exclude = cleanStringList(*fileSkills.Exclude)
+	}
+	if fileSkills.PromptBudgetChars < 0 {
+		return fmt.Errorf("skills.prompt_budget_chars must be non-negative")
+	}
+	if fileSkills.PromptBudgetChars > 0 {
+		cfg.Skills.PromptBudgetChars = fileSkills.PromptBudgetChars
+	}
+	return nil
+}
+
+func cleanStringList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func DefaultCompactionConfig() CompactionConfig {
