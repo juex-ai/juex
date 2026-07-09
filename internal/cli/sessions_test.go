@@ -292,6 +292,31 @@ func TestSessionsShow_TextRendersReasoning(t *testing.T) {
 	}
 }
 
+func TestSessionsShow_TextRendersImages(t *testing.T) {
+	work := t.TempDir()
+	body := `{"role":"assistant","blocks":[{"type":"image","media":{"artifact_path":".juex/artifacts/media/s/chart.png","media_type":"image/png","original_bytes":2048,"width":640,"height":480}}]}` + "\n" +
+		`{"role":"user","blocks":[{"type":"tool_result","tool_use_id":"tool-1","content":"chart rendered","media":{"artifact_path":".juex/artifacts/media/s/tool.png","media_type":"image/png","original_bytes":512,"width":20,"height":10}}]}` + "\n"
+	seedSession(t, work, "20260506T103500-show0004", body)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetArgs([]string{"-C", work, "sessions", "show", "20260506T103500-show0004", "--format", "text"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	body2 := out.String()
+	for _, want := range []string{
+		"assistant> [图片: chart.png (640x480, 2.0 KB)]",
+		"tool< chart rendered",
+		"tool< [图片: tool.png (20x10, 512 B)]",
+	} {
+		if !strings.Contains(body2, want) {
+			t.Errorf("missing %q in:\n%s", want, body2)
+		}
+	}
+}
+
 func TestSessionsShow_NotFound(t *testing.T) {
 	work := t.TempDir()
 	root := newRootCmd()

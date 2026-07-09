@@ -655,6 +655,7 @@ function appendToolResult(
       toolUseID: event.payload.tool_use_id,
       toolName: event.payload.name || "exec_command",
       content,
+      media: event.payload.media,
       isError,
       timeoutSeconds: event.payload.timeout_seconds,
     }),

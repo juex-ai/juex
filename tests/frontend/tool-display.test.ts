@@ -125,7 +125,7 @@ test("formatToolProcessResultText caps large process output", () => {
   );
 });
 
-test("formatToolProcessResult shows image-only tool result media", () => {
+test("formatToolProcessResult leaves image-only tool result media to the renderer", () => {
   assert.equal(
     formatToolProcessResult({
       content: "",
@@ -138,11 +138,11 @@ test("formatToolProcessResult shows image-only tool result media", () => {
         height: 3,
       },
     }),
-    "[tool_result_image: path=.juex/artifacts/media/s/image.png type=image/png sha256=abc bytes=12 size=2x3]",
+    "",
   );
 });
 
-test("formatToolProcessResult keeps content next to tool result media", () => {
+test("formatToolProcessResult keeps text separate from tool result media", () => {
   assert.equal(
     formatToolProcessResult({
       content: "chart rendered",
@@ -151,6 +151,6 @@ test("formatToolProcessResult keeps content next to tool result media", () => {
         media_type: "image/png",
       },
     }),
-    "chart rendered\n[tool_result_image: path=.juex/artifacts/media/s/chart.png type=image/png]",
+    "chart rendered",
   );
 });

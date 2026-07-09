@@ -34,6 +34,7 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
+import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
 import {
   messagesToGroups,
@@ -1195,6 +1196,9 @@ function MessageGroupView({
               />
             );
           }
+          if (unit.kind === "image") {
+            return <ImageBlock key={i} media={unit.block.media} />;
+          }
           if (unit.kind === "tool_batch") {
             return <ToolBatchProcessRow key={i} tools={unit.tools} />;
           }
@@ -1300,15 +1304,34 @@ function ToolProcessRow({
             />
           ) : null}
           {tool.result ? (
-            <ProcessPayload
-              label={tool.result.is_error ? "Error" : "Result"}
-              tone={tool.result.is_error ? "error" : "muted"}
-              value={formatToolProcessResult(tool.result) || "-"}
-            />
+            <ToolResultPayload result={tool.result} />
           ) : null}
         </div>
       ) : null}
     </ProcessDisclosure>
+  );
+}
+
+function ToolResultPayload({ result }: { result: NonNullable<ToolDisplayUnit["result"]> }) {
+  const text = formatToolProcessResult(result);
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      {text ? (
+        <ProcessPayload
+          label={result.is_error ? "Error" : "Result"}
+          tone={result.is_error ? "error" : "muted"}
+          value={text}
+        />
+      ) : null}
+      {result.media ? <ImageBlock media={result.media} /> : null}
+      {!text && !result.media ? (
+        <ProcessPayload
+          label={result.is_error ? "Error" : "Result"}
+          tone={result.is_error ? "error" : "muted"}
+          value="-"
+        />
+      ) : null}
+    </div>
   );
 }
 

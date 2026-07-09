@@ -180,6 +180,10 @@ export function getFileRawURL(path: string): string {
   return `${BASE}/api/files/raw?path=${encodeURIComponent(path)}`;
 }
 
+export function getMediaURL(path: string): string {
+  return `${BASE}/api/media?path=${encodeURIComponent(path)}`;
+}
+
 export async function getRuntimeStatus(): Promise<RuntimeStatusResponse> {
   return jsonOrThrow(await fetch(`${BASE}/api/runtime`));
 }
