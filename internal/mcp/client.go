@@ -13,6 +13,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -600,26 +601,30 @@ func newLinePrefixWriter(w io.Writer, prefix string) io.Writer {
 func (w *linePrefixWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	n := len(p)
+	written := 0
 	for len(p) > 0 {
 		if w.atLineStart {
 			if _, err := io.WriteString(w.w, w.prefix); err != nil {
-				return 0, err
+				return written, err
 			}
 			w.atLineStart = false
 		}
-		i := strings.IndexByte(string(p), '\n')
+		i := bytes.IndexByte(p, '\n')
 		if i < 0 {
-			if _, err := w.w.Write(p); err != nil {
-				return 0, err
+			n, err := w.w.Write(p)
+			written += n
+			if err != nil {
+				return written, err
 			}
-			return n, nil
+			return written, nil
 		}
-		if _, err := w.w.Write(p[:i+1]); err != nil {
-			return 0, err
+		n, err := w.w.Write(p[:i+1])
+		written += n
+		if err != nil {
+			return written, err
 		}
 		w.atLineStart = true
 		p = p[i+1:]
 	}
-	return n, nil
+	return written, nil
 }

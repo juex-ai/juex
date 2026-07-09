@@ -1310,6 +1310,38 @@ compaction:
 	}
 }
 
+func TestConfig_ProviderProfileForModelRefKeepsEnvCredentials(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "juex.yaml")
+	body := `model: local:gpt-4
+providers:
+  - id: local
+    protocol: openai/chat
+    base_url: https://main.example.com
+    models:
+      - id: gpt-4
+      - id: gpt-4-mini
+compaction:
+  summary_model: local:gpt-4-mini
+`
+	writeTextFile(t, configPath, body)
+	t.Setenv("PROVIDER_API_BASE", "https://env.example.com")
+	t.Setenv("PROVIDER_API_KEY", "sk-env")
+
+	cfg, err := LoadFromFileForWorkDir(configPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := cfg.ProviderProfileForModelRef(cfg.Compaction.SummaryModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "local" || profile.Protocol != llm.ProtocolOpenAIChat || profile.BaseURL != "https://env.example.com" || profile.APIKey != "sk-env" || profile.Model != "gpt-4-mini" {
+		t.Fatalf("profile = %+v", profile)
+	}
+}
+
 func TestLoadFromFile_CompactionDefaults(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

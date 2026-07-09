@@ -62,6 +62,16 @@ func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, err
 	if err := cfg.ApplyModelOverride(ref); err != nil {
 		return ProviderSelection{}, err
 	}
+	if err := applyOSEnvExcept(&cfg, map[string]struct{}{
+		"PROVIDER_API_ID":       {},
+		"PROVIDER_API_PROTOCOL": {},
+		"PROVIDER_API_MODEL":    {},
+	}); err != nil {
+		return ProviderSelection{}, err
+	}
+	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+		return ProviderSelection{}, err
+	}
 	return cfg.ProviderSelection(), nil
 }
 

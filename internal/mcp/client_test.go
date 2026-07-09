@@ -380,6 +380,21 @@ func TestMCPClient_StartupErrorIncludesStderrTail(t *testing.T) {
 	}
 }
 
+func TestLinePrefixWriterReturnsConsumedBytesOnPartialError(t *testing.T) {
+	underlying := &failOnWrite{failAt: 4, partialBytes: 1}
+	w := newLinePrefixWriter(underlying, "[mcp:fake] ")
+	n, err := w.Write([]byte("one\ntwo"))
+	if err == nil {
+		t.Fatal("expected write error")
+	}
+	if want := len("one\n") + 1; n != want {
+		t.Fatalf("written = %d, want %d", n, want)
+	}
+	if got, want := underlying.String(), "[mcp:fake] one\n[mcp:fake] t"; got != want {
+		t.Fatalf("underlying output = %q, want %q", got, want)
+	}
+}
+
 func TestMCPClient_CloseWaitsForSubprocess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -661,6 +676,32 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+type failOnWrite struct {
+	buf          bytes.Buffer
+	writes       int
+	failAt       int
+	partialBytes int
+}
+
+func (w *failOnWrite) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		n := w.partialBytes
+		if n > len(p) {
+			n = len(p)
+		}
+		if n > 0 {
+			_, _ = w.buf.Write(p[:n])
+		}
+		return n, fmt.Errorf("forced write failure")
+	}
+	return w.buf.Write(p)
+}
+
+func (w *failOnWrite) String() string {
+	return w.buf.String()
 }
 
 func TestMCPClient_EnvVarReachesServer(t *testing.T) {
