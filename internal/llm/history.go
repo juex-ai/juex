@@ -34,6 +34,9 @@ func compactBlocksForProvider(blocks []Block) []Block {
 			if b.Text == "" {
 				continue
 			}
+		case BlockImage:
+			// Keep image blocks even when their file is currently unavailable;
+			// adapters will degrade them to provider-visible reference text.
 		case BlockReasoning:
 			if b.Text == "" && b.Content == "" {
 				continue

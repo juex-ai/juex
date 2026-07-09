@@ -149,6 +149,9 @@ func estimateMessageTokens(history []llm.Message) int {
 		chars += len(m.Role) + len(m.Kind) + 8
 		for _, b := range m.Blocks {
 			chars += len(b.Type) + len(b.Text) + len(b.Content) + len(b.ToolUseID) + len(b.ToolName) + 8
+			if b.Media != nil {
+				chars += len(b.Media.ArtifactPath) + len(b.Media.MediaType) + len(b.Media.SHA256) + 24
+			}
 			if len(b.Input) > 0 {
 				if data, err := json.Marshal(b.Input); err == nil {
 					chars += len(data)

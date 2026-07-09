@@ -139,6 +139,23 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 		switch m.Role {
 		case RoleUser:
 			var userText strings.Builder
+			var userParts []openai.ChatCompletionContentPartUnionParam
+			flushUser := func() {
+				if userText.Len() == 0 && len(userParts) == 0 {
+					return
+				}
+				if len(userParts) == 0 {
+					out = append(out, openai.UserMessage(userText.String()))
+					userText.Reset()
+					return
+				}
+				if userText.Len() > 0 {
+					userParts = append(userParts, openai.TextContentPart(userText.String()))
+					userText.Reset()
+				}
+				out = append(out, openAIUserContentPartsMessage(userParts))
+				userParts = nil
+			}
 			for _, b := range m.Blocks {
 				switch b.Type {
 				case BlockText:
@@ -146,17 +163,39 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 						userText.WriteString("\n")
 					}
 					userText.WriteString(b.Text)
-				case BlockToolResult:
-					if userText.Len() > 0 {
-						out = append(out, openai.UserMessage(userText.String()))
-						userText.Reset()
+				case BlockImage:
+					if dataURL, ok := imageDataURL(b.Media); ok {
+						if userText.Len() > 0 {
+							userParts = append(userParts, openai.TextContentPart(userText.String()))
+							userText.Reset()
+						}
+						userParts = append(userParts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+							URL: dataURL,
+						}))
+						continue
 					}
-					out = append(out, openai.ToolMessage(b.Content, b.ToolUseID))
+					if userText.Len() > 0 {
+						userText.WriteString("\n")
+					}
+					userText.WriteString(mediaReferenceText("image", b.Media))
+				case BlockToolResult:
+					flushUser()
+					content := b.Content
+					if b.Media != nil {
+						content = toolResultContentWithMediaReference(b)
+					}
+					out = append(out, openai.ToolMessage(content, b.ToolUseID))
+					if b.Media != nil {
+						if dataURL, ok := imageDataURL(b.Media); ok {
+							out = append(out, openAIUserContentPartsMessage([]openai.ChatCompletionContentPartUnionParam{
+								openai.TextContentPart(openAIToolResultImageAttribution(b)),
+								openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
+							}))
+						}
+					}
 				}
 			}
-			if userText.Len() > 0 {
-				out = append(out, openai.UserMessage(userText.String()))
-			}
+			flushUser()
 		case RoleAssistant:
 			am := openai.ChatCompletionAssistantMessageParam{}
 			var textParts []string
@@ -208,6 +247,21 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 		}
 	}
 	return out
+}
+
+func openAIUserContentPartsMessage(parts []openai.ChatCompletionContentPartUnionParam) openai.ChatCompletionMessageParamUnion {
+	msg := openai.ChatCompletionUserMessageParam{}
+	msg.Content = openai.ChatCompletionUserMessageParamContentUnion{
+		OfArrayOfContentParts: parts,
+	}
+	return openai.ChatCompletionMessageParamUnion{OfUser: &msg}
+}
+
+func openAIToolResultImageAttribution(b Block) string {
+	if b.ToolName != "" {
+		return "Tool result image from " + b.ToolName + " (" + b.ToolUseID + ")."
+	}
+	return "Tool result image from tool call " + b.ToolUseID + "."
 }
 
 func toOpenAITools(tools []ToolSpec) []openai.ChatCompletionToolParam {

@@ -33,7 +33,7 @@ func projectProviderTranscript(history []Message, profile ProviderProfile, opts 
 		projected.Blocks = make([]Block, 0, len(m.Blocks))
 		for _, b := range m.Blocks {
 			if shouldProjectProviderBlock(b, profile, opts) {
-				projected.Blocks = append(projected.Blocks, projectProviderBlock(b))
+				projected.Blocks = append(projected.Blocks, projectProviderBlock(b, profile))
 			}
 		}
 		filtered = append(filtered, projected)
@@ -45,6 +45,8 @@ func shouldProjectProviderBlock(b Block, profile ProviderProfile, opts providerP
 	switch b.Type {
 	case BlockText:
 		return true
+	case BlockImage:
+		return true
 	case BlockToolUse, BlockToolResult:
 		return profile.Capabilities.Tools
 	case BlockReasoning:
@@ -54,9 +56,19 @@ func shouldProjectProviderBlock(b Block, profile ProviderProfile, opts providerP
 	}
 }
 
-func projectProviderBlock(b Block) Block {
-	if b.Type == BlockToolUse {
+func projectProviderBlock(b Block, profile ProviderProfile) Block {
+	switch b.Type {
+	case BlockToolUse:
 		b.Input = ProviderToolInput(b.ToolName, b.Input)
+	case BlockImage:
+		if !profile.Capabilities.Vision {
+			return imagePlaceholderBlock(b)
+		}
+	case BlockToolResult:
+		if b.Media != nil && !profile.Capabilities.Vision {
+			b.Content = toolResultContentWithMediaReference(b)
+			b.Media = nil
+		}
 	}
 	return b
 }

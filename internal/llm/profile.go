@@ -17,6 +17,7 @@ const (
 
 type ProviderCapabilities struct {
 	Tools           bool `json:"tools"`
+	Vision          bool `json:"vision"`
 	Streaming       bool `json:"streaming"`
 	ReasoningEffort bool `json:"reasoning_effort"`
 	ReasoningReplay bool `json:"reasoning_replay"`
@@ -25,6 +26,7 @@ type ProviderCapabilities struct {
 
 type CapabilityOverrides struct {
 	Tools           *bool
+	Vision          *bool
 	Streaming       *bool
 	ReasoningEffort *bool
 	ReasoningReplay *bool
@@ -61,6 +63,7 @@ func (p ProviderProfile) Config() Config {
 		Query:          cloneStringMap(p.Query),
 		Capabilities: CapabilityOverrides{
 			Tools:           boolPtr(p.Capabilities.Tools),
+			Vision:          boolPtr(p.Capabilities.Vision),
 			Streaming:       boolPtr(p.Capabilities.Streaming),
 			ReasoningEffort: boolPtr(p.Capabilities.ReasoningEffort),
 			ReasoningReplay: boolPtr(p.Capabilities.ReasoningReplay),
@@ -289,6 +292,9 @@ func parseProtocol(in string) (Protocol, error) {
 func applyCapabilityOverrides(c ProviderCapabilities, o CapabilityOverrides) ProviderCapabilities {
 	if o.Tools != nil {
 		c.Tools = *o.Tools
+	}
+	if o.Vision != nil {
+		c.Vision = *o.Vision
 	}
 	if o.Streaming != nil {
 		c.Streaming = *o.Streaming

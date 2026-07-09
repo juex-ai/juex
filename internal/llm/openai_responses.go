@@ -150,24 +150,47 @@ func encodeOpenAIResponseInput(history []Message) responses.ResponseInputParam {
 	var out responses.ResponseInputParam
 	for _, m := range history {
 		var textParts []string
+		var contentParts responses.ResponseInputMessageContentListParam
+		flushTextToContent := func() {
+			if len(textParts) == 0 {
+				return
+			}
+			contentParts = append(contentParts, responses.ResponseInputContentParamOfInputText(strings.Join(textParts, "\n")))
+			textParts = nil
+		}
+		flushMessage := func() {
+			out = appendResponseMessage(out, m.Role, textParts, contentParts)
+			textParts = nil
+			contentParts = nil
+		}
 		for _, b := range m.Blocks {
 			switch b.Type {
 			case BlockText:
 				textParts = append(textParts, b.Text)
+			case BlockImage:
+				if dataURL, ok := imageDataURL(b.Media); ok {
+					flushTextToContent()
+					imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
+					imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)
+					contentParts = append(contentParts, imagePart)
+				} else {
+					textParts = append(textParts, mediaReferenceText("image", b.Media))
+				}
 			case BlockToolUse:
-				out = appendResponseTextMessage(out, m.Role, textParts)
-				textParts = nil
+				flushMessage()
 				out = append(out, responses.ResponseInputItemParamOfFunctionCall(toolCallArguments(b.ToolName, b.Input), b.ToolUseID, b.ToolName))
 			case BlockToolResult:
-				out = appendResponseTextMessage(out, m.Role, textParts)
-				textParts = nil
-				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(b.ToolUseID, b.Content))
+				flushMessage()
+				content := b.Content
+				if b.Media != nil {
+					content = toolResultContentWithMediaReference(b)
+				}
+				out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(b.ToolUseID, content))
 			case BlockReasoning:
 				if b.Signature == "" {
 					continue
 				}
-				out = appendResponseTextMessage(out, m.Role, textParts)
-				textParts = nil
+				flushMessage()
 				var summary []responses.ResponseReasoningItemSummaryParam
 				if b.Text != "" {
 					summary = []responses.ResponseReasoningItemSummaryParam{{Text: b.Text}}
@@ -184,19 +207,22 @@ func encodeOpenAIResponseInput(history []Message) responses.ResponseInputParam {
 				out = append(out, responses.ResponseInputItemUnionParam{OfReasoning: &reasoning})
 			}
 		}
-		out = appendResponseTextMessage(out, m.Role, textParts)
+		flushMessage()
 	}
 	return out
 }
 
-func appendResponseTextMessage(out responses.ResponseInputParam, role Role, parts []string) responses.ResponseInputParam {
-	if len(parts) == 0 {
+func appendResponseMessage(out responses.ResponseInputParam, role Role, textParts []string, contentParts responses.ResponseInputMessageContentListParam) responses.ResponseInputParam {
+	if len(textParts) == 0 && len(contentParts) == 0 {
 		return out
 	}
-	return append(out, responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{
-		Role:    toResponseRole(role),
-		Content: responses.EasyInputMessageContentUnionParam{OfString: param.NewOpt(strings.Join(parts, "\n"))},
-	}})
+	if len(contentParts) == 0 {
+		return append(out, responses.ResponseInputItemParamOfMessage(strings.Join(textParts, "\n"), toResponseRole(role)))
+	}
+	if len(textParts) > 0 {
+		contentParts = append(contentParts, responses.ResponseInputContentParamOfInputText(strings.Join(textParts, "\n")))
+	}
+	return append(out, responses.ResponseInputItemParamOfMessage(contentParts, toResponseRole(role)))
 }
 
 func toResponseRole(role Role) responses.EasyInputMessageRole {

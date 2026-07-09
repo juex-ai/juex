@@ -18,6 +18,7 @@ type BlockType string
 
 const (
 	BlockText       BlockType = "text"
+	BlockImage      BlockType = "image"
 	BlockToolUse    BlockType = "tool_use"
 	BlockToolResult BlockType = "tool_result"
 	// BlockReasoning carries provider-specific reasoning/thinking content
@@ -47,6 +48,7 @@ const (
 type Block struct {
 	Type      BlockType      `json:"type"`
 	Text      string         `json:"text,omitempty"`
+	Media     *MediaRef      `json:"media,omitempty"`
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	ToolName  string         `json:"tool_name,omitempty"`
 	Input     map[string]any `json:"input,omitempty"`
@@ -66,6 +68,18 @@ type Block struct {
 	// Artifact records full content that was moved out of provider context
 	// while preserving a stable provider-visible preview in Text or Content.
 	Artifact *ContextArtifactProjection `json:"artifact,omitempty"`
+}
+
+// MediaRef keeps durable transcripts lightweight by storing a media reference
+// instead of inline bytes. Provider adapters read ArtifactPath only when the
+// selected model declares the matching capability.
+type MediaRef struct {
+	ArtifactPath  string `json:"artifact_path,omitempty"`
+	MediaType     string `json:"media_type,omitempty"`
+	SHA256        string `json:"sha256,omitempty"`
+	OriginalBytes int    `json:"original_bytes,omitempty"`
+	Width         int    `json:"width,omitempty"`
+	Height        int    `json:"height,omitempty"`
 }
 
 type ContextArtifactProjection struct {

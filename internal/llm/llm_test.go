@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -60,6 +62,23 @@ func writeAnthropicTextStreamWithCache(w http.ResponseWriter, model, text, stopR
 	fmt.Fprintf(w, `data: {"type":"message_delta","delta":{"stop_reason":%q,"stop_sequence":null},"usage":{"output_tokens":%d}}`+"\n\n", stopReason, outputTokens)
 	fmt.Fprint(w, "event: message_stop\n")
 	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+}
+
+func testImageMedia(t *testing.T) *MediaRef {
+	t.Helper()
+	data := []byte("fake image bytes")
+	path := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return &MediaRef{
+		ArtifactPath:  path,
+		MediaType:     "image/png",
+		SHA256:        "sha-test",
+		OriginalBytes: len(data),
+		Width:         2,
+		Height:        1,
+	}
 }
 
 func writeAnthropicTextAndToolStream(w http.ResponseWriter, model, text string, inputTokens, outputTokens int) {
@@ -166,6 +185,88 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 	sysBlocks, ok := capturedBody["system"].([]any)
 	if !ok || len(sysBlocks) == 0 {
 		t.Errorf("system not propagated: %+v", capturedBody["system"])
+	}
+}
+
+func TestBlockImageJSONRoundTripStoresMediaReference(t *testing.T) {
+	original := Message{
+		Role: RoleUser,
+		Blocks: []Block{{
+			Type: BlockImage,
+			Media: &MediaRef{
+				ArtifactPath:  ".juex/artifacts/media/s/sha.png",
+				MediaType:     "image/png",
+				SHA256:        "sha",
+				OriginalBytes: 123,
+				Width:         8,
+				Height:        9,
+			},
+		}},
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "base64") {
+		t.Fatalf("message JSON should store media references only: %s", data)
+	}
+	var roundTrip Message
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if len(roundTrip.Blocks) != 1 || roundTrip.Blocks[0].Type != BlockImage || roundTrip.Blocks[0].Media == nil {
+		t.Fatalf("round trip = %+v", roundTrip)
+	}
+	if roundTrip.Blocks[0].Media.SHA256 != "sha" || roundTrip.Blocks[0].Media.Width != 8 {
+		t.Fatalf("media ref = %+v", roundTrip.Blocks[0].Media)
+	}
+}
+
+func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
+	media := testImageMedia(t)
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		writeAnthropicTextStream(w, "claude-test", "ok", "end_turn", 10, 2)
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{
+		ID:           "anthropic",
+		BaseURL:      srv.URL,
+		APIKey:       "test-key",
+		Model:        "claude-test",
+		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
+	}, nil)
+
+	hist := []Message{
+		{Role: RoleUser, Blocks: []Block{{Type: BlockText, Text: "look"}, {Type: BlockImage, Media: media}}},
+		{Role: RoleAssistant, Blocks: []Block{{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "render_chart", Input: map[string]any{"id": "x"}}}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "render_chart", Content: "chart", Media: media}}},
+	}
+	if _, err := p.Complete(context.Background(), "", hist, []ToolSpec{{Name: "render_chart", Schema: map[string]any{"type": "object"}}}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	messages, _ := capturedBody["messages"].([]any)
+	if len(messages) != 3 {
+		t.Fatalf("messages = %+v", messages)
+	}
+	firstContent, _ := messages[0].(map[string]any)["content"].([]any)
+	if len(firstContent) != 2 || firstContent[1].(map[string]any)["type"] != "image" {
+		t.Fatalf("user image content = %+v", firstContent)
+	}
+	source, _ := firstContent[1].(map[string]any)["source"].(map[string]any)
+	if source["type"] != "base64" || source["media_type"] != "image/png" || source["data"] == "" {
+		t.Fatalf("anthropic image source = %+v", source)
+	}
+	toolContent, _ := messages[2].(map[string]any)["content"].([]any)
+	if len(toolContent) != 1 || toolContent[0].(map[string]any)["type"] != "tool_result" {
+		t.Fatalf("tool result wrapper = %+v", toolContent)
+	}
+	toolInner, _ := toolContent[0].(map[string]any)["content"].([]any)
+	if len(toolInner) != 2 || toolInner[1].(map[string]any)["type"] != "image" {
+		t.Fatalf("tool result image content = %+v", toolInner)
 	}
 }
 
@@ -1026,6 +1127,54 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
+	media := testImageMedia(t)
+	type wireReq struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	var captured wireReq
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{
+		Protocol:     string(ProtocolOpenAIChat),
+		BaseURL:      srv.URL,
+		APIKey:       "k",
+		Model:        "m",
+		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
+	}, nil)
+	hist := []Message{
+		{Role: RoleUser, Blocks: []Block{{Type: BlockText, Text: "look"}, {Type: BlockImage, Media: media}}},
+		{Role: RoleAssistant, Blocks: []Block{{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "render_chart", Input: map[string]any{"id": "x"}}}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "render_chart", Content: "chart", Media: media}}},
+	}
+	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(captured.Messages) != 4 {
+		t.Fatalf("messages len = %d, messages=%+v", len(captured.Messages), captured.Messages)
+	}
+	userParts, _ := captured.Messages[0]["content"].([]any)
+	if len(userParts) != 2 || userParts[1].(map[string]any)["type"] != "image_url" {
+		t.Fatalf("first user content = %+v", captured.Messages[0]["content"])
+	}
+	if imageURL, _ := userParts[1].(map[string]any)["image_url"].(map[string]any); !strings.HasPrefix(fmt.Sprint(imageURL["url"]), "data:image/png;base64,") {
+		t.Fatalf("image_url = %+v", imageURL)
+	}
+	if captured.Messages[2]["role"] != "tool" || !strings.Contains(fmt.Sprint(captured.Messages[2]["content"]), "tool_result_image") {
+		t.Fatalf("tool message = %+v", captured.Messages[2])
+	}
+	syntheticParts, _ := captured.Messages[3]["content"].([]any)
+	if len(syntheticParts) != 2 || syntheticParts[0].(map[string]any)["text"] != "Tool result image from render_chart (call_1)." || syntheticParts[1].(map[string]any)["type"] != "image_url" {
+		t.Fatalf("synthetic user image message = %+v", captured.Messages[3])
+	}
+}
+
 func TestNewProvider_Errors(t *testing.T) {
 	if _, err := New(Config{ID: "anthropic", APIKey: "", Model: "m"}); err == nil {
 		t.Error("missing key should error")
@@ -1344,6 +1493,56 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 10 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v", resp.Usage)
+	}
+}
+
+func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing.T) {
+	media := testImageMedia(t)
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(buf, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"id":"resp_1","object":"response","model":"gpt-test","status":"completed",
+			"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],
+			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:           "openai",
+		Protocol:     "openai/responses",
+		BaseURL:      srv.URL,
+		APIKey:       "k",
+		Model:        "gpt-test",
+		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist := []Message{
+		{Role: RoleUser, Blocks: []Block{{Type: BlockText, Text: "look"}, {Type: BlockImage, Media: media}}},
+		{Role: RoleAssistant, Blocks: []Block{{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "render_chart", Input: map[string]any{"id": "x"}}}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "render_chart", Content: "chart", Media: media}}},
+	}
+	if _, err := p.Complete(context.Background(), "", hist, []ToolSpec{{Name: "render_chart", Schema: map[string]any{"type": "object"}}}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	input, _ := capturedBody["input"].([]any)
+	if len(input) != 3 {
+		t.Fatalf("input = %+v", input)
+	}
+	content, _ := input[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 || content[0].(map[string]any)["type"] != "input_text" || content[1].(map[string]any)["type"] != "input_image" {
+		t.Fatalf("responses image input content = %+v", content)
+	}
+	if !strings.HasPrefix(fmt.Sprint(content[1].(map[string]any)["image_url"]), "data:image/png;base64,") {
+		t.Fatalf("responses input_image = %+v", content[1])
+	}
+	if input[2].(map[string]any)["type"] != "function_call_output" || !strings.Contains(fmt.Sprint(input[2].(map[string]any)["output"]), "tool_result_image") {
+		t.Fatalf("responses tool result output = %+v", input[2])
 	}
 }
 
@@ -2683,6 +2882,35 @@ func TestProjectProviderTranscriptGatesToolsAndReasoning(t *testing.T) {
 
 	if len(history[0].Blocks) != 3 || history[0].Blocks[1].Type != BlockReasoning {
 		t.Fatalf("projection mutated input history: %+v", history[0].Blocks)
+	}
+}
+
+func TestProjectProviderTranscriptGatesVision(t *testing.T) {
+	media := &MediaRef{ArtifactPath: "image.png", MediaType: "image/png", SHA256: "sha", OriginalBytes: 12}
+	history := []Message{
+		{Role: RoleUser, Blocks: []Block{{Type: BlockImage, Media: media}}},
+		{Role: RoleAssistant, Blocks: []Block{{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "render_chart", Input: map[string]any{"id": "x"}}}},
+		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "render_chart", Media: media}}},
+	}
+
+	noVision := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	if noVision[0].Blocks[0].Type != BlockText || !strings.Contains(noVision[0].Blocks[0].Text, "image.png") {
+		t.Fatalf("image without vision = %+v", noVision[0].Blocks[0])
+	}
+	if noVision[2].Blocks[0].Type != BlockToolResult || noVision[2].Blocks[0].Media != nil || !strings.Contains(noVision[2].Blocks[0].Content, "tool_result_image") {
+		t.Fatalf("tool result image without vision = %+v", noVision[2].Blocks[0])
+	}
+
+	withVision := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true, Vision: true},
+	}, providerProjectionOptions{})
+	if withVision[0].Blocks[0].Type != BlockImage || withVision[0].Blocks[0].Media == nil {
+		t.Fatalf("image with vision = %+v", withVision[0].Blocks[0])
+	}
+	if withVision[2].Blocks[0].Type != BlockToolResult || withVision[2].Blocks[0].Media == nil {
+		t.Fatalf("tool result image with vision = %+v", withVision[2].Blocks[0])
 	}
 }
 

@@ -1412,6 +1412,7 @@ providers:
       beta: "1"
     capabilities:
       tools: false
+      vision: false
       reasoning_replay: true
     compat:
       reasoning_replay_fields:
@@ -1423,6 +1424,7 @@ providers:
         headers:
           X-Model: deepseek-chat
         capabilities:
+          vision: true
           max_output_tokens: false
         compat:
           codex_transport: websocket-cached
@@ -1448,6 +1450,9 @@ providers:
 	if cfg.ProviderCapabilities.MaxOutputTokens == nil || *cfg.ProviderCapabilities.MaxOutputTokens {
 		t.Fatalf("max_output_tokens override = %+v, want false", cfg.ProviderCapabilities.MaxOutputTokens)
 	}
+	if cfg.ProviderCapabilities.Vision == nil || !*cfg.ProviderCapabilities.Vision {
+		t.Fatalf("vision override = %+v, want true", cfg.ProviderCapabilities.Vision)
+	}
 	if got := cfg.ProviderCompat.ReasoningReplayFields; len(got) != 1 || got[0] != "reasoning_content" {
 		t.Fatalf("compat = %+v", cfg.ProviderCompat)
 	}
@@ -1458,7 +1463,7 @@ providers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.ID != "deepseek" || profile.Protocol != "openai/chat" || profile.Capabilities.Tools || profile.Capabilities.MaxOutputTokens || profile.Compat.CodexTransport != "websocket-cached" {
+	if profile.ID != "deepseek" || profile.Protocol != "openai/chat" || profile.Capabilities.Tools || !profile.Capabilities.Vision || profile.Capabilities.MaxOutputTokens || profile.Compat.CodexTransport != "websocket-cached" {
 		t.Fatalf("profile = %+v", profile)
 	}
 	selection := cfg.ProviderSelection()
