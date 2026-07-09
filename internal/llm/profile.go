@@ -17,6 +17,7 @@ const (
 
 type ProviderCapabilities struct {
 	Tools           bool `json:"tools"`
+	Vision          bool `json:"vision"`
 	Streaming       bool `json:"streaming"`
 	ReasoningEffort bool `json:"reasoning_effort"`
 	ReasoningReplay bool `json:"reasoning_replay"`
@@ -25,6 +26,7 @@ type ProviderCapabilities struct {
 
 type CapabilityOverrides struct {
 	Tools           *bool
+	Vision          *bool
 	Streaming       *bool
 	ReasoningEffort *bool
 	ReasoningReplay *bool
@@ -47,6 +49,7 @@ type ProviderProfile struct {
 	Query          map[string]string
 	Capabilities   ProviderCapabilities
 	Compat         CompatOptions
+	WorkDir        string
 }
 
 func (p ProviderProfile) Config() Config {
@@ -59,8 +62,10 @@ func (p ProviderProfile) Config() Config {
 		ThinkingEffort: p.ThinkingEffort,
 		Headers:        cloneStringMap(p.Headers),
 		Query:          cloneStringMap(p.Query),
+		WorkDir:        p.WorkDir,
 		Capabilities: CapabilityOverrides{
 			Tools:           boolPtr(p.Capabilities.Tools),
+			Vision:          boolPtr(p.Capabilities.Vision),
 			Streaming:       boolPtr(p.Capabilities.Streaming),
 			ReasoningEffort: boolPtr(p.Capabilities.ReasoningEffort),
 			ReasoningReplay: boolPtr(p.Capabilities.ReasoningReplay),
@@ -84,6 +89,7 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 	profile.ThinkingEffort = firstNonEmpty(cfg.ThinkingEffort, profile.ThinkingEffort)
 	profile.Headers = mergeStringMap(profile.Headers, cfg.Headers)
 	profile.Query = mergeStringMap(profile.Query, cfg.Query)
+	profile.WorkDir = cfg.WorkDir
 	profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
 	if len(cfg.Compat.ReasoningReplayFields) > 0 {
 		profile.Compat.ReasoningReplayFields = append([]string(nil), cfg.Compat.ReasoningReplayFields...)
@@ -289,6 +295,9 @@ func parseProtocol(in string) (Protocol, error) {
 func applyCapabilityOverrides(c ProviderCapabilities, o CapabilityOverrides) ProviderCapabilities {
 	if o.Tools != nil {
 		c.Tools = *o.Tools
+	}
+	if o.Vision != nil {
+		c.Vision = *o.Vision
 	}
 	if o.Streaming != nil {
 		c.Streaming = *o.Streaming

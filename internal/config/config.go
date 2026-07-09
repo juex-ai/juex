@@ -92,6 +92,7 @@ type providerModelConfig struct {
 
 type providerCapabilitiesConfig struct {
 	Tools           *bool `yaml:"tools"`
+	Vision          *bool `yaml:"vision"`
 	Streaming       *bool `yaml:"streaming"`
 	ReasoningEffort *bool `yaml:"reasoning_effort"`
 	ReasoningReplay *bool `yaml:"reasoning_replay"`
@@ -755,6 +756,9 @@ func mergeProviderCapabilitiesConfig(base, override providerCapabilitiesConfig) 
 	if override.Tools != nil {
 		base.Tools = override.Tools
 	}
+	if override.Vision != nil {
+		base.Vision = override.Vision
+	}
 	if override.Streaming != nil {
 		base.Streaming = override.Streaming
 	}
@@ -1009,6 +1013,9 @@ func applyEnvMap(cfg *Config, values map[string]string) error {
 func applyProviderCapabilitiesConfig(dst *llm.CapabilityOverrides, src providerCapabilitiesConfig) {
 	if src.Tools != nil {
 		dst.Tools = src.Tools
+	}
+	if src.Vision != nil {
+		dst.Vision = src.Vision
 	}
 	if src.Streaming != nil {
 		dst.Streaming = src.Streaming

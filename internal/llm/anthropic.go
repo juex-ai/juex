@@ -77,7 +77,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.profile.Model),
 		MaxTokens: maxTokens,
-		Messages:  toAnthropicMessages(providerContext.Messages, cachePrompt, opts.CachePolicy.Retention),
+		Messages:  toAnthropicMessages(providerContext.Messages, p.profile, cachePrompt, opts.CachePolicy.Retention),
 	}
 	if p.profile.Capabilities.Tools {
 		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
@@ -234,7 +234,7 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 	}
 }
 
-func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
+func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
 	cacheMsg, cacheBlock := anthropicHistoryCacheBreakpoint(history, cachePrompt)
 	for msgIndex, m := range history {
@@ -244,6 +244,12 @@ func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention str
 			switch b.Type {
 			case BlockText:
 				block = anthropic.NewTextBlock(b.Text)
+			case BlockImage:
+				if imageBlock, ok := anthropicImageBlock(profile.WorkDir, b.Media); ok {
+					block = imageBlock
+				} else {
+					block = anthropic.NewTextBlock(mediaReferenceText("image", b.Media))
+				}
 			case BlockReasoning:
 				if b.Redacted {
 					block = anthropic.NewRedactedThinkingBlock(b.Content)
@@ -253,7 +259,7 @@ func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention str
 			case BlockToolUse:
 				block = anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName)
 			case BlockToolResult:
-				block = anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError)
+				block = anthropicToolResultBlock(profile.WorkDir, b)
 			default:
 				continue
 			}
@@ -270,6 +276,49 @@ func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention str
 		}
 	}
 	return out
+}
+
+func anthropicImageBlock(workDir string, media *MediaRef) (anthropic.ContentBlockParamUnion, bool) {
+	encoded, mediaType, ok := readImageBase64(workDir, media)
+	if !ok {
+		return anthropic.ContentBlockParamUnion{}, false
+	}
+	return anthropic.NewImageBlockBase64(mediaType, encoded), true
+}
+
+func anthropicToolResultBlock(workDir string, b Block) anthropic.ContentBlockParamUnion {
+	if b.Media == nil {
+		return anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError)
+	}
+	content := make([]anthropic.ToolResultBlockParamContentUnion, 0, 2)
+	if b.Content != "" {
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{
+			OfText: &anthropic.TextBlockParam{Text: b.Content},
+		})
+	}
+	if encoded, mediaType, ok := readImageBase64(workDir, b.Media); ok {
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{
+			OfImage: &anthropic.ImageBlockParam{
+				Source: anthropic.ImageBlockParamSourceUnion{
+					OfBase64: &anthropic.Base64ImageSourceParam{
+						Data:      encoded,
+						MediaType: anthropic.Base64ImageSourceMediaType(mediaType),
+					},
+				},
+			},
+		})
+	} else {
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{
+			OfText: &anthropic.TextBlockParam{Text: mediaReferenceText("tool_result_image", b.Media)},
+		})
+	}
+	return anthropic.ContentBlockParamUnion{
+		OfToolResult: &anthropic.ToolResultBlockParam{
+			ToolUseID: b.ToolUseID,
+			Content:   content,
+			IsError:   param.NewOpt(b.IsError),
+		},
+	}
 }
 
 func anthropicHistoryCacheBreakpoint(history []Message, enabled bool) (int, int) {
@@ -291,7 +340,7 @@ func anthropicHistoryCacheBreakpoint(history []Message, enabled bool) (int, int)
 
 func anthropicCacheableHistoryBlock(block Block) bool {
 	switch block.Type {
-	case BlockText, BlockToolUse, BlockToolResult:
+	case BlockText, BlockImage, BlockToolUse, BlockToolResult:
 		return true
 	default:
 		return false
@@ -303,6 +352,8 @@ func setAnthropicBlockCacheControl(block *anthropic.ContentBlockParamUnion, rete
 	switch {
 	case block.OfText != nil:
 		block.OfText.CacheControl = cc
+	case block.OfImage != nil:
+		block.OfImage.CacheControl = cc
 	case block.OfToolUse != nil:
 		block.OfToolUse.CacheControl = cc
 	case block.OfToolResult != nil:

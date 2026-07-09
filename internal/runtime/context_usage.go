@@ -149,6 +149,9 @@ func estimateMessageTokens(history []llm.Message) int {
 		chars += len(m.Role) + len(m.Kind) + 8
 		for _, b := range m.Blocks {
 			chars += len(b.Type) + len(b.Text) + len(b.Content) + len(b.ToolUseID) + len(b.ToolName) + 8
+			if b.Media != nil {
+				chars += estimateMediaReferenceChars(b.Media)
+			}
 			if len(b.Input) > 0 {
 				if data, err := json.Marshal(b.Input); err == nil {
 					chars += len(data)
@@ -157,6 +160,21 @@ func estimateMessageTokens(history []llm.Message) int {
 		}
 	}
 	return EstimateCharsAsTokens(chars)
+}
+
+func estimateMediaReferenceChars(media *llm.MediaRef) int {
+	chars := len(media.ArtifactPath) + len(media.MediaType) + len(media.SHA256) + 24
+	imageTokens := 85
+	if media.Width > 0 && media.Height > 0 {
+		pixels := int64(media.Width) * int64(media.Height)
+		if pixels > 0 {
+			estimated := int((pixels + 749) / 750)
+			if estimated > imageTokens {
+				imageTokens = estimated
+			}
+		}
+	}
+	return chars + imageTokens*4
 }
 
 func EstimateTextTokens(text string) int {

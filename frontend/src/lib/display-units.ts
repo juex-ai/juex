@@ -1,5 +1,6 @@
 import type {
   Block,
+  ImageBlock,
   Message,
   ReasoningBlock,
   Role,
@@ -8,6 +9,7 @@ import type {
   ToolUseBlock,
 } from "@/types";
 import type { ToolUIPartState } from "@/components/ai-elements/_local-types";
+import { mediaReferenceText } from "./media-reference.ts";
 
 export type ToolDisplayUnit = {
   kind: "tool";
@@ -45,6 +47,10 @@ function normalizeTextBlock(block: TextBlock): TextBlock {
   return { ...block, text: "" };
 }
 
+function imageReferenceText(block: ImageBlock): string {
+  return mediaReferenceText("image", block.media);
+}
+
 // Walk all messages in order and produce the render groups. tool_use lives in
 // an assistant message and the matching tool_result lives in the next user
 // message (Anthropic-style); we fold them into one tool unit on the assistant
@@ -67,6 +73,12 @@ export function messagesToGroups(
       switch (block.type) {
         case "text":
           units.push({ kind: "text", block: normalizeTextBlock(block) });
+          break;
+        case "image":
+          units.push({
+            kind: "text",
+            block: { type: "text", text: imageReferenceText(block) },
+          });
           break;
         case "reasoning":
           units.push({ kind: "reasoning", block });

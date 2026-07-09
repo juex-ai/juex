@@ -3,7 +3,7 @@
 
 export type Role = "user" | "assistant" | "system";
 
-export type BlockType = "text" | "reasoning" | "tool_use" | "tool_result";
+export type BlockType = "text" | "image" | "reasoning" | "tool_use" | "tool_result";
 
 export interface BlockBase {
   type: BlockType;
@@ -23,6 +23,20 @@ export interface ReasoningBlock extends BlockBase {
   redacted?: boolean;
 }
 
+export interface MediaRef {
+  artifact_path?: string;
+  media_type?: string;
+  sha256?: string;
+  original_bytes?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface ImageBlock extends BlockBase {
+  type: "image";
+  media?: MediaRef;
+}
+
 export interface ToolUseBlock extends BlockBase {
   type: "tool_use";
   tool_use_id: string;
@@ -35,6 +49,7 @@ export interface ToolResultBlock extends BlockBase {
   type: "tool_result";
   tool_use_id?: string;
   content: string;
+  media?: MediaRef;
   is_error?: boolean;
   // UI-local live projection marker. Persisted history omits this field; it
   // lets the session transcript keep streamed tool output in a running state
@@ -42,7 +57,7 @@ export interface ToolResultBlock extends BlockBase {
   streaming?: boolean;
 }
 
-export type Block = TextBlock | ReasoningBlock | ToolUseBlock | ToolResultBlock;
+export type Block = TextBlock | ImageBlock | ReasoningBlock | ToolUseBlock | ToolResultBlock;
 
 export interface Message {
   id?: string;

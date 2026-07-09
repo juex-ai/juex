@@ -57,6 +57,7 @@ type Config struct {
 	Query          map[string]string
 	Capabilities   CapabilityOverrides
 	Compat         CompatOptions
+	WorkDir        string
 }
 
 // New constructs the appropriate Provider for the resolved provider profile.

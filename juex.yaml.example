@@ -94,6 +94,7 @@ providers:
     # Optional capability gates. Unsupported features are not sent.
     # capabilities:
     #   tools: true
+    #   vision: false
     #   streaming: false
     #   reasoning_effort: true
     #   reasoning_replay: true

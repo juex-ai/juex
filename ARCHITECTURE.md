@@ -161,6 +161,7 @@ type Role string  // "user" | "assistant" | "system"
 type BlockType string
 const (
     BlockText       BlockType = "text"
+    BlockImage      BlockType = "image"
     BlockToolUse    BlockType = "tool_use"
     BlockToolResult BlockType = "tool_result"
     BlockReasoning  BlockType = "reasoning"  // round-tripped for thinking models
@@ -169,6 +170,7 @@ const (
 type Block struct {
     Type           BlockType
     Text           string
+    Media          *MediaRef
     ToolUseID      string
     ToolName       string
     Input          map[string]any
@@ -178,6 +180,15 @@ type Block struct {
     Signature      string // anthropic thinking-block signature
     Redacted       bool   // provider-redacted reasoning content
     Artifact       *ContextArtifactProjection
+}
+
+type MediaRef struct {
+    ArtifactPath  string // relative artifact path; adapters reject absolute or escaping paths
+    MediaType     string // e.g. image/png
+    SHA256        string
+    OriginalBytes int
+    Width         int
+    Height        int
 }
 
 type ContextArtifactProjection struct {
@@ -259,6 +270,7 @@ type ProviderProfile struct {
 
 type ProviderCapabilities struct {
     Tools           bool
+    Vision          bool
     Streaming       bool
     ReasoningEffort bool
     ReasoningReplay bool
@@ -934,6 +946,7 @@ providers:
     query: {}
     capabilities:
       tools: true
+      vision: false
       streaming: false
       reasoning_effort: true
       reasoning_replay: true
@@ -990,7 +1003,7 @@ compaction:
 | `providers[].api_key` | API key |
 | `providers[].headers` | optional static HTTP headers for this provider profile |
 | `providers[].query` | optional static query params for this provider profile |
-| `providers[].capabilities` | optional provider-level gates for tools, streaming, reasoning effort/replay, and max output tokens |
+| `providers[].capabilities` | optional provider-level gates for tools, vision, streaming, reasoning effort/replay, and max output tokens |
 | `providers[].compat.reasoning_replay_fields` | OpenAI-compatible raw assistant fields to replay when reasoning replay is enabled |
 | `providers[].compat.codex_transport` | optional `openai-codex` transport mode: `sse` (default), `auto`, `websocket`, or `websocket-cached` |
 | `providers[].models[].id` | model name sent to the provider |
@@ -998,7 +1011,7 @@ compaction:
 | `providers[].models[].context_window` | optional model context window in tokens; defaults to `256000` |
 | `providers[].models[].headers` | optional model-level HTTP header overrides |
 | `providers[].models[].query` | optional model-level query parameter overrides |
-| `providers[].models[].capabilities` | optional model-level capability overrides |
+| `providers[].models[].capabilities` | optional model-level capability overrides, including `vision` for image input support |
 | `providers[].models[].compat.reasoning_replay_fields` | optional model-level compatibility overrides |
 | `providers[].models[].compat.codex_transport` | optional model-level override for `providers[].compat.codex_transport` |
 | `hooks.trusted` | required for project-local or explicit config command hooks; user-global hooks are trusted by location |

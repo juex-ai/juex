@@ -5,6 +5,7 @@ import {
   aggregateToolProcessStatus,
   compactThinkingPreview,
   formatToolBatchTitle,
+  formatToolProcessResult,
   formatToolProcessResultText,
   thinkingProcessDisplay,
   thinkingProcessVisibleText,
@@ -121,5 +122,35 @@ test("formatToolProcessResultText caps large process output", () => {
       "[tool result truncated:",
     ),
     true,
+  );
+});
+
+test("formatToolProcessResult shows image-only tool result media", () => {
+  assert.equal(
+    formatToolProcessResult({
+      content: "",
+      media: {
+        artifact_path: ".juex/artifacts/media/s/image.png",
+        media_type: "image/png",
+        sha256: "abc",
+        original_bytes: 12,
+        width: 2,
+        height: 3,
+      },
+    }),
+    "[tool_result_image: path=.juex/artifacts/media/s/image.png type=image/png sha256=abc bytes=12 size=2x3]",
+  );
+});
+
+test("formatToolProcessResult keeps content next to tool result media", () => {
+  assert.equal(
+    formatToolProcessResult({
+      content: "chart rendered",
+      media: {
+        artifact_path: ".juex/artifacts/media/s/chart.png",
+        media_type: "image/png",
+      },
+    }),
+    "chart rendered\n[tool_result_image: path=.juex/artifacts/media/s/chart.png type=image/png]",
   );
 });
