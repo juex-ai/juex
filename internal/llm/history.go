@@ -1,9 +1,9 @@
 package llm
 
 // compactHistoryForProvider drops blocks that cannot be sent to model
-// providers and merges adjacent messages with the same role. That preserves
-// provider role ordering even when older transcripts contain empty assistant
-// messages.
+// providers and merges adjacent messages with the same role and app-level kind.
+// Keeping kind boundaries lets provider adapters distinguish durable user input
+// from transient runtime context while still coalescing ordinary chat history.
 func compactHistoryForProvider(history []Message) []Message {
 	out := make([]Message, 0, len(history))
 	for _, m := range history {
@@ -11,13 +11,19 @@ func compactHistoryForProvider(history []Message) []Message {
 		if len(blocks) == 0 {
 			continue
 		}
-		if len(out) > 0 && out[len(out)-1].Role == m.Role {
+		if len(out) > 0 && providerMessagesMergeable(out[len(out)-1], m) {
 			out[len(out)-1].Blocks = append(out[len(out)-1].Blocks, blocks...)
 			continue
 		}
-		out = append(out, Message{Role: m.Role, Blocks: blocks})
+		projected := m
+		projected.Blocks = blocks
+		out = append(out, projected)
 	}
 	return out
+}
+
+func providerMessagesMergeable(left, right Message) bool {
+	return left.Role == right.Role && left.Kind == right.Kind
 }
 
 func compactBlocksForProvider(blocks []Block) []Block {

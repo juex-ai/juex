@@ -1480,8 +1480,15 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	if got := messagesText(prov.history[0]); !strings.Contains(got, "hook-context: visible") {
 		t.Fatalf("first provider history missing injected context:\n%s", got)
 	}
-	if got := prov.history[2][len(prov.history[2])-1].FirstText(); got != "continue from hook" {
+	stopHistory := prov.history[2]
+	if len(stopHistory) < 2 {
+		t.Fatalf("stop history = %+v", stopHistory)
+	}
+	if got := stopHistory[len(stopHistory)-2].FirstText(); got != "continue from hook" {
 		t.Fatalf("stop continuation = %q", got)
+	}
+	if got := stopHistory[len(stopHistory)-1]; got.Kind != llm.MessageKindRuntimeContext || !strings.Contains(got.FirstText(), "Current working observations") {
+		t.Fatalf("stop runtime context = %+v", got)
 	}
 	if _, err := os.Stat(filepath.Join(work, "blocked.txt")); !os.IsNotExist(err) {
 		t.Fatalf("denied write should not create file, stat err=%v", err)
@@ -1612,10 +1619,18 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	if len(prov.history) != 4 {
 		t.Fatalf("provider calls = %d", len(prov.history))
 	}
-	if got := prov.history[2][len(prov.history[2])-1].FirstText(); !strings.Contains(got, "current session goal is still in progress") ||
-		!strings.Contains(got, "Current goal contract") ||
-		!strings.Contains(got, "goal_state.json") {
+	continuationHistory := prov.history[2]
+	if len(continuationHistory) < 2 {
+		t.Fatalf("goal continuation history = %+v", continuationHistory)
+	}
+	if got := continuationHistory[len(continuationHistory)-2].FirstText(); !strings.Contains(got, "current session goal is still in progress") {
 		t.Fatalf("goal continuation = %q", got)
+	}
+	goalContext := continuationHistory[len(continuationHistory)-1]
+	if goalContext.Kind != llm.MessageKindRuntimeContext ||
+		!strings.Contains(goalContext.FirstText(), "Current goal contract") ||
+		!strings.Contains(goalContext.FirstText(), "goal_state.json") {
+		t.Fatalf("goal runtime context = %+v", goalContext)
 	}
 	goalData, err := os.ReadFile(filepath.Join(a.Session.Dir, "goal_state.json"))
 	if err != nil {

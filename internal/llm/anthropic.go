@@ -73,12 +73,12 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		maxTokens = int64(opts.MaxOutputTokens)
 	}
 
+	cachePrompt := opts.CachePolicy.StablePrefixKey != ""
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.profile.Model),
 		MaxTokens: maxTokens,
-		Messages:  toAnthropicMessages(providerContext.Messages, p.profile),
+		Messages:  toAnthropicMessages(providerContext.Messages, cachePrompt, opts.CachePolicy.Retention),
 	}
-	cachePrompt := opts.CachePolicy.StablePrefixKey != ""
 	if p.profile.Capabilities.Tools {
 		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
 	}
@@ -234,25 +234,33 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 	}
 }
 
-func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic.MessageParam {
+func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
-	for _, m := range history {
+	cacheMsg, cacheBlock := anthropicHistoryCacheBreakpoint(history, cachePrompt)
+	for msgIndex, m := range history {
 		var blocks []anthropic.ContentBlockParamUnion
-		for _, b := range m.Blocks {
+		for blockIndex, b := range m.Blocks {
+			var block anthropic.ContentBlockParamUnion
 			switch b.Type {
 			case BlockText:
-				blocks = append(blocks, anthropic.NewTextBlock(b.Text))
+				block = anthropic.NewTextBlock(b.Text)
 			case BlockReasoning:
 				if b.Redacted {
-					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(b.Content))
+					block = anthropic.NewRedactedThinkingBlock(b.Content)
 				} else {
-					blocks = append(blocks, anthropic.NewThinkingBlock(b.Signature, b.Text))
+					block = anthropic.NewThinkingBlock(b.Signature, b.Text)
 				}
 			case BlockToolUse:
-				blocks = append(blocks, anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName))
+				block = anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName)
 			case BlockToolResult:
-				blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError))
+				block = anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError)
+			default:
+				continue
 			}
+			if msgIndex == cacheMsg && blockIndex == cacheBlock {
+				setAnthropicBlockCacheControl(&block, cacheRetention)
+			}
+			blocks = append(blocks, block)
 		}
 		switch m.Role {
 		case RoleUser:
@@ -262,6 +270,44 @@ func toAnthropicMessages(history []Message, profile ProviderProfile) []anthropic
 		}
 	}
 	return out
+}
+
+func anthropicHistoryCacheBreakpoint(history []Message, enabled bool) (int, int) {
+	if !enabled {
+		return -1, -1
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Kind == MessageKindRuntimeContext {
+			continue
+		}
+		for j := len(history[i].Blocks) - 1; j >= 0; j-- {
+			if anthropicCacheableHistoryBlock(history[i].Blocks[j]) {
+				return i, j
+			}
+		}
+	}
+	return -1, -1
+}
+
+func anthropicCacheableHistoryBlock(block Block) bool {
+	switch block.Type {
+	case BlockText, BlockToolUse, BlockToolResult:
+		return true
+	default:
+		return false
+	}
+}
+
+func setAnthropicBlockCacheControl(block *anthropic.ContentBlockParamUnion, retention string) {
+	cc := anthropicCacheControl(retention)
+	switch {
+	case block.OfText != nil:
+		block.OfText.CacheControl = cc
+	case block.OfToolUse != nil:
+		block.OfToolUse.CacheControl = cc
+	case block.OfToolResult != nil:
+		block.OfToolResult.CacheControl = cc
+	}
 }
 
 func toAnthropicTools(tools []ToolSpec, cachePrompt bool, cacheRetention string) []anthropic.ToolUnionParam {
