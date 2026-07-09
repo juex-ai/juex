@@ -54,10 +54,6 @@ func EstimateCharsAsTokens(chars int) int {
 	return contextbudget.EstimateCharsAsTokens(chars)
 }
 
-func estimateToolTokens(tools []llm.ToolSpec) int {
-	return contextbudget.EstimateToolTokens(tools)
-}
-
 func estimateMessageTokens(history []llm.Message) int {
 	return contextbudget.EstimateMessageTokens(history)
 }
