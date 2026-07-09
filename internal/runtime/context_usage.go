@@ -307,3 +307,7 @@ func (e *Engine) applyTokenEstimateCalibration(tokens int) int {
 func (e *Engine) estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
 	return e.applyTokenEstimateCalibration(estimateContextTokens(systemPrompt, tools, history))
 }
+
+func (e *Engine) estimateMessageTokens(history []llm.Message) int {
+	return e.applyTokenEstimateCalibration(estimateMessageTokens(history))
+}

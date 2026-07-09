@@ -93,7 +93,7 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 		contextMessages = append(contextMessages, workingStateContextMessage(text))
 	}
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
-	snap.EstimatedTokens = e.applyTokenEstimateCalibration(estimateMessageTokens(snap.Messages))
+	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
 	return snap
 }
 
@@ -110,7 +110,7 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 		contextMessages = append(contextMessages, workingStateContextMessage(text))
 	}
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
-	snap.EstimatedTokens = e.applyTokenEstimateCalibration(estimateMessageTokens(snap.Messages))
+	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
 	return snap
 }
 
