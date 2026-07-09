@@ -340,14 +340,14 @@ func TestLoader_PromptBudgetCompactsAndOmitsLowerPrioritySkills(t *testing.T) {
 	writeSkill(t, project, "project-skill", "---\nname: project-skill\ndescription: "+strings.Repeat("p", 300)+"\n---\nPROJECT")
 
 	l := NewLoaderFromDirsWithOptions([]Dir{{Path: user, Source: "user"}, {Path: project, Source: "project"}}, LoaderOptions{
-		Policy: Policy{PromptBudgetChars: 420},
+		Policy: Policy{PromptBudgetChars: 260},
 	})
 	if err := l.Load(); err != nil {
 		t.Fatal(err)
 	}
 	section := l.PromptSection()
 	report := l.PromptReport()
-	if len(section) > 420 {
+	if len(section) > 260 {
 		t.Fatalf("section length = %d, want <= budget; section:\n%s", len(section), section)
 	}
 	if !report.Compacted || len(report.Omitted) == 0 {
@@ -358,6 +358,35 @@ func TestLoader_PromptBudgetCompactsAndOmitsLowerPrioritySkills(t *testing.T) {
 	}
 	if !strings.Contains(section, "skill_search") {
 		t.Fatalf("prompt should mention search for omitted skills:\n%s", section)
+	}
+}
+
+func TestLoader_PromptBudgetUsesMinimalHeaderWhenBudgetIsTiny(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "alpha", "---\nname: alpha\ndescription: "+strings.Repeat("a", 120)+"\n---\nA")
+	writeSkill(t, dir, "beta", "---\nname: beta\ndescription: "+strings.Repeat("b", 120)+"\n---\nB")
+
+	l := NewLoaderFromDirsWithOptions([]Dir{{Path: dir, Source: "project"}}, LoaderOptions{
+		Policy: Policy{PromptBudgetChars: 80},
+	})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	section := l.PromptSection()
+	report := l.PromptReport()
+	if len(section) > 80 {
+		t.Fatalf("section length = %d, want <= budget; section:\n%s", len(section), section)
+	}
+	if report.UsedChars > report.BudgetChars {
+		t.Fatalf("report = %+v, want used <= budget", report)
+	}
+	if !report.Compacted || len(report.Omitted) == 0 {
+		t.Fatalf("report = %+v, want compacted omissions", report)
+	}
+	for _, want := range []string{"skill_search", "skill_load"} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("section should keep %s hint under tiny budget; got:\n%s", want, section)
+		}
 	}
 }
 

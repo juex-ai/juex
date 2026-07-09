@@ -62,6 +62,14 @@ type PromptOmittedSkill struct {
 	Reason string
 }
 
+const skillPromptHeader = "## Available Skills\n" +
+	"Reusable instructions stored as markdown files. To apply a skill, call `skill_load` with its name to load the full SKILL.md. Use `skill_search` when unsure or when a prompt budget omitted lower-priority skills.\n\n"
+
+const compactSkillPromptHeader = "## Available Skills\n" +
+	"Use `skill_search` to find skills and `skill_load` to read a full SKILL.md.\n\n"
+
+const minimalSkillPromptHeader = "Skills: `skill_search`, `skill_load`.\n"
+
 type Dir struct {
 	Path            string
 	Source          string
@@ -256,9 +264,6 @@ func (l *Loader) promptSectionAndReport() (string, PromptBudgetReport) {
 }
 
 func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetReport) {
-	var sb strings.Builder
-	sb.WriteString("## Available Skills\n")
-	sb.WriteString("Reusable instructions stored as markdown files. To apply a skill, call `skill_load` with its name to load the full SKILL.md. Use `skill_search` when unsure or when a prompt budget omitted lower-priority skills.\n\n")
 	renderLines := func(skills []Skill, descLimit int) []string {
 		lines := make([]string, 0, len(skills))
 		for _, s := range skills {
@@ -266,16 +271,23 @@ func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetRepo
 		}
 		return lines
 	}
-	header := sb.String()
 	fullLines := renderLines(all, 0)
-	full := promptSectionWithLines(header, fullLines)
+	full := promptSectionWithLines(skillPromptHeader, fullLines)
 	if budgetChars <= 0 || len(full) <= budgetChars {
 		return full, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(full)}
 	}
 	compactLines := renderLines(all, 120)
+	header := compactSkillPromptHeader
 	compact := promptSectionWithLines(header, compactLines)
 	if len(compact) <= budgetChars {
 		return compact, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(compact), Compacted: true}
+	}
+	if len(header) > budgetChars {
+		header = minimalSkillPromptHeader
+	}
+	if len(header) > budgetChars {
+		section := header[:budgetChars]
+		return section, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(section), Compacted: true, Omitted: promptBudgetOmissions(all)}
 	}
 	ordered := append([]Skill(nil), all...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -299,6 +311,14 @@ func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetRepo
 	}
 	section := promptSectionWithLines(header, keptLines)
 	return section, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(section), Compacted: true, Omitted: omitted}
+}
+
+func promptBudgetOmissions(skills []Skill) []PromptOmittedSkill {
+	omitted := make([]PromptOmittedSkill, 0, len(skills))
+	for _, skill := range skills {
+		omitted = append(omitted, PromptOmittedSkill{Name: skill.Name, Source: skill.Source, Reason: "prompt budget"})
+	}
+	return omitted
 }
 
 func promptSkillLine(s Skill, descLimit int) string {

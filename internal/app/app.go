@@ -185,7 +185,7 @@ func New(opts Options) (*App, error) {
 	if err := skillLoader.Load(); err != nil {
 		return nil, err
 	}
-	if err := registerSkillTools(reg, skillLoader); err != nil {
+	if err := registerSkillTools(reg, skillLoader, runtimePaths.WorkDir, cfg.SandboxPolicy()); err != nil {
 		return nil, err
 	}
 

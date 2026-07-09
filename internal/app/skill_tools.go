@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/skills"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -24,7 +25,8 @@ func skillLoaderOptions(cfg config.Config) skills.LoaderOptions {
 	}}
 }
 
-func registerSkillTools(reg *tools.Registry, loader *skills.Loader) error {
+func registerSkillTools(reg *tools.Registry, loader *skills.Loader, workDir string, policy sandbox.Policy) error {
+	guard := sandbox.NewPathGuard(workDir, policy)
 	if err := reg.Register(tools.Tool{
 		Name:        "skill_search",
 		Description: "Search the loaded skill catalog by name, description, type, or source. Use this when the compact skill prompt does not list the skill you need.",
@@ -95,6 +97,9 @@ func registerSkillTools(reg *tools.Registry, loader *skills.Loader) error {
 			skill, ok := loader.Get(name)
 			if !ok {
 				return "", fmt.Errorf("skill_load: unknown skill %q; call skill_search to inspect available skills", name)
+			}
+			if err := guard.Check(skill.Path); err != nil {
+				return "", fmt.Errorf("skill_load: %w", err)
 			}
 			data, err := os.ReadFile(skill.Path)
 			if err != nil {

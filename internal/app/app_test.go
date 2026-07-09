@@ -112,6 +112,42 @@ func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
 	}
 }
 
+func TestAppSkillLoadRespectsSandboxBlockedPaths(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".agents", "skills", "secret")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: secret\ndescription: blocked\n---\nSECRET BODY\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    dir,
+			Skills:     config.DefaultSkillsConfig(),
+			Sandbox: config.SandboxPolicy{
+				Enabled: true,
+				FileSystem: config.FileSystemSandboxPolicy{
+					BlockedPaths: []string{skillDir},
+				},
+			},
+		},
+		Provider: &stubProvider{},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	if _, err := a.Engine.Tools.Call(context.Background(), "skill_load", map[string]any{"name": "secret"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("skill_load blocked path error = %v, want sandbox blocked path", err)
+	}
+}
+
 func TestAppShellHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_APP_FAKE_SHELL") != "1" {
 		return
