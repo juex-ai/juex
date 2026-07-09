@@ -21,13 +21,15 @@ import (
 // Exit code conventions (principle 6 from the agent-CLI guide). Stable
 // across versions; treat as part of the public contract.
 const (
-	ExitSuccess      = 0
-	ExitGeneralError = 1
-	ExitUsageError   = 2
-	ExitNotFound     = 3
-	ExitPermission   = 4
-	ExitConflict     = 5
-	ExitDryRun       = 10
+	ExitSuccess       = 0
+	ExitGeneralError  = 1
+	ExitUsageError    = 2
+	ExitNotFound      = 3
+	ExitPermission    = 4
+	ExitConflict      = 5
+	ExitDoctorWarning = 6
+	ExitDoctorFailure = 7
+	ExitDryRun        = 10
 )
 
 // Execute runs the root cobra command and returns the process exit code.
@@ -50,6 +52,10 @@ func Execute() int {
 		alreadyEmitted = true
 	}
 	err = cancellation.NormalizeErrorWithContext(ctx, err)
+	var doctorErr *doctorExitError
+	if errors.As(err, &doctorErr) {
+		return doctorErr.ExitCode()
+	}
 	var lockErr *session.LockError
 	if errors.As(err, &lockErr) {
 		printErrorIfNeeded(alreadyEmitted, err)
@@ -180,6 +186,8 @@ func newRootCmd() *cobra.Command {
 
 	cmd.AddCommand(newRunCmd(flags))
 	cmd.AddCommand(newREPLCmd(flags))
+	cmd.AddCommand(newInitCmd(flags))
+	cmd.AddCommand(newDoctorCmd(flags))
 	cmd.AddCommand(newVersionCmd(flags))
 	cmd.AddCommand(newSchemaCmd(flags))
 	cmd.AddCommand(newSessionsCmd(flags))

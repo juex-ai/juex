@@ -565,6 +565,209 @@ func TestRunCmd_DryRunLoadsDefaultJuexYAML(t *testing.T) {
 	}
 }
 
+func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
+	setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	work := t.TempDir()
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{
+		"-C", work,
+		"init",
+		"--scope", "workspace",
+		"--provider", "openai",
+		"--model", "gpt-4.1",
+		"--api-key", "sk-test",
+		"--base-url", "https://openai.example",
+		"--skip-check",
+		"--yes",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("init execute: %v\n%s", err, out.String())
+	}
+
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"model: openai:gpt-4.1", "id: openai", "base_url: https://openai.example", "api_key: sk-test", "id: gpt-4.1"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("config missing %q:\n%s", want, body)
+		}
+	}
+	cfg, err := loadConfig(&persistentFlags{cwd: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4.1" || cfg.APIKey != "sk-test" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if !strings.Contains(out.String(), `juex run "say hello"`) {
+		t.Fatalf("quickstart missing from output:\n%s", out.String())
+	}
+}
+
+func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
+	setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(configPath, "openai", "https://old.example", "sk-old", "gpt-old"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{
+		"-C", work,
+		"init",
+		"--scope", "workspace",
+		"--provider", "openai",
+		"--model", "gpt-new",
+		"--api-key", "sk-new",
+		"--base-url", "https://new.example",
+		"--skip-check",
+		"--yes",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("init execute: %v\n%s", err, out.String())
+	}
+
+	bodyBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(bodyBytes)
+	for _, want := range []string{"model: openai:gpt-old", "base_url: https://old.example", "api_key: sk-old", "id: gpt-new"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("merged config missing %q:\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"https://new.example", "sk-new"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("merge should not overwrite existing provider with %q:\n%s", forbidden, body)
+		}
+	}
+	cfg, err := loadConfig(&persistentFlags{cwd: work, model: "openai:gpt-new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BaseURL != "https://old.example" || cfg.APIKey != "sk-old" || cfg.Model != "gpt-new" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestInitCmd_UserScopeIgnoresBrokenWorkspaceConfig(t *testing.T) {
+	home := setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	work := t.TempDir()
+	if err := writeTextFile(filepath.Join(work, ".juex", "juex.yaml"), "model: [broken\n"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{
+		"-C", work,
+		"init",
+		"--scope", "user",
+		"--provider", "openai",
+		"--model", "gpt-4.1",
+		"--api-key", "sk-user",
+		"--skip-check",
+		"--yes",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("user-scope init should ignore broken workspace config: %v\n%s", err, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "juex.yaml")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
+	setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".agents", "mcp.json"), `{"mcpServers":{"self":{"command":"`+os.Args[0]+`"}}}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".agents", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: demo skill\n---\nbody\n"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("doctor execute: %v\n%s", err, out.String())
+	}
+	var result map[string]any
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("doctor json: %v\n%s", err, out.String())
+	}
+	if result["status"] != "ok" {
+		t.Fatalf("status = %#v, want ok:\n%s", result["status"], out.String())
+	}
+	checks, _ := result["checks"].([]any)
+	seen := map[string]bool{}
+	for _, raw := range checks {
+		row, _ := raw.(map[string]any)
+		seen[row["name"].(string)] = true
+	}
+	for _, want := range []string{"config", "credentials", "connectivity", "shell", "workdir", "mcp", "skills"} {
+		if !seen[want] {
+			t.Fatalf("missing check %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestDoctorCmd_JSONOfflineEmptyConfigFailsWithInitSuggestion(t *testing.T) {
+	setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	work := t.TempDir()
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) {
+		t.Fatalf("err = %T %v, want doctorExitError; stdout=%s", err, err, out.String())
+	}
+	if doctorErr.status != doctorStatusFail {
+		t.Fatalf("doctor status = %q", doctorErr.status)
+	}
+	for _, want := range []string{`"status": "fail"`, "juex init"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestRunCmd_EmptyConfigSuggestsInit(t *testing.T) {
+	setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	work := t.TempDir()
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "run", "--dry-run", "hello"})
+	err := root.Execute()
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) {
+		t.Fatalf("err = %T %v, want usageError", err, err)
+	}
+	if !strings.Contains(err.Error(), "juex init") {
+		t.Fatalf("error should suggest init, got %q", err.Error())
+	}
+}
+
 func TestRunCmd_StatusSlashJSON(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -859,9 +1062,11 @@ func classifyForTest(err error) int {
 	if err == nil {
 		return ExitSuccess
 	}
-	switch err.(type) {
+	switch e := err.(type) {
 	case *dryRunOK:
 		return ExitDryRun
+	case *doctorExitError:
+		return e.ExitCode()
 	case *usageError:
 		return ExitUsageError
 	case *notFoundError:

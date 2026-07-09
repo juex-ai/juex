@@ -40,7 +40,7 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		out, _ := exec.Command(bin, "help").CombinedOutput()
 		body := string(out)
 		// cobra renders subcommand list under "Available Commands"
-		for _, want := range []string{"run", "repl", "sessions", "serve", "version"} {
+		for _, want := range []string{"init", "doctor", "run", "repl", "sessions", "serve", "version"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("help output missing %q in:\n%s", want, body)
 			}
@@ -82,14 +82,14 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 		if err := cmd.Run(); err == nil {
 			t.Fatalf("expected error, stderr was: %s", stderr.String())
 		}
-		if !strings.Contains(stderr.String(), "provider id/protocol") {
+		if !strings.Contains(stderr.String(), "juex init") {
 			t.Fatalf("stderr: %s", stderr.String())
 		}
 	})
 	t.Run("cwdFlagAcceptedAtRoot", func(t *testing.T) {
 		// `juex --cwd <dir> run "..."` parses; we just verify the flag is
-		// recognised. The command will fail on missing provider, which is
-		// fine — we only care about flag parsing.
+		// recognised. The command will fail on missing config, which is fine;
+		// we only care about flag parsing.
 		dir := t.TempDir()
 		cmd := exec.Command(bin, "--cwd", dir, "run", "hi")
 		cmd.Env = isolatedCLIEnv(dir)

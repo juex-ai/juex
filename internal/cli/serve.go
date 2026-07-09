@@ -33,6 +33,9 @@ and the server flushes session jsonl before exit.`,
 			if err != nil {
 				return err
 			}
+			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
+				return err
+			}
 			if !unsafeBindAny && !isLoopbackAddr(addr) {
 				return &usageError{msg: "juex serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
 			}

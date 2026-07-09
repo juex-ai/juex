@@ -18,6 +18,9 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
+				return err
+			}
 			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cfg.HistoryPath(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
 			if err != nil {
 				return err
