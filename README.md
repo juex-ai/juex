@@ -128,6 +128,15 @@ extension hooks are trusted by location. Extension MCP servers receive
 under `.juex/` so it can stay uncommitted. User-global provider fallback
 configuration lives at `~/.juex/juex.yaml`.
 
+Skills are exposed with progressive disclosure. The system prompt contains a
+compact, budgeted skill catalog instead of every full `SKILL.md`; the model can
+call `skill_search` to discover catalog entries and `skill_load` to read the
+full markdown body when a skill is relevant. Configure `skills.include` or
+`skills.exclude` to manually control which merged skills enter the catalog, and
+`skills.prompt_budget_chars` to tune the initial catalog budget. `juex repl`
+and `juex run --verbose` print a resource summary, while `juex run --dry-run
+--json` includes per-section system-prompt token estimates.
+
 The builtin file tools are `read`, `write`, `edit`, `apply_patch`, `grep`, and
 the chunked write tools `write_begin`, `write_chunk`, `write_commit`, and
 `write_abort`. `read` returns UTF-8 text for text files and structured media

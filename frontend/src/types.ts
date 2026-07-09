@@ -659,6 +659,8 @@ export interface RuntimeStatusResponse {
   skills: {
     count: number;
     items: SkillInfo[];
+    filtered?: SkillFilteredInfo[];
+    prompt: SkillPromptStatus;
   };
 }
 
@@ -793,4 +795,17 @@ export interface SkillInfo {
   type?: string;
   source: string;
   path: string;
+}
+
+export interface SkillFilteredInfo {
+  name: string;
+  source: string;
+  reason: string;
+}
+
+export interface SkillPromptStatus {
+  budget_chars: number;
+  used_chars: number;
+  compacted: boolean;
+  omitted?: SkillFilteredInfo[];
 }

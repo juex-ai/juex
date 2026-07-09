@@ -2,12 +2,11 @@
 // resource directories.
 //
 // Behaviour:
-//   - the system prompt's "Available Skills" section lists every loaded
-//     skill with its absolute path and one-line description
-//   - the model loads a skill's full body by calling the standard `read`
-//     builtin against the path printed in that section — there is no
-//     dedicated `read_skill` tool (one fewer thing for the model to
-//     hallucinate; one less surface area to maintain)
+//   - the system prompt's "Available Skills" section lists a compact,
+//     budgeted skill index
+//   - the model loads a skill's full body by calling the runtime-provided
+//     `skill_load` tool with the skill name, or uses `skill_search` when the
+//     prompt budget omitted a lower-priority entry
 //   - precedence: project-scoped > user-scoped for non-extension resources
 //   - extension skill names must be unique and reject collisions instead of
 //     silently overriding another resource
@@ -34,6 +33,35 @@ type Skill struct {
 	strictConflicts bool
 }
 
+type Policy struct {
+	Include           []string
+	Exclude           []string
+	PromptBudgetChars int
+}
+
+type LoaderOptions struct {
+	Policy Policy
+}
+
+type FilteredSkill struct {
+	Name   string
+	Source string
+	Reason string
+}
+
+type PromptBudgetReport struct {
+	BudgetChars int
+	UsedChars   int
+	Compacted   bool
+	Omitted     []PromptOmittedSkill
+}
+
+type PromptOmittedSkill struct {
+	Name   string
+	Source string
+	Reason string
+}
+
 type Dir struct {
 	Path            string
 	Source          string
@@ -41,8 +69,11 @@ type Dir struct {
 }
 
 type Loader struct {
-	dirs   []Dir // ordered: lowest precedence first
-	skills map[string]Skill
+	dirs         []Dir // ordered: lowest precedence first
+	policy       Policy
+	skills       map[string]Skill
+	filtered     []FilteredSkill
+	promptReport PromptBudgetReport
 }
 
 // NewLoader creates a loader. dirs are scanned in the supplied order; later
@@ -56,6 +87,10 @@ func NewLoader(dirs ...string) *Loader {
 }
 
 func NewLoaderFromDirs(dirs []Dir) *Loader {
+	return NewLoaderFromDirsWithOptions(dirs, LoaderOptions{})
+}
+
+func NewLoaderFromDirsWithOptions(dirs []Dir, opts LoaderOptions) *Loader {
 	refs := make([]Dir, 0, len(dirs))
 	for _, dir := range dirs {
 		if dir.Source == "" {
@@ -63,13 +98,15 @@ func NewLoaderFromDirs(dirs []Dir) *Loader {
 		}
 		refs = append(refs, dir)
 	}
-	return &Loader{dirs: refs, skills: make(map[string]Skill)}
+	return &Loader{dirs: refs, policy: normalizePolicy(opts.Policy), skills: make(map[string]Skill)}
 }
 
 // Load scans all configured directories for `<name>/SKILL.md`.
 // Errors on individual skills are reported but do not abort the load.
 func (l *Loader) Load() error {
 	l.skills = make(map[string]Skill)
+	l.filtered = nil
+	l.promptReport = PromptBudgetReport{}
 	for _, dir := range l.dirs {
 		if strings.TrimSpace(dir.Path) == "" {
 			continue
@@ -113,7 +150,32 @@ func (l *Loader) Load() error {
 			}
 		}
 	}
+	l.applyNameFilters()
 	return nil
+}
+
+func (l *Loader) applyNameFilters() {
+	include := nameSet(l.policy.Include)
+	exclude := nameSet(l.policy.Exclude)
+	for name, skill := range l.skills {
+		if len(include) > 0 {
+			if _, ok := include[name]; !ok {
+				l.filtered = append(l.filtered, FilteredSkill{Name: name, Source: skill.Source, Reason: "not included"})
+				delete(l.skills, name)
+			}
+			continue
+		}
+		if _, ok := exclude[name]; ok {
+			l.filtered = append(l.filtered, FilteredSkill{Name: name, Source: skill.Source, Reason: "excluded"})
+			delete(l.skills, name)
+		}
+	}
+	sort.Slice(l.filtered, func(i, j int) bool {
+		if l.filtered[i].Name != l.filtered[j].Name {
+			return l.filtered[i].Name < l.filtered[j].Name
+		}
+		return l.filtered[i].Source < l.filtered[j].Source
+	})
 }
 
 func skillDirPath(root string, e os.DirEntry) (string, bool) {
@@ -146,22 +208,176 @@ func (l *Loader) Get(name string) (Skill, bool) {
 	return s, ok
 }
 
+func (l *Loader) Search(query string, limit int) []Skill {
+	all := l.All()
+	query = strings.ToLower(strings.TrimSpace(query))
+	var out []Skill
+	for _, skill := range all {
+		if query != "" {
+			haystack := strings.ToLower(skill.Name + "\n" + skill.Description + "\n" + skill.Type + "\n" + skill.Source)
+			if !strings.Contains(haystack, query) {
+				continue
+			}
+		}
+		out = append(out, skill)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func (l *Loader) Filtered() []FilteredSkill {
+	return append([]FilteredSkill(nil), l.filtered...)
+}
+
+func (l *Loader) Policy() Policy {
+	return clonePolicy(l.policy)
+}
+
+func (l *Loader) PromptReport() PromptBudgetReport {
+	report := l.promptReport
+	report.Omitted = append([]PromptOmittedSkill(nil), report.Omitted...)
+	return report
+}
+
 // PromptSection renders the skills index for the system prompt. Each skill
-// is listed with its absolute path so the model can `read` it directly —
-// no dedicated tool needed.
+// is listed compactly; full skill bodies are loaded on demand with skill_load.
 func (l *Loader) PromptSection() string {
 	all := l.All()
 	if len(all) == 0 {
 		return ""
 	}
+	section, report := renderPromptSection(all, l.policy.PromptBudgetChars)
+	l.promptReport = report
+	return section
+}
+
+func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetReport) {
 	var sb strings.Builder
 	sb.WriteString("## Available Skills\n")
-	sb.WriteString("Reusable instructions stored as markdown files. To apply a skill, " +
-		"call `read` against the file path shown below to load its full body, then follow it.\n\n")
-	for _, s := range all {
-		fmt.Fprintf(&sb, "- **%s** (%s) — `%s` — %s\n", s.Name, s.Source, s.Path, s.Description)
+	sb.WriteString("Reusable instructions stored as markdown files. To apply a skill, call `skill_load` with its name to load the full SKILL.md. Use `skill_search` when unsure or when a prompt budget omitted lower-priority skills.\n\n")
+	renderLines := func(skills []Skill, descLimit int) []string {
+		lines := make([]string, 0, len(skills))
+		for _, s := range skills {
+			desc := strings.TrimSpace(s.Description)
+			if descLimit > 0 {
+				desc = trimRunes(desc, descLimit)
+			}
+			if desc == "" {
+				desc = "no description"
+			}
+			lines = append(lines, fmt.Sprintf("- **%s** (%s) — %s", s.Name, s.Source, desc))
+		}
+		return lines
+	}
+	fullLines := renderLines(all, 0)
+	full := promptSectionWithLines(sb.String(), fullLines)
+	if budgetChars <= 0 || len(full) <= budgetChars {
+		return full, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(full)}
+	}
+	compactLines := renderLines(all, 120)
+	compact := promptSectionWithLines(sb.String(), compactLines)
+	if len(compact) <= budgetChars {
+		return compact, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(compact), Compacted: true}
+	}
+	ordered := append([]Skill(nil), all...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if sourceRank(ordered[i].Source) != sourceRank(ordered[j].Source) {
+			return sourceRank(ordered[i].Source) < sourceRank(ordered[j].Source)
+		}
+		return ordered[i].Name < ordered[j].Name
+	})
+	var kept []Skill
+	var omitted []PromptOmittedSkill
+	for _, s := range ordered {
+		candidate := append(append([]Skill(nil), kept...), s)
+		candidateSection := promptSectionWithLines(sb.String(), renderLines(candidate, 80))
+		if len(candidateSection) <= budgetChars {
+			kept = candidate
+			continue
+		}
+		omitted = append(omitted, PromptOmittedSkill{Name: s.Name, Source: s.Source, Reason: "prompt budget"})
+	}
+	section := promptSectionWithLines(sb.String(), renderLines(kept, 80))
+	return section, PromptBudgetReport{BudgetChars: budgetChars, UsedChars: len(section), Compacted: true, Omitted: omitted}
+}
+
+func promptSectionWithLines(header string, lines []string) string {
+	var sb strings.Builder
+	sb.WriteString(header)
+	for _, line := range lines {
+		sb.WriteString(line)
+		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+func normalizePolicy(policy Policy) Policy {
+	return Policy{
+		Include:           cleanNameList(policy.Include),
+		Exclude:           cleanNameList(policy.Exclude),
+		PromptBudgetChars: policy.PromptBudgetChars,
+	}
+}
+
+func clonePolicy(policy Policy) Policy {
+	policy.Include = append([]string(nil), policy.Include...)
+	policy.Exclude = append([]string(nil), policy.Exclude...)
+	return policy
+}
+
+func cleanNameList(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func nameSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func trimRunes(value string, limit int) string {
+	if limit <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
+}
+
+func sourceRank(source string) int {
+	switch {
+	case source == "project":
+		return 0
+	case strings.HasPrefix(source, "ext:"):
+		return 1
+	case source == "user":
+		return 2
+	default:
+		return 3
+	}
 }
 
 func sourceLabel(dir string, all []string) string {

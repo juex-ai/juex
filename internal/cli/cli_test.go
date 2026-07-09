@@ -484,6 +484,8 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	}
 	haveExecCommand := false
 	haveWriteStdin := false
+	haveSkillLoad := false
+	haveSkillSearch := false
 	for _, name := range plan.Tools {
 		if name == "exec_command" {
 			haveExecCommand = true
@@ -491,12 +493,27 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 		if name == "write_stdin" {
 			haveWriteStdin = true
 		}
+		if name == "skill_load" {
+			haveSkillLoad = true
+		}
+		if name == "skill_search" {
+			haveSkillSearch = true
+		}
 		if name == "bash" {
 			t.Fatalf("dry-run tools should not include bash: %+v", plan.Tools)
 		}
 	}
 	if !haveExecCommand || !haveWriteStdin {
 		t.Fatalf("dry-run tools missing exec_command/write_stdin: %+v", plan.Tools)
+	}
+	if !haveSkillLoad || !haveSkillSearch {
+		t.Fatalf("dry-run tools missing skill_load/skill_search: %+v", plan.Tools)
+	}
+	if plan.Resources == "" || !strings.Contains(plan.Resources, "resources:") {
+		t.Fatalf("dry-run resources missing: %+v", plan.Resources)
+	}
+	if len(plan.Sections) == 0 {
+		t.Fatalf("dry-run sections missing")
 	}
 }
 

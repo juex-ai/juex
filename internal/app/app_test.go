@@ -67,6 +67,42 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return a, prov
 }
 
+func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".agents", "skills", "visual")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: visual\ndescription: inspect screenshots\n---\n# Visual Skill\nUse vision carefully.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a, err := New(Options{
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, Skills: config.DefaultSkillsConfig()},
+		Provider: &stubProvider{},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	out, err := a.Engine.Tools.Call(context.Background(), "skill_search", map[string]any{"query": "screen"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"name": "visual"`) {
+		t.Fatalf("skill_search output = %s", out)
+	}
+	loaded, err := a.Engine.Tools.Call(context.Background(), "skill_load", map[string]any{"name": "visual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != body {
+		t.Fatalf("skill_load = %q, want full body", loaded)
+	}
+}
+
 func TestAppShellHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_APP_FAKE_SHELL") != "1" {
 		return
