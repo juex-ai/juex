@@ -418,9 +418,9 @@ func formatModelSnapshot(p ProviderStatusSnapshot) string {
 }
 
 func formatContextUsage(usage llm.ContextUsage) string {
-	tokens := fmt.Sprintf("%s tokens", FormatCompactTokenCount(usage.TotalTokens))
+	tokens := fmt.Sprintf("~%s tokens", FormatCompactTokenCount(usage.TotalTokens))
 	if usage.ContextWindow > 0 {
-		tokens = fmt.Sprintf("%s/%s tokens", FormatCompactTokenCount(usage.TotalTokens), FormatCompactTokenCount(usage.ContextWindow))
+		tokens = fmt.Sprintf("~%s/%s tokens", FormatCompactTokenCount(usage.TotalTokens), FormatCompactTokenCount(usage.ContextWindow))
 	}
 	return fmt.Sprintf("%s, cache hit %s", tokens, percent(usage.CachedInputTokens, usage.InputTokens))
 }

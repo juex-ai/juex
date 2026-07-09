@@ -880,6 +880,42 @@ func TestTurn_RecordsContextUsageForAssistantResponse(t *testing.T) {
 	}
 }
 
+func TestTurn_CalibratesFallbackContextUsageFromPreviousProviderUsage(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message:    llm.TextMessage(llm.RoleAssistant, "calibrated"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 300, OutputTokens: 1},
+		},
+		{
+			Message:    llm.TextMessage(llm.RoleAssistant, "estimated"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{OutputTokens: 1},
+		},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 5000
+
+	if _, err := eng.Turn(context.Background(), strings.Repeat("calibrate ", 8)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := eng.Session.Info(time.Now()).ContextUsage
+	if got == nil {
+		t.Fatal("context usage is nil")
+	}
+	staticEstimate := estimateContextTokens(prompt.JoinSections(eng.Prompt.Sections()), eng.Tools.Specs(), prov.histories[1])
+	if got.InputTokens <= staticEstimate {
+		t.Fatalf("fallback input tokens = %d, want calibrated above static estimate %d", got.InputTokens, staticEstimate)
+	}
+	if got.InputTokens > staticEstimate*3 {
+		t.Fatalf("fallback input tokens = %d, want clamp at 3x static estimate %d", got.InputTokens, staticEstimate)
+	}
+}
+
 func contextPartsByKey(parts []llm.ContextUsagePart) map[string]llm.ContextUsagePart {
 	out := make(map[string]llm.ContextUsagePart, len(parts))
 	for _, part := range parts {

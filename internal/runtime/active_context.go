@@ -92,7 +92,9 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if text, ok := e.workingStateContextSnapshot(); ok {
 		contextMessages = append(contextMessages, workingStateContextMessage(text))
 	}
-	return appendRuntimeContextMessages(snap, contextMessages...)
+	snap = appendRuntimeContextMessages(snap, contextMessages...)
+	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
+	return snap
 }
 
 func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
@@ -107,7 +109,9 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 	if text, ok := e.workingStateContextLocked(); ok {
 		contextMessages = append(contextMessages, workingStateContextMessage(text))
 	}
-	return appendRuntimeContextMessages(snap, contextMessages...)
+	snap = appendRuntimeContextMessages(snap, contextMessages...)
+	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
+	return snap
 }
 
 func goalStateContextMessage(text string) llm.Message {

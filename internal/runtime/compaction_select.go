@@ -15,6 +15,13 @@ type compactionSelection struct {
 }
 
 func selectCompactionInput(history []llm.Message, policy compactionPolicy) compactionSelection {
+	return selectCompactionInputWithEstimator(history, policy, estimateMessageTokens)
+}
+
+func selectCompactionInputWithEstimator(history []llm.Message, policy compactionPolicy, estimateMessages func([]llm.Message) int) compactionSelection {
+	if estimateMessages == nil {
+		estimateMessages = estimateMessageTokens
+	}
 	latestCompact := -1
 	for i := range history {
 		if history[i].Kind == llm.MessageKindCompact {
@@ -35,7 +42,7 @@ func selectCompactionInput(history []llm.Message, policy compactionPolicy) compa
 		return sel
 	}
 
-	cut := chooseTailCut(work, policy)
+	cut := chooseTailCut(work, policy, estimateMessages)
 	cut = protectToolPairCut(work, cut)
 	summaryEnd := start + cut
 	tailStart := start + cut
@@ -50,12 +57,12 @@ func selectCompactionInput(history []llm.Message, policy compactionPolicy) compa
 	return sel
 }
 
-func chooseTailCut(work []llm.Message, policy compactionPolicy) int {
+func chooseTailCut(work []llm.Message, policy compactionPolicy, estimateMessages func([]llm.Message) int) int {
 	cut := len(work)
 	turns := 0
 	tokens := 0
 	for i := len(work) - 1; i >= 0; i-- {
-		tokens += estimateMessageTokens(work[i : i+1])
+		tokens += estimateMessages(work[i : i+1])
 		if isUserTurnStart(work[i]) {
 			turns++
 		}
