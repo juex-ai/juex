@@ -695,7 +695,15 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTextFile(filepath.Join(work, ".agents", "mcp.json"), `{"mcpServers":{"self":{"command":"`+os.Args[0]+`"}}}`); err != nil {
+	mcpConfig, err := json.Marshal(map[string]any{
+		"mcpServers": map[string]any{
+			"self": map[string]any{"command": os.Args[0]},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".agents", "mcp.json"), string(mcpConfig)); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeTextFile(filepath.Join(work, ".agents", "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: demo skill\n---\nbody\n"); err != nil {
