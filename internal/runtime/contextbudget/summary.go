@@ -99,7 +99,11 @@ func FitCompactionSummaryInput(sys string, previous llm.Message, input []llm.Mes
 			return out, bestStart, capChars
 		}
 	}
-	return nil, len(input), 256
+	fallbackCap := 256
+	if maxChars < fallbackCap {
+		fallbackCap = maxChars
+	}
+	return nil, len(input), fallbackCap
 }
 
 func compactionSummaryCaps(maxChars int) []int {
@@ -202,5 +206,12 @@ func truncateForSummary(s string, n int) string {
 	if n <= 0 || len(s) <= n {
 		return s
 	}
-	return s[:n]
+	limit := 0
+	for i := range s {
+		if i > n {
+			break
+		}
+		limit = i
+	}
+	return s[:limit]
 }

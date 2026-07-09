@@ -6,12 +6,23 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestNormalizeWorkingStatePathsUsesPortableSeparators(t *testing.T) {
 	got := normalizeWorkingStatePaths([]string{`dir\artifact.txt`, "dir/artifact.txt"})
 	if len(got) != 1 || got[0] != "dir/artifact.txt" {
 		t.Fatalf("paths = %+v", got)
+	}
+}
+
+func TestTruncatePreservesUTF8(t *testing.T) {
+	got := truncate("界界界", 4)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated string is invalid UTF-8: %q", got)
+	}
+	if !strings.HasPrefix(got, "界...(truncated") {
+		t.Fatalf("truncated string = %q, want one full rune plus suffix", got)
 	}
 }
 

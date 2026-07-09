@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 )
@@ -192,5 +193,27 @@ func TestFitCompactionSummaryInputKeepsLongestFittingSuffix(t *testing.T) {
 	}
 	if selected[0].ID != "msg-05" || selected[2].ID != "msg-07" {
 		t.Fatalf("selected suffix = %+v", selected)
+	}
+}
+
+func TestFitCompactionSummaryInputFallbackRespectsSmallCharLimit(t *testing.T) {
+	input := []llm.Message{llm.TextMessage(llm.RoleUser, strings.Repeat("x", 1000))}
+	_, omitted, maxChars := FitCompactionSummaryInput("system", llm.Message{}, input, Policy{ToolResultMaxChars: 64}, 1)
+
+	if omitted != 1 {
+		t.Fatalf("omitted = %d, want 1", omitted)
+	}
+	if maxChars != 64 {
+		t.Fatalf("fallback max chars = %d, want 64", maxChars)
+	}
+}
+
+func TestTruncateForSummaryPreservesUTF8(t *testing.T) {
+	got := truncateForSummary("界界界", 4)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated string is invalid UTF-8: %q", got)
+	}
+	if got != "界" {
+		t.Fatalf("truncated string = %q, want one full rune", got)
 	}
 }

@@ -751,10 +751,10 @@ func pathsIntersect(a []string, b []string) bool {
 	}
 	seen := make(map[string]bool, len(a))
 	for _, path := range a {
-		seen[filepath.Clean(path)] = true
+		seen[path] = true
 	}
 	for _, path := range b {
-		if seen[filepath.Clean(path)] {
+		if seen[path] {
 			return true
 		}
 	}
@@ -856,8 +856,15 @@ func sanitizeWorkingStateText(text string) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if n <= 0 || len(s) <= n {
 		return s
 	}
-	return fmt.Sprintf("%s...(truncated, total %d bytes)", s[:n], len(s))
+	limit := 0
+	for i := range s {
+		if i > n {
+			break
+		}
+		limit = i
+	}
+	return fmt.Sprintf("%s...(truncated, total %d bytes)", s[:limit], len(s))
 }
