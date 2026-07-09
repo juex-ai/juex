@@ -77,7 +77,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.profile.Model),
 		MaxTokens: maxTokens,
-		Messages:  toAnthropicMessages(providerContext.Messages, cachePrompt, opts.CachePolicy.Retention),
+		Messages:  toAnthropicMessages(providerContext.Messages, p.profile, cachePrompt, opts.CachePolicy.Retention),
 	}
 	if p.profile.Capabilities.Tools {
 		params.Tools = toAnthropicTools(tools, cachePrompt, opts.CachePolicy.Retention)
@@ -234,7 +234,7 @@ func (p *anthropicProvider) responseFromMessage(msg *anthropic.Message) Response
 	}
 }
 
-func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
+func toAnthropicMessages(history []Message, profile ProviderProfile, cachePrompt bool, cacheRetention string) []anthropic.MessageParam {
 	out := make([]anthropic.MessageParam, 0, len(history))
 	cacheMsg, cacheBlock := anthropicHistoryCacheBreakpoint(history, cachePrompt)
 	for msgIndex, m := range history {
@@ -245,7 +245,7 @@ func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention str
 			case BlockText:
 				block = anthropic.NewTextBlock(b.Text)
 			case BlockImage:
-				if imageBlock, ok := anthropicImageBlock(b.Media); ok {
+				if imageBlock, ok := anthropicImageBlock(profile.WorkDir, b.Media); ok {
 					block = imageBlock
 				} else {
 					block = anthropic.NewTextBlock(mediaReferenceText("image", b.Media))
@@ -259,7 +259,7 @@ func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention str
 			case BlockToolUse:
 				block = anthropic.NewToolUseBlock(b.ToolUseID, b.Input, b.ToolName)
 			case BlockToolResult:
-				block = anthropicToolResultBlock(b)
+				block = anthropicToolResultBlock(profile.WorkDir, b)
 			default:
 				continue
 			}
@@ -278,15 +278,15 @@ func toAnthropicMessages(history []Message, cachePrompt bool, cacheRetention str
 	return out
 }
 
-func anthropicImageBlock(media *MediaRef) (anthropic.ContentBlockParamUnion, bool) {
-	encoded, mediaType, ok := readImageBase64(media)
+func anthropicImageBlock(workDir string, media *MediaRef) (anthropic.ContentBlockParamUnion, bool) {
+	encoded, mediaType, ok := readImageBase64(workDir, media)
 	if !ok {
 		return anthropic.ContentBlockParamUnion{}, false
 	}
 	return anthropic.NewImageBlockBase64(mediaType, encoded), true
 }
 
-func anthropicToolResultBlock(b Block) anthropic.ContentBlockParamUnion {
+func anthropicToolResultBlock(workDir string, b Block) anthropic.ContentBlockParamUnion {
 	if b.Media == nil {
 		return anthropic.NewToolResultBlock(b.ToolUseID, b.Content, b.IsError)
 	}
@@ -296,7 +296,7 @@ func anthropicToolResultBlock(b Block) anthropic.ContentBlockParamUnion {
 			OfText: &anthropic.TextBlockParam{Text: b.Content},
 		})
 	}
-	if encoded, mediaType, ok := readImageBase64(b.Media); ok {
+	if encoded, mediaType, ok := readImageBase64(workDir, b.Media); ok {
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{
 			OfImage: &anthropic.ImageBlockParam{
 				Source: anthropic.ImageBlockParamSourceUnion{

@@ -233,13 +233,31 @@ func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
 	if err := os.WriteFile("image.txt", []byte("not an image"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if encoded, mediaType, ok := readImageBase64(&MediaRef{ArtifactPath: "image.txt", MediaType: "text/plain"}); ok || encoded != "" || mediaType != "" {
+	if encoded, mediaType, ok := readImageBase64("", &MediaRef{ArtifactPath: "image.txt", MediaType: "text/plain"}); ok || encoded != "" || mediaType != "" {
 		t.Fatalf("text media should be rejected: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
 	}
 	for _, unsafe := range []string{"/etc/passwd", "../image.png", filepath.Join("..", "image.png")} {
-		if encoded, mediaType, ok := readImageBase64(&MediaRef{ArtifactPath: unsafe, MediaType: "image/png"}); ok || encoded != "" || mediaType != "" {
+		if encoded, mediaType, ok := readImageBase64("", &MediaRef{ArtifactPath: unsafe, MediaType: "image/png"}); ok || encoded != "" || mediaType != "" {
 			t.Fatalf("unsafe path %q should be rejected: encoded=%q mediaType=%q ok=%t", unsafe, encoded, mediaType, ok)
 		}
+	}
+}
+
+func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
+	workDir := t.TempDir()
+	otherDir := t.TempDir()
+	path := filepath.Join(".juex", "artifacts", "media", "session", "image.png")
+	if err := os.MkdirAll(filepath.Join(workDir, filepath.Dir(path)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, path), []byte("fake image bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(otherDir)
+
+	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{ArtifactPath: path, MediaType: "image/png"})
+	if !ok || mediaType != "image/png" || encoded == "" {
+		t.Fatalf("readImageBase64 = encoded:%q mediaType:%q ok:%t", encoded, mediaType, ok)
 	}
 }
 

@@ -48,19 +48,19 @@ func mediaReferenceText(label string, media *MediaRef) string {
 	return "[" + label + ": " + strings.Join(parts, " ") + "]"
 }
 
-func imageDataURL(media *MediaRef) (string, bool) {
-	encoded, mediaType, ok := readImageBase64(media)
+func imageDataURL(workDir string, media *MediaRef) (string, bool) {
+	encoded, mediaType, ok := readImageBase64(workDir, media)
 	if !ok {
 		return "", false
 	}
 	return "data:" + mediaType + ";base64," + encoded, true
 }
 
-func readImageBase64(media *MediaRef) (string, string, bool) {
+func readImageBase64(workDir string, media *MediaRef) (string, string, bool) {
 	if media == nil || media.ArtifactPath == "" {
 		return "", "", false
 	}
-	path, ok := safeMediaArtifactPath(media.ArtifactPath)
+	path, ok := safeMediaArtifactPath(workDir, media.ArtifactPath)
 	if !ok {
 		return "", "", false
 	}
@@ -75,24 +75,31 @@ func readImageBase64(media *MediaRef) (string, string, bool) {
 	return base64.StdEncoding.EncodeToString(data), mediaType, true
 }
 
-func safeMediaArtifactPath(path string) (string, bool) {
+func safeMediaArtifactPath(root, path string) (string, bool) {
 	cleaned := filepath.Clean(strings.TrimSpace(path))
 	if cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return "", false
 	}
-	cwd, err := os.Getwd()
+	if strings.TrimSpace(root) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return "", false
+		}
+		root = cwd
+	}
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", false
 	}
-	resolvedCWD, err := filepath.EvalSymlinks(cwd)
+	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
 	if err != nil {
 		return "", false
 	}
-	resolvedPath, err := filepath.EvalSymlinks(filepath.Join(resolvedCWD, cleaned))
+	resolvedPath, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, cleaned))
 	if err != nil {
 		return "", false
 	}
-	rel, err := filepath.Rel(resolvedCWD, resolvedPath)
+	rel, err := filepath.Rel(resolvedRoot, resolvedPath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
 	}

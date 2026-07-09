@@ -49,6 +49,7 @@ type ProviderProfile struct {
 	Query          map[string]string
 	Capabilities   ProviderCapabilities
 	Compat         CompatOptions
+	WorkDir        string
 }
 
 func (p ProviderProfile) Config() Config {
@@ -61,6 +62,7 @@ func (p ProviderProfile) Config() Config {
 		ThinkingEffort: p.ThinkingEffort,
 		Headers:        cloneStringMap(p.Headers),
 		Query:          cloneStringMap(p.Query),
+		WorkDir:        p.WorkDir,
 		Capabilities: CapabilityOverrides{
 			Tools:           boolPtr(p.Capabilities.Tools),
 			Vision:          boolPtr(p.Capabilities.Vision),
@@ -87,6 +89,7 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 	profile.ThinkingEffort = firstNonEmpty(cfg.ThinkingEffort, profile.ThinkingEffort)
 	profile.Headers = mergeStringMap(profile.Headers, cfg.Headers)
 	profile.Query = mergeStringMap(profile.Query, cfg.Query)
+	profile.WorkDir = cfg.WorkDir
 	profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
 	if len(cfg.Compat.ReasoningReplayFields) > 0 {
 		profile.Compat.ReasoningReplayFields = append([]string(nil), cfg.Compat.ReasoningReplayFields...)

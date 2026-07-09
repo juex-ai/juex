@@ -9,6 +9,7 @@ import type {
   ToolUseBlock,
 } from "@/types";
 import type { ToolUIPartState } from "@/components/ai-elements/_local-types";
+import { mediaReferenceText } from "./media-reference.ts";
 
 export type ToolDisplayUnit = {
   kind: "tool";
@@ -47,17 +48,7 @@ function normalizeTextBlock(block: TextBlock): TextBlock {
 }
 
 function imageReferenceText(block: ImageBlock): string {
-  const media = block.media;
-  if (!media) return "[image: missing media reference]";
-  const parts: string[] = [];
-  if (media.artifact_path) parts.push(`path=${media.artifact_path}`);
-  if (media.media_type) parts.push(`type=${media.media_type}`);
-  if (media.sha256) parts.push(`sha256=${media.sha256}`);
-  if (media.original_bytes) parts.push(`bytes=${media.original_bytes}`);
-  if (media.width && media.height) parts.push(`size=${media.width}x${media.height}`);
-  return parts.length > 0
-    ? `[image: ${parts.join(" ")}]`
-    : "[image: empty media reference]";
+  return mediaReferenceText("image", block.media);
 }
 
 // Walk all messages in order and produce the render groups. tool_use lives in

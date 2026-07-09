@@ -64,7 +64,7 @@ import {
 import {
   aggregateToolProcessStatus,
   formatToolBatchTitle,
-  formatToolProcessResultText,
+  formatToolProcessResult,
   thinkingProcessDisplay,
   thinkingProcessVisibleText,
   toolDisplayName,
@@ -1303,11 +1303,7 @@ function ToolProcessRow({
             <ProcessPayload
               label={tool.result.is_error ? "Error" : "Result"}
               tone={tool.result.is_error ? "error" : "muted"}
-              value={
-                tool.result.content
-                  ? formatToolProcessResultText(tool.result.content)
-                  : "-"
-              }
+              value={formatToolProcessResult(tool.result) || "-"}
             />
           ) : null}
         </div>

@@ -32,6 +32,7 @@ type ProviderSelection struct {
 	Query          map[string]string
 	Capabilities   llm.CapabilityOverrides
 	Compat         llm.CompatOptions
+	WorkDir        string
 }
 
 func (c Config) ProviderSelection() ProviderSelection {
@@ -46,6 +47,7 @@ func (c Config) ProviderSelection() ProviderSelection {
 		Query:          c.ProviderQuery,
 		Capabilities:   c.ProviderCapabilities,
 		Compat:         c.ProviderCompat,
+		WorkDir:        c.WorkDir,
 	}
 }
 
@@ -68,6 +70,7 @@ func (s ProviderSelection) llmConfig() llm.Config {
 		Query:          s.Query,
 		Capabilities:   s.Capabilities,
 		Compat:         s.Compat,
+		WorkDir:        s.WorkDir,
 	}
 }
 

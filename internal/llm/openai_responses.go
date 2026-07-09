@@ -61,7 +61,7 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(p.profile.Model),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: encodeOpenAIResponseInput(providerContext.Messages),
+			OfInputItemList: encodeOpenAIResponseInput(providerContext.Messages, p.profile),
 		},
 		Store: param.NewOpt(false),
 	}
@@ -146,7 +146,7 @@ func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response
 	}
 }
 
-func encodeOpenAIResponseInput(history []Message) responses.ResponseInputParam {
+func encodeOpenAIResponseInput(history []Message, profile ProviderProfile) responses.ResponseInputParam {
 	var out responses.ResponseInputParam
 	for _, m := range history {
 		var textParts []string
@@ -168,7 +168,7 @@ func encodeOpenAIResponseInput(history []Message) responses.ResponseInputParam {
 			case BlockText:
 				textParts = append(textParts, b.Text)
 			case BlockImage:
-				if dataURL, ok := imageDataURL(b.Media); ok {
+				if dataURL, ok := imageDataURL(profile.WorkDir, b.Media); ok {
 					flushTextToContent()
 					imagePart := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
 					imagePart.OfInputImage.ImageURL = param.NewOpt(dataURL)

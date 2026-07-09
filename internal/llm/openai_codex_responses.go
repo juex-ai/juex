@@ -151,7 +151,7 @@ func (p *openAICodexResponsesProvider) codexRequestParams(sys string, history []
 		Model: shared.ResponsesModel(p.profile.Model),
 		Store: param.NewOpt(false),
 		Input: responses.ResponseNewParamsInputUnion{
-			OfInputItemList: encodeOpenAIResponseInput(history),
+			OfInputItemList: encodeOpenAIResponseInput(history, p.profile),
 		},
 		Include:           []responses.ResponseIncludable{responses.ResponseIncludableReasoningEncryptedContent},
 		ParallelToolCalls: param.NewOpt(true),
