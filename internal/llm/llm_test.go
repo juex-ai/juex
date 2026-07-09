@@ -66,8 +66,13 @@ func writeAnthropicTextStreamWithCache(w http.ResponseWriter, model, text, stopR
 
 func testImageMedia(t *testing.T) *MediaRef {
 	t.Helper()
+	dir := t.TempDir()
+	t.Chdir(dir)
 	data := []byte("fake image bytes")
-	path := filepath.Join(t.TempDir(), "image.png")
+	path := filepath.Join(".juex", "artifacts", "media", "session", "image.png")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +224,22 @@ func TestBlockImageJSONRoundTripStoresMediaReference(t *testing.T) {
 	}
 	if roundTrip.Blocks[0].Media.SHA256 != "sha" || roundTrip.Blocks[0].Media.Width != 8 {
 		t.Fatalf("media ref = %+v", roundTrip.Blocks[0].Media)
+	}
+}
+
+func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("image.txt", []byte("not an image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if encoded, mediaType, ok := readImageBase64(&MediaRef{ArtifactPath: "image.txt", MediaType: "text/plain"}); ok || encoded != "" || mediaType != "" {
+		t.Fatalf("text media should be rejected: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
+	}
+	for _, unsafe := range []string{"/etc/passwd", "../image.png", filepath.Join("..", "image.png")} {
+		if encoded, mediaType, ok := readImageBase64(&MediaRef{ArtifactPath: unsafe, MediaType: "image/png"}); ok || encoded != "" || mediaType != "" {
+			t.Fatalf("unsafe path %q should be rejected: encoded=%q mediaType=%q ok=%t", unsafe, encoded, mediaType, ok)
+		}
 	}
 }
 
@@ -1150,13 +1171,19 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 	}, nil)
 	hist := []Message{
 		{Role: RoleUser, Blocks: []Block{{Type: BlockText, Text: "look"}, {Type: BlockImage, Media: media}}},
-		{Role: RoleAssistant, Blocks: []Block{{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "render_chart", Input: map[string]any{"id": "x"}}}},
-		{Role: RoleUser, Blocks: []Block{{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "render_chart", Content: "chart", Media: media}}},
+		{Role: RoleAssistant, Blocks: []Block{
+			{Type: BlockToolUse, ToolUseID: "call_1", ToolName: "render_chart", Input: map[string]any{"id": "x"}},
+			{Type: BlockToolUse, ToolUseID: "call_2", ToolName: "read", Input: map[string]any{"path": "x"}},
+		}},
+		{Role: RoleUser, Blocks: []Block{
+			{Type: BlockToolResult, ToolUseID: "call_1", ToolName: "render_chart", Content: "chart", Media: media},
+			{Type: BlockToolResult, ToolUseID: "call_2", ToolName: "read", Content: "file"},
+		}},
 	}
 	if _, err := p.Complete(context.Background(), "", hist, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	if len(captured.Messages) != 4 {
+	if len(captured.Messages) != 5 {
 		t.Fatalf("messages len = %d, messages=%+v", len(captured.Messages), captured.Messages)
 	}
 	userParts, _ := captured.Messages[0]["content"].([]any)
@@ -1169,9 +1196,12 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 	if captured.Messages[2]["role"] != "tool" || !strings.Contains(fmt.Sprint(captured.Messages[2]["content"]), "tool_result_image") {
 		t.Fatalf("tool message = %+v", captured.Messages[2])
 	}
-	syntheticParts, _ := captured.Messages[3]["content"].([]any)
+	if captured.Messages[3]["role"] != "tool" || captured.Messages[3]["tool_call_id"] != "call_2" {
+		t.Fatalf("second tool message should stay contiguous before synthetic user image: %+v", captured.Messages[3])
+	}
+	syntheticParts, _ := captured.Messages[4]["content"].([]any)
 	if len(syntheticParts) != 2 || syntheticParts[0].(map[string]any)["text"] != "Tool result image from render_chart (call_1)." || syntheticParts[1].(map[string]any)["type"] != "image_url" {
-		t.Fatalf("synthetic user image message = %+v", captured.Messages[3])
+		t.Fatalf("synthetic user image message = %+v", captured.Messages[4])
 	}
 }
 

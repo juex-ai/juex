@@ -1,5 +1,6 @@
 import type {
   Block,
+  ImageBlock,
   Message,
   ReasoningBlock,
   Role,
@@ -45,6 +46,20 @@ function normalizeTextBlock(block: TextBlock): TextBlock {
   return { ...block, text: "" };
 }
 
+function imageReferenceText(block: ImageBlock): string {
+  const media = block.media;
+  if (!media) return "[image: missing media reference]";
+  const parts: string[] = [];
+  if (media.artifact_path) parts.push(`path=${media.artifact_path}`);
+  if (media.media_type) parts.push(`type=${media.media_type}`);
+  if (media.sha256) parts.push(`sha256=${media.sha256}`);
+  if (media.original_bytes) parts.push(`bytes=${media.original_bytes}`);
+  if (media.width && media.height) parts.push(`size=${media.width}x${media.height}`);
+  return parts.length > 0
+    ? `[image: ${parts.join(" ")}]`
+    : "[image: empty media reference]";
+}
+
 // Walk all messages in order and produce the render groups. tool_use lives in
 // an assistant message and the matching tool_result lives in the next user
 // message (Anthropic-style); we fold them into one tool unit on the assistant
@@ -67,6 +82,12 @@ export function messagesToGroups(
       switch (block.type) {
         case "text":
           units.push({ kind: "text", block: normalizeTextBlock(block) });
+          break;
+        case "image":
+          units.push({
+            kind: "text",
+            block: { type: "text", text: imageReferenceText(block) },
+          });
           break;
         case "reasoning":
           units.push({ kind: "reasoning", block });

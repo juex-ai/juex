@@ -80,3 +80,25 @@ func TestContextUsageSnapshotDoesNotDoubleCountCompactAndArtifactMessages(t *tes
 		t.Fatalf("messages tokens = %d should be less than all-history tokens %d", parts["messages"].Tokens, all)
 	}
 }
+
+func TestEstimateMessageTokensIncludesImageFootprint(t *testing.T) {
+	history := []llm.Message{{
+		Role: llm.RoleUser,
+		Blocks: []llm.Block{{
+			Type: llm.BlockImage,
+			Media: &llm.MediaRef{
+				ArtifactPath:  ".juex/artifacts/media/s/image.png",
+				MediaType:     "image/png",
+				SHA256:        strings.Repeat("a", 64),
+				OriginalBytes: 1000,
+				Width:         1000,
+				Height:        1000,
+			},
+		}},
+	}}
+
+	got := estimateMessageTokens(history)
+	if got < 1333 {
+		t.Fatalf("image token estimate = %d, want at least pixel-derived footprint", got)
+	}
+}

@@ -140,6 +140,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 		case RoleUser:
 			var userText strings.Builder
 			var userParts []openai.ChatCompletionContentPartUnionParam
+			var deferredUserMessages []openai.ChatCompletionMessageParamUnion
 			flushUser := func() {
 				if userText.Len() == 0 && len(userParts) == 0 {
 					return
@@ -156,14 +157,23 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 				out = append(out, openAIUserContentPartsMessage(userParts))
 				userParts = nil
 			}
+			flushDeferredUserMessages := func() {
+				if len(deferredUserMessages) == 0 {
+					return
+				}
+				out = append(out, deferredUserMessages...)
+				deferredUserMessages = nil
+			}
 			for _, b := range m.Blocks {
 				switch b.Type {
 				case BlockText:
+					flushDeferredUserMessages()
 					if userText.Len() > 0 {
 						userText.WriteString("\n")
 					}
 					userText.WriteString(b.Text)
 				case BlockImage:
+					flushDeferredUserMessages()
 					if dataURL, ok := imageDataURL(b.Media); ok {
 						if userText.Len() > 0 {
 							userParts = append(userParts, openai.TextContentPart(userText.String()))
@@ -187,7 +197,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					out = append(out, openai.ToolMessage(content, b.ToolUseID))
 					if b.Media != nil {
 						if dataURL, ok := imageDataURL(b.Media); ok {
-							out = append(out, openAIUserContentPartsMessage([]openai.ChatCompletionContentPartUnionParam{
+							deferredUserMessages = append(deferredUserMessages, openAIUserContentPartsMessage([]openai.ChatCompletionContentPartUnionParam{
 								openai.TextContentPart(openAIToolResultImageAttribution(b)),
 								openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
 							}))
@@ -195,6 +205,7 @@ func toOpenAIMessages(history []Message, profile ProviderProfile) []openai.ChatC
 					}
 				}
 			}
+			flushDeferredUserMessages()
 			flushUser()
 		case RoleAssistant:
 			am := openai.ChatCompletionAssistantMessageParam{}

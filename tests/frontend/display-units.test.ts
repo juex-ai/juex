@@ -86,3 +86,41 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
     ],
   );
 });
+
+test("messagesToGroups keeps image-only messages as media reference text", () => {
+  const messages: Message[] = [
+    {
+      id: "image-only",
+      role: "user",
+      blocks: [
+        {
+          type: "image",
+          media: {
+            artifact_path: ".juex/artifacts/media/s/image.png",
+            media_type: "image/png",
+            sha256: "abc",
+            original_bytes: 12,
+            width: 2,
+            height: 3,
+          },
+        },
+      ],
+    },
+  ];
+
+  const groups = messagesToGroups(messages);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].units.length, 1);
+  assert.deepEqual(groups[0].units[0], {
+    kind: "text",
+    block: {
+      type: "text",
+      text: "[image: path=.juex/artifacts/media/s/image.png type=image/png sha256=abc bytes=12 size=2x3]",
+    },
+  });
+  assert.equal(
+    messageGroupCopyText(groups[0]),
+    "[image: path=.juex/artifacts/media/s/image.png type=image/png sha256=abc bytes=12 size=2x3]",
+  );
+});

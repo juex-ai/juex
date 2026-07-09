@@ -183,7 +183,7 @@ type Block struct {
 }
 
 type MediaRef struct {
-    ArtifactPath  string // file to read only when the provider supports vision
+    ArtifactPath  string // relative artifact path; adapters reject absolute or escaping paths
     MediaType     string // e.g. image/png
     SHA256        string
     OriginalBytes int

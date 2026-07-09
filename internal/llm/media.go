@@ -60,23 +60,68 @@ func readImageBase64(media *MediaRef) (string, string, bool) {
 	if media == nil || media.ArtifactPath == "" {
 		return "", "", false
 	}
-	data, err := os.ReadFile(media.ArtifactPath)
+	path, ok := safeMediaArtifactPath(media.ArtifactPath)
+	if !ok {
+		return "", "", false
+	}
+	data, err := os.ReadFile(path)
 	if err != nil || len(data) == 0 {
 		return "", "", false
 	}
-	mediaType := normalizeImageMediaType(media.MediaType, media.ArtifactPath, data)
-	if !strings.HasPrefix(mediaType, "image/") {
+	mediaType := normalizeImageMediaType(media.MediaType, path, data)
+	if !supportedImageMediaType(mediaType) {
 		return "", "", false
 	}
 	return base64.StdEncoding.EncodeToString(data), mediaType, true
 }
 
+func safeMediaArtifactPath(path string) (string, bool) {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	if cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	resolvedCWD, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", false
+	}
+	resolvedPath, err := filepath.EvalSymlinks(filepath.Join(resolvedCWD, cleaned))
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(resolvedCWD, resolvedPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return resolvedPath, true
+}
+
 func normalizeImageMediaType(mediaType, path string, data []byte) string {
-	if mediaType = strings.TrimSpace(mediaType); mediaType != "" {
+	if mediaType = normalizeMediaTypeAlias(strings.TrimSpace(mediaType)); mediaType != "" {
 		return mediaType
 	}
 	if extType := mime.TypeByExtension(filepath.Ext(path)); extType != "" {
-		return strings.Split(extType, ";")[0]
+		return normalizeMediaTypeAlias(strings.Split(extType, ";")[0])
 	}
-	return http.DetectContentType(data)
+	return normalizeMediaTypeAlias(http.DetectContentType(data))
+}
+
+func normalizeMediaTypeAlias(mediaType string) string {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType == "image/jpg" {
+		return "image/jpeg"
+	}
+	return mediaType
+}
+
+func supportedImageMediaType(mediaType string) bool {
+	switch mediaType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
 }
