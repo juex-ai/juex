@@ -24,8 +24,8 @@ export function runtimeContextPercentLabel(usage?: ContextUsage): string {
   const windowTokens = usage?.context_window ?? 0;
   const totalTokens = usage?.total_tokens ?? 0;
   if (!Number.isFinite(windowTokens) || windowTokens <= 0) return "-";
-  if (!Number.isFinite(totalTokens) || totalTokens <= 0) return "0%";
-  return formatRuntimePercent((totalTokens / windowTokens) * 100);
+  if (!Number.isFinite(totalTokens) || totalTokens <= 0) return "~0%";
+  return `~${formatRuntimePercent((totalTokens / windowTokens) * 100)}`;
 }
 
 export function runtimeContextModelLabel(usage?: ContextUsage): string {
@@ -35,13 +35,14 @@ export function runtimeContextModelLabel(usage?: ContextUsage): string {
 export function runtimeContextWindowDetailLabel(
   usage?: ContextUsage | null,
 ): string {
+  if (!usage) return "context window: 0/0 tokens (0%)";
   const windowTokens = usage?.context_window ?? 0;
   const totalTokens = usage?.total_tokens ?? 0;
   const percent =
     windowTokens > 0 ? (totalTokens / windowTokens) * 100 : 0;
   const current = formatRuntimeTokenCount(totalTokens);
   const window = formatRuntimeTokenCount(windowTokens);
-  return `context window: ${current}/${window} tokens (${formatRuntimePercent(percent)})`;
+  return `context window: ~${current}/${window} tokens (~${formatRuntimePercent(percent)})`;
 }
 
 export function runtimeTokenUsageDetailLabel(usage?: TokenUsage): string {

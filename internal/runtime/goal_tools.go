@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/runtime/workmem"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -209,7 +210,7 @@ func goalToolStringListIfPresent(in map[string]any, key string) ([]string, bool)
 func goalToolStringListValue(raw any) []string {
 	switch values := raw.(type) {
 	case []string:
-		return sanitizeGoalTextList(values)
+		return workmem.SanitizeGoalTextList(values)
 	case []any:
 		out := make([]string, 0, len(values))
 		for _, value := range values {
@@ -217,9 +218,9 @@ func goalToolStringListValue(raw any) []string {
 				out = append(out, text)
 			}
 		}
-		return sanitizeGoalTextList(out)
+		return workmem.SanitizeGoalTextList(out)
 	case string:
-		return sanitizeGoalTextList([]string{values})
+		return workmem.SanitizeGoalTextList([]string{values})
 	default:
 		return nil
 	}

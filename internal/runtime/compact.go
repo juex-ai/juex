@@ -8,6 +8,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 )
 
@@ -32,7 +33,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 	}
 
 	projected := e.activeContextLocked(incoming).Messages
-	estimated := estimateContextTokens(systemPrompt, tools, projected)
+	estimated := e.estimateContextTokens(systemPrompt, tools, projected)
 	if estimated < policy.TriggerTokens {
 		return nil
 	}
@@ -48,7 +49,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 		return err
 	}
 
-	_, err := e.compactLocked(ctx, turnID, systemPrompt, "auto", true, "")
+	_, err := e.compactLocked(ctx, turnID, systemPrompt, tools, "auto", true, "")
 	if err != nil {
 		e.autoCompactFailures++
 		return err
@@ -64,15 +65,15 @@ func (e *Engine) Compact(ctx context.Context, turnID, systemPrompt, reason strin
 func (e *Engine) CompactWithInstructions(ctx context.Context, turnID, systemPrompt, reason string, auto bool, instructions string) (CompactionResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.compactLocked(ctx, turnID, systemPrompt, reason, auto, instructions)
+	return e.compactLocked(ctx, turnID, systemPrompt, e.compactionToolsLocked(), reason, auto, instructions)
 }
 
-func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason string, auto bool, instructions string) (CompactionResult, error) {
+func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string) (CompactionResult, error) {
 	policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
 	}
-	selection := ensureCompactionProgress(selectCompactionInput(providerVisibleMessages(e.Session.History), policy))
+	selection := ensureCompactionProgress(selectCompactionInputWithEstimator(providerVisibleMessages(e.Session.History), policy, e.estimateMessageTokens))
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}
@@ -103,7 +104,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	tokensBefore := estimateContextTokens(systemPrompt, nil, e.activeContextLocked().Messages)
+	tokensBefore := e.estimateContextTokens(systemPrompt, tools, e.activeContextLocked().Messages)
 	e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: ContextCompactStartedPayload{
 		Reason:           reason,
 		Auto:             auto,
@@ -116,12 +117,27 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	}})
 
 	summarySystem, summaryHistory := buildCompactionSummaryRequest(systemPrompt, selection.PreviousSummary, selection.SummaryInput, policy, instructions)
-	resp, err := llm.CompleteWithOptions(ctx, e.Provider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
+	summaryProvider := e.compactionSummaryProviderLocked()
+	resp, err := llm.CompleteWithOptions(ctx, summaryProvider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
 		Purpose:         "compaction",
 		MaxOutputTokens: policy.SummaryMaxTokens,
 		CachePolicy:     e.cachePolicyLocked(),
 		RetryObserver:   e.providerRetryObserverLocked(turnID, "compaction", nil),
 	})
+	if err != nil && e.Provider != nil && summaryProvider != e.Provider {
+		e.emit(events.Event{Type: "context.compact.summary_model_fallback", TurnID: turnID, Payload: ContextCompactSummaryFallbackPayload{
+			ConfiguredModel: policy.SummaryModel,
+			FallbackModel:   e.Provider.Name(),
+			Error:           err.Error(),
+		}})
+		summaryProvider = e.Provider
+		resp, err = llm.CompleteWithOptions(ctx, summaryProvider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
+			Purpose:         "compaction",
+			MaxOutputTokens: policy.SummaryMaxTokens,
+			CachePolicy:     e.cachePolicyLocked(),
+			RetryObserver:   e.providerRetryObserverLocked(turnID, "compaction", nil),
+		})
+	}
 	if err != nil {
 		compactErr := fmt.Errorf("compact context: %w", err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
@@ -143,8 +159,8 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	}
 
 	model := resp.Message.Model
-	if model == "" && e.Provider != nil {
-		model = e.Provider.Name()
+	if model == "" && summaryProvider != nil {
+		model = summaryProvider.Name()
 	}
 	msg := llm.TextMessage(llm.RoleUser, compactMessageText(summary))
 	msg.Kind = llm.MessageKindCompact
@@ -163,7 +179,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	simulated := make([]llm.Message, 0, len(e.Session.History)+1)
 	simulated = append(simulated, e.Session.History...)
 	simulated = append(simulated, msg)
-	tokensAfter := estimateContextTokens(systemPrompt, nil, assembleActiveContext(simulated, nil).Messages)
+	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
 	msg.Compaction.TokensAfter = tokensAfter
 	if err := e.Session.Append(msg); err != nil {
 		err := fmt.Errorf("session append compact: %w", err)
@@ -237,6 +253,23 @@ func compactMessageText(summary string) string {
 	return "Context compacted automatically because the provider context window is nearing its limit.\n\nSummary of earlier conversation:\n" + summary
 }
 
+func (e *Engine) compactionToolsLocked() []llm.ToolSpec {
+	if e == nil || e.Tools == nil {
+		return nil
+	}
+	return e.Tools.Specs()
+}
+
+func (e *Engine) compactionSummaryProviderLocked() llm.Provider {
+	if e != nil && e.SummaryProvider != nil {
+		return e.SummaryProvider
+	}
+	if e != nil {
+		return e.Provider
+	}
+	return nil
+}
+
 func ensureCompactionProgress(sel compactionSelection) compactionSelection {
 	if len(sel.SummaryInput) > 0 || len(sel.RetainedTail) == 0 {
 		return sel
@@ -245,7 +278,7 @@ func ensureCompactionProgress(sel compactionSelection) compactionSelection {
 	if keepStart < 0 {
 		keepStart = 0
 	}
-	for keepStart > 0 && startsWithToolResult(sel.RetainedTail[keepStart]) {
+	for keepStart > 0 && contextbudget.StartsWithToolResult(sel.RetainedTail[keepStart]) {
 		keepStart--
 	}
 	sel.SummaryInput = append(sel.SummaryInput, sel.RetainedTail[:keepStart]...)
@@ -260,10 +293,4 @@ func ensureCompactionProgress(sel compactionSelection) compactionSelection {
 	sel.FirstKeptMessageID = sel.RetainedTail[0].ID
 	sel.TailStartMessageID = sel.RetainedTail[0].ID
 	return sel
-}
-
-func estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
-	return EstimateCharsAsTokens(len(systemPrompt)) +
-		estimateToolTokens(tools) +
-		estimateMessageTokens(history)
 }

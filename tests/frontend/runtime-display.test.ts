@@ -47,7 +47,7 @@ test("runtimeContextPercentLabel summarizes context window usage", () => {
       output_tokens: 0,
       total_tokens: 5_950,
     }),
-    "59.5%",
+    "~59.5%",
   );
   assert.equal(
     runtimeContextPercentLabel({
@@ -56,7 +56,7 @@ test("runtimeContextPercentLabel summarizes context window usage", () => {
       output_tokens: 0,
       total_tokens: 0,
     }),
-    "0%",
+    "~0%",
   );
 });
 
@@ -79,7 +79,7 @@ test("runtime context tooltip labels separate model, window, and total tokens", 
       output_tokens: 0,
       total_tokens: 156_800,
     }),
-    "context window: 156.8k/256k tokens (61.3%)",
+    "context window: ~156.8k/256k tokens (~61.3%)",
   );
   assert.equal(
     runtimeTokenUsageDetailLabel({

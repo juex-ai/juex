@@ -17,6 +17,15 @@ model: openai:gpt-4.1
 # mcp.json, and hooks.yaml. Work-local extension hooks must set trusted: true
 # before Juex executes them.
 
+# Optional skill catalog controls. Juex loads user, extension, and project
+# skills into an on-demand catalog, then keeps only a compact budgeted index in
+# the system prompt. Models call skill_search and skill_load to inspect the full
+# SKILL.md content when needed.
+# skills:
+#   # prompt_budget_chars: 8000
+#   # include: [taskline-management] # whitelist mode; exclude is ignored.
+#   # exclude: [large-global-skill]  # blacklist mode when include is empty.
+
 # Optional workspace command shell. Omitted is the same as profile: auto.
 # The field is always an object; scalar values like `shell: powershell` are not
 # accepted. Built-in profiles are auto, powershell, cmd, bash, zsh, sh,

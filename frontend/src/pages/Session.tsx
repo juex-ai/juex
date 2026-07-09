@@ -1212,7 +1212,7 @@ function ActiveContextDebugLine({
   return (
     <div className="text-muted-foreground">
       active provider context {count} messages,{" "}
-      {formatTokenCount(tokens)} estimated tokens
+      ~{formatTokenCount(tokens)} estimated tokens
     </div>
   );
 }

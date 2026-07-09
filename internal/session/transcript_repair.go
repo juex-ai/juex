@@ -38,12 +38,20 @@ func (s *Session) RepairTranscript(reason string) ([]TranscriptRepair, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	repaired, repairs := repairTranscriptMessages(s.History, reason)
+	convPath := filepath.Join(s.Dir, conversationFile)
+	history := s.History
+	if len(s.transcript.entries) > len(s.History) {
+		fullHistory, err := readTranscriptMessages(convPath, s.transcript.entries)
+		if err != nil {
+			return nil, err
+		}
+		history = fullHistory
+	}
+	repaired, repairs := repairTranscriptMessages(history, reason)
 	if len(repairs) == 0 {
 		return nil, nil
 	}
-	s.History = repaired
-	if err := s.rewriteConversationLocked(); err != nil {
+	if err := s.rewriteConversationLocked(repaired); err != nil {
 		return nil, err
 	}
 	return repairs, nil
@@ -150,7 +158,7 @@ func newTranscriptRepairMessage(pending []pendingTranscriptToolUse, reason, befo
 	return msg, repairs
 }
 
-func (s *Session) rewriteConversationLocked() error {
+func (s *Session) rewriteConversationLocked(history []llm.Message) error {
 	if s.convFD != nil {
 		if err := s.convFD.Close(); err != nil {
 			return err
@@ -158,7 +166,15 @@ func (s *Session) rewriteConversationLocked() error {
 		s.convFD = nil
 	}
 	convPath := filepath.Join(s.Dir, conversationFile)
-	if err := writeConversationMessages(convPath, s.History); err != nil {
+	if err := writeConversationMessages(convPath, history); err != nil {
+		return err
+	}
+	idx, err := scanTranscriptIndex(convPath)
+	if err != nil {
+		return err
+	}
+	activeHistory, err := readActiveTranscriptWindow(convPath, idx)
+	if err != nil {
 		return err
 	}
 	convFD, err := os.OpenFile(convPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -166,6 +182,8 @@ func (s *Session) rewriteConversationLocked() error {
 		return fmt.Errorf("session: reopen repaired conversation: %w", err)
 	}
 	s.convFD = convFD
+	s.transcript = idx
+	s.History = activeHistory
 	return nil
 }
 

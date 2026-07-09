@@ -101,11 +101,13 @@ juex/
 │   │   ├── info.go
 │   │   ├── transcript_repair.go
 │   │   └── lock*.go
-│   ├── runtime/                  # turn loop, pending input, compaction, context projection
+│   ├── runtime/                  # turn loop, pending input, context projection, runtime glue
 │   │   ├── loop.go
 │   │   ├── active_context.go
 │   │   ├── compact.go
 │   │   ├── compaction_*.go
+│   │   ├── contextbudget/        # compaction policy, active context, token/context budgets
+│   │   ├── workmem/              # goal_state.json and working_state.json domains
 │   │   └── context_*.go
 │   ├── sandbox/                 # command sandbox policy, backend selection, wrapping errors
 │   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
@@ -736,7 +738,11 @@ UI or API cancellation.
 Compaction policy defaults and the default context-window token count live on
 the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
 and environment input; `internal/app` passes the resolved value into
-`runtime.Engine`.
+`runtime.Engine`. Pure context budget behavior lives in
+`internal/runtime/contextbudget`: policy clamping, compaction input selection,
+summary request shaping, active-context assembly, token estimation, and context
+usage breakdowns. `internal/runtime` keeps the Engine locks, provider calls,
+events, online token-calibration glue, and compatibility wrappers.
 
 Tool and provider adapters keep their own safeguards. Hooks and MCP
 startup/tool calls retain adapter-level timeouts, and provider transports may
@@ -936,6 +942,10 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 ```yaml
 model: openai:gpt-4.1
 enable_user_global_resources: true
+skills:
+  prompt_budget_chars: 8000
+  include: []
+  exclude: []
 shell:
   profile: auto
 providers:
@@ -978,6 +988,7 @@ compaction:
   reserve_tokens: 16384
   keep_recent_tokens: 20000
   tail_turns: 2
+  summary_model: ""
   summary_max_tokens: 2048
   tool_result_max_chars: 2000
   user_input_inline_max_bytes: 65536
@@ -993,6 +1004,9 @@ compaction:
 |---|---|
 | `model` | active model reference in `provider:model` form |
 | `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `~/.juex/extensions` |
+| `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
+| `skills.include` | optional skill-name whitelist applied after user, extension, and project skill merging; when non-empty, `skills.exclude` is ignored |
+| `skills.exclude` | optional skill-name blacklist applied after merging when `skills.include` is empty |
 | `shell` | optional object; omitted or `{}` means `profile: auto`; scalar values are rejected |
 | `shell.profile` | `auto`, `powershell`, `cmd`, `bash`, `zsh`, `sh`, `git-bash`, `wsl`, or `custom`; auto uses the Juex process runtime OS |
 | `shell.binary` | optional executable override for built-in profiles; validated before startup and never silently falls back |
@@ -1031,6 +1045,7 @@ compaction:
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
 | `compaction.tail_turns` | minimum recent user turns retained verbatim |
+| `compaction.summary_model` | optional `provider:model` used only for compaction summary calls; if omitted or if the summary provider fails, compaction uses the active model |
 | `compaction.summary_max_tokens` | maximum output tokens for summary generation |
 | `compaction.tool_result_max_chars` | per-tool-result truncation limit in summary input |
 | `compaction.user_input_inline_max_bytes` | user text larger than this is stored under `.juex/artifacts/user-inputs/` and replaced by a stable preview before provider calls |
@@ -1163,9 +1178,11 @@ expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
 The runtime also maintains an optional session-local `working_state.json`
-sidecar. It stores generic records for goal, hard constraints, artifacts,
-checks, open issues, last successful checks, and stale checks, each with
-source, confidence, severity, related paths, created time, and resolved time.
+sidecar. The persistence, merge, pruning, rendering, and redaction rules for it
+live in `internal/runtime/workmem`, alongside the `goal_state.json` store. The
+sidecar stores generic records for goal, hard constraints, artifacts, checks,
+open issues, last successful checks, and stale checks, each with source,
+confidence, severity, related paths, created time, and resolved time.
 Tool results update only generic runtime facts: failures become open issues,
 write/edit successes mark related checks stale, and later successful checks
 refresh `last_successful_checks`. Command hooks can output a `working_state`

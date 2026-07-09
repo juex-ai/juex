@@ -1,189 +1,89 @@
 package runtime
 
 import (
-	"encoding/json"
-	"strings"
-
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/prompt"
+	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 )
 
-const contextUsageResponseKey = "response"
+const contextUsageResponseKey = contextbudget.ContextUsageResponseKey
+
+type tokenEstimateCalibration struct {
+	inner contextbudget.TokenEstimateCalibration
+}
+
+func (c *tokenEstimateCalibration) update(realTokens, estimatedTokens int) {
+	if c == nil {
+		return
+	}
+	c.inner.Update(realTokens, estimatedTokens)
+}
+
+func (c tokenEstimateCalibration) apply(tokens int) int {
+	return c.inner.Apply(tokens)
+}
 
 func contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sections []prompt.Section, tools []llm.ToolSpec, history []llm.Message) llm.ContextUsage {
-	if contextWindow <= 0 {
-		contextWindow = DefaultContextWindowTokens
-	}
-	if model == "" {
-		model = "unknown"
-	}
-	systemTools, mcpTools := splitContextTools(tools)
-	breakdown := []llm.ContextUsagePart{
-		{Key: "system_prompt", Label: "System prompt", Tokens: estimateSystemPromptTokens(sections)},
-		{Key: "system_tools", Label: "System tools", Tokens: estimateToolTokens(systemTools)},
-		{Key: "mcp_tools", Label: "MCP tools", Tokens: estimateToolTokens(mcpTools)},
-		{Key: "memory_files", Label: "Memory files", Tokens: estimateSectionTokens(sections, "memory_files")},
-		{Key: "skills", Label: "Skills", Tokens: estimateSectionTokens(sections, "skills")},
-		{Key: "compact_summary", Label: "Compact summary", Tokens: estimateCompactSummaryTokens(history)},
-		{Key: "context_artifacts", Label: "Context artifact references", Tokens: estimateContextArtifactTokens(history)},
-		{Key: "messages", Label: "Messages", Tokens: estimateOrdinaryMessageTokens(history)},
-		{Key: contextUsageResponseKey, Label: "Response", Tokens: usage.OutputTokens},
+	return contextbudget.ContextUsageSnapshot(model, contextWindow, DefaultContextWindowTokens, usage, sections, tools, history)
+}
+
+func (e *Engine) contextUsageSnapshot(model string, contextWindow int, usage llm.Usage, sections []prompt.Section, tools []llm.ToolSpec, history []llm.Message) llm.ContextUsage {
+	snapshot := contextUsageSnapshot(model, contextWindow, usage, sections, tools, history)
+	for i := range snapshot.Breakdown {
+		if snapshot.Breakdown[i].Key == contextUsageResponseKey {
+			continue
+		}
+		snapshot.Breakdown[i].Tokens = e.applyTokenEstimateCalibration(snapshot.Breakdown[i].Tokens)
 	}
 	if usage.InputTokens <= 0 {
-		usage.InputTokens = estimatedInputTokens(breakdown)
+		snapshot.InputTokens = estimatedInputTokens(snapshot.Breakdown)
 	}
-	return llm.ContextUsage{
-		Model:             model,
-		ContextWindow:     contextWindow,
-		InputTokens:       usage.InputTokens,
-		OutputTokens:      usage.OutputTokens,
-		CachedInputTokens: usage.CachedInputTokens,
-		TotalTokens:       usage.TotalTokens(),
-		Breakdown:         breakdown,
-	}
+	snapshot.TotalTokens = snapshot.InputTokens + snapshot.OutputTokens
+	return snapshot
 }
 
 func estimatedInputTokens(parts []llm.ContextUsagePart) int {
-	var total int
-	for _, part := range parts {
-		if part.Key == contextUsageResponseKey {
-			continue
-		}
-		total += part.Tokens
-	}
-	return total
-}
-
-func estimateCompactSummaryTokens(history []llm.Message) int {
-	var compact []llm.Message
-	for _, msg := range history {
-		if msg.Kind == llm.MessageKindCompact {
-			compact = append(compact, msg)
-		}
-	}
-	return estimateMessageTokens(compact)
-}
-
-func estimateContextArtifactTokens(history []llm.Message) int {
-	var chars int
-	for _, msg := range history {
-		for _, block := range msg.Blocks {
-			if block.Artifact == nil {
-				continue
-			}
-			chars += len(block.Text) + len(block.Content)
-		}
-	}
-	return EstimateCharsAsTokens(chars)
-}
-
-func estimateOrdinaryMessageTokens(history []llm.Message) int {
-	ordinary := make([]llm.Message, 0, len(history))
-	for _, msg := range history {
-		if msg.Kind == llm.MessageKindCompact {
-			continue
-		}
-		cloned := msg
-		cloned.Blocks = nil
-		for _, block := range msg.Blocks {
-			if block.Artifact != nil {
-				continue
-			}
-			cloned.Blocks = append(cloned.Blocks, block)
-		}
-		ordinary = append(ordinary, cloned)
-	}
-	return estimateMessageTokens(ordinary)
-}
-
-func splitContextTools(tools []llm.ToolSpec) ([]llm.ToolSpec, []llm.ToolSpec) {
-	systemTools := make([]llm.ToolSpec, 0, len(tools))
-	mcpTools := make([]llm.ToolSpec, 0, len(tools))
-	for _, tool := range tools {
-		if strings.HasPrefix(tool.Name, "mcp__") {
-			mcpTools = append(mcpTools, tool)
-			continue
-		}
-		systemTools = append(systemTools, tool)
-	}
-	return systemTools, mcpTools
-}
-
-func estimateSystemPromptTokens(sections []prompt.Section) int {
-	filtered := make([]prompt.Section, 0, len(sections))
-	for _, section := range sections {
-		switch section.Key {
-		case "memory_files", "skills":
-			continue
-		default:
-			filtered = append(filtered, section)
-		}
-	}
-	return EstimateCharsAsTokens(len(prompt.JoinSections(filtered)))
-}
-
-func estimateSectionTokens(sections []prompt.Section, key string) int {
-	var chars int
-	for _, section := range sections {
-		if section.Key == key {
-			chars += len(section.Text)
-		}
-	}
-	return EstimateCharsAsTokens(chars)
-}
-
-func estimateToolTokens(tools []llm.ToolSpec) int {
-	if len(tools) == 0 {
-		return 0
-	}
-	data, err := json.Marshal(tools)
-	if err != nil {
-		return 0
-	}
-	return EstimateCharsAsTokens(len(data))
-}
-
-func estimateMessageTokens(history []llm.Message) int {
-	var chars int
-	for _, m := range history {
-		chars += len(m.Role) + len(m.Kind) + 8
-		for _, b := range m.Blocks {
-			chars += len(b.Type) + len(b.Text) + len(b.Content) + len(b.ToolUseID) + len(b.ToolName) + 8
-			if b.Media != nil {
-				chars += estimateMediaReferenceChars(b.Media)
-			}
-			if len(b.Input) > 0 {
-				if data, err := json.Marshal(b.Input); err == nil {
-					chars += len(data)
-				}
-			}
-		}
-	}
-	return EstimateCharsAsTokens(chars)
-}
-
-func estimateMediaReferenceChars(media *llm.MediaRef) int {
-	chars := len(media.ArtifactPath) + len(media.MediaType) + len(media.SHA256) + 24
-	imageTokens := 85
-	if media.Width > 0 && media.Height > 0 {
-		pixels := int64(media.Width) * int64(media.Height)
-		if pixels > 0 {
-			estimated := int((pixels + 749) / 750)
-			if estimated > imageTokens {
-				imageTokens = estimated
-			}
-		}
-	}
-	return chars + imageTokens*4
+	return contextbudget.EstimatedInputTokens(parts)
 }
 
 func EstimateTextTokens(text string) int {
-	return EstimateCharsAsTokens(len(text))
+	return contextbudget.EstimateTextTokens(text)
 }
 
 func EstimateCharsAsTokens(chars int) int {
-	if chars <= 0 {
-		return 0
+	return contextbudget.EstimateCharsAsTokens(chars)
+}
+
+func estimateMessageTokens(history []llm.Message) int {
+	return contextbudget.EstimateMessageTokens(history)
+}
+
+func estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
+	return contextbudget.EstimateContextTokens(systemPrompt, tools, history)
+}
+
+func (e *Engine) updateTokenEstimateCalibration(realTokens, estimatedTokens int) {
+	if e == nil {
+		return
 	}
-	return (chars + 3) / 4
+	e.tokenCalibrationMu.Lock()
+	defer e.tokenCalibrationMu.Unlock()
+	e.tokenCalibration.update(realTokens, estimatedTokens)
+}
+
+func (e *Engine) applyTokenEstimateCalibration(tokens int) int {
+	if e == nil {
+		return tokens
+	}
+	e.tokenCalibrationMu.RLock()
+	defer e.tokenCalibrationMu.RUnlock()
+	return e.tokenCalibration.apply(tokens)
+}
+
+func (e *Engine) estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
+	return e.applyTokenEstimateCalibration(estimateContextTokens(systemPrompt, tools, history))
+}
+
+func (e *Engine) estimateMessageTokens(history []llm.Message) int {
+	return e.applyTokenEstimateCalibration(estimateMessageTokens(history))
 }

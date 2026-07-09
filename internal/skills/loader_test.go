@@ -134,9 +134,7 @@ func TestLoader_PromptSectionEmpty(t *testing.T) {
 	}
 }
 
-func TestLoader_PromptSectionExposesAbsolutePath(t *testing.T) {
-	// The prompt section must give the model the absolute path so it can
-	// load the body with the standard `read` builtin (no dedicated tool).
+func TestLoader_PromptSectionUsesSkillTools(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "mySkill", "---\nname: mySkill\ndescription: do x\n---\nbody here")
 	l := NewLoader(dir)
@@ -145,16 +143,13 @@ func TestLoader_PromptSectionExposesAbsolutePath(t *testing.T) {
 	}
 
 	section := l.PromptSection()
-	want := filepath.Join(dir, "mySkill", "SKILL.md")
-	if !strings.Contains(section, want) {
-		t.Fatalf("prompt section missing absolute path %q in:\n%s", want, section)
-	}
 	if !strings.Contains(section, "do x") {
 		t.Fatalf("prompt section missing description in:\n%s", section)
 	}
-	// Instruction line must point the model at the `read` builtin.
-	if !strings.Contains(section, "`read`") {
-		t.Fatalf("prompt should tell the model to use `read` against the path; got:\n%s", section)
+	for _, want := range []string{"`skill_load`", "`skill_search`"} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("prompt should tell the model to use %s; got:\n%s", want, section)
+		}
 	}
 }
 
@@ -293,5 +288,119 @@ func TestLoader_LoadMissingDirIsOK(t *testing.T) {
 	}
 	if len(l.All()) != 0 {
 		t.Fatal("expected no skills")
+	}
+}
+
+func TestLoader_AppliesIncludeAfterScopeMerge(t *testing.T) {
+	user := t.TempDir()
+	project := t.TempDir()
+	writeSkill(t, user, "alpha", "---\nname: alpha\ndescription: user\n---\nUSER")
+	writeSkill(t, project, "alpha", "---\nname: alpha\ndescription: project\n---\nPROJECT")
+	writeSkill(t, project, "beta", "---\nname: beta\ndescription: project\n---\nBETA")
+
+	l := NewLoaderFromDirsWithOptions([]Dir{{Path: user, Source: "user"}, {Path: project, Source: "project"}}, LoaderOptions{
+		Policy: Policy{Include: []string{"alpha"}},
+	})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	all := l.All()
+	if len(all) != 1 || all[0].Name != "alpha" || all[0].Source != "project" || all[0].Body != "PROJECT" {
+		t.Fatalf("loaded skills = %+v", all)
+	}
+	filtered := l.Filtered()
+	if len(filtered) != 1 || filtered[0].Name != "beta" || filtered[0].Reason != "not included" {
+		t.Fatalf("filtered = %+v", filtered)
+	}
+}
+
+func TestLoader_ExcludeRemovesSkillFromCatalog(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "alpha", "---\nname: alpha\ndescription: a\n---\nA")
+	writeSkill(t, dir, "beta", "---\nname: beta\ndescription: b\n---\nB")
+
+	l := NewLoaderFromDirsWithOptions([]Dir{{Path: dir, Source: "project"}}, LoaderOptions{
+		Policy: Policy{Exclude: []string{"beta"}},
+	})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := l.Get("beta"); ok {
+		t.Fatal("excluded skill should not load")
+	}
+	if results := l.Search("beta", 10); len(results) != 0 {
+		t.Fatalf("excluded skill should not be searchable: %+v", results)
+	}
+}
+
+func TestLoader_PromptBudgetCompactsAndOmitsLowerPrioritySkills(t *testing.T) {
+	user := t.TempDir()
+	project := t.TempDir()
+	writeSkill(t, user, "user-skill", "---\nname: user-skill\ndescription: "+strings.Repeat("u", 300)+"\n---\nUSER")
+	writeSkill(t, project, "project-skill", "---\nname: project-skill\ndescription: "+strings.Repeat("p", 300)+"\n---\nPROJECT")
+
+	l := NewLoaderFromDirsWithOptions([]Dir{{Path: user, Source: "user"}, {Path: project, Source: "project"}}, LoaderOptions{
+		Policy: Policy{PromptBudgetChars: 260},
+	})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	section := l.PromptSection()
+	report := l.PromptReport()
+	if len(section) > 260 {
+		t.Fatalf("section length = %d, want <= budget; section:\n%s", len(section), section)
+	}
+	if !report.Compacted || len(report.Omitted) == 0 {
+		t.Fatalf("report = %+v, want compacted omission", report)
+	}
+	if !strings.Contains(section, "project-skill") {
+		t.Fatalf("project skill should be kept before user skill:\n%s", section)
+	}
+	if !strings.Contains(section, "skill_search") {
+		t.Fatalf("prompt should mention search for omitted skills:\n%s", section)
+	}
+}
+
+func TestLoader_PromptBudgetUsesMinimalHeaderWhenBudgetIsTiny(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "alpha", "---\nname: alpha\ndescription: "+strings.Repeat("a", 120)+"\n---\nA")
+	writeSkill(t, dir, "beta", "---\nname: beta\ndescription: "+strings.Repeat("b", 120)+"\n---\nB")
+
+	l := NewLoaderFromDirsWithOptions([]Dir{{Path: dir, Source: "project"}}, LoaderOptions{
+		Policy: Policy{PromptBudgetChars: 80},
+	})
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	section := l.PromptSection()
+	report := l.PromptReport()
+	if len(section) > 80 {
+		t.Fatalf("section length = %d, want <= budget; section:\n%s", len(section), section)
+	}
+	if report.UsedChars > report.BudgetChars {
+		t.Fatalf("report = %+v, want used <= budget", report)
+	}
+	if !report.Compacted || len(report.Omitted) == 0 {
+		t.Fatalf("report = %+v, want compacted omissions", report)
+	}
+	for _, want := range []string{"skill_search", "skill_load"} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("section should keep %s hint under tiny budget; got:\n%s", want, section)
+		}
+	}
+}
+
+func TestLoader_SearchFindsLoadedSkills(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "alpha", "---\nname: alpha\ndescription: read screenshots\n---\nA")
+	writeSkill(t, dir, "beta", "---\nname: beta\ndescription: database migrations\n---\nB")
+
+	l := NewLoader(dir)
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+	results := l.Search("screen", 10)
+	if len(results) != 1 || results[0].Name != "alpha" {
+		t.Fatalf("results = %+v", results)
 	}
 }

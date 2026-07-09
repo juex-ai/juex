@@ -40,6 +40,7 @@ type RuntimeStatusOptions struct {
 type RuntimeStatusSkillCache struct {
 	mu     sync.Mutex
 	dirs   []skills.Dir
+	policy config.SkillPolicy
 	status RuntimeSkillsStatus
 	loader *skills.Loader
 	loaded bool
@@ -116,8 +117,10 @@ type RuntimeHookInfo struct {
 }
 
 type RuntimeSkillsStatus struct {
-	Count int
-	Items []RuntimeSkillInfo
+	Count    int
+	Items    []RuntimeSkillInfo
+	Filtered []RuntimeSkillFilteredInfo
+	Prompt   RuntimeSkillPromptStatus
 }
 
 type RuntimeSkillInfo struct {
@@ -128,12 +131,31 @@ type RuntimeSkillInfo struct {
 	Path        string
 }
 
+type RuntimeSkillFilteredInfo struct {
+	Name   string
+	Source string
+	Reason string
+}
+
+type RuntimeSkillPromptStatus struct {
+	BudgetChars int
+	UsedChars   int
+	Compacted   bool
+	Omitted     []RuntimeSkillOmittedInfo
+}
+
+type RuntimeSkillOmittedInfo struct {
+	Name   string
+	Source string
+	Reason string
+}
+
 func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
 	resourceGraph, err := ResolveRuntimeResourceGraph(s.cfg)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache, resourceGraph.SkillDirs())
+	skillStatus, skillLoader, err := s.skillsStatus(opts.SkillCache, resourceGraph.SkillDirs(), s.cfg.SkillPolicy())
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -227,32 +249,37 @@ func runtimePromptSource(section prompt.Section) string {
 	return "runtime"
 }
 
-func (s RuntimeStatusService) skillsStatus(cache *RuntimeStatusSkillCache, dirs []skills.Dir) (RuntimeSkillsStatus, *skills.Loader, error) {
+func (s RuntimeStatusService) skillsStatus(cache *RuntimeStatusSkillCache, dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
 	if cache != nil {
-		return cache.snapshot(dirs)
+		return cache.snapshot(dirs, policy)
 	}
-	return loadRuntimeSkills(dirs)
+	return loadRuntimeSkills(dirs, policy)
 }
 
-func (c *RuntimeStatusSkillCache) snapshot(dirs []skills.Dir) (RuntimeSkillsStatus, *skills.Loader, error) {
+func (c *RuntimeStatusSkillCache) snapshot(dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.loaded && skillDirsEqual(c.dirs, dirs) {
+	if c.loaded && skillDirsEqual(c.dirs, dirs) && skillPoliciesEqual(c.policy, policy) {
 		return cloneRuntimeSkillsStatus(c.status), c.loader, nil
 	}
-	status, loader, err := loadRuntimeSkills(dirs)
+	status, loader, err := loadRuntimeSkills(dirs, policy)
 	if err != nil {
 		return RuntimeSkillsStatus{}, nil, err
 	}
 	c.dirs = append([]skills.Dir(nil), dirs...)
+	c.policy = cloneSkillPolicy(policy)
 	c.status = cloneRuntimeSkillsStatus(status)
 	c.loader = loader
 	c.loaded = true
 	return status, loader, nil
 }
 
-func loadRuntimeSkills(dirs []skills.Dir) (RuntimeSkillsStatus, *skills.Loader, error) {
-	skillLoader := skills.NewLoaderFromDirs(dirs)
+func loadRuntimeSkills(dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
+	skillLoader := skills.NewLoaderFromDirsWithOptions(dirs, skills.LoaderOptions{Policy: skills.Policy{
+		Include:           policy.Include,
+		Exclude:           policy.Exclude,
+		PromptBudgetChars: policy.PromptBudgetChars,
+	}})
 	if err := skillLoader.Load(); err != nil {
 		return RuntimeSkillsStatus{}, nil, err
 	}
@@ -270,11 +297,32 @@ func loadRuntimeSkills(dirs []skills.Dir) (RuntimeSkillsStatus, *skills.Loader, 
 	sort.Slice(items, func(i, j int) bool {
 		return runtimeSourceLess(items[i].Source, items[i].Name, items[j].Source, items[j].Name)
 	})
-	return RuntimeSkillsStatus{Count: len(items), Items: items}, skillLoader, nil
+	filtered := make([]RuntimeSkillFilteredInfo, 0, len(skillLoader.Filtered()))
+	for _, item := range skillLoader.Filtered() {
+		filtered = append(filtered, RuntimeSkillFilteredInfo{Name: item.Name, Source: item.Source, Reason: item.Reason})
+	}
+	report := skillLoader.PromptReport()
+	omitted := make([]RuntimeSkillOmittedInfo, 0, len(report.Omitted))
+	for _, item := range report.Omitted {
+		omitted = append(omitted, RuntimeSkillOmittedInfo{Name: item.Name, Source: item.Source, Reason: item.Reason})
+	}
+	return RuntimeSkillsStatus{
+		Count:    len(items),
+		Items:    items,
+		Filtered: filtered,
+		Prompt: RuntimeSkillPromptStatus{
+			BudgetChars: report.BudgetChars,
+			UsedChars:   report.UsedChars,
+			Compacted:   report.Compacted,
+			Omitted:     omitted,
+		},
+	}, skillLoader, nil
 }
 
 func cloneRuntimeSkillsStatus(status RuntimeSkillsStatus) RuntimeSkillsStatus {
 	status.Items = append([]RuntimeSkillInfo(nil), status.Items...)
+	status.Filtered = append([]RuntimeSkillFilteredInfo(nil), status.Filtered...)
+	status.Prompt.Omitted = append([]RuntimeSkillOmittedInfo(nil), status.Prompt.Omitted...)
 	return status
 }
 
@@ -288,6 +336,32 @@ func skillDirsEqual(left, right []skills.Dir) bool {
 		}
 	}
 	return true
+}
+
+func skillPoliciesEqual(left, right config.SkillPolicy) bool {
+	if left.PromptBudgetChars != right.PromptBudgetChars {
+		return false
+	}
+	if len(left.Include) != len(right.Include) || len(left.Exclude) != len(right.Exclude) {
+		return false
+	}
+	for i := range left.Include {
+		if left.Include[i] != right.Include[i] {
+			return false
+		}
+	}
+	for i := range left.Exclude {
+		if left.Exclude[i] != right.Exclude[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneSkillPolicy(policy config.SkillPolicy) config.SkillPolicy {
+	policy.Include = append([]string(nil), policy.Include...)
+	policy.Exclude = append([]string(nil), policy.Exclude...)
+	return policy
 }
 
 type runtimeMCPServerConfig struct {

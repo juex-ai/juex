@@ -52,6 +52,27 @@ func TestSelectCompactionInput_IgnoresRuntimeContextAsTailTurnStart(t *testing.T
 	}
 }
 
+func TestSelectCompactionInputUsesEstimatorForTailBudget(t *testing.T) {
+	h := []llm.Message{
+		testMsg("m1", llm.RoleUser, "old question"),
+		testMsg("m2", llm.RoleAssistant, "old answer"),
+		testMsg("m3", llm.RoleUser, "recent question"),
+	}
+	baseRecentTokens := estimateMessageTokens(h[2:3])
+	estimator := func(msgs []llm.Message) int {
+		if len(msgs) == 1 && msgs[0].ID == "m3" {
+			return baseRecentTokens + 2
+		}
+		return estimateMessageTokens(msgs)
+	}
+
+	sel := selectCompactionInputWithEstimator(h, compactionPolicy{KeepRecentTokens: baseRecentTokens + 1, TailTurns: 99}, estimator)
+
+	if len(sel.RetainedTail) != 1 || sel.RetainedTail[0].ID != "m3" {
+		t.Fatalf("tail = %+v, want estimator-limited recent message only", sel.RetainedTail)
+	}
+}
+
 func testMsg(id string, role llm.Role, text string) llm.Message {
 	m := llm.TextMessage(role, text)
 	m.ID = id
