@@ -80,8 +80,10 @@ type hookInfo struct {
 }
 
 type skillsStatus struct {
-	Count int         `json:"count"`
-	Items []skillInfo `json:"items"`
+	Count    int                 `json:"count"`
+	Items    []skillInfo         `json:"items"`
+	Filtered []skillFilteredInfo `json:"filtered,omitempty"`
+	Prompt   skillPromptStatus   `json:"prompt"`
 }
 
 type skillInfo struct {
@@ -90,6 +92,25 @@ type skillInfo struct {
 	Type        string `json:"type,omitempty"`
 	Source      string `json:"source"`
 	Path        string `json:"path"`
+}
+
+type skillFilteredInfo struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+	Reason string `json:"reason"`
+}
+
+type skillPromptStatus struct {
+	BudgetChars int                `json:"budget_chars"`
+	UsedChars   int                `json:"used_chars"`
+	Compacted   bool               `json:"compacted"`
+	Omitted     []skillOmittedInfo `json:"omitted,omitempty"`
+}
+
+type skillOmittedInfo struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+	Reason string `json:"reason"`
 }
 
 func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
@@ -213,7 +234,25 @@ func skillsStatusFromApp(status app.RuntimeSkillsStatus) skillsStatus {
 			Path:        item.Path,
 		})
 	}
-	return skillsStatus{Count: status.Count, Items: items}
+	filtered := make([]skillFilteredInfo, 0, len(status.Filtered))
+	for _, item := range status.Filtered {
+		filtered = append(filtered, skillFilteredInfo{Name: item.Name, Source: item.Source, Reason: item.Reason})
+	}
+	omitted := make([]skillOmittedInfo, 0, len(status.Prompt.Omitted))
+	for _, item := range status.Prompt.Omitted {
+		omitted = append(omitted, skillOmittedInfo{Name: item.Name, Source: item.Source, Reason: item.Reason})
+	}
+	return skillsStatus{
+		Count:    status.Count,
+		Items:    items,
+		Filtered: filtered,
+		Prompt: skillPromptStatus{
+			BudgetChars: status.Prompt.BudgetChars,
+			UsedChars:   status.Prompt.UsedChars,
+			Compacted:   status.Prompt.Compacted,
+			Omitted:     omitted,
+		},
+	}
 }
 
 func (s *Server) absoluteWorkDir() string {

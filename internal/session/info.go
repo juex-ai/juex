@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -72,7 +71,7 @@ func List(root string) ([]Info, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		info, _, err := loadInfo(dir)
+		info, _, err := loadInfoSummary(dir)
 		if err != nil {
 			continue // skip unreadable sessions
 		}
@@ -96,19 +95,31 @@ func LoadInfo(dir string) (Info, []llm.Message, error) {
 // loadInfo is the workhorse for List and LoadInfo. Returns an error for
 // any caller that cannot proceed; List filters those errors out itself.
 func loadInfo(dir string) (Info, []llm.Message, error) {
+	info, idx, err := loadInfoSummary(dir)
+	if err != nil {
+		return Info{}, nil, err
+	}
+	msgs, err := readTranscriptMessages(filepath.Join(dir, conversationFile), idx.entries)
+	if err != nil {
+		return Info{}, nil, err
+	}
+	return info, msgs, nil
+}
+
+func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 	convPath := filepath.Join(dir, conversationFile)
 	st, err := os.Stat(convPath)
 	if err != nil {
-		return Info{}, nil, err
+		return Info{}, transcriptIndex{}, err
 	}
 	id := filepath.Base(dir)
 	alias, err := LoadAlias(dir)
 	if err != nil {
-		return Info{}, nil, err
+		return Info{}, transcriptIndex{}, err
 	}
 	kind, err := LoadKind(dir)
 	if err != nil {
-		return Info{}, nil, err
+		return Info{}, transcriptIndex{}, err
 	}
 	info := Info{
 		ID:           id,
@@ -118,30 +129,14 @@ func loadInfo(dir string) (Info, []llm.Message, error) {
 		LastActiveAt: st.ModTime(),
 		StartedAt:    parseStartedAt(id, st.ModTime()),
 	}
-	data, err := os.ReadFile(convPath)
+	idx, err := scanTranscriptIndex(convPath)
 	if err != nil {
-		return Info{}, nil, err
+		return Info{}, transcriptIndex{}, err
 	}
-	var msgs []llm.Message
-	for i, line := range splitLines(data) {
-		if len(line) == 0 {
-			continue
-		}
-		var m llm.Message
-		if err := json.Unmarshal(line, &m); err != nil {
-			return Info{}, nil, err
-		}
-		m = normalizeLoadedMessage(m, i)
-		msgs = append(msgs, m)
-		if m.Role == llm.RoleUser && m.Kind != llm.MessageKindCompact {
-			info.Turns++
-			if info.Preview == "" {
-				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
-			}
-		}
-	}
+	info.Turns = idx.turns
+	info.Preview = idx.preview
 	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsage(dir)
-	return info, msgs, nil
+	return info, idx, nil
 }
 
 func loadLatestSessionUsage(dir string) (llm.Usage, *llm.ContextUsage, error) {

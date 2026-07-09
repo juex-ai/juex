@@ -50,12 +50,13 @@ const (
 )
 
 type Engine struct {
-	Provider llm.Provider
-	Tools    *tools.Registry
-	Bus      *events.Bus
-	Session  *session.Session
-	Prompt   *prompt.Builder
-	Hooks    HookRunner
+	Provider        llm.Provider
+	SummaryProvider llm.Provider
+	Tools           *tools.Registry
+	Bus             *events.Bus
+	Session         *session.Session
+	Prompt          *prompt.Builder
+	Hooks           HookRunner
 	// HookContext carries process/session metadata included in every hook
 	// command input. Event-specific fields are filled by the runtime.
 	HookContext hooks.Request
@@ -719,12 +720,7 @@ func (e *Engine) sessionHasMessageIDLocked(id string) bool {
 	if e == nil || e.Session == nil || id == "" {
 		return false
 	}
-	for _, msg := range e.Session.History {
-		if msg.ID == id {
-			return true
-		}
-	}
-	return false
+	return e.Session.HasMessageID(id)
 }
 
 func pendingRecordIDs(pending []queuedPendingInput) []string {

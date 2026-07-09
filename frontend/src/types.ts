@@ -252,6 +252,7 @@ export const BROWSER_EVENT_TYPES = [
   "context.compact.started",
   "context.compact.completed",
   "context.compact.errored",
+  "context.compact.summary_model_fallback",
   "context.projection.applied",
 ] as const;
 
@@ -531,6 +532,12 @@ export interface ContextCompactErroredPayload {
   error: string;
 }
 
+export interface ContextCompactSummaryFallbackPayload {
+  configured_model?: string;
+  fallback_model?: string;
+  error: string;
+}
+
 export interface ContextCompactCompletedPayload {
   message_id: string;
   reason: string;
@@ -588,6 +595,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"context.compact.started"> & { payload: ContextCompactStartedPayload })
   | (BrowserEventBase<"context.compact.completed"> & { payload: ContextCompactCompletedPayload })
   | (BrowserEventBase<"context.compact.errored"> & { payload: ContextCompactErroredPayload })
+  | (BrowserEventBase<"context.compact.summary_model_fallback"> & { payload: ContextCompactSummaryFallbackPayload })
   | (BrowserEventBase<"context.projection.applied"> & { payload: ContextProjectionAppliedPayload });
 
 export interface FileNode {
@@ -659,6 +667,8 @@ export interface RuntimeStatusResponse {
   skills: {
     count: number;
     items: SkillInfo[];
+    filtered?: SkillFilteredInfo[];
+    prompt: SkillPromptStatus;
   };
 }
 
@@ -793,4 +803,17 @@ export interface SkillInfo {
   type?: string;
   source: string;
   path: string;
+}
+
+export interface SkillFilteredInfo {
+  name: string;
+  source: string;
+  reason: string;
+}
+
+export interface SkillPromptStatus {
+  budget_chars: number;
+  used_chars: number;
+  compacted: boolean;
+  omitted?: SkillFilteredInfo[];
 }

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
@@ -68,14 +69,19 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 		"USERPROFILE="+home,
 		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
 	)
-	// Use Output() so stdout (the JSON plan) is not contaminated by stderr
-	// (uv's "Installed N packages" log on first run).
-	out, err := cmd.Output()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	out := stdout.Bytes()
 	if err != nil {
 		ee, ok := err.(*exec.ExitError)
 		if !ok || ee.ExitCode() != 10 {
-			t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, out, ee.Stderr)
+			t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, out, stderr.String())
 		}
+	}
+	if strings.Contains(stderr.String(), "JUEX-FAKE-MCP-STDERR") {
+		t.Fatalf("MCP server stderr leaked to CLI stderr:\n%s", stderr.String())
 	}
 
 	var plan struct {

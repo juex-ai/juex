@@ -342,10 +342,17 @@ func ValidateConfig(cfg FileConfig) (FileConfig, error) {
 
 func ValidateSpec(spec Spec) (Spec, error) {
 	spec.ID = strings.TrimSpace(spec.ID)
+	spec.Name = strings.TrimSpace(spec.Name)
+	if spec.ID == "" && spec.Name != "" {
+		spec.ID = slugObservableID(spec.Name)
+	}
 	spec.Command = strings.TrimSpace(spec.Command)
 	spec.Source.Type = strings.TrimSpace(spec.Source.Type)
+	if spec.ID == "" {
+		return Spec{}, fmt.Errorf("missing or invalid id")
+	}
 	if !validID(spec.ID) {
-		return Spec{}, fmt.Errorf("id must use lower-case letters, digits, '_' or '-'")
+		return Spec{}, fmt.Errorf("missing or invalid id: id must use lower-case letters, digits, '_' or '-'")
 	}
 	if spec.Source.Type == "" {
 		if hasLegacyCommandShorthand(spec) {
@@ -767,6 +774,39 @@ func validID(id string) bool {
 		}
 	}
 	return true
+}
+
+func slugObservableID(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	lastSep := false
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+			lastSep = false
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastSep = false
+		case r == '_' || r == '-':
+			if b.Len() > 0 && !lastSep {
+				b.WriteByte(byte(r))
+				lastSep = true
+			}
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			if b.Len() > 0 && !lastSep {
+				b.WriteByte('-')
+				lastSep = true
+			}
+		default:
+			if b.Len() > 0 && !lastSep {
+				b.WriteByte('-')
+				lastSep = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-_")
+	return out
 }
 
 func issueID(spec Spec, index int) string {

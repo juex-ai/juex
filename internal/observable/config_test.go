@@ -275,6 +275,19 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 	}
 }
 
+func TestValidateSpec_DerivesIDFromName(t *testing.T) {
+	spec := validSpec("")
+	spec.ID = ""
+	spec.Name = "Web Events!"
+	got, err := observable.ValidateSpec(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "web-events" {
+		t.Fatalf("id = %q, want web-events", got.ID)
+	}
+}
+
 func TestSaveConfig_FormatsStableJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "observables.json")
 	cfg := observable.FileConfig{Observables: []observable.Spec{validSpec("lark-events")}}
