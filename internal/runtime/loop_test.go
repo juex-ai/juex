@@ -1210,6 +1210,53 @@ func TestTurn_OneToolCallThenEnd(t *testing.T) {
 	}
 }
 
+func TestTurn_ToolStructuredMediaBecomesToolResultMedia(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu_image", ToolName: "read_image", Input: map[string]any{"path": "shot.png"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "saw it"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	media := llm.MediaRef{
+		ArtifactPath:  ".juex/artifacts/media/read/test.png",
+		MediaType:     "image/png",
+		SHA256:        strings.Repeat("a", 64),
+		OriginalBytes: 12,
+		Width:         2,
+		Height:        1,
+	}
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "read_image",
+		Schema: map[string]any{"type": "object"},
+		ResultHandler: func(ctx context.Context, in map[string]any) (tools.Result, error) {
+			return tools.Result{
+				Text:       "[image 2x1, 12 bytes, image/png]",
+				Structured: tools.MediaResult{Media: media},
+			}, nil
+		},
+	})
+
+	out, err := eng.Turn(context.Background(), "read the image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "saw it" {
+		t.Fatalf("out = %q", out)
+	}
+	result := eng.Session.History[2]
+	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
+		t.Fatalf("tool result message = %+v", result)
+	}
+	block := result.Blocks[0]
+	if block.Type != llm.BlockToolResult || block.Media == nil {
+		t.Fatalf("tool result block = %+v, want media tool result", block)
+	}
+	if block.Media.ArtifactPath != media.ArtifactPath || block.Content != "[image 2x1, 12 bytes, image/png]" {
+		t.Fatalf("tool result block = %+v, want media and content preserved", block)
+	}
+}
+
 func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},

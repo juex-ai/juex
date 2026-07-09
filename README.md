@@ -130,7 +130,10 @@ configuration lives at `~/.juex/juex.yaml`.
 
 The builtin file tools are `read`, `write`, `edit`, `apply_patch`, `grep`, and
 the chunked write tools `write_begin`, `write_chunk`, `write_commit`, and
-`write_abort`. `apply_patch` accepts a compact patch envelope in `patch_text`
+`write_abort`. `read` returns UTF-8 text for text files and structured media
+references for supported image files so vision-capable providers can inspect
+screenshots and visual artifacts without inlining image bytes into history.
+`apply_patch` accepts a compact patch envelope in `patch_text`
 with `*** Begin Patch` / `*** End Patch` markers and supports add, update,
 delete, and move operations. It validates the whole patch before writing,
 rejects paths outside the workspace, and returns a short changed-file summary

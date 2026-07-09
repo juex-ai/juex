@@ -1579,7 +1579,7 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 		t.Fatalf("Complete: %v", err)
 	}
 	input, _ := capturedBody["input"].([]any)
-	if len(input) != 3 {
+	if len(input) != 4 {
 		t.Fatalf("input = %+v", input)
 	}
 	content, _ := input[0].(map[string]any)["content"].([]any)
@@ -1591,6 +1591,20 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 	}
 	if input[2].(map[string]any)["type"] != "function_call_output" || !strings.Contains(fmt.Sprint(input[2].(map[string]any)["output"]), "tool_result_image") {
 		t.Fatalf("responses tool result output = %+v", input[2])
+	}
+	toolImageMessage, _ := input[3].(map[string]any)
+	if toolImageMessage["role"] != "user" {
+		t.Fatalf("responses tool result image message = %+v", toolImageMessage)
+	}
+	toolImageContent, _ := toolImageMessage["content"].([]any)
+	if len(toolImageContent) != 2 || toolImageContent[0].(map[string]any)["type"] != "input_text" || toolImageContent[1].(map[string]any)["type"] != "input_image" {
+		t.Fatalf("responses tool result image content = %+v", toolImageContent)
+	}
+	if !strings.Contains(fmt.Sprint(toolImageContent[0].(map[string]any)["text"]), "render_chart") {
+		t.Fatalf("responses tool result image attribution = %+v", toolImageContent[0])
+	}
+	if !strings.HasPrefix(fmt.Sprint(toolImageContent[1].(map[string]any)["image_url"]), "data:image/png;base64,") {
+		t.Fatalf("responses tool result input_image = %+v", toolImageContent[1])
 	}
 }
 

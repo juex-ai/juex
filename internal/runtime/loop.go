@@ -569,6 +569,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		block.Content = toolErrorContent(block.Content, toolErr)
 		block.IsError = true
 	}
+	if !block.IsError {
+		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
+			block.Media = media
+		}
+	}
 	observation := toolObservationForResult(call, block, info, toolErr)
 	e.emitToolFinished(turnID, call, block, observation, info)
 	return toolCallResult{Block: block, Observation: observation}
