@@ -193,7 +193,7 @@ func TestStatusSnapshotTextUsesCompactModelAndCacheHit(t *testing.T) {
 	}).Text()
 	for _, want := range []string{
 		statusLabel(statusIconProvider, "model: ark:deepseek-v4-pro"),
-		statusLabel(statusIconContext, "context: 32k/256k tokens, cache hit 37.5%"),
+		statusLabel(statusIconContext, "context: ~32k/256k tokens, cache hit 37.5%"),
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("status text missing %q:\n%s", want, text)
@@ -216,7 +216,7 @@ func TestStatusSnapshotContextCacheHitUsesCachedInputTokens(t *testing.T) {
 			TotalTokens:       120_500,
 		},
 	}).Text()
-	want := statusLabel(statusIconContext, "context: 120.5k/1m tokens, cache hit 0%")
+	want := statusLabel(statusIconContext, "context: ~120.5k/1m tokens, cache hit 0%")
 	if !strings.Contains(text, want) {
 		t.Fatalf("status text missing %q:\n%s", want, text)
 	}

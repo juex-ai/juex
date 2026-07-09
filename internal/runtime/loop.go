@@ -102,6 +102,9 @@ type Engine struct {
 
 	autoCompactFailures int
 	toolFailures        *toolFailureLedger
+
+	tokenCalibrationMu sync.RWMutex
+	tokenCalibration   tokenEstimateCalibration
 }
 
 type HookRunner interface {
@@ -312,8 +315,9 @@ type preparedTurnContext struct {
 }
 
 type providerTurnRequest struct {
-	iter    int
-	history []llm.Message
+	iter                 int
+	history              []llm.Message
+	estimatedInputTokens int
 }
 
 type recordedProviderResponse struct {
@@ -398,7 +402,8 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 	e.emitProjectionApplied(turnID, projection)
 	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
 	e.emitProjectionApplied(turnID, projection)
-	return providerTurnRequest{iter: iter, history: projectedHistory}, nil
+	estimatedInputTokens := estimateContextTokens(prepared.systemPrompt, prepared.tools, projectedHistory)
+	return providerTurnRequest{iter: iter, history: projectedHistory, estimatedInputTokens: estimatedInputTokens}, nil
 }
 
 func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
@@ -431,9 +436,10 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		msg.Model = e.Provider.Name()
 	}
 	msg.Blocks = prepareToolInputs(msg.Blocks, e.Tools)
+	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
 	var contextUsage *llm.ContextUsage
 	if !resp.Usage.IsZero() {
-		snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, prepared.promptSections, prepared.tools, request.history)
+		snapshot := e.contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, prepared.promptSections, prepared.tools, request.history)
 		contextUsage = &snapshot
 	}
 	totalUsage := e.Session.RecordResponseUsage(resp.Usage, contextUsage)

@@ -32,7 +32,7 @@ func (e *Engine) maybeCompact(ctx context.Context, turnID, systemPrompt string, 
 	}
 
 	projected := e.activeContextLocked(incoming).Messages
-	estimated := estimateContextTokens(systemPrompt, tools, projected)
+	estimated := e.estimateContextTokens(systemPrompt, tools, projected)
 	if estimated < policy.TriggerTokens {
 		return nil
 	}
@@ -103,7 +103,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}
-	tokensBefore := estimateContextTokens(systemPrompt, nil, e.activeContextLocked().Messages)
+	tokensBefore := e.estimateContextTokens(systemPrompt, nil, e.activeContextLocked().Messages)
 	e.emit(events.Event{Type: "context.compact.started", TurnID: turnID, Payload: ContextCompactStartedPayload{
 		Reason:           reason,
 		Auto:             auto,
@@ -163,7 +163,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt, reason
 	simulated := make([]llm.Message, 0, len(e.Session.History)+1)
 	simulated = append(simulated, e.Session.History...)
 	simulated = append(simulated, msg)
-	tokensAfter := estimateContextTokens(systemPrompt, nil, assembleActiveContext(simulated, nil).Messages)
+	tokensAfter := e.estimateContextTokens(systemPrompt, nil, assembleActiveContext(simulated, nil).Messages)
 	msg.Compaction.TokensAfter = tokensAfter
 	if err := e.Session.Append(msg); err != nil {
 		err := fmt.Errorf("session append compact: %w", err)
@@ -263,7 +263,7 @@ func ensureCompactionProgress(sel compactionSelection) compactionSelection {
 }
 
 func estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
-	return EstimateCharsAsTokens(len(systemPrompt)) +
+	return EstimateTextTokens(systemPrompt) +
 		estimateToolTokens(tools) +
 		estimateMessageTokens(history)
 }
