@@ -67,6 +67,29 @@ export function messageGroupShouldShowModel(group: MessageGroup): boolean {
   return group.role === "assistant" && !group.kind && Boolean(group.model);
 }
 
+export function messageGroupModelLabels(
+  groups: readonly MessageGroup[],
+): Array<string | undefined> {
+  let previousAssistantModel: string | undefined;
+  let inAssistantRun = false;
+
+  return groups.map((group) => {
+    if (!messageGroupShouldShowModel(group)) {
+      previousAssistantModel = undefined;
+      inAssistantRun = false;
+      return undefined;
+    }
+
+    const model = group.model;
+    if (inAssistantRun && previousAssistantModel === model) {
+      return undefined;
+    }
+    previousAssistantModel = model;
+    inAssistantRun = true;
+    return model;
+  });
+}
+
 export function externalEventRowClassName() {
   return EXTERNAL_EVENT_ROW_CLASS_NAME;
 }
