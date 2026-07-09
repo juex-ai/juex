@@ -226,12 +226,13 @@ func ensureSessionMediaDir(workDir, sessionID string) (string, error) {
 }
 
 func writeIfMissing(path string, data []byte) error {
-	matches, err := existingMediaMatches(path, data)
-	if err != nil {
-		return err
-	}
-	if matches {
+	if info, err := os.Stat(path); err == nil {
+		if info.IsDir() {
+			return errors.New("user media: media path is a directory")
+		}
 		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("user media: stat media: %w", err)
 	}
 
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".media-upload-*.tmp")
@@ -256,39 +257,16 @@ func writeIfMissing(path string, data []byte) error {
 	closed = true
 
 	if err := os.Rename(tmpPath, path); err != nil {
-		matches, matchErr := existingMediaMatches(path, data)
-		if matchErr != nil {
-			return matchErr
-		}
-		if matches {
+		if info, statErr := os.Stat(path); statErr == nil && !info.IsDir() {
 			return nil
+		} else if statErr == nil && info.IsDir() {
+			return errors.New("user media: media path is a directory")
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("user media: stat media: %w", statErr)
 		}
-		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-			return fmt.Errorf("user media: replace existing media: %w", removeErr)
-		}
-		if renameErr := os.Rename(tmpPath, path); renameErr != nil {
-			return fmt.Errorf("user media: rename media: %w", renameErr)
-		}
+		return fmt.Errorf("user media: rename media: %w", err)
 	}
 	return nil
-}
-
-func existingMediaMatches(path string, data []byte) (bool, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("user media: stat media: %w", err)
-	}
-	if info.IsDir() {
-		return false, errors.New("user media: media path is a directory")
-	}
-	existing, err := os.ReadFile(path)
-	if err != nil {
-		return false, fmt.Errorf("user media: read existing media: %w", err)
-	}
-	return bytes.Equal(existing, data), nil
 }
 
 func cleanSessionArtifactPath(sessionID, artifactPath string) (string, error) {

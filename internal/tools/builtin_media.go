@@ -95,11 +95,11 @@ func readImageResult(workDir string, source []byte, kind readImageKind) (Result,
 	sum := sha256.Sum256(artifactData)
 	sha := hex.EncodeToString(sum[:])
 	artifactPath := filepath.ToSlash(filepath.Join(".juex", "artifacts", "media", "read", sha+kind.ext))
-	root, err := mediaArtifactRoot(workDir)
+	root, err := ensureReadMediaArtifactDir(workDir)
 	if err != nil {
 		return Result{}, err
 	}
-	absArtifact := filepath.Join(root, filepath.FromSlash(artifactPath))
+	absArtifact := filepath.Join(root, sha+kind.ext)
 	if err := writeContentAddressedArtifact(absArtifact, artifactData); err != nil {
 		return Result{}, err
 	}
@@ -176,6 +176,31 @@ func mediaArtifactRoot(workDir string) (string, error) {
 		return "", err
 	}
 	return cwd, nil
+}
+
+func ensureReadMediaArtifactDir(workDir string) (string, error) {
+	root, err := mediaArtifactRoot(workDir)
+	if err != nil {
+		return "", err
+	}
+	dir := root
+	for _, elem := range []string{".juex", "artifacts", "media", "read"} {
+		dir = filepath.Join(dir, elem)
+		if err := os.Mkdir(dir, 0o755); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("%s is a symlink", dir)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("%s is not a directory", dir)
+		}
+	}
+	return dir, nil
 }
 
 func imageConfigDimensions(mediaType string, data []byte) (int, int) {

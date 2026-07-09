@@ -811,6 +811,46 @@ func TestBuiltins_ReadImageReturnsMediaResult(t *testing.T) {
 	}
 }
 
+func TestBuiltins_ReadImageRejectsSymlinkedMediaArtifactRoots(t *testing.T) {
+	source := testPNG(t, 2, 1)
+	cases := []string{
+		".juex",
+		filepath.Join(".juex", "artifacts"),
+		filepath.Join(".juex", "artifacts", "media"),
+		filepath.Join(".juex", "artifacts", "media", "read"),
+	}
+	for _, linkRel := range cases {
+		t.Run(linkRel, func(t *testing.T) {
+			workDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(workDir, "shot.png"), source, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			outside := t.TempDir()
+			linkPath := filepath.Join(workDir, linkRel)
+			if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, linkPath); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+
+			r := NewRegistry()
+			registerTestBuiltins(r, workDir)
+			_, _, err := r.CallWithInfo(context.Background(), "read", map[string]any{"path": "shot.png"})
+			if err == nil {
+				t.Fatalf("read accepted symlinked media artifact root %s", linkRel)
+			}
+			entries, readErr := os.ReadDir(outside)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("read wrote through symlinked media artifact root %s into %s", linkRel, outside)
+			}
+		})
+	}
+}
+
 func TestBuiltins_ReadImageRequiresMagicBytes(t *testing.T) {
 	workDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workDir, "fake.png"), []byte("not really an image"), 0o644); err != nil {
