@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 // errorJSON is the wire shape for every error response.
@@ -466,7 +467,8 @@ func (s *Server) sessionInfo(id string) (session.Info, error) {
 
 // turnRequest is the wire shape for POST /turns.
 type turnRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt      string         `json:"prompt"`
+	Attachments []llm.MediaRef `json:"attachments,omitempty"`
 }
 
 type startTurnResponse struct {
@@ -493,17 +495,82 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	var req turnRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Prompt == "" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body with non-empty prompt")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body")
+		return
+	}
+	if len(req.Attachments) > 0 {
+		if err := usermedia.ValidateSessionMediaRefs(s.opts.Cfg.WorkDir, id, req.Attachments, usermedia.Limits{}); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
+	if strings.TrimSpace(req.Prompt) == "" && len(req.Attachments) == 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body with non-empty prompt or attachments")
 		return
 	}
 
 	result := as.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
-		Prompt: req.Prompt,
-		IDs:    app.TurnIDFunc(s.nextTurnID),
+		Prompt:      req.Prompt,
+		Attachments: req.Attachments,
+		IDs:         app.TurnIDFunc(s.nextTurnID),
 	})
 	s.applyTurnAdmissionResult(as, result)
 	s.writeTurnAdmissionResult(w, result)
+}
+
+func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Request, id string) {
+	if _, ok, msg := s.webTurnAllowed(id); !ok {
+		if msg == "" {
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		} else {
+			writeErr(w, http.StatusConflict, "conflict", msg)
+		}
+		return
+	}
+	if _, err := s.getActiveSession(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, usermedia.DefaultMaxBytes+1024*1024)
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body too large")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "bad_request", "expected multipart file field named file")
+		return
+	}
+
+	filename := ""
+	if header != nil {
+		filename = header.Filename
+	}
+	ref, err := usermedia.StoreUpload(s.opts.Cfg.WorkDir, id, filename, file, usermedia.Limits{})
+	closeErr := file.Close()
+	if err != nil {
+		status := http.StatusBadRequest
+		kind := "bad_request"
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "unsupported image type"):
+			status = http.StatusUnsupportedMediaType
+			kind = "unsupported_media_type"
+		case strings.Contains(msg, "exceeds"):
+			status = http.StatusRequestEntityTooLarge
+			kind = "payload_too_large"
+		}
+		writeErr(w, status, kind, msg)
+		return
+	}
+	if closeErr != nil {
+		writeErr(w, http.StatusInternalServerError, "internal_error", "failed to close uploaded file")
+		return
+	}
+	writeJSON(w, http.StatusOK, ref)
 }
 
 func (s *Server) nextTurnID(prefix string) string {

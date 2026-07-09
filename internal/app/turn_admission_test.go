@@ -43,6 +43,62 @@ func TestAdmitTurnStartsWhenIdle(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnStartsWithImageAttachments(t *testing.T) {
+	a, _ := newStubApp(t)
+	ids := &testTurnIDs{}
+	media := turnAdmissionMediaRef()
+
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt:      "describe this",
+		Attachments: []llm.MediaRef{media},
+		IDs:         ids,
+	})
+
+	if result.Kind != TurnAdmissionStarted {
+		t.Fatalf("kind = %s, want %s; error=%+v", result.Kind, TurnAdmissionStarted, result.Error)
+	}
+	if result.Start == nil || result.Start.TurnID != "turn-1" {
+		t.Fatalf("start = %+v", result.Start)
+	}
+	blocks := result.Start.Message.Blocks
+	if len(blocks) != 2 || blocks[0].Type != llm.BlockText || blocks[0].Text != "describe this" ||
+		blocks[1].Type != llm.BlockImage || blocks[1].Media == nil || blocks[1].Media.ArtifactPath != media.ArtifactPath {
+		t.Fatalf("message blocks = %+v", blocks)
+	}
+}
+
+func TestAdmitTurnStartsWithImageOnlyInput(t *testing.T) {
+	a, _ := newStubApp(t)
+	media := turnAdmissionMediaRef()
+
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Attachments: []llm.MediaRef{media},
+		IDs:         &testTurnIDs{},
+	})
+
+	if result.Kind != TurnAdmissionStarted {
+		t.Fatalf("kind = %s, want %s; error=%+v", result.Kind, TurnAdmissionStarted, result.Error)
+	}
+	blocks := result.Start.Message.Blocks
+	if len(blocks) != 1 || blocks[0].Type != llm.BlockImage || blocks[0].Media == nil || blocks[0].Media.ArtifactPath != media.ArtifactPath {
+		t.Fatalf("message blocks = %+v", blocks)
+	}
+}
+
+func TestAdmitTurnRejectsSlashCommandWithAttachments(t *testing.T) {
+	a, _ := newStubApp(t)
+
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt:      "/status",
+		Attachments: []llm.MediaRef{turnAdmissionMediaRef()},
+		IDs:         &testTurnIDs{},
+	})
+
+	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestCompleteAdmittedTurnAllowsNextTurn(t *testing.T) {
 	a, _ := newStubApp(t, llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
@@ -89,6 +145,40 @@ func TestAdmitTurnQueuesWhileRunning(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnQueuesImageBlocksWhileRunning(t *testing.T) {
+	a, _ := newStubApp(t)
+	ids := &testTurnIDs{}
+	start := a.AdmitTurn(context.Background(), TurnAdmissionRequest{Prompt: "first", IDs: ids})
+	if start.Kind != TurnAdmissionStarted {
+		t.Fatalf("start = %+v", start)
+	}
+	media := turnAdmissionMediaRef()
+
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt:      "second",
+		Attachments: []llm.MediaRef{media},
+		IDs:         ids,
+	})
+
+	if result.Kind != TurnAdmissionQueued {
+		t.Fatalf("kind = %s, want %s; error=%+v", result.Kind, TurnAdmissionQueued, result.Error)
+	}
+	records, err := a.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %d, want 1", len(records))
+	}
+	for _, record := range records {
+		blocks := record.Message.Blocks
+		if len(blocks) != 2 || blocks[0].Type != llm.BlockText || blocks[0].Text != "second" ||
+			blocks[1].Type != llm.BlockImage || blocks[1].Media == nil || blocks[1].Media.ArtifactPath != media.ArtifactPath {
+			t.Fatalf("queued message blocks = %+v", blocks)
+		}
+	}
+}
+
 func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 	a, _ := newStubApp(t)
 	ids := &testTurnIDs{}
@@ -111,6 +201,33 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 	}
 	if status := a.Engine.PendingInputStatus(); status.TurnID != "turn-1" || status.PendingCount != 0 {
 		t.Fatalf("runtime pending status = %+v", status)
+	}
+}
+
+func TestAdmitTurnQueuesImageBlocksDuringCompactAndPromotesPendingInput(t *testing.T) {
+	a, _ := newStubApp(t)
+	ids := &testTurnIDs{}
+	compactID := ids.NextTurnID("compact")
+	if err := a.beginCompactAdmission(compactID); err != nil {
+		t.Fatal(err)
+	}
+	media := turnAdmissionMediaRef()
+
+	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Attachments: []llm.MediaRef{media},
+		IDs:         ids,
+	})
+	if queued.Kind != TurnAdmissionQueued || queued.TurnID != compactID {
+		t.Fatalf("queued = %+v", queued)
+	}
+
+	promoted := a.finishCompactAdmission(compactID, ids)
+	if promoted == nil || promoted.TurnID != "turn-1" {
+		t.Fatalf("promoted = %+v", promoted)
+	}
+	blocks := promoted.Message.Blocks
+	if len(blocks) != 1 || blocks[0].Type != llm.BlockImage || blocks[0].Media == nil || blocks[0].Media.ArtifactPath != media.ArtifactPath {
+		t.Fatalf("promoted message blocks = %+v", blocks)
 	}
 }
 
@@ -137,6 +254,17 @@ func TestAdmitTurnStatusSlashAllowedWhileRunning(t *testing.T) {
 	}
 	if prov.calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", prov.calls)
+	}
+}
+
+func turnAdmissionMediaRef() llm.MediaRef {
+	return llm.MediaRef{
+		ArtifactPath:  ".juex/artifacts/media/session-1/image.png",
+		MediaType:     "image/png",
+		SHA256:        strings.Repeat("a", 64),
+		OriginalBytes: 123,
+		Width:         2,
+		Height:        3,
 	}
 }
 

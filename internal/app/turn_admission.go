@@ -30,8 +30,9 @@ type TurnIDFunc func(prefix string) string
 func (f TurnIDFunc) NextTurnID(prefix string) string { return f(prefix) }
 
 type TurnAdmissionRequest struct {
-	Prompt string
-	IDs    TurnIDAllocator
+	Prompt      string
+	Attachments []llm.MediaRef
+	IDs         TurnIDAllocator
 }
 
 type AdmittedTurn struct {
@@ -87,11 +88,18 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 		ctx = context.Background()
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
-	if req.Prompt == "" {
-		return rejectedResult("bad_request", "expected non-empty prompt", "", false, nil, runtime.PendingInputStatus{})
+	if req.Prompt == "" && len(req.Attachments) == 0 {
+		return rejectedResult("bad_request", "expected non-empty prompt or attachment", "", false, nil, runtime.PendingInputStatus{})
 	}
 	if req.IDs == nil {
 		return errorResult(fmt.Errorf("turn admission: missing turn id allocator"), nil)
+	}
+
+	if len(req.Attachments) > 0 {
+		if _, handled, err := ParseSlashCommand(req.Prompt); handled || err != nil {
+			return rejectedResult("bad_request", "slash commands cannot include attachments", "send the image as a normal message or run the slash command without attachments", false, nil, runtime.PendingInputStatus{})
+		}
+		return a.admitUserTurn(ctx, userTurnMessage(req.Prompt, req.Attachments), req.IDs)
 	}
 
 	cmd, handled, err := ParseSlashCommand(req.Prompt)
@@ -101,7 +109,7 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 	if handled {
 		return a.admitSlashTurn(ctx, cmd, req.IDs)
 	}
-	return a.admitUserTurn(ctx, req.Prompt, req.IDs)
+	return a.admitUserTurn(ctx, userTurnMessage(req.Prompt, nil), req.IDs)
 }
 
 func (a *App) CompleteAdmittedTurn(turnID string) {
@@ -116,8 +124,8 @@ func (a *App) FinishCompactAdmission(compactTurnID string, ids TurnIDAllocator) 
 	return a.finishCompactAdmission(compactTurnID, ids)
 }
 
-func (a *App) admitUserTurn(ctx context.Context, prompt string, ids TurnIDAllocator) TurnAdmissionResult {
-	return a.admissionQueue().admitUser(ctx, prompt, ids)
+func (a *App) admitUserTurn(ctx context.Context, msg llm.Message, ids TurnIDAllocator) TurnAdmissionResult {
+	return a.admissionQueue().admitUser(ctx, msg, ids)
 }
 
 func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {
@@ -133,10 +141,21 @@ func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAl
 	case SlashCompact:
 		return a.admitCompactSlash(ctx, cmd, ids)
 	case SlashGoal:
-		return a.admitUserTurn(ctx, GoalInstructionPrompt(cmd.Args), ids)
+		return a.admitUserTurn(ctx, llm.TextMessage(llm.RoleUser, GoalInstructionPrompt(cmd.Args)), ids)
 	default:
 		return errorResult(&UnknownSlashCommandError{Input: cmd.Name}, nil)
 	}
+}
+
+func userTurnMessage(prompt string, attachments []llm.MediaRef) llm.Message {
+	blocks := make([]llm.Block, 0, 1+len(attachments))
+	if prompt = strings.TrimSpace(prompt); prompt != "" {
+		blocks = append(blocks, llm.Block{Type: llm.BlockText, Text: prompt})
+	}
+	for i := range attachments {
+		blocks = append(blocks, llm.Block{Type: llm.BlockImage, Media: &attachments[i]})
+	}
+	return llm.Message{Role: llm.RoleUser, Blocks: blocks}
 }
 
 func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {

@@ -21,9 +21,16 @@ import {
   resetSessionReadState,
 } from "../../frontend/src/lib/session-read-state.ts";
 import type {
+  MediaRef,
   Message,
   SessionShowResponse,
 } from "../../frontend/src/types.ts";
+
+const imageMedia: MediaRef = {
+  artifact_path: ".juex/artifacts/media/session/image.png",
+  media_type: "image/png",
+  sha256: "abc",
+};
 
 test("resetSessionReadState starts active turn reconciliation", () => {
   const state = resetSessionReadState(createSessionReadState(), {
@@ -208,6 +215,19 @@ test("projectStartTurnSucceeded records queued and optimistic turns", () => {
   assert.equal(result.state.projection.turnActive, true);
   assert.equal(result.state.projection.messages.at(-2)?.turn_id, "turn-2");
   assert.deepEqual(result.effects, []);
+});
+
+test("projectStartTurnSucceeded records optimistic image attachments", () => {
+  const result = projectStartTurnSucceeded(
+    createSessionReadState(),
+    "",
+    { turn_id: "turn-image" },
+    [imageMedia],
+  );
+
+  const user = result.state.projection.messages.at(-2);
+  assert.deepEqual(user?.blocks, [{ type: "image", media: imageMedia }]);
+  assert.equal(result.state.projection.turnActive, true);
 });
 
 test("projectStartTurnSucceeded emits navigation effect for /new", () => {

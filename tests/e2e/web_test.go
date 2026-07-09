@@ -5,7 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,18 +26,32 @@ import (
 )
 
 type webProvider struct {
-	steps []llm.Response
-	calls int
+	steps     []llm.Response
+	calls     int
+	histories [][]llm.Message
+	mu        sync.Mutex
 }
 
 func (p *webProvider) Name() string { return "web-test" }
 func (p *webProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.calls >= len(p.steps) {
 		return llm.Response{}, context.DeadlineExceeded
 	}
+	p.histories = append(p.histories, append([]llm.Message(nil), h...))
 	r := p.steps[p.calls]
 	p.calls++
 	return r, nil
+}
+
+func (p *webProvider) history(idx int) []llm.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if idx < 0 || idx >= len(p.histories) {
+		return nil
+	}
+	return append([]llm.Message(nil), p.histories[idx]...)
 }
 
 func TestWeb_TurnRoundTripPersists(t *testing.T) {
@@ -95,6 +113,93 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestWeb_ComposerImageUpload(t *testing.T) {
+	work := t.TempDir()
+	prov := &webProvider{steps: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "image noted"), StopReason: llm.StopEndTurn},
+	}}
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createWebSession(t, ts.URL)
+	media := uploadWebSessionImage(t, ts.URL, sessionID)
+	body, err := json.Marshal(struct {
+		Prompt      string         `json:"prompt"`
+		Attachments []llm.MediaRef `json:"attachments"`
+	}{Prompt: "describe this", Attachments: []llm.MediaRef{media}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/sessions/"+sessionID+"/turns", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("turn POST status = %d body=%s", resp.StatusCode, body)
+	}
+	var turn webStartTurnResponse
+	if err := json.NewDecoder(resp.Body).Decode(&turn); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if turn.TurnID == "" {
+		t.Fatal("turn response missing turn id")
+	}
+
+	waitForWebTranscript(t, ts.URL, sessionID, turn.TurnID, 30*time.Second, "image upload turn", func(messages []webTranscriptMessage) bool {
+		hasAssistant := false
+		for _, msg := range messages {
+			if msg.Role != "assistant" {
+				continue
+			}
+			for _, block := range msg.Blocks {
+				if block.Type == "text" && block.Text == "image noted" {
+					hasAssistant = true
+				}
+			}
+		}
+		if !hasAssistant {
+			return false
+		}
+		for _, msg := range messages {
+			if msg.Role != "user" {
+				continue
+			}
+			hasText := false
+			hasImage := false
+			for _, block := range msg.Blocks {
+				if block.Type == "text" && block.Text == "describe this" {
+					hasText = true
+				}
+				if block.Type == "image" && block.Media != nil && block.Media.ArtifactPath == media.ArtifactPath {
+					hasImage = true
+				}
+			}
+			if hasText && hasImage {
+				return true
+			}
+		}
+		return false
+	})
+
+	history := prov.history(0)
+	if len(history) == 0 {
+		t.Fatal("provider history missing")
+	}
+	user := history[len(history)-1]
+	if len(user.Blocks) != 2 || user.Blocks[0].Type != llm.BlockText || user.Blocks[1].Type != llm.BlockImage ||
+		user.Blocks[1].Media == nil || user.Blocks[1].Media.ArtifactPath != media.ArtifactPath {
+		t.Fatalf("provider user message = %+v", user)
+	}
 }
 
 type pendingWebProvider struct {
@@ -384,8 +489,9 @@ type webStartTurnResponse struct {
 type webTranscriptMessage struct {
 	Role   string `json:"role"`
 	Blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string        `json:"type"`
+		Text  string        `json:"text"`
+		Media *llm.MediaRef `json:"media,omitempty"`
 	} `json:"blocks"`
 }
 
@@ -448,6 +554,81 @@ func fetchWebTranscript(client *http.Client, baseURL, sessionID string) ([]webTr
 		return nil, err
 	}
 	return parsed.Messages, nil
+}
+
+func createWebSession(t *testing.T, baseURL string) string {
+	t.Helper()
+	created, err := http.Post(baseURL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Body.Close()
+	if created.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(created.Body)
+		t.Fatalf("create session status = %d body=%s", created.StatusCode, body)
+	}
+	var c struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	if c.ID == "" {
+		t.Fatal("no session id")
+	}
+	return c.ID
+}
+
+func uploadWebSessionImage(t *testing.T, baseURL, sessionID string) llm.MediaRef {
+	t.Helper()
+	resp := postWebSessionAttachment(t, baseURL, sessionID, "screen.png", webUploadPNG(t))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload status = %d body=%s", resp.StatusCode, body)
+	}
+	var ref llm.MediaRef
+	if err := json.NewDecoder(resp.Body).Decode(&ref); err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+func postWebSessionAttachment(t *testing.T, baseURL, sessionID, filename string, data []byte) *http.Response {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/sessions/"+sessionID+"/attachments", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func webUploadPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 3))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func fetchObservableRecords(baseURL, id string) ([]observable.ObservationRecord, error) {

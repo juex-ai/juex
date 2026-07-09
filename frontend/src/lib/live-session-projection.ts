@@ -21,7 +21,9 @@ import {
 } from "./queued-inputs.ts";
 import type {
   BrowserEvent,
+  Block,
   ContextUsage,
+  MediaRef,
   Message,
   SessionTurnStatus,
   TokenUsage,
@@ -160,10 +162,18 @@ export function projectOptimisticTurn(
   turnID: string | undefined,
   input: string | undefined,
   kind?: string,
+  attachments: MediaRef[] = [],
 ): LiveSessionProjection {
   return {
     ...state,
-    messages: appendLiveTurnToMessages(state.messages, turnID, input, kind, "optimistic"),
+    messages: appendLiveTurnToMessages(
+      state.messages,
+      turnID,
+      input,
+      kind,
+      "optimistic",
+      attachments,
+    ),
     turnActive: true,
     status: { kind: "running" },
   };
@@ -174,6 +184,7 @@ export function projectQueuedInput(
   input: string | undefined,
   kind: string | undefined,
   pendingCount: number,
+  attachments: MediaRef[] = [],
 ): LiveSessionProjection {
   return {
     ...state,
@@ -182,6 +193,7 @@ export function projectQueuedInput(
       input,
       kind,
       pendingCount,
+      attachments,
     ),
     turnActive: true,
     status: { kind: "pending", count: pendingCount },
@@ -508,7 +520,7 @@ function appendDrainedInputs(
     role: "user",
     turn_id: turnID,
     kind: item.kind || "pending_input",
-    blocks: [{ type: "text", text: item.input }],
+    blocks: inputBlocks(item.input, item.attachments),
   }));
   if (!turnID) return [...messages, ...additions];
   const insertAt = messages.findIndex(
@@ -531,10 +543,14 @@ function appendLiveTurnToMessages(
   input: string | undefined,
   kind: string | undefined,
   source: "event" | "optimistic",
+  attachments: MediaRef[] = [],
 ): Message[] {
-  if (!turnID || !input) return messages;
+  const blocks = inputBlocks(input, attachments);
+  if (!turnID || blocks.length === 0) return messages;
   if (messages.some((message) => message.turn_id === turnID)) return messages;
-  const existingTurnID = findPendingTurnForInput(messages, input);
+  const existingTurnID = input
+    ? findPendingTurnForInput(messages, input)
+    : undefined;
   if (existingTurnID) {
     if (source === "optimistic") return messages;
     return messages.map((message) =>
@@ -547,7 +563,7 @@ function appendLiveTurnToMessages(
       role: "user",
       turn_id: turnID,
       kind,
-      blocks: [{ type: "text", text: input }],
+      blocks,
     },
     {
       role: "assistant",
@@ -556,6 +572,20 @@ function appendLiveTurnToMessages(
       blocks: [],
     },
   ];
+}
+
+function inputBlocks(
+  input: string | undefined,
+  attachments: MediaRef[] | undefined,
+): Block[] {
+  const blocks: Block[] = [];
+  if (input) {
+    blocks.push({ type: "text", text: input });
+  }
+  for (const media of attachments ?? []) {
+    blocks.push({ type: "image", media });
+  }
+  return blocks;
 }
 
 function ensurePendingAssistant(messages: Message[], turnID: string): Message[] {
