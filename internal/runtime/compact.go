@@ -8,6 +8,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
 )
 
@@ -245,7 +246,7 @@ func ensureCompactionProgress(sel compactionSelection) compactionSelection {
 	if keepStart < 0 {
 		keepStart = 0
 	}
-	for keepStart > 0 && startsWithToolResult(sel.RetainedTail[keepStart]) {
+	for keepStart > 0 && contextbudget.StartsWithToolResult(sel.RetainedTail[keepStart]) {
 		keepStart--
 	}
 	sel.SummaryInput = append(sel.SummaryInput, sel.RetainedTail[:keepStart]...)
@@ -260,10 +261,4 @@ func ensureCompactionProgress(sel compactionSelection) compactionSelection {
 	sel.FirstKeptMessageID = sel.RetainedTail[0].ID
 	sel.TailStartMessageID = sel.RetainedTail[0].ID
 	return sel
-}
-
-func estimateContextTokens(systemPrompt string, tools []llm.ToolSpec, history []llm.Message) int {
-	return EstimateTextTokens(systemPrompt) +
-		estimateToolTokens(tools) +
-		estimateMessageTokens(history)
 }

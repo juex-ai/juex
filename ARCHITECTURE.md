@@ -101,11 +101,13 @@ juex/
 │   │   ├── info.go
 │   │   ├── transcript_repair.go
 │   │   └── lock*.go
-│   ├── runtime/                  # turn loop, pending input, compaction, context projection
+│   ├── runtime/                  # turn loop, pending input, context projection, runtime glue
 │   │   ├── loop.go
 │   │   ├── active_context.go
 │   │   ├── compact.go
 │   │   ├── compaction_*.go
+│   │   ├── contextbudget/        # compaction policy, active context, token/context budgets
+│   │   ├── workmem/              # goal_state.json and working_state.json domains
 │   │   └── context_*.go
 │   ├── sandbox/                 # command sandbox policy, backend selection, wrapping errors
 │   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
@@ -736,7 +738,11 @@ UI or API cancellation.
 Compaction policy defaults and the default context-window token count live on
 the runtime side. `config.CompactionConfig` is an alias used while parsing YAML
 and environment input; `internal/app` passes the resolved value into
-`runtime.Engine`.
+`runtime.Engine`. Pure context budget behavior lives in
+`internal/runtime/contextbudget`: policy clamping, compaction input selection,
+summary request shaping, active-context assembly, token estimation, and context
+usage breakdowns. `internal/runtime` keeps the Engine locks, provider calls,
+events, online token-calibration glue, and compatibility wrappers.
 
 Tool and provider adapters keep their own safeguards. Hooks and MCP
 startup/tool calls retain adapter-level timeouts, and provider transports may
@@ -1163,9 +1169,11 @@ expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
 The runtime also maintains an optional session-local `working_state.json`
-sidecar. It stores generic records for goal, hard constraints, artifacts,
-checks, open issues, last successful checks, and stale checks, each with
-source, confidence, severity, related paths, created time, and resolved time.
+sidecar. The persistence, merge, pruning, rendering, and redaction rules for it
+live in `internal/runtime/workmem`, alongside the `goal_state.json` store. The
+sidecar stores generic records for goal, hard constraints, artifacts, checks,
+open issues, last successful checks, and stale checks, each with source,
+confidence, severity, related paths, created time, and resolved time.
 Tool results update only generic runtime facts: failures become open issues,
 write/edit successes mark related checks stale, and later successful checks
 refresh `last_successful_checks`. Command hooks can output a `working_state`
