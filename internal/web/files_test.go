@@ -166,6 +166,96 @@ func TestFilesRawServesImage(t *testing.T) {
 	}
 }
 
+func TestMediaServesWorkDirImageWithImmutableCache(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/media?path=screenshots%2Fpreview.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("cache-control = %q", got)
+	}
+	if got := resp.Header.Get("ETag"); got != `"1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"` {
+		t.Fatalf("etag = %q", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(body, tinyPNG) {
+		t.Fatalf("media body = %x, want %x", body, tinyPNG)
+	}
+}
+
+func TestMediaServesArtifactImage(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, ".juex", "artifacts", "media", "session", "image.png"), tinyPNG)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/media?path=.juex%2Fartifacts%2Fmedia%2Fsession%2Fimage.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
+	}
+}
+
+func TestMediaRejectsEscapesAndNonImages(t *testing.T) {
+	srv := newTestServer(t)
+	work := srv.opts.Cfg.WorkDir
+	outside := filepath.Join(t.TempDir(), "secret.png")
+	mustWriteBytes(t, outside, tinyPNG)
+	mustWriteFile(t, filepath.Join(work, "notes.txt"), "hello")
+	if err := os.Symlink(outside, filepath.Join(work, "secret-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	cases := []struct {
+		name string
+		path string
+		want int
+	}{
+		{name: "parent traversal", path: "../secret.png", want: http.StatusForbidden},
+		{name: "absolute path", path: "/etc/passwd", want: http.StatusForbidden},
+		{name: "outside symlink", path: "secret-link", want: http.StatusForbidden},
+		{name: "text", path: "notes.txt", want: http.StatusUnsupportedMediaType},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + "/api/media?path=" + tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.want)
+			}
+		})
+	}
+}
+
 func TestFilesRawRejectsEscapesAndNonImages(t *testing.T) {
 	srv := newTestServer(t)
 	work := srv.opts.Cfg.WorkDir

@@ -160,6 +160,8 @@ func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message
 			switch b.Type {
 			case llm.BlockText:
 				fmt.Fprintf(w, "%s> %s\n", role, b.Text)
+			case llm.BlockImage:
+				fmt.Fprintf(w, "%s> %s\n", role, llm.FormatImagePlaceholder(b.Media))
 			case llm.BlockReasoning:
 				if b.Redacted {
 					fmt.Fprintln(w, "thinking> [redacted]")
@@ -169,7 +171,15 @@ func renderSessionText(cmd *cobra.Command, info session.Info, msgs []llm.Message
 			case llm.BlockToolUse:
 				fmt.Fprintf(w, "tool> %s(%v)\n", b.ToolName, b.Input)
 			case llm.BlockToolResult:
-				fmt.Fprintf(w, "tool< %s\n", b.Content)
+				if b.Content != "" {
+					fmt.Fprintf(w, "tool< %s\n", b.Content)
+				}
+				if b.Media != nil {
+					fmt.Fprintf(w, "tool< %s\n", llm.FormatImagePlaceholder(b.Media))
+				}
+				if b.Content == "" && b.Media == nil {
+					fmt.Fprintln(w, "tool< ")
+				}
 			}
 		}
 	}
@@ -270,12 +280,22 @@ func renderActiveContextText(cmd *cobra.Command, snap runtime.ActiveContextSnaps
 			switch b.Type {
 			case llm.BlockText:
 				fmt.Fprintf(w, "%s> %s\n", role, b.Text)
+			case llm.BlockImage:
+				fmt.Fprintf(w, "%s> %s\n", role, llm.FormatImagePlaceholder(b.Media))
 			case llm.BlockReasoning:
 				fmt.Fprintf(w, "%s thinking> %s\n", role, b.Text)
 			case llm.BlockToolUse:
 				fmt.Fprintf(w, "%s tool> %s(%v)\n", role, b.ToolName, b.Input)
 			case llm.BlockToolResult:
-				fmt.Fprintf(w, "%s tool< %s\n", role, b.Content)
+				if b.Content != "" {
+					fmt.Fprintf(w, "%s tool< %s\n", role, b.Content)
+				}
+				if b.Media != nil {
+					fmt.Fprintf(w, "%s tool< %s\n", role, llm.FormatImagePlaceholder(b.Media))
+				}
+				if b.Content == "" && b.Media == nil {
+					fmt.Fprintf(w, "%s tool< \n", role)
+				}
 			}
 		}
 	}

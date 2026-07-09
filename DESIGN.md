@@ -15,7 +15,7 @@
 - Make message structure obvious at a glance: who said what, what tools ran,
   what the agent was thinking.
 - Render rich content properly — markdown, code blocks with syntax
-  highlighting, tables, lists.
+  highlighting, tables, lists, and image media references.
 - Honour OS dark/light mode automatically.
 - Adapt from desktop to tablet/mobile without horizontal page overflow.
 - Use the Juex Design System: forest `#064032`, gold `#f6d78e`, warm paper,
@@ -23,7 +23,7 @@
 
 **Non-goals (v0.1):**
 
-- File attachments, voice input, image rendering inside messages.
+- File attachments and voice input.
 - Multi-cursor / real-time collaboration.
 - Token-by-token streaming (events arrive at block granularity).
 

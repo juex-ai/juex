@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"mime"
@@ -217,6 +219,64 @@ func (s *Server) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
+}
+
+func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return
+	}
+
+	file, reqErr := s.resolveFileRequest(r)
+	if reqErr != nil {
+		reqErr.write(w)
+		return
+	}
+
+	f, err := os.Open(file.resolvedPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	defer f.Close()
+
+	sample := make([]byte, 512)
+	n, err := f.Read(sample)
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath)
+	if !ok {
+		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "media is only supported for images")
+		return
+	}
+	etag, err := fileETag(f)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
+}
+
+func fileETag(r io.ReadSeeker) (string, error) {
+	if _, err := r.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, r); err != nil {
+		return "", err
+	}
+	return `"` + hex.EncodeToString(h.Sum(nil)) + `"`, nil
 }
 
 type resolvedFileRequest struct {

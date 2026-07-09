@@ -87,7 +87,7 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
   );
 });
 
-test("messagesToGroups keeps image-only messages as media reference text", () => {
+test("messagesToGroups keeps image-only messages as image units", () => {
   const messages: Message[] = [
     {
       id: "image-only",
@@ -113,14 +113,9 @@ test("messagesToGroups keeps image-only messages as media reference text", () =>
   assert.equal(groups.length, 1);
   assert.equal(groups[0].units.length, 1);
   assert.deepEqual(groups[0].units[0], {
-    kind: "text",
-    block: {
-      type: "text",
-      text: "[image: path=.juex/artifacts/media/s/image.png type=image/png sha256=abc bytes=12 size=2x3]",
-    },
+    kind: "image",
+    block: messages[0].blocks?.[0],
   });
-  assert.equal(
-    messageGroupCopyText(groups[0]),
-    "[image: path=.juex/artifacts/media/s/image.png type=image/png sha256=abc bytes=12 size=2x3]",
-  );
+  assert.equal(messageGroupCopyText(groups[0]), "");
+  assert.equal(messageGroupCanCopy(groups[0]), false);
 });

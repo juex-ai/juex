@@ -1,6 +1,5 @@
 import type { ToolUIPartState } from "../components/ai-elements/_local-types";
 import type { ReasoningBlock, ToolResultBlock } from "../types";
-import { mediaReferenceText } from "./media-reference.ts";
 import { formatToolResultText } from "./tool-result-output.ts";
 
 const STATUS_LABELS: Record<ToolUIPartState, string> = {
@@ -55,14 +54,10 @@ export function formatToolProcessResultText(content: string): string {
 }
 
 export function formatToolProcessResult(result: Pick<ToolResultBlock, "content" | "media">): string {
-  const parts: string[] = [];
   if (result.content) {
-    parts.push(formatToolProcessResultText(result.content));
+    return formatToolProcessResultText(result.content);
   }
-  if (result.media) {
-    parts.push(mediaReferenceText("tool_result_image", result.media));
-  }
-  return parts.join("\n");
+  return "";
 }
 
 export function formatToolBatchTitle(names: readonly string[]): string {

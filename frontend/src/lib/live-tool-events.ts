@@ -1,4 +1,4 @@
-import type { Message, ToolResultBlock, ToolUseBlock } from "../types";
+import type { MediaRef, Message, ToolResultBlock, ToolUseBlock } from "../types";
 
 const LIVE_TOOL_OUTPUT_MAX_CHARS = 12000;
 
@@ -22,6 +22,7 @@ export type ToolResultUpdate = {
   toolUseID: string | undefined;
   toolName?: string;
   content: string | undefined;
+  media?: MediaRef;
   isError?: boolean;
   timeoutSeconds?: number;
 };
@@ -105,6 +106,7 @@ export function applyToolResultToMessages(
     content: update.content ?? "",
   };
   if (update.isError) block.is_error = true;
+  if (update.media) block.media = update.media;
   return upsertToolResultBlock(messages, update, block, "final");
 }
 
@@ -351,14 +353,21 @@ function mergeToolResultBlock(
   mode: "append" | "final",
 ): ToolResultBlock {
   if (mode === "append") {
-    return {
+    const next = {
       ...current,
       content: capLiveToolOutput(current.content + incoming.content),
       streaming: true,
     };
+    setToolResultMedia(next, incoming.media ?? current.media);
+    return next;
   }
   if (incoming.is_error) {
-    const next = { ...current, content: incoming.content, is_error: true };
+    const next = {
+      ...current,
+      content: incoming.content,
+      is_error: true,
+    };
+    setToolResultMedia(next, incoming.media ?? current.media);
     delete next.streaming;
     return next;
   }
@@ -366,9 +375,18 @@ function mergeToolResultBlock(
     ...current,
     content: current.content || incoming.content,
   };
+  setToolResultMedia(next, incoming.media ?? current.media);
   delete next.is_error;
   delete next.streaming;
   return next;
+}
+
+function setToolResultMedia(block: ToolResultBlock, media: MediaRef | undefined) {
+  if (media) {
+    block.media = media;
+  } else {
+    delete block.media;
+  }
 }
 
 function toolUseBlockFromUpdate(update: ToolRequestedUpdate): ToolUseBlock {
