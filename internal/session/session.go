@@ -12,8 +12,8 @@ package session
 import (
 	cryptorand "crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +42,7 @@ type Session struct {
 	mu           sync.Mutex
 	convFD       *os.File
 	eventFD      *os.File
+	transcript   transcriptIndex
 	historyPath  string
 	recordActive bool
 }
@@ -114,11 +115,22 @@ func (s *Session) Append(m llm.Message) error {
 		s.mu.Unlock()
 		return err
 	}
-	s.History = append(s.History, m)
-	if err := writeJSONL(s.convFD, m); err != nil {
+	line, err := marshalJSONLine(m)
+	if err != nil {
 		s.mu.Unlock()
 		return err
 	}
+	offset, err := s.convFD.Seek(0, io.SeekEnd)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	if _, err := s.convFD.Write(line); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.History = append(s.History, m)
+	s.transcript.appendMessage(m, offset, len(line))
 	info, ok := s.historyInfoLocked()
 	historyPath := s.historyPath
 	s.mu.Unlock()
@@ -190,29 +202,33 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		}
 	}
 	convPath := filepath.Join(dir, conversationFile)
-	data, err := os.ReadFile(convPath)
+	idx, err := scanTranscriptIndex(convPath)
 	if err != nil {
 		return nil, err
 	}
-	var history []llm.Message
-	for i, line := range splitLines(data) {
-		if len(line) == 0 {
-			continue
-		}
-		var m llm.Message
-		if err := json.Unmarshal(line, &m); err != nil {
-			return nil, fmt.Errorf("session: parse %s: %w", convPath, err)
-		}
-		m = normalizeLoadedMessage(m, i)
-		history = append(history, m)
+	history, err := readActiveTranscriptWindow(convPath, idx)
+	if err != nil {
+		return nil, err
 	}
 	var repairs []TranscriptRepair
 	if opts.RepairTranscript {
-		history, repairs = repairTranscriptMessages(history, "load")
+		fullHistory, err := readTranscriptMessages(convPath, idx.entries)
+		if err != nil {
+			return nil, err
+		}
+		fullHistory, repairs = repairTranscriptMessages(fullHistory, "load")
 		if len(repairs) > 0 {
-			if err := writeConversationMessages(convPath, history); err != nil {
+			if err := writeConversationMessages(convPath, fullHistory); err != nil {
 				return nil, err
 			}
+			idx, err = scanTranscriptIndex(convPath)
+			if err != nil {
+				return nil, err
+			}
+		}
+		history, err = readActiveTranscriptWindow(convPath, idx)
+		if err != nil {
+			return nil, err
 		}
 	}
 	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -242,6 +258,7 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 		ContextUsage: contextUsage,
 		convFD:       convFD,
 		eventFD:      eventFD,
+		transcript:   idx,
 		historyPath:  opts.HistoryPath,
 		recordActive: recordActive,
 	}, nil
@@ -334,11 +351,10 @@ func writeJSONL(w *os.File, v any) error {
 	if w == nil {
 		return fmt.Errorf("session: file closed")
 	}
-	buf, err := json.Marshal(v)
+	buf, err := marshalJSONLine(v)
 	if err != nil {
 		return err
 	}
-	buf = append(buf, '\n')
 	_, err = w.Write(buf)
 	return err
 }
@@ -399,11 +415,16 @@ func (s *Session) infoLocked(now time.Time) Info {
 	} else {
 		info.LastActiveAt = now
 	}
-	for _, m := range s.History {
-		if m.Role == llm.RoleUser && m.Kind != llm.MessageKindCompact {
-			info.Turns++
-			if info.Preview == "" {
-				info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
+	if len(s.transcript.entries) > 0 || len(s.History) == 0 {
+		info.Turns = s.transcript.turns
+		info.Preview = s.transcript.preview
+	} else {
+		for _, m := range s.History {
+			if m.Role == llm.RoleUser && m.Kind != llm.MessageKindCompact {
+				info.Turns++
+				if info.Preview == "" {
+					info.Preview = truncateRunes(strings.TrimSpace(m.FirstText()), previewMaxRunes)
+				}
 			}
 		}
 	}
