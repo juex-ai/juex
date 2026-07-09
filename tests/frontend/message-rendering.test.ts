@@ -6,6 +6,7 @@ import {
   externalEventRowClassName,
   messageContentBaseClassName,
   messageContentRoleClassName,
+  messageGroupModelLabels,
   messageGroupShouldShowModel,
   messageResponseClassName,
   processDisclosureChevronClassName,
@@ -85,6 +86,85 @@ test("message model labels only render for normal assistant messages", () => {
     }),
     false,
   );
+});
+
+test("messageGroupModelLabels labels assistant model run starts", () => {
+  const labels = messageGroupModelLabels([
+    {
+      key: "user-start",
+      role: "user",
+      pending: false,
+      units: [],
+    },
+    {
+      key: "assistant-a-1",
+      role: "assistant",
+      pending: false,
+      units: [],
+      model: "model-a",
+    },
+    {
+      key: "assistant-a-2",
+      role: "assistant",
+      pending: false,
+      units: [],
+      model: "model-a",
+    },
+    {
+      key: "assistant-b-1",
+      role: "assistant",
+      pending: false,
+      units: [],
+      model: "model-b",
+    },
+    {
+      key: "assistant-b-2",
+      role: "assistant",
+      pending: false,
+      units: [],
+      model: "model-b",
+    },
+    {
+      key: "user-break",
+      role: "user",
+      pending: false,
+      units: [],
+    },
+    {
+      key: "assistant-b-after-user",
+      role: "assistant",
+      pending: false,
+      units: [],
+      model: "model-b",
+    },
+    {
+      key: "assistant-kind-break",
+      role: "assistant",
+      kind: "hook_event",
+      pending: false,
+      units: [],
+      model: "model-b",
+    },
+    {
+      key: "assistant-b-after-kind",
+      role: "assistant",
+      pending: false,
+      units: [],
+      model: "model-b",
+    },
+  ]);
+
+  assert.deepEqual(labels, [
+    undefined,
+    "model-a",
+    undefined,
+    "model-b",
+    undefined,
+    undefined,
+    "model-b",
+    undefined,
+    "model-b",
+  ]);
 });
 
 test("external event row renders as inline text instead of a bubble", () => {

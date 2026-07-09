@@ -81,7 +81,7 @@ import {
   externalEventBodyClassName,
   externalEventCopyClassName,
   externalEventRowClassName,
-  messageGroupShouldShowModel,
+  messageGroupModelLabels,
   processDisclosureBodyClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
@@ -415,6 +415,13 @@ export function Session() {
     data?.last_active_at ?? null,
   );
 
+  const messages = useMemo<ChatMessage[]>(
+    () => [...(data?.messages ?? []), ...projection.messages],
+    [data?.messages, projection.messages],
+  );
+  const groups = useMemo(() => messagesToGroups(messages), [messages]);
+  const modelLabels = useMemo(() => messageGroupModelLabels(groups), [groups]);
+
   if (!data) {
     if (loadError) {
       return (
@@ -427,8 +434,6 @@ export function Session() {
     return <LoadingState label="Loading conversation" />;
   }
 
-  const messages: ChatMessage[] = [...(data.messages ?? []), ...projection.messages];
-  const groups = messagesToGroups(messages);
   const tokenUsage = projection.tokenUsage ?? data.token_usage;
   const contextUsage = projection.contextUsage ?? data.context_usage;
   const canSend = sessionCanSend(data);
@@ -452,10 +457,11 @@ export function Session() {
               onLoad={() => void handleLoadOlderMessages()}
             />
           ) : null}
-          {groups.map((group) => (
+          {groups.map((group, index) => (
             <MessageGroupView
               key={group.key}
               group={group}
+              modelLabel={modelLabels[index]}
               compactCommand={
                 group.id ? projection.compactCommandInputs[group.id] : undefined
               }
@@ -1115,14 +1121,12 @@ function trimFixed(value: number): string {
 function MessageGroupView({
   group,
   compactCommand,
+  modelLabel,
 }: {
   group: MessageGroup;
   compactCommand?: string;
+  modelLabel?: string;
 }) {
-  // Per-message model (stamped at generation time). Falls back to nothing
-  // for older messages that pre-date the persistence change; the header
-  // already shows the current session-level model in that case.
-  const showModel = messageGroupShouldShowModel(group);
   const isMCPEvent = group.role === "user" && group.kind === "mcp_event";
   const isObservationEvent =
     group.role === "user" && group.kind === "observation";
@@ -1165,9 +1169,9 @@ function MessageGroupView({
   return (
     <Message from={group.role}>
       <div className="flex w-full flex-col gap-2">
-        {showModel ? (
+        {modelLabel ? (
           <span className="font-mono text-[11px] text-muted-foreground">
-            {group.model}
+            {modelLabel}
           </span>
         ) : null}
         {group.units.map((unit, i) => {
