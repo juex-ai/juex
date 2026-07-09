@@ -679,6 +679,42 @@ func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 	}
 }
 
+func TestMergeInitConfigFileFillsMissingProviderFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	if err := writeTextFile(path, `model: openai:gpt-4.1
+providers:
+  - id: openai
+    models:
+      - id: gpt-4.1
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := mergeInitConfigFile(path, initProviderSpec{
+		ID:       "openai",
+		Protocol: "openai/chat",
+		BaseURL:  "https://new.example",
+		APIKey:   "sk-new",
+		Model:    "gpt-4.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bodyBytes, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(bodyBytes)
+	for _, want := range []string{"protocol: openai/chat", "base_url: https://new.example", "api_key: sk-new"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("merged config missing %q:\n%s", want, body)
+		}
+	}
+	if got := strings.Count(body, "id: gpt-4.1"); got != 1 {
+		t.Fatalf("model entries = %d, want 1:\n%s", got, body)
+	}
+}
+
 func TestMergeInitConfigFileTightensSecretFilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows file mode bits do not model Unix secret permissions")
@@ -752,6 +788,38 @@ func TestLoadInitConfigForCheckIgnoresBrokenWorkspaceConfig(t *testing.T) {
 	}
 	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4.1" || cfg.APIKey != "sk-user" {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestValidateInitConfigTreatsUserTargetAsUserConfig(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	target := filepath.Join(home, ".juex", "juex.yaml")
+	if err := writeTextFile(target, `model: openai:gpt-4.1
+providers:
+  - id: openai
+    base_url: https://example.invalid
+    api_key: sk-user
+    models:
+      - id: gpt-4.1
+hooks:
+  commands:
+    - name: global-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := validateInitConfig(target, work); err != nil {
+		t.Fatalf("user-scope init validation should not require hooks.trusted: true: %v", err)
+	}
+	cfg, err := loadInitConfigForCheck(target, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "user" {
+		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
 	}
 }
 

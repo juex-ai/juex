@@ -287,6 +287,9 @@ func mergeInitConfigFile(path string, spec initProviderSpec) (string, error) {
 		providers.Content = append(providers.Content, newProviderNode(spec))
 		changed = true
 	} else {
+		if mergeMissingProviderFields(provider, spec) {
+			changed = true
+		}
 		models := ensureMappingSequence(provider, "models")
 		if models == nil {
 			return "", fmt.Errorf("init: provider %q models must be a YAML sequence in %s", spec.ID, path)
@@ -425,6 +428,23 @@ func scalarValue(node *yaml.Node) string {
 	return strings.TrimSpace(node.Value)
 }
 
+func mergeMissingProviderFields(provider *yaml.Node, spec initProviderSpec) bool {
+	changed := false
+	if spec.Protocol != "" && scalarValue(mappingValue(provider, "protocol")) == "" {
+		setMappingScalar(provider, "protocol", spec.Protocol)
+		changed = true
+	}
+	if spec.BaseURL != "" && scalarValue(mappingValue(provider, "base_url")) == "" {
+		setMappingScalar(provider, "base_url", spec.BaseURL)
+		changed = true
+	}
+	if spec.APIKey != "" && scalarValue(mappingValue(provider, "api_key")) == "" {
+		setMappingScalar(provider, "api_key", spec.APIKey)
+		changed = true
+	}
+	return changed
+}
+
 func newProviderNode(spec initProviderSpec) *yaml.Node {
 	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	setMappingScalar(node, "id", spec.ID)
@@ -449,9 +469,7 @@ func newModelNode(id string) *yaml.Node {
 }
 
 func validateInitConfig(path, workDir string) error {
-	validateWorkDir, cleanup := initConfigCheckWorkDir(path, workDir)
-	defer cleanup()
-	_, err := config.LoadFromFileForWorkDir(path, validateWorkDir)
+	_, err := loadInitConfigForCheck(path, workDir)
 	if err != nil {
 		return fmt.Errorf("init: wrote %s but config validation failed: %w", path, err)
 	}
@@ -459,8 +477,7 @@ func validateInitConfig(path, workDir string) error {
 }
 
 func initConfigCheckWorkDir(path, workDir string) (string, func()) {
-	workspaceConfig := (config.Config{WorkDir: workDir}).RuntimePaths().RuntimeConfigPath
-	if cleanPath(path) == cleanPath(workspaceConfig) {
+	if initConfigTargetScope(path, workDir) == "workspace" {
 		return workDir, func() {}
 	}
 	tmp, err := os.MkdirTemp("", "juex-init-validate-")
@@ -473,9 +490,27 @@ func initConfigCheckWorkDir(path, workDir string) (string, func()) {
 }
 
 func loadInitConfigForCheck(path, workDir string) (config.Config, error) {
+	scope := initConfigTargetScope(path, workDir)
 	checkWorkDir, cleanup := initConfigCheckWorkDir(path, workDir)
 	defer cleanup()
+	if scope == "workspace" || scope == "user" {
+		return config.LoadForWorkDir(checkWorkDir)
+	}
 	return config.LoadFromFileForWorkDir(path, checkWorkDir)
+}
+
+func initConfigTargetScope(path, workDir string) string {
+	workspaceConfig := (config.Config{WorkDir: workDir}).RuntimePaths().RuntimeConfigPath
+	if cleanPath(path) == cleanPath(workspaceConfig) {
+		return "workspace"
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		userConfig := filepath.Join(home, ".juex", "juex.yaml")
+		if cleanPath(path) == cleanPath(userConfig) {
+			return "user"
+		}
+	}
+	return "explicit"
 }
 
 func cleanPath(path string) string {
