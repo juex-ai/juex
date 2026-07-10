@@ -9,9 +9,6 @@ const MESSAGE_CONTENT_BASE_CLASS_NAME =
 const MESSAGE_CONTENT_USER_CLASS_NAME =
   "group-[.is-user]:ml-auto group-[.is-user]:max-w-[92%] group-[.is-user]:rounded-tr-[6px] sm:group-[.is-user]:max-w-[78%]";
 
-const MESSAGE_CONTENT_ASSISTANT_CLASS_NAME =
-  "group-[.is-assistant]:max-w-[96%] group-[.is-assistant]:rounded-tl-[6px] sm:group-[.is-assistant]:max-w-[82%]";
-
 const EXTERNAL_EVENT_ROW_CLASS_NAME =
   "flex min-w-0 cursor-pointer list-none items-center gap-2 px-1 py-1.5 text-xs text-juex-gold-900 outline-none transition hover:text-juex-ink-900 focus-visible:ring-2 focus-visible:ring-ring/40 dark:text-juex-gold-400 dark:hover:text-juex-gold-200 [&::-webkit-details-marker]:hidden";
 
@@ -57,10 +54,8 @@ export function messageContentBaseClassName() {
   return MESSAGE_CONTENT_BASE_CLASS_NAME;
 }
 
-export function messageContentRoleClassName(role: "user" | "assistant") {
-  return role === "user"
-    ? MESSAGE_CONTENT_USER_CLASS_NAME
-    : MESSAGE_CONTENT_ASSISTANT_CLASS_NAME;
+export function messageContentUserClassName() {
+  return MESSAGE_CONTENT_USER_CLASS_NAME;
 }
 
 export function messageGroupShouldShowModel(group: MessageGroup): boolean {

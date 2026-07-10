@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"time"
 )
@@ -451,14 +450,4 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return replaceFile(tmpName, path)
-}
-
-func replaceFile(tmpName, path string) error {
-	if err := os.Rename(tmpName, path); err == nil || runtime.GOOS != "windows" {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }

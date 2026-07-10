@@ -344,15 +344,16 @@ size. Copy stays short and descriptive, such as `Loading conversation` or
 
 ### 7.5 Message
 
-`<Message from={role}>` (AI Elements) is the unit per message. User messages
-render as right-aligned card-like bubbles with normal card foreground text,
-subtle borders, and a tighter top-right corner so they read as authored input
-without competing with assistant output. Assistant messages render as
-left-aligned paper bubbles with a warm border and a tighter top-left corner.
-Reasoning and tool sub-units render as siblings of `<MessageContent>`. MCP and
-observation external events bypass the normal user message wrapper and render
-as low-emphasis text rows in a centered transcript lane so they do not read as
-human-authored messages.
+`<Message from={role}>` (AI Elements) groups the visible units for one canonical
+message. User messages render as right-aligned card-like bubbles with normal
+card foreground text, subtle borders, and a tighter top-right corner so they
+read as authored input without competing with assistant output. Assistant text
+renders as unframed, left-aligned conversation text. A model label appears only
+on the first group in a contiguous run from the same model; a user or status
+message starts a new run. Reasoning and tool sub-units render as compact process
+rows below the assistant text. MCP notifications, Observations, and hook traces
+bypass normal message chrome and render as low-emphasis transcript rows so they
+do not read as human-authored messages.
 
 ### 7.6 Text rendering
 

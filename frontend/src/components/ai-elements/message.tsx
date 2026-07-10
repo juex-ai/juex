@@ -14,7 +14,7 @@ import {
 import { juexCodeThemes } from "@/lib/code-theme";
 import {
   messageContentBaseClassName,
-  messageContentRoleClassName,
+  messageContentUserClassName,
   messageResponseClassName,
 } from "@/lib/message-rendering";
 import { cn } from "@/lib/utils";
@@ -60,8 +60,7 @@ export const MessageContent = ({
   <div
     className={cn(
       messageContentBaseClassName(),
-      messageContentRoleClassName("user"),
-      messageContentRoleClassName("assistant"),
+      messageContentUserClassName(),
       className
     )}
     {...props}

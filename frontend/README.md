@@ -55,14 +55,17 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
 | `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
 | `src/lib/composer-submit.ts` | pure composer submit-state transitions |
+| `src/lib/code-theme.ts` | shared light/dark syntax themes for markdown and reasoning code blocks |
 | `src/lib/compact-ui.ts` | optimistic `/compact` UI labels and local message helpers |
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
 | `src/lib/home-route.ts` | pure helper for choosing the web root redirect target |
+| `src/lib/light-code-highlight.ts` | lightweight synchronous JSON/log highlighting for tool payloads |
 | `src/lib/live-session-projection.ts` | pure live-session read model for SSE events, optimistic turns, pending input, compact state, and turn-status reconciliation |
 | `src/lib/live-tool-events.ts` | pure live transcript updates for tool requested/output-delta events |
 | `src/lib/loading-state.ts` | pure loading-state display text helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
+| `src/lib/media-reference.ts` | stable text formatting for transcript and tool-result media references |
 | `src/lib/message-copy.ts` | pure helpers for compact-summary and message copy text |
 | `src/lib/message-rendering.ts` | pure message chrome, disclosure, and display-policy helpers |
 | `src/lib/observation-time.ts` | pure helpers for local Observation timestamp and window display |
@@ -74,7 +77,10 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/session-title.ts` | pure session preview display-title fallback helper |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |
 | `src/lib/tool-display.ts` | pure tool title, lifecycle label, and timeout display helpers |
+| `src/lib/tool-payload.ts` | defensive formatting for structured tool input and output payloads |
+| `src/lib/tool-result-output.ts` | bounded multiline formatting for visible tool-result text |
 | `src/lib/session-access.ts` | pure rules for writable versus read-only session views based on kind and active state |
+| `src/lib/utils.ts` | shared Tailwind class-merging helper used by UI primitives |
 | `src/lib/workspace-refresh.ts` | pure helper for refreshing workspace tree and open file preview data |
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
