@@ -30,16 +30,23 @@ Or build from source:
 make build
 ```
 
-Create runtime config in the work directory where you want the agent to run,
-or put shared provider settings in `~/.juex/juex.yaml` and override them per
-workspace:
+Create runtime config with the first-run wizard. By default it writes shared
+provider settings to `~/.juex/juex.yaml`; use `--scope workspace` when a
+repository needs its own `.juex/juex.yaml` override:
 
 ```bash
-mkdir -p .juex
-cp juex.yaml.example .juex/juex.yaml
+juex init
+juex init --scope workspace
+juex doctor
 ```
 
-Fill in provider settings, then run:
+For non-interactive setup, pass the provider, model, and key explicitly:
+
+```bash
+juex init --provider openai --model gpt-4.1 --api-key "$OPENAI_API_KEY" --skip-check --yes
+```
+
+Then run:
 
 ```bash
 juex run "summarize this repository"
@@ -62,6 +69,8 @@ If you built from source without installing, use `./dist/juex` instead of
 
 | Command | Purpose |
 | --- | --- |
+| `juex init` | Create or merge a first-run runtime config in `~/.juex/juex.yaml` or the workspace. |
+| `juex doctor` | Run read-only checks for config, credentials, connectivity, shell, MCP, and skills. |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
 | `juex --model <provider>:<model> run "<prompt>"` | Override the configured model for this invocation. |
 | `juex --debug run --json "<prompt>"` | Write detailed session logs, trace, span, and tool summary JSONL while emitting the normal run result. |

@@ -149,7 +149,11 @@ execution is printed and the process exits with code 10.`,
 			cfg, err := loadConfig(flags)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
-					"set top-level model and providers[] entries in .juex/juex.yaml (copy from juex.yaml.example)", false)
+					"set top-level model and providers[] entries in .juex/juex.yaml or "+initNoConfigSuggestion, false)
+			}
+			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
+				return emit(jsonOut, cmd.ErrOrStderr(), err,
+					initNoConfigSuggestion, false)
 			}
 
 			prompt := strings.Join(args, " ")

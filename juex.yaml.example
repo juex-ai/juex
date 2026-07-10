@@ -1,4 +1,5 @@
-# Copy this template to .juex/juex.yaml in a workspace, or to
+# Prefer `juex init` for first-run setup. Copy this template manually only when
+# you want full control over .juex/juex.yaml in a workspace or
 # ~/.juex/juex.yaml for user-global provider fallback settings.
 # The workspace .juex directory is local runtime state and should not be
 # committed.

@@ -773,6 +773,8 @@ mid-stream interrupts or rollback.
 
 ```
 juex
+├── init [--scope user|workspace] [--provider <id>] [--model <id>]
+├── doctor [--format text|table|json] [--offline]
 ├── run "<prompt>" [flags]   [--new | --side] [--alias <name>]
 ├── repl [flags]             [--new] [--alias <name>]
 ├── sessions
@@ -787,6 +789,13 @@ juex
 ├── schema
 └── version [-v]
 ```
+
+`init` and `doctor` are CLI-only onboarding commands. `init` writes or merges
+`juex.yaml` using conservative YAML node edits and validates the file through
+`internal/config`; it does not change runtime config semantics. `doctor` is a
+read-only diagnostic surface that reuses config/profile resolution, provider
+construction for optional hello checks, shell resolution, MCP config loading
+without starting servers, and skill scanning.
 
 `bundle` is implemented as a thin CLI wrapper over `internal/bundle`. The
 package owns session file collection, tar.gz writing, manifest hashes,
