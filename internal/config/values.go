@@ -19,6 +19,12 @@ const (
 	OutsideWorkspaceReadOnly  OutsideWorkspaceAccess = sandbox.OutsideWorkspaceReadOnly
 )
 
+type SkillPolicy struct {
+	Include           []string
+	Exclude           []string
+	PromptBudgetChars int
+}
+
 // ProviderSelection is the resolved provider/model value passed to the LLM
 // boundary. It contains no provider construction behavior.
 type ProviderSelection struct {
@@ -49,6 +55,32 @@ func (c Config) ProviderSelection() ProviderSelection {
 		Compat:         c.ProviderCompat,
 		WorkDir:        c.WorkDir,
 	}
+}
+
+func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, error) {
+	cfg := c
+	if err := cfg.ApplyModelOverride(ref); err != nil {
+		return ProviderSelection{}, err
+	}
+	if err := applyOSEnvExcept(&cfg, map[string]struct{}{
+		"PROVIDER_API_ID":       {},
+		"PROVIDER_API_PROTOCOL": {},
+		"PROVIDER_API_MODEL":    {},
+	}); err != nil {
+		return ProviderSelection{}, err
+	}
+	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+		return ProviderSelection{}, err
+	}
+	return cfg.ProviderSelection(), nil
+}
+
+func (c Config) ProviderProfileForModelRef(ref string) (llm.ProviderProfile, error) {
+	selection, err := c.ProviderSelectionForModelRef(ref)
+	if err != nil {
+		return llm.ProviderProfile{}, err
+	}
+	return selection.ProviderProfile()
 }
 
 func (s ProviderSelection) ProviderProfile() (llm.ProviderProfile, error) {
@@ -155,6 +187,24 @@ func (c Config) ResourcePaths() ResourcePaths {
 		paths.MCPConfigPaths = append(paths.MCPConfigPaths, filepath.Join(paths.ProjectAgentsDir, "mcp.json"))
 	}
 	return paths
+}
+
+func (c Config) SkillPolicy() SkillPolicy {
+	policy := SkillPolicy{
+		Include:           append([]string(nil), c.Skills.Include...),
+		Exclude:           append([]string(nil), c.Skills.Exclude...),
+		PromptBudgetChars: c.Skills.PromptBudgetChars,
+	}
+	if policy.PromptBudgetChars <= 0 {
+		policy.PromptBudgetChars = DefaultSkillPromptBudgetChars
+	}
+	if c.ContextWindow > 0 {
+		contextBudget := c.ContextWindow * 2 / 100 * 4
+		if contextBudget > 0 && contextBudget < policy.PromptBudgetChars {
+			policy.PromptBudgetChars = contextBudget
+		}
+	}
+	return policy
 }
 
 // RuntimeLimits contains runtime policy values after config resolution.

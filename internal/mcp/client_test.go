@@ -2,12 +2,14 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +31,9 @@ func runFakeServer() {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
+		if os.Getenv("JUEX_FAKE_MCP_STDERR_LOG") == "1" {
+			fmt.Fprintln(os.Stderr, "fake stderr log")
+		}
 		if os.Getenv("JUEX_FAKE_MCP_STDOUT_LOG") == "1" {
 			fmt.Fprintln(os.Stdout, "time=now level=INFO msg=not-json")
 			if err := os.Unsetenv("JUEX_FAKE_MCP_STDOUT_LOG"); err != nil {
@@ -310,6 +315,86 @@ func TestMCPClient_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestMCPClient_StderrIsDiagnosticByDefault(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var forwarded lockedBuffer
+	client, err := ConnectWithOptions(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":            "1",
+			"JUEX_FAKE_MCP_STDERR_LOG": "1",
+		},
+	}, ConnectOptions{Stderr: &forwarded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if forwarded.Len() != 0 {
+		t.Fatalf("stderr was forwarded without verbose opt-in: %q", forwarded.String())
+	}
+	if got := client.stderrTail.String(); !strings.Contains(got, "fake stderr log") {
+		t.Fatalf("stderr tail = %q", got)
+	}
+}
+
+func TestMCPClient_StderrForwardsWithPrefixWhenEnabled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var forwarded lockedBuffer
+	client, err := ConnectWithOptions(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":            "1",
+			"JUEX_FAKE_MCP_STDERR_LOG": "1",
+		},
+	}, ConnectOptions{Stderr: &forwarded, ForwardStderr: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	waitUntil(t, time.Second, func() bool {
+		return strings.Contains(forwarded.String(), "[mcp:fake] fake stderr log")
+	})
+}
+
+func TestMCPClient_StartupErrorIncludesStderrTail(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := ConnectWithOptions(ctx, "fake", ServerSpec{
+		Command: os.Args[0],
+		Env: map[string]string{
+			"JUEX_FAKE_MCP":                 "1",
+			"JUEX_FAKE_MCP_REQUIRE_CHANNEL": "1",
+			"JUEX_FAKE_MCP_STDERR_LOG":      "1",
+		},
+	}, ConnectOptions{})
+	if err == nil {
+		t.Fatal("expected initialize error")
+	}
+	if !strings.Contains(err.Error(), "mcp stderr tail") || !strings.Contains(err.Error(), "fake stderr log") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLinePrefixWriterReturnsConsumedBytesOnPartialError(t *testing.T) {
+	underlying := &failOnWrite{failAt: 4, partialBytes: 1}
+	w := newLinePrefixWriter(underlying, "[mcp:fake] ")
+	n, err := w.Write([]byte("one\ntwo"))
+	if err == nil {
+		t.Fatal("expected write error")
+	}
+	if want := len("one\n") + 1; n != want {
+		t.Fatalf("written = %d, want %d", n, want)
+	}
+	if got, want := underlying.String(), "[mcp:fake] one\n[mcp:fake] t"; got != want {
+		t.Fatalf("underlying output = %q, want %q", got, want)
+	}
+}
+
 func TestMCPClient_CloseWaitsForSubprocess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -556,6 +641,67 @@ func TestMCPClient_ToolErrorPropagates(t *testing.T) {
 	if !strings.Contains(out, "intentional failure") {
 		t.Fatalf("expected error text propagated, got %q", out)
 	}
+}
+
+func waitUntil(t *testing.T, timeout time.Duration, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not met before timeout")
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Len()
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+type failOnWrite struct {
+	buf          bytes.Buffer
+	writes       int
+	failAt       int
+	partialBytes int
+}
+
+func (w *failOnWrite) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		n := w.partialBytes
+		if n > len(p) {
+			n = len(p)
+		}
+		if n > 0 {
+			_, _ = w.buf.Write(p[:n])
+		}
+		return n, fmt.Errorf("forced write failure")
+	}
+	return w.buf.Write(p)
+}
+
+func (w *failOnWrite) String() string {
+	return w.buf.String()
 }
 
 func TestMCPClient_EnvVarReachesServer(t *testing.T) {

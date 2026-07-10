@@ -22,6 +22,7 @@ import { mergeOlderSessionPage } from "./session-messages.ts";
 import type {
   ActiveContextSnapshot,
   BrowserEvent,
+  MediaRef,
   SessionShowResponse,
   SlashCommandResponse,
   StartTurnResponse,
@@ -236,6 +237,7 @@ export function projectStartTurnSucceeded(
   state: SessionReadState,
   prompt: string,
   turn: StartTurnResponse,
+  attachments: MediaRef[] = [],
 ): SessionReadResult {
   if (turn.command) {
     return projectCommandTurnSucceeded(state, prompt, turn);
@@ -249,6 +251,7 @@ export function projectStartTurnSucceeded(
           prompt,
           undefined,
           turn.pending_count ?? 0,
+          attachments,
         ),
       },
       effects: [],
@@ -264,7 +267,13 @@ export function projectStartTurnSucceeded(
   return {
     state: {
       ...state,
-      projection: projectOptimisticTurn(state.projection, turn.turn_id, prompt),
+      projection: projectOptimisticTurn(
+        state.projection,
+        turn.turn_id,
+        prompt,
+        undefined,
+        attachments,
+      ),
     },
     effects: [],
   };

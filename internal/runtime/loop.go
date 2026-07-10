@@ -50,12 +50,13 @@ const (
 )
 
 type Engine struct {
-	Provider llm.Provider
-	Tools    *tools.Registry
-	Bus      *events.Bus
-	Session  *session.Session
-	Prompt   *prompt.Builder
-	Hooks    HookRunner
+	Provider        llm.Provider
+	SummaryProvider llm.Provider
+	Tools           *tools.Registry
+	Bus             *events.Bus
+	Session         *session.Session
+	Prompt          *prompt.Builder
+	Hooks           HookRunner
 	// HookContext carries process/session metadata included in every hook
 	// command input. Event-specific fields are filled by the runtime.
 	HookContext hooks.Request
@@ -102,6 +103,9 @@ type Engine struct {
 
 	autoCompactFailures int
 	toolFailures        *toolFailureLedger
+
+	tokenCalibrationMu sync.RWMutex
+	tokenCalibration   tokenEstimateCalibration
 }
 
 type HookRunner interface {
@@ -312,8 +316,9 @@ type preparedTurnContext struct {
 }
 
 type providerTurnRequest struct {
-	iter    int
-	history []llm.Message
+	iter                 int
+	history              []llm.Message
+	estimatedInputTokens int
 }
 
 type recordedProviderResponse struct {
@@ -398,7 +403,8 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 	e.emitProjectionApplied(turnID, projection)
 	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
 	e.emitProjectionApplied(turnID, projection)
-	return providerTurnRequest{iter: iter, history: projectedHistory}, nil
+	estimatedInputTokens := estimateContextTokens(prepared.systemPrompt, prepared.tools, projectedHistory)
+	return providerTurnRequest{iter: iter, history: projectedHistory, estimatedInputTokens: estimatedInputTokens}, nil
 }
 
 func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
@@ -431,9 +437,10 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		msg.Model = e.Provider.Name()
 	}
 	msg.Blocks = prepareToolInputs(msg.Blocks, e.Tools)
+	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
 	var contextUsage *llm.ContextUsage
 	if !resp.Usage.IsZero() {
-		snapshot := contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, prepared.promptSections, prepared.tools, request.history)
+		snapshot := e.contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, prepared.promptSections, prepared.tools, request.history)
 		contextUsage = &snapshot
 	}
 	totalUsage := e.Session.RecordResponseUsage(resp.Usage, contextUsage)
@@ -568,6 +575,11 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		toolErr = fmt.Errorf("hooks: tool %q denied after use%s", call.ToolName, hookReasonSuffix(reason))
 		block.Content = toolErrorContent(block.Content, toolErr)
 		block.IsError = true
+	}
+	if !block.IsError {
+		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
+			block.Media = media
+		}
 	}
 	observation := toolObservationForResult(call, block, info, toolErr)
 	e.emitToolFinished(turnID, call, block, observation, info)
@@ -711,12 +723,7 @@ func (e *Engine) sessionHasMessageIDLocked(id string) bool {
 	if e == nil || e.Session == nil || id == "" {
 		return false
 	}
-	for _, msg := range e.Session.History {
-		if msg.ID == id {
-			return true
-		}
-	}
-	return false
+	return e.Session.HasMessageID(id)
 }
 
 func pendingRecordIDs(pending []queuedPendingInput) []string {

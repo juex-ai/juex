@@ -98,6 +98,21 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 	if !strings.Contains(sys, "copy the actual values of labeled facts") {
 		t.Fatalf("system prompt does not require concrete facts:\n%s", sys)
 	}
+	if strings.Index(sys, "Critical Context") <= strings.Index(sys, "Goal") {
+		t.Fatalf("system prompt should place Critical Context immediately after Goal:\n%s", sys)
+	}
+	if strings.Index(sys, "Critical Context") >= strings.Index(sys, "Constraints & Preferences") {
+		t.Fatalf("system prompt should place Critical Context before lower-priority headings:\n%s", sys)
+	}
+	if !strings.Contains(sys, "Begin Critical Context with labeled facts before other details") {
+		t.Fatalf("system prompt does not require labeled facts first in Critical Context:\n%s", sys)
+	}
+	if !strings.Contains(sys, "keep the label together with its exact value") {
+		t.Fatalf("system prompt does not require preserving fact labels with values:\n%s", sys)
+	}
+	if !strings.Contains(sys, "do not rename, merge, or generalize labeled facts") {
+		t.Fatalf("system prompt does not prevent relabeling concrete facts:\n%s", sys)
+	}
 	if !strings.Contains(sys, "Never replace concrete facts with vague phrases") {
 		t.Fatalf("system prompt does not ban vague fact placeholders:\n%s", sys)
 	}

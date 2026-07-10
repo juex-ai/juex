@@ -23,7 +23,7 @@
 
 **Non-goals (v0.1):**
 
-- File attachments and voice input.
+- Non-image file attachments and voice input.
 - Multi-cursor / real-time collaboration.
 - Token-by-token streaming (events arrive at block granularity).
 
@@ -239,7 +239,9 @@ Center column: compact header strip + scrollable message list + sticky
 composer. The composer is shown only for the active primary session. Inactive
 primary sessions and side sessions are read-only and never show an activate
 control. The composer footer shows transient composer feedback, latest request
-context total, and current conversation token total.
+context total, and current conversation token total. Active primary sessions
+support image paste, drag/drop, and picker upload in the composer, with a
+bounded thumbnail strip before sending.
 
 Long transcripts load as a bounded window, not a full conversation dump. When
 older messages are available, a compact `Load older messages` control appears
@@ -661,7 +663,7 @@ unchanged.
 
 ## 14. Out of scope (deferred)
 
-- File / image attachments.
+- Non-image file attachments.
 - Mobile breakpoints.
 - Search across sessions.
 - Inline "regenerate" / "edit" affordances.

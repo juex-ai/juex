@@ -5,7 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +25,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 type blockingProvider struct {
@@ -176,7 +181,7 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 
 	t.Setenv("JUEX_WEB_OBSERVABLE_HELPER", "1")
 	createBody, err := json.Marshal(map[string]any{
-		"id":      "web-events",
+		"name":    "Web Events",
 		"command": os.Args[0],
 		"args":    []string{"-test.run=TestWebObservableHelperProcess", "--", "json-once"},
 		"env":     map[string]string{"JUEX_WEB_OBSERVABLE_HELPER": "1"},
@@ -727,6 +732,194 @@ func TestPostTurn_StatusSlashReturnsCommand(t *testing.T) {
 	}
 }
 
+func TestPostSessionAttachmentStoresImage(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+
+	resp := postSessionAttachment(t, ts.URL, id, "screen.png", testUploadPNG(t))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var ref llm.MediaRef
+	if err := json.NewDecoder(resp.Body).Decode(&ref); err != nil {
+		t.Fatal(err)
+	}
+	if ref.ArtifactPath == "" || !strings.Contains(ref.ArtifactPath, "/"+id+"/") {
+		t.Fatalf("artifact path = %q, want session-scoped", ref.ArtifactPath)
+	}
+	if ref.MediaType != "image/png" || ref.SHA256 == "" || ref.Width != 2 || ref.Height != 3 {
+		t.Fatalf("media ref = %+v", ref)
+	}
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.WorkDir, filepath.FromSlash(ref.ArtifactPath))); err != nil {
+		t.Fatalf("stored file missing: %v", err)
+	}
+}
+
+func TestPostSessionAttachmentRejectsNonImage(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+
+	resp := postSessionAttachment(t, ts.URL, id, "note.txt", []byte("not an image"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
+func TestPostSessionAttachmentRejectsTooLargeRequest(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+
+	data := bytes.Repeat([]byte("x"), usermedia.DefaultMaxBytes+1024*1024+1)
+	resp := postSessionAttachment(t, ts.URL, id, "screen.png", data)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var parsed errorJSON
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Error != "payload_too_large" {
+		t.Fatalf("error = %q, want payload_too_large", parsed.Error)
+	}
+}
+
+func TestPostTurn_AttachmentTextAndImageReachesProvider(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "ack"), StopReason: llm.StopEndTurn},
+	)
+	close(prov.release)
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+	ref := uploadSessionImage(t, ts.URL, id)
+
+	body, err := json.Marshal(struct {
+		Prompt      string         `json:"prompt"`
+		Attachments []llm.MediaRef `json:"attachments"`
+	}{Prompt: "describe this", Attachments: []llm.MediaRef{ref}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/turns", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var turn struct {
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&turn); err != nil {
+		t.Fatal(err)
+	}
+	waitForHTTPTranscript(t, ts.URL, id, turn.TurnID, 30*time.Second, "image attachment turn", func(messages []testTranscriptMessage) bool {
+		hasAssistant := transcriptContainsRoleText(messages, "assistant", "ack")
+		if !hasAssistant {
+			return false
+		}
+		for _, msg := range messages {
+			if msg.Role != "user" {
+				continue
+			}
+			hasText := false
+			hasImage := false
+			for _, block := range msg.Blocks {
+				if block.Type == "text" && block.Text == "describe this" {
+					hasText = true
+				}
+				if block.Type == "image" && block.Media != nil && block.Media.ArtifactPath == ref.ArtifactPath {
+					hasImage = true
+				}
+			}
+			if hasText && hasImage {
+				return true
+			}
+		}
+		return false
+	})
+	history := prov.history(0)
+	if len(history) == 0 {
+		t.Fatal("provider history missing")
+	}
+	last := history[len(history)-1]
+	if len(last.Blocks) != 2 || last.Blocks[0].Type != llm.BlockText || last.Blocks[1].Type != llm.BlockImage ||
+		last.Blocks[1].Media == nil || last.Blocks[1].Media.ArtifactPath != ref.ArtifactPath {
+		t.Fatalf("provider user message = %+v", last)
+	}
+}
+
+func TestPostTurn_ImageOnlyAttachmentStartsTurn(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "ack"), StopReason: llm.StopEndTurn},
+	)
+	close(prov.release)
+	work := t.TempDir()
+	srv := NewServer(Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+	ref := uploadSessionImage(t, ts.URL, id)
+
+	body, err := json.Marshal(struct {
+		Attachments []llm.MediaRef `json:"attachments"`
+	}{Attachments: []llm.MediaRef{ref}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/turns", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
+func TestPostTurn_RejectsAttachmentOutsideSession(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+	body := strings.NewReader(`{"prompt":"bad","attachments":[{"artifact_path":".juex/artifacts/media/other/image.png","media_type":"image/png","sha256":"` + strings.Repeat("a", 64) + `"}]}`)
+
+	resp, err := http.Post(ts.URL+"/api/sessions/"+id+"/turns", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
 func TestPostTurn_NewSlashCreatesActivePrimary(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
@@ -1184,8 +1377,9 @@ func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {
 }
 
 type testTranscriptBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type  string        `json:"type"`
+	Text  string        `json:"text"`
+	Media *llm.MediaRef `json:"media,omitempty"`
 }
 
 type testTranscriptMessage struct {
@@ -1296,6 +1490,81 @@ func fetchTurnState(client *http.Client, baseURL, sessionID, turnID string) (str
 		return "", "", err
 	}
 	return parsed.State, parsed.Error, nil
+}
+
+func createTestSession(t *testing.T, baseURL string) string {
+	t.Helper()
+	resp, err := http.Post(baseURL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create session status = %d body = %s", resp.StatusCode, body)
+	}
+	var c struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
+		t.Fatal(err)
+	}
+	if c.ID == "" {
+		t.Fatal("missing session id")
+	}
+	return c.ID
+}
+
+func uploadSessionImage(t *testing.T, baseURL, sessionID string) llm.MediaRef {
+	t.Helper()
+	resp := postSessionAttachment(t, baseURL, sessionID, "screen.png", testUploadPNG(t))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload status = %d body = %s", resp.StatusCode, body)
+	}
+	var ref llm.MediaRef
+	if err := json.NewDecoder(resp.Body).Decode(&ref); err != nil {
+		t.Fatal(err)
+	}
+	return ref
+}
+
+func postSessionAttachment(t *testing.T, baseURL, sessionID, filename string, data []byte) *http.Response {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/sessions/"+sessionID+"/attachments", &body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func testUploadPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 3))
+	img.Set(0, 0, color.RGBA{R: 255, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestGetSessionContext(t *testing.T) {

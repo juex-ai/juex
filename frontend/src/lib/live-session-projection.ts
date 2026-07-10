@@ -21,7 +21,9 @@ import {
 } from "./queued-inputs.ts";
 import type {
   BrowserEvent,
+  Block,
   ContextUsage,
+  MediaRef,
   Message,
   SessionTurnStatus,
   TokenUsage,
@@ -160,10 +162,18 @@ export function projectOptimisticTurn(
   turnID: string | undefined,
   input: string | undefined,
   kind?: string,
+  attachments: MediaRef[] = [],
 ): LiveSessionProjection {
   return {
     ...state,
-    messages: appendLiveTurnToMessages(state.messages, turnID, input, kind, "optimistic"),
+    messages: appendLiveTurnToMessages(
+      state.messages,
+      turnID,
+      input,
+      kind,
+      "optimistic",
+      attachments,
+    ),
     turnActive: true,
     status: { kind: "running" },
   };
@@ -174,6 +184,7 @@ export function projectQueuedInput(
   input: string | undefined,
   kind: string | undefined,
   pendingCount: number,
+  attachments: MediaRef[] = [],
 ): LiveSessionProjection {
   return {
     ...state,
@@ -182,6 +193,7 @@ export function projectQueuedInput(
       input,
       kind,
       pendingCount,
+      attachments,
     ),
     turnActive: true,
     status: { kind: "pending", count: pendingCount },
@@ -235,8 +247,13 @@ export function projectLiveSessionEvent(
   const effects: LiveSessionProjectionEffect[] = [];
 
   switch (event.type) {
-    case "turn.started":
-      next = consumeQueuedInput(next, event.payload.input, event.payload.kind);
+    case "turn.started": {
+      const consumed = consumeQueuedInput(
+        next,
+        event.payload.input,
+        event.payload.kind,
+      );
+      next = consumed.state;
       next = {
         ...next,
         messages: appendLiveTurnToMessages(
@@ -245,11 +262,13 @@ export function projectLiveSessionEvent(
           event.payload.input,
           event.payload.kind,
           "event",
+          consumed.item?.attachments,
         ),
         turnActive: true,
         status: { kind: "running" },
       };
       break;
+    }
     case "llm.requested":
       next = { ...next, turnActive: true, status: { kind: "running" } };
       break;
@@ -392,6 +411,7 @@ export function projectLiveSessionEvent(
       };
       effects.push({ type: "refresh", preserveLiveMessages: true });
       break;
+    case "context.compact.summary_model_fallback":
     case "context.compact.skipped":
     case "context.projection.applied":
       break;
@@ -457,21 +477,28 @@ function consumeQueuedInput(
   state: LiveSessionProjection,
   input: string | undefined,
   kind: string | undefined,
-): LiveSessionProjection {
-  if (!input) return state;
-  const index = state.queuedInput.items.findIndex(
-    (item) => item.input === input && item.kind === kind,
+): { state: LiveSessionProjection; item?: QueuedInput } {
+  const normalizedInput = input ?? "";
+  let index = state.queuedInput.items.findIndex(
+    (item) => item.input === normalizedInput && item.kind === kind,
   );
-  if (index < 0) return state;
+  if (index < 0 && normalizedInput === "" && state.queuedInput.items.length > 0) {
+    index = 0;
+  }
+  if (index < 0) return { state };
+  const item = state.queuedInput.items[index];
   return {
-    ...state,
-    queuedInput: {
-      ...state.queuedInput,
-      items: [
-        ...state.queuedInput.items.slice(0, index),
-        ...state.queuedInput.items.slice(index + 1),
-      ],
+    state: {
+      ...state,
+      queuedInput: {
+        ...state.queuedInput,
+        items: [
+          ...state.queuedInput.items.slice(0, index),
+          ...state.queuedInput.items.slice(index + 1),
+        ],
+      },
     },
+    item,
   };
 }
 
@@ -508,7 +535,7 @@ function appendDrainedInputs(
     role: "user",
     turn_id: turnID,
     kind: item.kind || "pending_input",
-    blocks: [{ type: "text", text: item.input }],
+    blocks: inputBlocks(item.input, item.attachments),
   }));
   if (!turnID) return [...messages, ...additions];
   const insertAt = messages.findIndex(
@@ -531,10 +558,14 @@ function appendLiveTurnToMessages(
   input: string | undefined,
   kind: string | undefined,
   source: "event" | "optimistic",
+  attachments: MediaRef[] = [],
 ): Message[] {
-  if (!turnID || !input) return messages;
+  const blocks = inputBlocks(input, attachments);
+  if (!turnID || blocks.length === 0) return messages;
   if (messages.some((message) => message.turn_id === turnID)) return messages;
-  const existingTurnID = findPendingTurnForInput(messages, input);
+  const existingTurnID = input
+    ? findPendingTurnForInput(messages, input)
+    : undefined;
   if (existingTurnID) {
     if (source === "optimistic") return messages;
     return messages.map((message) =>
@@ -547,7 +578,7 @@ function appendLiveTurnToMessages(
       role: "user",
       turn_id: turnID,
       kind,
-      blocks: [{ type: "text", text: input }],
+      blocks,
     },
     {
       role: "assistant",
@@ -556,6 +587,20 @@ function appendLiveTurnToMessages(
       blocks: [],
     },
   ];
+}
+
+function inputBlocks(
+  input: string | undefined,
+  attachments: MediaRef[] | undefined,
+): Block[] {
+  const blocks: Block[] = [];
+  if (input) {
+    blocks.push({ type: "text", text: input });
+  }
+  for (const media of attachments ?? []) {
+    blocks.push({ type: "image", media });
+  }
+  return blocks;
 }
 
 function ensurePendingAssistant(messages: Message[], turnID: string): Message[] {

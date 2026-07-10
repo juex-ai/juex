@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 // errorJSON is the wire shape for every error response.
@@ -136,12 +137,6 @@ type sessionMessageWindow struct {
 	Limit  int
 }
 
-type sessionMessagePage struct {
-	Messages        []llm.Message
-	HasMoreBefore   bool
-	OldestMessageID string
-}
-
 func messagesForSessionResponse(msgs []llm.Message) []llm.Message {
 	if msgs == nil {
 		return []llm.Message{}
@@ -157,15 +152,19 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	}
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
-		info, msgs := as.app.Session.Snapshot(time.Now().UTC())
+		info := as.app.Session.Info(time.Now().UTC())
 		info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 			return
 		}
-		page, err := selectSessionMessagePage(msgs, window)
+		page, err := as.app.Session.TranscriptMessagePage(window.Before, window.Limit)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			if errors.Is(err, session.ErrBeforeMessageNotFound) {
+				writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 			return
 		}
 		goal, workingState := s.sessionStateStatus(as.app.Session.Dir, as)
@@ -182,18 +181,17 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	info, msgs, err := session.LoadInfo(dir)
+	info, page, err := session.LoadInfoPage(dir, window.Before, window.Limit)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 			return
 		}
+		if errors.Is(err, session.ErrBeforeMessageNotFound) {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	page, err := selectSessionMessagePage(msgs, window)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
 	info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
@@ -262,60 +260,6 @@ func parseSessionMessageWindow(r *http.Request) (sessionMessageWindow, error) {
 	}
 	window.Before = strings.TrimSpace(q.Get("before"))
 	return window, nil
-}
-
-func selectSessionMessagePage(msgs []llm.Message, window sessionMessageWindow) (sessionMessagePage, error) {
-	if msgs == nil {
-		msgs = []llm.Message{}
-	}
-	start := 0
-	end := len(msgs)
-	if window.Before != "" {
-		index := sessionMessageIndex(msgs, window.Before)
-		if index < 0 {
-			return sessionMessagePage{}, fmt.Errorf("before message not found: %s", window.Before)
-		}
-		end = index
-	} else if compactIndex := latestCompactMessageIndex(msgs); compactIndex >= 0 {
-		start = compactIndex
-	}
-	if window.Limit > 0 && end-start > window.Limit {
-		start = end - window.Limit
-	}
-	if start < 0 {
-		start = 0
-	}
-	if end < start {
-		end = start
-	}
-	pageMessages := msgs[start:end]
-	oldestID := ""
-	if len(pageMessages) > 0 {
-		oldestID = pageMessages[0].ID
-	}
-	return sessionMessagePage{
-		Messages:        pageMessages,
-		HasMoreBefore:   start > 0,
-		OldestMessageID: oldestID,
-	}, nil
-}
-
-func latestCompactMessageIndex(msgs []llm.Message) int {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Kind == llm.MessageKindCompact {
-			return i
-		}
-	}
-	return -1
-}
-
-func sessionMessageIndex(msgs []llm.Message, id string) int {
-	for i, msg := range msgs {
-		if msg.ID == id {
-			return i
-		}
-	}
-	return -1
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request, id string) {
@@ -400,7 +344,7 @@ func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
-	_, msgs, err := session.LoadInfo(dir)
+	msgs, err := session.LoadActiveMessages(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
@@ -466,7 +410,8 @@ func (s *Server) sessionInfo(id string) (session.Info, error) {
 
 // turnRequest is the wire shape for POST /turns.
 type turnRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt      string         `json:"prompt"`
+	Attachments []llm.MediaRef `json:"attachments,omitempty"`
 }
 
 type startTurnResponse struct {
@@ -493,17 +438,82 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 	}
 
 	var req turnRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Prompt == "" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body with non-empty prompt")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body")
+		return
+	}
+	if len(req.Attachments) > 0 {
+		if err := usermedia.ValidateSessionMediaRefs(s.opts.Cfg.WorkDir, id, req.Attachments, usermedia.Limits{}); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+	}
+	if strings.TrimSpace(req.Prompt) == "" && len(req.Attachments) == 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body with non-empty prompt or attachments")
 		return
 	}
 
 	result := as.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
-		Prompt: req.Prompt,
-		IDs:    app.TurnIDFunc(s.nextTurnID),
+		Prompt:      req.Prompt,
+		Attachments: req.Attachments,
+		IDs:         app.TurnIDFunc(s.nextTurnID),
 	})
 	s.applyTurnAdmissionResult(as, result)
 	s.writeTurnAdmissionResult(w, result)
+}
+
+func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Request, id string) {
+	if _, ok, msg := s.webTurnAllowed(id); !ok {
+		if msg == "" {
+			writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		} else {
+			writeErr(w, http.StatusConflict, "conflict", msg)
+		}
+		return
+	}
+	if _, err := s.getActiveSession(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, usermedia.DefaultMaxBytes+1024*1024)
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "payload_too_large", "request body too large")
+			return
+		}
+		writeErr(w, http.StatusBadRequest, "bad_request", "expected multipart file field named file")
+		return
+	}
+
+	filename := ""
+	if header != nil {
+		filename = header.Filename
+	}
+	ref, err := usermedia.StoreUpload(s.opts.Cfg.WorkDir, id, filename, file, usermedia.Limits{})
+	closeErr := file.Close()
+	if err != nil {
+		status := http.StatusBadRequest
+		kind := "bad_request"
+		msg := err.Error()
+		switch {
+		case strings.Contains(msg, "unsupported image type"):
+			status = http.StatusUnsupportedMediaType
+			kind = "unsupported_media_type"
+		case strings.Contains(msg, "exceeds"):
+			status = http.StatusRequestEntityTooLarge
+			kind = "payload_too_large"
+		}
+		writeErr(w, status, kind, msg)
+		return
+	}
+	if closeErr != nil {
+		writeErr(w, http.StatusInternalServerError, "internal_error", "failed to close uploaded file")
+		return
+	}
+	writeJSON(w, http.StatusOK, ref)
 }
 
 func (s *Server) nextTurnID(prefix string) string {

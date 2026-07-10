@@ -29,7 +29,7 @@ func (FileToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 func readTool(workDir string, guard sandbox.PathGuard) Tool {
 	return Tool{
 		Name:        "read",
-		Description: "Read a UTF-8 text file. Returns the file contents. Optional offset (1-based line) and limit (max lines).",
+		Description: "Read a UTF-8 text file or image. Text reads return file contents with optional offset (1-based line) and limit (max lines). Image reads return a media reference visible to vision-capable models; offset and limit are not supported for images.",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -39,23 +39,29 @@ func readTool(workDir string, guard sandbox.PathGuard) Tool {
 			},
 			"required": []string{"path"},
 		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
 			path, _ := in["path"].(string)
 			if path == "" {
-				return "", fmt.Errorf("read: missing path")
+				return Result{}, fmt.Errorf("read: missing path")
 			}
 			path = resolveWorkPath(workDir, path)
 			if err := guard.Check(path); err != nil {
-				return "", fmt.Errorf("read: %w", err)
+				return Result{}, fmt.Errorf("read: %w", err)
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
 			offset, _ := toInt(in["offset"])
 			limit, _ := toInt(in["limit"])
+			if kind, ok := detectReadImage(path, data); ok {
+				if offset > 0 || limit > 0 {
+					return Result{}, fmt.Errorf("read: offset and limit are not supported for image files")
+				}
+				return readImageResult(workDir, data, kind)
+			}
 			if offset <= 0 && limit <= 0 {
-				return string(data), nil
+				return Result{Text: string(data)}, nil
 			}
 			lines := strings.Split(string(data), "\n")
 			start := 0
@@ -69,7 +75,7 @@ func readTool(workDir string, guard sandbox.PathGuard) Tool {
 			if limit > 0 && start+limit < end {
 				end = start + limit
 			}
-			return strings.Join(lines[start:end], "\n"), nil
+			return Result{Text: strings.Join(lines[start:end], "\n")}, nil
 		},
 	}
 }

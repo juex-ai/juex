@@ -44,6 +44,44 @@ func TestContextUsageSnapshotFallsBackToEstimatedInputWhenProviderOmitsInput(t *
 	}
 }
 
+func TestEstimateTextTokensClassifiesCJKRunes(t *testing.T) {
+	ascii := strings.Repeat("a", 24)
+	cjk := strings.Repeat("界", 24)
+	mixed := "hello世界"
+
+	if got := EstimateTextTokens(ascii); got != 6 {
+		t.Fatalf("ASCII estimate = %d, want 6", got)
+	}
+	if got := EstimateTextTokens(cjk); got != 24 {
+		t.Fatalf("CJK estimate = %d, want one token per rune", got)
+	}
+	if got := EstimateTextTokens(mixed); got != 4 {
+		t.Fatalf("mixed estimate = %d, want ASCII bucket plus CJK runes", got)
+	}
+	if EstimateTextTokens(cjk) <= EstimateTextTokens(ascii)*2 {
+		t.Fatalf("CJK estimate should be materially higher than same-length ASCII")
+	}
+}
+
+func TestTokenEstimateCalibrationClampsAndSmooths(t *testing.T) {
+	var calibration tokenEstimateCalibration
+
+	calibration.update(40, 10)
+	if got := calibration.apply(10); got != 30 {
+		t.Fatalf("clamped estimate = %d, want 30", got)
+	}
+
+	calibration.update(15, 10)
+	if got := calibration.apply(10); got != 26 {
+		t.Fatalf("smoothed estimate = %d, want 26", got)
+	}
+
+	calibration.update(0, 10)
+	if got := calibration.apply(10); got != 26 {
+		t.Fatalf("zero real usage should not update estimate, got %d", got)
+	}
+}
+
 func TestContextUsageSnapshotDoesNotDoubleCountCompactAndArtifactMessages(t *testing.T) {
 	compact := llm.TextMessage(llm.RoleUser, strings.Repeat("compact summary ", 20))
 	compact.Kind = llm.MessageKindCompact

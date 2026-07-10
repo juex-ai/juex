@@ -36,6 +36,34 @@ func TestSession_AppendsToConversationJSONL(t *testing.T) {
 	}
 }
 
+func TestSession_AppendDoesNotMutateHistoryWhenPersistFails(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.convFD.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.convFD, err = os.Open(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.Append(llm.TextMessage(llm.RoleUser, "lost"))
+	if err == nil {
+		t.Fatal("Append err = nil, want write failure")
+	}
+	if len(s.History) != 0 {
+		t.Fatalf("history len = %d, want 0 after failed append", len(s.History))
+	}
+	if len(s.transcript.entries) != 0 {
+		t.Fatalf("transcript entries = %d, want 0 after failed append", len(s.transcript.entries))
+	}
+}
+
 func TestSession_NewWithOptionsPersistsKind(t *testing.T) {
 	root := t.TempDir()
 	s, err := NewWithOptions(root, Options{Kind: KindSide})
@@ -428,6 +456,94 @@ func TestSession_LoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoad_UsesLatestCompactActiveWindow(t *testing.T) {
+	root := t.TempDir()
+	oldUser := llm.TextMessage(llm.RoleUser, "old user")
+	oldUser.ID = "m1"
+	tail := llm.TextMessage(llm.RoleAssistant, "tail assistant")
+	tail.ID = "m2"
+	compact := compactTestMessage("summary")
+	compact.ID = "m3"
+	compact.Compaction = &llm.CompactionMetadata{TailStartMessageID: "m2"}
+	latest := llm.TextMessage(llm.RoleUser, "latest user")
+	latest.ID = "m4"
+	dir := makeSession(t, root, "20260515T010203-window", []llm.Message{oldUser, tail, compact, latest}, time.Now())
+
+	s, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if got := messageIDsForTest(s.History); strings.Join(got, ",") != "m2,m3,m4" {
+		t.Fatalf("active history ids = %v, want m2,m3,m4", got)
+	}
+	info := s.Info(time.Now())
+	if info.Turns != 2 || info.Preview != "old user" {
+		t.Fatalf("info = turns %d preview %q, want full transcript summary", info.Turns, info.Preview)
+	}
+
+	page, err := s.TranscriptMessagePage("", 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDsForTest(page.Messages); strings.Join(got, ",") != "m3,m4" {
+		t.Fatalf("initial page ids = %v, want m3,m4", got)
+	}
+	if !page.HasMoreBefore || page.OldestMessageID != "m3" {
+		t.Fatalf("page = %+v, want more before m3", page)
+	}
+
+	older, err := s.TranscriptMessagePage("m3", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := messageIDsForTest(older.Messages); strings.Join(got, ",") != "m1,m2" {
+		t.Fatalf("older page ids = %v, want m1,m2", got)
+	}
+	if older.HasMoreBefore {
+		t.Fatalf("older page has_more_before = true, want false")
+	}
+}
+
+func TestLoadWithRepairTranscript_PreservesMessagesBeforeWindow(t *testing.T) {
+	root := t.TempDir()
+	assistant := llm.Message{
+		ID:   "m1",
+		Role: llm.RoleAssistant,
+		Blocks: []llm.Block{{
+			Type:      llm.BlockToolUse,
+			ToolUseID: "call_1",
+			ToolName:  "read",
+		}},
+	}
+	compact := compactTestMessage("summary")
+	compact.ID = "m2"
+	latest := llm.TextMessage(llm.RoleUser, "latest")
+	latest.ID = "m3"
+	dir := makeSession(t, root, "20260515T010203-repair", []llm.Message{assistant, compact, latest}, time.Now())
+
+	s, err := LoadWithOptions(dir, Options{RepairTranscript: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, full, err := LoadInfo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) != 4 {
+		t.Fatalf("full transcript len = %d, want 4: %+v", len(full), full)
+	}
+	if full[0].ID != "m1" || full[1].Role != llm.RoleUser || full[1].Blocks[0].ToolUseID != "call_1" || full[2].ID != "m2" {
+		t.Fatalf("repaired transcript = %+v", full)
+	}
+	if got := messageIDsForTest(s.History); strings.Join(got, ",") != "m2,m3" {
+		t.Fatalf("active history ids = %v, want m2,m3", got)
+	}
+}
+
 func TestSession_LoadNormalizesNullBlocks(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "20260509T074114-a20bf346")
@@ -460,6 +576,14 @@ func countLines(data []byte) int {
 		}
 	}
 	return n
+}
+
+func messageIDsForTest(msgs []llm.Message) []string {
+	out := make([]string, 0, len(msgs))
+	for _, msg := range msgs {
+		out = append(out, msg.ID)
+	}
+	return out
 }
 
 // time2025OrLater is a tiny helper that just returns "" — kept here so the

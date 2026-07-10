@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 )
@@ -68,6 +69,8 @@ type dryRunPlan struct {
 	Sandbox     sandbox.Policy      `json:"sandbox"`
 	SkillCount  int                 `json:"skill_count"`
 	Skills      []skillSummary      `json:"skills,omitempty"`
+	Resources   string              `json:"resources"`
+	Sections    []promptSectionPlan `json:"system_prompt_sections,omitempty"`
 	MCP         app.MCPStatus       `json:"mcp"`
 }
 
@@ -77,6 +80,15 @@ type dryRunPlan struct {
 type skillSummary struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
+}
+
+type promptSectionPlan struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Source string `json:"source"`
+	Path   string `json:"path,omitempty"`
+	Chars  int    `json:"chars"`
+	Tokens int    `json:"tokens"`
 }
 
 // noopProvider stands in for the real LLM provider during a dry run so
@@ -183,6 +195,9 @@ execution is printed and the process exits with code 10.`,
 					"check top-level model plus providers[].id/providers[].protocol/providers[].api_key in .juex/juex.yaml", false)
 			}
 			defer a.Close()
+			if flags.verbose {
+				fmt.Fprintln(cmd.ErrOrStderr(), app.FormatResourceSummary(a.ResourceSummary()))
+			}
 
 			start := time.Now()
 			out, err := a.Run(cmd.Context(), prompt)
@@ -247,6 +262,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	defer a.Close()
 
 	system := a.Engine.Prompt.Build()
+	sections := a.Engine.Prompt.Sections()
 	toolList := a.Engine.Tools.List()
 	tools := make([]string, len(toolList))
 	for i, t := range toolList {
@@ -257,6 +273,17 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		for _, s := range pb.Skills.All() {
 			skillSummaries = append(skillSummaries, skillSummary{Name: s.Name, Path: s.Path})
 		}
+	}
+	sectionPlans := make([]promptSectionPlan, 0, len(sections))
+	for _, section := range sections {
+		sectionPlans = append(sectionPlans, promptSectionPlan{
+			Key:    section.Key,
+			Label:  section.Label,
+			Source: section.Source,
+			Path:   section.Path,
+			Chars:  len(section.Text),
+			Tokens: juexruntime.EstimateTextTokens(section.Text),
+		})
 	}
 	providerID := cfg.ProviderID
 	protocol := cfg.ProviderProtocol
@@ -285,6 +312,8 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		Sandbox:     cfg.SandboxPolicy(),
 		SkillCount:  len(skillSummaries),
 		Skills:      skillSummaries,
+		Resources:   app.FormatResourceSummary(a.ResourceSummary()),
+		Sections:    sectionPlans,
 		MCP:         a.MCPStatus(),
 	}
 

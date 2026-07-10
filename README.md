@@ -128,9 +128,21 @@ extension hooks are trusted by location. Extension MCP servers receive
 under `.juex/` so it can stay uncommitted. User-global provider fallback
 configuration lives at `~/.juex/juex.yaml`.
 
+Skills are exposed with progressive disclosure. The system prompt contains a
+compact, budgeted skill catalog instead of every full `SKILL.md`; the model can
+call `skill_search` to discover catalog entries and `skill_load` to read the
+full markdown body plus its source path when a skill is relevant. Configure `skills.include` or
+`skills.exclude` to manually control which merged skills enter the catalog, and
+`skills.prompt_budget_chars` to tune the initial catalog budget. `juex repl`
+and `juex run --verbose` print a resource summary, while `juex run --dry-run
+--json` includes per-section system-prompt token estimates.
+
 The builtin file tools are `read`, `write`, `edit`, `apply_patch`, `grep`, and
 the chunked write tools `write_begin`, `write_chunk`, `write_commit`, and
-`write_abort`. `apply_patch` accepts a compact patch envelope in `patch_text`
+`write_abort`. `read` returns UTF-8 text for text files and structured media
+references for supported image files so vision-capable providers can inspect
+screenshots and visual artifacts without inlining image bytes into history.
+`apply_patch` accepts a compact patch envelope in `patch_text`
 with `*** Begin Patch` / `*** End Patch` markers and supports add, update,
 delete, and move operations. It validates the whole patch before writing,
 rejects paths outside the workspace, and returns a short changed-file summary
@@ -201,7 +213,8 @@ the Web UI and the `observable_*` agent tools. Command sources capture bounded
 stdout/stderr batches from managed commands. Schedule sources emit one-shot,
 daily, or interval Observations without an external wrapper and persist
 schedule state under `.juex/observables/`. Observables are workspace-local in
-the first version.
+the first version. Created Observables may omit `id` when `name` can be
+slugged into a stable lower-case id.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related
