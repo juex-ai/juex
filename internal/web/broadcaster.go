@@ -47,6 +47,10 @@ func newBroadcaster() *broadcaster {
 	return &broadcaster{subs: map[*subscriber]struct{}{}}
 }
 
+func (b *broadcaster) Publish(e events.Event) {
+	b.publish(e)
+}
+
 func (b *broadcaster) subscribe() *subscriber {
 	s := &subscriber{
 		ch:     make(chan events.Event, broadcasterBufferSize),

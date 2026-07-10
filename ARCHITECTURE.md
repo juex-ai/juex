@@ -58,7 +58,7 @@ juex/
 │   │   ├── shell.go
 │   │   └── codex_auth.go
 │   ├── bundle/                   # portable debug bundle tar.gz creation
-│   ├── events/     bus.go        # in-process EventBus (glob)
+│   ├── events/                   # in-process EventBus + durable commit sink
 │   ├── hooks/                    # trusted lifecycle command hook execution
 │   ├── observable/               # workspace Observable sources, schedule state, observation store/tools
 │   ├── observability/            # session-local logs, traces, spans, tool summaries
@@ -537,6 +537,14 @@ type Bus struct { ... }
 func Normalize(e Event) Event                         // fill stable id/timestamp defaults
 func (b *Bus) Subscribe(pattern string, fn func(Event))  // glob: "tool.*"
 func (b *Bus) Emit(e Event)                              // synchronous fan-out
+
+type Journal interface { AppendEvent(Event) error }
+type Delivery interface { Publish(Event) }
+type DurableSink struct { ... }
+func NewDurableSink(journal Journal) *DurableSink
+func (s *DurableSink) Commit(e Event) (Event, error)
+func (s *DurableSink) Handle(e Event)
+func (s *DurableSink) AddDelivery(d Delivery) func()
 ```
 
 Standard event families include `turn.started/completed/errored`,
@@ -551,6 +559,14 @@ tools, observability, SSE tests, frontend fixtures, and eval smoke helpers use
 one field vocabulary. Other stable runtime event families use typed payload
 structs next to their emitters while the bus and JSONL/SSE wire shape stay
 generic through `Payload any`.
+
+Durable browser-visible runtime facts flow through `events.DurableSink`.
+`internal/app` subscribes one sink to the app bus, using the session as the
+journal adapter. The sink normalizes each event once, appends it to
+`events.jsonl`, then publishes the committed event to registered live delivery
+adapters such as the web broadcaster. If journal append fails, live delivery is
+skipped. The public SSE cursor remains the event ID; replay order is the JSONL
+line order after that ID.
 
 ### 3.4 Memory
 
@@ -606,7 +622,9 @@ type Info struct {
 
 Each `Append(msg)` writes one JSON line to `conversation.jsonl`; each
 `AppendEvent(e)` writes a normalized event with id and timestamp to
-`events.jsonl`. Runtime callers resume sessions with
+`events.jsonl`. In the app runtime path, event append is driven by the durable
+event sink before any live delivery sees the event. Runtime callers resume
+sessions with
 `session.LoadWithOptions(dir, opts)` so aliases, lazy transcript creation, and
 explicit transcript repair policy are applied consistently; `session.Load` is
 only the no-option convenience wrapper. When repair is enabled, session loading
@@ -617,7 +635,7 @@ conversation continues, then records `transcript.repaired` evidence in
 `llm.responded` events and exposed through session `Info`, not through
 individual messages.
 
-`internal/observability` subscribes to the same in-process event bus and writes
+`internal/observability` subscribes to the in-process event bus and writes
 derived session-local artifacts: `logs/juex.log`, `logs/debug.log`,
 `trace.jsonl`, `spans.jsonl`, and `tools.jsonl`. These files are diagnostic
 views over runtime events and intentionally do not alter the compatibility
@@ -836,9 +854,10 @@ func (s *Server) Run(ctx) error
 `juex serve` defaults to `127.0.0.1:8080` (loopback only, no auth). Binding
 beyond loopback requires `--unsafe-bind-any`. Startup ensures an active primary
 session record exists, starts listening, and then warms the shared MCP manager
-plus the active primary session. Each session gets its own `*app.App`; events
-flow to a per-session broadcaster that fans out to connected SSE clients. Slow
-clients are dropped after a 5s buffer-full timeout.
+plus the active primary session. Each session gets its own `*app.App`; the web
+broadcaster is registered as a live delivery adapter on the app's durable event
+sink, so SSE clients only receive events after `events.jsonl` append succeeds.
+Slow clients are dropped after a 5s buffer-full timeout.
 `make web` builds the React SPA in `frontend/`, copies the bundle to
 `internal/web/dist`, and the Go binary embeds that directory with `go:embed`.
 

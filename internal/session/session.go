@@ -274,9 +274,10 @@ func shouldRecordActive(opts Options, kind string) bool {
 	return opts.HistoryPath != "" && NormalizeKind(kind) == KindPrimary
 }
 
-// SubscribeBus wires every event emitted on bus through to AppendEvent so the
-// runtime doesn't have to remember to do it manually. The returned function
-// removes the subscription.
+// SubscribeBus wires every event emitted on bus through to AppendEvent. App
+// runtime wiring uses events.DurableSink so live deliveries only see committed
+// events; this helper remains for lower-level callers and tests. The returned
+// function removes the subscription.
 func (s *Session) SubscribeBus(bus *events.Bus) func() {
 	if bus == nil {
 		return func() {}
