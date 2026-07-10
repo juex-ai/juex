@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestDurableSink_CommitsBeforeDelivery(t *testing.T) {
@@ -98,6 +99,43 @@ func TestDurableSink_PreservesDeliveryOrderFromJournalOrder(t *testing.T) {
 	}
 }
 
+func TestDurableSink_DoesNotHoldStateLockWhileDelivering(t *testing.T) {
+	journal := &recordingJournal{}
+	delivery := &blockingDelivery{started: make(chan struct{}), release: make(chan struct{})}
+	sink := NewDurableSink(journal)
+	sink.AddDelivery(delivery)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := sink.Commit(Event{Type: "turn.started"})
+		errCh <- err
+	}()
+
+	select {
+	case <-delivery.started:
+	case <-time.After(time.Second):
+		t.Fatal("delivery did not start")
+	}
+
+	added := make(chan struct{})
+	go func() {
+		sink.AddDelivery(DeliveryFunc(func(Event) {}))
+		close(added)
+	}()
+
+	select {
+	case <-added:
+	case <-time.After(100 * time.Millisecond):
+		close(delivery.release)
+		t.Fatal("AddDelivery blocked behind a slow delivery")
+	}
+
+	close(delivery.release)
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDurableSink_UnsubscribeAndClose(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
@@ -160,4 +198,15 @@ type recordingDelivery struct {
 
 func (d *recordingDelivery) Publish(e Event) {
 	d.events = append(d.events, e)
+}
+
+type blockingDelivery struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (d *blockingDelivery) Publish(Event) {
+	d.once.Do(func() { close(d.started) })
+	<-d.release
 }

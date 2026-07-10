@@ -25,8 +25,10 @@ func (fn DeliveryFunc) Publish(e Event) {
 }
 
 type DurableSink struct {
-	mu         sync.Mutex
-	journal    Journal
+	commitMu sync.Mutex
+	mu       sync.Mutex
+	journal  Journal
+
 	deliveries map[uint64]Delivery
 	nextID     uint64
 	closed     bool
@@ -83,18 +85,37 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 	}
 	e = Normalize(e)
 
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return Event{}, ErrDurableSinkClosed
 	}
-	if s.journal == nil {
+	journal := s.journal
+	if journal == nil {
+		s.mu.Unlock()
 		return Event{}, ErrDurableJournalMissing
 	}
-	if err := s.journal.AppendEvent(e); err != nil {
+	s.mu.Unlock()
+
+	if err := journal.AppendEvent(e); err != nil {
 		return Event{}, err
 	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return Event{}, ErrDurableSinkClosed
+	}
+	deliveries := make([]Delivery, 0, len(s.deliveries))
 	for _, delivery := range s.deliveries {
+		deliveries = append(deliveries, delivery)
+	}
+	s.mu.Unlock()
+
+	for _, delivery := range deliveries {
 		delivery.Publish(e)
 	}
 	return e, nil
