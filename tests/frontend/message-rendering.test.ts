@@ -5,7 +5,7 @@ import {
   externalEventCopyClassName,
   externalEventRowClassName,
   messageContentBaseClassName,
-  messageContentRoleClassName,
+  messageContentUserClassName,
   messageGroupModelLabels,
   messageGroupShouldShowModel,
   messageResponseClassName,
@@ -24,7 +24,7 @@ test("messageResponseClassName preserves explicit paragraph newlines", () => {
 
 test("user message chrome uses a weak card treatment", () => {
   const base = messageContentBaseClassName();
-  const user = messageContentRoleClassName("user");
+  const user = messageContentUserClassName();
 
   assert.match(base, /text-\[14\.5px\]/);
   assert.match(base, /bg-card/);
@@ -33,16 +33,6 @@ test("user message chrome uses a weak card treatment", () => {
   assert.match(user, /group-\[\.is-user\]:ml-auto/);
   assert.doesNotMatch(user, /bg-juex-user/);
   assert.doesNotMatch(user, /text-juex-user-foreground/);
-});
-
-test("MessageContent primitive keeps its card treatment", () => {
-  const base = messageContentBaseClassName();
-  const assistant = messageContentRoleClassName("assistant");
-
-  assert.match(base, /bg-card/);
-  assert.match(base, /border-border/);
-  assert.match(base, /text-card-foreground/);
-  assert.match(assistant, /group-\[\.is-assistant\]:rounded-tl-\[6px\]/);
 });
 
 test("message model labels only render for normal assistant messages", () => {

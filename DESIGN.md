@@ -351,7 +351,7 @@ read as authored input without competing with assistant output. Assistant text
 renders as unframed, left-aligned conversation text. A model label appears only
 on the first group in a contiguous run from the same model; a user or status
 message starts a new run. Reasoning and tool sub-units render as compact process
-rows beside the assistant text. MCP notifications, Observations, and hook traces
+rows below the assistant text. MCP notifications, Observations, and hook traces
 bypass normal message chrome and render as low-emphasis transcript rows so they
 do not read as human-authored messages.
 
