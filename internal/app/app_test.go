@@ -265,6 +265,30 @@ func TestApp_NewAppliesRuntimePolicyValues(t *testing.T) {
 	}
 }
 
+func TestApp_NewInjectedProviderDoesNotConstructSummaryProvider(t *testing.T) {
+	dir := t.TempDir()
+	compaction := config.DefaultCompactionConfig()
+	compaction.SummaryModel = "missing:gpt-4-mini"
+	a, err := New(Options{
+		Config: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    dir,
+			Compaction: compaction,
+		},
+		Provider: &stubProvider{},
+		WorkDir:  dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if a.Engine.SummaryProvider != nil {
+		t.Fatalf("SummaryProvider = %T, want nil for injected provider without explicit summary provider", a.Engine.SummaryProvider)
+	}
+}
+
 func TestApp_HandleObservationStartsTurnWhenNoActiveTurn(t *testing.T) {
 	reply := llm.TextMessage(llm.RoleAssistant, "ack")
 	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})

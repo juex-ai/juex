@@ -132,6 +132,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleTurnStatus(w, r, id, strings.TrimPrefix(rest, "turns/"))
 	case rest == "turns" && r.Method == http.MethodPost:
 		s.handleStartTurn(w, r, id)
+	case rest == "attachments" && r.Method == http.MethodPost:
+		s.handleSessionAttachmentUpload(w, r, id)
 	case rest == "interrupt" && r.Method == http.MethodPost:
 		s.handleInterrupt(w, r, id)
 	case rest == "events" && r.Method == http.MethodGet:

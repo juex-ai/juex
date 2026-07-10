@@ -9,6 +9,7 @@ import type {
   SessionsListResponse,
   StartTurnResponse,
   TurnStatusResponse,
+  MediaRef,
   FileContentResponse,
   FileNode,
   ObservableCreateRequest,
@@ -82,12 +83,27 @@ export async function deleteSession(id: string): Promise<DeleteSessionResponse> 
 export async function startTurn(
   id: string,
   prompt: string,
+  attachments: MediaRef[] = [],
 ): Promise<StartTurnResponse> {
   return jsonOrThrow(
     await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/turns`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, attachments }),
+    }),
+  );
+}
+
+export async function uploadSessionAttachment(
+  id: string,
+  file: File,
+): Promise<MediaRef> {
+  const body = new FormData();
+  body.append("file", file, file.name);
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/attachments`, {
+      method: "POST",
+      body,
     }),
   );
 }
