@@ -88,7 +88,7 @@ type ContextArtifactProjection struct {
 	ToolUseID     string `json:"tool_use_id,omitempty"`
 	ToolName      string `json:"tool_name,omitempty"`
 	OriginalBytes int    `json:"original_bytes"`
-	StoredPath    string `json:"stored_path"`
+	StoredPath    string `json:"stored_path"` // workspace-relative `.juex/artifacts/...` reference
 	SHA256        string `json:"sha256"`
 	HeadBytes     int    `json:"head_bytes"`
 	TailBytes     int    `json:"tail_bytes"`

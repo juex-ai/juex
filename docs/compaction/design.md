@@ -75,7 +75,7 @@ type ContextArtifactProjection struct {
     ToolUseID     string
     ToolName      string
     OriginalBytes int
-    StoredPath    string
+    StoredPath    string // workspace-relative `.juex/artifacts/...` reference
     SHA256        string
     HeadBytes     int
     TailBytes     int

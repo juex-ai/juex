@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
@@ -360,10 +361,7 @@ func TestTurn_ExternalizesLargeUserInputBeforeProviderRequest(t *testing.T) {
 	if block.Artifact == nil || block.Artifact.SourceKind != "user_input" || !block.Artifact.Truncated {
 		t.Fatalf("artifact metadata missing: %+v", block)
 	}
-	data, err := os.ReadFile(block.Artifact.StoredPath)
-	if err != nil {
-		t.Fatalf("read artifact: %v", err)
-	}
+	data := readProjectedArtifact(t, eng, block.Artifact)
 	if string(data) != input {
 		t.Fatalf("artifact content length = %d, want original %d", len(data), len(input))
 	}
@@ -412,13 +410,33 @@ func TestTurn_ExternalizesLargeToolResultBeforeNextProviderRequest(t *testing.T)
 	if block.Artifact == nil || block.Artifact.SourceKind != "tool_result" || block.Artifact.ToolUseID != "call_big" {
 		t.Fatalf("artifact metadata missing: %+v", block)
 	}
-	data, err := os.ReadFile(block.Artifact.StoredPath)
-	if err != nil {
-		t.Fatalf("read artifact: %v", err)
-	}
+	data := readProjectedArtifact(t, eng, block.Artifact)
 	if !strings.Contains(string(data), "TOOL-SECRET") {
 		t.Fatalf("artifact lost original tool output")
 	}
+}
+
+func readProjectedArtifact(t *testing.T, eng *Engine, projection *llm.ContextArtifactProjection) []byte {
+	t.Helper()
+	if projection == nil {
+		t.Fatal("missing context artifact projection")
+	}
+	if filepath.IsAbs(projection.StoredPath) {
+		t.Fatalf("stored path = %q, want workspace-relative artifact reference", projection.StoredPath)
+	}
+	store, err := eng.projectedArtifactStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := store.Read(artifact.Ref{
+		Path:   projection.StoredPath,
+		SHA256: projection.SHA256,
+		Bytes:  projection.OriginalBytes,
+	})
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	return data
 }
 
 func TestTurn_ProjectsLegacyLargeHistoryBeforeProviderRequest(t *testing.T) {

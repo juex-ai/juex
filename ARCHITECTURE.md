@@ -41,6 +41,7 @@ juex/
 │   │   ├── slash.go
 │   │   ├── turn_admission.go
 │   │   └── turn_admission_queue.go
+│   ├── artifact/                 # safe workspace artifact storage and integrity verification
 │   ├── cli/                      # cobra-based CLI surface
 │   │   ├── bundle.go
 │   │   ├── root.go
@@ -199,7 +200,7 @@ type ContextArtifactProjection struct {
     ToolUseID     string
     ToolName      string
     OriginalBytes int
-    StoredPath    string
+    StoredPath    string // workspace-relative `.juex/artifacts/...` reference
     SHA256        string
     HeadBytes     int
     TailBytes     int
@@ -1247,6 +1248,10 @@ Resources split between user-global and work-local:
 │   ├── mcp.json                 # project MCP (project wins on duplicate names)
 │   └── skills/<name>/SKILL.md   # project skills (project overrides user)
 └── .juex/
+    ├── artifacts/                # durable bytes managed by internal/artifact
+    │   ├── media/
+    │   ├── tool-results/<session-id>/
+    │   └── user-inputs/<session-id>/
     ├── extensions/<name>/       # work-local extension bundle
     │   ├── hooks.yaml           # must set trusted: true before execution
     │   ├── mcp.json
@@ -1270,6 +1275,21 @@ Resources split between user-global and work-local:
         ├── spans.jsonl          # start/end/error/instant spans by turn
         └── tools.jsonl          # sanitized tool input/output/error summaries
 ```
+
+### 6.1 Artifact Storage
+
+`internal/artifact` owns workspace-rooted artifact writes and reads. Callers
+pass a logical path relative to `.juex/artifacts`; the Store returns a stable
+workspace-relative reference with SHA-256 and stored byte count. Filesystem
+access uses `os.Root`, writes use same-directory temporary files plus atomic
+replacement, and reads verify supplied integrity metadata. Escaping paths and
+symlinks are rejected by the rooted filesystem boundary.
+
+The `read` tool owns image detection and resizing, provider adapters own media
+encoding, and runtime context projection owns preview policy. None of those
+adapters owns artifact path safety or persistence mechanics. Retention and
+garbage collection are separate lifecycle policy and are not implicit in a
+Store read or write.
 
 The user-global `~/.agents` and `~/.juex/extensions` resources are read-only
 from Juex's view and are loaded only when user-global resources are enabled.
