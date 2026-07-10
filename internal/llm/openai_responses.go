@@ -13,20 +13,12 @@ import (
 )
 
 type openAIResponsesProvider struct {
-	cfg     Config
 	profile ProviderProfile
 	client  openai.Client
 }
 
-func NewOpenAIResponses(cfg Config, _ any) Provider {
-	profile, err := ResolveProfile(cfg)
-	if err != nil {
-		profile = presetProfile("openai")
-		profile.Protocol = ProtocolOpenAIResponses
-		profile.APIKey = cfg.APIKey
-		profile.Model = cfg.Model
-		profile.BaseURL = cfg.BaseURL
-	}
+func NewOpenAIResponses(profile ProviderProfile, _ any) Provider {
+	profile = cloneProviderProfile(profile)
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(providerMaxRetries),
@@ -41,7 +33,6 @@ func NewOpenAIResponses(cfg Config, _ any) Provider {
 		opts = append(opts, option.WithQuery(k, v))
 	}
 	return &openAIResponsesProvider{
-		cfg:     profile.Config(),
 		profile: profile,
 		client:  openai.NewClient(opts...),
 	}

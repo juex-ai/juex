@@ -36,6 +36,15 @@ func (r errReadCloser) Close() error {
 	return nil
 }
 
+func testProfile(t testing.TB, cfg Config) ProviderProfile {
+	t.Helper()
+	profile, err := ResolveProfile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile
+}
+
 // The SDK clients accept option.WithBaseURL, so we point them at httptest
 // servers and assert on the wire payload + the way the canonical types come
 // back. This is end-to-end coverage of the provider adapter, but without
@@ -149,12 +158,12 @@ func TestAnthropic_RoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{
+	p := NewAnthropic(testProfile(t, Config{
 		ID:      "anthropic",
 		BaseURL: srv.URL,
 		APIKey:  "test-key",
 		Model:   "claude-test",
-	}, nil)
+	}), nil)
 
 	resp, err := p.Complete(context.Background(), "system text",
 		[]Message{TextMessage(RoleUser, "hello")},
@@ -271,13 +280,13 @@ func TestAnthropic_ProjectsUserAndToolResultImages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{
+	p := NewAnthropic(testProfile(t, Config{
 		ID:           "anthropic",
 		BaseURL:      srv.URL,
 		APIKey:       "test-key",
 		Model:        "claude-test",
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
-	}, nil)
+	}), nil)
 
 	hist := []Message{
 		{Role: RoleUser, Blocks: []Block{{Type: BlockText, Text: "look"}, {Type: BlockImage, Media: media}}},
@@ -319,12 +328,12 @@ func TestAnthropic_MalformedStreamChunkReturnsDiagnosticError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{
+	p := NewAnthropic(testProfile(t, Config{
 		ID:      "anthropic",
 		BaseURL: srv.URL,
 		APIKey:  "test-key",
 		Model:   "claude-test",
-	}, nil)
+	}), nil)
 
 	_, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err == nil {
@@ -363,12 +372,12 @@ func TestAnthropic_SplitInputJSONDeltaStillAccumulates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{
+	p := NewAnthropic(testProfile(t, Config{
 		ID:      "anthropic",
 		BaseURL: srv.URL,
 		APIKey:  "test-key",
 		Model:   "claude-test",
-	}, nil)
+	}), nil)
 
 	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err != nil {
@@ -392,12 +401,12 @@ func TestAnthropic_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{
+	p := NewAnthropic(testProfile(t, Config{
 		ID:      "anthropic",
 		BaseURL: srv.URL,
 		APIKey:  "test-key",
 		Model:   "claude-test",
-	}, nil)
+	}), nil)
 
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
 		{Name: "list_agents", Description: "list agents", Schema: map[string]any{"type": "object"}},
@@ -509,7 +518,7 @@ func TestAnthropic_CompactsEmptyHistoryMessages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}, nil)
+	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}), nil)
 	hist := []Message{
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{}},
@@ -558,12 +567,12 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{
+	p := NewOpenAI(testProfile(t, Config{
 		Protocol: string(ProtocolOpenAIChat),
 		BaseURL:  srv.URL,
 		APIKey:   "test-key",
 		Model:    "gpt-test",
-	}, nil)
+	}), nil)
 
 	resp, err := p.Complete(context.Background(), "system text",
 		[]Message{TextMessage(RoleUser, "hello")},
@@ -601,12 +610,12 @@ func TestOpenAI_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{
+	p := NewOpenAI(testProfile(t, Config{
 		Protocol: string(ProtocolOpenAIChat),
 		BaseURL:  srv.URL,
 		APIKey:   "k",
 		Model:    "m",
-	}, nil)
+	}), nil)
 	schema := map[string]any{"type": "object"}
 
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, []ToolSpec{
@@ -637,12 +646,12 @@ func TestOpenAI_ReplaysNoArgumentToolUseAsEmptyObject(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{
+	p := NewOpenAI(testProfile(t, Config{
 		Protocol: string(ProtocolOpenAIChat),
 		BaseURL:  srv.URL,
 		APIKey:   "k",
 		Model:    "m",
-	}, nil)
+	}), nil)
 	history := []Message{
 		TextMessage(RoleUser, "check status"),
 		{Role: RoleAssistant, Blocks: []Block{{
@@ -689,7 +698,7 @@ func TestProviders_RetryPolicy(t *testing.T) {
 		{
 			name: "anthropic",
 			provider: func(baseURL string) Provider {
-				return NewAnthropic(Config{ID: "anthropic", BaseURL: baseURL, APIKey: "test-key", Model: "claude-test"}, nil)
+				return NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: baseURL, APIKey: "test-key", Model: "claude-test"}), nil)
 			},
 			serverErr:          `{"type":"error","error":{"type":"api_error","message":"temporary server error"}}`,
 			badReqErr:          `{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`,
@@ -699,7 +708,7 @@ func TestProviders_RetryPolicy(t *testing.T) {
 		{
 			name: "openai",
 			provider: func(baseURL string) Provider {
-				return NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: baseURL, APIKey: "k", Model: "m"}, nil)
+				return NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: baseURL, APIKey: "k", Model: "m"}), nil)
 			},
 			serverErr:          `{"error":{"message":"temporary server error","type":"server_error"}}`,
 			badReqErr:          `{"error":{"message":"bad request","type":"invalid_request_error"}}`,
@@ -713,7 +722,7 @@ func TestProviders_RetryPolicy(t *testing.T) {
 		{
 			name: "openai-codex",
 			provider: func(baseURL string) Provider {
-				return NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: baseURL, APIKey: "k", Model: "m"}, nil)
+				return NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: baseURL, APIKey: "k", Model: "m"}), nil)
 			},
 			serverErr:          `{"error":{"message":"temporary server error","type":"server_error"}}`,
 			badReqErr:          `{"error":{"message":"bad request","type":"invalid_request_error"}}`,
@@ -788,7 +797,7 @@ func TestOpenAICodexResponses_RetriesTransportError(t *testing.T) {
 			Request: r,
 		}, nil
 	})}
-	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 
 	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err != nil {
@@ -825,7 +834,7 @@ func TestOpenAICodexResponses_RetriesSSEReadEOF(t *testing.T) {
 			Request: r,
 		}, nil
 	})}
-	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 
 	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err != nil {
@@ -854,7 +863,7 @@ func TestOpenAICodexResponses_RetriesSSEReadInternalErrorByCategory(t *testing.T
 		}
 		return codexCompletedTextResponse(r, "ok"), nil
 	})}
-	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 	withOpts, ok := p.(ProviderWithOptions)
 	if !ok {
 		t.Fatal("openai-codex provider does not implement ProviderWithOptions")
@@ -910,7 +919,7 @@ func TestOpenAICodexResponses_DoesNotRetryContextSSEReadErrors(t *testing.T) {
 					Request:    r,
 				}, nil
 			})}
-			p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+			p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 			withOpts := p.(ProviderWithOptions)
 			var diagnostics []ProviderRetryDiagnostic
 
@@ -948,7 +957,7 @@ func TestOpenAICodexResponses_SSEReadRetryExhaustionReportsAttempts(t *testing.T
 			Request:    r,
 		}, nil
 	})}
-	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 	withOpts := p.(ProviderWithOptions)
 	var diagnostics []ProviderRetryDiagnostic
 
@@ -989,7 +998,7 @@ func TestOpenAICodexResponses_DoesNotRetrySemanticResponseFailure(t *testing.T) 
 			Request: r,
 		}, nil
 	})}
-	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 
 	_, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err == nil || !strings.Contains(err.Error(), "semantic failure") {
@@ -1023,7 +1032,7 @@ func TestOpenAICodexResponses_RetriesStreamClosedBeforeCompleted(t *testing.T) {
 			Request: r,
 		}, nil
 	})}
-	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 
 	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err != nil {
@@ -1062,7 +1071,7 @@ func TestOpenAI_CompactsEmptyHistoryMessages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	hist := []Message{
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{}},
@@ -1097,7 +1106,7 @@ func TestOpenAI_ReplaysReasoningOnlyAssistantWithStringContent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	hist := []Message{
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{{Type: BlockReasoning, Text: "thought"}}},
@@ -1135,7 +1144,7 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 
 	hist := []Message{
 		TextMessage(RoleUser, "do it"),
@@ -1180,13 +1189,13 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{
+	p := NewOpenAI(testProfile(t, Config{
 		Protocol:     string(ProtocolOpenAIChat),
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "m",
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
-	}, nil)
+	}), nil)
 	hist := []Message{
 		{Role: RoleUser, Blocks: []Block{{Type: BlockText, Text: "look"}, {Type: BlockImage, Media: media}}},
 		{Role: RoleAssistant, Blocks: []Block{
@@ -1233,6 +1242,15 @@ func TestNewProvider_Errors(t *testing.T) {
 	if _, err := New(Config{ID: "bogus", APIKey: "k", Model: "m"}); err == nil {
 		t.Error("unknown provider selector should error")
 	}
+	if _, err := NewProvider(ProviderProfile{
+		ID:       "openai-codex",
+		Protocol: ProtocolOpenAICodexResponses,
+		APIKey:   "k",
+		Model:    "m",
+		Compat:   CompatOptions{CodexTransport: "bogus"},
+	}); err == nil {
+		t.Error("unsupported codex transport should error")
+	}
 }
 
 func TestNewProvider_FromResolvedProfile(t *testing.T) {
@@ -1251,6 +1269,55 @@ func TestNewProvider_FromResolvedProfile(t *testing.T) {
 	}
 	if provider.Name() != "openai:gpt-test" {
 		t.Fatalf("provider name = %q", provider.Name())
+	}
+}
+
+func TestNewProvider_DoesNotReResolveProfile(t *testing.T) {
+	profile := ProviderProfile{
+		ID:       "deepseek",
+		Protocol: ProtocolOpenAIResponses,
+		BaseURL:  "http://127.0.0.1:12345",
+		APIKey:   "sk-test",
+		Model:    "responses-test",
+		Headers:  map[string]string{"X-Provider": "canonical"},
+		Query:    map[string]string{"debug": "1"},
+		Capabilities: ProviderCapabilities{
+			Tools:           true,
+			ReasoningReplay: true,
+		},
+		Compat: CompatOptions{ReasoningReplayFields: []string{"canonical_reasoning"}},
+	}
+	provider, err := NewProvider(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.Name() != "deepseek:responses-test" {
+		t.Fatalf("provider name = %q", provider.Name())
+	}
+	responsesProvider, ok := provider.(*openAIResponsesProvider)
+	if !ok {
+		t.Fatalf("provider type = %T, want *openAIResponsesProvider", provider)
+	}
+	if responsesProvider.profile.Headers["X-Provider"] != "canonical" ||
+		responsesProvider.profile.Query["debug"] != "1" ||
+		!responsesProvider.profile.Capabilities.ReasoningReplay ||
+		len(responsesProvider.profile.Compat.ReasoningReplayFields) != 1 ||
+		responsesProvider.profile.Compat.ReasoningReplayFields[0] != "canonical_reasoning" {
+		t.Fatalf("profile was not preserved: %+v", responsesProvider.profile)
+	}
+}
+
+func TestOpenAICodexResponses_RejectsUnsupportedResolvedTransport(t *testing.T) {
+	p := NewOpenAICodexResponses(ProviderProfile{
+		ID:       "openai-codex",
+		Protocol: ProtocolOpenAICodexResponses,
+		APIKey:   "k",
+		Model:    "m",
+		Compat:   CompatOptions{CodexTransport: "bogus"},
+	}, nil)
+	_, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err == nil || !strings.Contains(err.Error(), `unsupported codex transport "bogus"`) {
+		t.Fatalf("err = %v, want unsupported codex transport", err)
 	}
 }
 
@@ -1282,13 +1349,13 @@ func TestOpenAI_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{
+	p := NewOpenAI(testProfile(t, Config{
 		Protocol:       string(ProtocolOpenAIChat),
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "m",
 		ThinkingEffort: "low",
-	}, nil)
+	}), nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -1307,13 +1374,13 @@ func TestOpenAI_DeepSeekPresetEnablesThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{
+	p := NewOpenAI(testProfile(t, Config{
 		ID:             "deepseek",
 		BaseURL:        srv.URL,
 		APIKey:         "k",
 		Model:          "deepseek-v4-pro",
 		ThinkingEffort: "max",
-	}, nil)
+	}), nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -1332,7 +1399,7 @@ func TestOpenAI_NoThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -1351,7 +1418,7 @@ func TestOpenAI_CompleteOptionsUsesOneMaxTokenField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}, nil)
+	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	withOpts, ok := p.(ProviderWithOptions)
 	if !ok {
 		t.Fatal("openai provider does not implement ProviderWithOptions")
@@ -1413,7 +1480,7 @@ func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
 	defer srv.Close()
 
 	disabled := false
-	p := NewOpenAI(Config{
+	p := NewOpenAI(testProfile(t, Config{
 		Protocol:       string(ProtocolOpenAIChat),
 		BaseURL:        srv.URL,
 		APIKey:         "k",
@@ -1425,7 +1492,7 @@ func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
 			ReasoningReplay: &disabled,
 			MaxOutputTokens: &disabled,
 		},
-	}, nil)
+	}), nil)
 	withOpts, ok := p.(ProviderWithOptions)
 	if !ok {
 		t.Fatal("openai provider does not implement ProviderWithOptions")
@@ -2295,7 +2362,7 @@ func TestAnthropic_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "low"}, nil)
+	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test", ThinkingEffort: "low"}), nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -2333,7 +2400,7 @@ func TestAnthropic_DefaultEffortUsesAdaptiveThinking(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}, nil)
+	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "claude-test"}), nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -2373,7 +2440,7 @@ func TestAnthropic_AlwaysUsesStreaming(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7"}, nil)
+	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7"}), nil)
 	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
@@ -2400,7 +2467,7 @@ func TestProviderCompleteOptions_PreservesThinkingForCompaction(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewAnthropic(Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7", ThinkingEffort: "high"}, nil)
+	p := NewAnthropic(testProfile(t, Config{ID: "anthropic", BaseURL: srv.URL, APIKey: "test-key", Model: "minimax-m2.7", ThinkingEffort: "high"}), nil)
 	withOpts, ok := p.(ProviderWithOptions)
 	if !ok {
 		t.Fatal("anthropic provider does not implement ProviderWithOptions")

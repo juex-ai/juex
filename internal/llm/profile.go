@@ -52,32 +52,6 @@ type ProviderProfile struct {
 	WorkDir        string
 }
 
-func (p ProviderProfile) Config() Config {
-	return Config{
-		ID:             p.ID,
-		Protocol:       string(p.Protocol),
-		BaseURL:        p.BaseURL,
-		APIKey:         p.APIKey,
-		Model:          p.Model,
-		ThinkingEffort: p.ThinkingEffort,
-		Headers:        cloneStringMap(p.Headers),
-		Query:          cloneStringMap(p.Query),
-		WorkDir:        p.WorkDir,
-		Capabilities: CapabilityOverrides{
-			Tools:           boolPtr(p.Capabilities.Tools),
-			Vision:          boolPtr(p.Capabilities.Vision),
-			Streaming:       boolPtr(p.Capabilities.Streaming),
-			ReasoningEffort: boolPtr(p.Capabilities.ReasoningEffort),
-			ReasoningReplay: boolPtr(p.Capabilities.ReasoningReplay),
-			MaxOutputTokens: boolPtr(p.Capabilities.MaxOutputTokens),
-		},
-		Compat: CompatOptions{
-			ReasoningReplayFields: append([]string(nil), p.Compat.ReasoningReplayFields...),
-			CodexTransport:        p.Compat.CodexTransport,
-		},
-	}
-}
-
 func ResolveProfile(cfg Config) (ProviderProfile, error) {
 	profile, err := baseProfile(cfg)
 	if err != nil {
@@ -105,6 +79,13 @@ func ResolveProfile(cfg Config) (ProviderProfile, error) {
 		profile.Compat.ReasoningReplayFields = []string{"reasoning_content", "reasoning", "thinking"}
 	}
 	return profile, nil
+}
+
+func cloneProviderProfile(p ProviderProfile) ProviderProfile {
+	p.Headers = cloneStringMap(p.Headers)
+	p.Query = cloneStringMap(p.Query)
+	p.Compat.ReasoningReplayFields = append([]string(nil), p.Compat.ReasoningReplayFields...)
+	return p
 }
 
 const (

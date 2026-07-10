@@ -16,26 +16,12 @@ import (
 // every OpenAI-compatible endpoint (DeepSeek, OpenRouter, Ollama, ...) by
 // swapping option.WithBaseURL.
 type openAIProvider struct {
-	cfg     Config
 	profile ProviderProfile
 	client  openai.Client
 }
 
-func NewOpenAI(cfg Config, _ any) Provider {
-	profile, err := ResolveProfile(cfg)
-	if err != nil {
-		profile = customOpenAIChatProfile(firstNonEmpty(cfg.ID, "openai"), ProtocolOpenAIChat)
-		profile.APIKey = cfg.APIKey
-		profile.Model = cfg.Model
-		profile.BaseURL = cfg.BaseURL
-		profile.ThinkingEffort = cfg.ThinkingEffort
-		profile.Headers = cloneStringMap(cfg.Headers)
-		profile.Query = cloneStringMap(cfg.Query)
-		profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
-		if len(cfg.Compat.ReasoningReplayFields) > 0 {
-			profile.Compat = cfg.Compat
-		}
-	}
+func NewOpenAI(profile ProviderProfile, _ any) Provider {
+	profile = cloneProviderProfile(profile)
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(providerMaxRetries),
@@ -50,7 +36,6 @@ func NewOpenAI(cfg Config, _ any) Provider {
 		opts = append(opts, option.WithQuery(k, v))
 	}
 	return &openAIProvider{
-		cfg:     profile.Config(),
 		profile: profile,
 		client:  openai.NewClient(opts...),
 	}
