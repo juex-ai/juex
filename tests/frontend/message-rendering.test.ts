@@ -35,7 +35,7 @@ test("user message chrome uses a weak card treatment", () => {
   assert.doesNotMatch(user, /text-juex-user-foreground/);
 });
 
-test("assistant message chrome keeps card treatment", () => {
+test("MessageContent primitive keeps its card treatment", () => {
   const base = messageContentBaseClassName();
   const assistant = messageContentRoleClassName("assistant");
 
