@@ -58,17 +58,15 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 			t.Fatal("expected non-zero exit")
 		}
 	})
-	t.Run("runRequiresPrompt", func(t *testing.T) {
+	t.Run("runRequiresPromptOrAttachment", func(t *testing.T) {
 		cmd := exec.Command(bin, "run")
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err == nil {
-			t.Fatal("expected non-zero exit when prompt missing")
+			t.Fatal("expected non-zero exit when prompt and attachment are missing")
 		}
 		body := stderr.String()
-		// Either our usageError text or cobra's own arg-validation message.
-		if !strings.Contains(body, "prompt required") &&
-			!strings.Contains(body, "requires") {
+		if !strings.Contains(body, "prompt or --attach required") {
 			t.Fatalf("stderr: %s", body)
 		}
 	})

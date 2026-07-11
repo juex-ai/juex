@@ -50,6 +50,7 @@ Then run:
 
 ```bash
 juex run "summarize this repository"
+juex run --attach screenshot.png "describe this image"
 juex --model openai:gpt-4.1 run "summarize this repository"
 juex --debug run --json "summarize this repository"
 juex repl
@@ -72,11 +73,13 @@ If you built from source without installing, use `./dist/juex` instead of
 | `juex init` | Create or merge a first-run runtime config in `~/.juex/juex.yaml` or the workspace. |
 | `juex doctor` | Run read-only checks for config, credentials, connectivity, shell, MCP, and skills. |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
+| `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
 | `juex --model <provider>:<model> run "<prompt>"` | Override the configured model for this invocation. |
 | `juex --debug run --json "<prompt>"` | Write detailed session logs, trace, span, and tool summary JSONL while emitting the normal run result. |
 | `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
 | `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |
 | `juex repl` | Start an interactive CLI session attached to the active primary session. |
+| `/attach <path>` in `juex repl` | Stage a local image for the next ordinary user turn. |
 | `/new`, `/status`, `/compact [instructions]` | Local slash commands accepted by `run`, `repl`, and the web composer. |
 | `juex sessions list` | List recorded sessions. |
 | `juex sessions show <id>` | Print session metadata and transcript. |
@@ -154,10 +157,12 @@ the chunked write tools `write_begin`, `write_chunk`, `write_commit`, and
 `write_abort`. `read` returns UTF-8 text for text files and structured media
 references for supported image files so vision-capable providers can inspect
 screenshots and visual artifacts without inlining image bytes into history.
-The Web composer can also paste, drop, or select images. Uploads are stored as
-content-addressed, session-scoped artifacts and revalidated when the turn is
-admitted; text-only, image-only, and mixed-content turns use the same runtime
-path.
+The Web composer can paste, drop, or select images; `juex run --attach` and the
+REPL-local `/attach <path>` command accept local image paths. Relative CLI
+paths resolve from the workdir, and each `--attach` flag is repeatable. Images
+are copied into content-addressed, session-scoped artifacts and revalidated
+before the runtime turn starts; text-only, image-only, and mixed-content turns
+use the same runtime path.
 `apply_patch` accepts a compact patch envelope in `patch_text`
 with `*** Begin Patch` / `*** End Patch` markers and supports add, update,
 delete, and move operations. It validates the whole patch before writing,

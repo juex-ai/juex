@@ -9,7 +9,6 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -37,6 +36,7 @@ import (
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
 	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 // Options bundles the inputs to New.
@@ -578,6 +578,27 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 	return a.Engine.Turn(ctx, prompt)
 }
 
+// RunWithAttachments drives one synchronous text, image, or mixed-content
+// user turn. Attachment references must belong to the current session.
+func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments []llm.MediaRef) (string, error) {
+	if a == nil || a.Session == nil || a.Engine == nil {
+		return "", errors.New("app: attachment turn requires an initialized session and engine")
+	}
+	if len(attachments) == 0 {
+		return a.Run(ctx, prompt)
+	}
+	if _, handled, err := ParseSlashCommand(prompt); handled || err != nil {
+		if err != nil {
+			return "", err
+		}
+		return "", errors.New("slash commands cannot include attachments")
+	}
+	if err := usermedia.ValidateSessionMediaRefs(a.cfg.WorkDir, a.Session.ID, attachments, usermedia.Limits{}); err != nil {
+		return "", err
+	}
+	return a.Engine.TurnMessage(ctx, userTurnMessage(prompt, attachments))
+}
+
 func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
 	if a == nil || a.Engine == nil {
 		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
@@ -843,32 +864,6 @@ func durationSeconds(d time.Duration) int {
 		seconds++
 	}
 	return int(seconds)
-}
-
-// REPL reads stdin lines, runs Turn for each non-empty line, prints the
-// result on out. Returns when the reader closes.
-func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
-	sc := bufio.NewScanner(in)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		text, err := a.Run(ctx, line)
-		if err != nil {
-			if _, writeErr := fmt.Fprintln(out, "error:", err); writeErr != nil {
-				return writeErr
-			}
-			continue
-		}
-		if _, err := fmt.Fprintln(out, text); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintln(out, FormatTokenUsage(a.TokenUsage())); err != nil {
-			return err
-		}
-	}
-	return sc.Err()
 }
 
 func FormatTokenUsage(usage llm.Usage) string {
