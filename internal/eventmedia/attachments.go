@@ -56,8 +56,9 @@ type AttachmentError struct {
 }
 
 type ValidationReport struct {
-	Valid  []ValidatedAttachment
-	Errors []AttachmentError
+	Valid              []ValidatedAttachment
+	Errors             []AttachmentError
+	EventBytesExceeded bool
 }
 
 type inspectedAttachment struct {
@@ -133,10 +134,13 @@ func ValidateAttachments(refs []AttachmentRef, opts ValidationOptions) Validatio
 }
 
 func eventSizeLimitReport(limit int64) ValidationReport {
-	return ValidationReport{Errors: []AttachmentError{{
-		Index: -1,
-		Error: fmt.Sprintf("event attachments exceed %d bytes", limit),
-	}}}
+	return ValidationReport{
+		Errors: []AttachmentError{{
+			Index: -1,
+			Error: fmt.Sprintf("event attachments exceed %d bytes", limit),
+		}},
+		EventBytesExceeded: true,
+	}
 }
 
 func IsImageMediaType(mediaType string) bool {

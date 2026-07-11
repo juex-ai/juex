@@ -2,17 +2,29 @@ package observable
 
 import "github.com/juex-ai/juex/internal/eventmedia"
 
-func snapshotAttachmentRefs(workDir string, refs []eventmedia.AttachmentRef) ([]eventmedia.AttachmentRef, []string) {
+type attachmentSnapshot struct {
+	refs               []eventmedia.AttachmentRef
+	errors             []string
+	bytes              int64
+	eventBytesExceeded bool
+}
+
+func snapshotAttachmentRefs(workDir string, refs []eventmedia.AttachmentRef, maxEventBytes int64) attachmentSnapshot {
 	if len(refs) == 0 {
-		return nil, nil
+		return attachmentSnapshot{}
 	}
-	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: workDir})
+	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{
+		WorkDir:       workDir,
+		MaxEventBytes: maxEventBytes,
+	})
 	stored := make([]eventmedia.AttachmentRef, 0, len(report.Valid))
+	var storedBytes int64
 	for _, attachment := range report.Valid {
 		stored = append(stored, eventmedia.AttachmentRef{
 			Path:      attachment.ArtifactPath,
 			MediaType: attachment.MediaType,
 		})
+		storedBytes += int64(attachment.OriginalBytes)
 	}
 	errors := make([]string, 0, len(report.Errors))
 	for _, errInfo := range report.Errors {
@@ -22,5 +34,10 @@ func snapshotAttachmentRefs(workDir string, refs []eventmedia.AttachmentRef) ([]
 			errors = append(errors, errInfo.Error)
 		}
 	}
-	return stored, errors
+	return attachmentSnapshot{
+		refs:               stored,
+		errors:             errors,
+		bytes:              storedBytes,
+		eventBytesExceeded: report.EventBytesExceeded,
+	}
 }

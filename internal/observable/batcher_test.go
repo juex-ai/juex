@@ -138,6 +138,86 @@ func TestBatcher_SnapshotsAttachmentsBeforeFlush(t *testing.T) {
 	}
 }
 
+func TestBatcher_EnforcesAttachmentLimitAcrossBatch(t *testing.T) {
+	workDir := t.TempDir()
+	firstPath := filepath.Join(workDir, "first.txt")
+	secondPath := filepath.Join(workDir, "second.txt")
+	if err := os.WriteFile(firstPath, []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{
+		WorkDir:       workDir,
+		MaxEventBytes: 1,
+	})
+	first := parsedUnit("stdout", "first", fixedTime)
+	first.Attachments = []eventmedia.AttachmentRef{{Path: "first.txt", MediaType: "text/plain"}}
+	if _, err := b.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	second := parsedUnit("stdout", "second", fixedTime.Add(time.Second))
+	second.Attachments = []eventmedia.AttachmentRef{{Path: "second.txt", MediaType: "text/plain"}}
+	if _, err := b.Add(second); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := b.Flush("interval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %+v, want one record", records)
+	}
+	record := records[0]
+	if len(record.Attachments) != 1 || !strings.Contains(record.Attachments[0].Path, "event-media") {
+		t.Fatalf("attachments = %+v, want first durable attachment only", record.Attachments)
+	}
+	if record.AttachmentState != observable.ObservationAttachmentStateError || len(record.AttachmentErrors) != 1 {
+		t.Fatalf("attachment state/errors = %q, %+v", record.AttachmentState, record.AttachmentErrors)
+	}
+	if !strings.Contains(record.AttachmentErrors[0], "event attachments exceed 1 bytes") {
+		t.Fatalf("attachment errors = %+v", record.AttachmentErrors)
+	}
+}
+
+func TestBatcher_ResetsAttachmentLimitAfterIntervalFlush(t *testing.T) {
+	workDir := t.TempDir()
+	for _, name := range []string{"first.txt", "second.txt"} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{
+		WorkDir:       workDir,
+		MaxEventBytes: 1,
+	})
+	first := parsedUnit("stdout", "first", fixedTime)
+	first.Attachments = []eventmedia.AttachmentRef{{Path: "first.txt", MediaType: "text/plain"}}
+	if _, err := b.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	second := parsedUnit("stdout", "second", fixedTime.Add(10*time.Second))
+	second.Attachments = []eventmedia.AttachmentRef{{Path: "second.txt", MediaType: "text/plain"}}
+	flushed, err := b.Add(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := b.Flush("shutdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flushed) != 1 || len(flushed[0].Attachments) != 1 || len(flushed[0].AttachmentErrors) != 0 {
+		t.Fatalf("flushed = %+v, want one valid attachment", flushed)
+	}
+	if len(remaining) != 1 || len(remaining[0].Attachments) != 1 || len(remaining[0].AttachmentErrors) != 0 {
+		t.Fatalf("remaining = %+v, want reset attachment budget", remaining)
+	}
+}
+
 func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 	spec := validSpec("large")
 	spec.Batch.MaxChars = 80
