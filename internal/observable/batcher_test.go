@@ -181,6 +181,9 @@ func TestBatcher_EnforcesAttachmentLimitAcrossBatch(t *testing.T) {
 	if !strings.Contains(record.AttachmentErrors[0], "event attachments exceed 1 bytes") {
 		t.Fatalf("attachment errors = %+v", record.AttachmentErrors)
 	}
+	if !strings.Contains(record.AttachmentErrors[0], "batch remaining: 0 bytes") {
+		t.Fatalf("attachment errors = %+v, want remaining budget", record.AttachmentErrors)
+	}
 }
 
 func TestBatcher_ResetsAttachmentLimitAfterIntervalFlush(t *testing.T) {
@@ -215,6 +218,57 @@ func TestBatcher_ResetsAttachmentLimitAfterIntervalFlush(t *testing.T) {
 	}
 	if len(remaining) != 1 || len(remaining[0].Attachments) != 1 || len(remaining[0].AttachmentErrors) != 0 {
 		t.Fatalf("remaining = %+v, want reset attachment budget", remaining)
+	}
+}
+
+func TestBatcher_SnapshotsNewAttachmentBeforeIntervalFlush(t *testing.T) {
+	workDir := t.TempDir()
+	spec := validSpec("logs")
+	spec.Batch.MaxChars = 1
+	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(spec, store, observable.BatcherOptions{WorkDir: workDir})
+	first := parsedUnit("stdout", "old-batch", fixedTime)
+	if _, err := b.Add(first); err != nil {
+		t.Fatal(err)
+	}
+	oldID := observable.BuildObservationID(observable.ObservationRecord{
+		ObservableID: "logs",
+		Kind:         "log_batch",
+		Severity:     "info",
+		WindowStart:  fixedTime,
+		WindowEnd:    fixedTime,
+		Content:      "old-batch",
+	})
+	temporaryPath := store.ArtifactPath("logs", oldID)
+	if err := os.MkdirAll(filepath.Dir(temporaryPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(temporaryPath, []byte("temporary attachment"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	relTemporaryPath, err := filepath.Rel(workDir, temporaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := parsedUnit("stdout", "new-batch", fixedTime.Add(10*time.Second))
+	second.Attachments = []eventmedia.AttachmentRef{{Path: filepath.ToSlash(relTemporaryPath), MediaType: "text/plain"}}
+	if _, err := b.Add(second); err != nil {
+		t.Fatal(err)
+	}
+	records, err := b.Flush("shutdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || len(records[0].Attachments) != 1 {
+		t.Fatalf("records = %+v, want new batch attachment", records)
+	}
+	storedPath := filepath.Join(workDir, filepath.FromSlash(records[0].Attachments[0].Path))
+	stored, err := os.ReadFile(storedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored) != "temporary attachment" {
+		t.Fatalf("stored attachment = %q, want pre-flush source bytes", stored)
 	}
 }
 

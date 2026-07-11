@@ -58,8 +58,26 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	if unit.ReceivedAt.IsZero() {
 		unit.ReceivedAt = time.Now().UTC()
 	}
+	startsNewBatch := b.batch != nil && !b.batch.windowStart.IsZero() && unit.ReceivedAt.Sub(b.batch.windowStart) >= time.Duration(b.spec.Batch.IntervalSeconds)*time.Second
+	remainingEventBytes := b.maxEventBytes
+	if b.batch != nil && !startsNewBatch {
+		remainingEventBytes -= b.batch.attachmentBytes
+	}
+	var snapshot attachmentSnapshot
+	if len(unit.Attachments) > 0 && remainingEventBytes <= 0 {
+		unit.AttachmentErrors = append(unit.AttachmentErrors, attachmentBudgetError(b.maxEventBytes, 0))
+	} else {
+		snapshot = snapshotAttachmentRefs(b.workDir, unit.Attachments, remainingEventBytes)
+		if snapshot.eventBytesExceeded {
+			unit.AttachmentErrors = append(unit.AttachmentErrors, attachmentBudgetError(b.maxEventBytes, remainingEventBytes))
+		} else {
+			unit.AttachmentErrors = append(unit.AttachmentErrors, snapshot.errors...)
+		}
+	}
+	unit.Attachments = snapshot.refs
+
 	var emitted []ObservationRecord
-	if b.batch != nil && !b.batch.windowStart.IsZero() && unit.ReceivedAt.Sub(b.batch.windowStart) >= time.Duration(b.spec.Batch.IntervalSeconds)*time.Second {
+	if startsNewBatch {
 		flushed, err := b.Flush("interval")
 		if err != nil {
 			return nil, err
@@ -76,26 +94,17 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	} else {
 		b.batch.severity = maxSeverity(b.batch.severity, unit.Severity)
 	}
-	remainingEventBytes := b.maxEventBytes - b.batch.attachmentBytes
-	if len(unit.Attachments) > 0 && remainingEventBytes <= 0 {
-		unit.Attachments = nil
-		unit.AttachmentErrors = append(unit.AttachmentErrors, fmt.Sprintf("event attachments exceed %d bytes", b.maxEventBytes))
-	} else {
-		snapshot := snapshotAttachmentRefs(b.workDir, unit.Attachments, remainingEventBytes)
-		unit.Attachments = snapshot.refs
-		if snapshot.eventBytesExceeded {
-			unit.AttachmentErrors = append(unit.AttachmentErrors, fmt.Sprintf("event attachments exceed %d bytes", b.maxEventBytes))
-		} else {
-			unit.AttachmentErrors = append(unit.AttachmentErrors, snapshot.errors...)
-		}
-		b.batch.attachmentBytes += snapshot.bytes
-	}
+	b.batch.attachmentBytes += snapshot.bytes
 	b.batch.streams = append(b.batch.streams, unit.Stream)
 	b.batch.contents = append(b.batch.contents, unit.Content)
 	b.batch.attachments = append(b.batch.attachments, unit.Attachments...)
 	b.batch.attachmentErrors = append(b.batch.attachmentErrors, unit.AttachmentErrors...)
 	b.batch.windowEnd = unit.ReceivedAt
 	return emitted, nil
+}
+
+func attachmentBudgetError(limit, remaining int64) string {
+	return fmt.Sprintf("event attachments exceed %d bytes (batch remaining: %d bytes)", limit, max(remaining, 0))
 }
 
 func (b *Batcher) FlushDue(now time.Time, reason string) ([]ObservationRecord, error) {
