@@ -23,36 +23,21 @@ const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
 var codexSSERetryBaseDelay = 100 * time.Millisecond
 
 type openAICodexResponsesProvider struct {
-	cfg       Config
 	profile   ProviderProfile
 	client    openai.Client
 	transport string
 	ws        *codexResponsesWebsocketTransport
 }
 
-func NewOpenAICodexResponses(cfg Config, client any) Provider {
-	profile, err := ResolveProfile(cfg)
-	if err != nil {
-		profile = presetProfile("openai-codex")
-		if cfg.ID != "" {
-			profile.ID = cfg.ID
-		}
-		profile.APIKey = cfg.APIKey
-		profile.Model = cfg.Model
-		profile.BaseURL = cfg.BaseURL
-		profile.ThinkingEffort = cfg.ThinkingEffort
-		profile.Headers = cloneStringMap(cfg.Headers)
-		profile.Query = cloneStringMap(cfg.Query)
-	}
+func NewOpenAICodexResponses(profile ProviderProfile, client any) Provider {
+	profile = cloneProviderProfile(profile)
 	if profile.BaseURL == "" {
 		profile.BaseURL = defaultOpenAICodexBaseURL
 	}
-	transport, err := NormalizeCodexTransport(profile.Compat.CodexTransport)
-	if err != nil {
-		transport = CodexTransportSSE
-	}
+	transport := profile.Compat.CodexTransport
 	if transport == "" {
 		transport = CodexTransportSSE
+		profile.Compat.CodexTransport = transport
 	}
 	opts := []option.RequestOption{
 		option.WithBaseURL(openAICodexResponsesBaseURL(profile.BaseURL)),
@@ -82,7 +67,6 @@ func NewOpenAICodexResponses(cfg Config, client any) Provider {
 		httpClient = c
 	}
 	return &openAICodexResponsesProvider{
-		cfg:       profile.Config(),
 		profile:   profile,
 		client:    openai.NewClient(opts...),
 		transport: transport,
@@ -112,8 +96,10 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 		}
 	case CodexTransportWebSocket, CodexTransportWebSocketCached:
 		resp, err = p.ws.Complete(ctx, params)
-	default:
+	case CodexTransportSSE:
 		resp, err = p.completeSSE(ctx, params, opts)
+	default:
+		return Response{}, fmt.Errorf("openai codex responses: unsupported codex transport %q", p.transport)
 	}
 	if err != nil {
 		return Response{}, fmt.Errorf("openai codex responses: %w", err)

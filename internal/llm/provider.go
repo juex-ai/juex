@@ -80,16 +80,24 @@ func NewProvider(profile ProviderProfile) (Provider, error) {
 	if profile.Model == "" {
 		return nil, fmt.Errorf("llm: missing model")
 	}
-	resolved := profile.Config()
+	profile = cloneProviderProfile(profile)
 	switch profile.Protocol {
 	case ProtocolAnthropicMessages:
-		return NewAnthropic(resolved, &http.Client{Timeout: 120 * time.Second}), nil
+		return NewAnthropic(profile, &http.Client{Timeout: 120 * time.Second}), nil
 	case ProtocolOpenAIChat:
-		return NewOpenAI(resolved, &http.Client{Timeout: 120 * time.Second}), nil
+		return NewOpenAI(profile, &http.Client{Timeout: 120 * time.Second}), nil
 	case ProtocolOpenAIResponses:
-		return NewOpenAIResponses(resolved, &http.Client{Timeout: 120 * time.Second}), nil
+		return NewOpenAIResponses(profile, &http.Client{Timeout: 120 * time.Second}), nil
 	case ProtocolOpenAICodexResponses:
-		return NewOpenAICodexResponses(resolved, nil), nil
+		transport, err := NormalizeCodexTransport(profile.Compat.CodexTransport)
+		if err != nil {
+			return nil, err
+		}
+		if transport == "" {
+			transport = CodexTransportSSE
+		}
+		profile.Compat.CodexTransport = transport
+		return NewOpenAICodexResponses(profile, nil), nil
 	default:
 		return nil, fmt.Errorf("llm: unsupported provider protocol %q", profile.Protocol)
 	}

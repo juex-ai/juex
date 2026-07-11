@@ -17,26 +17,12 @@ import (
 // works against the canonical types in types.go, so swapping SDK versions or
 // dropping back to raw HTTP only touches this file.
 type anthropicProvider struct {
-	cfg     Config
 	profile ProviderProfile
 	client  anthropic.Client
 }
 
-func NewAnthropic(cfg Config, _ any) Provider {
-	profile, err := ResolveProfile(cfg)
-	if err != nil {
-		profile = presetProfile("anthropic")
-		profile.APIKey = cfg.APIKey
-		profile.Model = cfg.Model
-		profile.BaseURL = cfg.BaseURL
-		profile.ThinkingEffort = cfg.ThinkingEffort
-		profile.Headers = cloneStringMap(cfg.Headers)
-		profile.Query = cloneStringMap(cfg.Query)
-		profile.Capabilities = applyCapabilityOverrides(profile.Capabilities, cfg.Capabilities)
-		if len(cfg.Compat.ReasoningReplayFields) > 0 {
-			profile.Compat = cfg.Compat
-		}
-	}
+func NewAnthropic(profile ProviderProfile, _ any) Provider {
+	profile = cloneProviderProfile(profile)
 	opts := []option.RequestOption{
 		option.WithAPIKey(profile.APIKey),
 		option.WithMaxRetries(providerMaxRetries),
@@ -51,7 +37,6 @@ func NewAnthropic(cfg Config, _ any) Provider {
 		opts = append(opts, option.WithQuery(k, v))
 	}
 	return &anthropicProvider{
-		cfg:     profile.Config(),
 		profile: profile,
 		client:  anthropic.NewClient(opts...),
 	}
