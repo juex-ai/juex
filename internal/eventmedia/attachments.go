@@ -75,12 +75,17 @@ func ExtractAttachmentRefs(value any) ([]AttachmentRef, error) {
 		return normalizeAttachmentRefs(typed), nil
 	case []any:
 		out := make([]AttachmentRef, 0, len(typed))
+		var errorMessages []string
 		for i, item := range typed {
 			ref, err := attachmentRefFromAny(item)
 			if err != nil {
-				return nil, fmt.Errorf("attachments[%d]: %w", i, err)
+				errorMessages = append(errorMessages, fmt.Sprintf("attachments[%d]: %v", i, err))
+				continue
 			}
 			out = append(out, ref)
+		}
+		if len(errorMessages) > 0 {
+			return normalizeAttachmentRefs(out), errors.New(strings.Join(errorMessages, "; "))
 		}
 		return normalizeAttachmentRefs(out), nil
 	default:

@@ -1235,6 +1235,34 @@ func TestApp_MCPNotificationIncludesValidatedImageAttachment(t *testing.T) {
 	}
 }
 
+func TestMCPNotificationPreservesValidAttachmentWhenAnotherIsMalformed(t *testing.T) {
+	workDir := t.TempDir()
+	relPath := ".juex/inbox/mcp.png"
+	writeAppTestPNG(t, filepath.Join(workDir, filepath.FromSlash(relPath)))
+
+	msg, err := mcpNotificationMessage(mcp.Notification{
+		ServerName: "local",
+		Method:     "notifications/claude/channel",
+		EventType:  "message",
+		Content:    "mixed attachments",
+		Params: map[string]any{
+			"attachments": []any{
+				map[string]any{"path": relPath, "media_type": "image/png"},
+				map[string]any{"path": 42},
+			},
+		},
+	}, "message", attachmentOptions{WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.Blocks) != 2 || msg.Blocks[1].Type != llm.BlockImage {
+		t.Fatalf("blocks = %+v, want text plus valid image", msg.Blocks)
+	}
+	if text := msg.FirstText(); !strings.Contains(text, "attachment_errors:") || !strings.Contains(text, "attachments[1]") {
+		t.Fatalf("text missing malformed attachment error:\n%s", text)
+	}
+}
+
 type blockingAppProvider struct {
 	started chan struct{}
 	release chan struct{}

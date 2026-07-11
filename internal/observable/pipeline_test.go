@@ -130,6 +130,30 @@ func TestPipeline_JSONLAttachmentFieldErrorPreservesContent(t *testing.T) {
 	}
 }
 
+func TestPipeline_JSONLAttachmentFieldErrorPreservesValidRefs(t *testing.T) {
+	spec := validSpec("lark-events")
+	spec.Parser = &observable.ParserSpec{
+		Type:             "jsonl",
+		ContentField:     "content",
+		AttachmentsField: "attachments",
+	}
+	pipe, err := observable.NewPipeline(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := `{"content":"keep image","attachments":[{"path":"photo.png","media_type":"image/png"},{"path":42}]}` + "\n"
+	units, err := pipe.Accept("stdout", []byte(line))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || len(units[0].Attachments) != 1 || len(units[0].AttachmentErrors) != 1 {
+		t.Fatalf("units = %+v, want valid ref plus malformed-entry error", units)
+	}
+	if units[0].Attachments[0].Path != "photo.png" || !strings.Contains(units[0].AttachmentErrors[0], "attachments[1]") {
+		t.Fatalf("unit = %+v", units[0])
+	}
+}
+
 func TestPipeline_JSONLNormalizesSeverity(t *testing.T) {
 	spec := validSpec("lark-events")
 	spec.Parser = &observable.ParserSpec{

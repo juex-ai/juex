@@ -131,6 +131,20 @@ func TestExtractAttachmentRefsRejectsInvalidFieldTypes(t *testing.T) {
 	}
 }
 
+func TestExtractAttachmentRefsPreservesValidEntries(t *testing.T) {
+	refs, err := ExtractAttachmentRefs([]any{
+		map[string]any{"path": "first.png", "media_type": "image/png"},
+		map[string]any{"path": 42},
+		map[string]any{"path": "second.json", "media_type": "application/json"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "attachments[1]") {
+		t.Fatalf("error = %v, want malformed index", err)
+	}
+	if len(refs) != 2 || refs[0].Path != "first.png" || refs[1].Path != "second.json" {
+		t.Fatalf("refs = %+v, want both valid entries", refs)
+	}
+}
+
 func TestValidateAttachmentsRejectsTotalEventSizeLimit(t *testing.T) {
 	workDir := t.TempDir()
 	writeAttachmentPNG(t, filepath.Join(workDir, "a.png"))

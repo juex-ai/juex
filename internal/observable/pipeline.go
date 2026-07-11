@@ -181,10 +181,9 @@ func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) (
 		if parser.AttachmentsField != "" {
 			if value, ok := obj[parser.AttachmentsField]; ok {
 				refs, err := eventmedia.ExtractAttachmentRefs(value)
+				attachments = refs
 				if err != nil {
 					attachmentErrors = append(attachmentErrors, fmt.Sprintf("attachments_field %q: %v", parser.AttachmentsField, err))
-				} else {
-					attachments = refs
 				}
 			}
 		}

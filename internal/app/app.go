@@ -702,9 +702,6 @@ func buildObservationMessage(record observable.ObservationRecord, opts attachmen
 
 func mcpNotificationMessage(n mcp.Notification, eventType string, opts attachmentOptions) (llm.Message, error) {
 	refs, err := eventmedia.ExtractAttachmentRefs(n.Params["attachments"])
-	if err != nil {
-		refs = nil
-	}
 	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: opts.WorkDir})
 	text := renderMCPNotificationText(n, eventType, report, err)
 	return eventMessageWithAttachments(llm.MessageKindMCPEvent, text, report), nil
