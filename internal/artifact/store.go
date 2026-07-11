@@ -74,7 +74,7 @@ func (s Store) Put(relativePath string, data []byte) (Ref, error) {
 	if err != nil {
 		return Ref{}, fmt.Errorf("artifact store open: %w", err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 
 	if existing, readErr := root.ReadFile(target); readErr == nil {
 		if bytes.Equal(existing, data) {
@@ -123,7 +123,7 @@ func (s Store) Read(ref Ref) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("artifact store open: %w", err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	data, err := root.ReadFile(filepath.FromSlash(target))
 	if err != nil {
 		return nil, fmt.Errorf("artifact read %q: %w", ref.Path, err)
