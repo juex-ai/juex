@@ -9,16 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/providerreadiness"
 )
-
-const initNoConfigSuggestion = "run `juex init` to get started"
 
 type initOptions struct {
 	scope     string
@@ -528,34 +526,12 @@ func runInitHelloCheck(ctx context.Context, path, workDir string) error {
 	if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 		return err
 	}
-	profile, err := cfg.ProviderProfile()
-	if err != nil {
-		return err
-	}
-	provider, err := llm.NewProvider(profile)
-	if err != nil {
-		return err
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	_, err = provider.Complete(checkCtx, "Reply with a short hello.", []llm.Message{
-		llm.TextMessage(llm.RoleUser, "hello"),
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("init: provider hello check failed: %w", err)
-	}
-	return nil
-}
-
-func ensureSelectedRuntimeConfig(cfg config.Config) error {
-	if strings.TrimSpace(cfg.ProviderID) == "" && strings.TrimSpace(cfg.ProviderProtocol) == "" && strings.TrimSpace(cfg.Model) == "" {
-		return &usageError{msg: "no Juex runtime config found; " + initNoConfigSuggestion}
-	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return &usageError{msg: "Juex runtime config has no selected model; " + initNoConfigSuggestion}
-	}
-	if strings.TrimSpace(cfg.ProviderID) == "" && strings.TrimSpace(cfg.ProviderProtocol) == "" {
-		return &usageError{msg: "Juex runtime config has no selected provider; " + initNoConfigSuggestion}
+	result := providerreadiness.CheckConnectivity(ctx, cfg, providerreadiness.ConnectivityOptions{})
+	if result.Status != providerreadiness.StatusOK {
+		if result.Err != nil {
+			return fmt.Errorf("init: provider hello check failed: %w", result.Err)
+		}
+		return fmt.Errorf("init: provider hello check failed: %s", result.Message)
 	}
 	return nil
 }
