@@ -147,6 +147,39 @@ func TestValidateAttachmentsRejectsTotalEventSizeLimit(t *testing.T) {
 	}
 }
 
+func TestValidateAttachmentsAcceptsDeclaredJSON(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "event.json"), []byte(`{"kind":"deploy"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report := ValidateAttachments([]AttachmentRef{{
+		Path:      "event.json",
+		MediaType: "application/json",
+	}}, ValidationOptions{WorkDir: workDir})
+	if len(report.Errors) != 0 || len(report.Valid) != 1 {
+		t.Fatalf("report = %+v, want one valid JSON attachment", report)
+	}
+	if got := report.Valid[0]; got.MediaType != "application/json" || !strings.HasSuffix(got.ArtifactPath, ".json") {
+		t.Fatalf("validated attachment = %+v, want application/json artifact", got)
+	}
+}
+
+func TestValidateAttachmentsRejectsInvalidDeclaredJSON(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "event.json"), []byte(`not json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report := ValidateAttachments([]AttachmentRef{{
+		Path:      "event.json",
+		MediaType: "application/json",
+	}}, ValidationOptions{WorkDir: workDir})
+	if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "media_type") {
+		t.Fatalf("report = %+v, want invalid JSON media type error", report)
+	}
+}
+
 func writeAttachmentPNG(t *testing.T, path string) {
 	t.Helper()
 	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")

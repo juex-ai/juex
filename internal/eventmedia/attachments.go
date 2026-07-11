@@ -2,6 +2,8 @@ package eventmedia
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -21,6 +23,8 @@ const (
 	DefaultMaxAttachmentBytes int64 = 10 * 1024 * 1024
 	DefaultMaxEventBytes      int64 = 32 * 1024 * 1024
 )
+
+var errEventAttachmentsTooLarge = errors.New("event attachments exceed byte limit")
 
 type AttachmentRef struct {
 	Path      string `json:"path"`
@@ -89,19 +93,16 @@ func ValidateAttachments(refs []AttachmentRef, opts ValidationOptions) Validatio
 	var total int64
 	var inspected []inspectedAttachment
 	for i, ref := range normalizeAttachmentRefs(refs) {
-		item, err := inspectAttachment(ref, opts)
+		item, err := inspectAttachment(ref, opts, opts.MaxEventBytes-total)
 		if err != nil {
+			if errors.Is(err, errEventAttachmentsTooLarge) {
+				return eventSizeLimitReport(opts.MaxEventBytes)
+			}
 			report.Errors = append(report.Errors, AttachmentError{Index: i, Path: strings.TrimSpace(ref.Path), Error: err.Error()})
 			continue
 		}
 		total += int64(item.attachment.OriginalBytes)
 		inspected = append(inspected, item)
-	}
-	if total > opts.MaxEventBytes {
-		return ValidationReport{Errors: []AttachmentError{{
-			Index: -1,
-			Error: fmt.Sprintf("event attachments exceed %d bytes", opts.MaxEventBytes),
-		}}}
 	}
 	if len(inspected) == 0 {
 		return report
@@ -123,6 +124,13 @@ func ValidateAttachments(refs []AttachmentRef, opts ValidationOptions) Validatio
 		report.Valid = append(report.Valid, item.attachment)
 	}
 	return report
+}
+
+func eventSizeLimitReport(limit int64) ValidationReport {
+	return ValidationReport{Errors: []AttachmentError{{
+		Index: -1,
+		Error: fmt.Sprintf("event attachments exceed %d bytes", limit),
+	}}}
 }
 
 func IsImageMediaType(mediaType string) bool {
@@ -181,7 +189,7 @@ func attachmentRefFromAny(value any) (AttachmentRef, error) {
 	return AttachmentRef{Path: path, MediaType: mediaType}, nil
 }
 
-func inspectAttachment(ref AttachmentRef, opts ValidationOptions) (inspectedAttachment, error) {
+func inspectAttachment(ref AttachmentRef, opts ValidationOptions, remainingEventBytes int64) (inspectedAttachment, error) {
 	if strings.TrimSpace(ref.Path) == "" {
 		return inspectedAttachment{}, fmt.Errorf("path is required")
 	}
@@ -217,12 +225,19 @@ func inspectAttachment(ref AttachmentRef, opts ValidationOptions) (inspectedAtta
 	if info.Size() > opts.MaxAttachmentBytes {
 		return inspectedAttachment{}, fmt.Errorf("attachment exceeds %d bytes", opts.MaxAttachmentBytes)
 	}
-	data, err := io.ReadAll(io.LimitReader(file, opts.MaxAttachmentBytes+1))
+	if info.Size() > remainingEventBytes {
+		return inspectedAttachment{}, errEventAttachmentsTooLarge
+	}
+	readLimit := min(opts.MaxAttachmentBytes, remainingEventBytes)
+	data, err := io.ReadAll(io.LimitReader(file, readLimit+1))
 	if err != nil {
 		return inspectedAttachment{}, err
 	}
 	if int64(len(data)) > opts.MaxAttachmentBytes {
 		return inspectedAttachment{}, fmt.Errorf("attachment exceeds %d bytes", opts.MaxAttachmentBytes)
+	}
+	if int64(len(data)) > remainingEventBytes {
+		return inspectedAttachment{}, errEventAttachmentsTooLarge
 	}
 	mediaType, err := validatedMediaType(data, absPath, ref.MediaType)
 	if err != nil {
@@ -301,10 +316,18 @@ func validatedMediaType(data []byte, path string, declared string) (string, erro
 	if declared == "" {
 		return detected, nil
 	}
-	if declared != detected {
+	if declared != detected && !declaredTypeMatchesContent(declared, detected, data, path) {
 		return "", fmt.Errorf("media_type %q does not match detected %q", declared, detected)
 	}
 	return declared, nil
+}
+
+func declaredTypeMatchesContent(declared, detected string, data []byte, path string) bool {
+	if declared != "application/json" || detected != "text/plain" {
+		return false
+	}
+	extType := normalizeMediaType(mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
+	return extType == declared && json.Valid(data)
 }
 
 func detectMediaType(data []byte, path string) string {
