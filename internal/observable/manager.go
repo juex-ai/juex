@@ -830,9 +830,13 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 		if outcomeErr != nil {
 			return outcomeErr
 		}
-		updated, updateErr := m.updateObservation(current.ID, outcome.apply)
-		if updateErr != nil {
-			return updateErr
+		updated := outcome.apply(current)
+		if m.store != nil {
+			var updateErr error
+			updated, updateErr = m.updateObservation(current.ID, outcome.apply)
+			if updateErr != nil {
+				return updateErr
+			}
 		}
 		m.emitObservation(observationEventType(updated.State), updated, updated.Error)
 		if err != nil {

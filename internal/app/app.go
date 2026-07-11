@@ -640,7 +640,6 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 		return observable.DeliveryOutcome{
 			State:         observable.ObservationStateDelivered,
 			TargetSession: a.currentSessionID(),
-			DeliveredAt:   time.Now().UTC(),
 		}, nil
 	}
 	return observable.DeliveryOutcome{}, err

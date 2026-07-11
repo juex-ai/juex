@@ -218,3 +218,46 @@ func TestDeliverObservationOwnsOutcomeTransitionAndSkipsTransitionedRecord(t *te
 		t.Fatalf("deliveries after transitioned record = %d, want still 1", deliveries)
 	}
 }
+
+func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
+	now := time.Now().UTC()
+	bus := events.NewBus()
+	var seen []ObservationEventPayload
+	bus.Subscribe("observation.*", func(e events.Event) {
+		payload, ok := e.Payload.(ObservationEventPayload)
+		if !ok {
+			t.Fatalf("payload = %T, want ObservationEventPayload", e.Payload)
+		}
+		seen = append(seen, payload)
+	})
+	mgr := &Manager{
+		opts: ManagerOptions{
+			Bus: bus,
+			Now: func() time.Time { return now },
+			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
+				return DeliveryOutcome{State: ObservationStateDelivered, TargetSession: "sess-1"}, nil
+			},
+		},
+	}
+	record := ObservationRecord{
+		ID:           "obs-1",
+		ObservableID: "no-store",
+		RunID:        "run-1",
+		Kind:         "notice",
+		Severity:     "info",
+		WindowStart:  now,
+		WindowEnd:    now,
+		Content:      "hello",
+		State:        ObservationStateRecorded,
+	}
+	if err := mgr.deliverObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("events = %+v, want recorded then delivered", seen)
+	}
+	delivered := seen[1].Observation
+	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetSession != "sess-1" || !delivered.DeliveredAt.Equal(now) {
+		t.Fatalf("delivered observation = %+v", delivered)
+	}
+}
