@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -66,6 +67,107 @@ func TestStoreUploadRejectsUnsupportedAndOversizedFiles(t *testing.T) {
 	data := testPNG(t)
 	if _, err := StoreUpload(workDir, "session-1", "screen.png", bytes.NewReader(data), Limits{MaxBytes: int64(len(data) - 1), MaxCount: 8}); err == nil {
 		t.Fatalf("StoreUpload accepted oversized content")
+	}
+}
+
+func TestInspectFilesAndStoreFilesResolveLocalPaths(t *testing.T) {
+	workDir := t.TempDir()
+	data := testPNG(t)
+	relativePath := filepath.Join("inputs", "screen one.png")
+	if err := os.MkdirAll(filepath.Join(workDir, "inputs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, relativePath), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	absolutePath := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(absolutePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 2}
+
+	infos, err := InspectFiles(workDir, []string{relativePath, absolutePath}, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("infos len = %d, want 2", len(infos))
+	}
+	for i, info := range infos {
+		if info.MediaType != "image/png" || info.Bytes != len(data) || info.Width != 2 || info.Height != 3 {
+			t.Fatalf("info %d = %+v", i, info)
+		}
+		if !filepath.IsAbs(info.Path) {
+			t.Fatalf("info %d path = %q, want absolute", i, info.Path)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex", "artifacts", "media")); !os.IsNotExist(err) {
+		t.Fatalf("InspectFiles wrote artifacts: %v", err)
+	}
+
+	refs, err := StoreFiles(workDir, "session-1", []string{relativePath, absolutePath}, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 || refs[0].ArtifactPath != refs[1].ArtifactPath {
+		t.Fatalf("refs = %+v, want two deduplicated content references", refs)
+	}
+	if err := ValidateSessionMediaRefs(workDir, "session-1", refs, limits); err != nil {
+		t.Fatalf("stored refs failed validation: %v", err)
+	}
+}
+
+func TestInspectFilesRejectsInvalidPathsAndCount(t *testing.T) {
+	workDir := t.TempDir()
+	data := testPNG(t)
+	imagePath := filepath.Join(workDir, "screen.png")
+	if err := os.WriteFile(imagePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	textPath := filepath.Join(workDir, "note.txt")
+	if err := os.WriteFile(textPath, []byte("not an image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name        string
+		paths       []string
+		limits      Limits
+		wantInvalid bool
+	}{
+		{name: "missing", paths: []string{"missing.png"}},
+		{name: "directory", paths: []string{"."}, wantInvalid: true},
+		{name: "unsupported", paths: []string{"note.txt"}, wantInvalid: true},
+		{name: "oversized", paths: []string{"screen.png"}, limits: Limits{MaxBytes: int64(len(data) - 1), MaxCount: 8}, wantInvalid: true},
+		{name: "too many", paths: []string{"screen.png", "screen.png"}, limits: Limits{MaxBytes: int64(len(data) + 1), MaxCount: 1}, wantInvalid: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := InspectFiles(workDir, tc.paths, tc.limits)
+			if err == nil {
+				t.Fatalf("InspectFiles accepted %s", tc.name)
+			}
+			if errors.Is(err, ErrInvalidInput) != tc.wantInvalid {
+				t.Fatalf("errors.Is(%v, ErrInvalidInput) = %v, want %v", err, errors.Is(err, ErrInvalidInput), tc.wantInvalid)
+			}
+		})
+	}
+}
+
+func TestStoreFilesValidatesEveryInputBeforeWriting(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "screen.png"), testPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "note.txt"), []byte("not an image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := StoreFiles(workDir, "session-1", []string{"screen.png", "note.txt"}, Limits{}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("StoreFiles error = %v, want ErrInvalidInput", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex", "artifacts", "media")); !os.IsNotExist(err) {
+		t.Fatalf("StoreFiles wrote before validating every input: %v", err)
 	}
 }
 

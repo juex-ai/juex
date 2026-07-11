@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -27,9 +28,34 @@ const (
 
 type MediaRef = llm.MediaRef
 
+// ErrInvalidInput classifies caller-controlled media validation failures.
+var ErrInvalidInput = errors.New("invalid user media input")
+
+type invalidInputError string
+
+func (e invalidInputError) Error() string { return string(e) }
+
+func (e invalidInputError) Is(target error) bool { return target == ErrInvalidInput }
+
 type Limits struct {
 	MaxBytes int64
 	MaxCount int
+}
+
+// FileInfo describes one validated local image without embedding its bytes.
+type FileInfo struct {
+	Path      string `json:"path"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Bytes     int    `json:"bytes"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+}
+
+type inspectedFile struct {
+	info FileInfo
+	ext  string
+	data []byte
 }
 
 func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits) (MediaRef, error) {
@@ -40,21 +66,155 @@ func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits
 		return MediaRef{}, fmt.Errorf("user media: unsafe session id %q", sessionID)
 	}
 	if r == nil {
-		return MediaRef{}, errors.New("user media: missing upload body")
+		return MediaRef{}, invalidInputError("user media: missing upload body")
 	}
 	limits = effectiveLimits(limits)
 	data, err := readLimited(r, limits.MaxBytes)
 	if err != nil {
 		return MediaRef{}, err
 	}
-	mediaType, ext, err := uploadedImageType(data, filename)
+	info, ext, err := inspectImageData("", filename, data)
 	if err != nil {
 		return MediaRef{}, err
 	}
+	return storeImageData(workDir, sessionID, info, ext, data)
+}
+
+// InspectFiles validates local image paths without persisting artifacts.
+func InspectFiles(workDir string, inputPaths []string, limits Limits) ([]FileInfo, error) {
+	files, err := inspectFiles(workDir, inputPaths, limits)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]FileInfo, 0, len(files))
+	for _, file := range files {
+		infos = append(infos, file.info)
+	}
+	return infos, nil
+}
+
+// StoreFiles validates local image paths and persists session-scoped artifacts.
+func StoreFiles(workDir, sessionID string, inputPaths []string, limits Limits) ([]MediaRef, error) {
+	if len(inputPaths) == 0 {
+		return []MediaRef{}, nil
+	}
+	if !safeSessionID(sessionID) {
+		return nil, fmt.Errorf("user media: unsafe session id %q", sessionID)
+	}
+	files, err := inspectFiles(workDir, inputPaths, limits)
+	if err != nil {
+		return nil, err
+	}
+	refs := make([]MediaRef, 0, len(files))
+	for _, file := range files {
+		ref, err := storeImageData(workDir, sessionID, file.info, file.ext, file.data)
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+func inspectFiles(workDir string, inputPaths []string, limits Limits) ([]inspectedFile, error) {
+	limits = effectiveLimits(limits)
+	if err := validateInputCount(inputPaths, limits.MaxCount); err != nil {
+		return nil, err
+	}
+	files := make([]inspectedFile, 0, len(inputPaths))
+	for _, inputPath := range inputPaths {
+		info, ext, data, err := inspectFile(workDir, inputPath, limits)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, inspectedFile{info: info, ext: ext, data: data})
+	}
+	return files, nil
+}
+
+// StoreFile validates one local image path and persists a session-scoped artifact.
+func StoreFile(workDir, sessionID, inputPath string, limits Limits) (MediaRef, error) {
+	return storeFile(workDir, sessionID, inputPath, effectiveLimits(limits))
+}
+
+func storeFile(workDir, sessionID, inputPath string, limits Limits) (MediaRef, error) {
+	if !safeSessionID(sessionID) {
+		return MediaRef{}, fmt.Errorf("user media: unsafe session id %q", sessionID)
+	}
+	info, ext, data, err := inspectFile(workDir, inputPath, limits)
+	if err != nil {
+		return MediaRef{}, err
+	}
+	return storeImageData(workDir, sessionID, info, ext, data)
+}
+
+func inspectFile(workDir, inputPath string, limits Limits) (FileInfo, string, []byte, error) {
+	resolvedPath, err := resolveInputPath(workDir, inputPath)
+	if err != nil {
+		return FileInfo{}, "", nil, err
+	}
+	f, err := os.Open(resolvedPath)
+	if err != nil {
+		return FileInfo{}, "", nil, fmt.Errorf("user media: open %q: %w", inputPath, err)
+	}
+	defer func() { _ = f.Close() }()
+	stat, err := f.Stat()
+	if err != nil {
+		return FileInfo{}, "", nil, fmt.Errorf("user media: stat %q: %w", inputPath, err)
+	}
+	if stat.IsDir() {
+		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: path %q is a directory", inputPath))
+	}
+	data, err := readLimited(f, limits.MaxBytes)
+	if err != nil {
+		return FileInfo{}, "", nil, fmt.Errorf("user media: inspect %q: %w", inputPath, err)
+	}
+	info, ext, err := inspectImageData(resolvedPath, stat.Name(), data)
+	if err != nil {
+		return FileInfo{}, "", nil, fmt.Errorf("user media: inspect %q: %w", inputPath, err)
+	}
+	return info, ext, data, nil
+}
+
+func resolveInputPath(workDir, inputPath string) (string, error) {
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		return "", errors.New("user media: missing work dir")
+	}
+	inputPath = strings.TrimSpace(inputPath)
+	if inputPath == "" {
+		return "", invalidInputError("user media: missing image path")
+	}
+	if !filepath.IsAbs(inputPath) {
+		inputPath = filepath.Join(workDir, inputPath)
+	}
+	resolved, err := filepath.Abs(inputPath)
+	if err != nil {
+		return "", fmt.Errorf("user media: resolve image path: %w", err)
+	}
+	return resolved, nil
+}
+
+func inspectImageData(resolvedPath, filename string, data []byte) (FileInfo, string, error) {
+	mediaType, ext, err := uploadedImageType(data, filename)
+	if err != nil {
+		return FileInfo{}, "", err
+	}
 	width, height, ok := imageDimensions(data)
 	if !ok && mediaType != "image/webp" {
-		return MediaRef{}, errors.New("user media: invalid image data")
+		return FileInfo{}, "", invalidInputError("user media: invalid image data")
 	}
+	return FileInfo{
+		Path:      resolvedPath,
+		Name:      filename,
+		MediaType: mediaType,
+		Bytes:     len(data),
+		Width:     width,
+		Height:    height,
+	}, ext, nil
+}
+
+func storeImageData(workDir, sessionID string, info FileInfo, ext string, data []byte) (MediaRef, error) {
 	store, err := artifact.NewStore(workDir)
 	if err != nil {
 		return MediaRef{}, fmt.Errorf("user media: artifact store: %w", err)
@@ -65,12 +225,19 @@ func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits
 	}
 	return MediaRef{
 		ArtifactPath:  stored.Path,
-		MediaType:     mediaType,
+		MediaType:     info.MediaType,
 		SHA256:        stored.SHA256,
 		OriginalBytes: stored.Bytes,
-		Width:         width,
-		Height:        height,
+		Width:         info.Width,
+		Height:        info.Height,
 	}, nil
+}
+
+func validateInputCount(inputPaths []string, maxCount int) error {
+	if maxCount > 0 && len(inputPaths) > maxCount {
+		return invalidInputError(fmt.Sprintf("user media: too many images (%d/%d)", len(inputPaths), maxCount))
+	}
+	return nil
 }
 
 func ValidateSessionMediaRefs(workDir, sessionID string, refs []MediaRef, limits Limits) error {
@@ -148,10 +315,10 @@ func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("user media: read upload: %w", err)
 	}
 	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("user media: upload exceeds %d bytes", limit)
+		return nil, invalidInputError(fmt.Sprintf("user media: upload exceeds %d bytes", limit))
 	}
 	if len(data) == 0 {
-		return nil, errors.New("user media: empty upload")
+		return nil, invalidInputError("user media: empty upload")
 	}
 	return data, nil
 }
@@ -175,7 +342,7 @@ func uploadedImageType(data []byte, filename string) (mediaType, ext string, err
 	if extType == "image/webp" && isWebP(data) {
 		return "image/webp", ".webp", nil
 	}
-	return "", "", fmt.Errorf("user media: unsupported image type %q", detected)
+	return "", "", invalidInputError(fmt.Sprintf("user media: unsupported image type %q", detected))
 }
 
 func imageDimensions(data []byte) (int, int, bool) {

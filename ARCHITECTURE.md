@@ -711,6 +711,9 @@ type Options struct {
 type App struct { Engine; Bus; Session; ... }
 func New(opts Options) (*App, error)
 func (a *App) Run(ctx, prompt) (string, error)
+func (a *App) RunWithAttachments(
+    ctx context.Context, prompt string, attachments []llm.MediaRef,
+) (string, error)
 func (a *App) REPL(ctx, in, out) error
 func (a *App) Close() error
 ```
@@ -806,7 +809,7 @@ mid-stream interrupts or rollback.
 juex
 ├── init [--scope user|workspace] [--provider <id>] [--model <id>]
 ├── doctor [--format text|table|json] [--offline]
-├── run "<prompt>" [flags]   [--new | --side] [--alias <name>]
+├── run ["<prompt>"] [flags] [--attach <path>]... [--new | --side] [--alias <name>]
 ├── repl [flags]             [--new] [--alias <name>]
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
@@ -841,6 +844,14 @@ provider requests and tool calls. On plain cancellation, stderr and
 `run --json` use `cancelled by user`; on signal-triggered cancellation they use
 neutral signal-aware messages such as `run interrupted by signal SIGINT (2)` or
 `run terminated by signal SIGTERM (15)` plus structured signal details.
+
+`run --attach <path>` accepts repeatable local image paths, resolves relative
+paths from the selected workdir, and copies validated bytes into the current
+session artifact namespace before starting the turn. An omitted prompt creates
+an image-only turn. `run --dry-run` validates attachment metadata without
+writing artifacts. The REPL-local `/attach <path>` command stages images for
+the next ordinary prompt; local status and compaction commands preserve the
+staging set, while a successful session switch clears it.
 
 Persistent flags inherited by all subcommands:
 
@@ -1329,17 +1340,19 @@ Store read or write.
 ### 6.2 User Media
 
 `internal/usermedia` owns session-scoped image attachment policy. It validates
-upload size and image type, records dimensions and integrity metadata, limits
-the number of images admitted to one turn, and rejects references outside the
-target session's `.juex/artifacts/media/<session-id>/` namespace. Durable bytes
-are stored and verified through `internal/artifact`; `usermedia` does not
+HTTP upload bodies and CLI-local image paths, records dimensions and integrity
+metadata, limits the number of images admitted to one turn, and rejects
+references outside the target session's `.juex/artifacts/media/<session-id>/`
+namespace. Durable bytes are stored and verified through `internal/artifact`;
+`usermedia` does not
 implement a second filesystem boundary.
 
-The Web attachment route is a transport adapter over this policy. It stores an
-upload before a turn starts and returns an `llm.MediaRef`; turn admission then
-revalidates every submitted reference before converting it into canonical
-image blocks. This keeps browser uploads, future CLI attachment input, and
-provider projection on one application contract while preventing a client
+The Web attachment route and CLI path ingestion are transport adapters over
+this policy. Both store bytes before a turn starts and return an `llm.MediaRef`.
+`App.AdmitTurn` revalidates Web references, while `RunWithAttachments`
+revalidates CLI and REPL references; both convert them into canonical image
+blocks before provider projection. This keeps browser uploads, CLI attachments,
+and provider projection on one application contract while preventing a client
 from submitting arbitrary workspace paths as session attachments.
 
 The user-global `~/.agents` and `~/.juex/extensions` resources are read-only

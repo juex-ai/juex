@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/tools"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 type stubProvider struct {
@@ -1193,6 +1195,137 @@ func TestApp_REPLProcessesMultipleLines(t *testing.T) {
 	}
 }
 
+func TestAppRunWithAttachmentsBuildsCanonicalUserMessage(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "described"),
+		StopReason: llm.StopEndTurn,
+	})
+	media := storeAppTestMedia(t, a, "run-with.png")
+
+	out, err := a.RunWithAttachments(context.Background(), "describe", []llm.MediaRef{media})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "described" || prov.calls != 1 {
+		t.Fatalf("out/calls = %q/%d", out, prov.calls)
+	}
+	if len(prov.histories) != 1 || len(prov.histories[0]) != 1 {
+		t.Fatalf("provider history = %+v", prov.histories)
+	}
+	blocks := prov.histories[0][0].Blocks
+	if len(blocks) != 2 || blocks[0].Type != llm.BlockText || blocks[0].Text != "describe" || blocks[1].Type != llm.BlockImage || blocks[1].Media == nil || blocks[1].Media.ArtifactPath != media.ArtifactPath {
+		t.Fatalf("user blocks = %+v", blocks)
+	}
+}
+
+func TestAppRunWithAttachmentsSupportsImageOnlyAndRejectsSlash(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "image only"),
+		StopReason: llm.StopEndTurn,
+	})
+	media := storeAppTestMedia(t, a, "image-only.png")
+	if _, err := a.RunWithAttachments(context.Background(), "", []llm.MediaRef{media}); err != nil {
+		t.Fatal(err)
+	}
+	if got := prov.histories[0][0].Blocks; len(got) != 1 || got[0].Type != llm.BlockImage {
+		t.Fatalf("image-only blocks = %+v", got)
+	}
+	if _, err := a.RunWithAttachments(context.Background(), "/status", []llm.MediaRef{media}); err == nil || !strings.Contains(err.Error(), "slash commands cannot include attachments") {
+		t.Fatalf("slash attachment error = %v", err)
+	}
+}
+
+func TestAppREPLStagesAttachmentsForNextMessage(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "described"),
+		StopReason: llm.StopEndTurn,
+	})
+	imagePath := filepath.Join(a.cfg.WorkDir, "screen one.png")
+	writeAppTestPNG(t, imagePath)
+	var out bytes.Buffer
+	if err := a.REPL(context.Background(), strings.NewReader("/attach screen one.png\ndescribe it\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "attached: [图片:") || !strings.Contains(out.String(), "(1/8 staged)") || !strings.Contains(out.String(), "described") {
+		t.Fatalf("repl output = %q", out.String())
+	}
+	blocks := prov.histories[0][0].Blocks
+	if len(blocks) != 2 || blocks[0].Text != "describe it" || blocks[1].Type != llm.BlockImage || blocks[1].Media == nil {
+		t.Fatalf("provider blocks = %+v", blocks)
+	}
+	if !strings.Contains(blocks[1].Media.ArtifactPath, "/"+a.Session.ID+"/") {
+		t.Fatalf("artifact path = %q, want session namespace %q", blocks[1].Media.ArtifactPath, a.Session.ID)
+	}
+}
+
+func TestParseREPLAttach(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		path    string
+		handled bool
+		wantErr bool
+	}{
+		{name: "plain path", input: "/attach screen one.png", path: "screen one.png", handled: true},
+		{name: "double quoted", input: `/attach "screen one.png"`, path: "screen one.png", handled: true},
+		{name: "single quoted", input: "/attach 'screen one.png'", path: "screen one.png", handled: true},
+		{name: "missing path", input: "/attach", handled: true, wantErr: true},
+		{name: "different command", input: "/attachment screen.png"},
+		{name: "ordinary text", input: "describe screen.png"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPath, handled, err := parseREPLAttach(tt.input)
+			if gotPath != tt.path || handled != tt.handled || (err != nil) != tt.wantErr {
+				t.Fatalf("parseREPLAttach(%q) = %q, %v, %v", tt.input, gotPath, handled, err)
+			}
+		})
+	}
+}
+
+func TestAppREPLKeepsStagedAttachmentsAcrossStatusAndContinuesAfterAttachError(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	})
+	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, "screen.png"))
+	var out bytes.Buffer
+	input := "/attach missing.png\n/attach screen.png\n/status\ndescribe\n"
+	if err := a.REPL(context.Background(), strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "error:") || !strings.Contains(out.String(), "observables: 0/0 running") || !strings.Contains(out.String(), "done") {
+		t.Fatalf("repl output = %q", out.String())
+	}
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
+	}
+	blocks := prov.histories[0][0].Blocks
+	if len(blocks) != 2 || blocks[1].Type != llm.BlockImage {
+		t.Fatalf("provider blocks = %+v", blocks)
+	}
+}
+
+func TestAppREPLNewSessionClearsStagedAttachments(t *testing.T) {
+	a, prov := newStubApp(t,
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "hello"), StopReason: llm.StopEndTurn},
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "plain"), StopReason: llm.StopEndTurn},
+	)
+	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, "screen.png"))
+	var out bytes.Buffer
+	if err := a.REPL(context.Background(), strings.NewReader("/attach screen.png\n/new\nplain turn\n"), &out); err != nil {
+		t.Fatal(err)
+	}
+	if prov.calls != 2 {
+		t.Fatalf("provider calls = %d, want 2", prov.calls)
+	}
+	lastHistory := prov.histories[1]
+	lastUser := lastHistory[len(lastHistory)-1]
+	if len(lastUser.Blocks) != 1 || lastUser.Blocks[0].Type != llm.BlockText || lastUser.Blocks[0].Text != "plain turn" {
+		t.Fatalf("post-new user message = %+v", lastUser)
+	}
+}
+
 func TestApp_REPLContinuesAfterTurnError(t *testing.T) {
 	// First call errors (stub exhausted on call 0 if we provide nothing) ->
 	// REPL should print "error:" and keep reading. Use a single-reply stub
@@ -1212,6 +1345,28 @@ func TestApp_REPLContinuesAfterTurnError(t *testing.T) {
 	if !strings.Contains(body, "error:") {
 		t.Fatalf("second turn should have errored: %q", body)
 	}
+}
+
+func writeAppTestPNG(t *testing.T, path string) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func storeAppTestMedia(t *testing.T, a *App, name string) llm.MediaRef {
+	t.Helper()
+	path := filepath.Join(a.cfg.WorkDir, name)
+	writeAppTestPNG(t, path)
+	ref, err := usermedia.StoreFile(a.cfg.WorkDir, a.Session.ID, path, usermedia.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ref
 }
 
 func TestApp_VerboseEmitsToStderr(t *testing.T) {

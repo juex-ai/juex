@@ -177,6 +177,93 @@ type capturedProviderRequest struct {
 	body map[string]any
 }
 
+func TestLiveBinary_CLIRunAttachmentSendsImageAndPersistsArtifact(t *testing.T) {
+	bin := buildJuex(t)
+	requests := make(chan capturedProviderRequest, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests <- capturedProviderRequest{path: r.URL.Path, body: body}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponse("attachment-ok")))
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	configBody := `model: local-chat:vision-test
+providers:
+  - id: local-chat
+    protocol: openai/chat
+    base_url: ` + srv.URL + `
+    api_key: k
+    capabilities:
+      vision: true
+    models:
+      - id: vision-test
+`
+	if err := writeText(configPath, configBody); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(sourcePath, webUploadPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "--attach", sourcePath, "describe this image")
+	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("juex run --attach: %v\n%s", err, out)
+	}
+	var result struct {
+		Text       string `json:"text"`
+		SessionID  string `json:"session_id"`
+		SessionDir string `json:"session_dir"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("decode run result: %v\n%s", err, out)
+	}
+	if result.Text != "attachment-ok" || result.SessionID == "" || result.SessionDir == "" {
+		t.Fatalf("run result = %+v", result)
+	}
+
+	var captured capturedProviderRequest
+	select {
+	case captured = <-requests:
+	default:
+		t.Fatal("fake provider did not receive attachment request")
+	}
+	if captured.path != "/chat/completions" || !requestHasUserImage(captured.body, "describe this image") {
+		t.Fatalf("provider request missing text/image content: path=%q body=%+v", captured.path, captured.body)
+	}
+
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	conversationPath := filepath.Join(result.SessionDir, "conversation.jsonl")
+	var storedRef *llm.MediaRef
+	for _, line := range readLines(t, conversationPath) {
+		var message llm.Message
+		if err := json.Unmarshal([]byte(line), &message); err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range message.Blocks {
+			if block.Type == llm.BlockImage && block.Media != nil {
+				storedRef = block.Media
+			}
+		}
+	}
+	if storedRef == nil || !strings.Contains(storedRef.ArtifactPath, "/"+result.SessionID+"/") {
+		t.Fatalf("stored media ref = %+v", storedRef)
+	}
+	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(storedRef.ArtifactPath))); err != nil {
+		t.Fatalf("persisted artifact unavailable after source removal: %v", err)
+	}
+}
+
 func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	bin := buildJuex(t)
 
@@ -887,6 +974,32 @@ func requestHasTool(body map[string]any, name string) bool {
 		tool, _ := raw.(map[string]any)
 		function, _ := tool["function"].(map[string]any)
 		if function["name"] == name {
+			return true
+		}
+	}
+	return false
+}
+
+func requestHasUserImage(body map[string]any, wantText string) bool {
+	messages, _ := body["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] != "user" {
+			continue
+		}
+		parts, _ := message["content"].([]any)
+		var haveText, haveImage bool
+		for _, rawPart := range parts {
+			part, _ := rawPart.(map[string]any)
+			switch part["type"] {
+			case "text":
+				haveText = strings.Contains(fmt.Sprint(part["text"]), wantText)
+			case "image_url":
+				imageURL, _ := part["image_url"].(map[string]any)
+				haveImage = strings.HasPrefix(fmt.Sprint(imageURL["url"]), "data:image/png;base64,")
+			}
+		}
+		if haveText && haveImage {
 			return true
 		}
 	}

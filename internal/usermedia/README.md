@@ -7,6 +7,12 @@ It validates upload size and image type, stores content-addressed bytes through
 that submitted references belong to the target session before turn admission.
 The default contract accepts up to eight images per turn and 10 MiB per image.
 
-HTTP multipart parsing belongs to `internal/web`; canonical image blocks and
-provider encoding belong to `internal/app` and `internal/llm`. This package
-does not own transport behavior or duplicate artifact filesystem safety.
+`InspectFiles` resolves local paths from the workdir and validates metadata
+without writing. `StoreFile` and `StoreFiles` copy validated local images into
+the same session-scoped artifact namespace used by HTTP uploads. Absolute paths
+are allowed; relative paths are always workdir-relative.
+
+HTTP multipart parsing belongs to `internal/web`, CLI and REPL interaction
+belong to their transport adapters, and canonical image blocks plus provider
+encoding belong to `internal/app` and `internal/llm`. This package does not own
+transport behavior or duplicate artifact filesystem safety.

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -61,6 +62,20 @@ func TestRunCmd_RequiresPrompt(t *testing.T) {
 	}
 	if _, ok := err.(*usageError); !ok {
 		t.Fatalf("expected *usageError, got %T: %v", err, err)
+	}
+}
+
+func TestRunCmd_HelpIncludesRepeatableAttachFlag(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"run", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "--attach") {
+		t.Fatalf("run help missing --attach:\n%s", out.String())
 	}
 }
 
@@ -453,6 +468,91 @@ func TestRunCmd_DryRunReturnsDryRunOK(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("plan missing %q in:\n%s", want, body)
 		}
+	}
+}
+
+func TestRunCmd_DryRunValidatesImageOnlyAttachmentsWithoutStoring(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	writeCLITestPNG(t, filepath.Join(dir, "screen.png"))
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "screen.png", "--attach", "screen.png"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v\n%s", err, err, out.String())
+	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Prompt != "" || plan.AttachmentCount != 2 || len(plan.Attachments) != 2 {
+		t.Fatalf("attachment plan = %+v", plan)
+	}
+	attachment := plan.Attachments[0]
+	if attachment.MediaType != "image/png" || attachment.Bytes != 68 || attachment.Width != 1 || attachment.Height != 1 {
+		t.Fatalf("attachment metadata = %+v", attachment)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".juex", "artifacts", "media")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run stored attachment artifacts: %v", err)
+	}
+}
+
+func TestRunCmd_DryRunInvalidAttachmentReturnsUsageError(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not an image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "notes.txt"})
+	err := root.Execute()
+	var emitted *emittedError
+	if !errors.As(err, &emitted) {
+		t.Fatalf("expected emitted error, got %T: %v", err, err)
+	}
+	var usage *usageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("expected usageError, got %T: %v", err, err)
+	}
+	if !strings.Contains(out.String(), `"error": "usage_error"`) || !strings.Contains(out.String(), "unsupported image type") {
+		t.Fatalf("error output = %s", out.String())
+	}
+}
+
+func TestRunCmd_DryRunAttachmentMissingReturnsNotFound(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "missing.png"})
+	err := root.Execute()
+	var emitted *emittedError
+	if !errors.As(err, &emitted) {
+		t.Fatalf("expected emitted error, got %T: %v", err, err)
+	}
+	var notFound *notFoundError
+	if !errors.As(err, &notFound) {
+		t.Fatalf("expected notFoundError, got %T: %v", err, err)
+	}
+	if !strings.Contains(out.String(), `"error": "not_found"`) || !strings.Contains(out.String(), "missing.png") {
+		t.Fatalf("error output = %s", out.String())
 	}
 }
 
@@ -1307,6 +1407,17 @@ func writeTextFile(path, body string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+func writeCLITestPNG(t *testing.T, path string) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func setHomeForCLITest(t *testing.T) string {

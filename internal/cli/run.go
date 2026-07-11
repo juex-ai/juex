@@ -20,6 +20,7 @@ import (
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/usermedia"
 )
 
 // runResult is the JSON shape emitted on success when --json is set.
@@ -54,24 +55,26 @@ const externalStopSuggestion = "The run was stopped externally; check the termin
 // Derivable paths (memory_dir / sessions_dir under <work_dir>/.juex)
 // are intentionally omitted — readers can reconstruct them from work_dir.
 type dryRunPlan struct {
-	ProviderID  string              `json:"provider_id,omitempty"`
-	Protocol    string              `json:"protocol,omitempty"`
-	Model       string              `json:"model"`
-	BaseURL     string              `json:"base_url"`
-	WorkDir     string              `json:"work_dir"`
-	ConfigFile  string              `json:"config_file,omitempty"`
-	Prompt      string              `json:"prompt"`
-	PromptChars int                 `json:"prompt_chars"`
-	SystemChars int                 `json:"system_prompt_chars"`
-	ToolCount   int                 `json:"tool_count"`
-	Tools       []string            `json:"tools"`
-	Shell       config.ShellProfile `json:"shell"`
-	Sandbox     sandbox.Policy      `json:"sandbox"`
-	SkillCount  int                 `json:"skill_count"`
-	Skills      []skillSummary      `json:"skills,omitempty"`
-	Resources   string              `json:"resources"`
-	Sections    []promptSectionPlan `json:"system_prompt_sections,omitempty"`
-	MCP         app.MCPStatus       `json:"mcp"`
+	ProviderID      string               `json:"provider_id,omitempty"`
+	Protocol        string               `json:"protocol,omitempty"`
+	Model           string               `json:"model"`
+	BaseURL         string               `json:"base_url"`
+	WorkDir         string               `json:"work_dir"`
+	ConfigFile      string               `json:"config_file,omitempty"`
+	Prompt          string               `json:"prompt"`
+	PromptChars     int                  `json:"prompt_chars"`
+	SystemChars     int                  `json:"system_prompt_chars"`
+	ToolCount       int                  `json:"tool_count"`
+	Tools           []string             `json:"tools"`
+	Shell           config.ShellProfile  `json:"shell"`
+	Sandbox         sandbox.Policy       `json:"sandbox"`
+	SkillCount      int                  `json:"skill_count"`
+	Skills          []skillSummary       `json:"skills,omitempty"`
+	Resources       string               `json:"resources"`
+	Sections        []promptSectionPlan  `json:"system_prompt_sections,omitempty"`
+	MCP             app.MCPStatus        `json:"mcp"`
+	AttachmentCount int                  `json:"attachment_count,omitempty"`
+	Attachments     []usermedia.FileInfo `json:"attachments,omitempty"`
 }
 
 // skillSummary mirrors what the system prompt's "Available Skills" section
@@ -107,10 +110,11 @@ func newRunCmd(flags *persistentFlags) *cobra.Command {
 		dryRun      bool
 		newSession  bool
 		sideSession bool
+		attachPaths []string
 		rf          resumeFlags
 	)
 	cmd := &cobra.Command{
-		Use:   "run [flags] <prompt>",
+		Use:   "run [flags] [prompt]",
 		Short: "Run one turn and print the answer",
 		Long: `Single-shot agent invocation. The prompt is the joined positional args.
 With --json the result is a JSON object on stdout (text + session metadata);
@@ -118,13 +122,14 @@ errors emit a structured JSON object on stderr.
 With --dry-run no LLM call is made; instead a JSON preview of the planned
 execution is printed and the process exits with code 10.`,
 		Example: `  juex run "summarise README.md"
+  juex run --attach screenshot.png "what is wrong here?"
   juex run --config .juex/juex.yaml "what is in scope.txt?"
   juex -C /path/to/project run "do thing"
   juex run --json "do thing" | jq -r .text
   juex run --dry-run "do thing"     # exits 10 with a JSON plan`,
 		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) < 1 {
-				return &usageError{msg: "juex run: prompt required (positional argument)"}
+			if len(args) < 1 && len(attachPaths) == 0 {
+				return &usageError{msg: "juex run: prompt or --attach required"}
 			}
 			return nil
 		},
@@ -167,7 +172,7 @@ execution is printed and the process exits with code 10.`,
 			}
 
 			if dryRun {
-				return runDryRun(cmd, flags, cfg, prompt, jsonOut)
+				return runDryRun(cmd, flags, cfg, prompt, attachPaths, jsonOut)
 			}
 
 			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cfg.HistoryPath(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
@@ -202,9 +207,13 @@ execution is printed and the process exits with code 10.`,
 			if flags.verbose {
 				fmt.Fprintln(cmd.ErrOrStderr(), app.FormatResourceSummary(a.ResourceSummary()))
 			}
+			attachments, err := usermedia.StoreFiles(cfg.WorkDir, a.Session.ID, attachPaths, usermedia.Limits{})
+			if err != nil {
+				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
+			}
 
 			start := time.Now()
-			out, err := a.Run(cmd.Context(), prompt)
+			out, err := a.RunWithAttachments(cmd.Context(), prompt, attachments)
 			if err != nil {
 				var slashErr *app.UnknownSlashCommandError
 				if errors.As(err, &slashErr) {
@@ -238,6 +247,7 @@ execution is printed and the process exits with code 10.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would execute (provider, model, prompt size, tool list); skip the LLM call; exit 10")
 	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
 	cmd.Flags().BoolVar(&sideSession, "side", false, "create a side session without changing the active primary")
+	cmd.Flags().StringArrayVar(&attachPaths, "attach", nil, "attach an image to this turn (repeatable; relative to workdir)")
 	cmd.Flags().StringVar(&rf.Resume, "resume", "", "deprecated: resume a past session by id, alias, or 'last'; use sessions activate")
 	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
@@ -247,7 +257,11 @@ execution is printed and the process exits with code 10.`,
 
 // runDryRun wires everything but the LLM call so we can introspect the
 // planned execution. Returns *dryRunOK so Execute() picks exit code 10.
-func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, userPrompt string, jsonOut bool) error {
+func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, userPrompt string, attachmentPaths []string, jsonOut bool) error {
+	attachments, err := usermedia.InspectFiles(cfg.WorkDir, attachmentPaths, usermedia.Limits{})
+	if err != nil {
+		return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
+	}
 	// Build the app with a noop provider — that's the only piece dry-run
 	// can't reuse from the live wiring (no API key required for noop).
 	a, err := app.New(app.Options{
@@ -301,24 +315,26 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		protocol = string(profile.Protocol)
 	}
 	plan := dryRunPlan{
-		ProviderID:  providerID,
-		Protocol:    protocol,
-		Model:       cfg.Model,
-		BaseURL:     cfg.BaseURL,
-		WorkDir:     cfg.WorkDir,
-		ConfigFile:  configFileForPlan(flags),
-		Prompt:      userPrompt,
-		PromptChars: len(userPrompt),
-		SystemChars: len(system),
-		ToolCount:   len(tools),
-		Tools:       tools,
-		Shell:       cfg.Shell,
-		Sandbox:     cfg.SandboxPolicy(),
-		SkillCount:  len(skillSummaries),
-		Skills:      skillSummaries,
-		Resources:   app.FormatResourceSummary(a.ResourceSummary()),
-		Sections:    sectionPlans,
-		MCP:         a.MCPStatus(),
+		ProviderID:      providerID,
+		Protocol:        protocol,
+		Model:           cfg.Model,
+		BaseURL:         cfg.BaseURL,
+		WorkDir:         cfg.WorkDir,
+		ConfigFile:      configFileForPlan(flags),
+		Prompt:          userPrompt,
+		PromptChars:     len(userPrompt),
+		SystemChars:     len(system),
+		ToolCount:       len(tools),
+		Tools:           tools,
+		Shell:           cfg.Shell,
+		Sandbox:         cfg.SandboxPolicy(),
+		SkillCount:      len(skillSummaries),
+		Skills:          skillSummaries,
+		Resources:       app.FormatResourceSummary(a.ResourceSummary()),
+		Sections:        sectionPlans,
+		MCP:             a.MCPStatus(),
+		AttachmentCount: len(attachments),
+		Attachments:     attachments,
 	}
 
 	if jsonOut {
@@ -328,6 +344,20 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		cmdPrintln(cmd, mustJSON(plan))
 	}
 	return &dryRunOK{msg: "dry run complete"}
+}
+
+func emitAttachmentError(jsonOut bool, stderr io.Writer, err error) error {
+	suggestion := "check each --attach path, supported image type, 10 MiB size limit, and 8-image count limit"
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return emit(jsonOut, stderr, &notFoundError{msg: err.Error()}, suggestion, false)
+	case errors.Is(err, os.ErrPermission):
+		return emit(jsonOut, stderr, &permissionError{msg: err.Error()}, suggestion, false)
+	case errors.Is(err, usermedia.ErrInvalidInput):
+		return emit(jsonOut, stderr, &usageError{msg: err.Error()}, suggestion, false)
+	default:
+		return emit(jsonOut, stderr, err, suggestion, false)
+	}
 }
 
 func configFileForPlan(flags *persistentFlags) string {
