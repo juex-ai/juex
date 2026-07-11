@@ -167,10 +167,14 @@ generated files, chunked write sessions accept bounded chunks, validate
 optional chunk/full-file SHA-256 digests, and commit with a temporary file plus
 rename so failed validation does not overwrite the target. Each chunk is capped
 at the provider-safe limit of about 2,000 characters or 4,000 bytes so tool
-argument JSON stays within model output limits. Provider-visible history keeps
-recent active chunks available for continuation, and folds committed chunked
-write sessions into a compact summary; the durable conversation log still
-preserves the original tool-use inputs for replay and debugging.
+argument JSON stays within model output limits. Successful chunked write tool
+results also persist a machine-readable lifecycle fact; provider-visible
+history uses those facts, not human-readable result strings, to keep recent
+active chunks available for continuation and fold committed chunked write
+sessions into a compact summary. When a session is resumed, Juex reconstructs
+active chunked write state from the persisted lifecycle facts plus the original
+tool-use inputs when enough transcript data remains. The durable conversation
+log still preserves the original tool-use inputs for replay and debugging.
 
 The builtin command tools are `exec_command`, `write_stdin`, and
 `list_shell_sessions`. Juex resolves a

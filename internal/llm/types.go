@@ -6,6 +6,8 @@
 // session) only ever see the types defined here.
 package llm
 
+import "github.com/juex-ai/juex/internal/chunkedwrite"
+
 type Role string
 
 const (
@@ -68,6 +70,10 @@ type Block struct {
 	// Artifact records full content that was moved out of provider context
 	// while preserving a stable provider-visible preview in Text or Content.
 	Artifact *ContextArtifactProjection `json:"artifact,omitempty"`
+	// ChunkedWrite records a machine-readable lifecycle fact for chunked write
+	// tool_result blocks. Provider replay must use this instead of parsing
+	// provider-facing result text.
+	ChunkedWrite *chunkedwrite.Event `json:"chunked_write,omitempty"`
 }
 
 // MediaRef keeps durable transcripts lightweight by storing a media reference

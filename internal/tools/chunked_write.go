@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/juex-ai/juex/internal/chunkedwrite"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -28,6 +30,134 @@ const (
 	chunkWriteMaxChunkChars         = chunkWriteRecommendedChunkChars
 	chunkWriteSessionTTL            = 2 * time.Hour
 )
+
+type ChunkedWriteManager = chunkWriteManager
+
+func NewChunkedWriteManager(workDir string, guards ...sandbox.PathGuard) *ChunkedWriteManager {
+	return newChunkWriteManager(workDir, guards...)
+}
+
+func (m *chunkWriteManager) RestoreActiveFromHistory(history []llm.Message) {
+	if m == nil {
+		return
+	}
+	toolUses := map[string]llm.Block{}
+	now := m.now()
+	restored := map[string]*chunkWriteSession{}
+	invalid := map[string]bool{}
+	var events []chunkedwrite.Event
+	for _, msg := range history {
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockToolUse && block.ToolUseID != "" {
+				toolUses[block.ToolUseID] = block
+				continue
+			}
+			if block.Type != llm.BlockToolResult || block.ChunkedWrite == nil {
+				continue
+			}
+			event := *block.ChunkedWrite
+			if event.WriteID == "" || invalid[event.WriteID] {
+				continue
+			}
+			events = append(events, event)
+			switch event.Kind {
+			case chunkedwrite.EventBegin:
+				session, ok := m.restoreSessionFromBeginEvent(event, now)
+				if !ok {
+					invalid[event.WriteID] = true
+					delete(restored, event.WriteID)
+					continue
+				}
+				restored[event.WriteID] = session
+			case chunkedwrite.EventChunk:
+				session := restored[event.WriteID]
+				if session == nil || event.Index < 0 {
+					continue
+				}
+				content, ok := chunkContentFromToolUse(toolUses[block.ToolUseID])
+				if !ok {
+					invalid[event.WriteID] = true
+					delete(restored, event.WriteID)
+					continue
+				}
+				hash := sha256Hex([]byte(content))
+				if event.SHA256 != "" && !strings.EqualFold(event.SHA256, hash) {
+					invalid[event.WriteID] = true
+					delete(restored, event.WriteID)
+					continue
+				}
+				session.chunks[event.Index] = chunkWriteChunk{
+					content: content,
+					hash:    hash,
+					bytes:   len(content),
+					chars:   utf8.RuneCountInString(content),
+				}
+				session.updatedAt = now
+			case chunkedwrite.EventCommit, chunkedwrite.EventAbort:
+				delete(restored, event.WriteID)
+				delete(invalid, event.WriteID)
+			}
+		}
+	}
+	states := chunkedwrite.BuildStates(events)
+	for writeID := range restored {
+		if states[writeID].Status != chunkedwrite.StatusActive {
+			delete(restored, writeID)
+		}
+	}
+	m.mu.Lock()
+	m.sessions = restored
+	m.mu.Unlock()
+}
+
+func (m *chunkWriteManager) restoreSessionFromBeginEvent(event chunkedwrite.Event, now time.Time) (*chunkWriteSession, bool) {
+	mode := event.Mode
+	if mode == "" {
+		mode = chunkWriteDefaultMode
+	}
+	if mode != chunkWriteOverwriteMode && mode != chunkWriteCreateMode {
+		return nil, false
+	}
+	rel, abs, err := resolveChunkWritePath(m.workDir, event.Path)
+	if err != nil {
+		return nil, false
+	}
+	if err := m.guard.Check(abs); err != nil {
+		return nil, false
+	}
+	fileMode := os.FileMode(event.FileMode).Perm()
+	if fileMode == 0 {
+		fileMode = 0o644
+	}
+	if info, statErr := os.Stat(abs); statErr == nil {
+		if info.IsDir() || mode == chunkWriteCreateMode {
+			return nil, false
+		}
+		if event.FileMode == 0 {
+			fileMode = info.Mode().Perm()
+		}
+	} else if !os.IsNotExist(statErr) {
+		return nil, false
+	}
+	return &chunkWriteSession{
+		id:        event.WriteID,
+		rel:       rel,
+		abs:       abs,
+		mode:      mode,
+		fileMode:  fileMode,
+		createdAt: now,
+		updatedAt: now,
+		chunks:    map[int]chunkWriteChunk{},
+	}, true
+}
+
+func chunkContentFromToolUse(block llm.Block) (string, bool) {
+	if block.Type != llm.BlockToolUse {
+		return "", false
+	}
+	content, ok := block.Input["content"].(string)
+	return content, ok
+}
 
 type chunkWriteManager struct {
 	mu       sync.Mutex
@@ -85,14 +215,21 @@ func writeBeginTool(manager *chunkWriteManager) Tool {
 			},
 			"required": []string{"path"},
 		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
 			path, _ := in["path"].(string)
 			mode, _ := in["mode"].(string)
 			session, err := manager.begin(path, mode)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
-			return fmt.Sprintf("write_begin: write_id=%s path=%s mode=%s max_chunk_bytes=%d max_chunk_chars=%d recommended_chunk_bytes=%d recommended_chunk_chars=%d", session.id, session.rel, session.mode, chunkWriteMaxChunkBytes, chunkWriteMaxChunkChars, chunkWriteRecommendedChunkBytes, chunkWriteRecommendedChunkChars), nil
+			text := fmt.Sprintf("write_begin: write_id=%s path=%s mode=%s max_chunk_bytes=%d max_chunk_chars=%d recommended_chunk_bytes=%d recommended_chunk_chars=%d", session.id, session.rel, session.mode, chunkWriteMaxChunkBytes, chunkWriteMaxChunkChars, chunkWriteRecommendedChunkBytes, chunkWriteRecommendedChunkChars)
+			return Result{Text: text, Structured: chunkedwrite.Event{
+				Kind:     chunkedwrite.EventBegin,
+				WriteID:  session.id,
+				Path:     session.rel,
+				Mode:     session.mode,
+				FileMode: uint32(session.fileMode.Perm()),
+			}}, nil
 		},
 	}
 }
@@ -116,25 +253,35 @@ func writeChunkTool(manager *chunkWriteManager) Tool {
 			},
 			"required": []string{"write_id", "index", "content"},
 		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
 			writeID, _ := in["write_id"].(string)
 			index, ok := toInt(in["index"])
 			if !ok {
-				return "", fmt.Errorf("write_chunk: index must be an integer")
+				return Result{}, fmt.Errorf("write_chunk: index must be an integer")
 			}
 			content, contentOK := in["content"].(string)
 			if !contentOK {
 				if projectedWriteChunkMetadata(in) {
-					return "", fmt.Errorf("write_chunk: missing content; content_omitted/content_bytes/content_chars/content_sha256 are summary metadata, not valid input. Send the actual content string, preferably no more than %d chars or %d bytes per chunk", chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes)
+					return Result{}, fmt.Errorf("write_chunk: missing content; content_omitted/content_bytes/content_chars/content_sha256 are summary metadata, not valid input. Send the actual content string, preferably no more than %d chars or %d bytes per chunk", chunkWriteRecommendedChunkChars, chunkWriteRecommendedChunkBytes)
 				}
-				return "", fmt.Errorf("write_chunk: missing content")
+				return Result{}, fmt.Errorf("write_chunk: missing content")
 			}
 			expectedHash, _ := in["sha256"].(string)
 			chunk, duplicate, count, err := manager.chunk(writeID, index, content, expectedHash)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
-			return fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=%s chunks=%d duplicate=%t", writeID, index, chunk.bytes, chunk.chars, chunk.hash, count, duplicate), nil
+			text := fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=%s chunks=%d duplicate=%t", writeID, index, chunk.bytes, chunk.chars, chunk.hash, count, duplicate)
+			return Result{Text: text, Structured: chunkedwrite.Event{
+				Kind:      chunkedwrite.EventChunk,
+				WriteID:   writeID,
+				Index:     index,
+				Bytes:     chunk.bytes,
+				Chars:     chunk.chars,
+				SHA256:    chunk.hash,
+				Chunks:    count,
+				Duplicate: duplicate,
+			}}, nil
 		},
 	}
 }
@@ -161,22 +308,31 @@ func writeCommitTool(manager *chunkWriteManager) Tool {
 			},
 			"required": []string{"write_id"},
 		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
 			writeID, _ := in["write_id"].(string)
 			expectedChunks := -1
 			if value, ok := in["expected_chunks"]; ok && value != nil {
 				parsed, parsedOK := toInt(value)
 				if !parsedOK || parsed < 0 {
-					return "", fmt.Errorf("write_commit: expected_chunks must be a non-negative integer")
+					return Result{}, fmt.Errorf("write_commit: expected_chunks must be a non-negative integer")
 				}
 				expectedChunks = parsed
 			}
 			expectedHash, _ := in["sha256"].(string)
 			result, err := manager.commit(writeID, expectedChunks, expectedHash)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
-			return fmt.Sprintf("write_commit: write_id=%s path=%s bytes=%d chars=%d chunks=%d sha256=%s", writeID, result.rel, result.bytes, result.chars, result.chunks, result.hash), nil
+			text := fmt.Sprintf("write_commit: write_id=%s path=%s bytes=%d chars=%d chunks=%d sha256=%s", writeID, result.rel, result.bytes, result.chars, result.chunks, result.hash)
+			return Result{Text: text, Structured: chunkedwrite.Event{
+				Kind:    chunkedwrite.EventCommit,
+				WriteID: writeID,
+				Path:    result.rel,
+				Bytes:   result.bytes,
+				Chars:   result.chars,
+				Chunks:  result.chunks,
+				SHA256:  result.hash,
+			}}, nil
 		},
 	}
 }
@@ -192,13 +348,18 @@ func writeAbortTool(manager *chunkWriteManager) Tool {
 			},
 			"required": []string{"write_id"},
 		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
+		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
 			writeID, _ := in["write_id"].(string)
 			chunks, err := manager.abort(writeID)
 			if err != nil {
-				return "", err
+				return Result{}, err
 			}
-			return fmt.Sprintf("write_abort: write_id=%s aborted chunks=%d", writeID, chunks), nil
+			text := fmt.Sprintf("write_abort: write_id=%s aborted chunks=%d", writeID, chunks)
+			return Result{Text: text, Structured: chunkedwrite.Event{
+				Kind:    chunkedwrite.EventAbort,
+				WriteID: writeID,
+				Chunks:  chunks,
+			}}, nil
 		},
 	}
 }

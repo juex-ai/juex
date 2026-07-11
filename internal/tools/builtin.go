@@ -17,6 +17,7 @@ type BuiltinOptions struct {
 	ToolTimeoutSeconds int
 	DisableApplyPatch  bool
 	Providers          []BuiltinProvider
+	ChunkedWrites      *ChunkedWriteManager
 }
 
 type ShellProfile struct {
@@ -40,6 +41,7 @@ type BuiltinProviderContext struct {
 	SandboxRunner      sandbox.Runner
 	ToolTimeoutSeconds int
 	Options            BuiltinOptions
+	ChunkedWrites      *ChunkedWriteManager
 }
 
 func DefaultBuiltinProviders() []BuiltinProvider {
@@ -97,6 +99,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		SandboxRunner:      opts.SandboxRunner,
 		ToolTimeoutSeconds: toolTimeoutSeconds,
 		Options:            opts,
+		ChunkedWrites:      opts.ChunkedWrites,
 	}
 }
 

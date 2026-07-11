@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/juex-ai/juex/internal/chunkedwrite"
 )
 
 const providerWriteChunkRecentReplayCount = 4
@@ -116,71 +118,65 @@ func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProj
 		if !hasResult {
 			continue
 		}
-		switch use.ToolName {
-		case "write_begin":
-			if result.IsError {
-				continue
+		event := result.ChunkedWrite
+		if event == nil || event.WriteID == "" {
+			if result.IsError && use.ToolName == "write_chunk" {
+				if writeID := providerToolInputString(use.Input, "write_id"); writeID != "" {
+					session := getSession(writeID)
+					session.chunkCalls = append(session.chunkCalls, toolUseID)
+				}
 			}
-			values := providerToolResultKeyValues(result.Content, "write_begin:")
-			writeID := values["write_id"]
+			continue
+		}
+		switch event.Kind {
+		case chunkedwrite.EventBegin:
+			writeID := event.WriteID
 			if writeID == "" {
 				continue
 			}
 			session := getSession(writeID)
 			session.beginCallID = toolUseID
-			session.path = providerProjectionFirstNonEmpty(values["path"], providerToolInputString(use.Input, "path"), session.path)
-			session.mode = providerProjectionFirstNonEmpty(values["mode"], providerToolInputString(use.Input, "mode"), session.mode)
-		case "write_chunk":
-			writeID := providerToolInputString(use.Input, "write_id")
+			session.path = providerProjectionFirstNonEmpty(event.Path, providerToolInputString(use.Input, "path"), session.path)
+			session.mode = providerProjectionFirstNonEmpty(event.Mode, providerToolInputString(use.Input, "mode"), session.mode)
+		case chunkedwrite.EventChunk:
+			writeID := event.WriteID
 			if writeID == "" {
 				continue
 			}
 			session := getSession(writeID)
 			session.chunkCalls = append(session.chunkCalls, toolUseID)
-			if result.IsError {
-				continue
-			}
-			index, ok := providerToolInputInt(use.Input, "index")
-			if !ok {
-				continue
-			}
-			chunk := providerChunkedWriteChunk{toolUseID: toolUseID, index: index}
+			chunk := providerChunkedWriteChunk{toolUseID: toolUseID, index: event.Index, bytes: event.Bytes, chars: event.Chars}
 			if content, ok := use.Input["content"].(string); ok {
-				chunk.bytes = len(content)
-				chunk.chars = utf8.RuneCountInString(content)
-			}
-			values := providerToolResultKeyValues(result.Content, "write_chunk:")
-			if v, ok := parseProviderProjectionInt(values["bytes"]); ok {
-				chunk.bytes = v
-			}
-			if v, ok := parseProviderProjectionInt(values["chars"]); ok {
-				chunk.chars = v
+				if chunk.bytes == 0 {
+					chunk.bytes = len(content)
+				}
+				if chunk.chars == 0 {
+					chunk.chars = utf8.RuneCountInString(content)
+				}
 			}
 			session.chunks = append(session.chunks, chunk)
-		case "write_commit":
-			writeID := providerToolInputString(use.Input, "write_id")
-			if writeID == "" || result.IsError {
+		case chunkedwrite.EventCommit:
+			writeID := event.WriteID
+			if writeID == "" {
 				continue
 			}
-			values := providerToolResultKeyValues(result.Content, "write_commit:")
 			session := getSession(writeID)
 			session.commitCallID = toolUseID
 			session.committed = true
-			session.path = providerProjectionFirstNonEmpty(values["path"], session.path)
-			session.commitSHA256 = values["sha256"]
-			session.commitBytes, _ = parseProviderProjectionInt(values["bytes"])
-			session.commitChars, _ = parseProviderProjectionInt(values["chars"])
-			session.commitChunks, _ = parseProviderProjectionInt(values["chunks"])
-		case "write_abort":
-			writeID := providerToolInputString(use.Input, "write_id")
-			if writeID == "" || result.IsError {
+			session.path = providerProjectionFirstNonEmpty(event.Path, session.path)
+			session.commitSHA256 = event.SHA256
+			session.commitBytes = event.Bytes
+			session.commitChars = event.Chars
+			session.commitChunks = event.Chunks
+		case chunkedwrite.EventAbort:
+			writeID := event.WriteID
+			if writeID == "" {
 				continue
 			}
-			values := providerToolResultKeyValues(result.Content, "write_abort:")
 			session := getSession(writeID)
 			session.abortCallID = toolUseID
 			session.aborted = true
-			session.abortedChunks, _ = parseProviderProjectionInt(values["chunks"])
+			session.abortedChunks = event.Chunks
 		}
 	}
 
@@ -289,76 +285,9 @@ func providerActiveChunkedWriteSummary(session *providerChunkedWriteSession, fol
 	return strings.Join(nonEmptyParts(parts), " ")
 }
 
-func providerToolResultKeyValues(content, prefix string) map[string]string {
-	values := map[string]string{}
-	content = strings.TrimSpace(content)
-	if !strings.HasPrefix(content, prefix) {
-		return values
-	}
-	for _, field := range strings.Fields(strings.TrimSpace(strings.TrimPrefix(content, prefix))) {
-		key, value, ok := strings.Cut(field, "=")
-		if !ok || key == "" {
-			continue
-		}
-		values[key] = value
-	}
-	return values
-}
-
 func providerToolInputString(input map[string]any, key string) string {
 	value, _ := input[key].(string)
 	return value
-}
-
-func providerToolInputInt(input map[string]any, key string) (int, bool) {
-	return providerProjectionValueInt(input[key])
-}
-
-func providerProjectionValueInt(value any) (int, bool) {
-	switch v := value.(type) {
-	case int:
-		return v, true
-	case int8:
-		return int(v), true
-	case int16:
-		return int(v), true
-	case int32:
-		return int(v), true
-	case int64:
-		return int(v), true
-	case uint:
-		return int(v), true
-	case uint8:
-		return int(v), true
-	case uint16:
-		return int(v), true
-	case uint32:
-		return int(v), true
-	case uint64:
-		return int(v), true
-	case float32:
-		if v == float32(int(v)) {
-			return int(v), true
-		}
-	case float64:
-		if v == float64(int(v)) {
-			return int(v), true
-		}
-	case string:
-		return parseProviderProjectionInt(v)
-	}
-	return 0, false
-}
-
-func parseProviderProjectionInt(value string) (int, bool) {
-	if value == "" {
-		return 0, false
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, false
-	}
-	return parsed, true
 }
 
 func providerIndexRange(indices []int) string {

@@ -6,6 +6,9 @@ type ChunkedWriteToolProvider struct{}
 
 func (ChunkedWriteToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	manager := newChunkWriteManager(ctx.WorkDir, sandbox.NewPathGuard(ctx.WorkDir, ctx.Sandbox))
+	if ctx.ChunkedWrites != nil {
+		manager = ctx.ChunkedWrites
+	}
 	return []Tool{
 		writeBeginTool(manager),
 		writeChunkTool(manager),

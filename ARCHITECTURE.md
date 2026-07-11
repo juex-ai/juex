@@ -60,6 +60,7 @@ juex/
 │   │   ├── shell.go
 │   │   └── codex_auth.go
 │   ├── providerreadiness/        # provider selection, credentials, and hello-probe readiness checks
+│   ├── chunkedwrite/             # canonical chunked write lifecycle facts and derived state
 │   ├── bundle/                   # portable debug bundle tar.gz creation
 │   ├── events/                   # in-process EventBus + durable commit sink
 │   ├── hooks/                    # trusted lifecycle command hook execution
@@ -354,7 +355,8 @@ projection before invoking any provider implementation. The helper compacts
 history, validates provider-visible tool-call transcripts, filters tool and
 reasoning replay blocks through capability gates, supports Codex's
 reasoning-omit path, normalizes function parameter schemas, folds committed
-chunked write sessions out of provider replay with a compact summary, and
+chunked write sessions out of provider replay with a compact summary from
+canonical lifecycle facts, and
 round-trips tool-call argument JSON fallbacks. Adapters still own
 protocol-specific SDK request structs, content-block shapes, cache-control
 placement, and response decoding. Session repair remains outside provider
@@ -438,13 +440,18 @@ append to `tools.DefaultBuiltinProviders()` and pass the result through
 `apply_patch` resolve relative paths against the agent workspace, and
 `exec_command` / `grep` fall back to it when the model does not pass an
 explicit `workdir` / `path`.
-The chunked write manager is in-memory per registry instance. Successful
-`write_chunk` calls return compact acknowledgements and never echo the chunk
-body. Provider-visible history keeps recent active chunks available so a model
-can continue writing, then folds committed chunked write sessions into a
-compact summary with path, size, chunk count, and SHA-256 metadata. The durable
-conversation log still preserves the original assistant tool-use input for
-replay and debugging.
+The chunked write manager is in-memory per registry instance, with active
+state restored from the attached session transcript when canonical lifecycle
+facts and matching chunk tool-use inputs are available. Successful lifecycle
+operations return compact acknowledgements and a structured
+`chunkedwrite.Event`; the runtime persists that fact on the corresponding
+`tool_result` block and tool event. Provider-visible history keeps recent
+active chunks available so a model can continue writing, then folds committed
+or aborted chunked write sessions into compact summaries from those facts.
+Human-readable tool result text is presentation only and is not parsed as a
+machine interface. Legacy transcripts without lifecycle facts remain unfolded
+rather than inventing active or committed state. The durable conversation log
+still preserves the original assistant tool-use input for replay and debugging.
 Tool hard timeouts are runtime policy rather than model-visible parameters.
 The registry applies a per-call timeout context from its default policy or from
 an individual tool's registration metadata, caps it at 300 seconds, and leaves

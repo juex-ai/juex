@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/chunkedwrite"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -1609,7 +1611,7 @@ func TestBuiltins_ChunkedWriteBeginReportsRecommendedChunkSize(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, t.TempDir())
 
-	out, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "long.md"})
+	out, info, err := r.CallWithInfo(context.Background(), "write_begin", map[string]any{"path": "long.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1617,6 +1619,13 @@ func TestBuiltins_ChunkedWriteBeginReportsRecommendedChunkSize(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("write_begin output = %q, missing %q", out, want)
 		}
+	}
+	event, ok := info.StructuredResult.(chunkedwrite.Event)
+	if !ok {
+		t.Fatalf("structured result = %#v, want chunkedwrite.Event", info.StructuredResult)
+	}
+	if event.Kind != chunkedwrite.EventBegin || event.WriteID == "" || event.Path != "long.md" || event.Mode != chunkedwrite.ModeOverwrite {
+		t.Fatalf("begin event = %+v", event)
 	}
 }
 
@@ -1856,6 +1865,78 @@ func TestBuiltins_ChunkedWriteStaleSession(t *testing.T) {
 	}
 	if _, _, _, err := manager.chunk(session.id, 0, "late", ""); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
 		t.Fatalf("second stale chunk err = %v, want unknown write_id", err)
+	}
+}
+
+func TestChunkedWriteManager_RestoreActiveFromHistoryWithoutGuard(t *testing.T) {
+	workDir := t.TempDir()
+	manager := NewChunkedWriteManager(workDir)
+	writeID := "w_no_guard"
+	history := []llm.Message{{
+		Role: llm.RoleAssistant,
+		Blocks: []llm.Block{
+			{
+				Type:         llm.BlockToolResult,
+				ToolUseID:    "begin_1",
+				ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventBegin, WriteID: writeID, Path: "restored.txt", Mode: "overwrite", FileMode: 0o644},
+			},
+			{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "chunk_1",
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": writeID, "index": 0, "content": "restored"},
+			},
+			{
+				Type:         llm.BlockToolResult,
+				ToolUseID:    "chunk_1",
+				ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventChunk, WriteID: writeID, Index: 0, Bytes: 8, Chars: 8, Chunks: 1},
+			},
+		},
+	}}
+
+	manager.RestoreActiveFromHistory(history)
+	if _, err := manager.commit(writeID, 1, ""); err != nil {
+		t.Fatalf("commit restored write without guard: %v", err)
+	}
+	data := mustReadFile(t, filepath.Join(workDir, "restored.txt"))
+	if string(data) != "restored" {
+		t.Fatalf("restored file = %q, want restored", data)
+	}
+}
+
+func TestChunkedWriteManager_RestoreActiveFromHistoryConsumesErrorLifecycleFacts(t *testing.T) {
+	workDir := t.TempDir()
+	manager := NewChunkedWriteManager(workDir)
+	writeID := "w_post_hook_denied_commit"
+	history := []llm.Message{
+		{Role: llm.RoleUser, Blocks: []llm.Block{{
+			Type:         llm.BlockToolResult,
+			ToolUseID:    "begin_1",
+			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventBegin, WriteID: writeID, Path: "committed.txt", Mode: "overwrite", FileMode: 0o644},
+		}}},
+		{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type:      llm.BlockToolUse,
+			ToolUseID: "chunk_1",
+			ToolName:  "write_chunk",
+			Input:     map[string]any{"write_id": writeID, "index": 0, "content": "already committed"},
+		}}},
+		{Role: llm.RoleUser, Blocks: []llm.Block{{
+			Type:         llm.BlockToolResult,
+			ToolUseID:    "chunk_1",
+			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventChunk, WriteID: writeID, Index: 0, Bytes: 17, Chars: 17, Chunks: 1},
+		}}},
+		{Role: llm.RoleUser, Blocks: []llm.Block{{
+			Type:         llm.BlockToolResult,
+			ToolUseID:    "commit_1",
+			Content:      "write_commit presentation text\n\n[tool error]\nhooks: tool denied after use: redaction required",
+			IsError:      true,
+			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventCommit, WriteID: writeID, Path: "committed.txt", Bytes: 17, Chars: 17, Chunks: 1},
+		}}},
+	}
+
+	manager.RestoreActiveFromHistory(history)
+	if _, err := manager.commit(writeID, 1, ""); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
+		t.Fatalf("commit restored finished write err = %v, want unknown write_id", err)
 	}
 }
 

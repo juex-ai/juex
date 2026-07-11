@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/cancellation"
+	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
@@ -558,6 +559,9 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		toolErr = err
 	} else {
 		block.Content = out
+		if event, ok := chunkedwrite.EventFromStructured(info.StructuredResult); ok {
+			block.ChunkedWrite = &event
+		}
 	}
 
 	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
