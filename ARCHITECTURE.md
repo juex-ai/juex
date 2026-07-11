@@ -58,6 +58,7 @@ juex/
 │   │   ├── values.go             # resolved ProviderSelection, paths, and limits
 │   │   ├── shell.go
 │   │   └── codex_auth.go
+│   ├── providerreadiness/        # provider selection, credentials, and hello-probe readiness checks
 │   ├── bundle/                   # portable debug bundle tar.gz creation
 │   ├── events/                   # in-process EventBus + durable commit sink
 │   ├── hooks/                    # trusted lifecycle command hook execution
@@ -321,6 +322,9 @@ default; set `providers[].capabilities.reasoning_effort: false` only when an
 endpoint rejects that field.
 `internal/config` resolves `ProviderSelection` into a `ProviderProfile`; the
 LLM package owns concrete provider construction through `llm.NewProvider`.
+`internal/providerreadiness` consumes those resolved values for onboarding and
+diagnostic checks, including selected-runtime validation, credential
+classification, and optional provider hello probes.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
@@ -812,9 +816,9 @@ juex
 `init` and `doctor` are CLI-only onboarding commands. `init` writes or merges
 `juex.yaml` using conservative YAML node edits and validates the file through
 `internal/config`; it does not change runtime config semantics. `doctor` is a
-read-only diagnostic surface that reuses config/profile resolution, provider
-construction for optional hello checks, shell resolution, MCP config loading
-without starting servers, and skill scanning.
+read-only diagnostic surface that maps `internal/providerreadiness` results
+into CLI checks, then adds shell resolution, MCP config loading without
+starting servers, and skill scanning.
 
 `bundle` is implemented as a thin CLI wrapper over `internal/bundle`. The
 package owns session file collection, tar.gz writing, manifest hashes,
@@ -1106,7 +1110,8 @@ runtime storage, `ResourcePaths` for AGENTS/skills/MCP/extension inputs, and
 `RuntimeLimits` for context window and compaction policy. The older `Config`
 path/profile methods remain compatibility delegates. Config does not construct
 providers; app resolves the profile and asks `internal/llm` to build the
-adapter.
+adapter. `internal/providerreadiness` reuses the same selection/profile
+boundary when commands need preflight checks before app composition.
 
 The resolved `ShellProfile` is included in `juex run --dry-run --json`,
 `/api/runtime`, the system prompt operating context, and the `exec_command`

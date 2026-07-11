@@ -3,20 +3,17 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/skills"
 )
 
@@ -141,87 +138,21 @@ func runDoctor(ctx context.Context, flags *persistentFlags, offline bool) doctor
 }
 
 func doctorConfigCheck(cfg config.Config) doctorCheck {
-	profile, err := cfg.ProviderProfile()
-	if err != nil {
-		return doctorCheck{
-			Name:       "config",
-			Status:     doctorStatusFail,
-			Message:    err.Error(),
-			Suggestion: "check top-level model and providers[] entries in juex.yaml",
-		}
+	_, result := providerreadiness.ResolveProfile(cfg)
+	if result.Status != providerreadiness.StatusOK {
+		check := doctorCheckFromReadiness("config", result)
+		check.Suggestion = "check top-level model and providers[] entries in juex.yaml"
+		return check
 	}
-	return doctorCheck{
-		Name:    "config",
-		Status:  doctorStatusOK,
-		Message: fmt.Sprintf("selected %s:%s using %s", profile.ID, profile.Model, profile.Protocol),
-		Details: map[string]any{
-			"provider": profile.ID,
-			"protocol": string(profile.Protocol),
-			"model":    profile.Model,
-		},
-	}
+	return doctorCheckFromReadiness("config", result)
 }
 
 func doctorCredentialsCheck(cfg config.Config) doctorCheck {
-	if strings.TrimSpace(cfg.APIKey) == "" {
-		status := doctorStatusFail
-		if providerAllowsMissingAPIKey(cfg) {
-			status = doctorStatusWarn
-		}
-		suggestion := "set providers[].api_key or PROVIDER_API_KEY"
-		if cfg.ProviderID == "openai-codex" || cfg.ProviderProtocol == string(llm.ProtocolOpenAICodexResponses) {
-			suggestion = "run Codex login or set providers[].api_key"
-		}
-		return doctorCheck{
-			Name:       "credentials",
-			Status:     status,
-			Message:    "selected provider has no API key",
-			Suggestion: suggestion,
-		}
-	}
-	return doctorCheck{Name: "credentials", Status: doctorStatusOK, Message: "credentials available"}
-}
-
-func providerAllowsMissingAPIKey(cfg config.Config) bool {
-	if !isKnownInitProvider(cfg.ProviderID) {
-		return true
-	}
-	if raw := strings.TrimSpace(cfg.BaseURL); raw != "" {
-		u, err := url.Parse(raw)
-		if err == nil {
-			host := u.Hostname()
-			if strings.EqualFold(host, "localhost") {
-				return true
-			}
-			if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-				return true
-			}
-		}
-	}
-	return false
+	return doctorCheckFromReadiness("credentials", providerreadiness.CheckCredentials(cfg.ProviderSelection()))
 }
 
 func doctorConnectivityCheck(ctx context.Context, cfg config.Config, offline bool) doctorCheck {
-	if offline {
-		return doctorCheck{Name: "connectivity", Status: doctorStatusOK, Message: "skipped because --offline was set"}
-	}
-	profile, err := cfg.ProviderProfile()
-	if err != nil {
-		return doctorCheck{Name: "connectivity", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix provider config first"}
-	}
-	provider, err := llm.NewProvider(profile)
-	if err != nil {
-		return doctorCheck{Name: "connectivity", Status: doctorStatusFail, Message: err.Error(), Suggestion: "fix provider credentials and model config"}
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	_, err = provider.Complete(checkCtx, "Reply with a short hello.", []llm.Message{
-		llm.TextMessage(llm.RoleUser, "hello"),
-	}, nil)
-	if err != nil {
-		return doctorCheck{Name: "connectivity", Status: doctorStatusFail, Message: err.Error(), Suggestion: "check network, base_url, API key, and model id"}
-	}
-	return doctorCheck{Name: "connectivity", Status: doctorStatusOK, Message: "provider hello check passed"}
+	return doctorCheckFromReadiness("connectivity", providerreadiness.CheckConnectivity(ctx, cfg, providerreadiness.ConnectivityOptions{Offline: offline}))
 }
 
 func doctorShellCheck(cfg config.Config) doctorCheck {
