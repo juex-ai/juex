@@ -266,10 +266,6 @@ func payloadFieldPresent(v any, key string) bool {
 	return true
 }
 
-func (vp *verbosePrinter) printResponseBlocks(blocks []llm.Block) {
-	vp.printResponseBlocksSkipping(blocks, false, false)
-}
-
 func (vp *verbosePrinter) printResponseBlocksSkipping(blocks []llm.Block, skipReasoning, skipText bool) {
 	for _, block := range blocks {
 		switch block.Type {
