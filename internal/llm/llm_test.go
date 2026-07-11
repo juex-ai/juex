@@ -248,16 +248,17 @@ func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
 func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	otherDir := t.TempDir()
-	path := filepath.Join(".juex", "artifacts", "media", "session", "image.png")
-	if err := os.MkdirAll(filepath.Join(workDir, filepath.Dir(path)), 0o700); err != nil {
+	artifactPath := ".juex/artifacts/media/session/image.png"
+	filePath := filepath.Join(workDir, filepath.FromSlash(artifactPath))
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, path), []byte("fake image bytes"), 0o600); err != nil {
+	if err := os.WriteFile(filePath, []byte("fake image bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(otherDir)
 
-	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{ArtifactPath: path, MediaType: "image/png"})
+	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{ArtifactPath: artifactPath, MediaType: "image/png"})
 	if !ok || mediaType != "image/png" || encoded == "" {
 		t.Fatalf("readImageBase64 = encoded:%q mediaType:%q ok:%t", encoded, mediaType, ok)
 	}
