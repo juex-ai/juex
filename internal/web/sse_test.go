@@ -50,6 +50,22 @@ func TestWriteSSEFrame_DataIsOneLine(t *testing.T) {
 	}
 }
 
+func TestWriteSSEFrame_TransientEventOmitsReplayCursor(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeSSEFrame(&buf, events.Event{
+		ID:        "transient-1",
+		Type:      "llm.output_delta",
+		Transient: true,
+		Payload:   map[string]any{"kind": "text", "text": "hello"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if strings.Contains(got, "id:") || !strings.Contains(got, `"type":"llm.output_delta"`) {
+		t.Fatalf("transient SSE frame must omit replay cursor:\n%s", got)
+	}
+}
+
 func TestWriteSSEFrame_SkipsRuntimeOnlyEvents(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeSSEFrame(&buf, events.Event{ID: "internal-1", Type: "tool.failure.recorded", Payload: map[string]any{"name": "exec_command"}}); err != nil {

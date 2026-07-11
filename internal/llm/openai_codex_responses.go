@@ -111,10 +111,18 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 	maxAttempts := providerMaxRetries + 1
 	idleTimeout := streamIdleTimeout(opts)
 	for attempt := 0; ; attempt++ {
+		emittedDelta := false
+		onDelta := opts.OnDelta
+		if onDelta != nil {
+			onDelta = func(delta StreamDelta) {
+				emittedDelta = true
+				opts.OnDelta(delta)
+			}
+		}
 		streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
 		stream := p.client.Responses.NewStreaming(streamCtx, params)
 		resp, err := readCodexResponsesStream(stream, codexResponsesStreamOptions{
-			OnDelta:   opts.OnDelta,
+			OnDelta:   onDelta,
 			ResetIdle: resetIdle,
 		})
 		_ = stream.Close()
@@ -124,6 +132,9 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 		}
 		if idleExpired() {
 			return nil, fmt.Errorf("codex SSE idle timeout after %s: %w", idleTimeout, err)
+		}
+		if emittedDelta {
+			return nil, fmt.Errorf("codex SSE read failed after emitting output; retry suppressed: %w", err)
 		}
 		attemptNumber := attempt + 1
 		if ctx.Err() != nil || !isRetryableCodexSSEReadError(err) {

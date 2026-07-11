@@ -364,7 +364,9 @@ request errors are returned immediately. The Codex Responses SSE adapter adds a
 second retry layer for stream-read failures after a streaming response has
 already started. It retries by the `codexSSEReadError` category instead of a
 transport-message allowlist, keeps context cancellation and deadlines
-non-retryable, and emits `llm.retry` diagnostics with provider, model,
+non-retryable, and does not retry an attempt after it has emitted a live delta
+because that observable output cannot be rolled back. It emits `llm.retry`
+diagnostics with provider, model,
 transport, attempt, delay, reason, and exhaustion state so session event logs
 and debug bundles can explain retry behavior. Semantic stream events such as
 `response.failed` are returned without retry.
@@ -603,8 +605,10 @@ journal adapter. The sink normalizes each event once, appends it to
 `events.jsonl`, then publishes the committed event to registered live delivery
 adapters such as the web broadcaster. If journal append fails, live delivery is
 skipped. Events marked `Transient` bypass the journal and are delivered only to
-current subscribers; `llm.output_delta` uses this path. The public SSE cursor
-remains the event ID; replay order is the JSONL line order after that ID.
+current subscribers; `llm.output_delta` uses this path and its SSE frame omits
+an `id` so the browser retains the last durable replay cursor. The public SSE
+cursor remains the durable event ID; replay order is the JSONL line order after
+that ID.
 
 ### 3.4 Memory
 

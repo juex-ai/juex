@@ -1043,6 +1043,40 @@ func TestOpenAICodexResponses_RetriesSSEReadEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAICodexResponses_DoesNotRetryAfterEmittingDelta(t *testing.T) {
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		partial := `data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}` + "\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(io.MultiReader(strings.NewReader(partial), errReadCloser{err: io.ErrUnexpectedEOF})),
+			Request:    r,
+		}, nil
+	})}
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
+	withOpts := p.(ProviderWithOptions)
+	var deltas []StreamDelta
+
+	_, err := withOpts.CompleteWithOptions(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		OnDelta: func(delta StreamDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "retry suppressed") {
+		t.Fatalf("err = %v, want retry suppressed after output", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+	want := []StreamDelta{{Kind: "text", Index: 0, Text: "partial"}}
+	if !slices.Equal(deltas, want) {
+		t.Fatalf("deltas = %+v, want %+v", deltas, want)
+	}
+}
+
 func TestOpenAICodexResponses_RetriesSSEReadInternalErrorByCategory(t *testing.T) {
 	attempts := 0
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
