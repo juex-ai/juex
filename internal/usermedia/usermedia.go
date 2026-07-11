@@ -58,6 +58,11 @@ type inspectedFile struct {
 	data []byte
 }
 
+// PreparedFiles is a validated, in-memory batch ready for session-scoped storage.
+type PreparedFiles struct {
+	files []inspectedFile
+}
+
 func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits) (MediaRef, error) {
 	if strings.TrimSpace(workDir) == "" {
 		return MediaRef{}, errors.New("user media: missing work dir")
@@ -82,31 +87,58 @@ func StoreUpload(workDir, sessionID, filename string, r io.Reader, limits Limits
 
 // InspectFiles validates local image paths without persisting artifacts.
 func InspectFiles(workDir string, inputPaths []string, limits Limits) ([]FileInfo, error) {
-	files, err := inspectFiles(workDir, inputPaths, limits)
+	prepared, err := PrepareFiles(workDir, inputPaths, limits)
 	if err != nil {
 		return nil, err
 	}
-	infos := make([]FileInfo, 0, len(files))
-	for _, file := range files {
+	return prepared.Infos(), nil
+}
+
+// PrepareFiles validates and reads all local images without writing artifacts.
+func PrepareFiles(workDir string, inputPaths []string, limits Limits) (PreparedFiles, error) {
+	limits = effectiveLimits(limits)
+	if err := validateInputCount(inputPaths, limits.MaxCount); err != nil {
+		return PreparedFiles{}, err
+	}
+	files := make([]inspectedFile, 0, len(inputPaths))
+	for _, inputPath := range inputPaths {
+		info, ext, data, err := inspectFile(workDir, inputPath, limits)
+		if err != nil {
+			return PreparedFiles{}, err
+		}
+		files = append(files, inspectedFile{info: info, ext: ext, data: data})
+	}
+	return PreparedFiles{files: files}, nil
+}
+
+// Infos returns a copy of the validated metadata in input order.
+func (p PreparedFiles) Infos() []FileInfo {
+	infos := make([]FileInfo, 0, len(p.files))
+	for _, file := range p.files {
 		infos = append(infos, file.info)
 	}
-	return infos, nil
+	return infos
 }
 
 // StoreFiles validates local image paths and persists session-scoped artifacts.
 func StoreFiles(workDir, sessionID string, inputPaths []string, limits Limits) ([]MediaRef, error) {
-	if len(inputPaths) == 0 {
+	prepared, err := PrepareFiles(workDir, inputPaths, limits)
+	if err != nil {
+		return nil, err
+	}
+	return prepared.Store(workDir, sessionID)
+}
+
+// Store persists a prepared batch in one session's artifact namespace.
+func (p PreparedFiles) Store(workDir, sessionID string) ([]MediaRef, error) {
+	if len(p.files) == 0 {
 		return []MediaRef{}, nil
 	}
 	if !safeSessionID(sessionID) {
 		return nil, fmt.Errorf("user media: unsafe session id %q", sessionID)
 	}
-	files, err := inspectFiles(workDir, inputPaths, limits)
-	if err != nil {
-		return nil, err
-	}
-	refs := make([]MediaRef, 0, len(files))
-	for _, file := range files {
+	refs := make([]MediaRef, 0, len(p.files))
+	for _, file := range p.files {
 		ref, err := storeImageData(workDir, sessionID, file.info, file.ext, file.data)
 		if err != nil {
 			return nil, err
@@ -114,22 +146,6 @@ func StoreFiles(workDir, sessionID string, inputPaths []string, limits Limits) (
 		refs = append(refs, ref)
 	}
 	return refs, nil
-}
-
-func inspectFiles(workDir string, inputPaths []string, limits Limits) ([]inspectedFile, error) {
-	limits = effectiveLimits(limits)
-	if err := validateInputCount(inputPaths, limits.MaxCount); err != nil {
-		return nil, err
-	}
-	files := make([]inspectedFile, 0, len(inputPaths))
-	for _, inputPath := range inputPaths {
-		info, ext, data, err := inspectFile(workDir, inputPath, limits)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, inspectedFile{info: info, ext: ext, data: data})
-	}
-	return files, nil
 }
 
 // StoreFile validates one local image path and persists a session-scoped artifact.

@@ -556,6 +556,33 @@ func TestRunCmd_DryRunAttachmentMissingReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestRunCmd_InvalidAttachmentDoesNotCreateSession(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not an image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--new", "--json", "--attach", "notes.txt"})
+	err := root.Execute()
+	var usage *usageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("expected usageError, got %T: %v", err, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".juex", "sessions")); !os.IsNotExist(err) {
+		t.Fatalf("invalid attachment created a session: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".juex", "history.json")); !os.IsNotExist(err) {
+		t.Fatalf("invalid attachment created session history: %v", err)
+	}
+}
+
 func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer

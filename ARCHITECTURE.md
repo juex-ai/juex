@@ -846,12 +846,13 @@ neutral signal-aware messages such as `run interrupted by signal SIGINT (2)` or
 `run terminated by signal SIGTERM (15)` plus structured signal details.
 
 `run --attach <path>` accepts repeatable local image paths, resolves relative
-paths from the selected workdir, and copies validated bytes into the current
-session artifact namespace before starting the turn. An omitted prompt creates
-an image-only turn. `run --dry-run` validates attachment metadata without
-writing artifacts. The REPL-local `/attach <path>` command stages images for
-the next ordinary prompt; local status and compaction commands preserve the
-staging set, while a successful session switch clears it.
+paths from the selected workdir, and prepares every attachment before creating
+or activating a session. Once a session ID is known, the already-validated
+bytes are copied into its artifact namespace without rereading the source. An
+omitted prompt creates an image-only turn. `run --dry-run` validates attachment
+metadata without writing artifacts. The REPL-local `/attach <path>` command
+stages images for the next ordinary prompt; local status and compaction commands
+preserve the staging set, while a successful session switch clears it.
 
 Persistent flags inherited by all subcommands:
 

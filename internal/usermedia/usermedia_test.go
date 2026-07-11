@@ -171,6 +171,36 @@ func TestStoreFilesValidatesEveryInputBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestPreparedFilesStoresCapturedBytesAfterSourceRemoval(t *testing.T) {
+	workDir := t.TempDir()
+	data := testPNG(t)
+	imagePath := filepath.Join(workDir, "screen.png")
+	if err := os.WriteFile(imagePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := PrepareFiles(workDir, []string{"screen.png"}, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(imagePath); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := prepared.Store(workDir, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].SHA256 != sha256Hex(data) {
+		t.Fatalf("refs = %+v", refs)
+	}
+	stored, err := os.ReadFile(filepath.Join(workDir, filepath.FromSlash(refs[0].ArtifactPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored, data) {
+		t.Fatal("prepared bytes changed before storage")
+	}
+}
+
 func TestStoreUploadConcurrentSameImage(t *testing.T) {
 	workDir := t.TempDir()
 	data := testPNG(t)

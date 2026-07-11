@@ -170,9 +170,13 @@ execution is printed and the process exits with code 10.`,
 				return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new/--side or --resume/--session, not both"},
 					"use 'juex sessions activate <id>' before the default run path", false)
 			}
+			preparedAttachments, err := usermedia.PrepareFiles(cfg.WorkDir, attachPaths, usermedia.Limits{})
+			if err != nil {
+				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
+			}
 
 			if dryRun {
-				return runDryRun(cmd, flags, cfg, prompt, attachPaths, jsonOut)
+				return runDryRun(cmd, flags, cfg, prompt, preparedAttachments.Infos(), jsonOut)
 			}
 
 			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cfg.HistoryPath(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
@@ -207,7 +211,7 @@ execution is printed and the process exits with code 10.`,
 			if flags.verbose {
 				fmt.Fprintln(cmd.ErrOrStderr(), app.FormatResourceSummary(a.ResourceSummary()))
 			}
-			attachments, err := usermedia.StoreFiles(cfg.WorkDir, a.Session.ID, attachPaths, usermedia.Limits{})
+			attachments, err := preparedAttachments.Store(cfg.WorkDir, a.Session.ID)
 			if err != nil {
 				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
 			}
@@ -257,11 +261,7 @@ execution is printed and the process exits with code 10.`,
 
 // runDryRun wires everything but the LLM call so we can introspect the
 // planned execution. Returns *dryRunOK so Execute() picks exit code 10.
-func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, userPrompt string, attachmentPaths []string, jsonOut bool) error {
-	attachments, err := usermedia.InspectFiles(cfg.WorkDir, attachmentPaths, usermedia.Limits{})
-	if err != nil {
-		return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
-	}
+func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, userPrompt string, attachments []usermedia.FileInfo, jsonOut bool) error {
 	// Build the app with a noop provider — that's the only piece dry-run
 	// can't reuse from the live wiring (no API key required for noop).
 	a, err := app.New(app.Options{
