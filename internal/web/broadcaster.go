@@ -20,6 +20,7 @@ const slowClientTimeout = 5 * time.Second
 // subscriber is one connected SSE consumer.
 type subscriber struct {
 	ch     chan events.Event
+	done   chan struct{}
 	parent *broadcaster
 	mu     sync.Mutex
 	live   bool
@@ -35,6 +36,16 @@ func (s *subscriber) isLive() bool {
 	return s.live
 }
 
+func (s *subscriber) drop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.live {
+		return
+	}
+	s.live = false
+	close(s.done)
+}
+
 // broadcaster fans an event stream out to N subscribers. A slow
 // subscriber is dropped instead of stalling everyone else.
 type broadcaster struct {
@@ -47,9 +58,14 @@ func newBroadcaster() *broadcaster {
 	return &broadcaster{subs: map[*subscriber]struct{}{}}
 }
 
+func (b *broadcaster) Publish(e events.Event) {
+	b.publish(e)
+}
+
 func (b *broadcaster) subscribe() *subscriber {
 	s := &subscriber{
 		ch:     make(chan events.Event, broadcasterBufferSize),
+		done:   make(chan struct{}),
 		parent: b,
 		live:   true,
 	}
@@ -68,9 +84,7 @@ func (b *broadcaster) unsubscribe(s *subscriber) {
 	b.mu.Lock()
 	delete(b.subs, s)
 	b.mu.Unlock()
-	s.mu.Lock()
-	s.live = false
-	s.mu.Unlock()
+	s.drop()
 }
 
 func (b *broadcaster) publish(e events.Event) {
@@ -98,6 +112,8 @@ func (b *broadcaster) deliver(s *subscriber, e events.Event) bool {
 	select {
 	case s.ch <- e:
 		return true
+	case <-s.done:
+		return false
 	default:
 	}
 	t := time.NewTimer(slowClientTimeout)
@@ -105,6 +121,8 @@ func (b *broadcaster) deliver(s *subscriber, e events.Event) bool {
 	select {
 	case s.ch <- e:
 		return true
+	case <-s.done:
+		return false
 	case <-t.C:
 		return false
 	}
@@ -121,11 +139,6 @@ func (b *broadcaster) close() {
 	b.subs = map[*subscriber]struct{}{}
 	b.mu.Unlock()
 	for s := range subs {
-		s.mu.Lock()
-		if s.live {
-			s.live = false
-			close(s.ch)
-		}
-		s.mu.Unlock()
+		s.drop()
 	}
 }

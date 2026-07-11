@@ -1,4 +1,5 @@
-// Package events implements an in-process pub/sub bus for runtime events.
+// Package events implements in-process pub/sub and durable commit helpers for
+// runtime events.
 //
 // Events are emitted synchronously to all matching subscribers. Subscribers
 // register interest via glob patterns (path.Match semantics), e.g. "tool.*".

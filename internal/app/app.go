@@ -94,8 +94,9 @@ type App struct {
 
 	turnAdmission turnAdmission
 
-	sessionLock        *session.Lock
-	sessionUnsubscribe func()
+	sessionLock      *session.Lock
+	eventSink        *events.DurableSink
+	eventUnsubscribe func()
 
 	debug                    bool
 	logLevel                 string
@@ -234,11 +235,22 @@ func New(opts Options) (*App, error) {
 		sess.Close()
 		return nil, err
 	}
+	var eventSink *events.DurableSink
+	var eventUnsubscribe func()
 	closeSessionResources := func() {
+		if eventUnsubscribe != nil {
+			eventUnsubscribe()
+			eventUnsubscribe = nil
+		}
+		if eventSink != nil {
+			eventSink.Close()
+			eventSink = nil
+		}
 		_ = sessLock.Close()
 		_ = sess.Close()
 	}
-	sessionUnsubscribe := sess.SubscribeBus(bus)
+	eventSink = events.NewDurableSink(sess)
+	eventUnsubscribe = bus.Subscribe("*", eventSink.Handle)
 
 	pb := &prompt.Builder{
 		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
@@ -303,17 +315,18 @@ func New(opts Options) (*App, error) {
 	}
 
 	a := &App{
-		Engine:             eng,
-		Bus:                bus,
-		Session:            sess,
-		ctx:                appCtx,
-		cancel:             appCancel,
-		cfg:                cfg,
-		skills:             skillLoader.All(),
-		sessionLock:        sessLock,
-		sessionUnsubscribe: sessionUnsubscribe,
-		debug:              opts.Debug,
-		logLevel:           opts.LogLevel,
+		Engine:           eng,
+		Bus:              bus,
+		Session:          sess,
+		ctx:              appCtx,
+		cancel:           appCancel,
+		cfg:              cfg,
+		skills:           skillLoader.All(),
+		sessionLock:      sessLock,
+		eventSink:        eventSink,
+		eventUnsubscribe: eventUnsubscribe,
+		debug:            opts.Debug,
+		logLevel:         opts.LogLevel,
 	}
 	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
 		_ = a.detachObservability()
@@ -353,9 +366,12 @@ func New(opts Options) (*App, error) {
 		}
 		return nil
 	}, func() error {
-		if a.sessionUnsubscribe != nil {
-			a.sessionUnsubscribe()
-			a.sessionUnsubscribe = nil
+		if a.eventUnsubscribe != nil {
+			a.eventUnsubscribe()
+			a.eventUnsubscribe = nil
+		}
+		if a.eventSink != nil {
+			a.eventSink.Close()
 		}
 		return nil
 	}, sessLock.Close, sess.Close)
@@ -457,15 +473,14 @@ func (a *App) SwitchToNewPrimarySession() error {
 
 func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	_ = a.detachObservability()
-	if a.sessionUnsubscribe != nil {
-		a.sessionUnsubscribe()
-		a.sessionUnsubscribe = nil
-	}
 	oldLock := a.sessionLock
 	oldSession := a.Session
 
 	a.Session = sess
 	a.sessionLock = sessLock
+	if a.eventSink != nil {
+		a.eventSink.SetJournal(sess)
+	}
 	if a.Engine != nil {
 		a.Engine.Session = sess
 		a.Engine.PendingInputQueue = runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{})
@@ -474,7 +489,6 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 		a.Engine.WorkingState = workingStateStore(sess, limits.WorkingStateEnabled)
 		a.Engine.GoalState = goalStateStore(sess)
 	}
-	a.sessionUnsubscribe = sess.SubscribeBus(a.Bus)
 	if err := a.attachObservability(sess); err != nil {
 		// Session switching happens after startup. Surface recorder failures as
 		// a runtime event so callers still receive a usable session.
@@ -488,6 +502,13 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
+}
+
+func (a *App) AddEventDelivery(delivery events.Delivery) func() {
+	if a == nil || a.eventSink == nil {
+		return func() {}
+	}
+	return a.eventSink.AddDelivery(delivery)
 }
 
 func (a *App) attachObservability(sess *session.Session) error {

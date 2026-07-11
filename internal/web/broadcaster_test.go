@@ -67,18 +67,49 @@ func TestBroadcaster_UnsubscribeStopsDelivery(t *testing.T) {
 	}
 }
 
-func TestBroadcaster_CloseUnblocksAllSubscribers(t *testing.T) {
+func TestBroadcaster_CloseDropsAllSubscribers(t *testing.T) {
 	b := newBroadcaster()
 	s := b.subscribe()
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, ok := <-s.ch
-		if ok {
-			t.Errorf("expected channel closed, got value")
+		select {
+		case <-s.done:
+		case <-time.After(time.Second):
+			t.Errorf("expected subscriber done signal")
 		}
 	}()
 	b.close()
 	wg.Wait()
+	select {
+	case _, ok := <-s.ch:
+		if !ok {
+			t.Fatal("event channel was closed; concurrent publishers can panic on send")
+		}
+	default:
+	}
+}
+
+func TestBroadcaster_CloseDoesNotPanicDuringSlowDelivery(t *testing.T) {
+	b := newBroadcaster()
+	s := b.subscribe()
+	for i := 0; i < broadcasterBufferSize; i++ {
+		s.ch <- events.Event{Type: "buffered"}
+	}
+	panicCh := make(chan any, 1)
+	go func() {
+		defer func() { panicCh <- recover() }()
+		b.publish(events.Event{Type: "after-full"})
+	}()
+	time.Sleep(10 * time.Millisecond)
+	b.close()
+	select {
+	case p := <-panicCh:
+		if p != nil {
+			t.Fatalf("publish panicked during close: %v", p)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publish did not return after close")
+	}
 }

@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
@@ -131,6 +135,62 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	}
 	if _, ok := srv.sessions.Load(h.Active.ID); ok {
 		t.Fatalf("server opened runtime app for %s without provider config", h.Active.ID)
+	}
+}
+
+func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	sub := as.bcast.subscribe()
+	defer sub.unsubscribe()
+
+	as.app.Bus.Emit(events.Event{ID: "evt-committed", Type: "turn.started"})
+
+	select {
+	case got := <-sub.ch:
+		if got.ID != "evt-committed" {
+			t.Fatalf("delivered event id = %q, want evt-committed", got.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for live event")
+	}
+	data, err := os.ReadFile(filepath.Join(as.app.Session.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"id":"evt-committed"`) {
+		t.Fatalf("events.jsonl does not contain committed event:\n%s", data)
+	}
+}
+
+func TestWebEventsSkipLiveDeliveryWhenJournalCommitFails(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	sub := as.bcast.subscribe()
+	defer sub.unsubscribe()
+
+	if err := as.app.Session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(as.app.Session.Dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(as.app.Session.Dir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	as.app.Bus.Emit(events.Event{ID: "evt-uncommitted", Type: "turn.started"})
+
+	select {
+	case got := <-sub.ch:
+		t.Fatalf("received uncommitted event: %+v", got)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

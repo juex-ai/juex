@@ -588,6 +588,8 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			if err := writeSSEFrame(w, e); err != nil {
 				return
 			}
+		case <-sub.done:
+			return
 		case <-ctx.Done():
 			return
 		}

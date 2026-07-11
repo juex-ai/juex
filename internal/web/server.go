@@ -16,7 +16,6 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
-	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
@@ -383,7 +382,7 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		workCancel: workCancel,
 	}
 	as.turns = newWebTurnTransport(a)
-	a.Bus.Subscribe("*", func(e events.Event) { as.bcast.publish(e) })
+	a.AddEventDelivery(as.bcast)
 	s.sessions.Store(a.Session.ID, as)
 	if session.NormalizeKind(a.Session.Kind) == session.KindPrimary {
 		s.closeOtherPrimarySessions(a.Session.ID)
