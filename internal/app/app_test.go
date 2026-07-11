@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -660,6 +661,39 @@ func TestApp_NewSessionStartHookDenyFailsStartup(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "SessionStart denied: startup blocked") {
 		t.Fatalf("err = %v", err)
 	}
+}
+
+func TestApp_NewInvalidHookConfigClosesDurableSink(t *testing.T) {
+	baseline := goruntime.NumGoroutine()
+	for i := 0; i < 20; i++ {
+		dir := t.TempDir()
+		_, err := New(Options{
+			Config: config.Config{
+				ProviderID: "openai",
+				APIKey:     "x",
+				Model:      "m",
+				WorkDir:    dir,
+				Hooks: hooks.Config{Commands: []hooks.CommandHook{{
+					Name:   "invalid",
+					Events: []hooks.EventName{hooks.EventSessionStart},
+				}}},
+			},
+			Provider: &stubProvider{replies: []llm.Response{}},
+			WorkDir:  dir,
+		})
+		if err == nil || !strings.Contains(err.Error(), "hooks: invalid: command is required") {
+			t.Fatalf("err = %v, want invalid hook command error", err)
+		}
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := goruntime.NumGoroutine(); got <= baseline+5 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("goroutines after failed app.New = %d, want near baseline %d", goruntime.NumGoroutine(), baseline)
 }
 
 func TestApp_NewSideDoesNotChangeActive(t *testing.T) {

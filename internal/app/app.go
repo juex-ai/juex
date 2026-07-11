@@ -235,12 +235,22 @@ func New(opts Options) (*App, error) {
 		sess.Close()
 		return nil, err
 	}
+	var eventSink *events.DurableSink
+	var eventUnsubscribe func()
 	closeSessionResources := func() {
+		if eventUnsubscribe != nil {
+			eventUnsubscribe()
+			eventUnsubscribe = nil
+		}
+		if eventSink != nil {
+			eventSink.Close()
+			eventSink = nil
+		}
 		_ = sessLock.Close()
 		_ = sess.Close()
 	}
-	eventSink := events.NewDurableSink(sess)
-	eventUnsubscribe := bus.Subscribe("*", eventSink.Handle)
+	eventSink = events.NewDurableSink(sess)
+	eventUnsubscribe = bus.Subscribe("*", eventSink.Handle)
 
 	pb := &prompt.Builder{
 		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
