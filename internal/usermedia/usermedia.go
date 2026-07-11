@@ -179,7 +179,7 @@ func inspectFile(workDir, inputPath string, limits Limits) (FileInfo, string, []
 	if stat.Size() > limits.MaxBytes {
 		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: upload exceeds %d bytes", limits.MaxBytes))
 	}
-	f, err := os.Open(resolvedPath)
+	f, err := openLocalFile(resolvedPath)
 	if err != nil {
 		return FileInfo{}, "", nil, fmt.Errorf("user media: open %q: %w", inputPath, err)
 	}
