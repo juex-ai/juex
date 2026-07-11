@@ -194,18 +194,18 @@ func writeAtomic(root *os.Root, target string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = root.Remove(temp) }()
+	defer func() {
+		_ = file.Close()
+		_ = root.Remove(temp)
+	}()
 	written, err := file.Write(data)
 	if err != nil {
-		_ = file.Close()
 		return err
 	}
 	if written != len(data) {
-		_ = file.Close()
 		return io.ErrShortWrite
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
