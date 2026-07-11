@@ -581,6 +581,9 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 // RunWithAttachments drives one synchronous text, image, or mixed-content
 // user turn. Attachment references must belong to the current session.
 func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments []llm.MediaRef) (string, error) {
+	if a == nil || a.Session == nil || a.Engine == nil {
+		return "", errors.New("app: attachment turn requires an initialized session and engine")
+	}
 	if len(attachments) == 0 {
 		return a.Run(ctx, prompt)
 	}

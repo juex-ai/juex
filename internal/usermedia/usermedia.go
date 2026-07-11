@@ -165,6 +165,9 @@ func inspectFile(workDir, inputPath string, limits Limits) (FileInfo, string, []
 	if stat.IsDir() {
 		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: path %q is a directory", inputPath))
 	}
+	if stat.Mode().IsRegular() && stat.Size() > limits.MaxBytes {
+		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: upload exceeds %d bytes", limits.MaxBytes))
+	}
 	data, err := readLimited(f, limits.MaxBytes)
 	if err != nil {
 		return FileInfo{}, "", nil, fmt.Errorf("user media: inspect %q: %w", inputPath, err)

@@ -18,9 +18,15 @@ const replAttachCommand = "/attach"
 // results until the reader closes. /attach stages local images for the next
 // ordinary user prompt.
 func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
+	if a == nil || a.Session == nil || a.Engine == nil {
+		return errors.New("app: REPL requires an initialized session and engine")
+	}
 	sc := bufio.NewScanner(in)
 	var staged []llm.MediaRef
 	for sc.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -1235,6 +1236,24 @@ func TestAppRunWithAttachmentsSupportsImageOnlyAndRejectsSlash(t *testing.T) {
 	}
 }
 
+func TestAppRunWithAttachmentsRejectsUninitializedApp(t *testing.T) {
+	tests := []struct {
+		name string
+		app  *App
+	}{
+		{name: "nil app"},
+		{name: "missing session", app: &App{Engine: &runtime.Engine{}}},
+		{name: "missing engine", app: &App{Session: &session.Session{}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := tt.app.RunWithAttachments(context.Background(), "describe", []llm.MediaRef{{ArtifactPath: "unused"}}); err == nil || !strings.Contains(err.Error(), "initialized session and engine") {
+				t.Fatalf("RunWithAttachments error = %v", err)
+			}
+		})
+	}
+}
+
 func TestAppREPLStagesAttachmentsForNextMessage(t *testing.T) {
 	a, prov := newStubApp(t, llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "described"),
@@ -1280,6 +1299,21 @@ func TestParseREPLAttach(t *testing.T) {
 				t.Fatalf("parseREPLAttach(%q) = %q, %v, %v", tt.input, gotPath, handled, err)
 			}
 		})
+	}
+}
+
+func TestAppREPLRejectsUninitializedAppAndCancelledContext(t *testing.T) {
+	if err := (*App)(nil).REPL(context.Background(), strings.NewReader("hello\n"), io.Discard); err == nil || !strings.Contains(err.Error(), "initialized session and engine") {
+		t.Fatalf("nil REPL error = %v", err)
+	}
+	a, prov := newStubApp(t, llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := a.REPL(ctx, strings.NewReader("hello\n"), io.Discard); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled REPL error = %v", err)
+	}
+	if prov.calls != 0 {
+		t.Fatalf("provider calls = %d, want 0", prov.calls)
 	}
 }
 
