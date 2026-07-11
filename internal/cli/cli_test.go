@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -626,6 +627,21 @@ func TestInitCmd_NonInteractiveWorkspaceWritesConfig(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `juex run "say hello"`) {
 		t.Fatalf("quickstart missing from output:\n%s", out.String())
+	}
+}
+
+func TestInitHelloCheckErrorIncludesSuggestion(t *testing.T) {
+	cause := errors.New("dial tcp: connection refused")
+	err := initHelloCheckError(providerreadiness.Result{
+		Message:    "provider hello check failed",
+		Suggestion: "check network connectivity and provider credentials",
+		Err:        cause,
+	})
+	if !errors.Is(err, cause) {
+		t.Fatalf("expected wrapped cause, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "check network connectivity and provider credentials") {
+		t.Fatalf("expected suggestion in error, got %q", err.Error())
 	}
 }
 

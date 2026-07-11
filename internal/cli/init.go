@@ -528,10 +528,20 @@ func runInitHelloCheck(ctx context.Context, path, workDir string) error {
 	}
 	result := providerreadiness.CheckConnectivity(ctx, cfg, providerreadiness.ConnectivityOptions{})
 	if result.Status != providerreadiness.StatusOK {
-		if result.Err != nil {
-			return fmt.Errorf("init: provider hello check failed: %w", result.Err)
-		}
-		return fmt.Errorf("init: provider hello check failed: %s", result.Message)
+		return initHelloCheckError(result)
 	}
 	return nil
+}
+
+func initHelloCheckError(result providerreadiness.Result) error {
+	if result.Err != nil {
+		if result.Suggestion != "" {
+			return fmt.Errorf("init: provider hello check failed: %w; %s", result.Err, result.Suggestion)
+		}
+		return fmt.Errorf("init: provider hello check failed: %w", result.Err)
+	}
+	if result.Suggestion != "" {
+		return fmt.Errorf("init: provider hello check failed: %s; %s", result.Message, result.Suggestion)
+	}
+	return fmt.Errorf("init: provider hello check failed: %s", result.Message)
 }
