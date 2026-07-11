@@ -15,6 +15,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/cancellation"
+	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -1436,6 +1437,47 @@ func TestTurn_ToolStructuredMediaBecomesToolResultMedia(t *testing.T) {
 	}
 	if block.Media.ArtifactPath != media.ArtifactPath || block.Content != "[image 2x1, 12 bytes, image/png]" {
 		t.Fatalf("tool result block = %+v, want media and content preserved", block)
+	}
+}
+
+func TestTurn_ToolStructuredChunkedWriteBecomesToolResultLifecycleFact(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "cw_begin", ToolName: "chunked_fact", Input: map[string]any{"path": "long.md"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "chunked_fact",
+		Schema: map[string]any{"type": "object"},
+		ResultHandler: func(ctx context.Context, in map[string]any) (tools.Result, error) {
+			return tools.Result{
+				Text: "write_begin presentation text without machine parsing contract",
+				Structured: chunkedwrite.Event{
+					Kind:    chunkedwrite.EventBegin,
+					WriteID: "w_runtime",
+					Path:    "long.md",
+					Mode:    chunkedwrite.ModeOverwrite,
+				},
+			}, nil
+		},
+	})
+
+	out, err := eng.Turn(context.Background(), "begin chunked write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q", out)
+	}
+	result := eng.Session.History[2]
+	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
+		t.Fatalf("tool result message = %+v", result)
+	}
+	fact := result.Blocks[0].ChunkedWrite
+	if fact == nil || fact.Kind != chunkedwrite.EventBegin || fact.WriteID != "w_runtime" {
+		t.Fatalf("chunked write fact = %+v", fact)
 	}
 }
 

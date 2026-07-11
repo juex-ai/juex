@@ -17,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/juex-ai/juex/internal/artifact"
+	"github.com/juex-ai/juex/internal/chunkedwrite"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -2705,6 +2706,12 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T
 			Type:      BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=reports/long.md mode=create max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventBegin,
+				WriteID: writeID,
+				Path:    "reports/long.md",
+				Mode:    chunkedwrite.ModeCreate,
+			},
 		}}},
 	}
 	for i, chunk := range chunks {
@@ -2720,6 +2727,15 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T
 				Type:      BlockToolResult,
 				ToolUseID: toolUseID,
 				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+				ChunkedWrite: &chunkedwrite.Event{
+					Kind:    chunkedwrite.EventChunk,
+					WriteID: writeID,
+					Index:   i,
+					Bytes:   len(chunk),
+					Chars:   len(chunk),
+					SHA256:  fmt.Sprintf("hash-%d", i),
+					Chunks:  i + 1,
+				},
 			}}},
 		)
 	}
@@ -2734,6 +2750,15 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T
 			Type:      BlockToolResult,
 			ToolUseID: "commit_1",
 			Content:   "write_commit: write_id=write-committed path=reports/long.md bytes=320 chars=320 chunks=3 sha256=final-hash",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventCommit,
+				WriteID: writeID,
+				Path:    "reports/long.md",
+				Bytes:   320,
+				Chars:   320,
+				Chunks:  3,
+				SHA256:  "final-hash",
+			},
 		}}},
 	)
 
@@ -2760,6 +2785,134 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteSession(t *testing.T
 	}
 }
 
+func TestProjectProviderTranscriptFoldsCommittedChunkedWriteFromLifecycleFacts(t *testing.T) {
+	const writeID = "write-fact"
+	chunks := []string{
+		strings.Repeat("alpha ", 20),
+		strings.Repeat("beta ", 20),
+	}
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "begin_fact",
+			ToolName:  "write_begin",
+			Input:     map[string]any{"path": "reports/fact.md", "mode": "create"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "begin_fact",
+			Content:   "presentation text changed",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventBegin,
+				WriteID: writeID,
+				Path:    "reports/fact.md",
+				Mode:    chunkedwrite.ModeCreate,
+			},
+		}}},
+	}
+	for i, chunk := range chunks {
+		toolUseID := fmt.Sprintf("chunk_fact_%d", i)
+		history = append(history,
+			Message{Role: RoleAssistant, Blocks: []Block{{
+				Type:      BlockToolUse,
+				ToolUseID: toolUseID,
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": writeID, "index": i, "content": chunk},
+			}}},
+			Message{Role: RoleUser, Blocks: []Block{{
+				Type:      BlockToolResult,
+				ToolUseID: toolUseID,
+				Content:   "chunk accepted",
+				ChunkedWrite: &chunkedwrite.Event{
+					Kind:    chunkedwrite.EventChunk,
+					WriteID: writeID,
+					Index:   i,
+					Bytes:   len(chunk),
+					Chars:   len(chunk),
+					Chunks:  i + 1,
+				},
+			}}},
+		)
+	}
+	history = append(history,
+		Message{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "commit_fact",
+			ToolName:  "write_commit",
+			Input:     map[string]any{"write_id": writeID, "expected_chunks": len(chunks)},
+		}}},
+		Message{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "commit_fact",
+			Content:   "commit presentation changed",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventCommit,
+				WriteID: writeID,
+				Path:    "reports/fact.md",
+				Bytes:   111,
+				Chars:   111,
+				Chunks:  len(chunks),
+				SHA256:  "full-hash",
+			},
+		}}},
+	)
+
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	text := providerProjectionDebugString(projected)
+	if !strings.Contains(text, "Chunked write provider replay summary: committed") {
+		t.Fatalf("projected history missing committed summary from facts:\n%s", text)
+	}
+	if !strings.Contains(text, "path=reports/fact.md") || !strings.Contains(text, "sha256=full-hash") {
+		t.Fatalf("summary missing fact metadata:\n%s", text)
+	}
+	for _, chunk := range chunks {
+		if strings.Contains(text, chunk) {
+			t.Fatalf("fact projection should fold raw chunk content %q:\n%s", chunk, text)
+		}
+	}
+}
+
+func TestProjectProviderTranscriptDoesNotParseLegacyChunkedWriteResultText(t *testing.T) {
+	const writeID = "legacy-write"
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "begin_legacy",
+			ToolName:  "write_begin",
+			Input:     map[string]any{"path": "reports/legacy.md", "mode": "create"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "begin_legacy",
+			Content:   "write_begin: write_id=" + writeID + " path=reports/legacy.md mode=create",
+		}}},
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "commit_legacy",
+			ToolName:  "write_commit",
+			Input:     map[string]any{"write_id": writeID, "expected_chunks": 0},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "commit_legacy",
+			Content:   "write_commit: write_id=legacy-write path=reports/legacy.md bytes=0 chars=0 chunks=0 sha256=legacy",
+		}}},
+	}
+
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	text := providerProjectionDebugString(projected)
+	if strings.Contains(text, "Chunked write provider replay summary") {
+		t.Fatalf("legacy text-only transcript should not be parsed as lifecycle state:\n%s", text)
+	}
+	if got := providerProjectionToolUseNames(projected); len(got) != 2 {
+		t.Fatalf("legacy tool calls should remain visible, got %+v", got)
+	}
+}
+
 func TestProjectProviderTranscriptFoldsOnlyOldActiveChunkedWriteChunks(t *testing.T) {
 	const writeID = "write-active"
 	history := []Message{
@@ -2773,6 +2926,12 @@ func TestProjectProviderTranscriptFoldsOnlyOldActiveChunkedWriteChunks(t *testin
 			Type:      BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=drafts/live.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventBegin,
+				WriteID: writeID,
+				Path:    "drafts/live.md",
+				Mode:    chunkedwrite.ModeOverwrite,
+			},
 		}}},
 	}
 	chunks := make([]string, 0, providerWriteChunkRecentReplayCount+2)
@@ -2791,6 +2950,15 @@ func TestProjectProviderTranscriptFoldsOnlyOldActiveChunkedWriteChunks(t *testin
 				Type:      BlockToolResult,
 				ToolUseID: toolUseID,
 				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+				ChunkedWrite: &chunkedwrite.Event{
+					Kind:    chunkedwrite.EventChunk,
+					WriteID: writeID,
+					Index:   i,
+					Bytes:   len(chunk),
+					Chars:   len(chunk),
+					SHA256:  fmt.Sprintf("hash-%d", i),
+					Chunks:  i + 1,
+				},
 			}}},
 		)
 	}
@@ -2843,6 +3011,12 @@ func TestProjectProviderTranscriptDoesNotFoldUnresolvedChunkedWriteCommit(t *tes
 			Type:      BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=drafts/unresolved.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventBegin,
+				WriteID: writeID,
+				Path:    "drafts/unresolved.md",
+				Mode:    chunkedwrite.ModeOverwrite,
+			},
 		}}},
 	}
 	for i, chunk := range chunks {
@@ -2858,6 +3032,15 @@ func TestProjectProviderTranscriptDoesNotFoldUnresolvedChunkedWriteCommit(t *tes
 				Type:      BlockToolResult,
 				ToolUseID: toolUseID,
 				Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+				ChunkedWrite: &chunkedwrite.Event{
+					Kind:    chunkedwrite.EventChunk,
+					WriteID: writeID,
+					Index:   i,
+					Bytes:   len(chunk),
+					Chars:   len(chunk),
+					SHA256:  fmt.Sprintf("hash-%d", i),
+					Chunks:  i + 1,
+				},
 			}}},
 		)
 	}
@@ -2898,6 +3081,12 @@ func TestProjectProviderTranscriptDefersActiveChunkedWriteSummaryUntilToolResult
 			Type:      BlockToolResult,
 			ToolUseID: "begin_1",
 			Content:   "write_begin: write_id=" + writeID + " path=drafts/batch.md mode=overwrite max_chunk_bytes=4000 max_chunk_chars=2000 recommended_chunk_bytes=4000 recommended_chunk_chars=2000",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventBegin,
+				WriteID: writeID,
+				Path:    "drafts/batch.md",
+				Mode:    chunkedwrite.ModeOverwrite,
+			},
 		}}},
 		{Role: RoleAssistant},
 		{Role: RoleUser},
@@ -2915,6 +3104,15 @@ func TestProjectProviderTranscriptDefersActiveChunkedWriteSummaryUntilToolResult
 			Type:      BlockToolResult,
 			ToolUseID: toolUseID,
 			Content:   fmt.Sprintf("write_chunk: write_id=%s index=%d bytes=%d chars=%d sha256=hash-%d chunks=%d duplicate=false", writeID, i, len(chunk), len(chunk), i, i+1),
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventChunk,
+				WriteID: writeID,
+				Index:   i,
+				Bytes:   len(chunk),
+				Chars:   len(chunk),
+				SHA256:  fmt.Sprintf("hash-%d", i),
+				Chunks:  i + 1,
+			},
 		})
 	}
 

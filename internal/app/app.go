@@ -33,6 +33,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/skills"
 	"github.com/juex-ai/juex/internal/tools"
@@ -81,16 +82,17 @@ const (
 )
 
 type App struct {
-	Engine  *runtime.Engine
-	Bus     *events.Bus
-	Session *session.Session
-	cleanup []func() error
-	ctx     context.Context
-	cancel  context.CancelFunc
-	cfg     config.Config
-	skills  []skills.Skill
-	mcp     MCPStatus
-	obsv    *observable.Manager
+	Engine        *runtime.Engine
+	Bus           *events.Bus
+	Session       *session.Session
+	cleanup       []func() error
+	ctx           context.Context
+	cancel        context.CancelFunc
+	cfg           config.Config
+	skills        []skills.Skill
+	mcp           MCPStatus
+	obsv          *observable.Manager
+	chunkedWrites *tools.ChunkedWriteManager
 
 	turnAdmission turnAdmission
 
@@ -189,12 +191,14 @@ func New(opts Options) (*App, error) {
 	reg := tools.NewRegistryWithOptions(tools.RegistryOptions{
 		DefaultTimeoutSeconds: toolTimeoutSeconds,
 	})
+	chunkedWrites := tools.NewChunkedWriteManager(runtimePaths.WorkDir, sandbox.NewPathGuard(runtimePaths.WorkDir, cfg.SandboxPolicy()))
 	tools.RegisterBuiltins(reg, tools.BuiltinOptions{
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              toolsShellProfile(cfg.Shell),
 		ShellSessions:      shellSessions,
 		Sandbox:            cfg.SandboxPolicy(),
 		ToolTimeoutSeconds: toolTimeoutSeconds,
+		ChunkedWrites:      chunkedWrites,
 	})
 
 	skillLoader := skills.NewLoaderFromDirsWithOptions(resourceGraph.SkillDirs(), skillLoaderOptions(cfg))
@@ -235,6 +239,7 @@ func New(opts Options) (*App, error) {
 		sess.Close()
 		return nil, err
 	}
+	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
 	closeSessionResources := func() {
@@ -322,6 +327,7 @@ func New(opts Options) (*App, error) {
 		cancel:           appCancel,
 		cfg:              cfg,
 		skills:           skillLoader.All(),
+		chunkedWrites:    chunkedWrites,
 		sessionLock:      sessLock,
 		eventSink:        eventSink,
 		eventUnsubscribe: eventUnsubscribe,
@@ -478,6 +484,9 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 
 	a.Session = sess
 	a.sessionLock = sessLock
+	if a.chunkedWrites != nil {
+		a.chunkedWrites.RestoreActiveFromHistory(sess.History)
+	}
 	if a.eventSink != nil {
 		a.eventSink.SetJournal(sess)
 	}

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -1569,7 +1570,7 @@ func TestBuiltins_ChunkedWriteBeginReportsRecommendedChunkSize(t *testing.T) {
 	r := NewRegistry()
 	registerTestBuiltins(r, t.TempDir())
 
-	out, err := r.Call(context.Background(), "write_begin", map[string]any{"path": "long.md"})
+	out, info, err := r.CallWithInfo(context.Background(), "write_begin", map[string]any{"path": "long.md"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1577,6 +1578,13 @@ func TestBuiltins_ChunkedWriteBeginReportsRecommendedChunkSize(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("write_begin output = %q, missing %q", out, want)
 		}
+	}
+	event, ok := info.StructuredResult.(chunkedwrite.Event)
+	if !ok {
+		t.Fatalf("structured result = %#v, want chunkedwrite.Event", info.StructuredResult)
+	}
+	if event.Kind != chunkedwrite.EventBegin || event.WriteID == "" || event.Path != "long.md" || event.Mode != chunkedwrite.ModeOverwrite {
+		t.Fatalf("begin event = %+v", event)
 	}
 }
 

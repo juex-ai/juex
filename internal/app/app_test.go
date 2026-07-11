@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -66,6 +67,130 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	}
 	t.Cleanup(func() { a.Close() })
 	return a, prov
+}
+
+func TestAppResumeRestoresActiveChunkedWriteLifecycle(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{
+		WorkDir:                   work,
+		ProviderProtocol:          "openai/chat",
+		EnableUserGlobalResources: false,
+	}
+	firstProvider := &chunkedWriteResumeProvider{t: t, phase: "start"}
+	first, err := New(Options{
+		Config:     cfg,
+		Provider:   firstProvider,
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := first.Run(context.Background(), "start a chunked write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "paused" {
+		t.Fatalf("first output = %q", out)
+	}
+	sessionDir := first.Session.Dir
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondProvider := &chunkedWriteResumeProvider{t: t, phase: "resume"}
+	second, err := New(Options{
+		Config:     cfg,
+		Provider:   secondProvider,
+		WorkDir:    work,
+		ResumeDir:  sessionDir,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	out, err = second.Run(context.Background(), "finish the chunked write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("second output = %q", out)
+	}
+	body, err := os.ReadFile(filepath.Join(work, "resume.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "one\ntwo\n" {
+		t.Fatalf("resume.md = %q", body)
+	}
+}
+
+type chunkedWriteResumeProvider struct {
+	t      *testing.T
+	phase  string
+	called int
+}
+
+func (p *chunkedWriteResumeProvider) Name() string { return "chunked-write-resume" }
+
+func (p *chunkedWriteResumeProvider) Complete(ctx context.Context, sys string, hist []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	idx := p.called
+	p.called++
+	switch p.phase {
+	case "start":
+		switch idx {
+		case 0:
+			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "begin_resume",
+				ToolName:  "write_begin",
+				Input:     map[string]any{"path": "resume.md", "mode": "create"},
+			}}}, StopReason: llm.StopToolUse}, nil
+		case 1:
+			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "chunk_resume_0",
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": chunkedWriteIDFromLifecycle(p.t, hist), "index": 0, "content": "one\n"},
+			}}}, StopReason: llm.StopToolUse}, nil
+		case 2:
+			return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "paused"), StopReason: llm.StopEndTurn}, nil
+		}
+	case "resume":
+		switch idx {
+		case 0:
+			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "chunk_resume_1",
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": chunkedWriteIDFromLifecycle(p.t, hist), "index": 1, "content": "two\n"},
+			}}}, StopReason: llm.StopToolUse}, nil
+		case 1:
+			return llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "commit_resume",
+				ToolName:  "write_commit",
+				Input:     map[string]any{"write_id": chunkedWriteIDFromLifecycle(p.t, hist), "expected_chunks": 2},
+			}}}, StopReason: llm.StopToolUse}, nil
+		case 2:
+			return llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn}, nil
+		}
+	}
+	return llm.Response{}, fmt.Errorf("unexpected %s provider call %d", p.phase, idx)
+}
+
+func chunkedWriteIDFromLifecycle(t *testing.T, history []llm.Message) string {
+	t.Helper()
+	for _, msg := range history {
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockToolResult && block.ChunkedWrite != nil && block.ChunkedWrite.Kind == chunkedwrite.EventBegin {
+				return block.ChunkedWrite.WriteID
+			}
+		}
+	}
+	t.Fatalf("history missing chunked write begin lifecycle fact: %+v", history)
+	return ""
 }
 
 func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
