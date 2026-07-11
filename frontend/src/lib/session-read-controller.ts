@@ -253,12 +253,15 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
   }
 
   function subscribeLiveEvents(sessionID = route.id) {
+    let subscribed = true;
     const unsubscribe = ports.subscribeEvents(sessionID, {
       onEvent: (event) => {
+        if (!subscribed || !isLatestSessionRoute(route, sessionID)) return;
         runSessionReadResult(projectLiveBrowserEvent(state, event));
       },
     });
     return () => {
+      subscribed = false;
       unsubscribe();
       clearTransientTimers();
     };
@@ -282,15 +285,18 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     prompt: string,
     attachments: MediaRef[] = [],
   ): Promise<boolean> {
+    if (!isLatestSessionRoute(route, sessionID)) return false;
     const compactCommand = isCompactCommandInput(prompt);
     updateReadState((prev) => projectPendingSubmit(prev, prompt));
     try {
       const turn = await ports.startTurn(sessionID, prompt, attachments);
+      if (!isLatestSessionRoute(route, sessionID)) return false;
       runSessionReadResult(
         projectStartTurnSucceeded(state, prompt, turn, attachments),
       );
       return true;
     } catch (error) {
+      if (!isLatestSessionRoute(route, sessionID)) return false;
       logError("startTurn failed", error);
       runSessionReadResult(projectStartTurnFailed(state, compactCommand, error));
       return false;

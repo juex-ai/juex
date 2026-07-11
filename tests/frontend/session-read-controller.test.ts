@@ -12,6 +12,7 @@ import {
 } from "../../frontend/src/lib/session-read-state.ts";
 import type {
   ActiveContextSnapshot,
+  BrowserEvent,
   MediaRef,
   Message,
   SessionShowResponse,
@@ -116,6 +117,83 @@ test("loaded turn polling does not retry transient failures", async () => {
 
   assert.equal(calls, 1);
   assert.equal(timers.pendingCount(), 0);
+});
+
+test("live events are ignored after route changes or subscription cleanup", () => {
+  let latestState = createSessionReadState();
+  let liveEvent: (event: BrowserEvent) => void = () => {};
+  const controller = createSessionReadController({
+    ...ports(),
+    onStateChange: (state) => {
+      latestState = state;
+    },
+    subscribeEvents: (_id, opts) => {
+      liveEvent = opts.onEvent;
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  const cleanup = controller.subscribeLiveEvents("s1");
+  controller.setRoute("s2");
+  liveEvent(turnStartedEvent("stale-route"));
+  assert.equal(latestState.projection.messages.length, 0);
+
+  controller.setRoute("s1");
+  cleanup();
+  liveEvent(turnStartedEvent("after-cleanup"));
+  assert.equal(latestState.projection.messages.length, 0);
+});
+
+test("submitPrompt ignores late startTurn results after route changes", async () => {
+  let latestState = createSessionReadState();
+  let resolveStart: (value: StartTurnResponse) => void = () => {};
+  const controller = createSessionReadController({
+    ...ports(),
+    onStateChange: (state) => {
+      latestState = state;
+    },
+    startTurn: async () =>
+      new Promise<StartTurnResponse>((resolve) => {
+        resolveStart = resolve;
+      }),
+  });
+
+  controller.setRoute("s1");
+  const submit = controller.submitPrompt("s1", "hello");
+  controller.setRoute("s2");
+  resolveStart({ turn_id: "turn-stale" });
+
+  assert.equal(await submit, false);
+  assert.equal(latestState.projection.messages.length, 0);
+});
+
+test("submitPrompt ignores late startTurn failures after route changes", async () => {
+  let latestState = createSessionReadState();
+  let rejectStart: (reason: unknown) => void = () => {};
+  let loggedErrors = 0;
+  const controller = createSessionReadController({
+    ...ports(),
+    onStateChange: (state) => {
+      latestState = state;
+    },
+    logError: () => {
+      loggedErrors++;
+    },
+    startTurn: async () =>
+      new Promise<StartTurnResponse>((_resolve, reject) => {
+        rejectStart = reject;
+      }),
+  });
+
+  controller.setRoute("s1");
+  const submit = controller.submitPrompt("s1", "hello");
+  controller.setRoute("s2");
+  rejectStart(new Error("late failure"));
+
+  assert.equal(await submit, false);
+  assert.equal(loggedErrors, 0);
+  assert.equal(latestState.projection.status.kind, "idle");
 });
 
 test("submitPrompt forwards attachments and projects optimistic image blocks", async () => {
@@ -257,6 +335,16 @@ function session(id: string, messages: Message[] = []): SessionShowResponse {
 
 function activeContext(): ActiveContextSnapshot {
   return { messages: [], estimated_tokens: 0 };
+}
+
+function turnStartedEvent(input: string): BrowserEvent {
+  return {
+    id: `event-${input}`,
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: `turn-${input}`,
+    payload: { input },
+  };
 }
 
 async function flushPromises() {
