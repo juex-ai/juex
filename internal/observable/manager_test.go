@@ -26,11 +26,11 @@ func TestManager_StartAllCapturesAndDeliversObservation(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -72,11 +72,11 @@ func TestManager_StartAllContinuesAfterOneStartError(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -107,7 +107,9 @@ func TestManager_CountsSummarizesRuntimeStates(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver:    func(context.Context, observable.ObservationRecord) error { return nil },
+		Deliver: func(context.Context, observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -174,11 +176,11 @@ func TestManager_DeleteWaitsForRunCleanup(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -350,11 +352,11 @@ func TestManager_TimerFlushesQuietBatch(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -382,11 +384,11 @@ func TestManager_DrainsUnwatchedStream(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -413,11 +415,11 @@ func TestManager_DeliversParseErrorObservation(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -451,11 +453,11 @@ func TestManager_OnExitNotifyNonzero(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -488,11 +490,11 @@ func TestManager_CloseSuppressesProviderDelivery(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -568,8 +570,8 @@ func TestManager_EmitsLifecycleAndObservationEvents(t *testing.T) {
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		Bus:        bus,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
-			return nil
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -596,11 +598,11 @@ func TestManager_ScheduleSourceDeliversOnceObservation(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -650,15 +652,11 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		Now:        fixedNow,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			firstMu.Lock()
 			defer firstMu.Unlock()
 			firstDelivered = append(firstDelivered, record)
-			store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
-			return store.UpdateObservation(record.ID, func(record observable.ObservationRecord) observable.ObservationRecord {
-				record.State = observable.ObservationStateDelivered
-				return record
-			})
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -682,15 +680,11 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		Now:        fixedNow,
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			secondMu.Lock()
 			defer secondMu.Unlock()
 			secondDelivered = append(secondDelivered, record)
-			store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
-			return store.UpdateObservation(record.ID, func(record observable.ObservationRecord) observable.ObservationRecord {
-				record.State = observable.ObservationStateDelivered
-				return record
-			})
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -753,11 +747,11 @@ func TestManager_DeleteClearsScheduleStateBeforeRecreate(t *testing.T) {
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		Now:        func() time.Time { return now },
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {
@@ -812,11 +806,11 @@ func TestManager_StoppedScheduleRestartsWithoutCatchUp(t *testing.T) {
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
 		Now:        func() time.Time { return now },
-		Deliver: func(ctx context.Context, record observable.ObservationRecord) error {
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
 			delivered = append(delivered, record)
-			return nil
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
 		},
 	})
 	if err != nil {

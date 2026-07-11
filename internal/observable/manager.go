@@ -21,7 +21,7 @@ type ManagerOptions struct {
 	Sandbox       sandbox.Policy
 	SandboxRunner sandbox.Runner
 	Bus           *events.Bus
-	Deliver       func(context.Context, ObservationRecord) error
+	Deliver       DeliveryFunc
 	Now           func() time.Time
 }
 
@@ -190,7 +190,9 @@ func (m *Manager) startCommandRun(ctx context.Context, runCtx context.Context, r
 		sandboxPolicy: m.opts.Sandbox,
 		sandboxRunner: m.opts.SandboxRunner,
 		store:         m.store,
-		deliver:       m.deliverObservation,
+		deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
+			return DeliveryOutcome{}, m.deliverObservation(ctx, record)
+		},
 	})
 	cmd, err := r.start(ctx, runCtx)
 	if err != nil {
@@ -796,22 +798,44 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 	if m == nil {
 		return nil
 	}
-	m.emitObservation(EventObservationRecorded, record, "")
+	current := record
+	if m.store != nil && record.ID != "" {
+		latest, ok, err := m.store.Observation(record.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			current = latest
+		}
+	}
+	if current.State != "" && current.State != ObservationStateRecorded {
+		return nil
+	}
+	m.emitObservation(EventObservationRecorded, current, "")
 	if m.isClosed() {
 		return nil
 	}
 	if m.opts.Deliver != nil {
-		if err := m.opts.Deliver(ctx, record); err != nil {
-			updated, updateErr := m.updateObservation(record.ID, func(record ObservationRecord) ObservationRecord {
-				record.State = ObservationStateDropped
-				record.Error = err.Error()
-				return record
-			})
-			if updateErr == nil {
-				m.emitObservation(EventObservationDropped, updated, err.Error())
-			} else {
-				m.emitObservation(EventObservationDropped, record, err.Error())
+		outcome, err := m.opts.Deliver(ctx, current)
+		if err != nil {
+			outcome = DeliveryOutcome{
+				State: ObservationStateDropped,
+				Error: err.Error(),
 			}
+		}
+		if outcome.State == "" {
+			return err
+		}
+		outcome, outcomeErr := outcome.normalized(m.now)
+		if outcomeErr != nil {
+			return outcomeErr
+		}
+		updated, updateErr := m.updateObservation(current.ID, outcome.apply)
+		if updateErr != nil {
+			return updateErr
+		}
+		m.emitObservation(observationEventType(updated.State), updated, updated.Error)
+		if err != nil {
 			return err
 		}
 	}

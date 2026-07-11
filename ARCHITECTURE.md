@@ -61,7 +61,7 @@ juex/
 │   ├── bundle/                   # portable debug bundle tar.gz creation
 │   ├── events/                   # in-process EventBus + durable commit sink
 │   ├── hooks/                    # trusted lifecycle command hook execution
-│   ├── observable/               # workspace Observable sources, schedule state, observation store/tools
+│   ├── observable/               # Observable source adapters plus durable Observation lifecycle/store/tools
 │   ├── observability/            # session-local logs, traces, spans, tool summaries
 │   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
