@@ -1,11 +1,14 @@
 package observable_test
 
 import (
+	"encoding/base64"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/observable"
 )
 
@@ -87,6 +90,54 @@ func TestBatcher_UsesHighestSeverityInWindow(t *testing.T) {
 	}
 }
 
+func TestBatcher_PersistsAttachmentErrors(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	unit := parsedUnit("stdout", "keep me", fixedTime)
+	unit.AttachmentErrors = []string{"attachments must be an array"}
+	if _, err := b.Add(unit); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Flush("shutdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].AttachmentState != observable.ObservationAttachmentStateError || len(got[0].AttachmentErrors) != 1 {
+		t.Fatalf("records = %+v, want persisted attachment error", got)
+	}
+}
+
+func TestBatcher_SnapshotsAttachmentsBeforeFlush(t *testing.T) {
+	workDir := t.TempDir()
+	sourcePath := filepath.Join(workDir, ".juex", "inbox", "pixel.png")
+	writeBatcherPNG(t, sourcePath)
+	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{WorkDir: workDir})
+	unit := parsedUnit("stdout", "image event", fixedTime)
+	unit.Attachments = []eventmedia.AttachmentRef{{Path: ".juex/inbox/pixel.png", MediaType: "image/png"}}
+	if _, err := b.Add(unit); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := b.Flush("interval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || len(records[0].Attachments) != 1 {
+		t.Fatalf("records = %+v, want one stored attachment", records)
+	}
+	ref := records[0].Attachments[0]
+	if !strings.HasPrefix(ref.Path, ".juex/artifacts/event-media/") {
+		t.Fatalf("attachment path = %q, want durable event artifact", ref.Path)
+	}
+	if report := eventmedia.ValidateAttachments(records[0].Attachments, eventmedia.ValidationOptions{WorkDir: workDir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
+		t.Fatalf("stored attachment validation = %+v", report)
+	}
+}
+
 func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 	spec := validSpec("large")
 	spec.Batch.MaxChars = 80
@@ -153,5 +204,19 @@ func parsedUnit(stream, content string, receivedAt time.Time) observable.ParsedU
 		Kind:       "log_batch",
 		Severity:   "info",
 		ReceivedAt: receivedAt,
+	}
+}
+
+func writeBatcherPNG(t *testing.T, path string) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

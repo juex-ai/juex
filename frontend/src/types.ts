@@ -252,6 +252,7 @@ export const BROWSER_EVENT_TYPES = [
   "observation.queued",
   "observation.delivered",
   "observation.dropped",
+  "observation.errored",
   "context.compact.skipped",
   "context.compact.started",
   "context.compact.completed",
@@ -495,6 +496,9 @@ export interface ObservationRecord {
   window_start: number;
   window_end: number;
   content: string;
+  attachments?: EventAttachmentRef[];
+  attachment_state?: string;
+  attachment_errors?: string[];
   original_chars: number;
   truncated?: boolean;
   artifact_path?: string;
@@ -504,6 +508,11 @@ export interface ObservationRecord {
   created_at: number;
   delivered_at?: number;
   error?: string;
+}
+
+export interface EventAttachmentRef {
+  path: string;
+  media_type?: string;
 }
 
 export interface ObservableEventPayload {
@@ -606,6 +615,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"observation.queued"> & { payload: ObservationEventPayload })
   | (BrowserEventBase<"observation.delivered"> & { payload: ObservationEventPayload })
   | (BrowserEventBase<"observation.dropped"> & { payload: ObservationEventPayload })
+  | (BrowserEventBase<"observation.errored"> & { payload: ObservationEventPayload })
   | (BrowserEventBase<"context.compact.skipped"> & { payload: ContextCompactSkippedPayload })
   | (BrowserEventBase<"context.compact.started"> & { payload: ContextCompactStartedPayload })
   | (BrowserEventBase<"context.compact.completed"> & { payload: ContextCompactCompletedPayload })

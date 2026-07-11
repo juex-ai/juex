@@ -57,6 +57,7 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{observable.EventObservationQueued, func() any { return &observable.ObservationEventPayload{} }},
 	{observable.EventObservationDelivered, func() any { return &observable.ObservationEventPayload{} }},
 	{observable.EventObservationDropped, func() any { return &observable.ObservationEventPayload{} }},
+	{observable.EventObservationErrored, func() any { return &observable.ObservationEventPayload{} }},
 	{"context.compact.skipped", func() any { return &juexruntime.ContextCompactSkippedPayload{} }},
 	{"context.compact.started", func() any { return &juexruntime.ContextCompactStartedPayload{} }},
 	{"context.compact.completed", func() any { return &juexruntime.ContextCompactCompletedPayload{} }},

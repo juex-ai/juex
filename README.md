@@ -243,9 +243,17 @@ them as external pending input to the active primary session, emits
 the Web UI and the `observable_*` agent tools. Command sources capture bounded
 stdout/stderr batches from managed commands. Schedule sources emit one-shot,
 daily, or interval Observations without an external wrapper and persist
-schedule state under `.juex/observables/`. Observables are workspace-local in
-the first version. Created Observables may omit `id` when `name` can be
-slugged into a stable lower-case id.
+schedule state under `.juex/observables/`. JSONL command parsers can map an
+`attachments_field` containing `[{ "path": "...", "media_type": "..." }]`;
+schedule observations can declare static `observation.attachments`. Attachment
+paths are validated inside the workdir, including `.juex/inbox/`; image
+attachments are copied into content-addressed
+`.juex/artifacts/event-media/` files when the event is accepted, before
+batching or asynchronous delivery, and then become provider image blocks.
+Validation failures are emitted as `observation.errored` and still leave
+structured text in context.
+Observables are workspace-local in the first version. Created Observables may
+omit `id` when `name` can be slugged into a stable lower-case id.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

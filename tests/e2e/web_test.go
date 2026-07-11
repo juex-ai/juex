@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -396,6 +397,28 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 			t.Fatalf("events missing %s:\n%s", want, eventsData)
 		}
 	}
+	var eventArtifactPath string
+	waitForCondition(t, 5*time.Second, func() bool {
+		messages, err := fetchWebTranscript(&http.Client{Timeout: 2 * time.Second}, ts.URL, c.ID)
+		if err != nil {
+			return false
+		}
+		for _, msg := range messages {
+			for _, block := range msg.Blocks {
+				if block.Type == "image" && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, ".juex/artifacts/event-media/") {
+					eventArtifactPath = block.Media.ArtifactPath
+					return true
+				}
+			}
+		}
+		return false
+	})
+	if err := os.Remove(filepath.Join(work, ".juex", "inbox", "observable-e2e.png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(eventArtifactPath))); err != nil {
+		t.Fatalf("stored observable event artifact unavailable after source removal: %v", err)
+	}
 }
 
 func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
@@ -487,6 +510,7 @@ type webStartTurnResponse struct {
 }
 
 type webTranscriptMessage struct {
+	Kind   string `json:"kind"`
 	Role   string `json:"role"`
 	Blocks []struct {
 		Type  string        `json:"type"`
@@ -652,19 +676,25 @@ func fetchObservableRecords(baseURL, id string) ([]observable.ObservationRecord,
 
 func writeE2EObservableConfig(t *testing.T, work string) {
 	t.Helper()
+	attachmentPath := ".juex/inbox/observable-e2e.png"
+	writeE2ETestPNG(t, filepath.Join(work, filepath.FromSlash(attachmentPath)))
 	cfg := map[string]any{
 		"observables": []map[string]any{
 			{
 				"id":      "observable-e2e",
 				"command": os.Args[0],
 				"args":    []string{"-test.run=TestE2EObservableHelperProcess"},
-				"env":     map[string]string{"JUEX_E2E_OBSERVABLE": "1"},
+				"env": map[string]string{
+					"JUEX_E2E_OBSERVABLE":            "1",
+					"JUEX_E2E_OBSERVABLE_ATTACHMENT": attachmentPath,
+				},
 				"streams": []string{"stdout"},
 				"parser": map[string]string{
-					"type":           "jsonl",
-					"content_field":  "content",
-					"kind_field":     "type",
-					"severity_field": "level",
+					"type":              "jsonl",
+					"content_field":     "content",
+					"kind_field":        "type",
+					"severity_field":    "level",
+					"attachments_field": "attachments",
 				},
 				"batch": map[string]int{
 					"interval_seconds": 5,
@@ -690,8 +720,23 @@ func TestE2EObservableHelperProcess(t *testing.T) {
 	if os.Getenv("JUEX_E2E_OBSERVABLE") != "1" {
 		return
 	}
-	_, _ = os.Stdout.WriteString(`{"type":"e2e_event","level":"info","content":"observable e2e payload"}` + "\n")
+	attachment := os.Getenv("JUEX_E2E_OBSERVABLE_ATTACHMENT")
+	_, _ = os.Stdout.WriteString(`{"type":"e2e_event","level":"info","content":"observable e2e payload","attachments":[{"path":"` + attachment + `","media_type":"image/png"}]}` + "\n")
 	os.Exit(0)
+}
+
+func writeE2ETestPNG(t *testing.T, path string) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func fetchWebTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {

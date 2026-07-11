@@ -7,15 +7,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
 type ParsedUnit struct {
-	Stream     string
-	Content    string
-	Kind       string
-	Severity   string
-	ReceivedAt time.Time
+	Stream           string
+	Content          string
+	Kind             string
+	Severity         string
+	Attachments      []eventmedia.AttachmentRef
+	AttachmentErrors []string
+	ReceivedAt       time.Time
 }
 
 type PipelineOptions struct {
@@ -143,14 +146,20 @@ func (p *Pipeline) parseJSONLLine(stream, line string) (ParsedUnit, bool, error)
 	if err := json.Unmarshal([]byte(line), &obj); err != nil {
 		return ParsedUnit{}, false, fmt.Errorf("observable jsonl: parse line: %w", err)
 	}
-	return p.unitFromJSON(stream, obj, line), true, nil
+	unit, err := p.unitFromJSON(stream, obj, line)
+	if err != nil {
+		return ParsedUnit{}, false, err
+	}
+	return unit, true, nil
 }
 
-func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) ParsedUnit {
+func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) (ParsedUnit, error) {
 	parser := p.spec.Parser
 	content := raw
 	kind := resolvedKind(p.spec.Defaults.Kind)
 	severity := resolvedSeverity(p.spec.Defaults.Severity)
+	var attachments []eventmedia.AttachmentRef
+	var attachmentErrors []string
 	if parser != nil {
 		if parser.ContentField != "" {
 			if value, ok := obj[parser.ContentField]; ok {
@@ -169,15 +178,26 @@ func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) P
 				}
 			}
 		}
+		if parser.AttachmentsField != "" {
+			if value, ok := obj[parser.AttachmentsField]; ok {
+				refs, err := eventmedia.ExtractAttachmentRefs(value)
+				attachments = refs
+				if err != nil {
+					attachmentErrors = append(attachmentErrors, fmt.Sprintf("attachments_field %q: %v", parser.AttachmentsField, err))
+				}
+			}
+		}
 	}
 	content = tools.SanitizeOutputText(content).Text
 	return ParsedUnit{
-		Stream:     stream,
-		Content:    content,
-		Kind:       kind,
-		Severity:   severity,
-		ReceivedAt: p.now().UTC(),
-	}
+		Stream:           stream,
+		Content:          content,
+		Kind:             kind,
+		Severity:         severity,
+		Attachments:      attachments,
+		AttachmentErrors: attachmentErrors,
+		ReceivedAt:       p.now().UTC(),
+	}, nil
 }
 
 func (p *Pipeline) filterUnit(unit ParsedUnit) []ParsedUnit {

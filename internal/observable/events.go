@@ -9,6 +9,7 @@ const (
 	EventObservationQueued    = "observation.queued"
 	EventObservationDelivered = "observation.delivered"
 	EventObservationDropped   = "observation.dropped"
+	EventObservationErrored   = "observation.errored"
 )
 
 type ObservableEventPayload struct {

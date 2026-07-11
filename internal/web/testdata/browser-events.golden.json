@@ -198,6 +198,38 @@
     }
   },
   {
+    "id": "evt-observation-errored",
+    "type": "observation.errored",
+    "ts": "2026-06-15T00:00:08.5Z",
+    "payload": {
+      "observation": {
+        "id": "obs-attachment-error",
+        "observable_id": "lark-events",
+        "kind": "lark_notification",
+        "severity": "warning",
+        "window_start": 1781481600000,
+        "window_end": 1781481601000,
+        "content": "attachment event",
+        "attachments": [
+          {
+            "path": ".juex/inbox/missing.png",
+            "media_type": "image/png"
+          }
+        ],
+        "attachment_state": "attachment_error",
+        "attachment_errors": [
+          "missing.png: attachment path does not exist"
+        ],
+        "original_chars": 16,
+        "state": "delivered",
+        "created_at": 1781481608000,
+        "delivered_at": 1781481608000,
+        "error": "missing.png: attachment path does not exist"
+      },
+      "error": "missing.png: attachment path does not exist"
+    }
+  },
+  {
     "id": "evt-compact-started",
     "type": "context.compact.started",
     "ts": "2026-06-15T00:00:09Z",

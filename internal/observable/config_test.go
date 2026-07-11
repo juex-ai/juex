@@ -40,7 +40,7 @@ func TestLoadConfig_DefaultsStreamsAndValidatesBatch(t *testing.T) {
 
 func TestLoadConfig_AcceptsExplicitCommandSource(t *testing.T) {
 	dir := t.TempDir()
-	body := `{"observables":[{"id":"lark-events","source":{"type":"command","command":"lark-cli","args":["watch","--json"],"streams":["stdout"],"parser":{"type":"jsonl","content_field":"content"},"batch":{"interval_seconds":10,"max_chars":1000}},"observation":{"kind":"lark_notification","severity":"info"}}]}`
+	body := `{"observables":[{"id":"lark-events","source":{"type":"command","command":"lark-cli","args":["watch","--json"],"streams":["stdout"],"parser":{"type":"jsonl","content_field":"content","attachments_field":"attachments"},"batch":{"interval_seconds":10,"max_chars":1000}},"observation":{"kind":"lark_notification","severity":"info"}}]}`
 	path := filepath.Join(dir, "observables.json")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -52,6 +52,9 @@ func TestLoadConfig_AcceptsExplicitCommandSource(t *testing.T) {
 	got := cfg.Observables[0]
 	if got.Source.Type != observable.SourceTypeCommand || got.Command != "lark-cli" || got.Parser == nil || got.Defaults.Kind != "lark_notification" {
 		t.Fatalf("explicit command source = %+v", got)
+	}
+	if got.Parser.AttachmentsField != "attachments" || got.Source.Parser.AttachmentsField != "attachments" {
+		t.Fatalf("attachments field not mirrored: %+v", got)
 	}
 }
 
@@ -88,7 +91,13 @@ func TestValidateConfig_AcceptsScheduleSource(t *testing.T) {
 			},
 			CatchUp: observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 120},
 		},
-		Observation: observable.ObservationSpec{Content: "Prepare a work brief."},
+		Observation: observable.ObservationSpec{
+			Content: "Prepare a work brief.",
+			Attachments: []observable.AttachmentSpec{{
+				Path:      ".juex/inbox/brief.png",
+				MediaType: "image/png",
+			}},
+		},
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +105,9 @@ func TestValidateConfig_AcceptsScheduleSource(t *testing.T) {
 	got := cfg.Observables[0]
 	if got.Observation.Kind != observable.DefaultScheduleKind || got.Observation.Severity != observable.DefaultSeverity {
 		t.Fatalf("schedule defaults = %+v", got.Observation)
+	}
+	if len(got.Observation.Attachments) != 1 || got.Observation.Attachments[0].Path != ".juex/inbox/brief.png" {
+		t.Fatalf("schedule attachments = %+v", got.Observation.Attachments)
 	}
 }
 
@@ -177,6 +189,24 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 			want: "regex",
 		},
 		{
+			name: "attachments field on text parser",
+			cfg: observable.FileConfig{Observables: []observable.Spec{
+				withSpec(validSpec("text-attachments"), func(s *observable.Spec) {
+					s.Parser = &observable.ParserSpec{Type: observable.ParserText, AttachmentsField: "attachments"}
+				}),
+			}},
+			want: "requires parser.type jsonl",
+		},
+		{
+			name: "static attachments on command",
+			cfg: observable.FileConfig{Observables: []observable.Spec{
+				withSpec(validSpec("command-static-attachments"), func(s *observable.Spec) {
+					s.Observation.Attachments = []observable.AttachmentSpec{{Path: "image.png"}}
+				}),
+			}},
+			want: "cannot set observation.attachments",
+		},
+		{
 			name: "schedule without content",
 			cfg: observable.FileConfig{Observables: []observable.Spec{{
 				ID: "empty-schedule",
@@ -186,6 +216,21 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 				},
 			}}},
 			want: "observation.content",
+		},
+		{
+			name: "schedule attachment without path",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "schedule-missing-attachment-path",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeSchedule,
+					Interval: &observable.IntervalSchedule{EverySeconds: 60},
+				},
+				Observation: observable.ObservationSpec{
+					Content:     "hello",
+					Attachments: []observable.AttachmentSpec{{MediaType: "image/png"}},
+				},
+			}}},
+			want: "path is required",
 		},
 		{
 			name: "daily schedule without timezone",

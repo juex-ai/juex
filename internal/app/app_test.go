@@ -16,8 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/eventmedia"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -432,16 +435,16 @@ func TestApp_HandleObservationStartsTurnWhenNoActiveTurn(t *testing.T) {
 	if got.Kind != llm.MessageKindObservation {
 		t.Fatalf("message kind = %q, want observation", got.Kind)
 	}
-	var body map[string]any
-	if err := json.Unmarshal([]byte(got.FirstText()), &body); err != nil {
-		t.Fatalf("observation body is not JSON: %v\n%s", err, got.FirstText())
-	}
-	if body["observation_id"] != record.ID || body["observable_id"] != record.ObservableID {
-		t.Fatalf("body = %+v", body)
-	}
-	if body["window_start"] != float64(record.WindowStart.UnixMilli()) ||
-		body["window_end"] != float64(record.WindowEnd.UnixMilli()) {
-		t.Fatalf("body window timestamps = %+v", body)
+	text := got.FirstText()
+	for _, want := range []string{
+		"Observable observation",
+		"observation_id: " + record.ID,
+		"observable_id: " + record.ObservableID,
+		"content:\nhello",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("observation text missing %q:\n%s", want, text)
+		}
 	}
 }
 
@@ -449,16 +452,164 @@ func TestObservationMessageZeroWindowTimestampsAreZero(t *testing.T) {
 	record := testObservationRecord("obs-zero-window")
 	record.WindowStart = time.Time{}
 	record.WindowEnd = time.Time{}
-	msg, err := observationMessage(record)
+	msg, err := observationMessage(record, attachmentOptions{WorkDir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var body map[string]any
-	if err := json.Unmarshal([]byte(msg.FirstText()), &body); err != nil {
+	text := msg.FirstText()
+	if !strings.Contains(text, "window_start: 0") || !strings.Contains(text, "window_end: 0") {
+		t.Fatalf("observation text = %q, want zero window timestamps", text)
+	}
+}
+
+func TestApp_HandleObservationIncludesValidatedImageAttachment(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	relPath := ".juex/inbox/observable.png"
+	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath)))
+	record := testObservationRecord("obs-image")
+	record.Attachments = []eventmedia.AttachmentRef{{Path: relPath, MediaType: "image/png"}}
+
+	if err := a.HandleObservation(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
-	if body["window_start"] != float64(0) || body["window_end"] != float64(0) {
-		t.Fatalf("body window timestamps = %+v, want zeros", body)
+	got := prov.histories[0][0]
+	if got.Kind != llm.MessageKindObservation {
+		t.Fatalf("message kind = %q", got.Kind)
+	}
+	if len(got.Blocks) != 2 || got.Blocks[1].Type != llm.BlockImage {
+		t.Fatalf("blocks = %+v, want text plus image block", got.Blocks)
+	}
+	media := got.Blocks[1].Media
+	if media == nil || !strings.HasPrefix(media.ArtifactPath, ".juex/artifacts/event-media/") || media.MediaType != "image/png" || media.Width != 1 || media.Height != 1 {
+		t.Fatalf("media = %+v", media)
+	}
+	if !strings.Contains(got.FirstText(), "attachments:") || !strings.Contains(got.FirstText(), relPath) {
+		t.Fatalf("observation text missing attachment list:\n%s", got.FirstText())
+	}
+	if err := os.Remove(filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath))); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(a.cfg.WorkDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := store.Read(artifact.Ref{Path: media.ArtifactPath, SHA256: media.SHA256, Bytes: media.OriginalBytes}); err != nil || len(data) == 0 {
+		t.Fatalf("stored observation artifact = %d bytes, err=%v", len(data), err)
+	}
+}
+
+func TestApp_HandleObservationRendersNonImageAttachmentAsTextReference(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	relPath := ".juex/inbox/notes.txt"
+	absPath := filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, []byte("plain attachment"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := testObservationRecord("obs-text-file")
+	record.Attachments = []eventmedia.AttachmentRef{{Path: relPath, MediaType: "text/plain"}}
+
+	if err := a.HandleObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	got := prov.histories[0][0]
+	if len(got.Blocks) != 1 || got.Blocks[0].Type != llm.BlockText {
+		t.Fatalf("blocks = %+v, want text only for non-image attachment", got.Blocks)
+	}
+	text := got.FirstText()
+	if !strings.Contains(text, "file source="+relPath) || !strings.Contains(text, "artifact=.juex/artifacts/event-media/") {
+		t.Fatalf("non-image attachment reference missing:\n%s", text)
+	}
+}
+
+func TestApp_HandleObservationEmitsAttachmentError(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	record := testObservationRecord("obs-missing-attachment")
+	record.Attachments = []eventmedia.AttachmentRef{{Path: "missing.png"}}
+	persisted, err := a.obsv.RecordObservation(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []events.Event
+	unsub := a.Bus.Subscribe(observable.EventObservationErrored, func(e events.Event) {
+		seen = append(seen, e)
+	})
+	defer unsub()
+
+	if err := a.HandleObservation(context.Background(), persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 {
+		t.Fatalf("observation.errored events = %+v, want one", seen)
+	}
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
+	}
+	text := prov.histories[0][0].FirstText()
+	if !strings.Contains(text, "attachment_errors:") || !strings.Contains(text, "missing.png") {
+		t.Fatalf("observation text missing attachment error:\n%s", text)
+	}
+	records, err := a.obsv.Observations(observable.ObservationFilter{ObservableID: persisted.ObservableID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) == 0 || records[0].AttachmentState != observable.ObservationAttachmentStateError || len(records[0].AttachmentErrors) == 0 {
+		t.Fatalf("records = %+v, want durable attachment error", records)
+	}
+}
+
+func TestApp_HandleObservationEmitsStoredAttachmentError(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	record := testObservationRecord("obs-invalid-envelope")
+	record.AttachmentState = observable.ObservationAttachmentStateError
+	record.AttachmentErrors = []string{"attachments must be an array"}
+	persisted, err := a.obsv.RecordObservation(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []events.Event
+	unsub := a.Bus.Subscribe(observable.EventObservationErrored, func(e events.Event) {
+		seen = append(seen, e)
+	})
+	defer unsub()
+
+	if err := a.HandleObservation(context.Background(), persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || prov.calls != 1 {
+		t.Fatalf("errored events = %+v provider calls = %d", seen, prov.calls)
+	}
+	if text := prov.histories[0][0].FirstText(); !strings.Contains(text, "stored_attachment_errors:") || !strings.Contains(text, "attachments must be an array") {
+		t.Fatalf("observation text missing stored attachment error:\n%s", text)
+	}
+}
+
+func TestApp_HandleObservationEmitsAttachmentErrorWhenRecordIsNotPersisted(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	record := testObservationRecord("obs-unpersisted-attachment-error")
+	record.Attachments = []eventmedia.AttachmentRef{{Path: "missing.png"}}
+	var seen []events.Event
+	unsub := a.Bus.Subscribe(observable.EventObservationErrored, func(e events.Event) {
+		seen = append(seen, e)
+	})
+	defer unsub()
+
+	if err := a.HandleObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || prov.calls != 1 {
+		t.Fatalf("errored events = %+v provider calls = %d", seen, prov.calls)
+	}
+	payload, ok := seen[0].Payload.(observable.ObservationEventPayload)
+	if !ok || payload.Observation.ID != record.ID || !strings.Contains(payload.Error, "missing.png") {
+		t.Fatalf("attachment error payload = %#v", seen[0].Payload)
 	}
 }
 
@@ -506,6 +657,20 @@ func testObservationRecord(id string) observable.ObservationRecord {
 		Content:      "hello",
 		State:        observable.ObservationStateRecorded,
 		CreatedAt:    now,
+	}
+}
+
+func writeAppTestPNG(t *testing.T, path string) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -1019,8 +1184,82 @@ func TestApp_MCPNotificationRunsAgentTurn(t *testing.T) {
 	if user.Kind != llm.MessageKindMCPEvent {
 		t.Fatalf("user kind = %q", user.Kind)
 	}
-	if got, want := user.FirstText(), "local:message:{\n  \"content\": \"[realtime] hello alice\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}"; got != want {
-		t.Fatalf("user text = %q", got)
+	for _, want := range []string{
+		"MCP notification",
+		"server: local",
+		"event_type: message",
+		"content:\n[realtime] hello alice",
+		"topic: ops",
+	} {
+		if !strings.Contains(user.FirstText(), want) {
+			t.Fatalf("user text missing %q:\n%s", want, user.FirstText())
+		}
+	}
+}
+
+func TestApp_MCPNotificationIncludesValidatedImageAttachment(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "handled event"),
+		StopReason: llm.StopEndTurn,
+	})
+	relPath := ".juex/inbox/mcp.png"
+	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath)))
+
+	err := a.HandleMCPNotification(context.Background(), mcp.Notification{
+		ServerName: "local",
+		Method:     "notifications/claude/channel",
+		EventType:  "message",
+		Content:    "image from mcp",
+		Params: map[string]any{
+			"content":     "image from mcp",
+			"attachments": []any{map[string]any{"path": relPath, "media_type": "image/png"}},
+			"meta":        map[string]any{"event_type": "message", "topic": "ops"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := prov.histories[0][0]
+	if user.Kind != llm.MessageKindMCPEvent {
+		t.Fatalf("message kind = %q", user.Kind)
+	}
+	if len(user.Blocks) != 2 || user.Blocks[1].Type != llm.BlockImage {
+		t.Fatalf("blocks = %+v, want text plus image block", user.Blocks)
+	}
+	media := user.Blocks[1].Media
+	if media == nil || !strings.HasPrefix(media.ArtifactPath, ".juex/artifacts/event-media/") || media.MediaType != "image/png" {
+		t.Fatalf("media = %+v", media)
+	}
+	if !strings.Contains(user.FirstText(), "attachments:") || !strings.Contains(user.FirstText(), relPath) {
+		t.Fatalf("MCP text missing attachment list:\n%s", user.FirstText())
+	}
+}
+
+func TestMCPNotificationPreservesValidAttachmentWhenAnotherIsMalformed(t *testing.T) {
+	workDir := t.TempDir()
+	relPath := ".juex/inbox/mcp.png"
+	writeAppTestPNG(t, filepath.Join(workDir, filepath.FromSlash(relPath)))
+
+	msg, err := mcpNotificationMessage(mcp.Notification{
+		ServerName: "local",
+		Method:     "notifications/claude/channel",
+		EventType:  "message",
+		Content:    "mixed attachments",
+		Params: map[string]any{
+			"attachments": []any{
+				map[string]any{"path": relPath, "media_type": "image/png"},
+				map[string]any{"path": 42},
+			},
+		},
+	}, "message", attachmentOptions{WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.Blocks) != 2 || msg.Blocks[1].Type != llm.BlockImage {
+		t.Fatalf("blocks = %+v, want text plus valid image", msg.Blocks)
+	}
+	if text := msg.FirstText(); !strings.Contains(text, "attachment_errors:") || !strings.Contains(text, "attachments[1]") {
+		t.Fatalf("text missing malformed attachment error:\n%s", text)
 	}
 }
 
@@ -1118,8 +1357,11 @@ func TestApp_MCPNotificationQueuesDuringActiveTurn(t *testing.T) {
 	if a.Session.History[2].Kind != llm.MessageKindMCPEvent {
 		t.Fatalf("queued message kind = %q", a.Session.History[2].Kind)
 	}
-	if got, want := a.Session.History[2].FirstText(), "local:message:{\n  \"content\": \"queued\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}"; got != want {
-		t.Fatalf("queued text = %q", got)
+	got := a.Session.History[2].FirstText()
+	for _, want := range []string{"MCP notification", "server: local", "event_type: message", "content:\nqueued", "topic: ops"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("queued text missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -1378,17 +1620,6 @@ func TestApp_REPLContinuesAfterTurnError(t *testing.T) {
 	}
 	if !strings.Contains(body, "error:") {
 		t.Fatalf("second turn should have errored: %q", body)
-	}
-}
-
-func writeAppTestPNG(t *testing.T, path string) {
-	t.Helper()
-	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
 	}
 }
 

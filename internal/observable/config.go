@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/juex-ai/juex/internal/eventmedia"
 )
 
 const (
@@ -106,10 +108,13 @@ type CatchUpSpec struct {
 }
 
 type ObservationSpec struct {
-	Kind     string `json:"kind,omitempty"`
-	Severity string `json:"severity,omitempty"`
-	Content  string `json:"content,omitempty"`
+	Kind        string           `json:"kind,omitempty"`
+	Severity    string           `json:"severity,omitempty"`
+	Content     string           `json:"content,omitempty"`
+	Attachments []AttachmentSpec `json:"attachments,omitempty"`
 }
+
+type AttachmentSpec = eventmedia.AttachmentRef
 
 func (spec Spec) MarshalJSON() ([]byte, error) {
 	type specJSON struct {
@@ -142,7 +147,7 @@ func (spec Spec) MarshalJSON() ([]byte, error) {
 	if spec.Source.Type != "" {
 		out.Source = &spec.Source
 	}
-	if spec.Observation != (ObservationSpec{}) {
+	if !isZeroObservationSpec(spec.Observation) {
 		out.Observation = &spec.Observation
 	}
 	if spec.Defaults != (Defaults{}) {
@@ -207,11 +212,12 @@ type Defaults struct {
 }
 
 type ParserSpec struct {
-	Type          string `json:"type"`
-	ContentField  string `json:"content_field,omitempty"`
-	KindField     string `json:"kind_field,omitempty"`
-	SeverityField string `json:"severity_field,omitempty"`
-	TimeField     string `json:"time_field,omitempty"`
+	Type             string `json:"type"`
+	ContentField     string `json:"content_field,omitempty"`
+	KindField        string `json:"kind_field,omitempty"`
+	SeverityField    string `json:"severity_field,omitempty"`
+	TimeField        string `json:"time_field,omitempty"`
+	AttachmentsField string `json:"attachments_field,omitempty"`
 }
 
 type FilterSpec struct {
@@ -408,6 +414,9 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 	}
 	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
 	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
+	if len(spec.Observation.Attachments) > 0 {
+		return Spec{}, fmt.Errorf("command source cannot set observation.attachments; use parser.attachments_field")
+	}
 	if spec.Observation.Kind != "" {
 		spec.Defaults.Kind = spec.Observation.Kind
 	}
@@ -430,6 +439,10 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 		case ParserText, ParserJSONL:
 		default:
 			return Spec{}, fmt.Errorf("parser.type must be text or jsonl, got %q", parserType)
+		}
+		spec.Source.Parser.AttachmentsField = strings.TrimSpace(spec.Source.Parser.AttachmentsField)
+		if spec.Source.Parser.AttachmentsField != "" && parserType != ParserJSONL {
+			return Spec{}, fmt.Errorf("parser.attachments_field requires parser.type jsonl")
 		}
 	}
 	if spec.Source.Batch.IntervalSeconds < MinBatchIntervalSeconds || spec.Source.Batch.IntervalSeconds > MaxBatchIntervalSeconds {
@@ -480,6 +493,11 @@ func validateScheduleSpec(spec Spec) (Spec, error) {
 	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
 	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
 	spec.Observation.Content = strings.TrimSpace(spec.Observation.Content)
+	var err error
+	spec.Observation.Attachments, err = normalizeAttachments(spec.Observation.Attachments)
+	if err != nil {
+		return Spec{}, err
+	}
 	if spec.Observation.Kind == "" {
 		spec.Observation.Kind = DefaultScheduleKind
 	}
@@ -758,6 +776,29 @@ func cloneParserSpec(in *ParserSpec) *ParserSpec {
 	}
 	out := *in
 	return &out
+}
+
+func normalizeAttachments(in []AttachmentSpec) ([]AttachmentSpec, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	out := make([]AttachmentSpec, 0, len(in))
+	for i, ref := range in {
+		ref.Path = strings.TrimSpace(ref.Path)
+		ref.MediaType = strings.TrimSpace(ref.MediaType)
+		if ref.Path == "" {
+			return nil, fmt.Errorf("observation.attachments[%d].path is required", i)
+		}
+		out = append(out, ref)
+	}
+	return out, nil
+}
+
+func isZeroObservationSpec(spec ObservationSpec) bool {
+	return spec.Kind == "" &&
+		spec.Severity == "" &&
+		spec.Content == "" &&
+		len(spec.Attachments) == 0
 }
 
 func validID(id string) bool {

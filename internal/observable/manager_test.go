@@ -3,11 +3,13 @@ package observable_test
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/sandbox"
@@ -15,6 +17,48 @@ import (
 
 const asyncWaitTimeout = 5 * time.Second
 const quietBatchWaitTimeout = 8 * time.Second
+
+func TestManager_RecordObservationSnapshotsAttachments(t *testing.T) {
+	dir := t.TempDir()
+	writeObservableConfig(t, dir, helperSpec("snapshot", "json-once"))
+	sourcePath := filepath.Join(dir, ".juex", "inbox", "event.json")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, []byte(`{"kind":"deploy"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := mgr.RecordObservation(observable.ObservationRecord{
+		ObservableID: "snapshot",
+		Kind:         "deploy",
+		Severity:     "info",
+		Content:      "deploy event",
+		Attachments: []eventmedia.AttachmentRef{{
+			Path:      ".juex/inbox/event.json",
+			MediaType: "application/json",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Attachments) != 1 || !strings.HasPrefix(record.Attachments[0].Path, ".juex/artifacts/event-media/") {
+		t.Fatalf("record attachments = %+v, want durable artifact", record.Attachments)
+	}
+	if report := eventmedia.ValidateAttachments(record.Attachments, eventmedia.ValidationOptions{WorkDir: dir}); len(report.Errors) != 0 || len(report.Valid) != 1 {
+		t.Fatalf("stored attachment validation = %+v", report)
+	}
+}
 
 func TestManager_StartAllCapturesAndDeliversObservation(t *testing.T) {
 	dir := t.TempDir()

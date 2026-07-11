@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
+	"github.com/juex-ai/juex/internal/eventmedia"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -307,6 +309,41 @@ func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 	t.Chdir(otherDir)
 
 	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{ArtifactPath: artifactPath, MediaType: "image/png"})
+	if !ok || mediaType != "image/png" || encoded == "" {
+		t.Fatalf("readImageBase64 = encoded:%q mediaType:%q ok:%t", encoded, mediaType, ok)
+	}
+}
+
+func TestReadImageBase64ReadsStoredEventAttachmentAfterSourceRemoval(t *testing.T) {
+	workDir := t.TempDir()
+	sourcePath := filepath.Join(workDir, ".juex", "inbox", "event.png")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourcePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := eventmedia.ValidateAttachments([]eventmedia.AttachmentRef{{
+		Path:      ".juex/inbox/event.png",
+		MediaType: "image/png",
+	}}, eventmedia.ValidationOptions{WorkDir: workDir})
+	if len(report.Valid) != 1 || len(report.Errors) != 0 {
+		t.Fatalf("event attachment report = %+v", report)
+	}
+	attachment := report.Valid[0]
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{
+		ArtifactPath:  attachment.ArtifactPath,
+		MediaType:     attachment.MediaType,
+		SHA256:        attachment.SHA256,
+		OriginalBytes: attachment.OriginalBytes,
+	})
 	if !ok || mediaType != "image/png" || encoded == "" {
 		t.Fatalf("readImageBase64 = encoded:%q mediaType:%q ok:%t", encoded, mediaType, ok)
 	}

@@ -27,6 +27,7 @@
   "observation.queued",
   "observation.delivered",
   "observation.dropped",
+  "observation.errored",
   "context.compact.skipped",
   "context.compact.started",
   "context.compact.completed",

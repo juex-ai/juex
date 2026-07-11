@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -621,8 +622,10 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if eventType == "" {
 		eventType = "notification"
 	}
-	msg := llm.TextMessage(llm.RoleUser, formatMCPNotificationText(n, eventType))
-	msg.Kind = llm.MessageKindMCPEvent
+	msg, err := mcpNotificationMessage(n, eventType, attachmentOptions{WorkDir: a.cfg.WorkDir})
+	if err != nil {
+		return err
+	}
 	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
 		ID:  mcpNotificationPendingInputID(n, eventType),
 		TTL: a.Engine.ExternalEventTTL,
@@ -631,7 +634,7 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
 		return err
 	}
-	_, err := a.Engine.TurnMessage(ctx, msg)
+	_, err = a.Engine.TurnMessage(ctx, msg)
 	return err
 }
 
@@ -649,9 +652,12 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 		return observable.DeliveryOutcome{}, ctx.Err()
 	default:
 	}
-	msg, err := observationMessage(record)
+	msg, attachmentErrors, err := buildObservationMessage(record, attachmentOptions{WorkDir: a.cfg.WorkDir})
 	if err != nil {
 		return observable.DeliveryOutcome{}, err
+	}
+	if len(attachmentErrors) > 0 {
+		a.markObservationAttachmentError(record, attachmentErrors)
 	}
 	pendingID := observationPendingInputID(record)
 	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
@@ -676,36 +682,222 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	return observable.DeliveryOutcome{}, err
 }
 
-func observationMessage(record observable.ObservationRecord) (llm.Message, error) {
-	body, err := json.Marshal(struct {
-		Kind            string `json:"kind"`
-		ObservationID   string `json:"observation_id"`
-		ObservableID    string `json:"observable_id"`
-		Severity        string `json:"severity"`
-		ObservationKind string `json:"observation_kind"`
-		WindowStart     int64  `json:"window_start"`
-		WindowEnd       int64  `json:"window_end"`
-		Content         string `json:"content"`
-		Truncated       bool   `json:"truncated"`
-		ArtifactPath    string `json:"artifact_path,omitempty"`
-	}{
-		Kind:            llm.MessageKindObservation,
-		ObservationID:   record.ID,
-		ObservableID:    record.ObservableID,
-		Severity:        record.Severity,
-		ObservationKind: record.Kind,
-		WindowStart:     observationTimeMillis(record.WindowStart),
-		WindowEnd:       observationTimeMillis(record.WindowEnd),
-		Content:         record.Content,
-		Truncated:       record.Truncated,
-		ArtifactPath:    record.ArtifactPath,
-	})
-	if err != nil {
-		return llm.Message{}, err
+type attachmentOptions struct {
+	WorkDir string
+}
+
+func observationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, error) {
+	msg, _, err := buildObservationMessage(record, opts)
+	return msg, err
+}
+
+func buildObservationMessage(record observable.ObservationRecord, opts attachmentOptions) (llm.Message, []string, error) {
+	report := eventmedia.ValidateAttachments(record.Attachments, eventmedia.ValidationOptions{WorkDir: opts.WorkDir})
+	text := renderObservationText(record, report)
+	msg := eventMessageWithAttachments(llm.MessageKindObservation, text, report)
+	errors := append([]string(nil), record.AttachmentErrors...)
+	errors = append(errors, attachmentErrorMessages(report)...)
+	return msg, uniqueStrings(errors), nil
+}
+
+func mcpNotificationMessage(n mcp.Notification, eventType string, opts attachmentOptions) (llm.Message, error) {
+	refs, err := eventmedia.ExtractAttachmentRefs(n.Params["attachments"])
+	report := eventmedia.ValidateAttachments(refs, eventmedia.ValidationOptions{WorkDir: opts.WorkDir})
+	text := renderMCPNotificationText(n, eventType, report, err)
+	return eventMessageWithAttachments(llm.MessageKindMCPEvent, text, report), nil
+}
+
+func eventMessageWithAttachments(kind string, text string, report eventmedia.ValidationReport) llm.Message {
+	blocks := []llm.Block{{Type: llm.BlockText, Text: text}}
+	for _, attachment := range report.Valid {
+		if !eventmedia.IsImageMediaType(attachment.MediaType) {
+			continue
+		}
+		blocks = append(blocks, llm.Block{
+			Type: llm.BlockImage,
+			Media: &llm.MediaRef{
+				ArtifactPath:  attachment.ArtifactPath,
+				MediaType:     attachment.MediaType,
+				SHA256:        attachment.SHA256,
+				OriginalBytes: attachment.OriginalBytes,
+				Width:         attachment.Width,
+				Height:        attachment.Height,
+			},
+		})
 	}
-	msg := llm.TextMessage(llm.RoleUser, string(body))
-	msg.Kind = llm.MessageKindObservation
-	return msg, nil
+	return llm.Message{Role: llm.RoleUser, Kind: kind, Blocks: blocks}
+}
+
+func renderObservationText(record observable.ObservationRecord, report eventmedia.ValidationReport) string {
+	var sb strings.Builder
+	sb.WriteString("Observable observation\n")
+	fmt.Fprintf(&sb, "observation_id: %s\n", record.ID)
+	fmt.Fprintf(&sb, "observable_id: %s\n", record.ObservableID)
+	fmt.Fprintf(&sb, "kind: %s\n", record.Kind)
+	fmt.Fprintf(&sb, "severity: %s\n", record.Severity)
+	fmt.Fprintf(&sb, "window_start: %d\n", observationTimeMillis(record.WindowStart))
+	fmt.Fprintf(&sb, "window_end: %d\n", observationTimeMillis(record.WindowEnd))
+	if record.Truncated {
+		sb.WriteString("truncated: true\n")
+	}
+	if record.ArtifactPath != "" {
+		fmt.Fprintf(&sb, "artifact_path: %s\n", record.ArtifactPath)
+	}
+	sb.WriteString("content:\n")
+	sb.WriteString(record.Content)
+	if !strings.HasSuffix(record.Content, "\n") {
+		sb.WriteByte('\n')
+	}
+	writeAttachmentSummary(&sb, report)
+	if len(record.AttachmentErrors) > 0 {
+		sb.WriteString("stored_attachment_errors:\n")
+		for _, errText := range record.AttachmentErrors {
+			fmt.Fprintf(&sb, "- %s\n", errText)
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func renderMCPNotificationText(n mcp.Notification, eventType string, report eventmedia.ValidationReport, attachmentParseErr error) string {
+	var sb strings.Builder
+	sb.WriteString("MCP notification\n")
+	fmt.Fprintf(&sb, "server: %s\n", n.ServerName)
+	if n.Method != "" {
+		fmt.Fprintf(&sb, "method: %s\n", n.Method)
+	}
+	if eventType != "" {
+		fmt.Fprintf(&sb, "event_type: %s\n", eventType)
+	}
+	content := n.Content
+	if value, ok := n.Params["content"].(string); ok && value != "" {
+		content = value
+	}
+	if content != "" {
+		sb.WriteString("content:\n")
+		sb.WriteString(content)
+		if !strings.HasSuffix(content, "\n") {
+			sb.WriteByte('\n')
+		}
+	}
+	if meta, ok := n.Params["meta"].(map[string]any); ok && len(meta) > 0 {
+		sb.WriteString("meta:\n")
+		writeSortedScalarMap(&sb, meta)
+	}
+	extra := notificationExtraParams(n.Params)
+	if len(extra) > 0 {
+		sb.WriteString("params:\n")
+		writeSortedScalarMap(&sb, extra)
+	}
+	writeAttachmentSummary(&sb, report)
+	if attachmentParseErr != nil {
+		sb.WriteString("attachment_errors:\n")
+		fmt.Fprintf(&sb, "- %s\n", attachmentParseErr.Error())
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func writeAttachmentSummary(sb *strings.Builder, report eventmedia.ValidationReport) {
+	if len(report.Valid) > 0 {
+		sb.WriteString("attachments:\n")
+		for _, attachment := range report.Valid {
+			kind := "file"
+			if eventmedia.IsImageMediaType(attachment.MediaType) {
+				kind = "image"
+			}
+			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, attachment.Ref.Path, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
+			if attachment.SHA256 != "" {
+				fmt.Fprintf(sb, ", sha256=%s", attachment.SHA256)
+			}
+			if attachment.Width > 0 && attachment.Height > 0 {
+				fmt.Fprintf(sb, ", %dx%d", attachment.Width, attachment.Height)
+			}
+			sb.WriteString(")\n")
+		}
+	}
+	if len(report.Errors) > 0 {
+		sb.WriteString("attachment_errors:\n")
+		for _, errInfo := range report.Errors {
+			if errInfo.Path != "" {
+				fmt.Fprintf(sb, "- %s: %s\n", errInfo.Path, errInfo.Error)
+			} else {
+				fmt.Fprintf(sb, "- %s\n", errInfo.Error)
+			}
+		}
+	}
+}
+
+func attachmentErrorMessages(report eventmedia.ValidationReport) []string {
+	if len(report.Errors) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(report.Errors))
+	for _, errInfo := range report.Errors {
+		if errInfo.Path != "" {
+			out = append(out, errInfo.Path+": "+errInfo.Error)
+		} else {
+			out = append(out, errInfo.Error)
+		}
+	}
+	return out
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func notificationExtraParams(params map[string]any) map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+	out := map[string]any{}
+	for key, value := range params {
+		switch key {
+		case "content", "meta", "attachments":
+			continue
+		default:
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func writeSortedScalarMap(sb *strings.Builder, values map[string]any) {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		fmt.Fprintf(sb, "%s: %s\n", key, renderScalar(values[key]))
+	}
+}
+
+func renderScalar(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		body, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(body)
+	}
 }
 
 func observationTimeMillis(value time.Time) int64 {
@@ -724,6 +916,29 @@ func (a *App) currentSessionID() string {
 		return ""
 	}
 	return a.Session.ID
+}
+
+func (a *App) markObservationAttachmentError(record observable.ObservationRecord, messages []string) {
+	if a == nil || len(messages) == 0 {
+		return
+	}
+	if a.obsv != nil {
+		if err := a.obsv.MarkObservationAttachmentError(record.ID, messages); err == nil {
+			return
+		}
+	}
+	record.AttachmentState = observable.ObservationAttachmentStateError
+	record.AttachmentErrors = append([]string(nil), messages...)
+	record.Error = strings.Join(messages, "; ")
+	if a.Bus != nil {
+		a.Bus.Emit(events.Event{
+			Type: observable.EventObservationErrored,
+			Payload: observable.ObservationEventPayload{
+				Observation: record,
+				Error:       record.Error,
+			},
+		})
+	}
 }
 
 func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string {
@@ -745,24 +960,6 @@ func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string 
 	}
 	sum := sha256.Sum256(body)
 	return "mcp-" + hex.EncodeToString(sum[:8])
-}
-
-func formatMCPNotificationText(n mcp.Notification, eventType string) string {
-	params := n.Params
-	if len(params) == 0 {
-		params = map[string]any{}
-		if n.Content != "" {
-			params["content"] = n.Content
-		}
-		if eventType != "" {
-			params["meta"] = map[string]any{"event_type": eventType}
-		}
-	}
-	body, err := json.MarshalIndent(params, "", "  ")
-	if err != nil {
-		body = []byte(n.Content)
-	}
-	return fmt.Sprintf("%s:%s:%s", n.ServerName, eventType, string(body))
 }
 
 func (a *App) TokenUsage() llm.Usage {

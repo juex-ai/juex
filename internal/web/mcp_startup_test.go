@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,7 +44,7 @@ func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
 	go func() { errCh <- srv.Run(ctx) }()
 	defer stopRunServer(t, cancel, errCh)
 
-	waitForMCPEventInSession(t, last.Dir, "alpha:message:{\n  \"content\": \"hello from mcp\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}")
+	waitForMCPEventInSession(t, last.Dir, "content:\nhello from mcp")
 	waitForSessionTextInSession(t, last.Dir, llm.RoleAssistant, "ack")
 	assertNoMCPEventInSession(t, older.Dir)
 }
@@ -60,8 +61,34 @@ func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
 	defer stopRunServer(t, cancel, errCh)
 
 	active := waitForActivePrimary(t, srv)
-	waitForMCPEventInSession(t, active.Dir, "alpha:message:{\n  \"content\": \"hello from mcp\",\n  \"meta\": {\n    \"event_type\": \"message\",\n    \"topic\": \"ops\"\n  }\n}")
+	waitForMCPEventInSession(t, active.Dir, "content:\nhello from mcp")
 	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
+}
+
+func TestServeMCPNotificationPreservesAttachmentImageBlock(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Addr = "127.0.0.1:0"
+	work := srv.opts.Cfg.WorkDir
+	relPath := ".juex/inbox/mcp-notification.png"
+	mustWriteWebTestPNG(t, filepath.Join(work, filepath.FromSlash(relPath)))
+	mustWriteWebFakeMCPConfigEnv(t, work, true, map[string]string{
+		"JUEX_WEB_FAKE_MCP_ATTACHMENT": relPath,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
+
+	active := waitForActivePrimary(t, srv)
+	artifactPath := waitForMCPImageBlockInSession(t, active.Dir, relPath)
+	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
+	if err := os.Remove(filepath.Join(work, filepath.FromSlash(relPath))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(artifactPath))); err != nil {
+		t.Fatalf("stored MCP event artifact unavailable after source removal: %v", err)
+	}
 }
 
 func TestRunServesHTTPBeforeDrainingStartupMCPNotifications(t *testing.T) {
@@ -228,13 +255,20 @@ func runWebFakeMCPServer() {
 				},
 			})
 			if os.Getenv("JUEX_WEB_FAKE_MCP_NOTIFY") == "1" {
+				params := map[string]any{
+					"content": "hello from mcp",
+					"meta":    map[string]any{"event_type": "message", "topic": "ops"},
+				}
+				if attachment := os.Getenv("JUEX_WEB_FAKE_MCP_ATTACHMENT"); attachment != "" {
+					params["attachments"] = []map[string]any{{
+						"path":       attachment,
+						"media_type": "image/png",
+					}}
+				}
 				_ = enc.Encode(map[string]any{
 					"jsonrpc": "2.0",
 					"method":  "notifications/claude/channel",
-					"params": map[string]any{
-						"content": "hello from mcp",
-						"meta":    map[string]any{"event_type": "message", "topic": "ops"},
-					},
+					"params":  params,
 				})
 			}
 		case "tools/call":
@@ -343,6 +377,24 @@ func waitForMCPEventInSession(t *testing.T, dir, want string) {
 	}, "MCP event "+want)
 }
 
+func waitForMCPImageBlockInSession(t *testing.T, dir, relPath string) string {
+	t.Helper()
+	var artifactPath string
+	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
+		if msg.Kind != llm.MessageKindMCPEvent || !strings.Contains(msg.FirstText(), relPath) {
+			return false
+		}
+		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockImage && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, ".juex/artifacts/event-media/") {
+				artifactPath = block.Media.ArtifactPath
+				return true
+			}
+		}
+		return false
+	}, "MCP image attachment "+relPath)
+	return artifactPath
+}
+
 func waitForSessionTextInSession(t *testing.T, dir string, role llm.Role, want string) {
 	t.Helper()
 	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
@@ -383,5 +435,19 @@ func assertNoMCPEventInSession(t *testing.T, dir string) {
 		if msg.Kind == llm.MessageKindMCPEvent {
 			t.Fatalf("unexpected MCP event in %s: %+v", dir, msg)
 		}
+	}
+}
+
+func mustWriteWebTestPNG(t *testing.T, path string) {
+	t.Helper()
+	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

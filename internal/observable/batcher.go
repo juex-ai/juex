@@ -5,30 +5,36 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/juex-ai/juex/internal/eventmedia"
 )
 
 type BatcherOptions struct {
-	RunID string
+	RunID   string
+	WorkDir string
 }
 
 type Batcher struct {
-	spec  Spec
-	store *Store
-	runID string
-	batch *activeBatch
+	spec    Spec
+	store   *Store
+	runID   string
+	workDir string
+	batch   *activeBatch
 }
 
 type activeBatch struct {
-	streams     []string
-	contents    []string
-	kind        string
-	severity    string
-	windowStart time.Time
-	windowEnd   time.Time
+	streams          []string
+	contents         []string
+	attachments      []eventmedia.AttachmentRef
+	attachmentErrors []string
+	kind             string
+	severity         string
+	windowStart      time.Time
+	windowEnd        time.Time
 }
 
 func NewBatcher(spec Spec, store *Store, opts BatcherOptions) *Batcher {
-	return &Batcher{spec: spec, store: store, runID: opts.RunID}
+	return &Batcher{spec: spec, store: store, runID: opts.RunID, workDir: opts.WorkDir}
 }
 
 func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
@@ -38,6 +44,9 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	if unit.ReceivedAt.IsZero() {
 		unit.ReceivedAt = time.Now().UTC()
 	}
+	storedAttachments, validationErrors := snapshotAttachmentRefs(b.workDir, unit.Attachments)
+	unit.Attachments = storedAttachments
+	unit.AttachmentErrors = append(unit.AttachmentErrors, validationErrors...)
 	var emitted []ObservationRecord
 	if b.batch != nil && !b.batch.windowStart.IsZero() && unit.ReceivedAt.Sub(b.batch.windowStart) >= time.Duration(b.spec.Batch.IntervalSeconds)*time.Second {
 		flushed, err := b.Flush("interval")
@@ -58,6 +67,8 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	}
 	b.batch.streams = append(b.batch.streams, unit.Stream)
 	b.batch.contents = append(b.batch.contents, unit.Content)
+	b.batch.attachments = append(b.batch.attachments, unit.Attachments...)
+	b.batch.attachmentErrors = append(b.batch.attachmentErrors, unit.AttachmentErrors...)
 	b.batch.windowEnd = unit.ReceivedAt
 	return emitted, nil
 }
@@ -84,16 +95,21 @@ func (b *Batcher) Flush(reason string) ([]ObservationRecord, error) {
 	full := strings.Join(current.contents, "\n")
 	originalChars := len([]rune(full))
 	record := ObservationRecord{
-		ObservableID:  b.spec.ID,
-		RunID:         b.runID,
-		Kind:          resolvedKind(current.kind),
-		Severity:      resolvedSeverity(current.severity),
-		Stream:        mergedStream(current.streams),
-		WindowStart:   current.windowStart,
-		WindowEnd:     current.windowEnd,
-		Content:       full,
-		OriginalChars: originalChars,
-		State:         ObservationStateRecorded,
+		ObservableID:     b.spec.ID,
+		RunID:            b.runID,
+		Kind:             resolvedKind(current.kind),
+		Severity:         resolvedSeverity(current.severity),
+		Stream:           mergedStream(current.streams),
+		WindowStart:      current.windowStart,
+		WindowEnd:        current.windowEnd,
+		Content:          full,
+		Attachments:      append([]eventmedia.AttachmentRef(nil), current.attachments...),
+		AttachmentErrors: append([]string(nil), current.attachmentErrors...),
+		OriginalChars:    originalChars,
+		State:            ObservationStateRecorded,
+	}
+	if len(record.AttachmentErrors) > 0 {
+		record.AttachmentState = ObservationAttachmentStateError
 	}
 	record.ID = BuildObservationID(record)
 	if originalChars > b.spec.Batch.MaxChars {
