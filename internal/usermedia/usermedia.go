@@ -169,26 +169,36 @@ func inspectFile(workDir, inputPath string, limits Limits) (FileInfo, string, []
 	if err != nil {
 		return FileInfo{}, "", nil, err
 	}
+	stat, err := os.Stat(resolvedPath)
+	if err != nil {
+		return FileInfo{}, "", nil, fmt.Errorf("user media: stat %q: %w", inputPath, err)
+	}
+	if !stat.Mode().IsRegular() {
+		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: path %q is not a regular file", inputPath))
+	}
+	if stat.Size() > limits.MaxBytes {
+		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: upload exceeds %d bytes", limits.MaxBytes))
+	}
 	f, err := os.Open(resolvedPath)
 	if err != nil {
 		return FileInfo{}, "", nil, fmt.Errorf("user media: open %q: %w", inputPath, err)
 	}
 	defer func() { _ = f.Close() }()
-	stat, err := f.Stat()
+	openedStat, err := f.Stat()
 	if err != nil {
 		return FileInfo{}, "", nil, fmt.Errorf("user media: stat %q: %w", inputPath, err)
 	}
-	if stat.IsDir() {
-		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: path %q is a directory", inputPath))
+	if !openedStat.Mode().IsRegular() {
+		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: path %q changed while opening", inputPath))
 	}
-	if stat.Mode().IsRegular() && stat.Size() > limits.MaxBytes {
+	if openedStat.Size() > limits.MaxBytes {
 		return FileInfo{}, "", nil, invalidInputError(fmt.Sprintf("user media: upload exceeds %d bytes", limits.MaxBytes))
 	}
 	data, err := readLimited(f, limits.MaxBytes)
 	if err != nil {
 		return FileInfo{}, "", nil, fmt.Errorf("user media: inspect %q: %w", inputPath, err)
 	}
-	info, ext, err := inspectImageData(resolvedPath, stat.Name(), data)
+	info, ext, err := inspectImageData(resolvedPath, openedStat.Name(), data)
 	if err != nil {
 		return FileInfo{}, "", nil, fmt.Errorf("user media: inspect %q: %w", inputPath, err)
 	}

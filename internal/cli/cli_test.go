@@ -583,6 +583,34 @@ func TestRunCmd_InvalidAttachmentDoesNotCreateSession(t *testing.T) {
 	}
 }
 
+func TestRunCmd_AttachedSlashDoesNotCreateSessionOrArtifact(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	writeCLITestPNG(t, filepath.Join(dir, "screen.png"))
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--new", "--json", "--attach", "screen.png", "/status"})
+	err := root.Execute()
+	var usage *usageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "slash commands cannot include attachments") {
+		t.Fatalf("attached slash error = %T: %v", err, err)
+	}
+	for _, path := range []string{
+		filepath.Join(dir, ".juex", "sessions"),
+		filepath.Join(dir, ".juex", "history.json"),
+		filepath.Join(dir, ".juex", "artifacts"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("attached slash created %s: %v", path, err)
+		}
+	}
+}
+
 func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer

@@ -170,6 +170,16 @@ execution is printed and the process exits with code 10.`,
 				return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: "pass --new/--side or --resume/--session, not both"},
 					"use 'juex sessions activate <id>' before the default run path", false)
 			}
+			if len(attachPaths) > 0 {
+				if _, handled, parseErr := app.ParseSlashCommand(prompt); handled || parseErr != nil {
+					message := "slash commands cannot include attachments"
+					if parseErr != nil {
+						message = parseErr.Error()
+					}
+					return emit(jsonOut, cmd.ErrOrStderr(), &usageError{msg: message},
+						"run the slash command and attachment turn separately", false)
+				}
+			}
 			preparedAttachments, err := usermedia.PrepareFiles(cfg.WorkDir, attachPaths, usermedia.Limits{})
 			if err != nil {
 				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)

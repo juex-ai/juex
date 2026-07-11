@@ -9,7 +9,9 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -151,6 +153,20 @@ func TestInspectFilesRejectsInvalidPathsAndCount(t *testing.T) {
 				t.Fatalf("errors.Is(%v, ErrInvalidInput) = %v, want %v", err, errors.Is(err, ErrInvalidInput), tc.wantInvalid)
 			}
 		})
+	}
+}
+
+func TestInspectFilesRejectsFIFOWithoutOpeningIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("named pipes use different filesystem semantics on Windows")
+	}
+	workDir := t.TempDir()
+	fifoPath := filepath.Join(workDir, "image.pipe")
+	if err := exec.Command("mkfifo", fifoPath).Run(); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	if _, err := InspectFiles(workDir, []string{"image.pipe"}, Limits{}); !errors.Is(err, ErrInvalidInput) || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("InspectFiles FIFO error = %v", err)
 	}
 }
 
