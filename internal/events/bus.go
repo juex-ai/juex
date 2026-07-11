@@ -19,6 +19,7 @@ type Event struct {
 	Timestamp time.Time `json:"ts"`
 	TurnID    string    `json:"turn_id,omitempty"`
 	Payload   any       `json:"payload,omitempty"`
+	Transient bool      `json:"-"` // bypasses journals while remaining eligible for live delivery
 }
 
 type Handler func(Event)

@@ -424,7 +424,7 @@ func TestSession_BusSubscription(t *testing.T) {
 	}
 }
 
-func TestSession_BusSubscriptionSkipsLLMOutputDelta(t *testing.T) {
+func TestSession_BusSubscriptionSkipsTransientEvents(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)
 	if err != nil {
@@ -434,7 +434,7 @@ func TestSession_BusSubscriptionSkipsLLMOutputDelta(t *testing.T) {
 	bus := events.NewBus()
 	s.SubscribeBus(bus)
 
-	bus.Emit(events.Event{Type: "llm.output_delta", Payload: map[string]any{
+	bus.Emit(events.Event{Type: "llm.output_delta", Transient: true, Payload: map[string]any{
 		"iter": 0,
 		"kind": "text",
 		"text": "live only",

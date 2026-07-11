@@ -32,7 +32,7 @@ func newCodexResponsesWebsocketTransport(profile ProviderProfile, httpClient *ht
 	return &codexResponsesWebsocketTransport{profile: profile, httpClient: httpClient}
 }
 
-func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
+func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (*responses.Response, error) {
 	payload, err := codexResponsesWebsocketPayload(params)
 	if err != nil {
 		return nil, err
@@ -56,9 +56,18 @@ func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params 
 		return nil, fmt.Errorf("codex websocket send request: %w", err)
 	}
 
-	resp, err := readCodexResponsesWebsocket(ctx, conn)
+	idleTimeout := streamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+	resp, err := readCodexResponsesWebsocket(streamCtx, conn, codexResponsesStreamOptions{
+		OnDelta:   opts.OnDelta,
+		ResetIdle: resetIdle,
+	})
+	stopIdle()
 	if err != nil {
 		t.closeLocked()
+		if idleExpired() {
+			return nil, fmt.Errorf("codex websocket idle timeout after %s: %w", idleTimeout, err)
+		}
 		return nil, err
 	}
 	if t.profile.Compat.CodexTransport == CodexTransportWebSocket {
@@ -238,7 +247,7 @@ func codexResponsesWebsocketHeaders(profile ProviderProfile) http.Header {
 	return headers
 }
 
-func readCodexResponsesWebsocket(ctx context.Context, conn *websocket.Conn) (*responses.Response, error) {
+func readCodexResponsesWebsocket(ctx context.Context, conn *websocket.Conn, opts codexResponsesStreamOptions) (*responses.Response, error) {
 	var (
 		finalResp responses.Response
 		hasFinal  bool
@@ -252,6 +261,9 @@ func readCodexResponsesWebsocket(ctx context.Context, conn *websocket.Conn) (*re
 		if messageType != websocket.MessageText {
 			return nil, fmt.Errorf("unexpected binary websocket event")
 		}
+		if opts.ResetIdle != nil {
+			opts.ResetIdle()
+		}
 		if err := codexWrappedWebsocketError(data); err != nil {
 			return nil, err
 		}
@@ -259,6 +271,7 @@ func readCodexResponsesWebsocket(ctx context.Context, conn *websocket.Conn) (*re
 		if err := json.Unmarshal(data, &event); err != nil {
 			continue
 		}
+		emitResponsesStreamDelta(opts.OnDelta, event)
 		switch event.Type {
 		case "error":
 			return nil, fmt.Errorf("codex websocket error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON()))

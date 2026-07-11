@@ -47,6 +47,16 @@ func testProfile(t testing.TB, cfg Config) ProviderProfile {
 	return profile
 }
 
+func testBlockingProfile(t testing.TB, cfg Config) ProviderProfile {
+	t.Helper()
+	return testProfile(t, blockingConfig(cfg))
+}
+
+func blockingConfig(cfg Config) Config {
+	cfg.Capabilities.Streaming = boolPtr(false)
+	return cfg
+}
+
 // The SDK clients accept option.WithBaseURL, so we point them at httptest
 // servers and assert on the wire payload + the way the canonical types come
 // back. This is end-to-end coverage of the provider adapter, but without
@@ -666,7 +676,7 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{
+	p := NewOpenAI(testBlockingProfile(t, Config{
 		Protocol: string(ProtocolOpenAIChat),
 		BaseURL:  srv.URL,
 		APIKey:   "test-key",
@@ -699,6 +709,70 @@ func TestOpenAI_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAI_StreamsReasoningTextAndUsage(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"id":"cmpl_1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"plan "},"finish_reason":null}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"id":"cmpl_1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hel"},"finish_reason":null}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"id":"cmpl_1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"lo","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"path\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"id":"cmpl_1","object":"chat.completion.chunk","created":1,"model":"m","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":4}}}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
+	var deltas []StreamDelta
+	resp, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		OnDelta: func(delta StreamDelta) { deltas = append(deltas, delta) },
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	streamOptions, _ := capturedBody["stream_options"].(map[string]any)
+	if capturedBody["stream"] != true || streamOptions["include_usage"] != true {
+		t.Fatalf("stream request = %+v", capturedBody)
+	}
+	wantDeltas := []StreamDelta{
+		{Kind: "reasoning", Index: 0, Text: "plan "},
+		{Kind: "text", Index: 0, Text: "hel"},
+		{Kind: "text", Index: 0, Text: "lo"},
+	}
+	if !slices.Equal(deltas, wantDeltas) {
+		t.Fatalf("deltas = %+v, want %+v", deltas, wantDeltas)
+	}
+	if resp.Message.FirstText() != "hello" || resp.StopReason != StopToolUse {
+		t.Fatalf("response = %+v", resp)
+	}
+	if calls := resp.Message.ToolCalls(); len(calls) != 1 || calls[0].ToolName != "read" || calls[0].Input["path"] != "x" {
+		t.Fatalf("tool calls = %+v", calls)
+	}
+	if len(resp.Message.Blocks) < 2 || resp.Message.Blocks[0].Type != BlockReasoning || resp.Message.Blocks[0].Text != "plan " {
+		t.Fatalf("reasoning response = %+v", resp.Message.Blocks)
+	}
+	if resp.Usage.InputTokens != 9 || resp.Usage.OutputTokens != 3 || resp.Usage.CachedInputTokens != 4 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+}
+
+func TestOpenAI_StreamIdleTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
+	_, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{StreamIdleTimeout: 20 * time.Millisecond})
+	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("err = %v, want stream idle timeout", err)
+	}
+}
+
 func TestOpenAI_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -709,7 +783,7 @@ func TestOpenAI_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{
+	p := NewOpenAI(testBlockingProfile(t, Config{
 		Protocol: string(ProtocolOpenAIChat),
 		BaseURL:  srv.URL,
 		APIKey:   "k",
@@ -745,7 +819,7 @@ func TestOpenAI_ReplaysNoArgumentToolUseAsEmptyObject(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{
+	p := NewOpenAI(testBlockingProfile(t, Config{
 		Protocol: string(ProtocolOpenAIChat),
 		BaseURL:  srv.URL,
 		APIKey:   "k",
@@ -807,7 +881,7 @@ func TestProviders_RetryPolicy(t *testing.T) {
 		{
 			name: "openai",
 			provider: func(baseURL string) Provider {
-				return NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: baseURL, APIKey: "k", Model: "m"}), nil)
+				return NewOpenAI(testBlockingProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: baseURL, APIKey: "k", Model: "m"}), nil)
 			},
 			serverErr:          `{"error":{"message":"temporary server error","type":"server_error"}}`,
 			badReqErr:          `{"error":{"message":"bad request","type":"invalid_request_error"}}`,
@@ -1159,7 +1233,7 @@ func TestOpenAICodexResponses_EmitsOutputTextDeltas(t *testing.T) {
 			Request: r,
 		}, nil
 	})}
-	p := NewOpenAICodexResponses(Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}, client)
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
 	withOpts := p.(ProviderWithOptions)
 	var deltas []StreamDelta
 
@@ -1208,7 +1282,7 @@ func TestOpenAI_CompactsEmptyHistoryMessages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
+	p := NewOpenAI(testBlockingProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	hist := []Message{
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{}},
@@ -1243,7 +1317,7 @@ func TestOpenAI_ReplaysReasoningOnlyAssistantWithStringContent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
+	p := NewOpenAI(testBlockingProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	hist := []Message{
 		TextMessage(RoleUser, "hello"),
 		{Role: RoleAssistant, Blocks: []Block{{Type: BlockReasoning, Text: "thought"}}},
@@ -1281,7 +1355,7 @@ func TestOpenAI_ToolResultRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
+	p := NewOpenAI(testBlockingProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 
 	hist := []Message{
 		TextMessage(RoleUser, "do it"),
@@ -1326,7 +1400,7 @@ func TestOpenAI_ProjectsUserAndToolResultImages(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{
+	p := NewOpenAI(testBlockingProfile(t, Config{
 		Protocol:     string(ProtocolOpenAIChat),
 		BaseURL:      srv.URL,
 		APIKey:       "k",
@@ -1486,7 +1560,7 @@ func TestOpenAI_ThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{
+	p := NewOpenAI(testBlockingProfile(t, Config{
 		Protocol:       string(ProtocolOpenAIChat),
 		BaseURL:        srv.URL,
 		APIKey:         "k",
@@ -1511,7 +1585,7 @@ func TestOpenAI_DeepSeekPresetEnablesThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{
+	p := NewOpenAI(testBlockingProfile(t, Config{
 		ID:             "deepseek",
 		BaseURL:        srv.URL,
 		APIKey:         "k",
@@ -1536,7 +1610,7 @@ func TestOpenAI_NoThinkingEffort(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
+	p := NewOpenAI(testBlockingProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	if _, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
@@ -1555,7 +1629,7 @@ func TestOpenAI_CompleteOptionsUsesOneMaxTokenField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
+	p := NewOpenAI(testBlockingProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	withOpts, ok := p.(ProviderWithOptions)
 	if !ok {
 		t.Fatal("openai provider does not implement ProviderWithOptions")
@@ -1588,7 +1662,7 @@ func TestOpenAI_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedTokens(t *test
 	}))
 	defer srv.Close()
 
-	p, err := New(Config{ID: "openai-chat-test", Protocol: "openai/chat", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	p, err := New(blockingConfig(Config{ID: "openai-chat-test", Protocol: "openai/chat", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1617,7 +1691,7 @@ func TestOpenAI_CapabilityGateOmitsUnsupportedParams(t *testing.T) {
 	defer srv.Close()
 
 	disabled := false
-	p := NewOpenAI(testProfile(t, Config{
+	p := NewOpenAI(testBlockingProfile(t, Config{
 		Protocol:       string(ProtocolOpenAIChat),
 		BaseURL:        srv.URL,
 		APIKey:         "k",
@@ -1684,7 +1758,7 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(Config{
+	p, err := New(blockingConfig(Config{
 		ID:             "openai",
 		Protocol:       "openai/responses",
 		BaseURL:        srv.URL,
@@ -1693,7 +1767,7 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 		ThinkingEffort: "low",
 		Headers:        map[string]string{"X-Juex-Test": "yes"},
 		Query:          map[string]string{"trace": "1"},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1748,6 +1822,65 @@ func TestOpenAIResponses_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponses_StreamsReasoningAndTextDeltas(t *testing.T) {
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &capturedBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"plan "}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"hel"}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"lo"}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"plan"}]},{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello","annotations":[]}]}],"usage":{"input_tokens":7,"output_tokens":2,"total_tokens":9}}}`+"\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltas []StreamDelta
+	resp, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		OnDelta: func(delta StreamDelta) { deltas = append(deltas, delta) },
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	if capturedBody["stream"] != true {
+		t.Fatalf("stream request = %+v", capturedBody)
+	}
+	wantDeltas := []StreamDelta{
+		{Kind: "reasoning", Index: 0, Text: "plan "},
+		{Kind: "text", Index: 1, Text: "hel"},
+		{Kind: "text", Index: 1, Text: "lo"},
+	}
+	if !slices.Equal(deltas, wantDeltas) {
+		t.Fatalf("deltas = %+v, want %+v", deltas, wantDeltas)
+	}
+	if resp.Message.FirstText() != "hello" || resp.Usage.InputTokens != 7 || resp.Usage.OutputTokens != 2 {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+func TestOpenAIResponses_StreamIdleTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{StreamIdleTimeout: 20 * time.Millisecond})
+	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("err = %v, want stream idle timeout", err)
+	}
+}
+
 func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing.T) {
 	media := testImageMedia(t)
 	var capturedBody map[string]any
@@ -1763,14 +1896,14 @@ func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing
 	}))
 	defer srv.Close()
 
-	p, err := New(Config{
+	p, err := New(blockingConfig(Config{
 		ID:           "openai",
 		Protocol:     "openai/responses",
 		BaseURL:      srv.URL,
 		APIKey:       "k",
 		Model:        "gpt-test",
 		Capabilities: CapabilityOverrides{Vision: boolPtr(true)},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1826,13 +1959,13 @@ func TestOpenAIResponses_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(Config{
+	p, err := New(blockingConfig(Config{
 		ID:       "openai",
 		Protocol: "openai/responses",
 		BaseURL:  srv.URL,
 		APIKey:   "k",
 		Model:    "gpt-test",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1864,7 +1997,7 @@ func TestOpenAIResponses_CompleteOptionsSendsPromptCacheKeyAndRecordsCachedToken
 	}))
 	defer srv.Close()
 
-	p, err := New(Config{ID: "openai", Protocol: "openai/responses", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	p, err := New(blockingConfig(Config{ID: "openai", Protocol: "openai/responses", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1896,13 +2029,13 @@ func TestOpenAIResponses_ReplaysReasoningWithEmptySummary(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p, err := New(Config{
+	p, err := New(blockingConfig(Config{
 		ID:       "openai",
 		Protocol: "openai/responses",
 		BaseURL:  srv.URL,
 		APIKey:   "k",
 		Model:    "gpt-test",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2226,6 +2359,91 @@ func TestOpenAICodexResponses_WebsocketCachedSendsCodexFrame(t *testing.T) {
 	input, _ := captured.frame["input"].([]any)
 	if len(input) != 1 {
 		t.Fatalf("input = %+v", captured.frame["input"])
+	}
+}
+
+func TestOpenAICodexResponses_WebsocketEmitsDeltas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if _, _, err := conn.Read(ctx); err != nil {
+			return
+		}
+		for _, event := range [][]byte{
+			[]byte(`{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"plan "}`),
+			[]byte(`{"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"ok"}`),
+			codexCompletedWebsocketEvent("resp_1", "ok"),
+		} {
+			if err := conn.Write(ctx, websocket.MessageText, event); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:      "openai-codex",
+		BaseURL: srv.URL,
+		APIKey:  "codex-token",
+		Model:   "gpt-test",
+		Compat:  CompatOptions{CodexTransport: CodexTransportWebSocket},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deltas []StreamDelta
+	resp, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		OnDelta: func(delta StreamDelta) { deltas = append(deltas, delta) },
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	want := []StreamDelta{
+		{Kind: "reasoning", Index: 0, Text: "plan "},
+		{Kind: "text", Index: 1, Text: "ok"},
+	}
+	if !slices.Equal(deltas, want) {
+		t.Fatalf("deltas = %+v, want %+v", deltas, want)
+	}
+	if resp.Message.FirstText() != "ok" {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+func TestOpenAICodexResponses_WebsocketIdleTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, _, _ = conn.Read(ctx)
+		time.Sleep(100 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{
+		ID:      "openai-codex",
+		BaseURL: srv.URL,
+		APIKey:  "codex-token",
+		Model:   "gpt-test",
+		Compat:  CompatOptions{CodexTransport: CodexTransportWebSocket},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		StreamIdleTimeout: 20 * time.Millisecond,
+	})
+	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("err = %v, want websocket idle timeout", err)
 	}
 }
 

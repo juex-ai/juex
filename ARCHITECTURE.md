@@ -290,9 +290,18 @@ type Provider interface {
 }
 
 type CompleteOptions struct {
-    Purpose         string
-    MaxOutputTokens int
-    CachePolicy     CachePolicy
+    Purpose           string
+    MaxOutputTokens   int
+    CachePolicy       CachePolicy
+    RetryObserver     func(ProviderRetryDiagnostic)
+    OnDelta           func(StreamDelta)
+    StreamIdleTimeout time.Duration
+}
+
+type StreamDelta struct {
+    Kind  string // "text" | "reasoning"
+    Index int
+    Text  string
 }
 
 type CachePolicy struct {
@@ -327,6 +336,16 @@ LLM package owns concrete provider construction through `llm.NewProvider`.
 `internal/providerreadiness` consumes those resolved values for onboarding and
 diagnostic checks, including selected-runtime validation, credential
 classification, and optional provider hello probes.
+
+Profiles with the streaming capability use their protocol's streaming
+transport for Anthropic Messages, OpenAI Chat, OpenAI Responses, and Codex
+Responses over SSE or WebSocket. Adapters emit provider-neutral text and
+reasoning fragments through `CompleteOptions.OnDelta`, while the returned
+`Response` remains the canonical completed result. Every streaming transport
+uses the shared idle watchdog (90 seconds by default); callers may override or
+disable it with `StreamIdleTimeout`. Setting
+`providers[].capabilities.streaming: false` keeps the blocking request path for
+compatible endpoints.
 
 SDK types remain confined to adapter files. `anthropic.go` wraps
 `anthropic-sdk-go`; `openai.go` wraps OpenAI Chat Completions and
@@ -561,9 +580,14 @@ func (s *DurableSink) AddDelivery(d Delivery) func()
 ```
 
 Standard event families include `turn.started/completed/errored`,
-`llm.requested/responded`, `tool.requested/output_delta/completed/errored`,
+`llm.requested/output_delta/responded`,
+`tool.requested/output_delta/completed/errored`,
 `transcript.repaired`, `pending_input.*`, `context.compact.*`, and
 `context.projection.applied`.
+`llm.output_delta` is a live-only projection event and is not appended to the
+session journal. CLI and browser subscribers may render it provisionally; the
+following durable `llm.responded` event is authoritative and replaces any
+provisional text or reasoning blocks.
 `llm.responded` includes the assistant message's ordered `blocks` plus summary
 fields (`text`, `thinking`, `tool_calls`) for older consumers.
 The live tool event family is owned by `internal/toolevents`: event name
@@ -578,8 +602,9 @@ Durable browser-visible runtime facts flow through `events.DurableSink`.
 journal adapter. The sink normalizes each event once, appends it to
 `events.jsonl`, then publishes the committed event to registered live delivery
 adapters such as the web broadcaster. If journal append fails, live delivery is
-skipped. The public SSE cursor remains the event ID; replay order is the JSONL
-line order after that ID.
+skipped. Events marked `Transient` bypass the journal and are delivered only to
+current subscribers; `llm.output_delta` uses this path. The public SSE cursor
+remains the event ID; replay order is the JSONL line order after that ID.
 
 ### 3.4 Memory
 

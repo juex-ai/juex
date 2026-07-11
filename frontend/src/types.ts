@@ -8,6 +8,9 @@ export type BlockType = "text" | "image" | "reasoning" | "tool_use" | "tool_resu
 export interface BlockBase {
   type: BlockType;
   artifact?: ContextArtifactProjection;
+  // UI-local key for provisional provider stream blocks. The final
+  // llm.responded payload replaces these blocks with canonical history data.
+  stream_index?: number;
 }
 
 export interface TextBlock extends BlockBase {

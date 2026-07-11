@@ -90,12 +90,12 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 
 	switch p.transport {
 	case CodexTransportAuto:
-		resp, err = p.ws.Complete(ctx, params)
+		resp, err = p.ws.Complete(ctx, params, opts)
 		if err != nil {
 			resp, err = p.completeSSE(ctx, params, opts)
 		}
 	case CodexTransportWebSocket, CodexTransportWebSocketCached:
-		resp, err = p.ws.Complete(ctx, params)
+		resp, err = p.ws.Complete(ctx, params, opts)
 	case CodexTransportSSE:
 		resp, err = p.completeSSE(ctx, params, opts)
 	default:
@@ -201,6 +201,7 @@ func readCodexResponsesStream(stream codexResponsesStream, opts codexResponsesSt
 			opts.ResetIdle()
 		}
 		event := stream.Current()
+		emitResponsesStreamDelta(opts.OnDelta, event)
 		switch event.Type {
 		case "error":
 			return nil, fmt.Errorf("codex error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON()))
@@ -209,13 +210,6 @@ func readCodexResponsesStream(stream codexResponsesStream, opts codexResponsesSt
 				return nil, fmt.Errorf("%s", msg)
 			}
 			return nil, fmt.Errorf("codex response failed")
-		case "response.output_text.delta":
-			if opts.OnDelta != nil {
-				delta := event.AsResponseOutputTextDelta()
-				if delta.Delta != "" {
-					opts.OnDelta(StreamDelta{Kind: "text", Index: int(delta.OutputIndex), Text: delta.Delta})
-				}
-			}
 		case "response.output_item.done":
 			items = append(items, event.Item)
 		case "response.done", "response.completed", "response.incomplete":

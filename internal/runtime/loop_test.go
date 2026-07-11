@@ -336,14 +336,14 @@ func TestTurn_EmitsLLMOutputDeltaEvents(t *testing.T) {
 	if !ok {
 		t.Fatalf("first payload type = %T", got[0].Payload)
 	}
-	if got[0].TurnID == "" || first.Iter != 0 || first.Model != "streaming-mock:model" || first.Kind != "reasoning" || first.Index != 0 || first.Text != "thinking " {
+	if got[0].TurnID == "" || !got[0].Transient || first.Iter != 0 || first.Model != "streaming-mock:model" || first.Kind != "reasoning" || first.Index != 0 || first.Text != "thinking " {
 		t.Fatalf("first delta event = %+v payload=%+v", got[0], first)
 	}
 	second, ok := got[1].Payload.(LLMOutputDeltaPayload)
 	if !ok {
 		t.Fatalf("second payload type = %T", got[1].Payload)
 	}
-	if second.Iter != 0 || second.Model != "streaming-mock:model" || second.Kind != "text" || second.Index != 1 || second.Text != "hello" {
+	if !got[1].Transient || second.Iter != 0 || second.Model != "streaming-mock:model" || second.Kind != "text" || second.Index != 1 || second.Text != "hello" {
 		t.Fatalf("second delta payload = %+v", second)
 	}
 }

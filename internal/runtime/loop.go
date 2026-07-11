@@ -419,7 +419,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		CachePolicy:     e.cachePolicyLocked(),
 		RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
 		OnDelta: func(delta llm.StreamDelta) {
-			e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Payload: LLMOutputDeltaPayload{
+			e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
 				Iter:  request.iter,
 				Model: model,
 				Kind:  delta.Kind,

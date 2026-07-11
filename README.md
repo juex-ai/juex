@@ -61,6 +61,12 @@ juex serve
 any model declared in the merged provider config, including providers from
 `~/.juex/juex.yaml` when the current directory has no local config.
 
+Anthropic, OpenAI, OpenAI-compatible Chat, DeepSeek, and Codex provider
+profiles stream assistant text and reasoning to verbose CLI and Web sessions
+while retaining the completed response as the persisted transcript. Set
+`providers[].capabilities.streaming: false` for an endpoint that only supports
+blocking responses.
+
 If you built from source without installing, use `./dist/juex` instead of
 `juex`.
 

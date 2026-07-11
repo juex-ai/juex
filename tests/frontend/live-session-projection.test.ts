@@ -138,6 +138,101 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
   ]);
 });
 
+test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final response", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-stream",
+    payload: { input: "stream" },
+  });
+  state = apply(state, {
+    id: "e2",
+    type: "llm.output_delta",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-stream",
+    payload: { iter: 0, model: "gpt-test", kind: "reasoning", index: 0, text: "plan " },
+  });
+  state = apply(state, {
+    id: "e3",
+    type: "llm.output_delta",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-stream",
+    payload: { iter: 0, model: "gpt-test", kind: "text", index: 1, text: "hel" },
+  });
+  state = apply(state, {
+    id: "e4",
+    type: "llm.output_delta",
+    ts: "2026-06-15T00:00:03Z",
+    turn_id: "turn-stream",
+    payload: { iter: 0, model: "gpt-test", kind: "text", index: 1, text: "lo" },
+  });
+
+  const streaming = state.messages[1];
+  assert.equal(streaming.pending, true);
+  assert.equal(streaming.model, "gpt-test");
+  assert.deepEqual(streaming.blocks, [
+    { type: "reasoning", text: "plan ", stream_index: 0 },
+    { type: "text", text: "hello", stream_index: 1 },
+  ]);
+
+  state = apply(state, {
+    id: "e5",
+    type: "llm.responded",
+    ts: "2026-06-15T00:00:04Z",
+    turn_id: "turn-stream",
+    payload: {
+      stop_reason: "end_turn",
+      usage: { input_tokens: 5, output_tokens: 2 },
+      blocks: [
+        { type: "reasoning", text: "plan final" },
+        { type: "text", text: "hello final" },
+      ],
+      text: "hello final",
+      thinking: "plan final",
+      tool_calls: [],
+      model: "gpt-test",
+    },
+  });
+
+  const reconciled = state.messages[1];
+  assert.equal(reconciled.pending, false);
+  assert.deepEqual(reconciled.blocks, [
+    { type: "reasoning", text: "plan final" },
+    { type: "text", text: "hello final" },
+  ]);
+});
+
+test("projectLiveSessionEvent starts a new streamed assistant for the next provider iteration", () => {
+  let state: LiveSessionProjection = {
+    ...createLiveSessionProjection(),
+    messages: [
+      {
+        role: "assistant",
+        turn_id: "turn-stream",
+        pending: false,
+        blocks: [{ type: "text", text: "calling tool" }],
+      },
+    ],
+  };
+
+  state = apply(state, {
+    id: "e-next",
+    type: "llm.output_delta",
+    ts: "2026-06-15T00:00:05Z",
+    turn_id: "turn-stream",
+    payload: { iter: 1, model: "gpt-test", kind: "text", index: 0, text: "final" },
+  });
+
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[0].pending, false);
+  assert.equal(state.messages[1].pending, true);
+  assert.deepEqual(state.messages[1].blocks, [
+    { type: "text", text: "final", stream_index: 0 },
+  ]);
+});
+
 test("projectLiveSessionEvent keeps streamed output paired when requested was missed", () => {
   let state = createLiveSessionProjection();
 
