@@ -9,7 +9,6 @@ import type {
   ToolUseBlock,
 } from "@/types";
 import type { ToolUIPartState } from "@/components/ai-elements/_local-types";
-import { mediaReferenceText } from "./media-reference.ts";
 
 export type ToolDisplayUnit = {
   kind: "tool";
@@ -24,6 +23,7 @@ export type ToolBatchDisplayUnit = {
 
 export type DisplayUnit =
   | { kind: "text"; block: TextBlock }
+  | { kind: "image"; block: ImageBlock }
   | { kind: "reasoning"; block: ReasoningBlock }
   | ToolDisplayUnit
   | ToolBatchDisplayUnit;
@@ -45,10 +45,6 @@ function normalizeTextBlock(block: TextBlock): TextBlock {
   // Older transcripts can contain {"type":"text"} for empty provider output.
   if (typeof block.text === "string") return block;
   return { ...block, text: "" };
-}
-
-function imageReferenceText(block: ImageBlock): string {
-  return mediaReferenceText("image", block.media);
 }
 
 // Walk all messages in order and produce the render groups. tool_use lives in
@@ -75,10 +71,7 @@ export function messagesToGroups(
           units.push({ kind: "text", block: normalizeTextBlock(block) });
           break;
         case "image":
-          units.push({
-            kind: "text",
-            block: { type: "text", text: imageReferenceText(block) },
-          });
+          units.push({ kind: "image", block });
           break;
         case "reasoning":
           units.push({ kind: "reasoning", block });

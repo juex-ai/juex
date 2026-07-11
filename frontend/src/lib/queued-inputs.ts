@@ -1,7 +1,10 @@
+import type { MediaRef } from "../types.ts";
+
 export type QueuedInput = {
   id: string;
   input: string;
   kind?: string;
+  attachments?: MediaRef[];
 };
 
 export type QueuedInputState = {
@@ -18,14 +21,18 @@ export function enqueueQueuedInput(
   input: string | undefined,
   kind: string | undefined,
   pendingCount: number,
+  attachments: MediaRef[] = [],
 ): QueuedInputState {
-  if (!input) return state;
+  const hasInput = Boolean(input) || attachments.length > 0;
+  if (!hasInput) return state;
   const current = state.items;
   let nextSeq = state.nextSeq;
   const makeItem = (existing?: QueuedInput): QueuedInput => ({
     id: existing?.id ?? `queued-${nextSeq++}`,
-    input,
+    input: input ?? "",
     kind,
+    attachments:
+      attachments.length > 0 ? attachments : (existing?.attachments ?? []),
   });
 
   if (pendingCount > 0) {
@@ -33,14 +40,34 @@ export function enqueueQueuedInput(
     if (current.length === pendingCount) {
       const index = pendingCount - 1;
       const existing = current[index];
-      if (existing?.input === input && existing.kind === kind) return state;
+      const nextItem = makeItem(existing);
+      if (
+        existing?.input === nextItem.input &&
+        existing.kind === nextItem.kind &&
+        sameAttachments(existing.attachments, nextItem.attachments ?? [])
+      ) {
+        return state;
+      }
       const next = [...current];
-      next[index] = makeItem(existing);
+      next[index] = nextItem;
       return { items: next, nextSeq };
     }
   }
 
   return { items: [...current, makeItem()], nextSeq };
+}
+
+function sameAttachments(a: MediaRef[] | undefined, b: MediaRef[]): boolean {
+  const left = a ?? [];
+  if (left.length !== b.length) return false;
+  return left.every((item, index) => {
+    const other = b[index];
+    return (
+      item.artifact_path === other.artifact_path &&
+      item.media_type === other.media_type &&
+      item.sha256 === other.sha256
+    );
+  });
 }
 
 export function drainQueuedInputs(

@@ -49,7 +49,7 @@ into `internal/web/dist/` for Go embedding.
 
 | Path | Purpose |
 | --- | --- |
-| `src/api.ts` | typed fetch helpers, session message pagination, workspace file preview URLs, and SSE subscription |
+| `src/api.ts` | typed fetch helpers, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
 | `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including transcript paging metadata and the browser event contract from `internal/web` |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
@@ -88,6 +88,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
 | `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
+| `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
 | `src/pages/Observables.tsx` | workspace Observable list, status, and start/stop/delete controls |
 | `src/pages/ObservableDetail.tsx` | Observable source details and recent Observation history |

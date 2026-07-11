@@ -100,6 +100,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/tree", s.handleFilesTree)
 	mux.HandleFunc("/api/files/content", s.handleFilesContent)
 	mux.HandleFunc("/api/files/raw", s.handleFilesRaw)
+	mux.HandleFunc("/api/media", s.handleMedia)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/observables", s.handleObservables)
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
@@ -130,6 +131,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleTurnStatus(w, r, id, strings.TrimPrefix(rest, "turns/"))
 	case rest == "turns" && r.Method == http.MethodPost:
 		s.handleStartTurn(w, r, id)
+	case rest == "attachments" && r.Method == http.MethodPost:
+		s.handleSessionAttachmentUpload(w, r, id)
 	case rest == "interrupt" && r.Method == http.MethodPost:
 		s.handleInterrupt(w, r, id)
 	case rest == "events" && r.Method == http.MethodGet:

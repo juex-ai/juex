@@ -11,13 +11,15 @@ export function composerSubmitAction({
   turnActive,
   compactActive,
   text,
+  attachmentCount = 0,
 }: {
   turnActive: boolean;
   compactActive: boolean;
   text: string;
+  attachmentCount?: number;
 }): ComposerSubmitAction {
-  const hasText = text.trim().length > 0;
-  if (!hasText) {
+  const hasInput = text.trim().length > 0 || attachmentCount > 0;
+  if (!hasInput) {
     if (turnActive) return "stop";
     if (compactActive) return "compacting";
     return "empty";

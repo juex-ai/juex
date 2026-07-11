@@ -502,7 +502,7 @@ export type PromptInputProps = Omit<
   // bytes
   maxFileSize?: number;
   onError?: (err: {
-    code: "max_files" | "max_file_size" | "accept";
+    code: "max_files" | "max_file_size" | "accept" | "submit_error";
     message: string;
   }) => void;
   onSubmit: (
@@ -885,8 +885,13 @@ export const PromptInput = ({
             if (usingProvider) {
               controller.textInput.clear();
             }
-          } catch {
+          } catch (error) {
             // Don't clear on error - user may want to retry
+            onError?.({
+              code: "submit_error",
+              message:
+                error instanceof Error ? error.message : "Submit failed.",
+            });
           }
         } else {
           // Sync function completed without throwing, clear inputs
@@ -895,11 +900,15 @@ export const PromptInput = ({
             controller.textInput.clear();
           }
         }
-      } catch {
+      } catch (error) {
         // Don't clear on error - user may want to retry
+        onError?.({
+          code: "submit_error",
+          message: error instanceof Error ? error.message : "Submit failed.",
+        });
       }
     },
-    [usingProvider, controller, files, onSubmit, clear]
+    [usingProvider, controller, files, onSubmit, clear, onError]
   );
 
   // Render with or without local provider

@@ -339,6 +339,7 @@ export interface ToolCompletedPayload {
   len: number;
   preview: string;
   result?: Record<string, unknown>;
+  media?: MediaRef;
 }
 
 export interface ToolOutputDeltaPayload {
@@ -367,6 +368,7 @@ export interface ToolErroredPayload {
   timed_out?: boolean;
   exit_code?: number;
   result?: Record<string, unknown>;
+  media?: MediaRef;
 }
 
 export interface HookStartedPayload {

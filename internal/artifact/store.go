@@ -21,6 +21,9 @@ const artifactPrefix = ".juex/artifacts"
 // ErrIntegrity reports that stored bytes do not match their durable reference.
 var ErrIntegrity = errors.New("artifact integrity check failed")
 
+// ErrTooLarge reports that artifact bytes exceed a caller's read limit.
+var ErrTooLarge = errors.New("artifact exceeds read limit")
+
 // Ref is a durable workspace-relative reference to stored artifact bytes.
 type Ref struct {
 	Path   string
@@ -115,6 +118,21 @@ func (s Store) PutContentAddressed(namespace, extension string, data []byte) (Re
 // Read returns verified artifact bytes. Empty SHA256 or Bytes values are
 // treated as unspecified for compatibility with older references.
 func (s Store) Read(ref Ref) ([]byte, error) {
+	return s.read(ref, 0)
+}
+
+// ReadLimit returns verified artifact bytes without reading more than maxBytes.
+func (s Store) ReadLimit(ref Ref, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		return nil, fmt.Errorf("artifact read limit must be positive")
+	}
+	if ref.Bytes > 0 && int64(ref.Bytes) > maxBytes {
+		return nil, fmt.Errorf("%w: %q bytes=%d limit=%d", ErrTooLarge, ref.Path, ref.Bytes, maxBytes)
+	}
+	return s.read(ref, maxBytes)
+}
+
+func (s Store) read(ref Ref, maxBytes int64) ([]byte, error) {
 	target, err := referenceTarget(ref.Path)
 	if err != nil {
 		return nil, err
@@ -124,9 +142,21 @@ func (s Store) Read(ref Ref) ([]byte, error) {
 		return nil, fmt.Errorf("artifact store open: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	data, err := root.ReadFile(filepath.FromSlash(target))
+	file, err := root.Open(filepath.FromSlash(target))
 	if err != nil {
 		return nil, fmt.Errorf("artifact read %q: %w", ref.Path, err)
+	}
+	defer func() { _ = file.Close() }()
+	var reader io.Reader = file
+	if maxBytes > 0 {
+		reader = io.LimitReader(file, maxBytes+1)
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("artifact read %q: %w", ref.Path, err)
+	}
+	if maxBytes > 0 && int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%w: %q limit=%d", ErrTooLarge, ref.Path, maxBytes)
 	}
 	if ref.Bytes > 0 && len(data) != ref.Bytes {
 		return nil, fmt.Errorf("%w: %q bytes=%d want=%d", ErrIntegrity, ref.Path, len(data), ref.Bytes)

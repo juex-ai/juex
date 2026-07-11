@@ -27,6 +27,7 @@ import { isCompactCommandInput } from "./compact-ui.ts";
 import type {
   ActiveContextSnapshot,
   BrowserEvent,
+  MediaRef,
   SessionShowResponse,
   SlashCommandResponse,
   StartTurnResponse,
@@ -70,7 +71,11 @@ export type SessionReadControllerPorts = {
     id: string,
     turnID: string,
   ) => Promise<TurnStatusResponse>;
-  startTurn: (id: string, prompt: string) => Promise<StartTurnResponse>;
+  startTurn: (
+    id: string,
+    prompt: string,
+    attachments?: MediaRef[],
+  ) => Promise<StartTurnResponse>;
   subscribeEvents: SessionReadSubscribeEvents;
   setTimeout?: (callback: () => void, ms: number) => TimerHandle;
   clearTimeout?: (handle: TimerHandle) => void;
@@ -272,15 +277,23 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     }
   }
 
-  async function submitPrompt(sessionID: string, prompt: string) {
+  async function submitPrompt(
+    sessionID: string,
+    prompt: string,
+    attachments: MediaRef[] = [],
+  ): Promise<boolean> {
     const compactCommand = isCompactCommandInput(prompt);
     updateReadState((prev) => projectPendingSubmit(prev, prompt));
     try {
-      const turn = await ports.startTurn(sessionID, prompt);
-      runSessionReadResult(projectStartTurnSucceeded(state, prompt, turn));
+      const turn = await ports.startTurn(sessionID, prompt, attachments);
+      runSessionReadResult(
+        projectStartTurnSucceeded(state, prompt, turn, attachments),
+      );
+      return true;
     } catch (error) {
       logError("startTurn failed", error);
       runSessionReadResult(projectStartTurnFailed(state, compactCommand, error));
+      return false;
     }
   }
 

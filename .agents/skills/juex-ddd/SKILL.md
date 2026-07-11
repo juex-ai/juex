@@ -69,6 +69,7 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Compaction | Policy-driven summary marker insertion that preserves active context while reducing token pressure | `internal/runtime` |
 | Context projection | Artifact-backed truncation/projection of large user input or tool result blocks before provider submission | `internal/runtime`, `internal/llm` |
 | Artifact | Durable workspace-local bytes addressed by a safe relative reference plus integrity metadata | `internal/artifact` |
+| User media | Session-scoped image input represented by a validated artifact reference | `internal/usermedia`, `internal/app` |
 | Event | Stable runtime fact emitted on the bus and persisted to `events.jsonl` | `internal/events`, `internal/session` |
 | Evaluation run | Deterministic or live-provider validation that records development evidence under `.tmp/reports/` | `tests/eval` |
 
@@ -92,6 +93,7 @@ Use this map to decide where behavior belongs:
 | `internal/prompt` | Prompt section assembly from AGENTS, skills, memory, runtime metadata, and shell profile | Provider wire formatting, session persistence |
 | `internal/config` | YAML/env/home/project resolution into explicit value objects and paths | Runtime turn behavior, provider request assembly, HTTP routing |
 | `internal/artifact` | Workspace-rooted artifact paths, atomic writes, content addressing, and integrity verification | Media encoding, provider projection, context preview policy, retention decisions |
+| `internal/usermedia` | Image upload limits, media validation, session namespace policy, and attachment reference verification | Artifact filesystem mechanics, HTTP multipart parsing, provider encoding |
 | `internal/app` | Process-level composition of config, provider, tools, MCP, prompt, session, runtime; application-level slash commands | HTTP request parsing, cobra flag grammar, provider SDK behavior |
 | `internal/cli` | Cobra command grammar, flag parsing, terminal/JSON presentation, CLI-specific error output | Runtime policy, session attachment policy, storage invariants |
 | `internal/web` | HTTP/SSE transport, browser-facing DTOs, active in-process session cache, turn cancellation presentation | Domain decisions shared with CLI, provider protocol, session persistence rules |

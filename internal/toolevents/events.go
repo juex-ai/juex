@@ -1,5 +1,7 @@
 package toolevents
 
+import "github.com/juex-ai/juex/internal/llm"
+
 const (
 	RequestedType   = "tool.requested"
 	OutputDeltaType = "tool.output_delta"
@@ -50,26 +52,28 @@ type OutputDeltaPayload struct {
 }
 
 type CompletedPayload struct {
-	Name           string `json:"name"`
-	ToolUseID      string `json:"tool_use_id"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	Len            int    `json:"len"`
-	Preview        string `json:"preview"`
-	Result         any    `json:"result,omitempty"`
+	Name           string        `json:"name"`
+	ToolUseID      string        `json:"tool_use_id"`
+	TimeoutSeconds int           `json:"timeout_seconds"`
+	Len            int           `json:"len"`
+	Preview        string        `json:"preview"`
+	Result         any           `json:"result,omitempty"`
+	Media          *llm.MediaRef `json:"media,omitempty"`
 }
 
 type ErroredPayload struct {
-	Name           string `json:"name"`
-	ToolUseID      string `json:"tool_use_id"`
-	Error          string `json:"error"`
-	ErrorKind      string `json:"error_kind,omitempty"`
-	RawCause       string `json:"raw_cause,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	Len            int    `json:"len,omitempty"`
-	Preview        string `json:"preview,omitempty"`
-	TimedOut       bool   `json:"timed_out,omitempty"`
-	ExitCode       *int   `json:"exit_code,omitempty"`
-	Result         any    `json:"result,omitempty"`
+	Name           string        `json:"name"`
+	ToolUseID      string        `json:"tool_use_id"`
+	Error          string        `json:"error"`
+	ErrorKind      string        `json:"error_kind,omitempty"`
+	RawCause       string        `json:"raw_cause,omitempty"`
+	TimeoutSeconds int           `json:"timeout_seconds"`
+	Len            int           `json:"len,omitempty"`
+	Preview        string        `json:"preview,omitempty"`
+	TimedOut       bool          `json:"timed_out,omitempty"`
+	ExitCode       *int          `json:"exit_code,omitempty"`
+	Result         any           `json:"result,omitempty"`
+	Media          *llm.MediaRef `json:"media,omitempty"`
 }
 
 type ErroredOptions struct {
@@ -82,6 +86,7 @@ type ErroredOptions struct {
 	TimedOut       bool
 	ExitCode       *int
 	Result         any
+	Media          *llm.MediaRef
 }
 
 func Requested(call ToolCallPayload) RequestedPayload {
@@ -141,5 +146,6 @@ func Errored(call ToolCallPayload, opts ErroredOptions) ErroredPayload {
 		TimedOut:       opts.TimedOut,
 		ExitCode:       opts.ExitCode,
 		Result:         opts.Result,
+		Media:          opts.Media,
 	}
 }

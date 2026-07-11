@@ -266,6 +266,35 @@ func TestTurn_PassesMaxOutputTokensToProvider(t *testing.T) {
 	}
 }
 
+func TestTurn_ReturnsImagePlaceholderForImageOnlyResponse(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{
+			Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+				{
+					Type: llm.BlockImage,
+					Media: &llm.MediaRef{
+						ArtifactPath:  ".juex/artifacts/media/s/chart.png",
+						MediaType:     "image/png",
+						OriginalBytes: 2048,
+						Width:         640,
+						Height:        480,
+					},
+				},
+			}},
+			StopReason: llm.StopEndTurn,
+		},
+	}}
+	eng, _ := newEngine(t, prov, false)
+
+	out, err := eng.Turn(context.Background(), "show chart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "[图片: chart.png (640x480, 2.0 KB)]" {
+		t.Fatalf("out = %q", out)
+	}
+}
+
 func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider) *Engine {
 	t.Helper()
 	reg := tools.NewRegistry()

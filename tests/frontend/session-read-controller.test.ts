@@ -12,6 +12,7 @@ import {
 } from "../../frontend/src/lib/session-read-state.ts";
 import type {
   ActiveContextSnapshot,
+  MediaRef,
   Message,
   SessionShowResponse,
   StartTurnResponse,
@@ -115,6 +116,45 @@ test("loaded turn polling does not retry transient failures", async () => {
 
   assert.equal(calls, 1);
   assert.equal(timers.pendingCount(), 0);
+});
+
+test("submitPrompt forwards attachments and projects optimistic image blocks", async () => {
+  let latestState = createSessionReadState();
+  let submittedAttachments: MediaRef[] | undefined;
+  const attachments: MediaRef[] = [
+    {
+      artifact_path: ".juex/artifacts/media/image.png",
+      media_type: "image/png",
+      sha256: "abc123",
+      original_bytes: 12,
+    },
+  ];
+  const controller = createSessionReadController({
+    ...ports(),
+    onStateChange: (state) => {
+      latestState = state;
+    },
+    startTurn: async (
+      _id,
+      _prompt,
+      nextAttachments,
+    ): Promise<StartTurnResponse> => {
+      submittedAttachments = nextAttachments;
+      return { turn_id: "turn-1" };
+    },
+  });
+
+  controller.setRoute("s1");
+  const ok = await controller.submitPrompt("s1", "", attachments);
+
+  assert.equal(ok, true);
+  assert.deepEqual(submittedAttachments, attachments);
+  assert.equal(
+    latestState.projection.messages.some((message) =>
+      message.blocks.some((block) => block.type === "image"),
+    ),
+    true,
+  );
 });
 
 test("controller interprets navigation, refresh, and timer effects", async () => {
