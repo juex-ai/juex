@@ -10,7 +10,13 @@ import {
   type LiveSessionProjection,
 } from "../../frontend/src/lib/live-session-projection.ts";
 import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
-import type { BrowserEvent } from "../../frontend/src/types.ts";
+import type { BrowserEvent, MediaRef } from "../../frontend/src/types.ts";
+
+const imageMedia: MediaRef = {
+  artifact_path: ".juex/artifacts/media/session/image.png",
+  media_type: "image/png",
+  sha256: "abc",
+};
 
 test("projectLiveSessionEvent projects a live turn with tool deltas and completion effects", () => {
   let state = createLiveSessionProjection();
@@ -186,6 +192,79 @@ test("projectOptimisticTurn is replaced by the canonical turn.started event", ()
     payload: { input: "hello" },
   });
   assert.equal(state.messages.length, 2);
+});
+
+test("projectOptimisticTurn renders attachment-only image blocks", () => {
+  const state = projectOptimisticTurn(
+    createLiveSessionProjection(),
+    "turn-image",
+    "",
+    undefined,
+    [imageMedia],
+  );
+
+  assert.equal(state.messages.length, 2);
+  assert.deepEqual(state.messages[0].blocks, [
+    { type: "image", media: imageMedia },
+  ]);
+  assert.equal(state.messages[1].role, "assistant");
+  assert.equal(state.messages[1].pending, true);
+});
+
+test("projectQueuedInput keeps image attachments for drained queued turns", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(state, "", undefined, 1, [imageMedia]);
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-1",
+    payload: { input: "active" },
+  });
+  state = apply(state, {
+    id: "e2",
+    type: "pending_input.drained",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-1",
+    payload: { count: 1 },
+  });
+
+  const queued = state.messages.find(
+    (message) => message.kind === "pending_input",
+  );
+  assert.deepEqual(queued?.blocks, [{ type: "image", media: imageMedia }]);
+});
+
+test("projectLiveSessionEvent preserves queued attachments when SSE omits them", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(state, "queued image", undefined, 1, [imageMedia]);
+  state = apply(state, {
+    id: "e1",
+    type: "pending_input.queued",
+    ts: "2026-06-15T00:00:00Z",
+    payload: { input: "queued image", pending_count: 1 },
+  });
+
+  assert.deepEqual(state.queuedInput.items[0]?.attachments, [imageMedia]);
+});
+
+test("projectLiveSessionEvent promotes image-only queued turns with attachments", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(state, "", undefined, 1, [imageMedia]);
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-image",
+    payload: { input: "" },
+  });
+
+  assert.equal(state.queuedInput.items.length, 0);
+  assert.deepEqual(state.messages[0]?.blocks, [
+    { type: "image", media: imageMedia },
+  ]);
+  assert.equal(state.messages[1]?.role, "assistant");
+  assert.equal(state.messages[1]?.pending, true);
 });
 
 test("projectSessionTurnStatus does not duplicate an existing assistant turn", () => {

@@ -23,7 +23,7 @@ func (a *App) admissionQueue() turnAdmissionQueue {
 	return turnAdmissionQueue{state: &a.turnAdmission, engine: a.Engine}
 }
 
-func (q turnAdmissionQueue) admitUser(ctx context.Context, prompt string, ids TurnIDAllocator) TurnAdmissionResult {
+func (q turnAdmissionQueue) admitUser(ctx context.Context, msg llm.Message, ids TurnIDAllocator) TurnAdmissionResult {
 	if q.state == nil || q.engine == nil {
 		return errorResult(fmt.Errorf("turn admission: app, engine, or session is not initialized"), nil)
 	}
@@ -32,7 +32,7 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, prompt string, ids Tu
 	}
 	phase, activeTurnID := q.snapshot()
 	if phase != turnAdmissionIdle {
-		return q.queuePending(ctx, prompt, activeTurnID)
+		return q.queuePending(ctx, msg, activeTurnID)
 	}
 
 	turnID := ids.NextTurnID("turn")
@@ -40,7 +40,7 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, prompt string, ids Tu
 	if q.state.phase != turnAdmissionIdle {
 		activeTurnID = q.state.turnID
 		q.state.mu.Unlock()
-		return q.queuePending(ctx, prompt, activeTurnID)
+		return q.queuePending(ctx, msg, activeTurnID)
 	}
 	if err := q.engine.ReserveTurnID(turnID); err != nil {
 		q.state.mu.Unlock()
@@ -50,7 +50,6 @@ func (q turnAdmissionQueue) admitUser(ctx context.Context, prompt string, ids Tu
 	q.state.turnID = turnID
 	q.state.mu.Unlock()
 
-	msg := llm.TextMessage(llm.RoleUser, prompt)
 	return TurnAdmissionResult{
 		Kind:   TurnAdmissionStarted,
 		TurnID: turnID,
@@ -153,11 +152,11 @@ func (q turnAdmissionQueue) snapshot() (turnAdmissionPhase, string) {
 	return q.state.phase, q.state.turnID
 }
 
-func (q turnAdmissionQueue) queuePending(ctx context.Context, prompt, fallbackTurnID string) TurnAdmissionResult {
+func (q turnAdmissionQueue) queuePending(ctx context.Context, msg llm.Message, fallbackTurnID string) TurnAdmissionResult {
 	if q.engine == nil {
 		return conflictResult("turn is not accepting pending input", runtime.ErrNoActiveTurn, runtime.PendingInputStatus{TurnID: fallbackTurnID})
 	}
-	status, err := q.engine.EnqueuePendingInput(ctx, prompt)
+	status, err := q.engine.EnqueuePendingMessage(ctx, msg)
 	if status.TurnID == "" {
 		status.TurnID = fallbackTurnID
 	}

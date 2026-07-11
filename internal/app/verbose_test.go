@@ -240,6 +240,30 @@ func TestVerbose_PrintsResponseBlocksInOrder(t *testing.T) {
 	}
 }
 
+func TestVerbose_PrintsImageBlocks(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "llm.requested", Payload: map[string]any{}},
+		{Type: "llm.responded", Payload: runtimeevents.LLMRespondedPayload{
+			Blocks: []llm.Block{
+				{
+					Type: llm.BlockImage,
+					Media: &llm.MediaRef{
+						ArtifactPath:  ".juex/artifacts/media/s/chart.png",
+						MediaType:     "image/png",
+						OriginalBytes: 2048,
+						Width:         640,
+						Height:        480,
+					},
+				},
+			},
+		}},
+	})
+
+	if !strings.Contains(out, "assistant: [图片: chart.png (640x480, 2.0 KB)]") {
+		t.Fatalf("missing image placeholder in:\n%s", out)
+	}
+}
+
 func TestVerbose_PrintsJSONDecodedResponseBlocksInOrder(t *testing.T) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(`{

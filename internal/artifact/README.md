@@ -9,7 +9,8 @@ count. It centralizes:
 - workspace-rooted path and symlink safety through `os.Root`;
 - same-directory temporary writes and atomic replacement;
 - idempotent content-addressed storage;
-- integrity verification on read.
+- integrity verification on read;
+- bounded reads that reject oversized artifacts before loading them in full.
 
 Callers retain format-specific decisions. The `read` tool detects and resizes
 images, provider adapters encode verified media, and runtime context projection

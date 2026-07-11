@@ -1,5 +1,7 @@
 import type {
   Block,
+  ImageBlock,
+  MediaRef,
   ReasoningBlock,
   ToolResultBlock,
   ToolUseBlock,
@@ -47,6 +49,8 @@ function blockFromUnknown(value: unknown): Block[] {
         : [];
     case "reasoning":
       return [reasoningBlockFromRecord(value)];
+    case "image":
+      return [imageBlockFromRecord(value)];
     case "tool_use":
       return [toolUseBlockFromRecord(value)];
     case "tool_result":
@@ -54,6 +58,12 @@ function blockFromUnknown(value: unknown): Block[] {
     default:
       return [];
   }
+}
+
+function imageBlockFromRecord(value: Record<string, unknown>): ImageBlock {
+  const block: ImageBlock = { type: "image" };
+  if (isRecord(value.media)) block.media = mediaRefFromRecord(value.media);
+  return block;
 }
 
 function reasoningBlockFromRecord(value: Record<string, unknown>): ReasoningBlock {
@@ -96,7 +106,24 @@ function toolResultBlockFromRecord(
   if (typeof value.is_error === "boolean") {
     block.is_error = value.is_error;
   }
+  if (isRecord(value.media)) {
+    block.media = mediaRefFromRecord(value.media);
+  }
   return block;
+}
+
+function mediaRefFromRecord(value: Record<string, unknown>): MediaRef {
+  const media: MediaRef = {};
+  if (typeof value.artifact_path === "string") media.artifact_path = value.artifact_path;
+  if (typeof value.media_type === "string") media.media_type = value.media_type;
+  if (typeof value.sha256 === "string") media.sha256 = value.sha256;
+  const originalBytes = numberValue(value.original_bytes);
+  if (originalBytes !== undefined) media.original_bytes = originalBytes;
+  const width = numberValue(value.width);
+  if (width !== undefined) media.width = width;
+  const height = numberValue(value.height);
+  if (height !== undefined) media.height = height;
+  return media;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

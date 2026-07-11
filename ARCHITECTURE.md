@@ -42,6 +42,7 @@ juex/
 │   │   ├── turn_admission.go
 │   │   └── turn_admission_queue.go
 │   ├── artifact/                 # safe workspace artifact storage and integrity verification
+│   ├── usermedia/                # session-scoped image upload and media reference policy
 │   ├── cli/                      # cobra-based CLI surface
 │   │   ├── bundle.go
 │   │   ├── root.go
@@ -911,7 +912,8 @@ Routes:
 | POST | `/api/sessions/<id>/activate` | make a primary session active |
 | GET | `/api/sessions/<id>/context` | active provider context for one session |
 | POST | `/api/sessions/<id>/compact` | append a manual compact summary marker |
-| POST | `/api/sessions/<id>/turns` | start a turn |
+| POST | `/api/sessions/<id>/attachments` | validate and store one session-scoped image upload |
+| POST | `/api/sessions/<id>/turns` | start a text, image, or mixed-content turn |
 | GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
@@ -925,6 +927,7 @@ Routes:
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
+| GET | `/api/media?path=<path>` | image bytes with immutable caching for content-addressed artifacts and revalidation for mutable workdir paths |
 | GET | `/api/runtime` | app-assembled system prompt, provider, shell, hooks, MCP, and skills status translated to the web DTO |
 
 ---
@@ -1306,14 +1309,31 @@ Resources split between user-global and work-local:
 pass a logical path relative to `.juex/artifacts`; the Store returns a stable
 workspace-relative reference with SHA-256 and stored byte count. Filesystem
 access uses `os.Root`, writes use same-directory temporary files plus atomic
-replacement, and reads verify supplied integrity metadata. Escaping paths and
-symlinks are rejected by the rooted filesystem boundary.
+replacement, and reads verify supplied integrity metadata. Bounded reads stop
+after the caller's byte limit instead of loading an oversized artifact first.
+Escaping paths and symlinks are rejected by the rooted filesystem boundary.
 
 The `read` tool owns image detection and resizing, provider adapters own media
 encoding, and runtime context projection owns preview policy. None of those
 adapters owns artifact path safety or persistence mechanics. Retention and
 garbage collection are separate lifecycle policy and are not implicit in a
 Store read or write.
+
+### 6.2 User Media
+
+`internal/usermedia` owns session-scoped image attachment policy. It validates
+upload size and image type, records dimensions and integrity metadata, limits
+the number of images admitted to one turn, and rejects references outside the
+target session's `.juex/artifacts/media/<session-id>/` namespace. Durable bytes
+are stored and verified through `internal/artifact`; `usermedia` does not
+implement a second filesystem boundary.
+
+The Web attachment route is a transport adapter over this policy. It stores an
+upload before a turn starts and returns an `llm.MediaRef`; turn admission then
+revalidates every submitted reference before converting it into canonical
+image blocks. This keeps browser uploads, future CLI attachment input, and
+provider projection on one application contract while preventing a client
+from submitting arbitrary workspace paths as session attachments.
 
 The user-global `~/.agents` and `~/.juex/extensions` resources are read-only
 from Juex's view and are loaded only when user-global resources are enabled.

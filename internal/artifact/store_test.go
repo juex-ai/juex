@@ -229,3 +229,29 @@ func TestStoreReadVerifiesIntegrity(t *testing.T) {
 		t.Fatal("unsafe read succeeded")
 	}
 }
+
+func TestStoreReadLimitRejectsOversizedArtifact(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("media/session/image.png", []byte("image bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadLimit(ref, int64(ref.Bytes-1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("declared oversized read err = %v, want ErrTooLarge", err)
+	}
+	unknownSize := ref
+	unknownSize.Bytes = 0
+	if _, err := store.ReadLimit(unknownSize, int64(ref.Bytes-1)); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("bounded oversized read err = %v, want ErrTooLarge", err)
+	}
+	data, err := store.ReadLimit(unknownSize, int64(ref.Bytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "image bytes" {
+		t.Fatalf("data = %q", data)
+	}
+}

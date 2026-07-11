@@ -46,6 +46,18 @@ test("composerSubmitAction sends non-empty idle input", () => {
   );
 });
 
+test("composerSubmitAction sends attachment-only idle input", () => {
+  assert.equal(
+    composerSubmitAction({
+      turnActive: false,
+      compactActive: false,
+      text: "",
+      attachmentCount: 1,
+    }),
+    "send",
+  );
+});
+
 test("composerSubmitAction queues non-empty input while busy", () => {
   assert.equal(
     composerSubmitAction({
@@ -60,6 +72,18 @@ test("composerSubmitAction queues non-empty input while busy", () => {
       turnActive: false,
       compactActive: true,
       text: "steer next",
+    }),
+    "queue",
+  );
+});
+
+test("composerSubmitAction queues attachment-only input while busy", () => {
+  assert.equal(
+    composerSubmitAction({
+      turnActive: true,
+      compactActive: false,
+      text: "",
+      attachmentCount: 1,
     }),
     "queue",
   );

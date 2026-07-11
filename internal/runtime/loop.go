@@ -467,7 +467,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	if err := e.Session.Append(msg); err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("session append assistant: %w", err)
 	}
-	return recordedProviderResponse{finalText: msg.FirstText(), stopReason: resp.StopReason, toolCalls: toolCalls}, nil
+	return recordedProviderResponse{finalText: llm.FormatBlocksForTerminal(msg.Blocks), stopReason: resp.StopReason, toolCalls: toolCalls}, nil
 }
 
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
@@ -631,10 +631,13 @@ func (e *Engine) emitToolFinished(turnID string, call llm.Block, block llm.Block
 		}
 		opts.ExitCode = cloneIntPtr(observation.ExitCode)
 		opts.Result = observation.StructuredResult
+		opts.Media = block.Media
 		e.emit(events.Event{Type: toolevents.ErroredType, TurnID: turnID, Payload: toolevents.Errored(toolCallPayload(call), opts)})
 		return
 	}
-	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(observation.Content), truncate(observation.Content, 200), observation.StructuredResult)})
+	payload := toolevents.Completed(toolCallPayload(call), info.TimeoutSeconds, len(observation.Content), truncate(observation.Content, 200), observation.StructuredResult)
+	payload.Media = block.Media
+	e.emit(events.Event{Type: toolevents.CompletedType, TurnID: turnID, Payload: payload})
 }
 
 func (e *Engine) hookToolErrorResult(turnID string, call llm.Block, err error) toolCallResult {

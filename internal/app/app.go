@@ -146,6 +146,7 @@ func New(opts Options) (*App, error) {
 	}
 
 	provider := opts.Provider
+	providerInjected := provider != nil
 	if provider == nil {
 		profile, err := cfg.ProviderSelection().ProviderProfile()
 		if err != nil {
@@ -158,7 +159,7 @@ func New(opts Options) (*App, error) {
 		provider = p
 	}
 	summaryProvider := opts.SummaryProvider
-	if summaryProvider == nil && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
+	if summaryProvider == nil && !providerInjected && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
 		profile, err := cfg.ProviderProfileForModelRef(runtimeLimits.Compaction.SummaryModel)
 		if err != nil {
 			return nil, fmt.Errorf("app: compaction.summary_model: %w", err)

@@ -217,6 +217,8 @@ func (vp *verbosePrinter) printResponseBlocks(blocks []llm.Block) {
 			vp.printIndentedBlock("thinking", text, true)
 		case llm.BlockText:
 			vp.printIndentedBlock("assistant", block.Text, false)
+		case llm.BlockImage:
+			vp.printIndentedBlock("assistant", llm.FormatImagePlaceholder(block.Media), false)
 		}
 	}
 }

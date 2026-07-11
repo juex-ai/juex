@@ -1,7 +1,9 @@
 package web
 
 import (
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -217,6 +219,61 @@ func (s *Server) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
+}
+
+func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return
+	}
+
+	file, reqErr := s.resolveFileRequest(r)
+	if reqErr != nil {
+		reqErr.write(w)
+		return
+	}
+
+	f, err := os.Open(file.resolvedPath)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	defer f.Close()
+
+	sample := make([]byte, 512)
+	n, err := f.Read(sample)
+	if err != nil && !errors.Is(err, io.EOF) {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath)
+	if !ok {
+		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "media is only supported for images")
+		return
+	}
+	etag, cacheControl := mediaCacheHeaders(file)
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", mediaType)
+	w.Header().Set("Cache-Control", cacheControl)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
+}
+
+func mediaCacheHeaders(file resolvedFileRequest) (etag, cacheControl string) {
+	relPath := filepath.ToSlash(file.relPath)
+	name := filepath.Base(filepath.FromSlash(relPath))
+	digest := strings.TrimSuffix(name, filepath.Ext(name))
+	if strings.HasPrefix(relPath, ".juex/artifacts/") && len(digest) == 64 {
+		if _, err := hex.DecodeString(digest); err == nil {
+			return `"` + strings.ToLower(digest) + `"`, "public, max-age=31536000, immutable"
+		}
+	}
+	return fmt.Sprintf(`W/"%x-%x"`, file.info.ModTime().UnixNano(), file.info.Size()), "no-cache"
 }
 
 type resolvedFileRequest struct {

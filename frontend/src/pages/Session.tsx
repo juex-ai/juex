@@ -28,12 +28,15 @@ import {
 } from "@/components/ai-elements/message";
 import {
   PromptInput,
+  PromptInputButton,
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
+  usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
+import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
 import {
   messagesToGroups,
@@ -140,6 +143,7 @@ import {
   interrupt,
   startTurn,
   subscribeEvents,
+  uploadSessionAttachment,
 } from "@/api";
 import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
 import {
@@ -148,15 +152,18 @@ import {
   ChevronUpIcon,
   CircleGaugeIcon,
   CopyIcon,
+  ImagePlusIcon,
   LoaderCircleIcon,
   RadioIcon,
   SendHorizontalIcon,
   SquareIcon,
+  XIcon,
 } from "lucide-react";
 import type {
   ActiveContextSnapshot,
   ContextUsage,
   GoalStatusSnapshot,
+  MediaRef,
   Message as ChatMessage,
   SessionShowResponse,
   TokenUsage,
@@ -182,6 +189,7 @@ export function Session() {
     createSessionReadState(),
   );
   const [draft, setDraft] = useState("");
+  const [attachmentCount, setAttachmentCount] = useState(0);
   const doneTimerRef = useRef<number | null>(null);
   const composerHintTimerRef = useRef<number | null>(null);
   const initialCommandRef = useRef<string | null>(null);
@@ -386,19 +394,29 @@ export function Session() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.kind, data?.active, id, refresh]);
 
-  async function handleSend(prompt: string) {
+  async function handleSend(
+    prompt: string,
+    attachments: MediaRef[] = [],
+  ): Promise<boolean> {
     const compactCommand = isCompactCommandInput(prompt);
     updateReadState((prev) => projectPendingSubmit(prev, prompt));
     try {
-      const turn = await startTurn(id, prompt);
+      const turn = await startTurn(id, prompt, attachments);
       runSessionReadResult(
-        projectStartTurnSucceeded(currentReadState(), prompt, turn),
+        projectStartTurnSucceeded(
+          currentReadState(),
+          prompt,
+          turn,
+          attachments,
+        ),
       );
+      return true;
     } catch (e) {
       console.error("startTurn failed", e);
       runSessionReadResult(
         projectStartTurnFailed(currentReadState(), compactCommand, e),
       );
+      return false;
     }
   }
 
@@ -441,6 +459,7 @@ export function Session() {
     turnActive: projection.turnActive,
     compactActive: projection.compactActive,
     text: draft,
+    attachmentCount,
   });
 
   return (
@@ -475,14 +494,25 @@ export function Session() {
           <QueuedInputStack items={projection.queuedInput.items} />
           {canSend ? (
             <PromptInput
+              accept="image/*"
+              maxFileSize={10 * 1024 * 1024}
+              maxFiles={8}
+              multiple
+              onError={(err) => showComposerHint(err.message)}
               onSubmit={async (msg) => {
                 const text = msg.text?.trim();
-                if (!text) {
-                  showComposerHint("Enter a message to send");
+                const files = msg.files ?? [];
+                if (!text && files.length === 0) {
+                  showComposerHint("Enter a message or attach an image");
                   return;
                 }
+                const attachments = await uploadPromptAttachments(id, files);
+                const sent = await handleSend(text ?? "", attachments);
+                if (!sent) {
+                  throw new Error("start turn failed");
+                }
                 setDraft("");
-                await handleSend(text);
+                setAttachmentCount(0);
               }}
             >
               <PromptInputTextarea
@@ -492,9 +522,11 @@ export function Session() {
                 }}
                 placeholder="Ask juex anything..."
               />
+              <ComposerAttachmentStrip onCountChange={setAttachmentCount} />
               <PromptInputFooter className="flex-nowrap items-end gap-2">
                 <TooltipProvider>
                   <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-1.5">
+                    <ComposerAttachmentButton />
                     {composerHint ? (
                       <ComposerFeedback tone="hint">
                         {composerHint}
@@ -518,7 +550,9 @@ export function Session() {
                       onCompacting={() =>
                         showComposerHint(COMPACTING_SUBMIT_HINT)
                       }
-                      onEmpty={() => showComposerHint("Enter a message to send")}
+                      onEmpty={() =>
+                        showComposerHint("Enter a message or attach an image")
+                      }
                       onStop={() => void handleInterrupt()}
                     />
                   </div>
@@ -923,6 +957,88 @@ function ComposerFeedback({
   );
 }
 
+type PromptAttachmentFile = {
+  filename?: string;
+  mediaType?: string;
+  url: string;
+};
+
+async function uploadPromptAttachments(
+  sessionID: string,
+  files: PromptAttachmentFile[],
+): Promise<MediaRef[]> {
+  if (files.length === 0) return [];
+  return Promise.all(
+    files.map(async (file) =>
+      uploadSessionAttachment(sessionID, await filePartToFile(file)),
+    ),
+  );
+}
+
+async function filePartToFile(part: PromptAttachmentFile): Promise<File> {
+  const response = await fetch(part.url);
+  if (!response.ok) {
+    throw new Error("Unable to read attached image");
+  }
+  const blob = await response.blob();
+  const type = part.mediaType || blob.type || "application/octet-stream";
+  const name = part.filename || "image";
+  return new File([blob], name, { type });
+}
+
+function ComposerAttachmentButton() {
+  const attachments = usePromptInputAttachments();
+  return (
+    <PromptInputButton
+      aria-label="Attach images"
+      onClick={() => attachments.openFileDialog()}
+      tooltip="Attach images"
+    >
+      <ImagePlusIcon className="size-4" aria-hidden="true" />
+    </PromptInputButton>
+  );
+}
+
+function ComposerAttachmentStrip({
+  onCountChange,
+}: {
+  onCountChange: (count: number) => void;
+}) {
+  const attachments = usePromptInputAttachments();
+  const files = attachments.files;
+  useEffect(() => {
+    onCountChange(files.length);
+  }, [files.length, onCountChange]);
+
+  if (files.length === 0) return null;
+  return (
+    <div className="flex min-h-20 flex-wrap gap-2 border-t border-border/60 px-2.5 py-2">
+      {files.map((file) => (
+        <div
+          key={file.id}
+          className="group relative size-16 overflow-hidden rounded-md border border-border/70 bg-muted"
+        >
+          <img
+            src={file.url}
+            alt={file.filename ?? "attached image"}
+            className="size-full object-cover"
+          />
+          <Button
+            aria-label={`Remove ${file.filename ?? "attached image"}`}
+            className="absolute right-1 top-1 size-6 border border-border/70 bg-background/90 opacity-95 shadow-[var(--shadow-xs)] group-hover:opacity-100"
+            onClick={() => attachments.remove(file.id)}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <XIcon className="size-3.5" aria-hidden="true" />
+          </Button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ComposerSubmitButton({
   action,
   onCompacting,
@@ -939,7 +1055,7 @@ function ComposerSubmitButton({
   const isStop = action === "stop";
   const tooltip =
     action === "empty"
-      ? "Enter a message to send"
+      ? "Enter a message or attach an image"
       : action === "compacting"
         ? COMPACTING_SUBMIT_HINT
       : action === "stop"
@@ -949,7 +1065,7 @@ function ComposerSubmitButton({
           : "Send message";
   const ariaLabel =
     action === "empty"
-      ? "Enter a message before sending"
+      ? "Enter a message or attach an image before sending"
       : action === "compacting"
         ? COMPACTING_SUBMIT_HINT
       : action === "stop"
@@ -1195,6 +1311,9 @@ function MessageGroupView({
               />
             );
           }
+          if (unit.kind === "image") {
+            return <ImageBlock key={i} media={unit.block.media} />;
+          }
           if (unit.kind === "tool_batch") {
             return <ToolBatchProcessRow key={i} tools={unit.tools} />;
           }
@@ -1300,15 +1419,34 @@ function ToolProcessRow({
             />
           ) : null}
           {tool.result ? (
-            <ProcessPayload
-              label={tool.result.is_error ? "Error" : "Result"}
-              tone={tool.result.is_error ? "error" : "muted"}
-              value={formatToolProcessResult(tool.result) || "-"}
-            />
+            <ToolResultPayload result={tool.result} />
           ) : null}
         </div>
       ) : null}
     </ProcessDisclosure>
+  );
+}
+
+function ToolResultPayload({ result }: { result: NonNullable<ToolDisplayUnit["result"]> }) {
+  const text = formatToolProcessResult(result);
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      {text ? (
+        <ProcessPayload
+          label={result.is_error ? "Error" : "Result"}
+          tone={result.is_error ? "error" : "muted"}
+          value={text}
+        />
+      ) : null}
+      {result.media ? <ImageBlock media={result.media} /> : null}
+      {!text && !result.media ? (
+        <ProcessPayload
+          label={result.is_error ? "Error" : "Result"}
+          tone={result.is_error ? "error" : "muted"}
+          value="-"
+        />
+      ) : null}
+    </div>
   );
 }
 

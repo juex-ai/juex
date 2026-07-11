@@ -365,6 +365,37 @@ test("applyToolResultToMessages creates a named placeholder for missed completio
   });
 });
 
+test("applyToolResultToMessages preserves completed media references", () => {
+  const next = applyToolResultToMessages([], {
+    turnID: "t1",
+    toolUseID: "tool-1",
+    toolName: "render_chart",
+    content: "chart rendered",
+    media: {
+      artifact_path: ".juex/artifacts/media/s/chart.png",
+      media_type: "image/png",
+      sha256: "abc",
+      original_bytes: 2048,
+      width: 640,
+      height: 480,
+    },
+  });
+
+  assert.deepEqual(next[1].blocks?.[0], {
+    type: "tool_result",
+    tool_use_id: "tool-1",
+    content: "chart rendered",
+    media: {
+      artifact_path: ".juex/artifacts/media/s/chart.png",
+      media_type: "image/png",
+      sha256: "abc",
+      original_bytes: 2048,
+      width: 640,
+      height: 480,
+    },
+  });
+});
+
 test("applyToolResultToMessages inserts after the matching later tool_use", () => {
   const messages: Message[] = [
     {

@@ -1,3 +1,4 @@
+import { getMediaURL } from "@/api";
 import type { QueuedInput } from "@/lib/queued-inputs";
 
 export function QueuedInputStack({ items }: { items: QueuedInput[] }) {
@@ -17,11 +18,38 @@ export function QueuedInputStack({ items }: { items: QueuedInput[] }) {
               Queued
             </div>
             <div className="truncate text-sm leading-5 text-foreground">
-              {item.input}
+              {item.input || queuedImageLabel(item)}
             </div>
+            {item.attachments?.length ? (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {item.attachments.map((media, mediaIndex) => {
+                  const path = media.artifact_path;
+                  if (!path) return null;
+                  return (
+                    <img
+                      key={`${path}-${mediaIndex}`}
+                      src={getMediaURL(path)}
+                      alt={mediaName(path)}
+                      className="size-10 rounded border border-border/70 object-cover"
+                    />
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
         </div>
       ))}
     </div>
   );
+}
+
+function queuedImageLabel(item: QueuedInput): string {
+  const count = item.attachments?.length ?? 0;
+  if (count === 1) return "1 image";
+  if (count > 1) return `${count} images`;
+  return "";
+}
+
+function mediaName(path: string): string {
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? "image";
 }
