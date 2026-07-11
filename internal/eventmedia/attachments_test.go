@@ -2,6 +2,7 @@ package eventmedia
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,6 +179,52 @@ func TestValidateAttachmentsRejectsInvalidDeclaredJSON(t *testing.T) {
 	if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "media_type") {
 		t.Fatalf("report = %+v, want invalid JSON media type error", report)
 	}
+}
+
+func TestValidateAttachmentsParsesWebPDimensions(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "image.webp"), testWebPVP8X(640, 480), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report := ValidateAttachments([]AttachmentRef{{Path: "image.webp", MediaType: "image/webp"}}, ValidationOptions{WorkDir: workDir})
+	if len(report.Errors) != 0 || len(report.Valid) != 1 {
+		t.Fatalf("report = %+v, want one valid WebP attachment", report)
+	}
+	if got := report.Valid[0]; got.Width != 640 || got.Height != 480 {
+		t.Fatalf("dimensions = %dx%d, want 640x480", got.Width, got.Height)
+	}
+}
+
+func TestValidateAttachmentsRejectsTruncatedWebP(t *testing.T) {
+	workDir := t.TempDir()
+	data := []byte{'R', 'I', 'F', 'F', 4, 0, 0, 0, 'W', 'E', 'B', 'P'}
+	if err := os.WriteFile(filepath.Join(workDir, "truncated.webp"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report := ValidateAttachments([]AttachmentRef{{Path: "truncated.webp", MediaType: "image/webp"}}, ValidationOptions{WorkDir: workDir})
+	if len(report.Valid) != 0 || len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "invalid image data") {
+		t.Fatalf("report = %+v, want invalid WebP error", report)
+	}
+}
+
+func testWebPVP8X(width, height int) []byte {
+	data := make([]byte, 30)
+	copy(data[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(data[4:8], uint32(len(data)-8))
+	copy(data[8:12], "WEBP")
+	copy(data[12:16], "VP8X")
+	binary.LittleEndian.PutUint32(data[16:20], 10)
+	writeLittleEndian24(data[24:27], width-1)
+	writeLittleEndian24(data[27:30], height-1)
+	return data
+}
+
+func writeLittleEndian24(dst []byte, value int) {
+	dst[0] = byte(value)
+	dst[1] = byte(value >> 8)
+	dst[2] = byte(value >> 16)
 }
 
 func writeAttachmentPNG(t *testing.T, path string) {

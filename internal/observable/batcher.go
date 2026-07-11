@@ -10,14 +10,16 @@ import (
 )
 
 type BatcherOptions struct {
-	RunID string
+	RunID   string
+	WorkDir string
 }
 
 type Batcher struct {
-	spec  Spec
-	store *Store
-	runID string
-	batch *activeBatch
+	spec    Spec
+	store   *Store
+	runID   string
+	workDir string
+	batch   *activeBatch
 }
 
 type activeBatch struct {
@@ -32,7 +34,7 @@ type activeBatch struct {
 }
 
 func NewBatcher(spec Spec, store *Store, opts BatcherOptions) *Batcher {
-	return &Batcher{spec: spec, store: store, runID: opts.RunID}
+	return &Batcher{spec: spec, store: store, runID: opts.RunID, workDir: opts.WorkDir}
 }
 
 func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
@@ -42,6 +44,9 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	if unit.ReceivedAt.IsZero() {
 		unit.ReceivedAt = time.Now().UTC()
 	}
+	storedAttachments, validationErrors := snapshotAttachmentRefs(b.workDir, unit.Attachments)
+	unit.Attachments = storedAttachments
+	unit.AttachmentErrors = append(unit.AttachmentErrors, validationErrors...)
 	var emitted []ObservationRecord
 	if b.batch != nil && !b.batch.windowStart.IsZero() && unit.ReceivedAt.Sub(b.batch.windowStart) >= time.Duration(b.spec.Batch.IntervalSeconds)*time.Second {
 		flushed, err := b.Flush("interval")

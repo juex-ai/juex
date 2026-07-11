@@ -39,7 +39,7 @@ func newRunner(opts runnerOptions) *runner {
 	return &runner{
 		opts:    opts,
 		pipe:    pipe,
-		batcher: NewBatcher(opts.spec, opts.store, BatcherOptions{RunID: opts.runID}),
+		batcher: NewBatcher(opts.spec, opts.store, BatcherOptions{RunID: opts.runID, WorkDir: opts.workDir}),
 	}
 }
 

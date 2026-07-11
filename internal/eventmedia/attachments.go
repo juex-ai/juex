@@ -2,6 +2,7 @@ package eventmedia
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -362,10 +363,11 @@ func imageDimensions(data []byte, mediaType string) (int, int, error) {
 		return 0, 0, nil
 	}
 	if mediaType == "image/webp" {
-		if !isWebP(data) {
+		width, height, ok := webPDimensions(data)
+		if !ok {
 			return 0, 0, fmt.Errorf("invalid image data for %s", mediaType)
 		}
-		return 0, 0, nil
+		return width, height, nil
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
@@ -396,4 +398,53 @@ func artifactExtension(mediaType string) string {
 
 func isWebP(data []byte) bool {
 	return len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP"
+}
+
+func webPDimensions(data []byte) (int, int, bool) {
+	if len(data) < 20 || !isWebP(data) {
+		return 0, 0, false
+	}
+	containerEnd := uint64(binary.LittleEndian.Uint32(data[4:8])) + 8
+	if containerEnd < 12 || containerEnd > uint64(len(data)) {
+		return 0, 0, false
+	}
+	for offset := 12; offset < int(containerEnd); {
+		if offset+8 > int(containerEnd) {
+			return 0, 0, false
+		}
+		chunkType := string(data[offset : offset+4])
+		chunkSize := uint64(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		chunkStart := uint64(offset + 8)
+		chunkEnd := chunkStart + chunkSize
+		paddedEnd := chunkEnd + chunkSize%2
+		if chunkEnd > containerEnd || paddedEnd > containerEnd || chunkEnd > uint64(len(data)) {
+			return 0, 0, false
+		}
+		chunk := data[int(chunkStart):int(chunkEnd)]
+		switch chunkType {
+		case "VP8X":
+			if len(chunk) >= 10 {
+				return 1 + readLittleEndian24(chunk[4:7]), 1 + readLittleEndian24(chunk[7:10]), true
+			}
+		case "VP8L":
+			if len(chunk) >= 5 && chunk[0] == 0x2f {
+				bits := binary.LittleEndian.Uint32(chunk[1:5])
+				return 1 + int(bits&0x3fff), 1 + int((bits>>14)&0x3fff), true
+			}
+		case "VP8 ":
+			if len(chunk) >= 10 && bytes.Equal(chunk[3:6], []byte{0x9d, 0x01, 0x2a}) {
+				width := int(binary.LittleEndian.Uint16(chunk[6:8]) & 0x3fff)
+				height := int(binary.LittleEndian.Uint16(chunk[8:10]) & 0x3fff)
+				if width > 0 && height > 0 {
+					return width, height, true
+				}
+			}
+		}
+		offset = int(paddedEnd)
+	}
+	return 0, 0, false
+}
+
+func readLittleEndian24(data []byte) int {
+	return int(data[0]) | int(data[1])<<8 | int(data[2])<<16
 }
