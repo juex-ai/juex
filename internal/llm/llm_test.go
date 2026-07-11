@@ -2874,6 +2874,96 @@ func TestProjectProviderTranscriptFoldsCommittedChunkedWriteFromLifecycleFacts(t
 	}
 }
 
+func TestProjectProviderTranscriptFoldsFailedChunkAttemptsAfterCommit(t *testing.T) {
+	const writeID = "write-failed-chunk"
+	failedContent := strings.Repeat("oversized secret chunk ", 20)
+	validContent := "final content"
+	history := []Message{
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "begin_failed_chunk",
+			ToolName:  "write_begin",
+			Input:     map[string]any{"path": "reports/failed-chunk.md", "mode": "create"},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "begin_failed_chunk",
+			Content:   "begin ok",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventBegin,
+				WriteID: writeID,
+				Path:    "reports/failed-chunk.md",
+				Mode:    chunkedwrite.ModeCreate,
+			},
+		}}},
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "chunk_failed",
+			ToolName:  "write_chunk",
+			Input:     map[string]any{"write_id": writeID, "index": 0, "content": failedContent},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "chunk_failed",
+			Content:   "write_chunk: content exceeds max chunk limits",
+			IsError:   true,
+		}}},
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "chunk_valid",
+			ToolName:  "write_chunk",
+			Input:     map[string]any{"write_id": writeID, "index": 0, "content": validContent},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "chunk_valid",
+			Content:   "chunk accepted",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventChunk,
+				WriteID: writeID,
+				Index:   0,
+				Bytes:   len(validContent),
+				Chars:   len(validContent),
+				Chunks:  1,
+			},
+		}}},
+		{Role: RoleAssistant, Blocks: []Block{{
+			Type:      BlockToolUse,
+			ToolUseID: "commit_failed_chunk",
+			ToolName:  "write_commit",
+			Input:     map[string]any{"write_id": writeID, "expected_chunks": 1},
+		}}},
+		{Role: RoleUser, Blocks: []Block{{
+			Type:      BlockToolResult,
+			ToolUseID: "commit_failed_chunk",
+			Content:   "commit ok",
+			ChunkedWrite: &chunkedwrite.Event{
+				Kind:    chunkedwrite.EventCommit,
+				WriteID: writeID,
+				Path:    "reports/failed-chunk.md",
+				Bytes:   len(validContent),
+				Chars:   len(validContent),
+				Chunks:  1,
+				SHA256:  "final-hash",
+			},
+		}}},
+	}
+
+	projected := projectProviderTranscript(history, ProviderProfile{
+		Capabilities: ProviderCapabilities{Tools: true},
+	}, providerProjectionOptions{})
+	text := providerProjectionDebugString(projected)
+	if !strings.Contains(text, "Chunked write provider replay summary: committed") {
+		t.Fatalf("projected history missing committed summary:\n%s", text)
+	}
+	if strings.Contains(text, failedContent) || strings.Contains(text, validContent) {
+		t.Fatalf("committed projection should fold failed and valid chunk content:\n%s", text)
+	}
+	if got := providerProjectionToolUseNames(projected); len(got) != 0 {
+		t.Fatalf("committed projection should omit all chunked write tool calls, got %+v", got)
+	}
+}
+
 func TestProjectProviderTranscriptDoesNotParseLegacyChunkedWriteResultText(t *testing.T) {
 	const writeID = "legacy-write"
 	history := []Message{

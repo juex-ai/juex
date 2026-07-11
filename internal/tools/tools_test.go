@@ -1864,6 +1864,42 @@ func TestChunkedWriteManager_RestoreActiveFromHistoryWithoutGuard(t *testing.T) 
 	}
 }
 
+func TestChunkedWriteManager_RestoreActiveFromHistoryConsumesErrorLifecycleFacts(t *testing.T) {
+	workDir := t.TempDir()
+	manager := NewChunkedWriteManager(workDir)
+	writeID := "w_post_hook_denied_commit"
+	history := []llm.Message{
+		{Role: llm.RoleUser, Blocks: []llm.Block{{
+			Type:         llm.BlockToolResult,
+			ToolUseID:    "begin_1",
+			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventBegin, WriteID: writeID, Path: "committed.txt", Mode: "overwrite", FileMode: 0o644},
+		}}},
+		{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+			Type:      llm.BlockToolUse,
+			ToolUseID: "chunk_1",
+			ToolName:  "write_chunk",
+			Input:     map[string]any{"write_id": writeID, "index": 0, "content": "already committed"},
+		}}},
+		{Role: llm.RoleUser, Blocks: []llm.Block{{
+			Type:         llm.BlockToolResult,
+			ToolUseID:    "chunk_1",
+			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventChunk, WriteID: writeID, Index: 0, Bytes: 17, Chars: 17, Chunks: 1},
+		}}},
+		{Role: llm.RoleUser, Blocks: []llm.Block{{
+			Type:         llm.BlockToolResult,
+			ToolUseID:    "commit_1",
+			Content:      "write_commit presentation text\n\n[tool error]\nhooks: tool denied after use: redaction required",
+			IsError:      true,
+			ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventCommit, WriteID: writeID, Path: "committed.txt", Bytes: 17, Chars: 17, Chunks: 1},
+		}}},
+	}
+
+	manager.RestoreActiveFromHistory(history)
+	if _, err := manager.commit(writeID, 1, ""); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
+		t.Fatalf("commit restored finished write err = %v, want unknown write_id", err)
+	}
+}
+
 func TestBuiltins_ChunkedWriteRejectsConcurrentTargetSession(t *testing.T) {
 	workDir := t.TempDir()
 	r := NewRegistry()

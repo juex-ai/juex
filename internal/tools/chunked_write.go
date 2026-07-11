@@ -52,7 +52,7 @@ func (m *chunkWriteManager) RestoreActiveFromHistory(history []llm.Message) {
 				toolUses[block.ToolUseID] = block
 				continue
 			}
-			if block.Type != llm.BlockToolResult || block.IsError || block.ChunkedWrite == nil {
+			if block.Type != llm.BlockToolResult || block.ChunkedWrite == nil {
 				continue
 			}
 			event := *block.ChunkedWrite

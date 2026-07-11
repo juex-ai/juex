@@ -119,14 +119,17 @@ func buildChunkedWriteProjectionPlan(history []Message) providerChunkedWriteProj
 			continue
 		}
 		event := result.ChunkedWrite
-		if event == nil || event.WriteID == "" || result.IsError {
+		if event == nil || event.WriteID == "" {
+			if result.IsError && use.ToolName == "write_chunk" {
+				if writeID := providerToolInputString(use.Input, "write_id"); writeID != "" {
+					session := getSession(writeID)
+					session.chunkCalls = append(session.chunkCalls, toolUseID)
+				}
+			}
 			continue
 		}
 		switch event.Kind {
 		case chunkedwrite.EventBegin:
-			if result.IsError {
-				continue
-			}
 			writeID := event.WriteID
 			if writeID == "" {
 				continue
