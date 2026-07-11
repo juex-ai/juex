@@ -1,14 +1,13 @@
 package runtime
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
@@ -161,46 +160,62 @@ func stripRedactedReasoningForProviderBudget(systemPrompt string, tools []llm.To
 }
 
 func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, block llm.Block, content string, headBytes, tailBytes int) (llm.ContextArtifactProjection, string, error) {
-	sum := sha256.Sum256([]byte(content))
-	sha := hex.EncodeToString(sum[:])
-	path, err := e.artifactPath(sourceKind, messageID, block)
+	store, err := e.projectedArtifactStore()
 	if err != nil {
 		return llm.ContextArtifactProjection{}, "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return llm.ContextArtifactProjection{}, "", fmt.Errorf("context artifact mkdir: %w", err)
+	relativePath, err := e.projectedArtifactPath(sourceKind, messageID, block)
+	if err != nil {
+		return llm.ContextArtifactProjection{}, "", err
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return llm.ContextArtifactProjection{}, "", fmt.Errorf("context artifact write: %w", err)
+	ref, err := store.Put(relativePath, []byte(content))
+	if err != nil {
+		return llm.ContextArtifactProjection{}, "", fmt.Errorf("context artifact: %w", err)
 	}
 	head, tail := previewParts(content, headBytes, tailBytes)
-	artifact := llm.ContextArtifactProjection{
+	projection := llm.ContextArtifactProjection{
 		SourceKind:    sourceKind,
 		MessageID:     messageID,
 		ToolUseID:     block.ToolUseID,
 		ToolName:      block.ToolName,
-		OriginalBytes: len(content),
-		StoredPath:    path,
-		SHA256:        sha,
+		OriginalBytes: ref.Bytes,
+		StoredPath:    ref.Path,
+		SHA256:        ref.SHA256,
 		HeadBytes:     len(head),
 		TailBytes:     len(tail),
 		Truncated:     true,
 	}
-	return artifact, providerVisibleArtifactText(artifact, head, tail), nil
+	return projection, providerVisibleArtifactText(projection, head, tail), nil
 }
 
-func (e *Engine) artifactPath(sourceKind, messageID string, block llm.Block) (string, error) {
+func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
 	if e == nil || e.Session == nil || e.Session.Dir == "" {
-		return "", fmt.Errorf("context artifact: missing session directory")
+		return artifact.Store{}, fmt.Errorf("context artifact: missing session directory")
 	}
-	root := filepath.Dir(filepath.Dir(e.Session.Dir))
+	runtimeRoot := filepath.Dir(filepath.Dir(filepath.Clean(e.Session.Dir)))
+	workDir := runtimeRoot
+	if filepath.Base(runtimeRoot) == ".juex" {
+		workDir = filepath.Dir(runtimeRoot)
+	}
+	store, err := artifact.NewStore(workDir)
+	if err != nil {
+		return artifact.Store{}, fmt.Errorf("context artifact store: %w", err)
+	}
+	return store, nil
+}
+
+func (e *Engine) projectedArtifactPath(sourceKind, messageID string, block llm.Block) (string, error) {
+	if e == nil || e.Session == nil || e.Session.ID == "" {
+		return "", fmt.Errorf("context artifact: missing session identity")
+	}
 	var dir, name string
+	sessionID := safeArtifactName(e.Session.ID)
 	switch sourceKind {
 	case "user_input":
-		dir = filepath.Join(root, "artifacts", "user-inputs", e.Session.ID)
+		dir = path.Join("user-inputs", sessionID)
 		name = messageID
 	case "tool_result":
-		dir = filepath.Join(root, "artifacts", "tool-results", e.Session.ID)
+		dir = path.Join("tool-results", sessionID)
 		name = block.ToolUseID
 		if name == "" {
 			name = messageID
@@ -211,12 +226,7 @@ func (e *Engine) artifactPath(sourceKind, messageID string, block llm.Block) (st
 	if name == "" {
 		name = "item-" + newID()
 	}
-	path := filepath.Join(dir, safeArtifactName(name)+".txt")
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	return abs, nil
+	return path.Join(dir, safeArtifactName(name)+".txt"), nil
 }
 
 func previewParts(content string, headBytes, tailBytes int) (string, string) {

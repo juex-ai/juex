@@ -2,19 +2,17 @@ package tools
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"image"
 	_ "image/gif"
 	"image/jpeg"
 	"image/png"
 	"math"
-	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -92,21 +90,18 @@ func readImageResult(workDir string, source []byte, kind readImageKind) (Result,
 		reason := fmt.Sprintf("artifact byte size %d exceeds limit %d after downsampling", len(artifactData), readImageMaxBytes)
 		return Result{Text: readImageOmittedSummary(kind.mediaType, len(artifactData), width, height, reason)}, nil
 	}
-	sum := sha256.Sum256(artifactData)
-	sha := hex.EncodeToString(sum[:])
-	artifactPath := filepath.ToSlash(filepath.Join(".juex", "artifacts", "media", "read", sha+kind.ext))
-	root, err := mediaArtifactRoot(workDir)
+	store, err := artifact.NewStore(workDir)
 	if err != nil {
 		return Result{}, err
 	}
-	absArtifact := filepath.Join(root, filepath.FromSlash(artifactPath))
-	if err := writeContentAddressedArtifact(absArtifact, artifactData); err != nil {
+	ref, err := store.PutContentAddressed("media/read", kind.ext, artifactData)
+	if err != nil {
 		return Result{}, err
 	}
 	media := llm.MediaRef{
-		ArtifactPath:  artifactPath,
+		ArtifactPath:  ref.Path,
 		MediaType:     kind.mediaType,
-		SHA256:        sha,
+		SHA256:        ref.SHA256,
 		OriginalBytes: len(source),
 		Width:         width,
 		Height:        height,
@@ -115,67 +110,6 @@ func readImageResult(workDir string, source []byte, kind readImageKind) (Result,
 		Text:       readImageSummary(media, len(artifactData), downsampled),
 		Structured: MediaResult{Media: media},
 	}, nil
-}
-
-func writeContentAddressedArtifact(path string, data []byte) error {
-	if ok, err := contentAddressedArtifactMatches(path, data); err == nil && ok {
-		return nil
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if os.IsExist(err) {
-		ok, verifyErr := contentAddressedArtifactMatches(path, data)
-		if verifyErr != nil {
-			return verifyErr
-		}
-		if ok {
-			return nil
-		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		file, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	}
-	if err != nil {
-		return err
-	}
-	_, writeErr := file.Write(data)
-	closeErr := file.Close()
-	if writeErr != nil {
-		_ = os.Remove(path)
-		return writeErr
-	}
-	if closeErr != nil {
-		_ = os.Remove(path)
-		return closeErr
-	}
-	return nil
-}
-
-func contentAddressedArtifactMatches(path string, data []byte) (bool, error) {
-	existing, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	return bytes.Equal(existing, data), nil
-}
-
-func mediaArtifactRoot(workDir string) (string, error) {
-	if strings.TrimSpace(workDir) != "" {
-		return workDir, nil
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	return cwd, nil
 }
 
 func imageConfigDimensions(mediaType string, data []byte) (int, int) {

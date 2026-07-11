@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/artifact"
 )
 
 func imagePlaceholderBlock(b Block) Block {
@@ -60,50 +61,19 @@ func readImageBase64(workDir string, media *MediaRef) (string, string, bool) {
 	if media == nil || media.ArtifactPath == "" {
 		return "", "", false
 	}
-	path, ok := safeMediaArtifactPath(workDir, media.ArtifactPath)
-	if !ok {
+	store, err := artifact.NewStore(workDir)
+	if err != nil {
 		return "", "", false
 	}
-	data, err := os.ReadFile(path)
+	data, err := store.Read(artifact.Ref{Path: media.ArtifactPath, SHA256: media.SHA256})
 	if err != nil || len(data) == 0 {
 		return "", "", false
 	}
-	mediaType := normalizeImageMediaType(media.MediaType, path, data)
+	mediaType := normalizeImageMediaType(media.MediaType, media.ArtifactPath, data)
 	if !supportedImageMediaType(mediaType) {
 		return "", "", false
 	}
 	return base64.StdEncoding.EncodeToString(data), mediaType, true
-}
-
-func safeMediaArtifactPath(root, path string) (string, bool) {
-	cleaned := filepath.Clean(strings.TrimSpace(path))
-	if cleaned == "." || filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	if strings.TrimSpace(root) == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", false
-		}
-		root = cwd
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", false
-	}
-	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return "", false
-	}
-	resolvedPath, err := filepath.EvalSymlinks(filepath.Join(resolvedRoot, cleaned))
-	if err != nil {
-		return "", false
-	}
-	rel, err := filepath.Rel(resolvedRoot, resolvedPath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return resolvedPath, true
 }
 
 func normalizeImageMediaType(mediaType, path string, data []byte) string {

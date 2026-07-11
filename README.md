@@ -95,6 +95,9 @@ Juex keeps runtime state in the current work directory:
 ```text
 .juex/
 ├── artifacts/
+│   ├── media/
+│   ├── tool-results/<session-id>/
+│   └── user-inputs/<session-id>/
 ├── extensions/<name>/
 │   ├── hooks.yaml
 │   ├── mcp.json

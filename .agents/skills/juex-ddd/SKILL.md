@@ -68,6 +68,7 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Prompt section | Named slice of the system prompt assembled from AGENTS, skills, memory, runtime metadata, and shell profile | `internal/prompt` |
 | Compaction | Policy-driven summary marker insertion that preserves active context while reducing token pressure | `internal/runtime` |
 | Context projection | Artifact-backed truncation/projection of large user input or tool result blocks before provider submission | `internal/runtime`, `internal/llm` |
+| Artifact | Durable workspace-local bytes addressed by a safe relative reference plus integrity metadata | `internal/artifact` |
 | Event | Stable runtime fact emitted on the bus and persisted to `events.jsonl` | `internal/events`, `internal/session` |
 | Evaluation run | Deterministic or live-provider validation that records development evidence under `.tmp/reports/` | `tests/eval` |
 
@@ -90,6 +91,7 @@ Use this map to decide where behavior belongs:
 | `internal/skills` | SKILL.md frontmatter loading and skill metadata | Prompt prose generation, task execution policy |
 | `internal/prompt` | Prompt section assembly from AGENTS, skills, memory, runtime metadata, and shell profile | Provider wire formatting, session persistence |
 | `internal/config` | YAML/env/home/project resolution into explicit value objects and paths | Runtime turn behavior, provider request assembly, HTTP routing |
+| `internal/artifact` | Workspace-rooted artifact paths, atomic writes, content addressing, and integrity verification | Media encoding, provider projection, context preview policy, retention decisions |
 | `internal/app` | Process-level composition of config, provider, tools, MCP, prompt, session, runtime; application-level slash commands | HTTP request parsing, cobra flag grammar, provider SDK behavior |
 | `internal/cli` | Cobra command grammar, flag parsing, terminal/JSON presentation, CLI-specific error output | Runtime policy, session attachment policy, storage invariants |
 | `internal/web` | HTTP/SSE transport, browser-facing DTOs, active in-process session cache, turn cancellation presentation | Domain decisions shared with CLI, provider protocol, session persistence rules |

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/juex-ai/juex/internal/artifact"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -78,17 +79,18 @@ func testImageMedia(t *testing.T) *MediaRef {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	data := []byte("fake image bytes")
-	path := filepath.Join(".juex", "artifacts", "media", "session", "image.png")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	store, err := artifact.NewStore(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	ref, err := store.Put("media/session/image.png", data)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return &MediaRef{
-		ArtifactPath:  path,
+		ArtifactPath:  ref.Path,
 		MediaType:     "image/png",
-		SHA256:        "sha-test",
+		SHA256:        ref.SHA256,
 		OriginalBytes: len(data),
 		Width:         2,
 		Height:        1,
@@ -255,18 +257,38 @@ func TestReadImageBase64RejectsUnsafePathsAndMediaTypes(t *testing.T) {
 func TestReadImageBase64ResolvesRelativeArtifactFromWorkDir(t *testing.T) {
 	workDir := t.TempDir()
 	otherDir := t.TempDir()
-	path := filepath.Join(".juex", "artifacts", "media", "session", "image.png")
-	if err := os.MkdirAll(filepath.Join(workDir, filepath.Dir(path)), 0o700); err != nil {
+	artifactPath := ".juex/artifacts/media/session/image.png"
+	filePath := filepath.Join(workDir, filepath.FromSlash(artifactPath))
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, path), []byte("fake image bytes"), 0o600); err != nil {
+	if err := os.WriteFile(filePath, []byte("fake image bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Chdir(otherDir)
 
-	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{ArtifactPath: path, MediaType: "image/png"})
+	encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{ArtifactPath: artifactPath, MediaType: "image/png"})
 	if !ok || mediaType != "image/png" || encoded == "" {
 		t.Fatalf("readImageBase64 = encoded:%q mediaType:%q ok:%t", encoded, mediaType, ok)
+	}
+}
+
+func TestReadImageBase64RejectsIntegrityMismatch(t *testing.T) {
+	workDir := t.TempDir()
+	store, err := artifact.NewStore(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("media/session/image.png", []byte("fake image bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, mediaType, ok := readImageBase64(workDir, &MediaRef{
+		ArtifactPath: ref.Path,
+		MediaType:    "image/png",
+		SHA256:       strings.Repeat("0", 64),
+	}); ok || encoded != "" || mediaType != "" {
+		t.Fatalf("integrity mismatch accepted: encoded=%q mediaType=%q ok=%t", encoded, mediaType, ok)
 	}
 }
 
