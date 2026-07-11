@@ -1,5 +1,5 @@
 import { DownloadIcon, ImageOffIcon, XIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { getMediaURL } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,15 @@ export function ImageBlock({ media }: { media?: MediaRef | null }) {
   const path = media?.artifact_path?.trim();
   const [open, setOpen] = useState(false);
   const meta = useMemo(() => mediaMetadata(media), [media]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
 
   if (!path) {
     return (

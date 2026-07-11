@@ -904,7 +904,7 @@ Routes:
 | GET | `/api/files/tree` | workdir file tree for the web sidebar |
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
-| GET | `/api/media?path=<path>` | immutable image bytes from a workdir-relative media reference |
+| GET | `/api/media?path=<path>` | image bytes with immutable caching for content-addressed artifacts and revalidation for mutable workdir paths |
 | GET | `/api/runtime` | app-assembled system prompt, provider, shell, hooks, MCP, and skills status translated to the web DTO |
 
 ---

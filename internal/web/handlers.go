@@ -487,13 +487,13 @@ func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Re
 		writeErr(w, http.StatusBadRequest, "bad_request", "expected multipart file field named file")
 		return
 	}
+	defer func() { _ = file.Close() }()
 
 	filename := ""
 	if header != nil {
 		filename = header.Filename
 	}
 	ref, err := usermedia.StoreUpload(s.opts.Cfg.WorkDir, id, filename, file, usermedia.Limits{})
-	closeErr := file.Close()
 	if err != nil {
 		status := http.StatusBadRequest
 		kind := "bad_request"
@@ -507,10 +507,6 @@ func (s *Server) handleSessionAttachmentUpload(w http.ResponseWriter, r *http.Re
 			kind = "payload_too_large"
 		}
 		writeErr(w, status, kind, msg)
-		return
-	}
-	if closeErr != nil {
-		writeErr(w, http.StatusInternalServerError, "internal_error", "failed to close uploaded file")
 		return
 	}
 	writeJSON(w, http.StatusOK, ref)

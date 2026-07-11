@@ -1,9 +1,9 @@
 package web
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -251,32 +251,29 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "media is only supported for images")
 		return
 	}
-	etag, err := fileETag(f)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
+	etag, cacheControl := mediaCacheHeaders(file)
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
 
 	w.Header().Set("Content-Type", mediaType)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Set("ETag", etag)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	http.ServeContent(w, r, file.relPath, file.info.ModTime(), f)
 }
 
-func fileETag(r io.ReadSeeker) (string, error) {
-	if _, err := r.Seek(0, io.SeekStart); err != nil {
-		return "", err
+func mediaCacheHeaders(file resolvedFileRequest) (etag, cacheControl string) {
+	relPath := filepath.ToSlash(file.relPath)
+	name := filepath.Base(filepath.FromSlash(relPath))
+	digest := strings.TrimSuffix(name, filepath.Ext(name))
+	if strings.HasPrefix(relPath, ".juex/artifacts/") && len(digest) == 64 {
+		if _, err := hex.DecodeString(digest); err == nil {
+			return `"` + strings.ToLower(digest) + `"`, "public, max-age=31536000, immutable"
+		}
 	}
-	h := sha256.New()
-	if _, err := io.Copy(h, r); err != nil {
-		return "", err
-	}
-	return `"` + hex.EncodeToString(h.Sum(nil)) + `"`, nil
+	return fmt.Sprintf(`W/"%x-%x"`, file.info.ModTime().UnixNano(), file.info.Size()), "no-cache"
 }
 
 type resolvedFileRequest struct {

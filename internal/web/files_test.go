@@ -3,9 +3,11 @@ package web
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,9 +168,14 @@ func TestFilesRawServesImage(t *testing.T) {
 	}
 }
 
-func TestMediaServesWorkDirImageWithImmutableCache(t *testing.T) {
+func TestMediaServesWorkDirImageWithRevalidationCache(t *testing.T) {
 	srv := newTestServer(t)
-	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
+	imagePath := filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png")
+	mustWriteBytes(t, imagePath, tinyPNG)
+	info, err := os.Stat(imagePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -184,11 +191,12 @@ func TestMediaServesWorkDirImageWithImmutableCache(t *testing.T) {
 	if got := resp.Header.Get("Content-Type"); got != "image/png" {
 		t.Fatalf("content type = %q", got)
 	}
-	if got := resp.Header.Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+	if got := resp.Header.Get("Cache-Control"); got != "no-cache" {
 		t.Fatalf("cache-control = %q", got)
 	}
-	if got := resp.Header.Get("ETag"); got != `"1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"` {
-		t.Fatalf("etag = %q", got)
+	wantETag := fmt.Sprintf(`W/"%x-%x"`, info.ModTime().UnixNano(), info.Size())
+	if got := resp.Header.Get("ETag"); got != wantETag {
+		t.Fatalf("etag = %q, want %q", got, wantETag)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -201,12 +209,14 @@ func TestMediaServesWorkDirImageWithImmutableCache(t *testing.T) {
 
 func TestMediaServesArtifactImage(t *testing.T) {
 	srv := newTestServer(t)
-	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, ".juex", "artifacts", "media", "session", "image.png"), tinyPNG)
+	digest := "1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"
+	artifactPath := filepath.Join(".juex", "artifacts", "media", "session", digest+".png")
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, artifactPath), tinyPNG)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/media?path=.juex%2Fartifacts%2Fmedia%2Fsession%2Fimage.png")
+	resp, err := http.Get(ts.URL + "/api/media?path=" + url.QueryEscape(filepath.ToSlash(artifactPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,6 +226,12 @@ func TestMediaServesArtifactImage(t *testing.T) {
 	}
 	if got := resp.Header.Get("Content-Type"); got != "image/png" {
 		t.Fatalf("content type = %q", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("cache-control = %q", got)
+	}
+	if got := resp.Header.Get("ETag"); got != `"`+digest+`"` {
+		t.Fatalf("etag = %q", got)
 	}
 }
 
