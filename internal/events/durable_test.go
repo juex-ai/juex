@@ -12,6 +12,7 @@ func TestDurableSink_CommitsBeforeDelivery(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
+	t.Cleanup(sink.Close)
 	sink.AddDelivery(delivery)
 
 	committed, err := sink.Commit(Event{Type: "turn.started"})
@@ -27,14 +28,12 @@ func TestDurableSink_CommitsBeforeDelivery(t *testing.T) {
 	if len(journal.events) != 1 {
 		t.Fatalf("journal events = %d, want 1", len(journal.events))
 	}
-	if len(delivery.events) != 1 {
-		t.Fatalf("delivery events = %d, want 1", len(delivery.events))
-	}
 	if !reflect.DeepEqual(journal.events[0], committed) {
 		t.Fatalf("journal event = %+v, want committed %+v", journal.events[0], committed)
 	}
-	if !reflect.DeepEqual(delivery.events[0], committed) {
-		t.Fatalf("delivery event = %+v, want committed %+v", delivery.events[0], committed)
+	delivery.waitLen(t, 1)
+	if !reflect.DeepEqual(delivery.snapshot()[0], committed) {
+		t.Fatalf("delivery event = %+v, want committed %+v", delivery.snapshot()[0], committed)
 	}
 }
 
@@ -43,28 +42,30 @@ func TestDurableSink_DoesNotDeliverWhenJournalFails(t *testing.T) {
 	journal := &recordingJournal{err: journalErr}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
+	t.Cleanup(sink.Close)
 	sink.AddDelivery(delivery)
 
 	_, err := sink.Commit(Event{Type: "turn.started"})
 	if !errors.Is(err, journalErr) {
 		t.Fatalf("err = %v, want %v", err, journalErr)
 	}
-	if len(delivery.events) != 0 {
-		t.Fatalf("delivery events = %+v, want none", delivery.events)
+	if got := delivery.snapshot(); len(got) != 0 {
+		t.Fatalf("delivery events = %+v, want none", got)
 	}
 }
 
 func TestDurableSink_RequiresJournal(t *testing.T) {
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(nil)
+	t.Cleanup(sink.Close)
 	sink.AddDelivery(delivery)
 
 	_, err := sink.Commit(Event{Type: "turn.started"})
 	if !errors.Is(err, ErrDurableJournalMissing) {
 		t.Fatalf("err = %v, want ErrDurableJournalMissing", err)
 	}
-	if len(delivery.events) != 0 {
-		t.Fatalf("delivery events = %+v, want none", delivery.events)
+	if got := delivery.snapshot(); len(got) != 0 {
+		t.Fatalf("delivery events = %+v, want none", got)
 	}
 }
 
@@ -72,6 +73,7 @@ func TestDurableSink_PreservesDeliveryOrderFromJournalOrder(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
+	t.Cleanup(sink.Close)
 	sink.AddDelivery(delivery)
 
 	var wg sync.WaitGroup
@@ -89,20 +91,23 @@ func TestDurableSink_PreservesDeliveryOrderFromJournalOrder(t *testing.T) {
 	if len(journal.events) != 50 {
 		t.Fatalf("journal events = %d, want 50", len(journal.events))
 	}
-	if len(delivery.events) != len(journal.events) {
-		t.Fatalf("delivery events = %d, want %d", len(delivery.events), len(journal.events))
+	delivery.waitLen(t, len(journal.events))
+	delivered := delivery.snapshot()
+	if len(delivered) != len(journal.events) {
+		t.Fatalf("delivery events = %d, want %d", len(delivered), len(journal.events))
 	}
 	for i := range journal.events {
-		if journal.events[i].ID != delivery.events[i].ID {
-			t.Fatalf("delivery order diverged at %d: journal=%s delivery=%s", i, journal.events[i].ID, delivery.events[i].ID)
+		if journal.events[i].ID != delivered[i].ID {
+			t.Fatalf("delivery order diverged at %d: journal=%s delivery=%s", i, journal.events[i].ID, delivered[i].ID)
 		}
 	}
 }
 
-func TestDurableSink_DoesNotHoldStateLockWhileDelivering(t *testing.T) {
+func TestDurableSink_DoesNotBlockCommitsOrStateWhileDelivering(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &blockingDelivery{started: make(chan struct{}), release: make(chan struct{})}
 	sink := NewDurableSink(journal)
+	t.Cleanup(sink.Close)
 	sink.AddDelivery(delivery)
 
 	errCh := make(chan error, 1)
@@ -115,6 +120,35 @@ func TestDurableSink_DoesNotHoldStateLockWhileDelivering(t *testing.T) {
 	case <-delivery.started:
 	case <-time.After(time.Second):
 		t.Fatal("delivery did not start")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(delivery.release)
+		t.Fatal("Commit blocked behind a slow delivery")
+	}
+
+	manyDone := make(chan error, 1)
+	go func() {
+		for i := 0; i < 1500; i++ {
+			if _, err := sink.Commit(Event{Type: "tool.output_delta"}); err != nil {
+				manyDone <- err
+				return
+			}
+		}
+		manyDone <- nil
+	}()
+	select {
+	case err := <-manyDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		close(delivery.release)
+		t.Fatal("later commits blocked behind queued slow delivery")
 	}
 
 	added := make(chan struct{})
@@ -131,26 +165,27 @@ func TestDurableSink_DoesNotHoldStateLockWhileDelivering(t *testing.T) {
 	}
 
 	close(delivery.release)
-	if err := <-errCh; err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestDurableSink_UnsubscribeAndClose(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
 	sink := NewDurableSink(journal)
+	t.Cleanup(sink.Close)
 	unsubscribe := sink.AddDelivery(delivery)
 
 	if _, err := sink.Commit(Event{Type: "one"}); err != nil {
 		t.Fatal(err)
 	}
+	delivery.waitLen(t, 1)
 	unsubscribe()
 	if _, err := sink.Commit(Event{Type: "two"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(delivery.events) != 1 || delivery.events[0].Type != "one" {
-		t.Fatalf("delivery events = %+v, want only first event", delivery.events)
+	time.Sleep(50 * time.Millisecond)
+	delivered := delivery.snapshot()
+	if len(delivered) != 1 || delivered[0].Type != "one" {
+		t.Fatalf("delivery events = %+v, want only first event", delivered)
 	}
 
 	sink.Close()
@@ -163,6 +198,7 @@ func TestDurableSink_SetJournal(t *testing.T) {
 	first := &recordingJournal{}
 	second := &recordingJournal{}
 	sink := NewDurableSink(first)
+	t.Cleanup(sink.Close)
 
 	if _, err := sink.Commit(Event{Type: "one"}); err != nil {
 		t.Fatal(err)
@@ -193,11 +229,32 @@ func (j *recordingJournal) AppendEvent(e Event) error {
 }
 
 type recordingDelivery struct {
+	mu     sync.Mutex
 	events []Event
 }
 
 func (d *recordingDelivery) Publish(e Event) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.events = append(d.events, e)
+}
+
+func (d *recordingDelivery) snapshot() []Event {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]Event(nil), d.events...)
+}
+
+func (d *recordingDelivery) waitLen(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := len(d.snapshot()); got >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("delivery len = %d, want at least %d", len(d.snapshot()), want)
 }
 
 type blockingDelivery struct {

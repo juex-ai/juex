@@ -27,17 +27,51 @@ func (fn DeliveryFunc) Publish(e Event) {
 type DurableSink struct {
 	commitMu sync.Mutex
 	mu       sync.Mutex
+	cond     *sync.Cond
 	journal  Journal
 
 	deliveries map[uint64]Delivery
 	nextID     uint64
 	closed     bool
+	queue      []deliveryBatch
+}
+
+type deliveryBatch struct {
+	event      Event
+	deliveries []Delivery
 }
 
 func NewDurableSink(journal Journal) *DurableSink {
-	return &DurableSink{
+	s := &DurableSink{
 		journal:    journal,
 		deliveries: map[uint64]Delivery{},
+	}
+	s.cond = sync.NewCond(&s.mu)
+	go s.runDeliveries()
+	return s
+}
+
+func (s *DurableSink) runDeliveries() {
+	for {
+		s.mu.Lock()
+		for len(s.queue) == 0 && !s.closed {
+			s.cond.Wait()
+		}
+		if len(s.queue) == 0 && s.closed {
+			s.mu.Unlock()
+			return
+		}
+		batch := s.queue[0]
+		s.queue[0] = deliveryBatch{}
+		s.queue = s.queue[1:]
+		if len(s.queue) == 0 {
+			s.queue = nil
+		}
+		s.mu.Unlock()
+
+		for _, delivery := range batch.deliveries {
+			delivery.Publish(batch.event)
+		}
 	}
 }
 
@@ -105,19 +139,16 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 	}
 
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return Event{}, ErrDurableSinkClosed
-	}
 	deliveries := make([]Delivery, 0, len(s.deliveries))
 	for _, delivery := range s.deliveries {
 		deliveries = append(deliveries, delivery)
 	}
+	if len(deliveries) > 0 {
+		s.queue = append(s.queue, deliveryBatch{event: e, deliveries: deliveries})
+		s.cond.Signal()
+	}
 	s.mu.Unlock()
 
-	for _, delivery := range deliveries {
-		delivery.Publish(e)
-	}
 	return e, nil
 }
 
@@ -125,8 +156,14 @@ func (s *DurableSink) Close() {
 	if s == nil {
 		return
 	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 	s.closed = true
 	s.deliveries = map[uint64]Delivery{}
+	s.cond.Signal()
 }
