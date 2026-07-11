@@ -104,6 +104,31 @@ func TestStoreUploadConcurrentSameImage(t *testing.T) {
 	}
 }
 
+func TestStoreUploadRepairsCorruptContentAddressedImage(t *testing.T) {
+	workDir := t.TempDir()
+	data := testPNG(t)
+	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}
+	ref, err := StoreUpload(workDir, "session-1", "screen.png", bytes.NewReader(data), limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(workDir, filepath.FromSlash(ref.ArtifactPath))
+	if err := os.WriteFile(artifactPath, []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := StoreUpload(workDir, "session-1", "screen.png", bytes.NewReader(data), limits); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(repaired, data) {
+		t.Fatalf("content-addressed upload did not repair corrupt bytes")
+	}
+}
+
 func TestStoreUploadRejectsSymlinkedMediaRoots(t *testing.T) {
 	data := testPNG(t)
 	limits := Limits{MaxBytes: int64(len(data) + 1), MaxCount: 8}

@@ -154,6 +154,10 @@ the chunked write tools `write_begin`, `write_chunk`, `write_commit`, and
 `write_abort`. `read` returns UTF-8 text for text files and structured media
 references for supported image files so vision-capable providers can inspect
 screenshots and visual artifacts without inlining image bytes into history.
+The Web composer can also paste, drop, or select images. Uploads are stored as
+content-addressed, session-scoped artifacts and revalidated when the turn is
+admitted; text-only, image-only, and mixed-content turns use the same runtime
+path.
 `apply_patch` accepts a compact patch envelope in `patch_text`
 with `*** Begin Patch` / `*** End Patch` markers and supports add, update,
 delete, and move operations. It validates the whole patch before writing,
