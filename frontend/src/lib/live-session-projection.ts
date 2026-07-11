@@ -272,6 +272,13 @@ export function projectLiveSessionEvent(
     case "llm.requested":
       next = { ...next, turnActive: true, status: { kind: "running" } };
       break;
+    case "llm.output_delta":
+      next = {
+        ...applyAssistantOutputDelta(next, event),
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
     case "llm.responded":
       next = {
         ...applyAssistantResponse(next, event),
@@ -680,6 +687,71 @@ function applyAssistantResponse(
       { role: "assistant", turn_id: event.turn_id, pending: false, blocks, model },
     ],
   };
+}
+
+function applyAssistantOutputDelta(
+  state: LiveSessionProjection,
+  event: Extract<BrowserEvent, { type: "llm.output_delta" }>,
+): LiveSessionProjection {
+  if (!event.turn_id || !event.payload.text) return state;
+  const blockType =
+    event.payload.kind === "reasoning"
+      ? "reasoning"
+      : event.payload.kind === "text"
+        ? "text"
+        : null;
+  if (!blockType) return state;
+
+  const messageIndex = state.messages.findLastIndex(
+    (message) =>
+      message.turn_id === event.turn_id &&
+      message.role === "assistant" &&
+      message.pending,
+  );
+  const messages = [...state.messages];
+  const message: Message =
+    messageIndex >= 0
+      ? { ...messages[messageIndex], blocks: [...(messages[messageIndex].blocks ?? [])] }
+      : {
+          role: "assistant",
+          turn_id: event.turn_id,
+          pending: true,
+          blocks: [],
+        };
+  const blocks = message.blocks ?? [];
+  const blockIndex = blocks.findIndex(
+    (block) =>
+      block.type === blockType && block.stream_index === event.payload.index,
+  );
+  if (blockIndex >= 0) {
+    const block = blocks[blockIndex];
+    if (block.type === "text" || block.type === "reasoning") {
+      blocks[blockIndex] = {
+        ...block,
+        text: `${block.text ?? ""}${event.payload.text}`,
+      };
+    }
+  } else if (blockType === "reasoning") {
+    blocks.push({
+      type: "reasoning",
+      text: event.payload.text,
+      stream_index: event.payload.index,
+    });
+  } else {
+    blocks.push({
+      type: "text",
+      text: event.payload.text,
+      stream_index: event.payload.index,
+    });
+  }
+  message.blocks = blocks;
+  if (event.payload.model) message.model = event.payload.model;
+  if (messageIndex >= 0) {
+    messages[messageIndex] = message;
+  } else {
+    messages.push(message);
+  }
+  return { ...state, messages };
 }
 
 function appendToolResult(

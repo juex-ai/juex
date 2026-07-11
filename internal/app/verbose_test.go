@@ -217,6 +217,22 @@ func TestVerbose_MultilineThinkingAndText(t *testing.T) {
 	}
 }
 
+func TestVerbose_LLMOutputDeltaStreamsWithoutDuplicatingFinalText(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{Input: "stream"}},
+		{Type: "llm.requested", Payload: runtimeevents.LLMRequestedPayload{Iter: 0}},
+		{Type: "llm.output_delta", Payload: runtimeevents.LLMOutputDeltaPayload{Kind: "text", Index: 0, Text: "hel"}},
+		{Type: "llm.output_delta", Payload: runtimeevents.LLMOutputDeltaPayload{Kind: "text", Index: 0, Text: "lo"}},
+		{Type: "llm.responded", Payload: runtimeevents.LLMRespondedPayload{
+			Blocks: []llm.Block{{Type: llm.BlockText, Text: "hello"}},
+			Text:   "hello",
+		}},
+	})
+	if strings.Count(out, "hello") != 1 {
+		t.Fatalf("expected streamed text once, got:\n%s", out)
+	}
+}
+
 func TestVerbose_PrintsResponseBlocksInOrder(t *testing.T) {
 	out := emitAll([]events.Event{
 		{Type: "llm.requested", Payload: map[string]any{}},

@@ -33,6 +33,11 @@ type verbosePrinter struct {
 
 	toolBatch       *verboseToolBatch
 	lastToolLineKey string
+
+	streamedLLMText      bool
+	streamedLLMReasoning bool
+	streamingDeltaLine   bool
+	streamingDeltaKind   string
 }
 
 func newVerbosePrinter(w io.Writer) *verbosePrinter {
@@ -61,21 +66,30 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		payload, _ := payloadAs[runtimeevents.TurnStartedPayload](e.Payload)
 		vp.turn = 0
 		vp.tStart = time.Now()
+		vp.resetLLMOutputDelta()
 		vp.printTurnStarted(payload)
 	case "llm.requested":
 		vp.turn++
+		vp.resetLLMOutputDelta()
 		vp.printlnDim(fmt.Sprintf("[turn %d]", vp.turn))
 		vp.spin.start("thinking")
+	case "llm.output_delta":
+		payload, _ := payloadAs[runtimeevents.LLMOutputDeltaPayload](e.Payload)
+		vp.printLLMOutputDelta(payload)
 	case "llm.responded":
 		vp.spin.halt()
 		payload, _ := payloadAs[runtimeevents.LLMRespondedPayload](e.Payload)
+		streamed := vp.streamedLLMText || vp.streamedLLMReasoning
+		if streamed {
+			vp.finishLLMOutputDeltaLine()
+		}
 		if len(payload.Blocks) > 0 {
-			vp.printResponseBlocks(payload.Blocks)
+			vp.printResponseBlocksSkipping(payload.Blocks, vp.streamedLLMReasoning, vp.streamedLLMText)
 		} else {
-			if payload.Thinking != "" {
+			if payload.Thinking != "" && !vp.streamedLLMReasoning {
 				vp.printIndentedBlock("thinking", payload.Thinking, true)
 			}
-			if payload.Text != "" {
+			if payload.Text != "" && !vp.streamedLLMText {
 				vp.printIndentedBlock("assistant", payload.Text, false)
 			}
 		}
@@ -122,6 +136,54 @@ func (vp *verbosePrinter) handle(e events.Event) {
 		payload, _ := payloadAs[runtimeevents.TurnErroredPayload](e.Payload)
 		vp.printlnRed("✗ " + payload.Error)
 	}
+}
+
+func (vp *verbosePrinter) resetLLMOutputDelta() {
+	vp.streamedLLMText = false
+	vp.streamedLLMReasoning = false
+	vp.streamingDeltaLine = false
+	vp.streamingDeltaKind = ""
+}
+
+func (vp *verbosePrinter) printLLMOutputDelta(payload runtimeevents.LLMOutputDeltaPayload) {
+	if payload.Text == "" {
+		return
+	}
+	vp.spin.halt()
+	kind := payload.Kind
+	if kind != "reasoning" {
+		kind = "text"
+	}
+	vp.startLLMOutputDeltaLine(kind)
+	if kind == "reasoning" {
+		vp.streamedLLMReasoning = true
+	} else {
+		vp.streamedLLMText = true
+	}
+	fmt.Fprint(vp.w, payload.Text)
+}
+
+func (vp *verbosePrinter) startLLMOutputDeltaLine(kind string) {
+	if vp.streamingDeltaLine && vp.streamingDeltaKind == kind {
+		return
+	}
+	vp.finishLLMOutputDeltaLine()
+	label := "assistant"
+	if kind == "reasoning" {
+		label = "thinking"
+	}
+	fmt.Fprint(vp.w, "  "+label+": ")
+	vp.streamingDeltaLine = true
+	vp.streamingDeltaKind = kind
+}
+
+func (vp *verbosePrinter) finishLLMOutputDeltaLine() {
+	if !vp.streamingDeltaLine {
+		return
+	}
+	fmt.Fprintln(vp.w)
+	vp.streamingDeltaLine = false
+	vp.streamingDeltaKind = ""
 }
 
 func (vp *verbosePrinter) printTurnStarted(payload runtimeevents.TurnStartedPayload) {
@@ -204,10 +266,13 @@ func payloadFieldPresent(v any, key string) bool {
 	return true
 }
 
-func (vp *verbosePrinter) printResponseBlocks(blocks []llm.Block) {
+func (vp *verbosePrinter) printResponseBlocksSkipping(blocks []llm.Block, skipReasoning, skipText bool) {
 	for _, block := range blocks {
 		switch block.Type {
 		case llm.BlockReasoning:
+			if skipReasoning {
+				continue
+			}
 			text := block.Text
 			if block.Redacted {
 				text = "[redacted]"
@@ -216,6 +281,9 @@ func (vp *verbosePrinter) printResponseBlocks(blocks []llm.Block) {
 			}
 			vp.printIndentedBlock("thinking", text, true)
 		case llm.BlockText:
+			if skipText {
+				continue
+			}
 			vp.printIndentedBlock("assistant", block.Text, false)
 		case llm.BlockImage:
 			vp.printIndentedBlock("assistant", llm.FormatImagePlaceholder(block.Media), false)

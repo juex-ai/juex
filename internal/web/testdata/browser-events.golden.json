@@ -63,6 +63,19 @@
     }
   },
   {
+    "id": "evt-llm-delta",
+    "type": "llm.output_delta",
+    "ts": "2026-06-15T00:00:01.75Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "iter": 0,
+      "model": "gpt-test",
+      "kind": "text",
+      "index": 0,
+      "text": "streaming "
+    }
+  },
+  {
     "id": "evt-tool-requested",
     "type": "tool.requested",
     "ts": "2026-06-15T00:00:02Z",

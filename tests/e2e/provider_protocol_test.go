@@ -41,6 +41,8 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
     protocol: openai/responses
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: gpt-test
         thinking_effort: high
@@ -71,6 +73,8 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: chat-test
         thinking_effort: xhigh
@@ -85,6 +89,8 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 			providerYAML: `  - id: deepseek
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: deepseek-v4-pro
         thinking_effort: max
@@ -102,6 +108,7 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
     api_key: k
     capabilities:
       reasoning_effort: false
+      streaming: false
     models:
       - id: chat-test
         thinking_effort: high
@@ -172,6 +179,61 @@ func TestLiveBinary_ProviderProtocolAndThinkingMatrix(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_OpenAIChatStreamsByDefault(t *testing.T) {
+	bin := buildJuex(t)
+	requests := make(chan capturedProviderRequest, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests <- capturedProviderRequest{path: r.URL.Path, body: body}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"id":"cmpl_e2e","object":"chat.completion.chunk","created":1,"model":"chat-test","choices":[{"index":0,"delta":{"role":"assistant","content":"stream-"},"finish_reason":null}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"id":"cmpl_e2e","object":"chat.completion.chunk","created":1,"model":"chat-test","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, `data: {"id":"cmpl_e2e","object":"chat.completion.chunk","created":1,"model":"chat-test","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`+"\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	configBody := "model: local-chat:chat-test\nproviders:\n" + strings.ReplaceAll(`  - id: local-chat
+    protocol: openai/chat
+    base_url: BASE_URL
+    api_key: k
+    models:
+      - id: chat-test
+`, "BASE_URL", srv.URL)
+	if err := writeText(configPath, configBody); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--new", "--json", "hello")
+	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("juex run: %v\n%s", err, out)
+	}
+	var result struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatalf("stdout is not run JSON: %v\n%s", err, out)
+	}
+	if result.Text != "stream-ok" {
+		t.Fatalf("run text = %q, want stream-ok", result.Text)
+	}
+	request := <-requests
+	if request.path != "/chat/completions" || request.body["stream"] != true {
+		t.Fatalf("stream request = %+v", request)
+	}
+	streamOptions, _ := request.body["stream_options"].(map[string]any)
+	if streamOptions["include_usage"] != true {
+		t.Fatalf("stream_options = %+v, want include_usage=true", streamOptions)
+	}
+}
+
 type capturedProviderRequest struct {
 	path string
 	body map[string]any
@@ -201,6 +263,7 @@ providers:
     api_key: k
     capabilities:
       vision: true
+      streaming: false
     models:
       - id: vision-test
 `
@@ -306,6 +369,8 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: chat-test
 `, "BASE_URL", srv.URL)
@@ -402,6 +467,8 @@ func TestLiveBinary_CLIVerboseCompactsToolBatch(t *testing.T) {
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: chat-test
 `, "BASE_URL", srv.URL)
@@ -496,6 +563,8 @@ func TestLiveBinary_ShellYieldIgnoresRuntimeToolTimeout(t *testing.T) {
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: chat-test
 `, "BASE_URL", srv.URL)
@@ -598,6 +667,8 @@ func main() {
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: chat-test
 `, "BASE_URL", srv.URL)
@@ -682,6 +753,8 @@ func TestLiveBinary_CtrlCCancelsExecCommandTool(t *testing.T) {
     protocol: openai/chat
     base_url: BASE_URL
     api_key: k
+    capabilities:
+      streaming: false
     models:
       - id: chat-test
 `, "BASE_URL", srv.URL)

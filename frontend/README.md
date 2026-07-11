@@ -61,7 +61,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
 | `src/lib/home-route.ts` | pure helper for choosing the web root redirect target |
 | `src/lib/light-code-highlight.ts` | lightweight synchronous JSON/log highlighting for tool payloads |
-| `src/lib/live-session-projection.ts` | pure live-session read model for SSE events, optimistic turns, pending input, compact state, and turn-status reconciliation |
+| `src/lib/live-session-projection.ts` | pure live-session read model for SSE events, optimistic turns, provisional assistant deltas, pending input, compact state, and final-response reconciliation |
 | `src/lib/live-tool-events.ts` | pure live transcript updates for tool requested/output-delta events |
 | `src/lib/loading-state.ts` | pure loading-state display text helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |

@@ -77,12 +77,81 @@ func (p *openAIResponsesProvider) CompleteWithOptions(ctx context.Context, sys s
 	if opts.CachePolicy.StablePrefixKey != "" {
 		params.PromptCacheKey = param.NewOpt(opts.CachePolicy.StablePrefixKey)
 	}
+	if p.profile.Capabilities.Streaming {
+		return p.completeStreaming(ctx, params, opts)
+	}
 
 	resp, err := p.client.Responses.New(ctx, params)
 	if err != nil {
 		return Response{}, fmt.Errorf("openai responses: %w", err)
 	}
 	return p.responseFromResponses(resp), nil
+}
+
+func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (Response, error) {
+	idleTimeout := streamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+	defer stopIdle()
+	stream := p.client.Responses.NewStreaming(streamCtx, params)
+	defer func() { _ = stream.Close() }()
+
+	var (
+		finalResp responses.Response
+		hasFinal  bool
+		items     []responses.ResponseOutputItemUnion
+	)
+	for stream.Next() {
+		resetIdle()
+		event := stream.Current()
+		emitResponsesStreamDelta(opts.OnDelta, event)
+		switch event.Type {
+		case "error":
+			return Response{}, fmt.Errorf("openai responses stream error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON()))
+		case "response.failed":
+			if msg := responseErrorMessage(event.Response); msg != "" {
+				return Response{}, fmt.Errorf("openai responses: %s", msg)
+			}
+			return Response{}, fmt.Errorf("openai responses failed")
+		case "response.output_item.done":
+			items = append(items, event.Item)
+		case "response.done", "response.completed", "response.incomplete":
+			finalResp = event.Response
+			hasFinal = true
+		}
+	}
+	if err := stream.Err(); err != nil {
+		if idleExpired() {
+			return Response{}, fmt.Errorf("openai responses stream idle timeout after %s: %w", idleTimeout, err)
+		}
+		return Response{}, fmt.Errorf("openai responses stream: %w", err)
+	}
+	if !hasFinal {
+		if len(items) == 0 {
+			return Response{}, fmt.Errorf("openai responses stream closed before response.completed")
+		}
+		finalResp = responses.Response{Status: responses.ResponseStatusCompleted, Output: items}
+	} else if len(finalResp.Output) == 0 && len(items) > 0 {
+		finalResp.Output = items
+	}
+	return p.responseFromResponses(&finalResp), nil
+}
+
+func emitResponsesStreamDelta(onDelta func(StreamDelta), event responses.ResponseStreamEventUnion) {
+	if onDelta == nil {
+		return
+	}
+	switch event.Type {
+	case "response.output_text.delta":
+		delta := event.AsResponseOutputTextDelta()
+		if delta.Delta != "" {
+			onDelta(StreamDelta{Kind: "text", Index: int(delta.OutputIndex), Text: delta.Delta})
+		}
+	case "response.reasoning_summary_text.delta":
+		delta := event.AsResponseReasoningSummaryTextDelta()
+		if delta.Delta != "" {
+			onDelta(StreamDelta{Kind: "reasoning", Index: int(delta.OutputIndex), Text: delta.Delta})
+		}
+	}
 }
 
 func (p *openAIResponsesProvider) responseFromResponses(resp *responses.Response) Response {

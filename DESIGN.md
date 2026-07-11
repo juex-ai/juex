@@ -25,7 +25,7 @@
 
 - Non-image file attachments and voice input.
 - Multi-cursor / real-time collaboration.
-- Token-by-token streaming (events arrive at block granularity).
+- Collaborative multi-user transcript editing.
 
 ---
 
@@ -566,7 +566,11 @@ and prepends the returned page.
 Live facts from the JSON/SSE API are projected through
 `src/lib/live-session-projection.ts`. That module owns the browser-side read
 model for live messages, optimistic turns, pending input, compact progress,
-tool output deltas, usage snapshots, active flags, and status.
+tool output deltas, assistant text/reasoning deltas, usage snapshots, active
+flags, and status. Assistant deltas accumulate in provisional blocks keyed by
+provider block index; `llm.responded` then replaces them with the canonical
+ordered blocks so retries or protocol-specific chunking cannot duplicate the
+final transcript.
 `src/lib/session-read-controller.ts` owns the session-detail effect interpreter:
 route guards, snapshot/context refresh, EventSource dispatch, turn polling,
 transient timers, navigation effects, and refetching after terminal turn events.

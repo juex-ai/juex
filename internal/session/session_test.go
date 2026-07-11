@@ -424,6 +424,32 @@ func TestSession_BusSubscription(t *testing.T) {
 	}
 }
 
+func TestSession_BusSubscriptionSkipsTransientEvents(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	bus := events.NewBus()
+	s.SubscribeBus(bus)
+
+	bus.Emit(events.Event{Type: "llm.output_delta", Transient: true, Payload: map[string]any{
+		"iter": 0,
+		"kind": "text",
+		"text": "live only",
+	}})
+	bus.Emit(events.Event{Type: "turn.completed", Payload: map[string]any{"output_len": 4}})
+
+	data, _ := os.ReadFile(filepath.Join(s.Dir, eventsFile))
+	if c := countLines(data); c != 1 {
+		t.Fatalf("expected only durable event from bus, got %d: %s", c, data)
+	}
+	if strings.Contains(string(data), "llm.output_delta") {
+		t.Fatalf("llm.output_delta should not be persisted: %s", data)
+	}
+}
+
 func TestSession_LoadRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

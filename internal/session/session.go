@@ -283,6 +283,9 @@ func (s *Session) SubscribeBus(bus *events.Bus) func() {
 		return func() {}
 	}
 	return bus.Subscribe("*", func(e events.Event) {
+		if e.Transient {
+			return
+		}
 		_ = s.AppendEvent(e)
 	})
 }

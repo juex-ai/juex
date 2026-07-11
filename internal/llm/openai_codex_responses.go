@@ -90,12 +90,12 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 
 	switch p.transport {
 	case CodexTransportAuto:
-		resp, err = p.ws.Complete(ctx, params)
+		resp, err = p.ws.Complete(ctx, params, opts)
 		if err != nil {
 			resp, err = p.completeSSE(ctx, params, opts)
 		}
 	case CodexTransportWebSocket, CodexTransportWebSocketCached:
-		resp, err = p.ws.Complete(ctx, params)
+		resp, err = p.ws.Complete(ctx, params, opts)
 	case CodexTransportSSE:
 		resp, err = p.completeSSE(ctx, params, opts)
 	default:
@@ -109,12 +109,32 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 
 func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (*responses.Response, error) {
 	maxAttempts := providerMaxRetries + 1
+	idleTimeout := streamIdleTimeout(opts)
 	for attempt := 0; ; attempt++ {
-		stream := p.client.Responses.NewStreaming(ctx, params)
-		resp, err := readCodexResponsesStream(stream)
+		emittedDelta := false
+		onDelta := opts.OnDelta
+		if onDelta != nil {
+			onDelta = func(delta StreamDelta) {
+				emittedDelta = true
+				opts.OnDelta(delta)
+			}
+		}
+		streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+		stream := p.client.Responses.NewStreaming(streamCtx, params)
+		resp, err := readCodexResponsesStream(stream, codexResponsesStreamOptions{
+			OnDelta:   onDelta,
+			ResetIdle: resetIdle,
+		})
 		_ = stream.Close()
+		stopIdle()
 		if err == nil {
 			return resp, nil
+		}
+		if idleExpired() {
+			return nil, fmt.Errorf("codex SSE idle timeout after %s: %w", idleTimeout, err)
+		}
+		if emittedDelta {
+			return nil, fmt.Errorf("codex SSE read failed after emitting output; retry suppressed: %w", err)
 		}
 		attemptNumber := attempt + 1
 		if ctx.Err() != nil || !isRetryableCodexSSEReadError(err) {
@@ -176,14 +196,23 @@ type codexResponsesStream interface {
 	Err() error
 }
 
-func readCodexResponsesStream(stream codexResponsesStream) (*responses.Response, error) {
+type codexResponsesStreamOptions struct {
+	OnDelta   func(StreamDelta)
+	ResetIdle func()
+}
+
+func readCodexResponsesStream(stream codexResponsesStream, opts codexResponsesStreamOptions) (*responses.Response, error) {
 	var (
 		finalResp responses.Response
 		hasFinal  bool
 		items     []responses.ResponseOutputItemUnion
 	)
 	for stream.Next() {
+		if opts.ResetIdle != nil {
+			opts.ResetIdle()
+		}
 		event := stream.Current()
+		emitResponsesStreamDelta(opts.OnDelta, event)
 		switch event.Type {
 		case "error":
 			return nil, fmt.Errorf("codex error: %s", firstNonEmpty(event.Message, event.Code, event.RawJSON()))

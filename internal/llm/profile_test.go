@@ -15,7 +15,7 @@ func TestResolveProfile_KnownPresetUsesFixedProtocol(t *testing.T) {
 	if profile.ID != "openai" || profile.Protocol != ProtocolOpenAIResponses {
 		t.Fatalf("profile = %+v", profile)
 	}
-	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
+	if !profile.Capabilities.Tools || !profile.Capabilities.Streaming || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
 		t.Fatalf("capabilities = %+v", profile.Capabilities)
 	}
 	if len(profile.Compat.ReasoningReplayFields) == 0 {
@@ -38,7 +38,7 @@ func TestResolveProfile_DeepSeekPresetUsesOpenAIChatWithReasoningEffort(t *testi
 	if profile.BaseURL != "https://api.deepseek.com" {
 		t.Fatalf("base url = %q", profile.BaseURL)
 	}
-	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
+	if !profile.Capabilities.Tools || !profile.Capabilities.Streaming || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
 		t.Fatalf("capabilities = %+v", profile.Capabilities)
 	}
 	if got := profile.Compat.ReasoningReplayFields; len(got) != 1 || got[0] != "reasoning_content" {
@@ -66,14 +66,15 @@ func TestResolveProfile_CapabilityOverride(t *testing.T) {
 		Model:  "gpt-test",
 		Capabilities: CapabilityOverrides{
 			Tools:           &no,
+			Streaming:       &no,
 			ReasoningEffort: &no,
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Capabilities.Tools || profile.Capabilities.ReasoningEffort {
-		t.Fatalf("capabilities = %+v, want tools/reasoning_effort disabled", profile.Capabilities)
+	if profile.Capabilities.Tools || profile.Capabilities.Streaming || profile.Capabilities.ReasoningEffort {
+		t.Fatalf("capabilities = %+v, want tools/streaming/reasoning_effort disabled", profile.Capabilities)
 	}
 	if !profile.Capabilities.MaxOutputTokens {
 		t.Fatalf("max output override should preserve preset true: %+v", profile.Capabilities)
@@ -92,7 +93,7 @@ func TestResolveProfile_CustomProtocolUsesCompatibleOpenAIChatDefaults(t *testin
 	if profile.ID != "custom" || profile.Protocol != ProtocolOpenAIChat {
 		t.Fatalf("profile = %+v", profile)
 	}
-	if !profile.Capabilities.Tools || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
+	if !profile.Capabilities.Tools || !profile.Capabilities.Streaming || !profile.Capabilities.ReasoningEffort || !profile.Capabilities.ReasoningReplay {
 		t.Fatalf("capabilities = %+v, want OpenAI-compatible chat defaults with reasoning effort", profile.Capabilities)
 	}
 }

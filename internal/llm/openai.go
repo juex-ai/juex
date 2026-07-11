@@ -74,11 +74,65 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	if opts.CachePolicy.StablePrefixKey != "" {
 		params.PromptCacheKey = openai.String(opts.CachePolicy.StablePrefixKey)
 	}
+	if p.profile.Capabilities.Streaming {
+		return p.completeStreaming(ctx, params, opts)
+	}
 
 	completion, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return Response{}, fmt.Errorf("openai: %w", err)
 	}
+	return p.responseFromChatCompletion(completion, "")
+}
+
+func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.ChatCompletionNewParams, opts CompleteOptions) (Response, error) {
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
+	idleTimeout := streamIdleTimeout(opts)
+	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
+	defer stopIdle()
+	stream := p.client.Chat.Completions.NewStreaming(streamCtx, params)
+	defer func() { _ = stream.Close() }()
+
+	acc := openai.ChatCompletionAccumulator{}
+	var (
+		reasoning   strings.Builder
+		streamUsage openai.CompletionUsage
+	)
+	for stream.Next() {
+		resetIdle()
+		chunk := stream.Current()
+		for _, choice := range chunk.Choices {
+			index := int(choice.Index)
+			if delta := extractReasoningContent(choice.Delta.RawJSON()); delta != "" {
+				reasoning.WriteString(delta)
+				if opts.OnDelta != nil {
+					opts.OnDelta(StreamDelta{Kind: "reasoning", Index: index, Text: delta})
+				}
+			}
+			if choice.Delta.Content != "" && opts.OnDelta != nil {
+				opts.OnDelta(StreamDelta{Kind: "text", Index: index, Text: choice.Delta.Content})
+			}
+		}
+		if !acc.AddChunk(chunk) {
+			return Response{}, fmt.Errorf("openai chat stream accumulation failed")
+		}
+		if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 || chunk.Usage.PromptTokensDetails.CachedTokens != 0 {
+			streamUsage = chunk.Usage
+		}
+	}
+	if err := stream.Err(); err != nil {
+		if idleExpired() {
+			return Response{}, fmt.Errorf("openai chat stream idle timeout after %s: %w", idleTimeout, err)
+		}
+		return Response{}, fmt.Errorf("openai chat stream: %w", err)
+	}
+	if streamUsage.PromptTokens != 0 || streamUsage.CompletionTokens != 0 || streamUsage.PromptTokensDetails.CachedTokens != 0 {
+		acc.Usage = streamUsage
+	}
+	return p.responseFromChatCompletion(&acc.ChatCompletion, reasoning.String())
+}
+
+func (p *openAIProvider) responseFromChatCompletion(completion *openai.ChatCompletion, streamedReasoning string) (Response, error) {
 	if len(completion.Choices) == 0 {
 		return Response{}, fmt.Errorf("openai: empty choices")
 	}
@@ -89,7 +143,7 @@ func (p *openAIProvider) CompleteWithOptions(ctx context.Context, sys string, hi
 	// assistant message. We surface it as a Block so it round-trips on the
 	// next call (DeepSeek rejects requests that omit it after a thinking
 	// turn).
-	if rc := extractReasoningContent(choice.Message.RawJSON()); rc != "" {
+	if rc := firstNonEmpty(streamedReasoning, extractReasoningContent(choice.Message.RawJSON())); rc != "" {
 		out.Blocks = append(out.Blocks, Block{Type: BlockReasoning, Text: rc})
 	}
 	if choice.Message.Content != "" {

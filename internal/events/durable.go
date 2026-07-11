@@ -128,14 +128,16 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 		return Event{}, ErrDurableSinkClosed
 	}
 	journal := s.journal
-	if journal == nil {
+	if journal == nil && !e.Transient {
 		s.mu.Unlock()
 		return Event{}, ErrDurableJournalMissing
 	}
 	s.mu.Unlock()
 
-	if err := journal.AppendEvent(e); err != nil {
-		return Event{}, err
+	if !e.Transient {
+		if err := journal.AppendEvent(e); err != nil {
+			return Event{}, err
+		}
 	}
 
 	s.mu.Lock()

@@ -4,6 +4,7 @@
   "turn.errored",
   "llm.requested",
   "llm.responded",
+  "llm.output_delta",
   "llm.retry",
   "tool.requested",
   "tool.completed",

@@ -170,6 +170,7 @@ var providerPresets = map[string]ProviderProfile{
 		Protocol: ProtocolOpenAIResponses,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
+			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
@@ -181,6 +182,7 @@ var providerPresets = map[string]ProviderProfile{
 		Protocol: ProtocolOpenAICodexResponses,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
+			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 		},
@@ -192,6 +194,7 @@ var providerPresets = map[string]ProviderProfile{
 		BaseURL:  "https://api.deepseek.com",
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
+			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,
@@ -225,6 +228,7 @@ func customProfileForProtocol(id, rawProtocol string) (ProviderProfile, error) {
 			Protocol: proto,
 			Capabilities: ProviderCapabilities{
 				Tools:           true,
+				Streaming:       true,
 				ReasoningEffort: true,
 				ReasoningReplay: true,
 				MaxOutputTokens: true,
@@ -246,6 +250,7 @@ func customOpenAIChatProfile(id string, proto Protocol) ProviderProfile {
 		Protocol: proto,
 		Capabilities: ProviderCapabilities{
 			Tools:           true,
+			Streaming:       true,
 			ReasoningEffort: true,
 			ReasoningReplay: true,
 			MaxOutputTokens: true,

@@ -69,6 +69,25 @@ func TestDurableSink_RequiresJournal(t *testing.T) {
 	}
 }
 
+func TestDurableSink_DeliversTransientEventWithoutJournal(t *testing.T) {
+	delivery := &recordingDelivery{}
+	sink := NewDurableSink(nil)
+	t.Cleanup(sink.Close)
+	sink.AddDelivery(delivery)
+
+	committed, err := sink.Commit(Event{Type: "llm.output_delta", Transient: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.ID == "" || committed.Timestamp.IsZero() {
+		t.Fatalf("transient event was not normalized: %+v", committed)
+	}
+	delivery.waitLen(t, 1)
+	if got := delivery.snapshot(); !reflect.DeepEqual(got, []Event{committed}) {
+		t.Fatalf("delivery events = %+v, want transient event %+v", got, committed)
+	}
+}
+
 func TestDurableSink_PreservesDeliveryOrderFromJournalOrder(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}
