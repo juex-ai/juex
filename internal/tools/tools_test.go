@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/chunkedwrite"
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -1824,6 +1825,42 @@ func TestBuiltins_ChunkedWriteStaleSession(t *testing.T) {
 	}
 	if _, _, _, err := manager.chunk(session.id, 0, "late", ""); err == nil || !strings.Contains(err.Error(), "unknown write_id") {
 		t.Fatalf("second stale chunk err = %v, want unknown write_id", err)
+	}
+}
+
+func TestChunkedWriteManager_RestoreActiveFromHistoryWithoutGuard(t *testing.T) {
+	workDir := t.TempDir()
+	manager := NewChunkedWriteManager(workDir)
+	writeID := "w_no_guard"
+	history := []llm.Message{{
+		Role: llm.RoleAssistant,
+		Blocks: []llm.Block{
+			{
+				Type:         llm.BlockToolResult,
+				ToolUseID:    "begin_1",
+				ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventBegin, WriteID: writeID, Path: "restored.txt", Mode: "overwrite", FileMode: 0o644},
+			},
+			{
+				Type:      llm.BlockToolUse,
+				ToolUseID: "chunk_1",
+				ToolName:  "write_chunk",
+				Input:     map[string]any{"write_id": writeID, "index": 0, "content": "restored"},
+			},
+			{
+				Type:         llm.BlockToolResult,
+				ToolUseID:    "chunk_1",
+				ChunkedWrite: &chunkedwrite.Event{Kind: chunkedwrite.EventChunk, WriteID: writeID, Index: 0, Bytes: 8, Chars: 8, Chunks: 1},
+			},
+		},
+	}}
+
+	manager.RestoreActiveFromHistory(history)
+	if _, err := manager.commit(writeID, 1, ""); err != nil {
+		t.Fatalf("commit restored write without guard: %v", err)
+	}
+	data := mustReadFile(t, filepath.Join(workDir, "restored.txt"))
+	if string(data) != "restored" {
+		t.Fatalf("restored file = %q, want restored", data)
 	}
 }
 

@@ -42,19 +42,16 @@ func (m *chunkWriteManager) RestoreActiveFromHistory(history []llm.Message) {
 		return
 	}
 	toolUses := map[string]llm.Block{}
-	for _, msg := range history {
-		for _, block := range msg.Blocks {
-			if block.Type == llm.BlockToolUse && block.ToolUseID != "" {
-				toolUses[block.ToolUseID] = block
-			}
-		}
-	}
 	now := m.now()
 	restored := map[string]*chunkWriteSession{}
 	invalid := map[string]bool{}
 	var events []chunkedwrite.Event
 	for _, msg := range history {
 		for _, block := range msg.Blocks {
+			if block.Type == llm.BlockToolUse && block.ToolUseID != "" {
+				toolUses[block.ToolUseID] = block
+				continue
+			}
 			if block.Type != llm.BlockToolResult || block.IsError || block.ChunkedWrite == nil {
 				continue
 			}
