@@ -397,6 +397,7 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 			t.Fatalf("events missing %s:\n%s", want, eventsData)
 		}
 	}
+	var eventArtifactPath string
 	waitForCondition(t, 5*time.Second, func() bool {
 		messages, err := fetchWebTranscript(&http.Client{Timeout: 2 * time.Second}, ts.URL, c.ID)
 		if err != nil {
@@ -404,13 +405,20 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 		}
 		for _, msg := range messages {
 			for _, block := range msg.Blocks {
-				if block.Type == "image" && block.Media != nil && block.Media.ArtifactPath == ".juex/inbox/observable-e2e.png" {
+				if block.Type == "image" && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, ".juex/artifacts/event-media/") {
+					eventArtifactPath = block.Media.ArtifactPath
 					return true
 				}
 			}
 		}
 		return false
 	})
+	if err := os.Remove(filepath.Join(work, ".juex", "inbox", "observable-e2e.png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(eventArtifactPath))); err != nil {
+		t.Fatalf("stored observable event artifact unavailable after source removal: %v", err)
+	}
 }
 
 func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {

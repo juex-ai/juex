@@ -657,7 +657,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 		return observable.DeliveryOutcome{}, err
 	}
 	if len(attachmentErrors) > 0 {
-		a.markObservationAttachmentError(record.ID, attachmentErrors)
+		a.markObservationAttachmentError(record, attachmentErrors)
 	}
 	pendingID := observationPendingInputID(record)
 	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
@@ -695,7 +695,9 @@ func buildObservationMessage(record observable.ObservationRecord, opts attachmen
 	report := eventmedia.ValidateAttachments(record.Attachments, eventmedia.ValidationOptions{WorkDir: opts.WorkDir})
 	text := renderObservationText(record, report)
 	msg := eventMessageWithAttachments(llm.MessageKindObservation, text, report)
-	return msg, attachmentErrorMessages(report), nil
+	errors := append([]string(nil), record.AttachmentErrors...)
+	errors = append(errors, attachmentErrorMessages(report)...)
+	return msg, uniqueStrings(errors), nil
 }
 
 func mcpNotificationMessage(n mcp.Notification, eventType string, opts attachmentOptions) (llm.Message, error) {
@@ -805,7 +807,7 @@ func writeAttachmentSummary(sb *strings.Builder, report eventmedia.ValidationRep
 			if eventmedia.IsImageMediaType(attachment.MediaType) {
 				kind = "image"
 			}
-			fmt.Fprintf(sb, "- %s %s (%s, %d bytes", kind, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
+			fmt.Fprintf(sb, "- %s source=%s artifact=%s (%s, %d bytes", kind, attachment.Ref.Path, attachment.ArtifactPath, attachment.MediaType, attachment.OriginalBytes)
 			if attachment.SHA256 != "" {
 				fmt.Fprintf(sb, ", sha256=%s", attachment.SHA256)
 			}
@@ -838,6 +840,23 @@ func attachmentErrorMessages(report eventmedia.ValidationReport) []string {
 		} else {
 			out = append(out, errInfo.Error)
 		}
+	}
+	return out
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
 	}
 	return out
 }
@@ -902,11 +921,27 @@ func (a *App) currentSessionID() string {
 	return a.Session.ID
 }
 
-func (a *App) markObservationAttachmentError(id string, messages []string) {
-	if a == nil || a.obsv == nil || len(messages) == 0 {
+func (a *App) markObservationAttachmentError(record observable.ObservationRecord, messages []string) {
+	if a == nil || len(messages) == 0 {
 		return
 	}
-	_ = a.obsv.MarkObservationAttachmentError(id, messages)
+	if a.obsv != nil {
+		if err := a.obsv.MarkObservationAttachmentError(record.ID, messages); err == nil {
+			return
+		}
+	}
+	record.AttachmentState = observable.ObservationAttachmentStateError
+	record.AttachmentErrors = append([]string(nil), messages...)
+	record.Error = strings.Join(messages, "; ")
+	if a.Bus != nil {
+		a.Bus.Emit(events.Event{
+			Type: observable.EventObservationErrored,
+			Payload: observable.ObservationEventPayload{
+				Observation: record,
+				Error:       record.Error,
+			},
+		})
+	}
 }
 
 func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string {

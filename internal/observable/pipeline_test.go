@@ -107,6 +107,29 @@ func TestPipeline_JSONLAttachmentFieldMapping(t *testing.T) {
 	}
 }
 
+func TestPipeline_JSONLAttachmentFieldErrorPreservesContent(t *testing.T) {
+	spec := validSpec("lark-events")
+	spec.Parser = &observable.ParserSpec{
+		Type:             "jsonl",
+		ContentField:     "content",
+		AttachmentsField: "attachments",
+	}
+	pipe, err := observable.NewPipeline(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	units, err := pipe.Accept("stdout", []byte(`{"content":"keep me","attachments":"invalid"}`+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) != 1 || units[0].Content != "keep me" || len(units[0].AttachmentErrors) != 1 {
+		t.Fatalf("units = %+v, want preserved content plus attachment error", units)
+	}
+	if !strings.Contains(units[0].AttachmentErrors[0], "attachments must be an array") {
+		t.Fatalf("attachment errors = %+v", units[0].AttachmentErrors)
+	}
+}
+
 func TestPipeline_JSONLNormalizesSeverity(t *testing.T) {
 	spec := validSpec("lark-events")
 	spec.Parser = &observable.ParserSpec{

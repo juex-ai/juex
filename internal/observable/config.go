@@ -414,7 +414,9 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 	}
 	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
 	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
-	spec.Observation.Attachments = normalizeAttachments(spec.Observation.Attachments)
+	if len(spec.Observation.Attachments) > 0 {
+		return Spec{}, fmt.Errorf("command source cannot set observation.attachments; use parser.attachments_field")
+	}
 	if spec.Observation.Kind != "" {
 		spec.Defaults.Kind = spec.Observation.Kind
 	}
@@ -437,6 +439,10 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 		case ParserText, ParserJSONL:
 		default:
 			return Spec{}, fmt.Errorf("parser.type must be text or jsonl, got %q", parserType)
+		}
+		spec.Source.Parser.AttachmentsField = strings.TrimSpace(spec.Source.Parser.AttachmentsField)
+		if spec.Source.Parser.AttachmentsField != "" && parserType != ParserJSONL {
+			return Spec{}, fmt.Errorf("parser.attachments_field requires parser.type jsonl")
 		}
 	}
 	if spec.Source.Batch.IntervalSeconds < MinBatchIntervalSeconds || spec.Source.Batch.IntervalSeconds > MaxBatchIntervalSeconds {
@@ -487,7 +493,11 @@ func validateScheduleSpec(spec Spec) (Spec, error) {
 	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
 	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
 	spec.Observation.Content = strings.TrimSpace(spec.Observation.Content)
-	spec.Observation.Attachments = normalizeAttachments(spec.Observation.Attachments)
+	var err error
+	spec.Observation.Attachments, err = normalizeAttachments(spec.Observation.Attachments)
+	if err != nil {
+		return Spec{}, err
+	}
 	if spec.Observation.Kind == "" {
 		spec.Observation.Kind = DefaultScheduleKind
 	}
@@ -768,20 +778,20 @@ func cloneParserSpec(in *ParserSpec) *ParserSpec {
 	return &out
 }
 
-func normalizeAttachments(in []AttachmentSpec) []AttachmentSpec {
+func normalizeAttachments(in []AttachmentSpec) ([]AttachmentSpec, error) {
 	if len(in) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]AttachmentSpec, 0, len(in))
-	for _, ref := range in {
+	for i, ref := range in {
 		ref.Path = strings.TrimSpace(ref.Path)
 		ref.MediaType = strings.TrimSpace(ref.MediaType)
-		if ref.Path == "" && ref.MediaType == "" {
-			continue
+		if ref.Path == "" {
+			return nil, fmt.Errorf("observation.attachments[%d].path is required", i)
 		}
 		out = append(out, ref)
 	}
-	return out
+	return out, nil
 }
 
 func isZeroObservationSpec(spec ObservationSpec) bool {

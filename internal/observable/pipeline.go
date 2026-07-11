@@ -12,12 +12,13 @@ import (
 )
 
 type ParsedUnit struct {
-	Stream      string
-	Content     string
-	Kind        string
-	Severity    string
-	Attachments []eventmedia.AttachmentRef
-	ReceivedAt  time.Time
+	Stream           string
+	Content          string
+	Kind             string
+	Severity         string
+	Attachments      []eventmedia.AttachmentRef
+	AttachmentErrors []string
+	ReceivedAt       time.Time
 }
 
 type PipelineOptions struct {
@@ -158,6 +159,7 @@ func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) (
 	kind := resolvedKind(p.spec.Defaults.Kind)
 	severity := resolvedSeverity(p.spec.Defaults.Severity)
 	var attachments []eventmedia.AttachmentRef
+	var attachmentErrors []string
 	if parser != nil {
 		if parser.ContentField != "" {
 			if value, ok := obj[parser.ContentField]; ok {
@@ -180,20 +182,22 @@ func (p *Pipeline) unitFromJSON(stream string, obj map[string]any, raw string) (
 			if value, ok := obj[parser.AttachmentsField]; ok {
 				refs, err := eventmedia.ExtractAttachmentRefs(value)
 				if err != nil {
-					return ParsedUnit{}, fmt.Errorf("observable jsonl: attachments_field %q: %w", parser.AttachmentsField, err)
+					attachmentErrors = append(attachmentErrors, fmt.Sprintf("attachments_field %q: %v", parser.AttachmentsField, err))
+				} else {
+					attachments = refs
 				}
-				attachments = refs
 			}
 		}
 	}
 	content = tools.SanitizeOutputText(content).Text
 	return ParsedUnit{
-		Stream:      stream,
-		Content:     content,
-		Kind:        kind,
-		Severity:    severity,
-		Attachments: attachments,
-		ReceivedAt:  p.now().UTC(),
+		Stream:           stream,
+		Content:          content,
+		Kind:             kind,
+		Severity:         severity,
+		Attachments:      attachments,
+		AttachmentErrors: attachmentErrors,
+		ReceivedAt:       p.now().UTC(),
 	}, nil
 }
 

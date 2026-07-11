@@ -189,6 +189,24 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 			want: "regex",
 		},
 		{
+			name: "attachments field on text parser",
+			cfg: observable.FileConfig{Observables: []observable.Spec{
+				withSpec(validSpec("text-attachments"), func(s *observable.Spec) {
+					s.Parser = &observable.ParserSpec{Type: observable.ParserText, AttachmentsField: "attachments"}
+				}),
+			}},
+			want: "requires parser.type jsonl",
+		},
+		{
+			name: "static attachments on command",
+			cfg: observable.FileConfig{Observables: []observable.Spec{
+				withSpec(validSpec("command-static-attachments"), func(s *observable.Spec) {
+					s.Observation.Attachments = []observable.AttachmentSpec{{Path: "image.png"}}
+				}),
+			}},
+			want: "cannot set observation.attachments",
+		},
+		{
 			name: "schedule without content",
 			cfg: observable.FileConfig{Observables: []observable.Spec{{
 				ID: "empty-schedule",
@@ -198,6 +216,21 @@ func TestValidateConfig_RejectsInvalidSpecs(t *testing.T) {
 				},
 			}}},
 			want: "observation.content",
+		},
+		{
+			name: "schedule attachment without path",
+			cfg: observable.FileConfig{Observables: []observable.Spec{{
+				ID: "schedule-missing-attachment-path",
+				Source: observable.SourceSpec{
+					Type:     observable.SourceTypeSchedule,
+					Interval: &observable.IntervalSchedule{EverySeconds: 60},
+				},
+				Observation: observable.ObservationSpec{
+					Content:     "hello",
+					Attachments: []observable.AttachmentSpec{{MediaType: "image/png"}},
+				},
+			}}},
+			want: "path is required",
 		},
 		{
 			name: "daily schedule without timezone",

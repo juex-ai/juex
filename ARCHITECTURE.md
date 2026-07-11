@@ -1420,9 +1420,12 @@ run through the normal Agent turn loop as `mcp_event` user messages rendered as
 structured text: server, method, event type, content, metadata, and selected
 params. `params.attachments` may contain
 `[{ "path": "...", "media_type": "..." }]`, using the same workdir-bounded
-validation as Observable attachments. Valid image attachments become image
-blocks on the incoming user message; invalid attachments are called out in the
-structured text instead of being silently dropped. `params.content` remains a
+validation as Observable attachments. Valid bytes are copied to the
+content-addressed `event-media` artifact namespace before image attachments
+become image blocks on the incoming user message; queued or persisted messages
+therefore do not depend on the source file remaining in the inbox. Invalid
+attachments are called out in structured text instead of being silently
+dropped. `params.content` remains a
 display preview, while metadata under `params.meta` is visible to the Agent.
 For `run` and `repl`, notifications target the command's only primary app. For
 `serve`, notifications target `<WorkDir>/.juex/history.json.active`: the active

@@ -87,6 +87,23 @@ func TestBatcher_UsesHighestSeverityInWindow(t *testing.T) {
 	}
 }
 
+func TestBatcher_PersistsAttachmentErrors(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	unit := parsedUnit("stdout", "keep me", fixedTime)
+	unit.AttachmentErrors = []string{"attachments must be an array"}
+	if _, err := b.Add(unit); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Flush("shutdown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].AttachmentState != observable.ObservationAttachmentStateError || len(got[0].AttachmentErrors) != 1 {
+		t.Fatalf("records = %+v, want persisted attachment error", got)
+	}
+}
+
 func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 	spec := validSpec("large")
 	spec.Batch.MaxChars = 80

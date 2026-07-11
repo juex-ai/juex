@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/eventmedia"
@@ -480,11 +481,48 @@ func TestApp_HandleObservationIncludesValidatedImageAttachment(t *testing.T) {
 		t.Fatalf("blocks = %+v, want text plus image block", got.Blocks)
 	}
 	media := got.Blocks[1].Media
-	if media == nil || media.ArtifactPath != relPath || media.MediaType != "image/png" || media.Width != 1 || media.Height != 1 {
+	if media == nil || !strings.HasPrefix(media.ArtifactPath, ".juex/artifacts/event-media/") || media.MediaType != "image/png" || media.Width != 1 || media.Height != 1 {
 		t.Fatalf("media = %+v", media)
 	}
 	if !strings.Contains(got.FirstText(), "attachments:") || !strings.Contains(got.FirstText(), relPath) {
 		t.Fatalf("observation text missing attachment list:\n%s", got.FirstText())
+	}
+	if err := os.Remove(filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath))); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifact.NewStore(a.cfg.WorkDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := store.Read(artifact.Ref{Path: media.ArtifactPath, SHA256: media.SHA256, Bytes: media.OriginalBytes}); err != nil || len(data) == 0 {
+		t.Fatalf("stored observation artifact = %d bytes, err=%v", len(data), err)
+	}
+}
+
+func TestApp_HandleObservationRendersNonImageAttachmentAsTextReference(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	relPath := ".juex/inbox/notes.txt"
+	absPath := filepath.Join(a.cfg.WorkDir, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, []byte("plain attachment"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := testObservationRecord("obs-text-file")
+	record.Attachments = []eventmedia.AttachmentRef{{Path: relPath, MediaType: "text/plain"}}
+
+	if err := a.HandleObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	got := prov.histories[0][0]
+	if len(got.Blocks) != 1 || got.Blocks[0].Type != llm.BlockText {
+		t.Fatalf("blocks = %+v, want text only for non-image attachment", got.Blocks)
+	}
+	text := got.FirstText()
+	if !strings.Contains(text, "file source="+relPath) || !strings.Contains(text, "artifact=.juex/artifacts/event-media/") {
+		t.Fatalf("non-image attachment reference missing:\n%s", text)
 	}
 }
 
@@ -522,6 +560,56 @@ func TestApp_HandleObservationEmitsAttachmentError(t *testing.T) {
 	}
 	if len(records) == 0 || records[0].AttachmentState != observable.ObservationAttachmentStateError || len(records[0].AttachmentErrors) == 0 {
 		t.Fatalf("records = %+v, want durable attachment error", records)
+	}
+}
+
+func TestApp_HandleObservationEmitsStoredAttachmentError(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	record := testObservationRecord("obs-invalid-envelope")
+	record.AttachmentState = observable.ObservationAttachmentStateError
+	record.AttachmentErrors = []string{"attachments must be an array"}
+	persisted, err := a.obsv.RecordObservation(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []events.Event
+	unsub := a.Bus.Subscribe(observable.EventObservationErrored, func(e events.Event) {
+		seen = append(seen, e)
+	})
+	defer unsub()
+
+	if err := a.HandleObservation(context.Background(), persisted); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || prov.calls != 1 {
+		t.Fatalf("errored events = %+v provider calls = %d", seen, prov.calls)
+	}
+	if text := prov.histories[0][0].FirstText(); !strings.Contains(text, "stored_attachment_errors:") || !strings.Contains(text, "attachments must be an array") {
+		t.Fatalf("observation text missing stored attachment error:\n%s", text)
+	}
+}
+
+func TestApp_HandleObservationEmitsAttachmentErrorWhenRecordIsNotPersisted(t *testing.T) {
+	reply := llm.TextMessage(llm.RoleAssistant, "ack")
+	a, prov := newStubApp(t, llm.Response{Message: reply, StopReason: llm.StopEndTurn})
+	record := testObservationRecord("obs-unpersisted-attachment-error")
+	record.Attachments = []eventmedia.AttachmentRef{{Path: "missing.png"}}
+	var seen []events.Event
+	unsub := a.Bus.Subscribe(observable.EventObservationErrored, func(e events.Event) {
+		seen = append(seen, e)
+	})
+	defer unsub()
+
+	if err := a.HandleObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || prov.calls != 1 {
+		t.Fatalf("errored events = %+v provider calls = %d", seen, prov.calls)
+	}
+	payload, ok := seen[0].Payload.(observable.ObservationEventPayload)
+	if !ok || payload.Observation.ID != record.ID || !strings.Contains(payload.Error, "missing.png") {
+		t.Fatalf("attachment error payload = %#v", seen[0].Payload)
 	}
 }
 
@@ -1139,7 +1227,7 @@ func TestApp_MCPNotificationIncludesValidatedImageAttachment(t *testing.T) {
 		t.Fatalf("blocks = %+v, want text plus image block", user.Blocks)
 	}
 	media := user.Blocks[1].Media
-	if media == nil || media.ArtifactPath != relPath || media.MediaType != "image/png" {
+	if media == nil || !strings.HasPrefix(media.ArtifactPath, ".juex/artifacts/event-media/") || media.MediaType != "image/png" {
 		t.Fatalf("media = %+v", media)
 	}
 	if !strings.Contains(user.FirstText(), "attachments:") || !strings.Contains(user.FirstText(), relPath) {
@@ -1504,17 +1592,6 @@ func TestApp_REPLContinuesAfterTurnError(t *testing.T) {
 	}
 	if !strings.Contains(body, "error:") {
 		t.Fatalf("second turn should have errored: %q", body)
-	}
-}
-
-func writeAppTestPNG(t *testing.T, path string) {
-	t.Helper()
-	data, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatal(err)
 	}
 }
 

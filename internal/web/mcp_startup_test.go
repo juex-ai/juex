@@ -81,8 +81,14 @@ func TestServeMCPNotificationPreservesAttachmentImageBlock(t *testing.T) {
 	defer stopRunServer(t, cancel, errCh)
 
 	active := waitForActivePrimary(t, srv)
-	waitForMCPImageBlockInSession(t, active.Dir, relPath)
+	artifactPath := waitForMCPImageBlockInSession(t, active.Dir, relPath)
 	waitForSessionTextInSession(t, active.Dir, llm.RoleAssistant, "ack")
+	if err := os.Remove(filepath.Join(work, filepath.FromSlash(relPath))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(artifactPath))); err != nil {
+		t.Fatalf("stored MCP event artifact unavailable after source removal: %v", err)
+	}
 }
 
 func TestRunServesHTTPBeforeDrainingStartupMCPNotifications(t *testing.T) {
@@ -371,19 +377,22 @@ func waitForMCPEventInSession(t *testing.T, dir, want string) {
 	}, "MCP event "+want)
 }
 
-func waitForMCPImageBlockInSession(t *testing.T, dir, relPath string) {
+func waitForMCPImageBlockInSession(t *testing.T, dir, relPath string) string {
 	t.Helper()
+	var artifactPath string
 	waitForSessionMessage(t, dir, func(msg llm.Message) bool {
 		if msg.Kind != llm.MessageKindMCPEvent || !strings.Contains(msg.FirstText(), relPath) {
 			return false
 		}
 		for _, block := range msg.Blocks {
-			if block.Type == llm.BlockImage && block.Media != nil && block.Media.ArtifactPath == relPath {
+			if block.Type == llm.BlockImage && block.Media != nil && strings.HasPrefix(block.Media.ArtifactPath, ".juex/artifacts/event-media/") {
+				artifactPath = block.Media.ArtifactPath
 				return true
 			}
 		}
 		return false
 	}, "MCP image attachment "+relPath)
+	return artifactPath
 }
 
 func waitForSessionTextInSession(t *testing.T, dir string, role llm.Role, want string) {

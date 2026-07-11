@@ -247,8 +247,10 @@ schedule state under `.juex/observables/`. JSONL command parsers can map an
 `attachments_field` containing `[{ "path": "...", "media_type": "..." }]`;
 schedule observations can declare static `observation.attachments`. Attachment
 paths are validated inside the workdir, including `.juex/inbox/`; image
-attachments become provider image blocks, while validation failures are emitted
-as `observation.errored` and still leave structured text in context.
+attachments are copied into content-addressed
+`.juex/artifacts/event-media/` files before they become provider image blocks.
+Validation failures are emitted as `observation.errored` and still leave
+structured text in context.
 Observables are workspace-local in the first version. Created Observables may
 omit `id` when `name` can be slugged into a stable lower-case id.
 

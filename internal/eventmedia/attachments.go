@@ -2,18 +2,19 @@ package eventmedia
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"io"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/artifact"
 )
 
 const (
@@ -54,6 +55,12 @@ type ValidationReport struct {
 	Errors []AttachmentError
 }
 
+type inspectedAttachment struct {
+	attachment ValidatedAttachment
+	data       []byte
+	extension  string
+}
+
 func ExtractAttachmentRefs(value any) ([]AttachmentRef, error) {
 	if value == nil {
 		return nil, nil
@@ -80,20 +87,40 @@ func ValidateAttachments(refs []AttachmentRef, opts ValidationOptions) Validatio
 	opts = normalizeOptions(opts)
 	var report ValidationReport
 	var total int64
+	var inspected []inspectedAttachment
 	for i, ref := range normalizeAttachmentRefs(refs) {
-		validated, err := validateAttachment(ref, opts)
+		item, err := inspectAttachment(ref, opts)
 		if err != nil {
 			report.Errors = append(report.Errors, AttachmentError{Index: i, Path: strings.TrimSpace(ref.Path), Error: err.Error()})
 			continue
 		}
-		total += int64(validated.OriginalBytes)
-		report.Valid = append(report.Valid, validated)
+		total += int64(item.attachment.OriginalBytes)
+		inspected = append(inspected, item)
 	}
 	if total > opts.MaxEventBytes {
 		return ValidationReport{Errors: []AttachmentError{{
 			Index: -1,
 			Error: fmt.Sprintf("event attachments exceed %d bytes", opts.MaxEventBytes),
 		}}}
+	}
+	if len(inspected) == 0 {
+		return report
+	}
+	store, err := artifact.NewStore(opts.WorkDir)
+	if err != nil {
+		report.Errors = append(report.Errors, AttachmentError{Index: -1, Error: fmt.Sprintf("store event attachment: %v", err)})
+		return report
+	}
+	for i, item := range inspected {
+		stored, err := store.PutContentAddressed("event-media", item.extension, item.data)
+		if err != nil {
+			report.Errors = append(report.Errors, AttachmentError{Index: i, Path: item.attachment.Ref.Path, Error: fmt.Sprintf("store event attachment: %v", err)})
+			continue
+		}
+		item.attachment.ArtifactPath = stored.Path
+		item.attachment.SHA256 = stored.SHA256
+		item.attachment.OriginalBytes = stored.Bytes
+		report.Valid = append(report.Valid, item.attachment)
 	}
 	return report
 }
@@ -122,9 +149,6 @@ func normalizeAttachmentRefs(refs []AttachmentRef) []AttachmentRef {
 	for _, ref := range refs {
 		ref.Path = strings.TrimSpace(ref.Path)
 		ref.MediaType = normalizeMediaType(ref.MediaType)
-		if ref.Path == "" && ref.MediaType == "" {
-			continue
-		}
 		out = append(out, ref)
 	}
 	return out
@@ -135,54 +159,80 @@ func attachmentRefFromAny(value any) (AttachmentRef, error) {
 	if !ok {
 		return AttachmentRef{}, fmt.Errorf("attachment must be an object")
 	}
-	path, _ := obj["path"].(string)
-	mediaType, _ := obj["media_type"].(string)
+	pathValue, ok := obj["path"]
+	if !ok {
+		return AttachmentRef{}, fmt.Errorf("path is required")
+	}
+	path, ok := pathValue.(string)
+	if !ok {
+		return AttachmentRef{}, fmt.Errorf("path must be a string")
+	}
+	mediaType := ""
+	if value, exists := obj["media_type"]; exists {
+		var ok bool
+		mediaType, ok = value.(string)
+		if !ok {
+			return AttachmentRef{}, fmt.Errorf("media_type must be a string")
+		}
+	}
 	if strings.TrimSpace(path) == "" {
 		return AttachmentRef{}, fmt.Errorf("path is required")
 	}
 	return AttachmentRef{Path: path, MediaType: mediaType}, nil
 }
 
-func validateAttachment(ref AttachmentRef, opts ValidationOptions) (ValidatedAttachment, error) {
+func inspectAttachment(ref AttachmentRef, opts ValidationOptions) (inspectedAttachment, error) {
 	if strings.TrimSpace(ref.Path) == "" {
-		return ValidatedAttachment{}, fmt.Errorf("path is required")
+		return inspectedAttachment{}, fmt.Errorf("path is required")
 	}
 	root, err := resolvedWorkDir(opts.WorkDir)
 	if err != nil {
-		return ValidatedAttachment{}, err
+		return inspectedAttachment{}, err
 	}
 	absPath, err := resolveAttachmentPath(root, ref.Path)
 	if err != nil {
-		return ValidatedAttachment{}, err
-	}
-	info, err := os.Stat(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return ValidatedAttachment{}, fmt.Errorf("attachment path does not exist")
-		}
-		return ValidatedAttachment{}, err
-	}
-	if info.IsDir() {
-		return ValidatedAttachment{}, fmt.Errorf("attachment path is a directory")
-	}
-	if info.Size() > opts.MaxAttachmentBytes {
-		return ValidatedAttachment{}, fmt.Errorf("attachment exceeds %d bytes", opts.MaxAttachmentBytes)
+		return inspectedAttachment{}, err
 	}
 	rel, err := filepath.Rel(root, absPath)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return ValidatedAttachment{}, fmt.Errorf("attachment path is outside allowed roots")
+		return inspectedAttachment{}, fmt.Errorf("attachment path is outside allowed roots")
 	}
-	data, err := os.ReadFile(absPath)
+	rootFS, err := os.OpenRoot(root)
 	if err != nil {
-		return ValidatedAttachment{}, err
+		return inspectedAttachment{}, err
+	}
+	defer func() { _ = rootFS.Close() }()
+	file, err := rootFS.Open(rel)
+	if err != nil {
+		return inspectedAttachment{}, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return inspectedAttachment{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return inspectedAttachment{}, fmt.Errorf("attachment path is not a regular file")
+	}
+	if info.Size() > opts.MaxAttachmentBytes {
+		return inspectedAttachment{}, fmt.Errorf("attachment exceeds %d bytes", opts.MaxAttachmentBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, opts.MaxAttachmentBytes+1))
+	if err != nil {
+		return inspectedAttachment{}, err
+	}
+	if int64(len(data)) > opts.MaxAttachmentBytes {
+		return inspectedAttachment{}, fmt.Errorf("attachment exceeds %d bytes", opts.MaxAttachmentBytes)
 	}
 	mediaType, err := validatedMediaType(data, absPath, ref.MediaType)
 	if err != nil {
-		return ValidatedAttachment{}, err
+		return inspectedAttachment{}, err
 	}
-	sum := sha256.Sum256(data)
-	width, height := imageDimensions(data, mediaType)
-	return ValidatedAttachment{
+	width, height, err := imageDimensions(data, mediaType)
+	if err != nil {
+		return inspectedAttachment{}, err
+	}
+	validated := ValidatedAttachment{
 		Ref: AttachmentRef{
 			Path:      strings.TrimSpace(ref.Path),
 			MediaType: mediaType,
@@ -190,10 +240,14 @@ func validateAttachment(ref AttachmentRef, opts ValidationOptions) (ValidatedAtt
 		ArtifactPath:  filepath.ToSlash(rel),
 		AbsolutePath:  absPath,
 		MediaType:     mediaType,
-		SHA256:        hex.EncodeToString(sum[:]),
 		OriginalBytes: len(data),
 		Width:         width,
 		Height:        height,
+	}
+	return inspectedAttachment{
+		attachment: validated,
+		data:       data,
+		extension:  artifactExtension(mediaType),
 	}, nil
 }
 
@@ -254,6 +308,9 @@ func validatedMediaType(data []byte, path string, declared string) (string, erro
 }
 
 func detectMediaType(data []byte, path string) string {
+	if isWebP(data) {
+		return "image/webp"
+	}
 	sample := data
 	if len(sample) > 512 {
 		sample = sample[:512]
@@ -277,13 +334,43 @@ func normalizeMediaType(value string) string {
 	return value
 }
 
-func imageDimensions(data []byte, mediaType string) (int, int) {
+func imageDimensions(data []byte, mediaType string) (int, int, error) {
 	if !IsImageMediaType(mediaType) {
-		return 0, 0
+		return 0, 0, nil
+	}
+	if mediaType == "image/webp" {
+		if !isWebP(data) {
+			return 0, 0, fmt.Errorf("invalid image data for %s", mediaType)
+		}
+		return 0, 0, nil
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return 0, 0
+		return 0, 0, fmt.Errorf("invalid image data for %s", mediaType)
 	}
-	return cfg.Width, cfg.Height
+	return cfg.Width, cfg.Height, nil
+}
+
+func artifactExtension(mediaType string) string {
+	switch mediaType {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "text/plain":
+		return ".txt"
+	case "application/json":
+		return ".json"
+	case "application/pdf":
+		return ".pdf"
+	}
+	return ".bin"
+}
+
+func isWebP(data []byte) bool {
+	return len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP"
 }

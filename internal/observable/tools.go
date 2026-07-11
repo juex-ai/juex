@@ -217,10 +217,14 @@ func observationSchema() map[string]any {
 		"description":          "For schedule sources, content is required and becomes the scheduled Observation text. For command sources, kind and severity set output defaults.",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"kind":        map[string]any{"type": "string"},
-			"severity":    map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
-			"content":     map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
-			"attachments": map[string]any{"type": "array", "items": attachmentSchema()},
+			"kind":     map[string]any{"type": "string"},
+			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
+			"content":  map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
+			"attachments": map[string]any{
+				"type":        "array",
+				"description": "Static event attachments for schedule sources. Command sources use parser.attachments_field.",
+				"items":       attachmentSchema(),
+			},
 		},
 	}
 }

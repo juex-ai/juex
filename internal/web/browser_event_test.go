@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
@@ -314,6 +315,31 @@ func browserEventFixtureEvents() []events.Event {
 					CreatedAt:     ts.Add(8 * time.Second),
 					DeliveredAt:   ts.Add(8 * time.Second),
 				},
+			},
+		},
+		{
+			ID:        "evt-observation-errored",
+			Type:      observable.EventObservationErrored,
+			Timestamp: ts.Add(8500 * time.Millisecond),
+			Payload: observable.ObservationEventPayload{
+				Observation: observable.ObservationRecord{
+					ID:               "obs-attachment-error",
+					ObservableID:     "lark-events",
+					Kind:             "lark_notification",
+					Severity:         "warning",
+					WindowStart:      ts,
+					WindowEnd:        ts.Add(time.Second),
+					Content:          "attachment event",
+					Attachments:      []eventmedia.AttachmentRef{{Path: ".juex/inbox/missing.png", MediaType: "image/png"}},
+					AttachmentState:  observable.ObservationAttachmentStateError,
+					AttachmentErrors: []string{"missing.png: attachment path does not exist"},
+					OriginalChars:    16,
+					State:            observable.ObservationStateDelivered,
+					CreatedAt:        ts.Add(8 * time.Second),
+					DeliveredAt:      ts.Add(8 * time.Second),
+					Error:            "missing.png: attachment path does not exist",
+				},
+				Error: "missing.png: attachment path does not exist",
 			},
 		},
 		{

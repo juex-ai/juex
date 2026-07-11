@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/juex-ai/juex/internal/artifact"
 )
 
 func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 	workDir := t.TempDir()
 	relPath := ".juex/inbox/pixel.png"
-	writeAttachmentPNG(t, filepath.Join(workDir, filepath.FromSlash(relPath)))
+	sourcePath := filepath.Join(workDir, filepath.FromSlash(relPath))
+	writeAttachmentPNG(t, sourcePath)
 
 	report := ValidateAttachments([]AttachmentRef{{
 		Path:      relPath,
@@ -24,7 +27,7 @@ func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 		t.Fatalf("valid = %+v, want one attachment", report.Valid)
 	}
 	got := report.Valid[0]
-	if got.ArtifactPath != relPath || got.MediaType != "image/png" || got.SHA256 == "" {
+	if !strings.HasPrefix(got.ArtifactPath, ".juex/artifacts/event-media/") || got.MediaType != "image/png" || got.SHA256 == "" {
 		t.Fatalf("validated attachment = %+v", got)
 	}
 	if got.OriginalBytes <= 0 || got.Width != 1 || got.Height != 1 {
@@ -37,6 +40,17 @@ func TestValidateAttachmentsAcceptsWorkdirImage(t *testing.T) {
 	if got.AbsolutePath == "" || !strings.HasPrefix(got.AbsolutePath, resolvedWorkDir) {
 		t.Fatalf("absolute path = %q, want inside workdir %q", got.AbsolutePath, resolvedWorkDir)
 	}
+	store, err := artifact.NewStore(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := artifact.Ref{Path: got.ArtifactPath, SHA256: got.SHA256, Bytes: got.OriginalBytes}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := store.Read(ref); err != nil || len(data) == 0 {
+		t.Fatalf("stored event artifact after source removal = %d bytes, err=%v", len(data), err)
+	}
 }
 
 func TestValidateAttachmentsRejectsInvalidInputs(t *testing.T) {
@@ -45,6 +59,9 @@ func TestValidateAttachmentsRejectsInvalidInputs(t *testing.T) {
 	writeAttachmentPNG(t, filepath.Join(workDir, relPath))
 	outside := filepath.Join(t.TempDir(), "outside.png")
 	writeAttachmentPNG(t, outside)
+	if err := os.WriteFile(filepath.Join(workDir, "fake.png"), make([]byte, 32), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -52,6 +69,12 @@ func TestValidateAttachmentsRejectsInvalidInputs(t *testing.T) {
 		opts ValidationOptions
 		want string
 	}{
+		{
+			name: "missing path",
+			refs: []AttachmentRef{{}},
+			opts: ValidationOptions{WorkDir: workDir},
+			want: "path is required",
+		},
 		{
 			name: "missing",
 			refs: []AttachmentRef{{Path: "missing.png"}},
@@ -76,6 +99,12 @@ func TestValidateAttachmentsRejectsInvalidInputs(t *testing.T) {
 			opts: ValidationOptions{WorkDir: workDir},
 			want: "media_type",
 		},
+		{
+			name: "invalid image bytes",
+			refs: []AttachmentRef{{Path: "fake.png"}},
+			opts: ValidationOptions{WorkDir: workDir},
+			want: "invalid image data",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,6 +116,17 @@ func TestValidateAttachmentsRejectsInvalidInputs(t *testing.T) {
 				t.Fatalf("errors = %+v, want %q", report.Errors, tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractAttachmentRefsRejectsInvalidFieldTypes(t *testing.T) {
+	for _, value := range []any{
+		[]any{map[string]any{"path": 42}},
+		[]any{map[string]any{"path": "image.png", "media_type": 42}},
+	} {
+		if _, err := ExtractAttachmentRefs(value); err == nil {
+			t.Fatalf("ExtractAttachmentRefs(%#v) succeeded, want error", value)
+		}
 	}
 }
 
