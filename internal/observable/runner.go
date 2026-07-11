@@ -20,7 +20,7 @@ type runnerOptions struct {
 	sandboxPolicy sandbox.Policy
 	sandboxRunner sandbox.Runner
 	store         *Store
-	deliver       func(context.Context, ObservationRecord) error
+	deliver       DeliveryFunc
 }
 
 type runner struct {
@@ -225,7 +225,7 @@ func (r *runner) deliver(records []ObservationRecord) {
 			r.deliveryWG.Add(1)
 			go func() {
 				defer r.deliveryWG.Done()
-				_ = r.opts.deliver(context.Background(), record)
+				_, _ = r.opts.deliver(context.Background(), record)
 			}()
 		}
 	}

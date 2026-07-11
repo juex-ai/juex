@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/events"
 )
 
 func TestStopScheduleTimerDoesNotBlockWhenStopReturnsFalseWithoutValue(t *testing.T) {
@@ -27,14 +29,20 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 	now := time.Now().UTC()
 	deliveryStarted := make(chan struct{})
 	releaseDelivery := make(chan struct{})
-	defer close(releaseDelivery)
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(releaseDelivery)
+		}
+	})
+	store := NewStore(t.TempDir(), StoreOptions{Now: func() time.Time { return now }})
 	mgr := &Manager{
-		store: NewStore(t.TempDir(), StoreOptions{Now: func() time.Time { return now }}),
+		store: store,
 		opts: ManagerOptions{
-			Deliver: func(ctx context.Context, record ObservationRecord) error {
+			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
 				close(deliveryStarted)
 				<-releaseDelivery
-				return nil
+				return DeliveryOutcome{State: ObservationStateDelivered}, nil
 			},
 		},
 	}
@@ -48,15 +56,20 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 		ScheduledAt:   now,
 		SourceEventID: scheduleSourceEventID(spec.ID, now),
 	}
-	done := make(chan error, 1)
+	type emitResult struct {
+		record ObservationRecord
+		err    error
+	}
+	done := make(chan emitResult, 1)
 	go func() {
-		_, _, err := mgr.emitScheduledOccurrence(context.Background(), run, occurrence, now)
-		done <- err
+		record, _, err := mgr.emitScheduledOccurrence(context.Background(), run, occurrence, now)
+		done <- emitResult{record: record, err: err}
 	}()
+	var result emitResult
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+	case result = <-done:
+		if result.err != nil {
+			t.Fatal(result.err)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("emitScheduledOccurrence blocked on delivery")
@@ -66,6 +79,20 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("scheduled observation was not delivered")
 	}
+	close(releaseDelivery)
+	released = true
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		updated, ok, err := store.Observation(result.record.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok && updated.State == ObservationStateDelivered {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("scheduled observation delivery transition did not finish")
 }
 
 func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T) {
@@ -107,12 +134,9 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 		store: store,
 		opts: ManagerOptions{
 			Now: func() time.Time { return now },
-			Deliver: func(ctx context.Context, record ObservationRecord) error {
+			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
 				delivered <- record
-				return store.UpdateObservation(record.ID, func(record ObservationRecord) ObservationRecord {
-					record.State = ObservationStateQueued
-					return record
-				})
+				return DeliveryOutcome{State: ObservationStateQueued, PendingInputID: "pending-" + record.ID}, nil
 			},
 		},
 	}
@@ -134,5 +158,106 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 	}
 	if len(records) != 1 || records[0].State != ObservationStateQueued {
 		t.Fatalf("recovered observations = %+v, want one queued record", records)
+	}
+}
+
+func TestDeliverObservationOwnsOutcomeTransitionAndSkipsTransitionedRecord(t *testing.T) {
+	now := time.Now().UTC()
+	store := NewStore(t.TempDir(), StoreOptions{Now: func() time.Time { return now }})
+	record, err := store.RecordObservation(ObservationRecord{
+		ObservableID: "lifecycle",
+		RunID:        "run-1",
+		Kind:         "notice",
+		Severity:     "info",
+		WindowStart:  now,
+		WindowEnd:    now,
+		Content:      "hello",
+		State:        ObservationStateRecorded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus := events.NewBus()
+	var seen []string
+	bus.Subscribe("*", func(e events.Event) {
+		seen = append(seen, e.Type)
+	})
+	deliveries := 0
+	mgr := &Manager{
+		store: store,
+		opts: ManagerOptions{
+			Bus: bus,
+			Now: func() time.Time { return now },
+			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
+				deliveries++
+				return DeliveryOutcome{State: ObservationStateDelivered, TargetSession: "sess-1"}, nil
+			},
+		},
+	}
+	if err := mgr.deliverObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	updated, ok, err := store.Observation(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || updated.State != ObservationStateDelivered || updated.TargetSession != "sess-1" || updated.DeliveredAt.IsZero() {
+		t.Fatalf("updated observation = %+v ok=%v", updated, ok)
+	}
+	if deliveries != 1 {
+		t.Fatalf("deliveries = %d, want 1", deliveries)
+	}
+	if len(seen) != 2 || seen[0] != EventObservationRecorded || seen[1] != EventObservationDelivered {
+		t.Fatalf("events = %+v, want recorded then delivered", seen)
+	}
+
+	if err := mgr.deliverObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 1 {
+		t.Fatalf("deliveries after transitioned record = %d, want still 1", deliveries)
+	}
+}
+
+func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
+	now := time.Now().UTC()
+	bus := events.NewBus()
+	var seen []ObservationEventPayload
+	bus.Subscribe("observation.*", func(e events.Event) {
+		payload, ok := e.Payload.(ObservationEventPayload)
+		if !ok {
+			t.Fatalf("payload = %T, want ObservationEventPayload", e.Payload)
+		}
+		seen = append(seen, payload)
+	})
+	mgr := &Manager{
+		opts: ManagerOptions{
+			Bus: bus,
+			Now: func() time.Time { return now },
+			Deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
+				return DeliveryOutcome{State: ObservationStateDelivered, TargetSession: "sess-1"}, nil
+			},
+		},
+	}
+	record := ObservationRecord{
+		ID:           "obs-1",
+		ObservableID: "no-store",
+		RunID:        "run-1",
+		Kind:         "notice",
+		Severity:     "info",
+		WindowStart:  now,
+		WindowEnd:    now,
+		Content:      "hello",
+		State:        ObservationStateRecorded,
+	}
+	if err := mgr.deliverObservation(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("events = %+v, want recorded then delivered", seen)
+	}
+	delivered := seen[1].Observation
+	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetSession != "sess-1" || !delivered.DeliveredAt.Equal(now) {
+		t.Fatalf("delivered observation = %+v", delivered)
 	}
 }

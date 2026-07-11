@@ -359,6 +359,20 @@ func (s *Store) ListObservations(filter ObservationFilter) ([]ObservationRecord,
 	return out, nil
 }
 
+func (s *Store) Observation(id string) (ObservationRecord, bool, error) {
+	if s == nil || stringsTrimSpace(id) == "" {
+		return ObservationRecord{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	if err != nil {
+		return ObservationRecord{}, false, err
+	}
+	record, ok := records[id]
+	return record, ok, nil
+}
+
 func (s *Store) FindObservationBySourceEventID(sourceEventID string) (ObservationRecord, bool, error) {
 	if s == nil || sourceEventID == "" {
 		return ObservationRecord{}, false, nil

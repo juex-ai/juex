@@ -345,7 +345,7 @@ func New(opts Options) (*App, error) {
 		Sandbox:       cfg.SandboxPolicy(),
 		SandboxRunner: nil,
 		Bus:           bus,
-		Deliver:       a.HandleObservation,
+		Deliver:       a.DeliverObservation,
 	})
 	if err != nil {
 		_ = a.detachObservability()
@@ -605,33 +605,44 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 }
 
 func (a *App) HandleObservation(ctx context.Context, record observable.ObservationRecord) error {
+	_, err := a.DeliverObservation(ctx, record)
+	return err
+}
+
+func (a *App) DeliverObservation(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 	if a == nil || a.Engine == nil {
-		return nil
+		return observable.DeliveryOutcome{}, nil
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return observable.DeliveryOutcome{}, ctx.Err()
 	default:
 	}
 	msg, err := observationMessage(record)
 	if err != nil {
-		return err
+		return observable.DeliveryOutcome{}, err
 	}
 	pendingID := observationPendingInputID(record)
 	if _, err := a.Engine.EnqueuePendingMessageWithOptions(ctx, msg, runtime.PendingInputOptions{
 		ID:  pendingID,
 		TTL: a.Engine.ExternalEventTTL,
 	}); err == nil {
-		a.markObservationQueued(record.ID, pendingID)
-		return nil
+		return observable.DeliveryOutcome{
+			State:          observable.ObservationStateQueued,
+			PendingInputID: pendingID,
+			TargetSession:  a.currentSessionID(),
+		}, nil
 	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
-		return err
+		return observable.DeliveryOutcome{}, err
 	}
 	_, err = a.Engine.TurnMessage(ctx, msg)
 	if err == nil {
-		a.markObservationDelivered(record.ID)
+		return observable.DeliveryOutcome{
+			State:         observable.ObservationStateDelivered,
+			TargetSession: a.currentSessionID(),
+		}, nil
 	}
-	return err
+	return observable.DeliveryOutcome{}, err
 }
 
 func observationMessage(record observable.ObservationRecord) (llm.Message, error) {
@@ -677,32 +688,11 @@ func observationPendingInputID(record observable.ObservationRecord) string {
 	return "observation-" + record.ID
 }
 
-func (a *App) markObservationQueued(id, pendingID string) {
-	if a == nil || a.obsv == nil {
-		return
+func (a *App) currentSessionID() string {
+	if a == nil || a.Session == nil {
+		return ""
 	}
-	_ = a.obsv.UpdateObservation(id, func(record observable.ObservationRecord) observable.ObservationRecord {
-		record.State = observable.ObservationStateQueued
-		record.PendingInputID = pendingID
-		if a.Session != nil {
-			record.TargetSession = a.Session.ID
-		}
-		return record
-	})
-}
-
-func (a *App) markObservationDelivered(id string) {
-	if a == nil || a.obsv == nil {
-		return
-	}
-	_ = a.obsv.UpdateObservation(id, func(record observable.ObservationRecord) observable.ObservationRecord {
-		record.State = observable.ObservationStateDelivered
-		record.DeliveredAt = time.Now().UTC()
-		if a.Session != nil {
-			record.TargetSession = a.Session.ID
-		}
-		return record
-	})
+	return a.Session.ID
 }
 
 func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string {
