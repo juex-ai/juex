@@ -564,11 +564,14 @@ and prepends the returned page.
 Live facts from the JSON/SSE API are projected through
 `src/lib/live-session-projection.ts`. That module owns the browser-side read
 model for live messages, optimistic turns, pending input, compact progress,
-tool output deltas, usage snapshots, active flags, and status. `pages/Session.tsx`
-owns the route adapter work: fetching, EventSource subscription, timers,
-navigation, and rendering projection effects such as refetching after terminal
-turn events. The composer reads projection state so the submit button can
-switch between send, queue, and stop behavior:
+tool output deltas, usage snapshots, active flags, and status.
+`src/lib/session-read-controller.ts` owns the session-detail effect interpreter:
+route guards, snapshot/context refresh, EventSource dispatch, turn polling,
+transient timers, navigation effects, and refetching after terminal turn events.
+`pages/Session.tsx` remains the React route/view adapter and should render the
+projection instead of sequencing those effects directly. The composer reads
+projection state so the submit button can switch between send, queue, and stop
+behavior:
 
 | Event | Effect |
 |---|---|

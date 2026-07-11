@@ -1,9 +1,7 @@
 import {
   type ReactNode,
-  useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -47,7 +45,6 @@ import {
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
 import {
-  isCompactCommandInput,
   LOCAL_COMPACT_PENDING_KIND,
   PENDING_COMPACT_LABEL,
 } from "@/lib/compact-ui";
@@ -109,30 +106,14 @@ import {
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
 import {
-  clearComposerHint,
   createSessionReadState,
-  markSessionProjectionIdle,
-  projectActiveContextFailed,
-  projectActiveContextLoaded,
-  projectComposerHint,
-  projectInitialCommand,
-  projectLiveBrowserEvent,
-  projectLoadOlderFailed,
-  projectLoadOlderStarted,
-  projectLoadOlderSucceeded,
-  projectPendingSubmit,
-  projectPromptInputChanged,
-  projectSessionLoadFailed,
-  projectSessionLoaded,
-  projectStartTurnFailed,
-  projectStartTurnSucceeded,
-  projectTurnStatus,
-  resetSessionReadState,
   type SessionInitialCommandState,
-  type SessionReadEffect,
-  type SessionReadResult,
   type SessionReadState,
 } from "@/lib/session-read-state";
+import {
+  createSessionReadController,
+  type SessionReadController,
+} from "@/lib/session-read-controller";
 import {
   getSession,
   getSessionContext,
@@ -166,14 +147,6 @@ import type {
 
 type InitialCommandState = SessionInitialCommandState;
 
-type SessionRouteSnapshot = {
-  id: string;
-};
-
-function isLatestRoute(latest: SessionRouteSnapshot, id: string): boolean {
-  return latest.id === id;
-}
-
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
@@ -181,15 +154,21 @@ export function Session() {
   const [readState, setReadState] = useState<SessionReadState>(() =>
     createSessionReadState(),
   );
+  const controller = useMemo<SessionReadController>(
+    () =>
+      createSessionReadController({
+        initialState: createSessionReadState(),
+        onStateChange: setReadState,
+        getSession,
+        getSessionContext,
+        getTurnStatus,
+        startTurn,
+        subscribeEvents,
+        logError: (message, error) => console.error(message, error),
+      }),
+    [],
+  );
   const [draft, setDraft] = useState("");
-  const doneTimerRef = useRef<number | null>(null);
-  const composerHintTimerRef = useRef<number | null>(null);
-  const initialCommandRef = useRef<string | null>(null);
-  const readStateRef = useRef<SessionReadState | null>(null);
-  if (readStateRef.current === null) {
-    readStateRef.current = readState;
-  }
-  const latestRouteRef = useRef({ id });
   const {
     data,
     loadError,
@@ -201,205 +180,75 @@ export function Session() {
   } = readState;
 
   useEffect(() => {
-    latestRouteRef.current = { id };
-  }, [id]);
+    controller.configureNavigation({
+      clearRouteState: () =>
+        navigate(location.pathname, { replace: true, state: null }),
+      dispatchSessionsChanged: () =>
+        window.dispatchEvent(new Event("juex:sessions-changed")),
+      navigateToSession: (sessionID, state) =>
+        navigate(`/sessions/${encodeURIComponent(sessionID)}`, { state }),
+    });
+  }, [controller, location.pathname, navigate]);
 
-  // refresh is stable per route mode and session id.
-  const refresh = useCallback(async (
-    opts?: { preserveLiveMessages?: boolean },
-  ) => {
-    const requestId = id;
-    try {
-      const r = await getSession(requestId);
-      if (!isLatestRoute(latestRouteRef.current, requestId)) {
-        return;
-      }
-      updateReadState((prev) => projectSessionLoaded(prev, r, opts));
-      try {
-        const context = await getSessionContext(requestId);
-        if (!isLatestRoute(latestRouteRef.current, requestId)) {
-          return;
-        }
-        updateReadState((prev) => projectActiveContextLoaded(prev, context));
-      } catch (contextError) {
-        if (isLatestRoute(latestRouteRef.current, requestId)) {
-          console.error("getSessionContext failed", contextError);
-          updateReadState(projectActiveContextFailed);
-        }
-      }
-    } catch (e) {
-      if (isLatestRoute(latestRouteRef.current, requestId)) {
-        console.error("getSession failed", e);
-      }
-    }
-    // updateReadState writes through readStateRef and React's stable setter.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  useEffect(() => {
+    return () => controller.dispose();
+  }, [controller]);
 
   useEffect(() => {
     const state = location.state as InitialCommandState;
     const activeTurnID = state?.activeTurnID;
-    setSessionReadState(
-      resetSessionReadState(currentReadState(), { activeTurnID }),
-    );
+    controller.setRoute(id);
+    controller.resetForRoute({ activeTurnID });
     setDraft("");
     if (!activeTurnID) return;
-
-    let cancelled = false;
-    let timer: number | null = null;
-    const reconcile = async () => {
-      try {
-        const turn = await getTurnStatus(id, activeTurnID);
-        if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
-        runSessionReadResult(projectTurnStatus(currentReadState(), turn));
-        if (turn.state === "running") {
-          timer = window.setTimeout(() => void reconcile(), 1000);
-        }
-      } catch (e) {
-        if (!cancelled && isLatestRoute(latestRouteRef.current, id)) {
-          console.error("getTurnStatus failed", e);
-          timer = window.setTimeout(() => void reconcile(), 1000);
-        }
-      }
-    };
-    void reconcile();
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-    // Projection effect helpers read current state from refs; including them
-    // would restart the polling loop on every render. location.state is read
-    // only on session entry; clearing it later must not reset live projection.
+    return controller.startTurnStatusPolling({
+      sessionID: id,
+      turnID: activeTurnID,
+      retryOnError: true,
+    });
+    // location.state is read only on session entry; clearing it later must not
+    // reset live projection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, refresh]);
+  }, [controller, id]);
 
   const loadedTurnID =
     data?.turn?.state === "running" ? data.turn.turn_id : undefined;
 
   useEffect(() => {
     if (!id || !loadedTurnID) return;
-
-    let cancelled = false;
-    let timer: number | null = null;
-    const reconcile = async () => {
-      try {
-        const turn = await getTurnStatus(id, loadedTurnID);
-        if (cancelled || !isLatestRoute(latestRouteRef.current, id)) return;
-        runSessionReadResult(projectTurnStatus(currentReadState(), turn));
-        if (turn.state === "running") {
-          timer = window.setTimeout(() => void reconcile(), 1000);
-        }
-      } catch (e) {
-        if (!cancelled && isLatestRoute(latestRouteRef.current, id)) {
-          console.error("getTurnStatus failed", e);
-        }
-      }
-    };
-    void reconcile();
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearTimeout(timer);
-    };
-    // Projection effect helpers read current state from refs; including them
-    // would restart the polling loop on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, loadedTurnID]);
+    return controller.startTurnStatusPolling({
+      sessionID: id,
+      turnID: loadedTurnID,
+      retryOnError: false,
+    });
+  }, [controller, id, loadedTurnID]);
 
   useEffect(() => {
     if (!id) return;
-    const requestId = id;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await getSession(requestId);
-        if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
-          return;
-        }
-        updateReadState((prev) =>
-          projectSessionLoaded(prev, r, { preserveLiveMessages: true }),
-        );
-        try {
-          const context = await getSessionContext(requestId);
-          if (cancelled || !isLatestRoute(latestRouteRef.current, requestId)) {
-            return;
-          }
-          updateReadState((prev) => projectActiveContextLoaded(prev, context));
-        } catch (contextError) {
-          if (!cancelled && isLatestRoute(latestRouteRef.current, requestId)) {
-            console.error("getSessionContext failed", contextError);
-            updateReadState(projectActiveContextFailed);
-          }
-        }
-      } catch (e) {
-        if (!cancelled && isLatestRoute(latestRouteRef.current, requestId)) {
-          console.error("getSession failed", e);
-          updateReadState((prev) => projectSessionLoadFailed(prev, e));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // updateReadState writes through readStateRef; including it would refetch
-    // the session whenever the route-local controller state changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+    void controller.refresh(id, {
+      preserveLiveMessages: true,
+      recordLoadFailure: true,
+    });
+  }, [controller, id]);
 
   useEffect(() => {
     if (!data) return;
     const state = location.state as InitialCommandState;
     if (!state?.command || !state.commandInput) return;
-    const command = state.command;
-    const commandInput = state.commandInput;
-    const key = `${id}:${commandInput}:${command.name}:${command.text}`;
-    if (initialCommandRef.current === key) return;
-    initialCommandRef.current = key;
-    runSessionReadResult(
-      projectInitialCommand(currentReadState(), commandInput, command),
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    data,
-    id,
-    location.pathname,
-    location.state,
-    navigate,
-    refresh,
-  ]);
+    controller.projectInitialCommandOnce(id, state.commandInput, state.command);
+  }, [controller, data, id, location.state]);
 
   // SSE subscription.
   useEffect(() => {
     if (!id || !data || !sessionCanSend(data)) return;
-    const unsub = subscribeEvents(id, {
-      onEvent: (e) => {
-        runSessionReadResult(projectLiveBrowserEvent(currentReadState(), e));
-      },
-    });
-    return () => {
-      unsub();
-      if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
-      if (composerHintTimerRef.current)
-        window.clearTimeout(composerHintTimerRef.current);
-    };
-    // Projection reads from refs; resubscribing on every live-state change would
-    // reopen the EventSource during active turns.
+    return controller.subscribeLiveEvents(id);
+    // Keep this tied to send-access fields so projection-only data changes do
+    // not reopen the EventSource during active turns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.kind, data?.active, id, refresh]);
+  }, [controller, data?.kind, data?.active, id]);
 
   async function handleSend(prompt: string) {
-    const compactCommand = isCompactCommandInput(prompt);
-    updateReadState((prev) => projectPendingSubmit(prev, prompt));
-    try {
-      const turn = await startTurn(id, prompt);
-      runSessionReadResult(
-        projectStartTurnSucceeded(currentReadState(), prompt, turn),
-      );
-    } catch (e) {
-      console.error("startTurn failed", e);
-      runSessionReadResult(
-        projectStartTurnFailed(currentReadState(), compactCommand, e),
-      );
-    }
+    await controller.submitPrompt(id, prompt);
   }
 
   async function handleInterrupt() {
@@ -485,13 +334,13 @@ export function Session() {
                 await handleSend(text);
               }}
             >
-              <PromptInputTextarea
-                onChange={(event) => {
-                  setDraft(event.currentTarget.value);
-                  updateReadState(projectPromptInputChanged);
-                }}
-                placeholder="Ask juex anything..."
-              />
+                <PromptInputTextarea
+                  onChange={(event) => {
+                    setDraft(event.currentTarget.value);
+                    controller.projectPromptInput();
+                  }}
+                  placeholder="Ask juex anything..."
+                />
               <PromptInputFooter className="flex-nowrap items-end gap-2">
                 <TooltipProvider>
                   <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-1.5">
@@ -534,91 +383,11 @@ export function Session() {
   );
 
   async function handleLoadOlderMessages() {
-    if (!data?.oldest_message_id || loadingOlderMessages) return;
-    const requestId = id;
-    const before = data.oldest_message_id;
-    updateReadState(projectLoadOlderStarted);
-    try {
-      const page = await getSession(requestId, { before });
-      if (!isLatestRoute(latestRouteRef.current, requestId)) {
-        return;
-      }
-      updateReadState((prev) => projectLoadOlderSucceeded(prev, page));
-    } catch (error) {
-      if (isLatestRoute(latestRouteRef.current, requestId)) {
-        updateReadState((prev) => projectLoadOlderFailed(prev, error));
-      }
-    }
-  }
-
-  function setSessionReadState(next: SessionReadState) {
-    readStateRef.current = next;
-    setReadState(next);
-  }
-
-  function currentReadState(): SessionReadState {
-    return readStateRef.current ?? readState;
-  }
-
-  function updateReadState(project: (state: SessionReadState) => SessionReadState) {
-    setSessionReadState(project(currentReadState()));
-  }
-
-  function runSessionReadResult(result: SessionReadResult) {
-    setSessionReadState(result.state);
-    runSessionReadEffects(result.effects);
-  }
-
-  function runSessionReadEffects(effects: SessionReadEffect[]) {
-    for (const effect of effects) {
-      if (effect.type === "refresh") {
-        void refresh({ preserveLiveMessages: effect.preserveLiveMessages });
-        continue;
-      }
-      if (effect.type === "scheduleComposerHintClear") {
-        scheduleComposerHintClear();
-        continue;
-      }
-      if (effect.type === "clearRouteState") {
-        navigate(location.pathname, { replace: true, state: null });
-        continue;
-      }
-      if (effect.type === "dispatchSessionsChanged") {
-        window.dispatchEvent(new Event("juex:sessions-changed"));
-        continue;
-      }
-      if (effect.type === "navigateToSession") {
-        navigate(`/sessions/${encodeURIComponent(effect.sessionID)}`, {
-          state: effect.state,
-        });
-        continue;
-      }
-      if (effect.type === "scheduleIdleStatus") {
-        scheduleIdleStatus();
-      }
-    }
-  }
-
-  function scheduleIdleStatus() {
-    if (doneTimerRef.current) window.clearTimeout(doneTimerRef.current);
-    doneTimerRef.current = window.setTimeout(
-      () => updateReadState(markSessionProjectionIdle),
-      1500,
-    );
+    await controller.loadOlderMessages(id, data?.oldest_message_id);
   }
 
   function showComposerHint(message: string) {
-    runSessionReadResult(projectComposerHint(currentReadState(), message));
-  }
-
-  function scheduleComposerHintClear() {
-    if (composerHintTimerRef.current) {
-      window.clearTimeout(composerHintTimerRef.current);
-    }
-    composerHintTimerRef.current = window.setTimeout(
-      () => updateReadState(clearComposerHint),
-      1800,
-    );
+    controller.showComposerHint(message);
   }
 }
 
