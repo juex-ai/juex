@@ -618,6 +618,28 @@ func TestStreamIdleContextCancelsAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestStreamIdleContextResetExtendsDeadline(t *testing.T) {
+	const timeout = 40 * time.Millisecond
+	ctx, reset, stop, expired := newStreamIdleContext(context.Background(), timeout)
+	defer stop()
+
+	time.Sleep(25 * time.Millisecond)
+	reset()
+	select {
+	case <-ctx.Done():
+		t.Fatal("stream idle context canceled before the reset deadline")
+	case <-time.After(25 * time.Millisecond):
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("stream idle context did not cancel after the reset deadline")
+	}
+	if !expired() {
+		t.Fatal("expired = false, want true")
+	}
+}
+
 func TestAnthropic_CompactsEmptyHistoryMessages(t *testing.T) {
 	var capturedBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

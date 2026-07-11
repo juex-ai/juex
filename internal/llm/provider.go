@@ -176,13 +176,6 @@ func newStreamIdleContext(ctx context.Context, timeout time.Duration) (context.C
 			return
 		}
 		deadline = time.Now().Add(timeout)
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(timeout)
 	}
 	stop := func() {
 		once.Do(func() {
