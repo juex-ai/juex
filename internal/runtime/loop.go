@@ -559,6 +559,9 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		toolErr = err
 	} else {
 		block.Content = out
+		if event, ok := chunkedwrite.EventFromStructured(info.StructuredResult); ok {
+			block.ChunkedWrite = &event
+		}
 	}
 
 	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
@@ -580,9 +583,6 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	if !block.IsError {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
 			block.Media = media
-		}
-		if event, ok := chunkedwrite.EventFromStructured(info.StructuredResult); ok {
-			block.ChunkedWrite = &event
 		}
 	}
 	observation := toolObservationForResult(call, block, info, toolErr)

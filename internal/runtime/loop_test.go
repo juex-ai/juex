@@ -1481,6 +1481,53 @@ func TestTurn_ToolStructuredChunkedWriteBecomesToolResultLifecycleFact(t *testin
 	}
 }
 
+func TestTurn_PostToolUseHookDenyPreservesChunkedWriteLifecycleFact(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "cw_commit", ToolName: "chunked_fact", Input: map[string]any{"write_id": "w_runtime"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:   "chunked_fact",
+		Schema: map[string]any{"type": "object"},
+		ResultHandler: func(ctx context.Context, in map[string]any) (tools.Result, error) {
+			return tools.Result{
+				Text: "write_commit presentation text",
+				Structured: chunkedwrite.Event{
+					Kind:    chunkedwrite.EventCommit,
+					WriteID: "w_runtime",
+					Path:    "long.md",
+					Chunks:  1,
+				},
+			}, nil
+		},
+	})
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+		hooks.EventPostToolUse: {{Decision: hooks.DecisionDeny, AdditionalContext: "redaction required"}},
+	}}
+
+	out, err := eng.Turn(context.Background(), "commit chunked write")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q", out)
+	}
+	result := eng.Session.History[2]
+	if result.Role != llm.RoleUser || len(result.Blocks) != 1 {
+		t.Fatalf("tool result message = %+v", result)
+	}
+	block := result.Blocks[0]
+	if !block.IsError || !strings.Contains(block.Content, "redaction required") {
+		t.Fatalf("tool result block = %+v, want post hook error", block)
+	}
+	if block.ChunkedWrite == nil || block.ChunkedWrite.Kind != chunkedwrite.EventCommit || block.ChunkedWrite.WriteID != "w_runtime" {
+		t.Fatalf("chunked write fact = %+v", block.ChunkedWrite)
+	}
+}
+
 func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
