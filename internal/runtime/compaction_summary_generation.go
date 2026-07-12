@@ -61,6 +61,9 @@ func (e *Engine) generateCompactionSummaryLocked(
 		}
 	}
 
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage}, ctxErr
+	}
 	if e.Provider != nil && provider != e.Provider {
 		e.emit(events.Event{Type: "context.compact.summary_model_fallback", TurnID: turnID, Payload: ContextCompactSummaryFallbackPayload{
 			ConfiguredModel: policy.SummaryModel,

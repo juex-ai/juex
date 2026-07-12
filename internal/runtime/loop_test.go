@@ -1464,6 +1464,34 @@ func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
 	}
 }
 
+func TestCompactDoesNotFallbackAfterContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	main := &scriptedCompactionProvider{name: "main:model"}
+	summary := &scriptedCompactionProvider{
+		name: "summary:model",
+		attempts: []scriptedCompactionAttempt{{
+			beforeReturn: cancel,
+			err:          context.Canceled,
+		}},
+	}
+	eng, bus := newEngine(t, main, false)
+	eng.SummaryProvider = summary
+	configureCompactionRetryTest(t, eng, 2, 200)
+	eng.Compaction.SummaryModel = "summary:model"
+	var fallbacks int
+	bus.Subscribe("context.compact.summary_model_fallback", func(events.Event) {
+		fallbacks++
+	})
+
+	_, err := eng.Compact(ctx, "compact-turn", "system", "manual", false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context canceled", err)
+	}
+	if summary.calls != 1 || main.calls != 0 || fallbacks != 0 {
+		t.Fatalf("summary/main/fallbacks = %d/%d/%d, want 1/0/0", summary.calls, main.calls, fallbacks)
+	}
+}
+
 func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1618,8 +1646,9 @@ type namedCompactionProvider struct {
 }
 
 type scriptedCompactionAttempt struct {
-	response llm.Response
-	err      error
+	response     llm.Response
+	err          error
+	beforeReturn func()
 }
 
 type scriptedCompactionProvider struct {
@@ -1646,6 +1675,9 @@ func (p *scriptedCompactionProvider) CompleteWithOptions(ctx context.Context, sy
 	p.histories = append(p.histories, append([]llm.Message(nil), history...))
 	attempt := p.attempts[p.calls]
 	p.calls++
+	if attempt.beforeReturn != nil {
+		attempt.beforeReturn()
+	}
 	return attempt.response, attempt.err
 }
 

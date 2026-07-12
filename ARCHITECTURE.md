@@ -1269,8 +1269,9 @@ and requested output remain within the compaction trigger budget. If the retry
 still has no summary, or the retry fails, an independently configured summary
 provider falls back once to the active provider. Compaction fails only after
 those bounded recovery steps are exhausted; generic provider failures are not
-treated as empty-summary retries. Successful response attempts remain included
-in session token usage.
+treated as empty-summary retries. A canceled or expired parent context stops
+before fallback and does not emit a misleading fallback event. Successful
+response attempts remain included in session token usage.
 The runtime also maintains an optional session-local `working_state.json`
 sidecar. The persistence, merge, pruning, rendering, and redaction rules for it
 live in `internal/runtime/workmem`, alongside the `goal_state.json` store. The
