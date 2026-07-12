@@ -415,9 +415,9 @@ func (m *Manager) RecordObservation(record ObservationRecord) (ObservationRecord
 	if m == nil || m.store == nil {
 		return ObservationRecord{}, nil
 	}
-	storedAttachments, validationErrors := snapshotAttachmentRefs(m.opts.WorkDir, record.Attachments)
-	record.Attachments = storedAttachments
-	record.AttachmentErrors = append(record.AttachmentErrors, validationErrors...)
+	snapshot := snapshotAttachmentRefs(m.opts.WorkDir, record.Attachments, eventmedia.DefaultMaxEventBytes)
+	record.Attachments = snapshot.refs
+	record.AttachmentErrors = append(record.AttachmentErrors, snapshot.errors...)
 	if len(record.AttachmentErrors) > 0 {
 		record.AttachmentState = ObservationAttachmentStateError
 	}

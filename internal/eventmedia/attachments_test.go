@@ -160,6 +160,9 @@ func TestValidateAttachmentsRejectsTotalEventSizeLimit(t *testing.T) {
 	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0].Error, "event attachments exceed") {
 		t.Fatalf("errors = %+v, want total size error", report.Errors)
 	}
+	if !report.EventBytesExceeded {
+		t.Fatal("EventBytesExceeded = false, want structured total size signal")
+	}
 }
 
 func TestValidateAttachmentsAcceptsDeclaredJSON(t *testing.T) {

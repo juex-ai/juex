@@ -1,6 +1,7 @@
 package observable
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,22 +11,25 @@ import (
 )
 
 type BatcherOptions struct {
-	RunID   string
-	WorkDir string
+	RunID         string
+	WorkDir       string
+	MaxEventBytes int64
 }
 
 type Batcher struct {
-	spec    Spec
-	store   *Store
-	runID   string
-	workDir string
-	batch   *activeBatch
+	spec          Spec
+	store         *Store
+	runID         string
+	workDir       string
+	maxEventBytes int64
+	batch         *activeBatch
 }
 
 type activeBatch struct {
 	streams          []string
 	contents         []string
 	attachments      []eventmedia.AttachmentRef
+	attachmentBytes  int64
 	attachmentErrors []string
 	kind             string
 	severity         string
@@ -34,7 +38,17 @@ type activeBatch struct {
 }
 
 func NewBatcher(spec Spec, store *Store, opts BatcherOptions) *Batcher {
-	return &Batcher{spec: spec, store: store, runID: opts.RunID, workDir: opts.WorkDir}
+	maxEventBytes := opts.MaxEventBytes
+	if maxEventBytes <= 0 {
+		maxEventBytes = eventmedia.DefaultMaxEventBytes
+	}
+	return &Batcher{
+		spec:          spec,
+		store:         store,
+		runID:         opts.RunID,
+		workDir:       opts.WorkDir,
+		maxEventBytes: maxEventBytes,
+	}
 }
 
 func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
@@ -44,11 +58,26 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	if unit.ReceivedAt.IsZero() {
 		unit.ReceivedAt = time.Now().UTC()
 	}
-	storedAttachments, validationErrors := snapshotAttachmentRefs(b.workDir, unit.Attachments)
-	unit.Attachments = storedAttachments
-	unit.AttachmentErrors = append(unit.AttachmentErrors, validationErrors...)
+	startsNewBatch := b.batch != nil && !b.batch.windowStart.IsZero() && unit.ReceivedAt.Sub(b.batch.windowStart) >= time.Duration(b.spec.Batch.IntervalSeconds)*time.Second
+	remainingEventBytes := b.maxEventBytes
+	if b.batch != nil && !startsNewBatch {
+		remainingEventBytes -= b.batch.attachmentBytes
+	}
+	var snapshot attachmentSnapshot
+	if len(unit.Attachments) > 0 && remainingEventBytes <= 0 {
+		unit.AttachmentErrors = append(unit.AttachmentErrors, attachmentBudgetError(b.maxEventBytes, 0))
+	} else {
+		snapshot = snapshotAttachmentRefs(b.workDir, unit.Attachments, remainingEventBytes)
+		if snapshot.eventBytesExceeded {
+			unit.AttachmentErrors = append(unit.AttachmentErrors, attachmentBudgetError(b.maxEventBytes, remainingEventBytes))
+		} else {
+			unit.AttachmentErrors = append(unit.AttachmentErrors, snapshot.errors...)
+		}
+	}
+	unit.Attachments = snapshot.refs
+
 	var emitted []ObservationRecord
-	if b.batch != nil && !b.batch.windowStart.IsZero() && unit.ReceivedAt.Sub(b.batch.windowStart) >= time.Duration(b.spec.Batch.IntervalSeconds)*time.Second {
+	if startsNewBatch {
 		flushed, err := b.Flush("interval")
 		if err != nil {
 			return nil, err
@@ -65,12 +94,17 @@ func (b *Batcher) Add(unit ParsedUnit) ([]ObservationRecord, error) {
 	} else {
 		b.batch.severity = maxSeverity(b.batch.severity, unit.Severity)
 	}
+	b.batch.attachmentBytes += snapshot.bytes
 	b.batch.streams = append(b.batch.streams, unit.Stream)
 	b.batch.contents = append(b.batch.contents, unit.Content)
 	b.batch.attachments = append(b.batch.attachments, unit.Attachments...)
 	b.batch.attachmentErrors = append(b.batch.attachmentErrors, unit.AttachmentErrors...)
 	b.batch.windowEnd = unit.ReceivedAt
 	return emitted, nil
+}
+
+func attachmentBudgetError(limit, remaining int64) string {
+	return fmt.Sprintf("event attachments exceed %d bytes (batch remaining: %d bytes)", limit, max(remaining, 0))
 }
 
 func (b *Batcher) FlushDue(now time.Time, reason string) ([]ObservationRecord, error) {

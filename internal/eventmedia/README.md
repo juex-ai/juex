@@ -13,4 +13,6 @@ removed.
 
 Validation is per attachment plus a total event-size gate. Callers must render
 `ValidationReport.Errors` visibly; Observable ingress also records them and
-emits `observation.errored` while preserving the event text.
+emits `observation.errored` while preserving the event text. Command
+Observables apply the total gate to the complete batch, not each parsed line,
+so one Observation cannot exceed the event attachment budget by aggregation.
