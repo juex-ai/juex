@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
@@ -15,7 +14,7 @@ func TestWebTurnTransportStatusTracksRunningAndDone(t *testing.T) {
 	_, as := newTurnTransportTestSession(t, prov)
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	waitForProviderStart(t, prov)
+	waitPendingProviderStarted(t, prov, "provider did not start")
 	status, ok := as.turns.status("turn-1")
 	if !ok || status.State != "running" {
 		t.Fatalf("running status = %+v, ok=%v", status, ok)
@@ -34,7 +33,7 @@ func TestWebTurnTransportStatusForwardsPendingCounts(t *testing.T) {
 	_, as := newTurnTransportTestSession(t, prov)
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	waitForProviderStart(t, prov)
+	waitPendingProviderStarted(t, prov, "provider did not start")
 	if _, err := as.app.Engine.EnqueuePendingInput(context.Background(), "queued"); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +58,7 @@ func TestWebTurnTransportActiveStatusOnlyWhileRunning(t *testing.T) {
 	}
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	waitForProviderStart(t, prov)
+	waitPendingProviderStarted(t, prov, "provider did not start")
 	turnID, status, ok := as.turns.activeStatus()
 	if !ok || turnID != "turn-1" || status.State != "running" {
 		t.Fatalf("running active status = %q %+v ok=%v", turnID, status, ok)
@@ -80,7 +79,7 @@ func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 		t.Fatal("idle interrupt returned true")
 	}
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	waitForProviderStart(t, prov)
+	waitPendingProviderStarted(t, prov, "provider did not start")
 	if !as.turns.interrupt() {
 		t.Fatal("running interrupt returned false")
 	}
@@ -102,7 +101,7 @@ func TestWebTurnTransportStartCancelsExistingTurn(t *testing.T) {
 	_, as := newTurnTransportTestSession(t, prov)
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "first"))
-	waitForProviderStart(t, prov)
+	waitPendingProviderStarted(t, prov, "provider did not start")
 	as.turns.start("turn-2", llm.TextMessage(llm.RoleUser, "second"))
 	as.turns.wait()
 
@@ -143,13 +142,4 @@ func newTurnTransportTestSession(t *testing.T, provider llm.Provider) (*Server, 
 		t.Fatal(err)
 	}
 	return srv, as
-}
-
-func waitForProviderStart(t *testing.T, prov *pendingProvider) {
-	t.Helper()
-	select {
-	case <-prov.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("provider did not start")
-	}
 }
