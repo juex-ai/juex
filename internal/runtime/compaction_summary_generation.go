@@ -39,7 +39,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage}, nil
 		}
 
-		retryMaxOutputTokens := doubledSummaryMaxTokens(maxOutputTokens)
+		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, policy, instructions)
 		e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 			Attempt:                 2,
 			Reason:                  "empty_summary",
@@ -136,4 +136,29 @@ func doubledSummaryMaxTokens(value int) int {
 		return maxInt
 	}
 	return value * 2
+}
+
+func (e *Engine) compactionSummaryRetryMaxOutputTokens(
+	baseSystem string,
+	previous llm.Message,
+	input []llm.Message,
+	policy compactionPolicy,
+	instructions string,
+) int {
+	desired := doubledSummaryMaxTokens(policy.SummaryMaxTokens)
+	if desired <= 0 || policy.TriggerTokens <= 1 {
+		return desired
+	}
+
+	minimumSystem, _ := buildCompactionSummaryRequest(baseSystem, previous, nil, policy, instructions)
+	minimumBody := buildCompactionSummaryBody(previous, nil, policy.ToolResultMaxChars, len(input))
+	minimumHistory := []llm.Message{llm.TextMessage(llm.RoleUser, minimumBody)}
+	maxOutputTokens := policy.TriggerTokens - estimateContextTokens(minimumSystem, nil, minimumHistory)
+	if maxOutputTokens < 1 {
+		maxOutputTokens = 1
+	}
+	if desired > maxOutputTokens {
+		return maxOutputTokens
+	}
+	return desired
 }

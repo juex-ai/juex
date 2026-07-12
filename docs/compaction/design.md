@@ -340,7 +340,7 @@ Currently emitted events:
     `keep_recent_tokens`
 - `context.compact.summary_retry`
   - empty-summary reason, stop reason, reasoning-only classification, and the
-    previous and increased output-token budgets
+    previous and bounded retry output-token budgets
 - `context.compact.summary_model_fallback`
   - configured summary model, fallback model, and the summary-provider error
 - `context.compact.errored` and `context.compact.skipped`

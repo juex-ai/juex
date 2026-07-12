@@ -1305,6 +1305,44 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	}
 }
 
+func TestCompactCapsSummaryRetryToBoundedRequest(t *testing.T) {
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant}}},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "bounded retry summary")}},
+		},
+	}
+	eng, bus := newEngine(t, provider, false)
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 1200
+	eng.Compaction.ReserveTokens = 300
+	eng.Compaction.SummaryMaxTokens = 600
+	var retry ContextCompactSummaryRetryPayload
+	bus.Subscribe("context.compact.summary_retry", func(e events.Event) {
+		retry = e.Payload.(ContextCompactSummaryRetryPayload)
+	})
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 || len(provider.options) != 2 || len(provider.systems) != 2 || len(provider.histories) != 2 {
+		t.Fatalf("calls/options/systems/histories = %d/%d/%d/%d", provider.calls, len(provider.options), len(provider.systems), len(provider.histories))
+	}
+	retryBudget := provider.options[1].MaxOutputTokens
+	if retryBudget >= 1200 {
+		t.Fatalf("retry budget = %d, want less than uncapped double 1200", retryBudget)
+	}
+	policy := effectiveCompactionPolicy(eng.Compaction, eng.ContextWindow)
+	retryInputTokens := estimateContextTokens(provider.systems[1], nil, provider.histories[1])
+	if retryInputTokens+retryBudget > policy.TriggerTokens {
+		t.Fatalf("retry input + output = %d + %d, want <= trigger %d", retryInputTokens, retryBudget, policy.TriggerTokens)
+	}
+	if retry.PreviousMaxOutputTokens != 600 || retry.MaxOutputTokens != retryBudget {
+		t.Fatalf("retry payload = %+v, want bounded budget %d", retry, retryBudget)
+	}
+}
+
 func TestCompactReturnsEmptySummaryAfterSingleRetry(t *testing.T) {
 	provider := &scriptedCompactionProvider{
 		name: "thinking:model",
@@ -1589,6 +1627,7 @@ type scriptedCompactionProvider struct {
 	attempts  []scriptedCompactionAttempt
 	calls     int
 	options   []llm.CompleteOptions
+	systems   []string
 	histories [][]llm.Message
 }
 
@@ -1603,6 +1642,7 @@ func (p *scriptedCompactionProvider) CompleteWithOptions(ctx context.Context, sy
 		return llm.Response{}, fmt.Errorf("scriptedCompactionProvider: out of attempts (called=%d)", p.calls)
 	}
 	p.options = append(p.options, opts)
+	p.systems = append(p.systems, sys)
 	p.histories = append(p.histories, append([]llm.Message(nil), history...))
 	attempt := p.attempts[p.calls]
 	p.calls++

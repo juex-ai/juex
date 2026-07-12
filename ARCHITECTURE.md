@@ -1263,12 +1263,14 @@ expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
 If a successful summary response contains no text, the runtime retries that
-provider once with twice the summary output budget and rebuilds the bounded
-summary request for the larger budget. If the retry still has no summary, or
-the retry fails, an independently configured summary provider falls back once
-to the active provider. Compaction fails only after those bounded recovery
-steps are exhausted; generic provider failures are not treated as empty-summary
-retries. Successful response attempts remain included in session token usage.
+provider once with up to twice the summary output budget and rebuilds the
+bounded summary request. The retry budget is capped so the fixed summary prompt
+and requested output remain within the compaction trigger budget. If the retry
+still has no summary, or the retry fails, an independently configured summary
+provider falls back once to the active provider. Compaction fails only after
+those bounded recovery steps are exhausted; generic provider failures are not
+treated as empty-summary retries. Successful response attempts remain included
+in session token usage.
 The runtime also maintains an optional session-local `working_state.json`
 sidecar. The persistence, merge, pruning, rendering, and redaction rules for it
 live in `internal/runtime/workmem`, alongside the `goal_state.json` store. The
