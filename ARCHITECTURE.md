@@ -1521,8 +1521,8 @@ Loading flow:
 3. merge precedence and apply `skills.include` / `skills.exclude`
 4. emit a budgeted `## Available Skills` catalog containing compact
    `name + source + description` entries
-5. use `skill_search` to discover entries omitted by the prompt budget and
-   `skill_load` to load one skill's full SKILL.md plus source path
+5. the model uses `skill_search` to discover entries omitted by the prompt
+   budget and `skill_load` to load one skill's full SKILL.md plus source path
 
 Project skills still override user-global skills. Extension skill names must be
 unique and reject collisions with user-global, project, or other extension
