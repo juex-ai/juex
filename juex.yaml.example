@@ -132,7 +132,7 @@ providers:
   #     - id: deepseek-v4-pro
 
   # For OpenAI Codex OAuth, switch the top-level model to
-  # openai-codex/gpt-5.5 and use:
+  # openai-codex:gpt-5.5 and use:
   # - id: openai-codex
   #   # Optional: try Codex-style WebSocket cached transport.
   #   # compat:
