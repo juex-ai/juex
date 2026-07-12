@@ -2740,6 +2740,47 @@ func TestShellSessionManagerCloseKillsAndWaitsForSessions(t *testing.T) {
 	}
 }
 
+func TestShellSessionWaitsForOutputPumpBeforeCompletion(t *testing.T) {
+	processExited := make(chan struct{})
+	outputDone := make(chan struct{})
+	session := &shellSession{
+		started:    time.Now(),
+		outputDone: outputDone,
+		doneChan:   make(chan struct{}),
+		waitFunc: func() error {
+			close(processExited)
+			return nil
+		},
+	}
+	go session.wait(context.Background())
+
+	select {
+	case <-processExited:
+	case <-time.After(time.Second):
+		t.Fatal("process wait did not complete")
+	}
+	select {
+	case <-session.doneChan:
+		t.Fatal("session completed before the output pump drained")
+	default:
+	}
+
+	session.appendOutput([]byte("final tty output\n"))
+	close(outputDone)
+	select {
+	case <-session.doneChan:
+	case <-time.After(time.Second):
+		t.Fatal("session did not complete after the output pump drained")
+	}
+	result := session.snapshot(true, defaultShellMaxOutputTokens)
+	if result.Running || result.ExitCode == nil || *result.ExitCode != 0 {
+		t.Fatalf("session result = %+v, want completed success", result)
+	}
+	if result.Output != "final tty output\n" {
+		t.Fatalf("session output = %q, want drained final output", result.Output)
+	}
+}
+
 type timedOutStructuredTestResult struct{}
 
 func (timedOutStructuredTestResult) ToolCallTimedOut() bool {

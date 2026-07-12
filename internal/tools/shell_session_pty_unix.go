@@ -15,7 +15,10 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 	if err != nil {
 		return nil, err
 	}
+	outputDone := make(chan struct{})
+	session.outputDone = outputDone
 	go func() {
+		defer close(outputDone)
 		defer ptyFile.Close()
 		_, _ = io.Copy(shellSessionWriter{session: session}, ptyFile)
 	}()
