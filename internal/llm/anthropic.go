@@ -145,15 +145,17 @@ func (o *anthropicStreamUsageObservation) observe(event anthropic.MessageStreamE
 	}
 }
 
-func (o anthropicStreamUsageObservation) applyFallback(msg *anthropic.Message) {
-	if msg == nil || msg.Usage.InputTokens != 0 || o.inputTokens <= 0 {
+func (o *anthropicStreamUsageObservation) applyFallback(msg *anthropic.Message) {
+	if o == nil || msg == nil || msg.Usage.InputTokens != 0 {
 		return
 	}
-	msg.Usage.InputTokens = o.inputTokens
-	if o.cacheReadTokens > 0 {
+	if o.inputTokens > 0 {
+		msg.Usage.InputTokens = o.inputTokens
+	}
+	if msg.Usage.CacheReadInputTokens == 0 && o.cacheReadTokens > 0 {
 		msg.Usage.CacheReadInputTokens = o.cacheReadTokens
 	}
-	if o.cacheCreationTokens > 0 {
+	if msg.Usage.CacheCreationInputTokens == 0 && o.cacheCreationTokens > 0 {
 		msg.Usage.CacheCreationInputTokens = o.cacheCreationTokens
 	}
 }

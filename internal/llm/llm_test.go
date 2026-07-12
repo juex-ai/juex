@@ -632,6 +632,27 @@ func TestAnthropic_UsesMessageDeltaInputUsageWhenMessageStartIsZero(t *testing.T
 	}
 }
 
+func TestAnthropic_UsesMessageDeltaCacheUsageWhenInputIsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeAnthropicTextStreamWithDeltaUsage(w, "claude-test", 0, 0, 0, 50, 7)
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(testProfile(t, Config{
+		ID:      "anthropic",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}), nil)
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.InputTokens != 0 || resp.Usage.CachedInputTokens != 50 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want input=0 cached=50 output=5", resp.Usage)
+	}
+}
+
 func TestAnthropic_MessageStartInputUsageTakesPrecedenceOverDelta(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		writeAnthropicTextStreamWithDeltaUsage(w, "claude-test", 1234, 64, 178, 50, 7)
@@ -650,6 +671,27 @@ func TestAnthropic_MessageStartInputUsageTakesPrecedenceOverDelta(t *testing.T) 
 	}
 	if resp.Usage.InputTokens != 1234 || resp.Usage.CachedInputTokens != 64 || resp.Usage.OutputTokens != 5 {
 		t.Fatalf("usage = %+v, want official start usage input=1234 cached=64 output=5", resp.Usage)
+	}
+}
+
+func TestAnthropic_MessageStartCacheUsageTakesPrecedenceWhenInputIsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeAnthropicTextStreamWithDeltaUsage(w, "claude-test", 0, 64, 0, 50, 7)
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(testProfile(t, Config{
+		ID:      "anthropic",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}), nil)
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.InputTokens != 0 || resp.Usage.CachedInputTokens != 64 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want official start usage input=0 cached=64 output=5", resp.Usage)
 	}
 }
 
