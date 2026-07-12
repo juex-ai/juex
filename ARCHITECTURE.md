@@ -38,6 +38,7 @@ juex/
 │   │   ├── app.go
 │   │   ├── runtime_status.go
 │   │   ├── session_attachment.go
+│   │   ├── skill_tools.go
 │   │   ├── slash.go
 │   │   ├── turn_admission.go
 │   │   └── turn_admission_queue.go
@@ -437,9 +438,11 @@ func (r *Registry) Call(ctx, name, input) (string, error)
 func (r *Registry) CallWithInfo(ctx, name, input) (string, CallInfo, error)
 ```
 
-Builtin set (file/search/exec/session + 3 memory). Skills are NOT a tool — they are
-markdown files surfaced in the system prompt; the model reads a skill body
-with the standard `read` builtin against the path printed there.
+The runtime registry combines builtin file/search/exec/session tools, three
+memory tools, and the app-registered `skill_search` / `skill_load` tools.
+Skills themselves remain markdown resource packages rather than executable
+tool definitions: the prompt exposes a compact catalog, `skill_search`
+discovers loaded entries, and `skill_load` returns one selected SKILL.md body.
 
 | Name | Purpose |
 |---|---|
@@ -452,6 +455,8 @@ with the standard `read` builtin against the path printed there.
 | `write_stdin` | poll a running command session, write `chars` to a TTY session, or send Ctrl-C (`\x03`) to interrupt a non-TTY session using the numeric `session_id` returned by `exec_command` |
 | `list_shell_sessions` | recover Juex-managed shell session ids and status after forgotten state, compaction, or background commands; defaults to running sessions |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
+| `skill_search` | search loaded skill metadata, including entries omitted from the prompt budget |
+| `skill_load` | load one skill's full SKILL.md, source, and path by name after sandbox path validation |
 | `memory_write` | persist a memory entry |
 | `memory_search` | substring match |
 | `memory_delete` | remove an entry by name |
@@ -1513,20 +1518,18 @@ Loading flow:
 
 1. on startup, scan user, extension, and project skill dirs
 2. parse each SKILL.md frontmatter -> `name + description + body`
-3. emit a `## Available Skills` section in the system prompt; each entry
-   shows the skill's **absolute SKILL.md path** alongside its description
-4. when the model decides a skill applies, it calls the standard `read`
-   builtin against that path — no dedicated `read_skill` tool
+3. merge precedence and apply `skills.include` / `skills.exclude`
+4. emit a budgeted `## Available Skills` catalog containing compact
+   `name + source + description` entries
+5. use `skill_search` to discover entries omitted by the prompt budget and
+   `skill_load` to load one skill's full SKILL.md plus source path
 
 Project skills still override user-global skills. Extension skill names must be
 unique and reject collisions with user-global, project, or other extension
 skills. Runtime status uses `user`, `project`, or `ext:<name>` as the skill
-source.
-
-No embedding retrieval / auto-activation yet — the LLM picks via description
-and reads the file path when it wants the body. Dropping the
-dedicated tool follows agent-CLI principle 7 (fewer surfaces ⇒ fewer
-hallucinations).
+source. `skill_load` enforces the command sandbox path policy before reading
+the selected file. There is no embedding retrieval or automatic activation;
+the model chooses a skill from catalog metadata and loads it explicitly.
 
 ---
 
