@@ -248,11 +248,9 @@ test("projectStartTurnSucceeded surfaces attachment capability warnings", () => 
     [imageMedia],
   );
 
-  assert.match(result.state.composerHint ?? "", /^Warning:/);
-  assert.match(result.state.composerHint ?? "", /cannot view attached image/);
-  assert.match(
-    result.state.composerHint ?? "",
-    /providers\[\]\.models\[\]\.capabilities\.vision/,
+  assert.equal(
+    result.state.composerHint,
+    'Warning: model "ark-anthropic:minimax-m3" cannot view attached image content; use a vision-capable model or configure providers[].models[].capabilities.vision',
   );
   assert.deepEqual(result.effects, [{ type: "scheduleComposerHintClear" }]);
 });

@@ -13,12 +13,22 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/version"
 )
+
+type warningFailingWriter struct {
+	calls int
+}
+
+func (w *warningFailingWriter) Write([]byte) (int, error) {
+	w.calls++
+	return 0, errors.New("writer unavailable")
+}
 
 func TestVersionCmd_ShortForm(t *testing.T) {
 	root := newRootCmd()
@@ -76,6 +86,17 @@ func TestRunCmd_HelpIncludesRepeatableAttachFlag(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "--attach") {
 		t.Fatalf("run help missing --attach:\n%s", out.String())
+	}
+}
+
+func TestWriteTurnWarningsIsBestEffort(t *testing.T) {
+	w := &warningFailingWriter{}
+	writeTurnWarnings(w, []app.TurnWarning{
+		{Message: "cannot view image", Suggestion: "use a vision model"},
+		{Message: "second warning", Suggestion: "second suggestion"},
+	})
+	if w.calls != 1 {
+		t.Fatalf("warning write calls = %d, want 1", w.calls)
 	}
 }
 

@@ -72,9 +72,7 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out, errOut io.Writer) err
 		} else {
 			attachments := staged
 			staged = nil
-			if err := writeREPLTurnWarnings(errOut, a.AttachmentWarnings(len(attachments))); err != nil {
-				return err
-			}
+			writeREPLTurnWarnings(errOut, a.AttachmentWarnings(len(attachments)))
 			text, err = a.RunWithAttachments(ctx, line, attachments)
 		}
 		if err != nil {
@@ -93,13 +91,13 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out, errOut io.Writer) err
 	return sc.Err()
 }
 
-func writeREPLTurnWarnings(w io.Writer, warnings []TurnWarning) error {
+// Capability warnings are best-effort diagnostics and must not stop the REPL turn.
+func writeREPLTurnWarnings(w io.Writer, warnings []TurnWarning) {
 	for _, warning := range warnings {
 		if _, err := fmt.Fprintf(w, "juex: warning: %s; %s\n", warning.Message, warning.Suggestion); err != nil {
-			return err
+			return
 		}
 	}
-	return nil
 }
 
 func parseREPLAttach(input string) (string, bool, error) {

@@ -229,9 +229,7 @@ execution is printed and the process exits with code 10.`,
 			}
 			warnings := a.AttachmentWarnings(len(attachments))
 			if !jsonOut {
-				if err := writeTurnWarnings(cmd.ErrOrStderr(), warnings); err != nil {
-					return err
-				}
+				writeTurnWarnings(cmd.ErrOrStderr(), warnings)
 			}
 
 			start := time.Now()
@@ -366,13 +364,13 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	return &dryRunOK{msg: "dry run complete"}
 }
 
-func writeTurnWarnings(w io.Writer, warnings []app.TurnWarning) error {
+// Capability warnings are best-effort diagnostics and must not stop the run.
+func writeTurnWarnings(w io.Writer, warnings []app.TurnWarning) {
 	for _, warning := range warnings {
 		if _, err := fmt.Fprintf(w, "juex: warning: %s; %s\n", warning.Message, warning.Suggestion); err != nil {
-			return err
+			return
 		}
 	}
-	return nil
 }
 
 func emitAttachmentError(jsonOut bool, stderr io.Writer, err error) error {

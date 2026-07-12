@@ -38,6 +38,15 @@ type stubProvider struct {
 	histories [][]llm.Message
 }
 
+type failingWriter struct {
+	calls int
+}
+
+func (w *failingWriter) Write([]byte) (int, error) {
+	w.calls++
+	return 0, errors.New("writer unavailable")
+}
+
 func TestDurationSecondsCeilAndCap(t *testing.T) {
 	if got := durationSeconds(1500 * time.Millisecond); got != 2 {
 		t.Fatalf("durationSeconds(1.5s) = %d, want 2", got)
@@ -1520,6 +1529,26 @@ func TestAppREPLStagesAttachmentsForNextMessage(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "juex: warning:") || !strings.Contains(stderr.String(), "providers[].models[].capabilities.vision") {
 		t.Fatalf("repl stderr = %q", stderr.String())
+	}
+}
+
+func TestAppREPLContinuesWhenCapabilityWarningCannotBeWritten(t *testing.T) {
+	a, prov := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "described"),
+		StopReason: llm.StopEndTurn,
+	})
+	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, "screen.png"))
+	var out bytes.Buffer
+	warnings := &failingWriter{}
+
+	if err := a.REPL(context.Background(), strings.NewReader("/attach screen.png\ndescribe it\n"), &out, warnings); err != nil {
+		t.Fatal(err)
+	}
+	if warnings.calls != 1 {
+		t.Fatalf("warning write calls = %d, want 1", warnings.calls)
+	}
+	if prov.calls != 1 || !strings.Contains(out.String(), "described") {
+		t.Fatalf("provider calls = %d, output = %q", prov.calls, out.String())
 	}
 }
 

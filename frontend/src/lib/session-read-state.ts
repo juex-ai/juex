@@ -285,14 +285,14 @@ function withStartTurnWarnings(
 ): SessionReadResult {
   const warnings = (turn.warnings ?? [])
     .map((warning) =>
-      [warning.message, warning.suggestion].filter(Boolean).join(" "),
+      [warning.message, warning.suggestion].filter(Boolean).join("; "),
     )
     .filter(Boolean);
   if (warnings.length === 0) return result;
   return {
     state: {
       ...result.state,
-      composerHint: `Warning: ${warnings.join(" ")}`,
+      composerHint: `Warning: ${warnings.join("; ")}`,
     },
     effects: [...result.effects, { type: "scheduleComposerHintClear" }],
   };
