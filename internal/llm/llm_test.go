@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/coder/websocket"
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
@@ -83,6 +84,27 @@ func writeAnthropicTextStreamWithCache(w http.ResponseWriter, model, text, stopR
 	fmt.Fprint(w, `data: {"type":"content_block_stop","index":0}`+"\n\n")
 	fmt.Fprint(w, "event: message_delta\n")
 	fmt.Fprintf(w, `data: {"type":"message_delta","delta":{"stop_reason":%q,"stop_sequence":null},"usage":{"output_tokens":%d}}`+"\n\n", stopReason, outputTokens)
+	fmt.Fprint(w, "event: message_stop\n")
+	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
+}
+
+func writeAnthropicTextStreamWithDeltaUsage(
+	w http.ResponseWriter,
+	model string,
+	startInputTokens, startCacheReadTokens int,
+	deltaInputTokens, deltaCacheReadTokens, deltaCacheCreationTokens int,
+) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	fmt.Fprint(w, "event: message_start\n")
+	fmt.Fprintf(w, `data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":%q,"content":[],"stop_reason":null,"usage":{"input_tokens":%d,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":%d}}}`+"\n\n", model, startInputTokens, startCacheReadTokens)
+	fmt.Fprint(w, "event: content_block_start\n")
+	fmt.Fprint(w, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_delta\n")
+	fmt.Fprint(w, `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`+"\n\n")
+	fmt.Fprint(w, "event: content_block_stop\n")
+	fmt.Fprint(w, `data: {"type":"content_block_stop","index":0}`+"\n\n")
+	fmt.Fprint(w, "event: message_delta\n")
+	fmt.Fprintf(w, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":%d,"output_tokens":5,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d}}`+"\n\n", deltaInputTokens, deltaCacheCreationTokens, deltaCacheReadTokens)
 	fmt.Fprint(w, "event: message_stop\n")
 	fmt.Fprint(w, `data: {"type":"message_stop"}`+"\n\n")
 }
@@ -586,6 +608,73 @@ func TestAnthropic_CompleteOptionsAddsCacheControlAndRecordsCacheReadTokens(t *t
 	}
 	if resp.Usage.CachedInputTokens != 64 {
 		t.Fatalf("cached input tokens = %d", resp.Usage.CachedInputTokens)
+	}
+}
+
+func TestAnthropic_UsesMessageDeltaInputUsageWhenMessageStartIsZero(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeAnthropicTextStreamWithDeltaUsage(w, "claude-test", 0, 0, 178, 50, 7)
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(testProfile(t, Config{
+		ID:      "anthropic",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}), nil)
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.InputTokens != 178 || resp.Usage.CachedInputTokens != 50 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want input=178 cached=50 output=5", resp.Usage)
+	}
+}
+
+func TestAnthropic_MessageStartInputUsageTakesPrecedenceOverDelta(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeAnthropicTextStreamWithDeltaUsage(w, "claude-test", 1234, 64, 178, 50, 7)
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(testProfile(t, Config{
+		ID:      "anthropic",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Model:   "claude-test",
+	}), nil)
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hello")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.InputTokens != 1234 || resp.Usage.CachedInputTokens != 64 || resp.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v, want official start usage input=1234 cached=64 output=5", resp.Usage)
+	}
+}
+
+func TestAnthropicStreamUsageObservationUsesLastNonzeroDeltaFields(t *testing.T) {
+	var observed anthropicStreamUsageObservation
+	observed.observe(anthropic.MessageStreamEventUnion{
+		Type: "message_delta",
+		Usage: anthropic.MessageDeltaUsage{
+			InputTokens:              178,
+			CacheReadInputTokens:     50,
+			CacheCreationInputTokens: 7,
+		},
+	})
+	observed.observe(anthropic.MessageStreamEventUnion{
+		Type: "message_delta",
+		Usage: anthropic.MessageDeltaUsage{
+			CacheReadInputTokens: 51,
+		},
+	})
+	msg := anthropic.Message{}
+
+	observed.applyFallback(&msg)
+
+	if msg.Usage.InputTokens != 178 || msg.Usage.CacheReadInputTokens != 51 || msg.Usage.CacheCreationInputTokens != 7 {
+		t.Fatalf("usage = %+v, want last nonzero delta fields", msg.Usage)
 	}
 }
 

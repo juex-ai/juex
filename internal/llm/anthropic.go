@@ -96,6 +96,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	}
 
 	msg := anthropic.Message{}
+	deltaUsage := anthropicStreamUsageObservation{}
 	streamDiagnostics := &anthropicStreamDiagnostics{}
 	idleTimeout := streamIdleTimeout(opts)
 	streamCtx, resetIdle, stopIdle, idleExpired := newStreamIdleContext(ctx, idleTimeout)
@@ -105,6 +106,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		resetIdle()
 		event := stream.Current()
 		emitAnthropicStreamDelta(opts.OnDelta, event)
+		deltaUsage.observe(event)
 		if err := msg.Accumulate(event); err != nil {
 			return Response{}, anthropicStreamParseErrorFromEvent(p.Name(), event, err)
 		}
@@ -118,7 +120,42 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 		}
 		return Response{}, fmt.Errorf("anthropic: %w", err)
 	}
+	deltaUsage.applyFallback(&msg)
 	return p.responseFromMessage(&msg), nil
+}
+
+type anthropicStreamUsageObservation struct {
+	inputTokens         int64
+	cacheReadTokens     int64
+	cacheCreationTokens int64
+}
+
+func (o *anthropicStreamUsageObservation) observe(event anthropic.MessageStreamEventUnion) {
+	if o == nil || event.Type != "message_delta" {
+		return
+	}
+	if event.Usage.InputTokens > 0 {
+		o.inputTokens = event.Usage.InputTokens
+	}
+	if event.Usage.CacheReadInputTokens > 0 {
+		o.cacheReadTokens = event.Usage.CacheReadInputTokens
+	}
+	if event.Usage.CacheCreationInputTokens > 0 {
+		o.cacheCreationTokens = event.Usage.CacheCreationInputTokens
+	}
+}
+
+func (o anthropicStreamUsageObservation) applyFallback(msg *anthropic.Message) {
+	if msg == nil || msg.Usage.InputTokens != 0 || o.inputTokens <= 0 {
+		return
+	}
+	msg.Usage.InputTokens = o.inputTokens
+	if o.cacheReadTokens > 0 {
+		msg.Usage.CacheReadInputTokens = o.cacheReadTokens
+	}
+	if o.cacheCreationTokens > 0 {
+		msg.Usage.CacheCreationInputTokens = o.cacheCreationTokens
+	}
 }
 
 func emitAnthropicStreamDelta(onDelta func(StreamDelta), event anthropic.MessageStreamEventUnion) {
