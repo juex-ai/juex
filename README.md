@@ -168,7 +168,11 @@ REPL-local `/attach <path>` command accept local image paths. Relative CLI
 paths resolve from the workdir, and each `--attach` flag is repeatable. Images
 are copied into content-addressed, session-scoped artifacts and revalidated
 before the runtime turn starts; text-only, image-only, and mixed-content turns
-use the same runtime path.
+use the same runtime path. If the selected model has
+`capabilities.vision: false`, Juex keeps the canonical media reference but
+warns the user and tells the model that image content is unavailable instead of
+letting it guess. Enable `providers[].models[].capabilities.vision` only for a
+model that actually accepts image input.
 `apply_patch` accepts a compact patch envelope in `patch_text`
 with `*** Begin Patch` / `*** End Patch` markers and supports add, update,
 delete, and move operations. It validates the whole patch before writing,

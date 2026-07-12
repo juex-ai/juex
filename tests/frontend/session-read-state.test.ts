@@ -230,6 +230,33 @@ test("projectStartTurnSucceeded records optimistic image attachments", () => {
   assert.equal(result.state.projection.turnActive, true);
 });
 
+test("projectStartTurnSucceeded surfaces attachment capability warnings", () => {
+  const result = projectStartTurnSucceeded(
+    createSessionReadState(),
+    "describe this",
+    {
+      turn_id: "turn-warning",
+      warnings: [
+        {
+          code: "attachment_vision_unavailable",
+          message: 'model "ark-anthropic:minimax-m3" cannot view attached image content',
+          suggestion:
+            "use a vision-capable model or configure providers[].models[].capabilities.vision",
+        },
+      ],
+    },
+    [imageMedia],
+  );
+
+  assert.match(result.state.composerHint ?? "", /^Warning:/);
+  assert.match(result.state.composerHint ?? "", /cannot view attached image/);
+  assert.match(
+    result.state.composerHint ?? "",
+    /providers\[\]\.models\[\]\.capabilities\.vision/,
+  );
+  assert.deepEqual(result.effects, [{ type: "scheduleComposerHintClear" }]);
+});
+
 test("projectStartTurnSucceeded emits navigation effect for /new", () => {
   const result = projectStartTurnSucceeded(createSessionReadState(), "/new", {
     turn_id: "turn-new",

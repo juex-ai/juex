@@ -61,6 +61,7 @@ type TurnAdmissionResult struct {
 	MaxPendingInputs int
 	Command          *SlashCommandResult
 	SessionChanged   *TurnAdmissionSessionChange
+	Warnings         []TurnWarning
 	Error            TurnAdmissionErrorInfo
 	Err              error
 }
@@ -99,7 +100,11 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 		if _, handled, err := ParseSlashCommand(req.Prompt); handled || err != nil {
 			return rejectedResult("bad_request", "slash commands cannot include attachments", "send the image as a normal message or run the slash command without attachments", false, nil, runtime.PendingInputStatus{})
 		}
-		return a.admitUserTurn(ctx, userTurnMessage(req.Prompt, req.Attachments), req.IDs)
+		result := a.admitUserTurn(ctx, userTurnMessage(req.Prompt, req.Attachments), req.IDs)
+		if result.Kind == TurnAdmissionStarted || result.Kind == TurnAdmissionQueued {
+			result.Warnings = a.AttachmentWarnings(len(req.Attachments))
+		}
+		return result
 	}
 
 	cmd, handled, err := ParseSlashCommand(req.Prompt)

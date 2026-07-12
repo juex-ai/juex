@@ -157,12 +157,19 @@ export interface DeleteSessionResponse {
   id: string;
 }
 
+export interface TurnWarning {
+  code: string;
+  message: string;
+  suggestion?: string;
+}
+
 export interface StartTurnResponse {
   turn_id?: string;
   queued?: boolean;
   pending_count?: number;
   max_pending_inputs?: number;
   command?: SlashCommandResponse;
+  warnings?: TurnWarning[];
 }
 
 export interface SlashCommandResponse {

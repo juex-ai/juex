@@ -243,7 +243,7 @@ export function projectStartTurnSucceeded(
     return projectCommandTurnSucceeded(state, prompt, turn);
   }
   if (turn.queued) {
-    return {
+    return withStartTurnWarnings({
       state: {
         ...state,
         projection: projectQueuedInput(
@@ -255,7 +255,7 @@ export function projectStartTurnSucceeded(
         ),
       },
       effects: [],
-    };
+    }, turn);
   }
   if (!turn.turn_id) {
     return projectStartTurnFailed(
@@ -264,7 +264,7 @@ export function projectStartTurnSucceeded(
       new Error("turn response missing turn_id"),
     );
   }
-  return {
+  return withStartTurnWarnings({
     state: {
       ...state,
       projection: projectOptimisticTurn(
@@ -276,6 +276,25 @@ export function projectStartTurnSucceeded(
       ),
     },
     effects: [],
+  }, turn);
+}
+
+function withStartTurnWarnings(
+  result: SessionReadResult,
+  turn: StartTurnResponse,
+): SessionReadResult {
+  const warnings = (turn.warnings ?? [])
+    .map((warning) =>
+      [warning.message, warning.suggestion].filter(Boolean).join(" "),
+    )
+    .filter(Boolean);
+  if (warnings.length === 0) return result;
+  return {
+    state: {
+      ...result.state,
+      composerHint: `Warning: ${warnings.join(" ")}`,
+    },
+    effects: [...result.effects, { type: "scheduleComposerHintClear" }],
   };
 }
 

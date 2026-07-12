@@ -24,8 +24,9 @@ func toolResultContentWithMediaReference(b Block) string {
 }
 
 func mediaReferenceText(label string, media *MediaRef) string {
+	const unavailable = "the current model cannot view image content; state that you cannot see the image instead of guessing"
 	if media == nil {
-		return "[" + label + ": missing media reference]"
+		return "[" + label + ": missing media reference; " + unavailable + "]"
 	}
 	parts := make([]string, 0, 6)
 	if media.ArtifactPath != "" {
@@ -44,9 +45,9 @@ func mediaReferenceText(label string, media *MediaRef) string {
 		parts = append(parts, fmt.Sprintf("size=%dx%d", media.Width, media.Height))
 	}
 	if len(parts) == 0 {
-		return "[" + label + ": empty media reference]"
+		return "[" + label + ": empty media reference; " + unavailable + "]"
 	}
-	return "[" + label + ": " + strings.Join(parts, " ") + "]"
+	return "[" + label + ": " + strings.Join(parts, " ") + "; " + unavailable + "]"
 }
 
 func imageDataURL(workDir string, media *MediaRef) (string, bool) {

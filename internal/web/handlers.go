@@ -420,6 +420,7 @@ type startTurnResponse struct {
 	PendingCount     int                     `json:"pending_count,omitempty"`
 	MaxPendingInputs int                     `json:"max_pending_inputs,omitempty"`
 	Command          *app.SlashCommandResult `json:"command,omitempty"`
+	Warnings         []app.TurnWarning       `json:"warnings,omitempty"`
 }
 
 func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id string) {
@@ -534,16 +535,17 @@ func (s *Server) applyTurnAdmissionResult(as *activeSession, result app.TurnAdmi
 func (s *Server) writeTurnAdmissionResult(w http.ResponseWriter, result app.TurnAdmissionResult) {
 	switch result.Kind {
 	case app.TurnAdmissionStarted:
-		writeJSON(w, http.StatusAccepted, startTurnResponse{TurnID: result.TurnID})
+		writeJSON(w, http.StatusAccepted, startTurnResponse{TurnID: result.TurnID, Warnings: result.Warnings})
 	case app.TurnAdmissionQueued:
 		writeJSON(w, http.StatusAccepted, startTurnResponse{
 			TurnID:           result.TurnID,
 			Queued:           result.Queued,
 			PendingCount:     result.PendingCount,
 			MaxPendingInputs: result.MaxPendingInputs,
+			Warnings:         result.Warnings,
 		})
 	case app.TurnAdmissionCommandCompleted:
-		writeJSON(w, http.StatusOK, startTurnResponse{TurnID: result.TurnID, Command: result.Command})
+		writeJSON(w, http.StatusOK, startTurnResponse{TurnID: result.TurnID, Command: result.Command, Warnings: result.Warnings})
 	case app.TurnAdmissionRejected:
 		status := http.StatusBadRequest
 		if result.Error.Kind == "pending_input_full" {

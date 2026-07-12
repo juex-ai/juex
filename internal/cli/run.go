@@ -25,14 +25,15 @@ import (
 
 // runResult is the JSON shape emitted on success when --json is set.
 type runResult struct {
-	Text        string    `json:"text"`
-	SessionID   string    `json:"session_id"`
-	SessionDir  string    `json:"session_dir"`
-	SessionKind string    `json:"session_kind"`
-	Active      bool      `json:"active"`
-	DurationMs  int64     `json:"duration_ms"`
-	TokenUsage  llm.Usage `json:"token_usage"`
-	TokenTotal  int       `json:"token_total"`
+	Text        string            `json:"text"`
+	SessionID   string            `json:"session_id"`
+	SessionDir  string            `json:"session_dir"`
+	SessionKind string            `json:"session_kind"`
+	Active      bool              `json:"active"`
+	DurationMs  int64             `json:"duration_ms"`
+	TokenUsage  llm.Usage         `json:"token_usage"`
+	TokenTotal  int               `json:"token_total"`
+	Warnings    []app.TurnWarning `json:"warnings,omitempty"`
 }
 
 // errorJSON mirrors principle 9 (errors as guides):
@@ -75,6 +76,7 @@ type dryRunPlan struct {
 	MCP             app.MCPStatus        `json:"mcp"`
 	AttachmentCount int                  `json:"attachment_count,omitempty"`
 	Attachments     []usermedia.FileInfo `json:"attachments,omitempty"`
+	Warnings        []app.TurnWarning    `json:"warnings,omitempty"`
 }
 
 // skillSummary mirrors what the system prompt's "Available Skills" section
@@ -225,6 +227,12 @@ execution is printed and the process exits with code 10.`,
 			if err != nil {
 				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
 			}
+			warnings := a.AttachmentWarnings(len(attachments))
+			if !jsonOut {
+				if err := writeTurnWarnings(cmd.ErrOrStderr(), warnings); err != nil {
+					return err
+				}
+			}
 
 			start := time.Now()
 			out, err := a.RunWithAttachments(cmd.Context(), prompt, attachments)
@@ -249,6 +257,7 @@ execution is printed and the process exits with code 10.`,
 					DurationMs:  time.Since(start).Milliseconds(),
 					TokenUsage:  usage,
 					TokenTotal:  usage.TotalTokens(),
+					Warnings:    warnings,
 				}))
 			} else {
 				cmdPrintln(cmd, out)
@@ -345,6 +354,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		MCP:             a.MCPStatus(),
 		AttachmentCount: len(attachments),
 		Attachments:     attachments,
+		Warnings:        a.AttachmentWarnings(len(attachments)),
 	}
 
 	if jsonOut {
@@ -354,6 +364,15 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		cmdPrintln(cmd, mustJSON(plan))
 	}
 	return &dryRunOK{msg: "dry run complete"}
+}
+
+func writeTurnWarnings(w io.Writer, warnings []app.TurnWarning) error {
+	for _, warning := range warnings {
+		if _, err := fmt.Fprintf(w, "juex: warning: %s; %s\n", warning.Message, warning.Suggestion); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func emitAttachmentError(jsonOut bool, stderr io.Writer, err error) error {

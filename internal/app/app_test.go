@@ -1418,7 +1418,7 @@ func TestApp_REPLProcessesMultipleLines(t *testing.T) {
 
 	in := strings.NewReader("first\n\nsecond\n") // blank line is ignored
 	var out bytes.Buffer
-	if err := a.REPL(context.Background(), in, &out); err != nil {
+	if err := a.REPL(context.Background(), in, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	body := out.String()
@@ -1504,7 +1504,8 @@ func TestAppREPLStagesAttachmentsForNextMessage(t *testing.T) {
 	imagePath := filepath.Join(a.cfg.WorkDir, "screen one.png")
 	writeAppTestPNG(t, imagePath)
 	var out bytes.Buffer
-	if err := a.REPL(context.Background(), strings.NewReader("/attach screen one.png\ndescribe it\n"), &out); err != nil {
+	var stderr bytes.Buffer
+	if err := a.REPL(context.Background(), strings.NewReader("/attach screen one.png\ndescribe it\n"), &out, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "attached: [图片:") || !strings.Contains(out.String(), "(1/8 staged)") || !strings.Contains(out.String(), "described") {
@@ -1516,6 +1517,9 @@ func TestAppREPLStagesAttachmentsForNextMessage(t *testing.T) {
 	}
 	if !strings.Contains(blocks[1].Media.ArtifactPath, "/"+a.Session.ID+"/") {
 		t.Fatalf("artifact path = %q, want session namespace %q", blocks[1].Media.ArtifactPath, a.Session.ID)
+	}
+	if !strings.Contains(stderr.String(), "juex: warning:") || !strings.Contains(stderr.String(), "providers[].models[].capabilities.vision") {
+		t.Fatalf("repl stderr = %q", stderr.String())
 	}
 }
 
@@ -1545,13 +1549,13 @@ func TestParseREPLAttach(t *testing.T) {
 }
 
 func TestAppREPLRejectsUninitializedAppAndCancelledContext(t *testing.T) {
-	if err := (*App)(nil).REPL(context.Background(), strings.NewReader("hello\n"), io.Discard); err == nil || !strings.Contains(err.Error(), "initialized session and engine") {
+	if err := (*App)(nil).REPL(context.Background(), strings.NewReader("hello\n"), io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "initialized session and engine") {
 		t.Fatalf("nil REPL error = %v", err)
 	}
 	a, prov := newStubApp(t, llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := a.REPL(ctx, strings.NewReader("hello\n"), io.Discard); !errors.Is(err, context.Canceled) {
+	if err := a.REPL(ctx, strings.NewReader("hello\n"), io.Discard, io.Discard); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled REPL error = %v", err)
 	}
 	if prov.calls != 0 {
@@ -1567,7 +1571,7 @@ func TestAppREPLKeepsStagedAttachmentsAcrossStatusAndContinuesAfterAttachError(t
 	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, "screen.png"))
 	var out bytes.Buffer
 	input := "/attach missing.png\n/attach screen.png\n/status\ndescribe\n"
-	if err := a.REPL(context.Background(), strings.NewReader(input), &out); err != nil {
+	if err := a.REPL(context.Background(), strings.NewReader(input), &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "error:") || !strings.Contains(out.String(), "observables: 0/0 running") || !strings.Contains(out.String(), "done") {
@@ -1589,7 +1593,7 @@ func TestAppREPLNewSessionClearsStagedAttachments(t *testing.T) {
 	)
 	writeAppTestPNG(t, filepath.Join(a.cfg.WorkDir, "screen.png"))
 	var out bytes.Buffer
-	if err := a.REPL(context.Background(), strings.NewReader("/attach screen.png\n/new\nplain turn\n"), &out); err != nil {
+	if err := a.REPL(context.Background(), strings.NewReader("/attach screen.png\n/new\nplain turn\n"), &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if prov.calls != 2 {
@@ -1611,7 +1615,7 @@ func TestApp_REPLContinuesAfterTurnError(t *testing.T) {
 	)
 	in := strings.NewReader("first\nsecond\n")
 	var out bytes.Buffer
-	if err := a.REPL(context.Background(), in, &out); err != nil {
+	if err := a.REPL(context.Background(), in, &out, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	body := out.String()

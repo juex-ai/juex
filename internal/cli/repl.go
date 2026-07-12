@@ -49,7 +49,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			defer a.Close()
 			cmdPrintln(cmd, "juex repl - type your prompt; /attach <path> stages an image (empty line + Ctrl-D to quit)")
 			cmdPrintln(cmd, app.FormatResourceSummary(a.ResourceSummary()))
-			return a.REPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
+			return a.REPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())
 		},
 	}
 	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
