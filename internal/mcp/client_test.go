@@ -334,9 +334,9 @@ func TestMCPClient_StderrIsDiagnosticByDefault(t *testing.T) {
 	if forwarded.Len() != 0 {
 		t.Fatalf("stderr was forwarded without verbose opt-in: %q", forwarded.String())
 	}
-	if got := client.stderrTail.String(); !strings.Contains(got, "fake stderr log") {
-		t.Fatalf("stderr tail = %q", got)
-	}
+	waitUntil(t, time.Second, func() bool {
+		return strings.Contains(client.stderrTail.String(), "fake stderr log")
+	})
 }
 
 func TestMCPClient_StderrForwardsWithPrefixWhenEnabled(t *testing.T) {
