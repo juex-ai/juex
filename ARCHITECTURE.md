@@ -387,6 +387,12 @@ an invalid transcript still reaches the protocol edge.
 Malformed provider stream events are wrapped as `StreamParseError` with a
 stable kind, provider:model identity, event type, optional content block index,
 and a bounded raw event preview.
+The Anthropic streaming adapter treats SDK-accumulated `message_start` usage as
+authoritative. For compatible endpoints that incorrectly place non-zero input
+or cache usage in `message_delta`, it observes the typed delta usage and fills
+the completed message only when the SDK result still has zero input tokens.
+This compatibility fallback never overrides a standards-compliant non-zero
+start value and does not affect blocking requests.
 
 Capability gates decide which request features are sent. If a profile disables
 tools, tool specs and provider-facing tool history are omitted. If it disables
