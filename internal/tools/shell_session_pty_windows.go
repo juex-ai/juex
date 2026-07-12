@@ -120,7 +120,10 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 	}
 	_ = windows.CloseHandle(processInfo.Thread)
 
+	outputDone := make(chan struct{})
+	session.outputDone = outputDone
 	go func() {
+		defer close(outputDone)
 		defer outputFile.Close()
 		_, _ = io.Copy(shellSessionWriter{session: session}, outputFile)
 	}()
