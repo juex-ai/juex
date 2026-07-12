@@ -828,10 +828,14 @@ func TestPostTurn_AttachmentTextAndImageReachesProvider(t *testing.T) {
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
 	var turn struct {
-		TurnID string `json:"turn_id"`
+		TurnID   string            `json:"turn_id"`
+		Warnings []app.TurnWarning `json:"warnings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&turn); err != nil {
 		t.Fatal(err)
+	}
+	if len(turn.Warnings) != 1 || turn.Warnings[0].Code != "attachment_vision_unavailable" {
+		t.Fatalf("turn warnings = %+v", turn.Warnings)
 	}
 	waitForHTTPTranscript(t, ts.URL, id, turn.TurnID, 30*time.Second, "image attachment turn", func(messages []testTranscriptMessage) bool {
 		hasAssistant := transcriptContainsRoleText(messages, "assistant", "ack")
@@ -875,8 +879,16 @@ func TestPostTurn_ImageOnlyAttachmentStartsTurn(t *testing.T) {
 	)
 	close(prov.release)
 	work := t.TempDir()
+	vision := true
 	srv := NewServer(Options{
-		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work, Compaction: config.DefaultCompactionConfig()},
+		Cfg: config.Config{
+			ProviderID:           "openai",
+			APIKey:               "x",
+			Model:                "m",
+			WorkDir:              work,
+			Compaction:           config.DefaultCompactionConfig(),
+			ProviderCapabilities: llm.CapabilityOverrides{Vision: &vision},
+		},
 		Provider: prov,
 	})
 	t.Cleanup(srv.Close)
@@ -899,6 +911,13 @@ func TestPostTurn_ImageOnlyAttachmentStartsTurn(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var turn startTurnResponse
+	if err := json.NewDecoder(resp.Body).Decode(&turn); err != nil {
+		t.Fatal(err)
+	}
+	if len(turn.Warnings) != 0 {
+		t.Fatalf("turn warnings = %+v, want none", turn.Warnings)
 	}
 }
 

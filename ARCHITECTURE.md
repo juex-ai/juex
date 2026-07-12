@@ -888,6 +888,10 @@ omitted prompt creates an image-only turn. `run --dry-run` validates attachment
 metadata without writing artifacts. The REPL-local `/attach <path>` command
 stages images for the next ordinary prompt; local status and compaction commands
 preserve the staging set, while a successful session switch clears it.
+Accepted attachments targeting a profile with vision disabled produce a
+non-blocking application warning. Normal CLI output writes it to stderr, JSON
+run/dry-run output carries structured `warnings`, and REPL warnings use the
+REPL stderr writer.
 
 Persistent flags inherited by all subcommands:
 
@@ -1402,6 +1406,12 @@ revalidates CLI and REPL references; both convert them into canonical image
 blocks before provider projection. This keeps browser uploads, CLI attachments,
 and provider projection on one application contract while preventing a client
 from submitting arbitrary workspace paths as session attachments.
+`internal/app` also compares accepted attachment turns with the selected
+provider profile. A non-vision profile adds a structured, non-blocking
+`attachment_vision_unavailable` warning to Web turn responses and CLI
+presentation. `internal/llm` preserves the canonical media block in history but
+projects it to metadata plus an explicit cannot-view/do-not-guess instruction
+for that provider request. Vision-capable projection remains unchanged.
 
 The user-global `~/.agents` and `~/.juex/extensions` resources are read-only
 from Juex's view and are loaded only when user-global resources are enabled.

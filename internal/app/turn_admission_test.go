@@ -60,10 +60,31 @@ func TestAdmitTurnStartsWithImageAttachments(t *testing.T) {
 	if result.Start == nil || result.Start.TurnID != "turn-1" {
 		t.Fatalf("start = %+v", result.Start)
 	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "attachment_vision_unavailable" ||
+		!strings.Contains(result.Warnings[0].Message, "openai:m") ||
+		!strings.Contains(result.Warnings[0].Suggestion, "providers[].models[].capabilities.vision") {
+		t.Fatalf("warnings = %+v", result.Warnings)
+	}
 	blocks := result.Start.Message.Blocks
 	if len(blocks) != 2 || blocks[0].Type != llm.BlockText || blocks[0].Text != "describe this" ||
 		blocks[1].Type != llm.BlockImage || blocks[1].Media == nil || blocks[1].Media.ArtifactPath != media.ArtifactPath {
 		t.Fatalf("message blocks = %+v", blocks)
+	}
+}
+
+func TestAdmitTurnVisionCapabilitySuppressesAttachmentWarning(t *testing.T) {
+	a, _ := newStubApp(t)
+	vision := true
+	a.cfg.ProviderCapabilities.Vision = &vision
+
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt:      "describe this",
+		Attachments: []llm.MediaRef{turnAdmissionMediaRef()},
+		IDs:         &testTurnIDs{},
+	})
+
+	if result.Kind != TurnAdmissionStarted || len(result.Warnings) != 0 {
+		t.Fatalf("result = %+v, want started without warnings", result)
 	}
 }
 
@@ -162,6 +183,9 @@ func TestAdmitTurnQueuesImageBlocksWhileRunning(t *testing.T) {
 
 	if result.Kind != TurnAdmissionQueued {
 		t.Fatalf("kind = %s, want %s; error=%+v", result.Kind, TurnAdmissionQueued, result.Error)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "attachment_vision_unavailable" {
+		t.Fatalf("queued warnings = %+v", result.Warnings)
 	}
 	records, err := a.Engine.PendingInputQueue.Records()
 	if err != nil {

@@ -13,12 +13,22 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/version"
 )
+
+type warningFailingWriter struct {
+	calls int
+}
+
+func (w *warningFailingWriter) Write([]byte) (int, error) {
+	w.calls++
+	return 0, errors.New("writer unavailable")
+}
 
 func TestVersionCmd_ShortForm(t *testing.T) {
 	root := newRootCmd()
@@ -76,6 +86,17 @@ func TestRunCmd_HelpIncludesRepeatableAttachFlag(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "--attach") {
 		t.Fatalf("run help missing --attach:\n%s", out.String())
+	}
+}
+
+func TestWriteTurnWarningsIsBestEffort(t *testing.T) {
+	w := &warningFailingWriter{}
+	writeTurnWarnings(w, []app.TurnWarning{
+		{Message: "cannot view image", Suggestion: "use a vision model"},
+		{Message: "second warning", Suggestion: "second suggestion"},
+	})
+	if w.calls != 1 {
+		t.Fatalf("warning write calls = %d, want 1", w.calls)
 	}
 }
 
@@ -494,12 +515,43 @@ func TestRunCmd_DryRunValidatesImageOnlyAttachmentsWithoutStoring(t *testing.T) 
 	if plan.Prompt != "" || plan.AttachmentCount != 2 || len(plan.Attachments) != 2 {
 		t.Fatalf("attachment plan = %+v", plan)
 	}
+	if len(plan.Warnings) != 1 || plan.Warnings[0].Code != "attachment_vision_unavailable" {
+		t.Fatalf("attachment warnings = %+v", plan.Warnings)
+	}
 	attachment := plan.Attachments[0]
 	if attachment.MediaType != "image/png" || attachment.Bytes != 68 || attachment.Width != 1 || attachment.Height != 1 {
 		t.Fatalf("attachment metadata = %+v", attachment)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".juex", "artifacts", "media")); !os.IsNotExist(err) {
 		t.Fatalf("dry-run stored attachment artifacts: %v", err)
+	}
+}
+
+func TestRunCmd_DryRunVisionCapabilitySuppressesAttachmentWarning(t *testing.T) {
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(configFile, "        capabilities:\n          vision: true\n"); err != nil {
+		t.Fatal(err)
+	}
+	writeCLITestPNG(t, filepath.Join(dir, "screen.png"))
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "--attach", "screen.png"})
+	err := root.Execute()
+	if _, ok := err.(*dryRunOK); !ok {
+		t.Fatalf("expected *dryRunOK, got %T: %v\n%s", err, err, out.String())
+	}
+	var plan dryRunPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Warnings) != 0 {
+		t.Fatalf("attachment warnings = %+v, want none", plan.Warnings)
 	}
 }
 

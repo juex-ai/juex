@@ -327,6 +327,72 @@ providers:
 	}
 }
 
+func TestLiveBinary_CLIRunNonVisionAttachmentWarnsAndProjectsUnavailableText(t *testing.T) {
+	bin := buildJuex(t)
+	requests := make(chan capturedProviderRequest, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		requests <- capturedProviderRequest{path: r.URL.Path, body: body}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponse("I cannot view the attached image.")))
+	}))
+	defer srv.Close()
+
+	work := t.TempDir()
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	configBody := `model: local-chat:text-test
+providers:
+  - id: local-chat
+    protocol: openai/chat
+    base_url: ` + srv.URL + `
+    api_key: k
+    capabilities:
+      streaming: false
+    models:
+      - id: text-test
+`
+	if err := writeText(configPath, configBody); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "photo_a.png")
+	if err := os.WriteFile(sourcePath, webUploadPNG(t), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--new", "--attach", sourcePath, "what color is this image?")
+	cmd.Env = isolatedJuexBinaryEnv(t.TempDir())
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("juex run --attach: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "juex: warning:") ||
+		!strings.Contains(stderr.String(), "local-chat:text-test") ||
+		!strings.Contains(stderr.String(), "providers[].models[].capabilities.vision") {
+		t.Fatalf("stderr warning missing:\n%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "I cannot view the attached image.") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+
+	captured := <-requests
+	if captured.path != "/chat/completions" || !requestUserContentContains(
+		captured.body,
+		"what color is this image?",
+		"cannot view image content",
+		"instead of guessing",
+	) {
+		t.Fatalf("provider request missing unavailable-image guidance: path=%q body=%+v", captured.path, captured.body)
+	}
+	if requestHasUserImage(captured.body, "what color is this image?") {
+		t.Fatalf("non-vision request unexpectedly contained image data: %+v", captured.body)
+	}
+}
+
 func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	bin := buildJuex(t)
 
@@ -1073,6 +1139,37 @@ func requestHasUserImage(body map[string]any, wantText string) bool {
 			}
 		}
 		if haveText && haveImage {
+			return true
+		}
+	}
+	return false
+}
+
+func requestUserContentContains(body map[string]any, wants ...string) bool {
+	messages, _ := body["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		if message["role"] != "user" {
+			continue
+		}
+		var content strings.Builder
+		switch value := message["content"].(type) {
+		case string:
+			content.WriteString(value)
+		case []any:
+			for _, rawPart := range value {
+				part, _ := rawPart.(map[string]any)
+				if part["type"] == "text" {
+					fmt.Fprint(&content, part["text"])
+				}
+			}
+		}
+		text := content.String()
+		matched := true
+		for _, want := range wants {
+			matched = matched && strings.Contains(text, want)
+		}
+		if matched {
 			return true
 		}
 	}

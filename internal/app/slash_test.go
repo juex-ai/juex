@@ -388,7 +388,7 @@ func TestApp_RunUnknownSlashReachesProvider(t *testing.T) {
 func TestApp_REPLProcessesStatusSlash(t *testing.T) {
 	a, prov := newStubApp(t)
 	var out bytes.Buffer
-	if err := a.REPL(context.Background(), strings.NewReader("/status\n"), &out); err != nil {
+	if err := a.REPL(context.Background(), strings.NewReader("/status\n"), &out, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "observables: 0/0 running, 0 errors") || strings.Contains(out.String(), "Juex status") {

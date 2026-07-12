@@ -242,6 +242,10 @@ control. The composer footer shows transient composer feedback, latest request
 context total, and current conversation token total. Active primary sessions
 support image paste, drag/drop, and picker upload in the composer, with a
 bounded thumbnail strip before sending.
+When an accepted image turn targets a model without vision capability, the turn
+response supplies a non-blocking warning. The session controller renders its
+message and configuration suggestion through the existing transient composer
+feedback area; the turn still starts or queues normally.
 
 Long transcripts load as a bounded window, not a full conversation dump. When
 older messages are available, a compact `Load older messages` control appears
@@ -472,6 +476,7 @@ shows the input/output split.
 | empty + running | square stop icon |
 | text + idle | send icon, submits immediately |
 | text + running | send icon, queues pending input |
+| accepted image + vision disabled | turn proceeds; transient warning appears in the left feedback group |
 | error | compact error text in the left feedback group |
 
 The visual state is derived from a local draft string plus whether the active

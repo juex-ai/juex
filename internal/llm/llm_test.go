@@ -3894,8 +3894,18 @@ func TestProjectProviderTranscriptGatesVision(t *testing.T) {
 	if noVision[0].Blocks[0].Type != BlockText || !strings.Contains(noVision[0].Blocks[0].Text, "image.png") {
 		t.Fatalf("image without vision = %+v", noVision[0].Blocks[0])
 	}
+	for _, want := range []string{"cannot view image content", "instead of guessing"} {
+		if !strings.Contains(noVision[0].Blocks[0].Text, want) {
+			t.Fatalf("image placeholder missing %q: %q", want, noVision[0].Blocks[0].Text)
+		}
+	}
 	if noVision[2].Blocks[0].Type != BlockToolResult || noVision[2].Blocks[0].Media != nil || !strings.Contains(noVision[2].Blocks[0].Content, "tool_result_image") {
 		t.Fatalf("tool result image without vision = %+v", noVision[2].Blocks[0])
+	}
+	for _, want := range []string{"cannot view image content", "instead of guessing"} {
+		if !strings.Contains(noVision[2].Blocks[0].Content, want) {
+			t.Fatalf("tool result placeholder missing %q: %q", want, noVision[2].Blocks[0].Content)
+		}
 	}
 
 	withVision := projectProviderTranscript(history, ProviderProfile{

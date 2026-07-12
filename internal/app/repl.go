@@ -16,10 +16,13 @@ const replAttachCommand = "/attach"
 
 // REPL reads stdin lines, runs one turn for each non-empty prompt, and prints
 // results until the reader closes. /attach stages local images for the next
-// ordinary user prompt.
-func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
+// ordinary user prompt. Non-blocking capability warnings use errOut.
+func (a *App) REPL(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
 	if a == nil || a.Session == nil || a.Engine == nil {
 		return errors.New("app: REPL requires an initialized session and engine")
+	}
+	if errOut == nil {
+		errOut = io.Discard
 	}
 	sc := bufio.NewScanner(in)
 	var staged []llm.MediaRef
@@ -69,6 +72,7 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
 		} else {
 			attachments := staged
 			staged = nil
+			writeREPLTurnWarnings(errOut, a.AttachmentWarnings(len(attachments)))
 			text, err = a.RunWithAttachments(ctx, line, attachments)
 		}
 		if err != nil {
@@ -85,6 +89,15 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 	}
 	return sc.Err()
+}
+
+// Capability warnings are best-effort diagnostics and must not stop the REPL turn.
+func writeREPLTurnWarnings(w io.Writer, warnings []TurnWarning) {
+	for _, warning := range warnings {
+		if _, err := fmt.Fprintf(w, "juex: warning: %s; %s\n", warning.Message, warning.Suggestion); err != nil {
+			return
+		}
+	}
 }
 
 func parseREPLAttach(input string) (string, bool, error) {
