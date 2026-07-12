@@ -84,7 +84,7 @@ unless `--report-dir` is passed.
 Useful options:
 
 ```bash
-bash tests/eval/provider_model_smoke.sh --only ark/doubao-seed-2.0-pro
+bash tests/eval/provider_model_smoke.sh --only ark:doubao-seed-2.0-pro
 bash tests/eval/provider_model_smoke.sh --all-models
 bash tests/eval/provider_model_smoke.sh --all-config-models
 bash tests/eval/provider_model_smoke.sh --work-root /tmp/juex-provider-smoke --keep
@@ -109,19 +109,19 @@ build, and a rotating provider smoke by default. Use `--skip-tests` and
 `--no-provider-smoke` only for validating the harness itself or documentation
 examples where live providers are irrelevant.
 
-Use `--only provider/model` to bound provider smoke. Use `--compaction-eval`
+Use `--only provider:model` to bound provider smoke. Use `--compaction-eval`
 when a change touches compaction, context projection, provider reasoning replay,
 or long-session behavior. The compaction evaluator rotates one ref from
 `compaction_eval_models` by default, reads provider/model details from
 `~/.juex/juex.yaml`, and writes scorecards under the development record. Use
-`--compaction-only provider/model` for a focused compaction run and
+`--compaction-only provider:model` for a focused compaction run and
 `--compaction-all-models` when a larger change needs every listed compaction
 model in one run.
 
 Direct compaction entrypoint:
 
 ```bash
-bash tests/eval/compaction_eval.sh --only ark/doubao-seed-2.0-pro
+bash tests/eval/compaction_eval.sh --only ark:doubao-seed-2.0-pro
 bash tests/eval/compaction_eval.sh --all-models
 ```
 
