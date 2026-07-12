@@ -833,6 +833,17 @@ func TestManager_StoppedScheduleRestartsWithoutCatchUp(t *testing.T) {
 	dir := t.TempDir()
 	startedAt := time.Now().UTC().Add(5 * time.Second)
 	now := startedAt
+	var nowMu sync.RWMutex
+	nowFunc := func() time.Time {
+		nowMu.RLock()
+		defer nowMu.RUnlock()
+		return now
+	}
+	setNow := func(next time.Time) {
+		nowMu.Lock()
+		now = next
+		nowMu.Unlock()
+	}
 	spec := observable.Spec{
 		ID: "paused-schedule",
 		Source: observable.SourceSpec{
@@ -849,7 +860,7 @@ func TestManager_StoppedScheduleRestartsWithoutCatchUp(t *testing.T) {
 		ConfigPath: configPath(dir),
 		StateDir:   stateDir(dir),
 		WorkDir:    dir,
-		Now:        func() time.Time { return now },
+		Now:        nowFunc,
 		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
 			deliveredMu.Lock()
 			defer deliveredMu.Unlock()
@@ -863,11 +874,11 @@ func TestManager_StoppedScheduleRestartsWithoutCatchUp(t *testing.T) {
 	if err := mgr.Start(context.Background(), spec.ID); err != nil {
 		t.Fatal(err)
 	}
-	now = startedAt.Add(30 * time.Second)
+	setNow(startedAt.Add(30 * time.Second))
 	if err := mgr.Stop(context.Background(), spec.ID); err != nil {
 		t.Fatal(err)
 	}
-	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: nowFunc})
 	state, ok, err := store.ScheduleState(spec.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -875,7 +886,7 @@ func TestManager_StoppedScheduleRestartsWithoutCatchUp(t *testing.T) {
 	if !ok || !state.Paused {
 		t.Fatalf("state after stop = %+v ok=%v, want paused", state, ok)
 	}
-	now = startedAt.Add(2 * time.Minute)
+	setNow(startedAt.Add(2 * time.Minute))
 	if err := mgr.Start(context.Background(), spec.ID); err != nil {
 		t.Fatal(err)
 	}
