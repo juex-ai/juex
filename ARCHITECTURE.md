@@ -1262,6 +1262,13 @@ Compaction summary input keeps readable reasoning summaries when providers
 expose them, but encrypted/redacted reasoning payloads are represented only as
 small metadata placeholders; those blobs are replay material for compatible
 providers, not useful content for the summary model.
+If a successful summary response contains no text, the runtime retries that
+provider once with twice the summary output budget and rebuilds the bounded
+summary request for the larger budget. If the retry still has no summary, or
+the retry fails, an independently configured summary provider falls back once
+to the active provider. Compaction fails only after those bounded recovery
+steps are exhausted; generic provider failures are not treated as empty-summary
+retries. Successful response attempts remain included in session token usage.
 The runtime also maintains an optional session-local `working_state.json`
 sidecar. The persistence, merge, pruning, rendering, and redaction rules for it
 live in `internal/runtime/workmem`, alongside the `goal_state.json` store. The
@@ -1286,6 +1293,8 @@ routes. Slash commands are parsed in `internal/app` so CLI and web inputs share
 one whitelist and result contract before any provider turn is started.
 Successful compaction records summary-call token usage and updates the session
 context usage snapshot to the estimated active context after the compact marker.
+`context.compact.summary_retry` records the empty-summary retry, stop reason,
+reasoning-only classification, and previous and increased output budgets.
 OpenAI-compatible providers receive a stable `prompt_cache_key` per session
 when called through `CompleteWithOptions`; Anthropic providers add ephemeral
 `cache_control` breakpoints to stable system/tool sections. Provider-reported

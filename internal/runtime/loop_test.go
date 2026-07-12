@@ -1227,8 +1227,12 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	var fallback ContextCompactSummaryFallbackPayload
+	var retries int
 	bus.Subscribe("context.compact.summary_model_fallback", func(e events.Event) {
 		fallback = e.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+	bus.Subscribe("context.compact.summary_retry", func(e events.Event) {
+		retries++
 	})
 
 	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
@@ -1243,6 +1247,182 @@ func TestCompactFallsBackToMainProviderWhenSummaryProviderFails(t *testing.T) {
 	}
 	if fallback.ConfiguredModel != "summary:model" || fallback.FallbackModel != "main:model" || !strings.Contains(fallback.Error, "unavailable") {
 		t.Fatalf("fallback payload = %+v", fallback)
+	}
+	if retries != 0 {
+		t.Fatalf("summary retries = %d, want no semantic retry for transport error", retries)
+	}
+}
+
+func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{
+			{
+				response: llm.Response{
+					Message:    llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "spent the first budget"}}},
+					StopReason: llm.StopMaxTokens,
+					Usage:      llm.Usage{InputTokens: 10, OutputTokens: 2},
+				},
+			},
+			{
+				response: llm.Response{
+					Message:    llm.TextMessage(llm.RoleAssistant, "recovered summary"),
+					StopReason: llm.StopEndTurn,
+					Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
+				},
+			},
+		},
+	}
+	eng, bus := newEngine(t, provider, false)
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 5000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 1000
+	var retry ContextCompactSummaryRetryPayload
+	bus.Subscribe("context.compact.summary_retry", func(e events.Event) {
+		retry = e.Payload.(ContextCompactSummaryRetryPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryChars != len("recovered summary") || provider.calls != 2 {
+		t.Fatalf("result/calls = %+v, %d", result, provider.calls)
+	}
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 2000 {
+		t.Fatalf("max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(provider.options))
+	}
+	if retry.Attempt != 2 || retry.Reason != "empty_summary" || retry.StopReason != llm.StopMaxTokens || !retry.ReasoningOnly || retry.PreviousMaxOutputTokens != 1000 || retry.MaxOutputTokens != 2000 {
+		t.Fatalf("retry payload = %+v", retry)
+	}
+	if len(provider.histories) != 2 || provider.histories[0][0].FirstText() == provider.histories[1][0].FirstText() {
+		t.Fatalf("retry summary request was not rebuilt for the larger budget")
+	}
+	usage := eng.Session.TokenUsageSnapshot()
+	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
+		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
+	}
+}
+
+func TestCompactReturnsEmptySummaryAfterSingleRetry(t *testing.T) {
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "first thought"}}}, StopReason: llm.StopMaxTokens, Usage: llm.Usage{InputTokens: 3, OutputTokens: 1}}},
+			{response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant}, StopReason: llm.StopEndTurn, Usage: llm.Usage{InputTokens: 4, OutputTokens: 1}}},
+		},
+	}
+	eng, bus := newEngine(t, provider, false)
+	configureCompactionRetryTest(t, eng, 2, 200)
+	eng.Compaction.SummaryMaxTokens = 100
+	var retries int
+	bus.Subscribe("context.compact.summary_retry", func(e events.Event) {
+		retries++
+	})
+
+	_, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err == nil || !strings.Contains(err.Error(), "compact context: empty summary") {
+		t.Fatalf("error = %v, want empty summary", err)
+	}
+	if provider.calls != 2 || retries != 1 {
+		t.Fatalf("calls/retries = %d/%d, want 2/1", provider.calls, retries)
+	}
+	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 7, OutputTokens: 2}) {
+		t.Fatalf("token usage = %+v, want failed-attempt usage", usage)
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			t.Fatalf("unexpected compact marker after exhausted retry: %+v", msg)
+		}
+	}
+}
+
+func TestCompactFallsBackAfterEmptySummaryRetry(t *testing.T) {
+	main := &scriptedCompactionProvider{
+		name: "main:model",
+		attempts: []scriptedCompactionAttempt{{response: llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "main recovered summary"),
+			StopReason: llm.StopEndTurn,
+			Usage:      llm.Usage{InputTokens: 7, OutputTokens: 2},
+		}}},
+	}
+	summary := &scriptedCompactionProvider{
+		name: "summary:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "first thought"}}}, StopReason: llm.StopMaxTokens, Usage: llm.Usage{InputTokens: 5, OutputTokens: 1}}},
+			{response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "second thought"}}}, StopReason: llm.StopMaxTokens, Usage: llm.Usage{InputTokens: 6, OutputTokens: 1}}},
+		},
+	}
+	eng, bus := newEngine(t, main, false)
+	eng.SummaryProvider = summary
+	configureCompactionRetryTest(t, eng, 2, 200)
+	eng.Compaction.SummaryModel = "summary:model"
+	eng.Compaction.SummaryMaxTokens = 100
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(e events.Event) {
+		fallback = e.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.calls != 2 || main.calls != 1 || result.SummaryModel != "main:model" {
+		t.Fatalf("summary/main/result = %d/%d/%+v", summary.calls, main.calls, result)
+	}
+	if len(main.options) != 1 || main.options[0].MaxOutputTokens != 200 {
+		t.Fatalf("fallback max output tokens = %+v, want 200", compactionOptionBudgets(main.options))
+	}
+	if fallback.ConfiguredModel != "summary:model" || fallback.FallbackModel != "main:model" || !strings.Contains(fallback.Error, "empty summary") {
+		t.Fatalf("fallback payload = %+v", fallback)
+	}
+	usage := eng.Session.TokenUsageSnapshot()
+	if usage != (llm.Usage{InputTokens: 18, OutputTokens: 4}) {
+		t.Fatalf("token usage = %+v, want all summary attempts", usage)
+	}
+}
+
+func TestCompactFallsBackWhenEmptySummaryRetryFails(t *testing.T) {
+	main := &scriptedCompactionProvider{
+		name: "main:model",
+		attempts: []scriptedCompactionAttempt{{response: llm.Response{
+			Message: llm.TextMessage(llm.RoleAssistant, "main recovered summary"),
+			Usage:   llm.Usage{InputTokens: 7, OutputTokens: 2},
+		}}},
+	}
+	summary := &scriptedCompactionProvider{
+		name: "summary:model",
+		attempts: []scriptedCompactionAttempt{
+			{response: llm.Response{
+				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{Type: llm.BlockReasoning, Text: "first thought"}}},
+				Usage:   llm.Usage{InputTokens: 5, OutputTokens: 1},
+			}},
+			{err: errors.New("retry unavailable")},
+		},
+	}
+	eng, bus := newEngine(t, main, false)
+	eng.SummaryProvider = summary
+	configureCompactionRetryTest(t, eng, 2, 200)
+	eng.Compaction.SummaryModel = "summary:model"
+	eng.Compaction.SummaryMaxTokens = 100
+	var fallback ContextCompactSummaryFallbackPayload
+	bus.Subscribe("context.compact.summary_model_fallback", func(e events.Event) {
+		fallback = e.Payload.(ContextCompactSummaryFallbackPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.calls != 2 || main.calls != 1 || result.SummaryModel != "main:model" {
+		t.Fatalf("summary/main/result = %d/%d/%+v", summary.calls, main.calls, result)
+	}
+	if !strings.Contains(fallback.Error, "retry unavailable") {
+		t.Fatalf("fallback payload = %+v", fallback)
+	}
+	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 12, OutputTokens: 3}) {
+		t.Fatalf("token usage = %+v, want successful attempts only", usage)
 	}
 }
 
@@ -1397,6 +1577,57 @@ type namedCompactionProvider struct {
 	text  string
 	err   error
 	calls int
+}
+
+type scriptedCompactionAttempt struct {
+	response llm.Response
+	err      error
+}
+
+type scriptedCompactionProvider struct {
+	name      string
+	attempts  []scriptedCompactionAttempt
+	calls     int
+	options   []llm.CompleteOptions
+	histories [][]llm.Message
+}
+
+func (p *scriptedCompactionProvider) Name() string { return p.name }
+
+func (p *scriptedCompactionProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	return p.CompleteWithOptions(ctx, sys, history, tools, llm.CompleteOptions{})
+}
+
+func (p *scriptedCompactionProvider) CompleteWithOptions(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec, opts llm.CompleteOptions) (llm.Response, error) {
+	if p.calls >= len(p.attempts) {
+		return llm.Response{}, fmt.Errorf("scriptedCompactionProvider: out of attempts (called=%d)", p.calls)
+	}
+	p.options = append(p.options, opts)
+	p.histories = append(p.histories, append([]llm.Message(nil), history...))
+	attempt := p.attempts[p.calls]
+	p.calls++
+	return attempt.response, attempt.err
+}
+
+func configureCompactionRetryTest(t *testing.T, eng *Engine, messageCount, messageChars int) {
+	t.Helper()
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	for i := 0; i < messageCount; i++ {
+		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", messageChars)))
+		if err := eng.Session.Append(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func compactionOptionBudgets(options []llm.CompleteOptions) []int {
+	out := make([]int, len(options))
+	for i, opts := range options {
+		out[i] = opts.MaxOutputTokens
+	}
+	return out
 }
 
 func (p *namedCompactionProvider) Name() string { return p.name }

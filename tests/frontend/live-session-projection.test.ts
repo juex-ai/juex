@@ -461,6 +461,22 @@ test("projectLiveSessionEvent projects compact start and completion", () => {
   assert.equal(state.compactActive, true);
   assert.equal(state.turnActive, false);
 
+  state = apply(state, {
+    id: "e-summary-retry",
+    type: "context.compact.summary_retry",
+    ts: "2026-06-15T00:00:00.750Z",
+    payload: {
+      attempt: 2,
+      reason: "empty_summary",
+      stop_reason: "max_tokens",
+      reasoning_only: true,
+      previous_max_output_tokens: 2048,
+      max_output_tokens: 4096,
+    },
+  });
+  assert.equal(state.compactActive, true);
+  assert.equal(state.turnActive, false);
+
   const completed = projectLiveSessionEvent(state, {
     id: "e2",
     type: "context.compact.completed",

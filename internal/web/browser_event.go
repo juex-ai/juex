@@ -62,6 +62,7 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{"context.compact.started", func() any { return &juexruntime.ContextCompactStartedPayload{} }},
 	{"context.compact.completed", func() any { return &juexruntime.ContextCompactCompletedPayload{} }},
 	{"context.compact.errored", func() any { return &juexruntime.ContextCompactErroredPayload{} }},
+	{"context.compact.summary_retry", func() any { return &juexruntime.ContextCompactSummaryRetryPayload{} }},
 	{"context.compact.summary_model_fallback", func() any { return &juexruntime.ContextCompactSummaryFallbackPayload{} }},
 	{"context.projection.applied", func() any { return &BrowserContextProjectionAppliedPayload{} }},
 }

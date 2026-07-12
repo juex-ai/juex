@@ -241,6 +241,15 @@ type ContextCompactSummaryFallbackPayload struct {
 	Error           string `json:"error"`
 }
 
+type ContextCompactSummaryRetryPayload struct {
+	Attempt                 int            `json:"attempt"`
+	Reason                  string         `json:"reason"`
+	StopReason              llm.StopReason `json:"stop_reason,omitempty"`
+	ReasoningOnly           bool           `json:"reasoning_only,omitempty"`
+	PreviousMaxOutputTokens int            `json:"previous_max_output_tokens"`
+	MaxOutputTokens         int            `json:"max_output_tokens"`
+}
+
 type ContextCompactCompletedPayload struct {
 	MessageID          string `json:"message_id"`
 	Reason             string `json:"reason"`
