@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
@@ -116,29 +115,9 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 		TailTurns:        policy.TailTurns,
 	}})
 
-	summarySystem, summaryHistory := buildCompactionSummaryRequest(systemPrompt, selection.PreviousSummary, selection.SummaryInput, policy, instructions)
-	summaryProvider := e.compactionSummaryProviderLocked()
-	resp, err := llm.CompleteWithOptions(ctx, summaryProvider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
-		Purpose:         "compaction",
-		MaxOutputTokens: policy.SummaryMaxTokens,
-		CachePolicy:     e.cachePolicyLocked(),
-		RetryObserver:   e.providerRetryObserverLocked(turnID, "compaction", nil),
-	})
-	if err != nil && e.Provider != nil && summaryProvider != e.Provider {
-		e.emit(events.Event{Type: "context.compact.summary_model_fallback", TurnID: turnID, Payload: ContextCompactSummaryFallbackPayload{
-			ConfiguredModel: policy.SummaryModel,
-			FallbackModel:   e.Provider.Name(),
-			Error:           err.Error(),
-		}})
-		summaryProvider = e.Provider
-		resp, err = llm.CompleteWithOptions(ctx, summaryProvider, summarySystem, summaryHistory, nil, llm.CompleteOptions{
-			Purpose:         "compaction",
-			MaxOutputTokens: policy.SummaryMaxTokens,
-			CachePolicy:     e.cachePolicyLocked(),
-			RetryObserver:   e.providerRetryObserverLocked(turnID, "compaction", nil),
-		})
-	}
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, policy, instructions)
 	if err != nil {
+		e.Session.RecordResponseUsage(generation.Usage, nil)
 		compactErr := fmt.Errorf("compact context: %w", err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
@@ -147,16 +126,9 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 		}})
 		return CompactionResult{}, compactErr
 	}
-	summary := strings.TrimSpace(responseText(resp.Message))
-	if summary == "" {
-		err := fmt.Errorf("compact context: empty summary")
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  err.Error(),
-		}})
-		return CompactionResult{}, err
-	}
+	resp := generation.Response
+	summaryProvider := generation.Provider
+	summary := generation.Summary
 
 	model := resp.Message.Model
 	if model == "" && summaryProvider != nil {
@@ -214,7 +186,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 			{Key: "active_context", Label: "active context after compaction", Tokens: tokensAfter},
 		},
 	}
-	e.Session.RecordResponseUsage(resp.Usage, &contextUsage)
+	e.Session.RecordResponseUsage(generation.Usage, &contextUsage)
 	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
 	postReq.CompactReason = reason
 	postReq.CompactAuto = auto

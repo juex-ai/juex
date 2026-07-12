@@ -15,9 +15,9 @@ The default model matrix is maintained in `tests/eval/live-models.yaml`:
 
 | Label | Juex model ref | Notes |
 | --- | --- | --- |
-| OpenAI Codex | `openai-codex/gpt-5.5` | Uses the Codex Responses adapter. |
-| Ark Doubao | `ark/doubao-seed-2.0-pro` | OpenAI-compatible chat through Ark. |
-| Clip Local Responses | `clip-local-responses/gpt-5.3-codex-spark` | Local proxy provider through the Responses protocol. |
+| OpenAI Codex | `openai-codex:gpt-5.5` | Uses the Codex Responses adapter. |
+| Ark Doubao | `ark:doubao-seed-2.0-pro` | OpenAI-compatible chat through Ark. |
+| Clip Local Responses | `clip-local-responses:gpt-5.3-codex-spark` | Local proxy provider through the Responses protocol. |
 
 ## Window Size
 
@@ -103,7 +103,7 @@ tests/eval/compaction_eval.sh --all-models
 Run one provider:
 
 ```bash
-tests/eval/compaction_eval.sh openai-codex/gpt-5.5
+tests/eval/compaction_eval.sh --only openai-codex:gpt-5.5
 ```
 
 The script reads model refs from `tests/eval/live-models.yaml`, records the last

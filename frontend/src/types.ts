@@ -257,6 +257,7 @@ export const BROWSER_EVENT_TYPES = [
   "context.compact.started",
   "context.compact.completed",
   "context.compact.errored",
+  "context.compact.summary_retry",
   "context.compact.summary_model_fallback",
   "context.projection.applied",
 ] as const;
@@ -561,6 +562,15 @@ export interface ContextCompactSummaryFallbackPayload {
   error: string;
 }
 
+export interface ContextCompactSummaryRetryPayload {
+  attempt: number;
+  reason: string;
+  stop_reason?: string;
+  reasoning_only?: boolean;
+  previous_max_output_tokens: number;
+  max_output_tokens: number;
+}
+
 export interface ContextCompactCompletedPayload {
   message_id: string;
   reason: string;
@@ -620,6 +630,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"context.compact.started"> & { payload: ContextCompactStartedPayload })
   | (BrowserEventBase<"context.compact.completed"> & { payload: ContextCompactCompletedPayload })
   | (BrowserEventBase<"context.compact.errored"> & { payload: ContextCompactErroredPayload })
+  | (BrowserEventBase<"context.compact.summary_retry"> & { payload: ContextCompactSummaryRetryPayload })
   | (BrowserEventBase<"context.compact.summary_model_fallback"> & { payload: ContextCompactSummaryFallbackPayload })
   | (BrowserEventBase<"context.projection.applied"> & { payload: ContextProjectionAppliedPayload });
 

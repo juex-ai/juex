@@ -246,6 +246,20 @@
     }
   },
   {
+    "id": "evt-compact-summary-retry",
+    "type": "context.compact.summary_retry",
+    "ts": "2026-06-15T00:00:09.5Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "attempt": 2,
+      "reason": "empty_summary",
+      "stop_reason": "max_tokens",
+      "reasoning_only": true,
+      "previous_max_output_tokens": 2048,
+      "max_output_tokens": 4096
+    }
+  },
+  {
     "id": "evt-compact-completed",
     "type": "context.compact.completed",
     "ts": "2026-06-15T00:00:10Z",

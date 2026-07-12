@@ -359,6 +359,20 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-compact-summary-retry",
+			Type:      "context.compact.summary_retry",
+			Timestamp: ts.Add(9500 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.ContextCompactSummaryRetryPayload{
+				Attempt:                 2,
+				Reason:                  "empty_summary",
+				StopReason:              llm.StopMaxTokens,
+				ReasoningOnly:           true,
+				PreviousMaxOutputTokens: 2048,
+				MaxOutputTokens:         4096,
+			},
+		},
+		{
 			ID:        "evt-compact-completed",
 			Type:      "context.compact.completed",
 			Timestamp: ts.Add(10 * time.Second),
