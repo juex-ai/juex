@@ -164,6 +164,7 @@ type shellSession struct {
 	tty           bool
 	waitFunc      func() error
 	killFunc      func() error
+	outputDone    <-chan struct{}
 	doneChan      chan struct{}
 
 	mu              sync.Mutex
@@ -418,6 +419,9 @@ func (s *shellSession) wait(ctx context.Context) {
 		defer s.cancel()
 	}
 	err := s.waitProcess()
+	if s.outputDone != nil {
+		<-s.outputDone
+	}
 	s.mu.Lock()
 	s.done = true
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {

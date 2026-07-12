@@ -533,7 +533,10 @@ Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
 matching Codex's unified exec behavior; Ctrl-C (`\x03`) is the supported
 follow-up exception and maps to shell-session interrupt. `tty: true` allocates
 a pseudo-terminal on supported platforms so interactive programs can prompt and
-receive follow-up input. Session transcripts and SSE deltas are bounded,
+receive follow-up input. TTY sessions publish completion only after both the
+command process and the PTY/ConPTY output pump finish, so output written just
+before exit is included in the completing tool result and event stream.
+Session transcripts and SSE deltas are bounded,
 completed sessions are pruned, and sessions are not durable across Juex
 process restart.
 
