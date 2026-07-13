@@ -286,8 +286,10 @@ intermediate files, and working material that exceeds the Notes budget. The
 system prompt provides its absolute path, and the model uses the existing
 `read`, `write`, `edit`, and `grep` tools to manage it. Scratchpad contents are
 not automatically added to provider context; the model reads files back when
-needed. The session page can browse this directory without exposing the rest of
-`.juex`, and deleting the session removes the scratchpad with it.
+needed. The prompt also provides a workspace-relative path for long generated
+files written through `write_begin`/`write_chunk`/`write_commit`. The session
+page can browse this directory without exposing the rest of `.juex`, and
+deleting the session removes the scratchpad with it.
 
 Juex also keeps a session-local `goal_state.json` for the model-owned current
 goal. The active contract is intentionally small: `description`,

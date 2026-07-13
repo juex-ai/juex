@@ -226,10 +226,12 @@ func TestBuilder_RuntimeSectionsInsertedBeforeOperatingContext(t *testing.T) {
 }
 
 func TestBuilder_SessionScratchpadSection(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), ".juex", "sessions", "session-1", "scratchpad")
+	work := t.TempDir()
+	dir := filepath.Join(work, ".juex", "sessions", "session-1", "scratchpad")
 	b := &Builder{
 		AgentsMDDirs:  []string{t.TempDir()},
 		ScratchpadDir: dir,
+		WorkDir:       work,
 		Now:           func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
 	}
 
@@ -244,6 +246,7 @@ func TestBuilder_SessionScratchpadSection(t *testing.T) {
 	for _, want := range []string{
 		"## Session Scratchpad",
 		dir,
+		"workspace-relative path for `write_begin`: .juex/sessions/session-1/scratchpad",
 		"not automatically added to context",
 		"use `read` or `grep`",
 		"Notes",

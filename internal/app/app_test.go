@@ -97,10 +97,16 @@ func TestAppSystemPromptIncludesSessionScratchpad(t *testing.T) {
 		t.Fatalf("provider calls = %d, want 1", len(provider.systems))
 	}
 	wantPath := filepath.Join(a.Session.Dir, "scratchpad")
-	for _, want := range []string{"## Session Scratchpad", wantPath, "not automatically added to context"} {
+	wantRelativePath := filepath.ToSlash(filepath.Join(".juex", "sessions", a.Session.ID, "scratchpad"))
+	for _, want := range []string{"## Session Scratchpad", wantPath, wantRelativePath, "write_begin", "not automatically added to context"} {
 		if !strings.Contains(provider.systems[0], want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, provider.systems[0])
 		}
+	}
+	if _, err := a.Engine.Tools.Call(context.Background(), "write_begin", map[string]any{
+		"path": filepath.ToSlash(filepath.Join(wantRelativePath, "long.md")),
+	}); err != nil {
+		t.Fatalf("prompted scratchpad write_begin path failed: %v", err)
 	}
 }
 

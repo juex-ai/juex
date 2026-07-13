@@ -312,6 +312,7 @@ func TestApp_RunNewSlashSwitchesActivePrimary(t *testing.T) {
 		StopReason: llm.StopEndTurn,
 	})
 	oldID := a.Session.ID
+	oldScratchpadDir := a.Session.ScratchpadDir()
 	out, err := a.Run(context.Background(), "/new")
 	if err != nil {
 		t.Fatal(err)
@@ -336,6 +337,10 @@ func TestApp_RunNewSlashSwitchesActivePrimary(t *testing.T) {
 	}
 	if got := prov.histories[0][len(prov.histories[0])-1].FirstText(); got != NewSessionGreetingPrompt() {
 		t.Fatalf("provider prompt = %q, want greeting prompt", got)
+	}
+	newScratchpadDir := a.Session.ScratchpadDir()
+	if !strings.Contains(prov.systems[0], newScratchpadDir) || strings.Contains(prov.systems[0], oldScratchpadDir) {
+		t.Fatalf("provider system prompt did not switch scratchpad from %q to %q:\n%s", oldScratchpadDir, newScratchpadDir, prov.systems[0])
 	}
 	h, err := session.LoadHistory(filepath.Join(a.cfg.WorkDir, ".juex", "history.json"))
 	if err != nil {

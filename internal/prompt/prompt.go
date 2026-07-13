@@ -122,14 +122,20 @@ func (b *Builder) scratchpadSection() (Section, bool) {
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	text := strings.Join([]string{
+	lines := []string{
 		"## Session Scratchpad",
 		fmt.Sprintf("- path: %s", dir),
+	}
+	if rel, ok := scratchpadRelativePath(b.WorkDir, dir); ok {
+		lines = append(lines, fmt.Sprintf("- workspace-relative path for `write_begin`: %s", rel))
+	}
+	lines = append(lines,
 		"- Use this directory for long drafts, intermediate files, and working material that exceeds the compact Notes budget.",
 		"- Scratchpad contents are not automatically added to context. When needed, use `read` or `grep` to retrieve them.",
 		"- Keep the current plan and short progress checkpoints in Notes; keep substantial working material here.",
 		"- Save important intermediate conclusions here before compaction so a later turn can read them back.",
-	}, "\n")
+	)
+	text := strings.Join(lines, "\n")
 	return Section{
 		Key:    "session_scratchpad",
 		Label:  "Session Scratchpad",
@@ -137,6 +143,22 @@ func (b *Builder) scratchpadSection() (Section, bool) {
 		Path:   dir,
 		Text:   text,
 	}, true
+}
+
+func scratchpadRelativePath(workDir, dir string) (string, bool) {
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		return "", false
+	}
+	root, err := filepath.Abs(workDir)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 func JoinSections(sections []Section) string {

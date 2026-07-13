@@ -1323,7 +1323,9 @@ task items.
 The session scratchpad is the larger complement to Notes. A named prompt section
 provides its absolute path and asks the model to keep long drafts and
 intermediate files there, retrieve them explicitly with `read` or `grep`, and
-save important conclusions before compaction. Scratchpad bytes are never
+save important conclusions before compaction. When the directory is inside the
+workspace, the section also provides a relative path for the chunked-write
+tools, which intentionally reject absolute paths. Scratchpad bytes are never
 recited or automatically projected into provider context. The model manages
 them with existing file tools, so no parallel scratchpad tool protocol exists.
 
