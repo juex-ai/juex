@@ -98,6 +98,9 @@ type Engine struct {
 	activeTurnID string
 	pendingInput []queuedPendingInput
 
+	hookRuntimeContextMu      sync.Mutex
+	pendingHookRuntimeContext []llm.Message
+
 	autoCompactFailures int
 	toolFailures        *toolFailureLedger
 
@@ -392,7 +395,8 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 		ToolCount:  len(prepared.tools),
 	}})
 
-	requestHistory := e.activeContextLocked().Messages
+	hookContext := e.pendingHookRuntimeContextSnapshot()
+	requestHistory := e.activeContextLockedWithHookContext(hookContext).Messages
 	projectedHistory, projection, err := e.projectMessagesForProviderLocked(requestHistory, prepared.policy)
 	if err != nil {
 		return providerTurnRequest{}, err
@@ -401,6 +405,7 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
 	e.emitProjectionApplied(turnID, projection)
 	estimatedInputTokens := estimateContextTokens(prepared.systemPrompt, prepared.tools, projectedHistory)
+	e.consumePendingHookRuntimeContext(len(hookContext))
 	return providerTurnRequest{iter: iter, history: projectedHistory, estimatedInputTokens: estimatedInputTokens}, nil
 }
 

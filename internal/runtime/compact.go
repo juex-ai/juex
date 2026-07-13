@@ -189,12 +189,8 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 			Auto:   auto,
 			Error:  fmt.Sprintf("compact context: post hook failed: %v", err),
 		}})
-	} else if err := e.appendHookRuntimeContext(postResults); err != nil {
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  fmt.Sprintf("compact context: post hook context failed: %v", err),
-		}})
+	} else {
+		e.queueHookRuntimeContext(postResults)
 	}
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,

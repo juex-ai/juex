@@ -252,8 +252,12 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 	}
 }
 
-func TestRunSessionStartHooksAppendsStdoutRuntimeContext(t *testing.T) {
-	eng, _ := newEngine(t, &mockProvider{}, false)
+func TestRunSessionStartHooksQueuesStdoutForNextProviderRequest(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
 	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventSessionStart: {{Stdout: "load project policy"}},
 	}}
@@ -261,12 +265,44 @@ func TestRunSessionStartHooksAppendsStdoutRuntimeContext(t *testing.T) {
 	if err := eng.RunSessionStartHooks(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(eng.Session.History) != 1 {
-		t.Fatalf("history = %+v", eng.Session.History)
+	if len(eng.Session.History) != 0 {
+		t.Fatalf("session hook context persisted in history: %+v", eng.Session.History)
 	}
-	msg := eng.Session.History[0]
-	if msg.Kind != llm.MessageKindRuntimeContext || !strings.Contains(msg.FirstText(), "load project policy") {
-		t.Fatalf("session hook context = %+v", msg)
+	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "second turn"); err != nil {
+		t.Fatal(err)
+	}
+	if got := messagesText(prov.histories[0]); !strings.Contains(got, "load project policy") {
+		t.Fatalf("first provider request missing session hook context:\n%s", got)
+	}
+	if got := messagesText(prov.histories[1]); strings.Contains(got, "load project policy") {
+		t.Fatalf("session hook context repeated in second provider request:\n%s", got)
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindRuntimeContext {
+			t.Fatalf("runtime context persisted in history: %+v", msg)
+		}
+	}
+}
+
+func TestPendingHookRuntimeContextConsumesOnlySnapshottedMessages(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "first"},
+		Stdout: "first context",
+	}})
+	firstBatch := eng.pendingHookRuntimeContextSnapshot()
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "second"},
+		Stdout: "second context",
+	}})
+
+	eng.consumePendingHookRuntimeContext(len(firstBatch))
+	remaining := eng.pendingHookRuntimeContextSnapshot()
+	if len(remaining) != 1 || !strings.Contains(remaining[0].FirstText(), "second context") {
+		t.Fatalf("remaining hook context = %+v", remaining)
 	}
 }
 
@@ -1261,9 +1297,11 @@ func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 	}
 }
 
-func TestCompactPostHookStdoutAppendsRuntimeContext(t *testing.T) {
+func TestCompactPostHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
 	eng.Compaction = DefaultCompactionPolicy()
@@ -1283,8 +1321,25 @@ func TestCompactPostHookStdoutAppendsRuntimeContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := eng.Session.History[len(eng.Session.History)-1]
-	if last.Kind != llm.MessageKindRuntimeContext || !strings.Contains(last.FirstText(), "Recheck the release branch") {
-		t.Fatalf("post-compact context = %+v", last)
+	if last.Kind != llm.MessageKindCompact {
+		t.Fatalf("post-compact context persisted in history: %+v", last)
+	}
+	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "second turn"); err != nil {
+		t.Fatal(err)
+	}
+	if got := messagesText(prov.histories[1]); !strings.Contains(got, "Recheck the release branch") {
+		t.Fatalf("first provider request missing post-compact context:\n%s", got)
+	}
+	if got := messagesText(prov.histories[2]); strings.Contains(got, "Recheck the release branch") {
+		t.Fatalf("post-compact context repeated in second provider request:\n%s", got)
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindRuntimeContext {
+			t.Fatalf("runtime context persisted in history: %+v", msg)
+		}
 	}
 }
 
@@ -2234,6 +2289,46 @@ func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 	}
 	if got := prov.histories[1][len(prov.histories[1])-1].FirstText(); got != "continue until done" {
 		t.Fatalf("continued prompt = %q", got)
+	}
+}
+
+func TestTurn_StopHookStdoutQueuesRuntimeContextForNextProviderRequest(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "first"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "second"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "third"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventStop: {
+			{Stdout: "verify the release branch before the next response"},
+			{},
+			{},
+		},
+	}}
+
+	if _, err := eng.Turn(context.Background(), "first turn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "second turn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Turn(context.Background(), "third turn"); err != nil {
+		t.Fatal(err)
+	}
+	if got := messagesText(prov.histories[0]); strings.Contains(got, "verify the release branch") {
+		t.Fatalf("stop hook context appeared before the hook ran:\n%s", got)
+	}
+	if got := messagesText(prov.histories[1]); !strings.Contains(got, "verify the release branch") {
+		t.Fatalf("next provider request missing stop hook context:\n%s", got)
+	}
+	if got := messagesText(prov.histories[2]); strings.Contains(got, "verify the release branch") {
+		t.Fatalf("stop hook context repeated in later provider request:\n%s", got)
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindRuntimeContext {
+			t.Fatalf("runtime context persisted in history: %+v", msg)
+		}
 	}
 }
 

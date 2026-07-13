@@ -1226,7 +1226,10 @@ produces an error tool result so the model can recover. `PostToolUse` exit `2`
 adds corrective context without changing whether the completed tool itself
 failed. `PreCompact` stdout extends the summary instructions; compact hooks
 cannot veto compaction, so exit `2` is reported as `hook.errored`.
-`PostCompact` stdout is appended as runtime context for the next model request.
+`SessionStart`, `PostCompact`, and `Stop` exit `0` stdout is queued in memory as
+runtime context for exactly the next model request; it is never persisted as a
+transcript message. `PostCompact` therefore cannot affect the summary request
+that already completed.
 `Stop` exit `2` blocks turn completion and uses its text as the continuation
 prompt.
 

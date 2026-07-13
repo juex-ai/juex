@@ -107,7 +107,8 @@ func (e *Engine) RunSessionStartHooks(ctx context.Context) error {
 	if denied, reason := hookBlocked(results); denied {
 		return hookDeniedError(hooks.EventSessionStart, reason)
 	}
-	return e.appendHookRuntimeContext(results)
+	e.queueHookRuntimeContext(results)
+	return nil
 }
 
 func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
@@ -306,10 +307,11 @@ func hookContextLabel(result hooks.Result, kind string) string {
 	return "Hook " + kind + " (" + name + "):\n"
 }
 
-func (e *Engine) appendHookRuntimeContext(results []hooks.Result) error {
-	if e == nil || e.Session == nil {
-		return nil
+func (e *Engine) queueHookRuntimeContext(results []hooks.Result) {
+	if e == nil {
+		return
 	}
+	var messages []llm.Message
 	for _, result := range results {
 		if result.ExitCode != 0 {
 			continue
@@ -320,11 +322,37 @@ func (e *Engine) appendHookRuntimeContext(results []hooks.Result) error {
 		}
 		msg := llm.TextMessage(llm.RoleUser, hookContextLabel(result, "additional context")+text)
 		msg.Kind = llm.MessageKindRuntimeContext
-		if err := e.Session.Append(msg); err != nil {
-			return fmt.Errorf("append hook runtime context: %w", err)
-		}
+		messages = append(messages, msg)
 	}
-	return nil
+	if len(messages) == 0 {
+		return
+	}
+	e.hookRuntimeContextMu.Lock()
+	e.pendingHookRuntimeContext = append(e.pendingHookRuntimeContext, messages...)
+	e.hookRuntimeContextMu.Unlock()
+}
+
+func (e *Engine) pendingHookRuntimeContextSnapshot() []llm.Message {
+	if e == nil {
+		return nil
+	}
+	e.hookRuntimeContextMu.Lock()
+	defer e.hookRuntimeContextMu.Unlock()
+	return append([]llm.Message(nil), e.pendingHookRuntimeContext...)
+}
+
+func (e *Engine) consumePendingHookRuntimeContext(count int) {
+	if e == nil || count <= 0 {
+		return
+	}
+	e.hookRuntimeContextMu.Lock()
+	defer e.hookRuntimeContextMu.Unlock()
+	if count >= len(e.pendingHookRuntimeContext) {
+		e.pendingHookRuntimeContext = nil
+		return
+	}
+	clear(e.pendingHookRuntimeContext[:count])
+	e.pendingHookRuntimeContext = e.pendingHookRuntimeContext[count:]
 }
 
 func appendToolHookContext(block *llm.Block, results []hooks.Result, includeExitTwo bool) {

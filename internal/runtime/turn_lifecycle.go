@@ -141,9 +141,7 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 	if err != nil {
 		return turnFinishOutcome{}, err
 	}
-	if err := e.appendHookRuntimeContext(stopResults); err != nil {
-		return turnFinishOutcome{}, err
-	}
+	e.queueHookRuntimeContext(stopResults)
 
 	if prompt, payload, ok, err := e.runGoalCompletionGate(l.turnID); err != nil {
 		return turnFinishOutcome{}, err
