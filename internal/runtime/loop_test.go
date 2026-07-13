@@ -174,6 +174,12 @@ type fakeHookRunner struct {
 	requests  []hooks.Request
 }
 
+type hookRunnerFunc func(context.Context, hooks.Request) ([]hooks.Result, error)
+
+func (f hookRunnerFunc) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+	return f(ctx, req)
+}
+
 func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
 	r.requests = append(r.requests, req)
 	if err := r.errors[req.EventName]; err != nil {
@@ -2705,6 +2711,41 @@ func TestTurn_ParallelToolCalls(t *testing.T) {
 		if gotIDs[i] != wantIDs[i] {
 			t.Fatalf("ordering broken: got %v want %v", gotIDs, wantIDs)
 		}
+	}
+}
+
+func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "notes-1", ToolName: NotesToolUpdate, Input: map[string]any{"content": "first"}},
+			{Type: llm.BlockToolUse, ToolUseID: "notes-2", ToolName: NotesToolUpdate, Input: map[string]any{"content": "second"}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}, false)
+	eng.Notes = NewNotesStore(eng.Session.Dir)
+	if err := RegisterNotesTools(eng.Tools, eng); err != nil {
+		t.Fatal(err)
+	}
+	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+		if req.EventName == hooks.EventPreToolUse && req.ToolName == NotesToolUpdate && req.ToolInput["content"] == "first" {
+			select {
+			case <-time.After(100 * time.Millisecond):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return nil, nil
+	})
+
+	if out, err := eng.Turn(context.Background(), "rewrite notes twice"); err != nil || out != "done" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	snapshot, err := eng.Notes.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Content != "second" {
+		t.Fatalf("notes content = %q, want final provider-ordered rewrite", snapshot.Content)
 	}
 }
 
