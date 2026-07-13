@@ -264,6 +264,7 @@ func New(opts Options) (*App, error) {
 		AgentsMDDirs:       resourcePaths.AgentsMDDirs,
 		Memory:             memStore,
 		Skills:             skillLoader,
+		ScratchpadDir:      sess.ScratchpadDir(),
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
 		RuntimeSections: func() []prompt.Section {
@@ -498,6 +499,9 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	}
 	if a.Engine != nil {
 		a.Engine.Session = sess
+		if a.Engine.Prompt != nil {
+			a.Engine.Prompt.ScratchpadDir = sess.ScratchpadDir()
+		}
 		a.Engine.PendingInputQueue = runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{})
 		a.Engine.Notes = notesStore(sess)
 		a.Engine.GoalState = goalStateStore(sess)

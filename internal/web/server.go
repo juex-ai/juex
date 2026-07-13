@@ -141,6 +141,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleCompactSession(w, r, id)
 	case rest == "context" && r.Method == http.MethodGet:
 		s.handleSessionContext(w, r, id)
+	case rest == "scratchpad" && r.Method == http.MethodGet:
+		s.handleSessionScratchpad(w, r, id)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
 	}

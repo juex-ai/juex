@@ -84,6 +84,32 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return a, prov
 }
 
+func TestAppSystemPromptIncludesSessionScratchpad(t *testing.T) {
+	a, provider := newStubApp(t, llm.Response{
+		Message:    llm.TextMessage(llm.RoleAssistant, "done"),
+		StopReason: llm.StopEndTurn,
+	})
+
+	if _, err := a.Run(context.Background(), "use session working space"); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.systems) != 1 {
+		t.Fatalf("provider calls = %d, want 1", len(provider.systems))
+	}
+	wantPath := filepath.Join(a.Session.Dir, "scratchpad")
+	wantRelativePath := filepath.ToSlash(filepath.Join(".juex", "sessions", a.Session.ID, "scratchpad"))
+	for _, want := range []string{"## Session Scratchpad", wantPath, wantRelativePath, "write_begin", "not automatically added to context"} {
+		if !strings.Contains(provider.systems[0], want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, provider.systems[0])
+		}
+	}
+	if _, err := a.Engine.Tools.Call(context.Background(), "write_begin", map[string]any{
+		"path": filepath.ToSlash(filepath.Join(wantRelativePath, "long.md")),
+	}); err != nil {
+		t.Fatalf("prompted scratchpad write_begin path failed: %v", err)
+	}
+}
+
 func TestAppResumeRestoresActiveChunkedWriteLifecycle(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{

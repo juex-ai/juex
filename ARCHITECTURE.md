@@ -691,6 +691,12 @@ conversation continues, then records `transcript.repaired` evidence in
 `llm.responded` events and exposed through session `Info`, not through
 individual messages.
 
+Every persisted session also owns a `scratchpad/` directory. Eager sessions
+create it with the transcript files; lazy sessions create it on the first
+persistent append; loading a persisted session ensures it exists. The session
+package owns the canonical path and deletion remains atomic at the session
+directory boundary.
+
 `internal/observability` subscribes to the in-process event bus and writes
 derived session-local artifacts: `logs/juex.log`, `logs/debug.log`,
 `trace.jsonl`, `spans.jsonl`, and `tools.jsonl`. These files are diagnostic
@@ -724,8 +730,10 @@ startup removes that stale lock and retries the atomic acquire.
 
 New web sessions are lazy for transcript files: `POST /api/sessions` allocates
 an in-memory primary session, records it as active, and only creates
-`conversation.jsonl` when the first message is appended. The CLI keeps eager
-persistence for `run` and `repl`.
+`conversation.jsonl` and `scratchpad/` when the first message is appended. The
+session lock may create the parent directory earlier, but reading the scratchpad
+API does not persist either resource. The CLI keeps eager persistence for `run`
+and `repl`.
 
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
@@ -977,6 +985,7 @@ Routes:
 | DELETE | `/api/sessions/<id>` | delete session and remove it from history |
 | POST | `/api/sessions/<id>/activate` | make a primary session active |
 | GET | `/api/sessions/<id>/context` | active provider context for one session |
+| GET | `/api/sessions/<id>/scratchpad` | scratchpad-only file tree for one active or persisted session |
 | POST | `/api/sessions/<id>/compact` | append a manual compact summary marker |
 | POST | `/api/sessions/<id>/attachments` | validate and store one session-scoped image upload |
 | POST | `/api/sessions/<id>/turns` | start a text, image, or mixed-content turn |
@@ -1311,6 +1320,15 @@ the sidecar, so Notes survive compaction without being copied into
 session UI renders the Markdown plus progress derived from `- [ ]` and `- [x]`
 task items.
 
+The session scratchpad is the larger complement to Notes. A named prompt section
+provides its absolute path and asks the model to keep long drafts and
+intermediate files there, retrieve them explicitly with `read` or `grep`, and
+save important conclusions before compaction. When the directory is inside the
+workspace, the section also provides a relative path for the chunked-write
+tools, which intentionally reject absolute paths. Scratchpad bytes are never
+recited or automatically projected into provider context. The model manages
+them with existing file tools, so no parallel scratchpad tool protocol exists.
+
 The separate `goal_state.json` sidecar carries model-owned operational goal
 state instead of advisory context. It is updated through `create_goal` and
 `update_goal`, appears in session status surfaces, and records
@@ -1385,6 +1403,7 @@ Resources split between user-global and work-local:
         ├── conversation.jsonl
         ├── events.jsonl
         ├── notes.md             # model-owned Markdown recited after Goal on every provider request
+        ├── scratchpad/          # model-managed long working files, read explicitly when needed
         ├── goal_state.json      # model-owned goal description, verification, status, and continuation count
         ├── trace.jsonl          # structured event trace derived from the bus
         ├── spans.jsonl          # start/end/error/instant spans by turn

@@ -225,6 +225,42 @@ func TestBuilder_RuntimeSectionsInsertedBeforeOperatingContext(t *testing.T) {
 	}
 }
 
+func TestBuilder_SessionScratchpadSection(t *testing.T) {
+	work := t.TempDir()
+	dir := filepath.Join(work, ".juex", "sessions", "session-1", "scratchpad")
+	b := &Builder{
+		AgentsMDDirs:  []string{t.TempDir()},
+		ScratchpadDir: dir,
+		WorkDir:       work,
+		Now:           func() time.Time { return time.Date(2026, 5, 1, 12, 30, 45, 0, time.UTC) },
+	}
+
+	sections := b.Sections()
+	if len(sections) != 2 {
+		t.Fatalf("sections = %+v, want scratchpad and operating context", sections)
+	}
+	got := sections[0]
+	if got.Key != "session_scratchpad" || got.Label != "Session Scratchpad" || got.Source != "runtime" || got.Path != dir {
+		t.Fatalf("scratchpad section = %+v", got)
+	}
+	for _, want := range []string{
+		"## Session Scratchpad",
+		dir,
+		"workspace-relative path for `write_begin`: .juex/sessions/session-1/scratchpad",
+		"not automatically added to context",
+		"use `read` or `grep`",
+		"Notes",
+		"before compaction",
+	} {
+		if !strings.Contains(got.Text, want) {
+			t.Errorf("scratchpad section missing %q:\n%s", want, got.Text)
+		}
+	}
+	if sections[1].Key != "operating_context" {
+		t.Fatalf("section[1] = %+v, want operating context", sections[1])
+	}
+}
+
 func TestBuilder_OperatingContextHasCwdOSAndTime(t *testing.T) {
 	b := &Builder{
 		AgentsMDDirs: []string{t.TempDir()},

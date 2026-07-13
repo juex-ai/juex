@@ -183,6 +183,15 @@ export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {
   return jsonOrThrow(await fetch(`${BASE}/api/files/tree`, { signal }));
 }
 
+export async function getSessionScratchpad(
+  id: string,
+  signal?: AbortSignal,
+): Promise<FileNode> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/scratchpad`, { signal }),
+  );
+}
+
 export async function getFileContent(
   path: string,
   signal?: AbortSignal,

@@ -58,6 +58,21 @@ type Options struct {
 	RepairTranscript bool
 }
 
+const scratchpadDirectory = "scratchpad"
+
+// ScratchpadDir returns the session-local directory for long working material.
+func ScratchpadDir(sessionDir string) string {
+	return filepath.Join(sessionDir, scratchpadDirectory)
+}
+
+func (s *Session) ScratchpadDir() string {
+	return ScratchpadDir(s.Dir)
+}
+
+func ensureScratchpadDir(sessionDir string) error {
+	return os.MkdirAll(ScratchpadDir(sessionDir), 0o755)
+}
+
 // New creates a new session under rootDir. rootDir is created if missing.
 func New(rootDir string) (*Session, error) {
 	return NewWithOptions(rootDir, Options{})
@@ -80,6 +95,9 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 		}, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := ensureScratchpadDir(dir); err != nil {
 		return nil, err
 	}
 	if err := saveMetadata(dir, metadata{Alias: opts.Alias, Kind: kind}); err != nil {
@@ -231,6 +249,9 @@ func LoadWithOptions(dir string, opts Options) (*Session, error) {
 			return nil, err
 		}
 	}
+	if err := ensureScratchpadDir(dir); err != nil {
+		return nil, err
+	}
 	convFD, err := os.OpenFile(convPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
@@ -329,6 +350,9 @@ func (s *Session) ensureFilesLocked() error {
 		return nil
 	}
 	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return err
+	}
+	if err := ensureScratchpadDir(s.Dir); err != nil {
 		return err
 	}
 	if err := saveMetadata(s.Dir, metadata{Alias: s.Alias, Kind: s.Kind}); err != nil {

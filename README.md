@@ -126,6 +126,7 @@ Juex keeps runtime state in the current work directory:
     ├── events.jsonl
     ├── pending_input.jsonl
     ├── notes.md
+    ├── scratchpad/
     ├── goal_state.json
     ├── trace.jsonl
     ├── spans.jsonl
@@ -279,6 +280,16 @@ request. Notes are limited to 2048 Unicode characters, survive compaction, and
 may use Markdown task items (`- [ ]` and `- [x]`) for visible progress. Juex
 does not infer or mirror runtime facts into notes, and it never reads or
 migrates legacy `working_state.json` files.
+
+Each persisted session also has a `scratchpad/` directory for long drafts,
+intermediate files, and working material that exceeds the Notes budget. The
+system prompt provides its absolute path, and the model uses the existing
+`read`, `write`, `edit`, and `grep` tools to manage it. Scratchpad contents are
+not automatically added to provider context; the model reads files back when
+needed. The prompt also provides a workspace-relative path for long generated
+files written through `write_begin`/`write_chunk`/`write_commit`. The session
+page can browse this directory without exposing the rest of `.juex`, and
+deleting the session removes the scratchpad with it.
 
 Juex also keeps a session-local `goal_state.json` for the model-owned current
 goal. The active contract is intentionally small: `description`,

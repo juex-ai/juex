@@ -242,6 +242,13 @@ control. The composer footer shows transient composer feedback, latest request
 context total, and current conversation token total. Active primary sessions
 support image paste, drag/drop, and picker upload in the composer, with a
 bounded thumbnail strip before sending.
+
+Both writable and read-only session controls expose an icon-only folder action
+for the session scratchpad. It opens a right-side `Sheet` containing the reused
+file tree, refresh and empty states, and existing text/image preview behavior.
+The browser is scoped to that session's scratchpad; the global Workspace tree
+continues to hide `.juex` runtime state.
+
 When an accepted image turn targets a model without vision capability, the turn
 response supplies a non-blocking warning. The session controller renders its
 message and configuration suggestion through the existing transient composer
@@ -581,6 +588,9 @@ by model-owned Notes. Notes render as Markdown; when they contain task items,
 the tooltip shows completed/total counts and a thin progress indicator. The
 `notes.updated` event updates this state without waiting for a transcript
 refresh.
+The adjacent scratchpad folder action is a separate command rather than another
+state badge. It fetches `/api/sessions/<id>/scratchpad` only while its Sheet is
+open and delegates file preview to the existing workspace-bounded endpoints.
 
 `src/lib/session-read-controller.ts` owns the session-detail effect interpreter:
 route guards, snapshot/context refresh, EventSource dispatch, turn polling,

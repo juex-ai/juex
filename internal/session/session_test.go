@@ -612,6 +612,64 @@ func messageIDsForTest(msgs []llm.Message) []string {
 	return out
 }
 
+func TestSession_ScratchpadLifecycle(t *testing.T) {
+	t.Run("eager create", func(t *testing.T) {
+		s, err := New(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+
+		if got, want := s.ScratchpadDir(), filepath.Join(s.Dir, "scratchpad"); got != want {
+			t.Fatalf("scratchpad dir = %q, want %q", got, want)
+		}
+		if info, err := os.Stat(s.ScratchpadDir()); err != nil || !info.IsDir() {
+			t.Fatalf("scratchpad stat = %+v, %v", info, err)
+		}
+	})
+
+	t.Run("lazy first append", func(t *testing.T) {
+		s, err := NewWithOptions(t.TempDir(), Options{Lazy: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+
+		if _, err := os.Stat(s.Dir); !os.IsNotExist(err) {
+			t.Fatalf("lazy session dir stat err = %v, want not exist", err)
+		}
+		if err := s.Append(llm.TextMessage(llm.RoleUser, "persist")); err != nil {
+			t.Fatal(err)
+		}
+		if info, err := os.Stat(s.ScratchpadDir()); err != nil || !info.IsDir() {
+			t.Fatalf("scratchpad after append = %+v, %v", info, err)
+		}
+	})
+
+	t.Run("load existing", func(t *testing.T) {
+		s, err := New(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := s.Dir
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(filepath.Join(dir, "scratchpad")); err != nil {
+			t.Fatal(err)
+		}
+
+		loaded, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer loaded.Close()
+		if info, err := os.Stat(loaded.ScratchpadDir()); err != nil || !info.IsDir() {
+			t.Fatalf("loaded scratchpad = %+v, %v", info, err)
+		}
+	})
+}
+
 // time2025OrLater is a tiny helper that just returns "" — kept here so the
 // HasPrefix check above always falls through to the basename comparison while
 // staying explicit about intent.
