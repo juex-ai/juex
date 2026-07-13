@@ -2127,6 +2127,16 @@ func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
 	if result.IsError || !strings.Contains(result.Content, "inspection complete") || !strings.Contains(result.Content, "compare against approved baseline") {
 		t.Fatalf("tool result = %+v", result)
 	}
+	runner := eng.Hooks.(*fakeHookRunner)
+	var postRequest hooks.Request
+	for _, request := range runner.requests {
+		if request.EventName == hooks.EventPostToolUse {
+			postRequest = request
+		}
+	}
+	if postRequest.ToolResult != "inspection complete" {
+		t.Fatalf("PostToolUse tool_result = %q, want raw tool output", postRequest.ToolResult)
+	}
 }
 
 func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {

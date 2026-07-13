@@ -588,8 +588,6 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 			block.ChunkedWrite = &event
 		}
 	}
-	appendToolHookContext(&block, preResults, false)
-
 	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
 	postReq.ToolName = call.ToolName
 	postReq.ToolInput = call.Input
@@ -601,6 +599,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		block.IsError = true
 		toolErr = postErr
 	}
+	appendToolHookContext(&block, preResults, false)
 	appendToolHookContext(&block, postResults, true)
 	if !block.IsError {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
