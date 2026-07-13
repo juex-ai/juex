@@ -130,23 +130,29 @@ func TestGoalStateStoreIgnoresRemovedLegacyFieldsWithoutMigrating(t *testing.T) 
 	}
 }
 
-func TestGoalStateStoreDoesNotRecoverLegacyOnlyGoal(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "goal_state.json"), []byte(`{
+func TestGoalStateStoreDoesNotResurrectLegacyStatusWithDescription(t *testing.T) {
+	for _, status := range []string{"complete", "blocked"} {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			data := `{
   "version": 1,
   "objective": "legacy objective",
+  "description": "legacy description",
   "acceptance_criteria": ["legacy criterion"],
-  "status": "complete",
+  "status": "` + status + `",
   "budget": {"continuations_used": 2}
-}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := NewGoalStateStore(dir, GoalStateOptions{}).StatusSnapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot != nil {
-		t.Fatalf("legacy-only goal should be absent: %+v", snapshot)
+			}`
+			if err := os.WriteFile(filepath.Join(dir, "goal_state.json"), []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := NewGoalStateStore(dir, GoalStateOptions{}).StatusSnapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot != nil {
+				t.Fatalf("goal with legacy status should be absent: %+v", snapshot)
+			}
+		})
 	}
 }
 

@@ -314,7 +314,8 @@ func normalizeGoalState(state GoalState) GoalState {
 	}
 	if state.Status != "" {
 		if err := validateGoalStatus(state.Status); err != nil {
-			state.Status = ""
+			// An explicit unknown status identifies an incompatible contract.
+			return GoalState{Version: 1}
 		}
 	}
 	if state.present() {
