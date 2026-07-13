@@ -1254,6 +1254,67 @@ func TestCompactPreHookStdoutExtendsSummaryInstructions(t *testing.T) {
 	}
 }
 
+func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.T) {
+	prov := &scriptedCompactionProvider{
+		name: "summary",
+		attempts: []scriptedCompactionAttempt{{
+			response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+		}},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	eng.Compaction.Instructions = "Preserve configured release criteria."
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := eng.GoalState.CreateWithContract(GoalStateCreate{
+		Description: "Ship authoritative compaction state",
+		Acceptance:  "The persisted goal and notes remain exact",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	eng.Notes = NewNotesStore(eng.Session.Dir)
+	if _, err := eng.Notes.Update("- [x] map the runtime\n- [ ] run the live compaction evaluation"); err != nil {
+		t.Fatal(err)
+	}
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPreCompact: {{Stdout: "Preserve hook deployment evidence."}},
+	}}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.CompactWithInstructions(context.Background(), "compact-turn", "system", "manual", false, "Focus on the requested verification command."); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.systems) != 1 || len(prov.histories) != 1 || len(prov.histories[0]) != 1 {
+		t.Fatalf("summary requests = systems:%d histories:%d", len(prov.systems), len(prov.histories))
+	}
+	system := prov.systems[0]
+	configured := strings.Index(system, "Preserve configured release criteria.")
+	requested := strings.Index(system, "Focus on the requested verification command.")
+	hook := strings.Index(system, "Hook compact instructions (fake):\nPreserve hook deployment evidence.")
+	if configured < 0 || requested <= configured || hook <= requested {
+		t.Fatalf("compact instruction order is not config -> request -> hook:\n%s", system)
+	}
+	body := prov.histories[0][0].FirstText()
+	for _, want := range []string{
+		"<authoritative-session-state>",
+		"description: Ship authoritative compaction state",
+		"acceptance: The persisted goal and notes remain exact",
+		"status: in_progress",
+		"- [x] map the runtime",
+		"- [ ] run the live compaction evaluation",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary request missing authoritative state %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
@@ -1502,6 +1563,107 @@ func TestCompactRetriesReasoningOnlySummaryWithLargerBudget(t *testing.T) {
 	usage := eng.Session.TokenUsageSnapshot()
 	if usage != (llm.Usage{InputTokens: 21, OutputTokens: 5}) {
 		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
+	}
+}
+
+func TestCompactRetriesPartialSummaryStoppedAtMaxTokens(t *testing.T) {
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{
+			{
+				response: llm.Response{
+					Message:    llm.TextMessage(llm.RoleAssistant, "Goal\n- partial summary"),
+					StopReason: llm.StopMaxTokens,
+					Usage:      llm.Usage{InputTokens: 10, OutputTokens: 1000},
+				},
+			},
+			{
+				response: llm.Response{
+					Message:    llm.TextMessage(llm.RoleAssistant, "complete summary"),
+					StopReason: llm.StopEndTurn,
+					Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
+				},
+			},
+		},
+	}
+	eng, bus := newEngine(t, provider, false)
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 5000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 1000
+	var retry ContextCompactSummaryRetryPayload
+	bus.Subscribe("context.compact.summary_retry", func(e events.Event) {
+		retry = e.Payload.(ContextCompactSummaryRetryPayload)
+	})
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SummaryChars != len("complete summary") || provider.calls != 2 {
+		t.Fatalf("result/calls = %+v, %d", result, provider.calls)
+	}
+	if retry.Reason != "max_tokens" || retry.StopReason != llm.StopMaxTokens || retry.ReasoningOnly {
+		t.Fatalf("retry payload = %+v", retry)
+	}
+	if len(provider.options) != 2 || provider.options[0].MaxOutputTokens != 1000 || provider.options[1].MaxOutputTokens != 2000 {
+		t.Fatalf("max output tokens = %+v, want [1000 2000]", compactionOptionBudgets(provider.options))
+	}
+	if usage := eng.Session.TokenUsageSnapshot(); usage != (llm.Usage{InputTokens: 21, OutputTokens: 1003}) {
+		t.Fatalf("token usage = %+v, want aggregate retry usage", usage)
+	}
+}
+
+func TestCompactSummaryRetryReusesAuthoritativeStateSnapshot(t *testing.T) {
+	var eng *Engine
+	provider := &scriptedCompactionProvider{
+		name: "thinking:model",
+		attempts: []scriptedCompactionAttempt{
+			{
+				response: llm.Response{Message: llm.Message{Role: llm.RoleAssistant}},
+				beforeReturn: func() {
+					updated := "Mutated after the first summary request"
+					if _, err := eng.GoalState.Update(GoalStateUpdate{Description: &updated}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := eng.Notes.Update("- [ ] mutated after first request"); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered summary")}},
+		},
+	}
+	eng, _ = newEngine(t, provider, false)
+	configureCompactionRetryTest(t, eng, 30, 2000)
+	eng.ContextWindow = 5000
+	eng.Compaction.ReserveTokens = 1000
+	eng.Compaction.SummaryMaxTokens = 1000
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if _, err := eng.GoalState.Create("Original compact goal", "Original acceptance"); err != nil {
+		t.Fatal(err)
+	}
+	eng.Notes = NewNotesStore(eng.Session.Dir)
+	if _, err := eng.Notes.Update("- [ ] original compact note"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.histories) != 2 {
+		t.Fatalf("summary requests = %d, want 2", len(provider.histories))
+	}
+	for i, history := range provider.histories {
+		body := history[0].FirstText()
+		for _, want := range []string{"Original compact goal", "Original acceptance", "original compact note"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("request %d missing snapshot value %q:\n%s", i+1, want, body)
+			}
+		}
+		if strings.Contains(body, "Mutated after") || strings.Contains(body, "mutated after") {
+			t.Fatalf("request %d used state mutated during retry:\n%s", i+1, body)
+		}
 	}
 }
 

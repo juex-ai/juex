@@ -24,3 +24,17 @@ func TestEffectiveCompactionPolicy_PreservesExplicitDisabledZeroPolicy(t *testin
 		t.Fatalf("policy defaults were not filled: %+v", p)
 	}
 }
+
+func TestEffectiveCompactionPolicy_PreservesInstructionsWithZeroValues(t *testing.T) {
+	policy := EffectivePolicy(CompactionPolicy{
+		Enabled:      true,
+		Instructions: "Preserve exact release evidence.",
+	}, 6400, 200000)
+
+	if policy.Instructions != "Preserve exact release evidence." {
+		t.Fatalf("instructions = %q", policy.Instructions)
+	}
+	if policy.ReserveTokens <= 0 || policy.KeepRecentTokens <= 0 {
+		t.Fatalf("defaults were not applied: %+v", policy)
+	}
+}

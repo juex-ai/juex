@@ -229,6 +229,48 @@ func TestEvalDefaultReportDirsUseTmpRoot(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    session = work / '.juex' / 'sessions' / 'session-1'",
+		"    session.mkdir(parents=True)",
+		"    (session / 'goal_state.json').write_text(json.dumps(compaction.AUTHORITATIVE_GOAL), encoding='utf-8')",
+		"    (session / 'notes.md').write_text(compaction.AUTHORITATIVE_NOTES, encoding='utf-8')",
+		"    goal = compaction.AUTHORITATIVE_GOAL",
+		"    summary = '\\n'.join([",
+		"        'Goal',",
+		"        f\"description: {goal['description']}\",",
+		"        f\"acceptance: {goal['acceptance']}\",",
+		"        f\"status: {goal['status']}\",",
+		"        'Critical Context', 'facts', 'Constraints & Preferences', 'none',",
+		"        'Progress', 'mapped', 'Key Decisions', 'preserve state', 'Next Steps',",
+		"        compaction.AUTHORITATIVE_OPEN_NOTE.rstrip('.'), 'Relevant Files', 'notes.md', 'Tool Failures', 'none',",
+		"    ])",
+		"    message = {'kind': 'compact', 'blocks': [{'type': 'text', 'text': summary}]}",
+		"    (session / 'conversation.jsonl').write_text(json.dumps(message) + '\\n', encoding='utf-8')",
+		"    answer = compaction.AUTHORITATIVE_COMPLETED_NOTE.rstrip('.') + '\\n' + compaction.AUTHORITATIVE_OPEN_NOTE.rstrip('.')",
+		"    result = compaction.score_authoritative_state(work, answer)",
+		"    assert result['score'] == 30, result",
+		"    assert all(result['checks'].values()), result",
+		"    bad = compaction.score_authoritative_state(work, answer.replace('scorecard', 'report'))",
+		"    assert not bad['checks']['notes_recited_after_compaction'], bad",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestEvalWriteSelectedConfigUsesColonModelRef(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")

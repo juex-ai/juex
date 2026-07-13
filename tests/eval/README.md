@@ -162,7 +162,9 @@ metrics, and report output shape. This is the project-level quality evaluation
 for long-running agent context retention. Normal e2e tests cover deterministic
 runtime behavior; the live compaction evaluation rotates one
 `compaction_eval_models` ref by default so routine validation stays cheap while
-covering the full list over time.
+covering the full list over time. The scorecard also cross-checks compacted
+`Goal` content against `goal_state.json`, verifies unfinished Notes in `Next
+Steps`, and proves Notes remain unchanged and are recited after compaction.
 
 ## Development Records
 

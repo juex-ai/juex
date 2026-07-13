@@ -25,24 +25,26 @@ func (e *Engine) generateCompactionSummaryLocked(
 	baseSystem string,
 	previous llm.Message,
 	input []llm.Message,
+	state compactionSummaryState,
 	policy compactionPolicy,
 	instructions string,
 ) (compactionSummaryGeneration, error) {
 	provider := e.compactionSummaryProviderLocked()
 	maxOutputTokens := policy.SummaryMaxTokens
-	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, policy, instructions)
+	summarySystem, summaryHistory := buildCompactionSummaryRequest(baseSystem, previous, input, state, policy, instructions)
 	resp, err := e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens)
 	var usage llm.Usage
 	if err == nil {
 		usage.Add(resp.Usage)
-		if summary := compactionSummaryText(resp); summary != "" {
+		if summary, ok := completeCompactionSummaryText(resp); ok {
 			return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage}, nil
 		}
 
-		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, policy, instructions)
+		retryReason := compactionSummaryRetryReason(resp)
+		retryMaxOutputTokens := e.compactionSummaryRetryMaxOutputTokens(baseSystem, previous, input, state, policy, instructions)
 		e.emit(events.Event{Type: "context.compact.summary_retry", TurnID: turnID, Payload: ContextCompactSummaryRetryPayload{
 			Attempt:                 2,
-			Reason:                  "empty_summary",
+			Reason:                  retryReason,
 			StopReason:              resp.StopReason,
 			ReasoningOnly:           compactionResponseReasoningOnly(resp.Message),
 			PreviousMaxOutputTokens: maxOutputTokens,
@@ -50,12 +52,12 @@ func (e *Engine) generateCompactionSummaryLocked(
 		}})
 		retryPolicy := policy
 		retryPolicy.SummaryMaxTokens = retryMaxOutputTokens
-		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, retryPolicy, instructions)
+		summarySystem, summaryHistory = buildCompactionSummaryRequest(baseSystem, previous, input, state, retryPolicy, instructions)
 		maxOutputTokens = retryMaxOutputTokens
 		resp, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens)
 		if err == nil {
 			usage.Add(resp.Usage)
-			if summary := compactionSummaryText(resp); summary != "" {
+			if summary, ok := completeCompactionSummaryText(resp); ok {
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage}, nil
 			}
 		}
@@ -74,7 +76,7 @@ func (e *Engine) generateCompactionSummaryLocked(
 		resp, err = e.completeCompactionSummary(ctx, turnID, provider, summarySystem, summaryHistory, maxOutputTokens)
 		if err == nil {
 			usage.Add(resp.Usage)
-			if summary := compactionSummaryText(resp); summary != "" {
+			if summary, ok := completeCompactionSummaryText(resp); ok {
 				return compactionSummaryGeneration{Response: resp, Provider: provider, Summary: summary, Usage: usage}, nil
 			}
 		}
@@ -82,6 +84,9 @@ func (e *Engine) generateCompactionSummaryLocked(
 
 	if err != nil {
 		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage}, err
+	}
+	if resp.StopReason == llm.StopMaxTokens && compactionSummaryText(resp) != "" {
+		return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage}, fmt.Errorf("truncated summary (stop_reason=%s)", resp.StopReason)
 	}
 	return compactionSummaryGeneration{Response: resp, Provider: provider, Usage: usage}, errEmptyCompactionSummary
 }
@@ -106,6 +111,18 @@ func compactionSummaryText(resp llm.Response) string {
 	return strings.TrimSpace(responseText(resp.Message))
 }
 
+func completeCompactionSummaryText(resp llm.Response) (string, bool) {
+	summary := compactionSummaryText(resp)
+	return summary, summary != "" && resp.StopReason != llm.StopMaxTokens
+}
+
+func compactionSummaryRetryReason(resp llm.Response) string {
+	if compactionSummaryText(resp) != "" && resp.StopReason == llm.StopMaxTokens {
+		return "max_tokens"
+	}
+	return "empty_summary"
+}
+
 func compactionResponseReasoningOnly(msg llm.Message) bool {
 	hasReasoning := false
 	for _, block := range msg.Blocks {
@@ -127,6 +144,9 @@ func compactionSummaryFailure(resp llm.Response, err error) string {
 	if err != nil {
 		return err.Error()
 	}
+	if resp.StopReason == llm.StopMaxTokens && compactionSummaryText(resp) != "" {
+		return fmt.Sprintf("truncated summary (stop_reason=%s)", resp.StopReason)
+	}
 	return fmt.Sprintf("empty summary (stop_reason=%s, reasoning_only=%t)", resp.StopReason, compactionResponseReasoningOnly(resp.Message))
 }
 
@@ -145,6 +165,7 @@ func (e *Engine) compactionSummaryRetryMaxOutputTokens(
 	baseSystem string,
 	previous llm.Message,
 	input []llm.Message,
+	state compactionSummaryState,
 	policy compactionPolicy,
 	instructions string,
 ) int {
@@ -153,8 +174,8 @@ func (e *Engine) compactionSummaryRetryMaxOutputTokens(
 		return desired
 	}
 
-	minimumSystem, _ := buildCompactionSummaryRequest(baseSystem, previous, nil, policy, instructions)
-	minimumBody := buildCompactionSummaryBody(previous, nil, policy.ToolResultMaxChars, len(input))
+	minimumSystem, _ := buildCompactionSummaryRequest(baseSystem, previous, nil, state, policy, instructions)
+	minimumBody := buildCompactionSummaryBody(previous, nil, state, policy.ToolResultMaxChars, len(input))
 	minimumHistory := []llm.Message{llm.TextMessage(llm.RoleUser, minimumBody)}
 	maxOutputTokens := policy.TriggerTokens - estimateContextTokens(minimumSystem, nil, minimumHistory)
 	if maxOutputTokens < 1 {

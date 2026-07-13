@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
@@ -76,6 +77,16 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}
+	summaryState, err := e.compactionSummaryStateLocked()
+	if err != nil {
+		compactErr := fmt.Errorf("compact context: %w", err)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
 	preReq := e.newHookRequest(hooks.EventPreCompact, turnID)
 	preReq.CompactReason = reason
 	preReq.CompactAuto = auto
@@ -89,6 +100,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 		}})
 		return CompactionResult{}, compactErr
 	}
+	instructions = mergeCompactInstructions(policy.Instructions, instructions)
 	instructions = appendCompactHookInstructions(instructions, preResults)
 
 	contextWindow := e.ContextWindow
@@ -107,7 +119,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 		TailTurns:        policy.TailTurns,
 	}})
 
-	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, policy, instructions)
+	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, summaryState, policy, instructions)
 	if err != nil {
 		e.Session.RecordResponseUsage(generation.Usage, nil)
 		compactErr := fmt.Errorf("compact context: %w", err)
@@ -207,6 +219,16 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 		KeepRecentTokens:   policy.KeepRecentTokens,
 	}})
 	return result, nil
+}
+
+func mergeCompactInstructions(parts ...string) string {
+	merged := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			merged = append(merged, part)
+		}
+	}
+	return strings.Join(merged, "\n\n")
 }
 
 func compactMessageText(summary string) string {

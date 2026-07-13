@@ -15,7 +15,7 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 	input := []llm.Message{
 		{ID: "tool-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "tu1", Content: strings.Repeat("x", 50)}}},
 	}
-	sys, hist := BuildCompactionSummaryRequest("base", prev, input, Policy{ToolResultMaxChars: 10}, "")
+	sys, hist := BuildCompactionSummaryRequest("base", prev, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
 	if !strings.Contains(sys, "Goal") || !strings.Contains(sys, "Tool Failures") {
 		t.Fatalf("system prompt missing required headings: %s", sys)
 	}
@@ -32,7 +32,7 @@ func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
-	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, Policy{ToolResultMaxChars: 10}, "")
+	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
 	if !strings.Contains(body, "text: tttttttttt ...(truncated, total 50 bytes)") {
 		t.Fatalf("text was not truncated:\n%s", body)
@@ -66,7 +66,7 @@ func TestBuildCompactionSummaryRequest_OmitsRedactedReasoningContent(t *testing.
 		}}},
 	}
 
-	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, Policy{ToolResultMaxChars: 2000}, "")
+	_, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 2000}, "")
 	body := hist[0].FirstText()
 
 	if strings.Contains(body, encrypted) || strings.Contains(body, "enc_keep_metadata_only") {
@@ -94,7 +94,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		}, "\n")),
 	}
 
-	sys, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, Policy{ToolResultMaxChars: 400}, "")
+	sys, hist := BuildCompactionSummaryRequest("", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 400}, "")
 
 	if !strings.Contains(sys, "copy the actual values of labeled facts") {
 		t.Fatalf("system prompt does not require concrete facts:\n%s", sys)
@@ -138,7 +138,7 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 		SummaryMaxTokens:   100,
 	}
 
-	sys, hist := BuildCompactionSummaryRequest("base", llm.Message{}, input, policy, "")
+	sys, hist := BuildCompactionSummaryRequest("base", llm.Message{}, input, SummaryState{}, policy, "")
 
 	limit := policy.TriggerTokens - policy.SummaryMaxTokens
 	if got := EstimateContextTokens(sys, nil, hist); got > limit {
@@ -153,6 +153,51 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 	}
 	if !strings.Contains(body, "message-79") {
 		t.Fatalf("newest transcript should be retained when over budget:\n%s", body)
+	}
+}
+
+func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscriptIsOmitted(t *testing.T) {
+	state := SummaryState{
+		GoalContract: "description: Ship compaction fidelity\nacceptance: Goal and Notes survive compaction\nstatus: in_progress",
+		Notes:        "- [x] map the runtime\n- [ ] run the live compaction evaluation",
+	}
+	var input []llm.Message
+	for i := 0; i < 12; i++ {
+		msg := llm.TextMessage(llm.RoleUser, fmt.Sprintf("message-%02d %s", i, strings.Repeat("x", 500)))
+		msg.ID = fmt.Sprintf("msg-%02d", i)
+		input = append(input, msg)
+	}
+	policy := Policy{
+		ToolResultMaxChars: 500,
+		TriggerTokens:      800,
+		SummaryMaxTokens:   100,
+	}
+
+	sys, hist := BuildCompactionSummaryRequest("base", llm.Message{}, input, state, policy, "")
+
+	if !strings.Contains(sys, "Authoritative session state is provided below") {
+		t.Fatalf("system prompt missing authoritative-state instruction:\n%s", sys)
+	}
+	if !strings.Contains(sys, "copy every unfinished - [ ] checklist item's text verbatim into Next Steps and do not omit one") {
+		t.Fatalf("system prompt does not require exact unfinished Notes retention:\n%s", sys)
+	}
+	body := hist[0].FirstText()
+	for _, want := range []string{
+		"<authoritative-session-state>",
+		state.GoalContract,
+		state.Notes,
+		"</authoritative-session-state>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary body missing authoritative state %q:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(body, "messages omitted") || strings.Contains(body, "message-00") {
+		t.Fatalf("transcript was not omitted before authoritative state:\n%s", body)
+	}
+	limit := policy.TriggerTokens - policy.SummaryMaxTokens
+	if got := EstimateContextTokens(sys, nil, hist); got > limit {
+		t.Fatalf("summary request tokens = %d, want <= %d", got, limit)
 	}
 }
 
@@ -177,13 +222,13 @@ func TestFitCompactionSummaryInputKeepsLongestFittingSuffix(t *testing.T) {
 	policy := Policy{ToolResultMaxChars: 500}
 	wantStart := len(input) - 3
 	limit := EstimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, input[wantStart:], policy.ToolResultMaxChars, wantStart)),
+		llm.TextMessage(llm.RoleUser, BuildCompactionSummaryBody(llm.Message{}, input[wantStart:], SummaryState{}, policy.ToolResultMaxChars, wantStart)),
 	})
-	if CompactionSummaryFits(sys, llm.Message{}, input[wantStart-1:], policy.ToolResultMaxChars, wantStart-1, limit) {
+	if CompactionSummaryFits(sys, llm.Message{}, input[wantStart-1:], SummaryState{}, policy.ToolResultMaxChars, wantStart-1, limit) {
 		t.Fatal("test setup invalid: four-message suffix should not fit")
 	}
 
-	selected, omitted, _ := FitCompactionSummaryInput(sys, llm.Message{}, input, policy, limit)
+	selected, omitted, _ := FitCompactionSummaryInput(sys, llm.Message{}, input, SummaryState{}, policy, limit)
 
 	if omitted != wantStart {
 		t.Fatalf("omitted = %d, want %d", omitted, wantStart)
@@ -198,7 +243,7 @@ func TestFitCompactionSummaryInputKeepsLongestFittingSuffix(t *testing.T) {
 
 func TestFitCompactionSummaryInputFallbackRespectsSmallCharLimit(t *testing.T) {
 	input := []llm.Message{llm.TextMessage(llm.RoleUser, strings.Repeat("x", 1000))}
-	_, omitted, maxChars := FitCompactionSummaryInput("system", llm.Message{}, input, Policy{ToolResultMaxChars: 64}, 1)
+	_, omitted, maxChars := FitCompactionSummaryInput("system", llm.Message{}, input, SummaryState{}, Policy{ToolResultMaxChars: 64}, 1)
 
 	if omitted != 1 {
 		t.Fatalf("omitted = %d, want 1", omitted)
