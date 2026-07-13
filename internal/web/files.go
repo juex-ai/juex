@@ -127,19 +127,9 @@ func (s *Server) handleSessionScratchpad(w http.ResponseWriter, r *http.Request,
 	if root == "" {
 		root = "."
 	}
-	root, err := filepath.Abs(root)
+	root, relPath, err := resolveScratchpadTreePath(root, dir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	dir, err = filepath.Abs(dir)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
-		return
-	}
-	relPath, err := filepath.Rel(root, dir)
-	if err != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
-		writeErr(w, http.StatusInternalServerError, "general_error", "scratchpad is outside workspace")
 		return
 	}
 
@@ -157,6 +147,38 @@ func (s *Server) handleSessionScratchpad(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	writeJSON(w, http.StatusOK, tree)
+}
+
+func resolveScratchpadTreePath(root, dir string) (string, string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return "", "", err
+	}
+	relPath, err := relativeInside(root, dir)
+	if err != nil {
+		return "", "", errors.New("scratchpad is outside workspace")
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return root, relPath, nil
+	}
+	root = resolvedRoot
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		// Lazy sessions intentionally have no directory yet. Their lexical path
+		// remains valid relative to the resolved workspace root.
+		return root, relPath, nil
+	}
+	relPath, err = relativeInside(root, resolvedDir)
+	if err != nil {
+		return "", "", errors.New("scratchpad is outside workspace")
+	}
+	return root, relPath, nil
 }
 
 func (s *Server) sessionScratchpadDir(id string) (string, bool) {

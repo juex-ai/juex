@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/config"
 )
 
 func TestFilesTreeReturnsSortedWorkDir(t *testing.T) {
@@ -177,6 +178,90 @@ func TestSessionScratchpadTreeRejectsUnknownSession(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
+func TestSessionScratchpadTreeSupportsSymlinkedWorkspace(t *testing.T) {
+	realWork := t.TempDir()
+	linkedWork := filepath.Join(t.TempDir(), "work")
+	if err := os.Symlink(realWork, linkedWork); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Options{
+		Cfg: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    linkedWork,
+			Compaction: config.DefaultCompactionConfig(),
+		},
+		Provider: stubProvider{},
+	})
+	t.Cleanup(srv.Close)
+
+	id := "20260507T101010-linked"
+	seedSession(t, linkedWork, id,
+		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad", "draft.md"), "draft")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var tree FileNode
+	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad"))
+	if tree.Path != wantPath || len(tree.Children) != 1 || tree.Children[0].Name != "draft.md" {
+		t.Fatalf("tree = %+v, want path %q with draft.md", tree, wantPath)
+	}
+
+	as, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lazyResp, err := http.Get(ts.URL + "/api/sessions/" + as.app.Session.ID + "/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lazyResp.Body.Close()
+	if lazyResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(lazyResp.Body)
+		t.Fatalf("lazy status = %d body = %s", lazyResp.StatusCode, body)
+	}
+	if _, err := os.Stat(as.app.Session.ScratchpadDir()); !os.IsNotExist(err) {
+		t.Fatalf("scratchpad read created lazy directory: %v", err)
+	}
+}
+
+func TestSessionScratchpadTreeRejectsOutsideSymlink(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-linked-out"
+	seedSession(t, srv.opts.Cfg.WorkDir, id,
+		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad")); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
