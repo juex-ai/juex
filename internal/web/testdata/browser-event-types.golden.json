@@ -19,6 +19,7 @@
   "pending_input.dropped",
   "pending_input.rejected",
   "goal.updated",
+  "notes.updated",
   "observable.started",
   "observable.stopped",
   "observable.exited",

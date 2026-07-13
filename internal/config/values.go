@@ -215,7 +215,6 @@ type RuntimeLimits struct {
 	PendingInputTTL       time.Duration
 	ExternalEventTTL      time.Duration
 	ToolTimeout           time.Duration
-	WorkingStateEnabled   bool
 	ShowBuiltinHookTraces bool
 }
 
@@ -227,7 +226,6 @@ func (c Config) RuntimeLimits() RuntimeLimits {
 		PendingInputTTL:       c.PendingInputTTL,
 		ExternalEventTTL:      c.ExternalEventTTL,
 		ToolTimeout:           c.ToolTimeout,
-		WorkingStateEnabled:   !c.DisableWorkingState,
 		ShowBuiltinHookTraces: c.ShowBuiltinHookTraces,
 	}
 }

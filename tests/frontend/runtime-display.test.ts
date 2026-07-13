@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import type { NotesSnapshot } from "../../frontend/src/types.ts";
+
 import {
   formatRuntimeTokenCount,
+  notesCheckboxProgress,
   runtimeContextModelLabel,
   runtimeContextPercentLabel,
   runtimeContextWindowDetailLabel,
@@ -14,10 +17,6 @@ import {
   runtimeSessionStateBadgeLabel,
   runtimeSessionStateIsActive,
   runtimeTokenUsageDetailLabel,
-  runtimeWorkingStateBadgeLabel,
-  workingStatePresenceLabel,
-  workingStateRecordCount,
-  workingStateSectionCounts,
 } from "../../frontend/src/lib/runtime-display.ts";
 
 test("formatRuntimeTokenCount keeps sub-thousand counts exact", () => {
@@ -137,76 +136,40 @@ test("runtimeGoalContinuationLabel reads simplified continuation count", () => {
   assert.equal(runtimeGoalContinuationLabel({ status: "in_progress", continuation_count: 2 }), "2");
 });
 
-test("workingStatePresenceLabel describes active sidecar state", () => {
-  assert.equal(workingStatePresenceLabel(undefined), "no active session");
-  assert.equal(
-    workingStatePresenceLabel({ disabled: true, present: false, state: { version: 1 } }),
-    "disabled",
-  );
-  assert.equal(
-    workingStatePresenceLabel({ present: false, state: { version: 1 } }),
-    "empty",
-  );
-  assert.equal(
-    workingStatePresenceLabel({ present: true, state: { version: 1 } }),
-    "present",
-  );
-});
-
-test("workingStateSectionCounts summarizes sidecar records", () => {
-  const counts = workingStateSectionCounts({
-    present: true,
-    state: {
-      version: 1,
-      goal: { text: "ship it" },
-      hard_constraints: [{ text: "test first" }],
-      open_issues: [{ text: "missing e2e" }, { text: "missing docs" }],
-      tool_failures: [{ text: "exec_command failed" }],
-      active_processes: [{ text: "session 7 running" }],
-    },
+test("notesCheckboxProgress counts Markdown task items", () => {
+  assert.deepEqual(notesCheckboxProgress(undefined), {
+    completed: 0,
+    total: 0,
+    percent: 0,
   });
-  assert.equal(counts.find((item) => item.key === "goal")?.count, 1);
-  assert.equal(counts.find((item) => item.key === "hard_constraints")?.count, 1);
-  assert.equal(counts.find((item) => item.key === "open_issues")?.count, 2);
-  assert.equal(counts.find((item) => item.key === "tool_failures")?.count, 1);
-  assert.equal(counts.find((item) => item.key === "active_processes")?.count, 1);
-  assert.equal(counts.find((item) => item.key === "runtime_budget")?.count, 0);
-  assert.equal(counts.find((item) => item.key === "stale_checks")?.count, 0);
-  assert.equal(workingStateRecordCount({ present: true, state: countsState() }), 6);
-  assert.equal(
-    runtimeWorkingStateBadgeLabel({ present: true, state: countsState() }),
-    "state 6",
-  );
+  const progress = notesCheckboxProgress({
+    content: "- [x] inspect\n  - [X] implement\n- [ ] verify\nplain text",
+  });
+  assert.equal(progress.completed, 2);
+  assert.equal(progress.total, 3);
+  assert.ok(Math.abs(progress.percent - 200 / 3) < 1e-10);
+  assert.deepEqual(notesCheckboxProgress({} as NotesSnapshot), {
+    completed: 0,
+    total: 0,
+    percent: 0,
+  });
 });
 
 test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
   assert.equal(runtimeSessionStateBadgeLabel(), "state");
 });
 
-test("runtimeSessionStateIsActive merges goal and working-state presence", () => {
+test("runtimeSessionStateIsActive merges goal and notes presence", () => {
   assert.equal(runtimeSessionStateIsActive(undefined, undefined), false);
   assert.equal(runtimeSessionStateIsActive({ status: "in_progress" }, undefined), true);
   assert.equal(
-    runtimeSessionStateIsActive(undefined, { present: true, state: { version: 1 } }),
+    runtimeSessionStateIsActive(undefined, { content: "- [ ] verify" }),
     true,
   );
+  assert.equal(runtimeSessionStateIsActive(undefined, { content: "  " }), false);
+  assert.equal(runtimeSessionStateIsActive(undefined, {} as NotesSnapshot), false);
   assert.equal(
-    runtimeSessionStateIsActive(undefined, {
-      disabled: true,
-      present: false,
-      state: { version: 1 },
-    }),
+    runtimeSessionStateIsActive(undefined, { content: null } as unknown as NotesSnapshot),
     false,
   );
 });
-
-function countsState() {
-  return {
-    version: 1,
-    goal: { text: "ship it" },
-    hard_constraints: [{ text: "test first" }],
-    open_issues: [{ text: "missing e2e" }, { text: "missing docs" }],
-    tool_failures: [{ text: "exec_command failed" }],
-    active_processes: [{ text: "session 7 running" }],
-  };
-}

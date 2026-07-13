@@ -398,12 +398,22 @@ function projectSessionMetadataEvent(
   state: SessionReadState,
   event: BrowserEvent,
 ): SessionReadState {
-  if (event.type !== "goal.updated" || !state.data) return state;
+  if (!state.data) return state;
+  if (event.type === "goal.updated") {
+    return {
+      ...state,
+      data: {
+        ...state.data,
+        goal: event.payload,
+      },
+    };
+  }
+  if (event.type !== "notes.updated") return state;
   return {
     ...state,
     data: {
       ...state.data,
-      goal: event.payload,
+      notes: event.payload,
     },
   };
 }

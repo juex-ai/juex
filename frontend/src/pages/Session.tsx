@@ -93,8 +93,8 @@ import {
 } from "@/lib/message-rendering";
 import { cn } from "@/lib/utils";
 import {
-  WORKING_STATE_SECTIONS,
   formatRuntimeTimestamp,
+  notesCheckboxProgress,
   runtimeContextModelLabel,
   runtimeContextPercentLabel,
   runtimeContextWindowDetailLabel,
@@ -102,9 +102,6 @@ import {
   runtimeSessionStateBadgeLabel,
   runtimeSessionStateIsActive,
   runtimeTokenUsageDetailLabel,
-  workingStatePresenceLabel,
-  workingStateRecords,
-  workingStateSectionCounts,
 } from "@/lib/runtime-display";
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
@@ -146,10 +143,9 @@ import type {
   GoalStatusSnapshot,
   MediaRef,
   Message as ChatMessage,
+  NotesSnapshot,
   SessionShowResponse,
   TokenUsage,
-  WorkingStateRecord,
-  WorkingStateStatusSnapshot,
 } from "@/types";
 
 type InitialCommandState = SessionInitialCommandState;
@@ -491,12 +487,12 @@ function SessionRuntimeStateBadges({ data }: { data: SessionShowResponse }) {
     <SessionStateBadge
       label={runtimeSessionStateBadgeLabel()}
       tone={
-        runtimeSessionStateIsActive(data.goal, data.working_state)
+        runtimeSessionStateIsActive(data.goal, data.notes)
           ? "active"
           : "muted"
       }
     >
-      <SessionStateTooltip goal={data.goal} snapshot={data.working_state} />
+      <SessionStateTooltip goal={data.goal} notes={data.notes} />
     </SessionStateBadge>
   );
 }
@@ -560,55 +556,59 @@ function GoalStateTooltip({ goal }: { goal?: GoalStatusSnapshot }) {
 
 function SessionStateTooltip({
   goal,
-  snapshot,
+  notes,
 }: {
   goal?: GoalStatusSnapshot;
-  snapshot?: WorkingStateStatusSnapshot;
+  notes?: NotesSnapshot;
 }) {
   return (
     <div className="space-y-3">
       <GoalStateTooltip goal={goal} />
       <div className="border-t border-border/60 pt-3">
-        <WorkingStateTooltip snapshot={snapshot} />
+        <NotesStateTooltip notes={notes} />
       </div>
     </div>
   );
 }
 
-function WorkingStateTooltip({
-  snapshot,
-}: {
-  snapshot?: WorkingStateStatusSnapshot;
-}) {
-  if (!snapshot) {
+function NotesStateTooltip({ notes }: { notes?: NotesSnapshot }) {
+  if (!notes?.content?.trim()) {
     return (
-      <RuntimeTooltipPanel title="Working State">
-        <div className="text-muted-foreground">No active working-state snapshot for this session.</div>
+      <RuntimeTooltipPanel title="Notes">
+        <div className="text-muted-foreground">No working notes for this session.</div>
       </RuntimeTooltipPanel>
     );
   }
-  const counts = workingStateSectionCounts(snapshot);
-  const state = snapshot.state;
+  const progress = notesCheckboxProgress(notes);
   return (
-    <RuntimeTooltipPanel title="Working State">
-      <RuntimeTooltipRow label="status" value={workingStatePresenceLabel(snapshot)} />
-      <RuntimeTooltipRow label="path" value={snapshot.path || "-"} />
-      <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(state.updated_at)} />
-      <RuntimeTooltipRow
-        label="counts"
-        value={counts.map((item) => `${item.label}: ${item.count}`).join(", ")}
-      />
-      {WORKING_STATE_SECTIONS.map((section) => {
-        const records = workingStateRecords(state, section.key);
-        if (records.length === 0) return null;
-        return (
-          <RuntimeTooltipRecords
-            key={section.key}
-            title={section.label}
-            records={records}
+    <RuntimeTooltipPanel title="Notes">
+      <RuntimeTooltipRow label="updated" value={formatRuntimeTimestamp(notes.updated_at)} />
+      {progress.total > 0 ? (
+        <div className="space-y-1.5">
+          <RuntimeTooltipRow
+            label="progress"
+            value={`${progress.completed}/${progress.total} complete`}
           />
-        );
-      })}
+          <div
+            aria-label="Notes task progress"
+            aria-valuemax={progress.total}
+            aria-valuemin={0}
+            aria-valuenow={progress.completed}
+            className="h-1.5 w-full overflow-hidden rounded-sm bg-muted"
+            role="progressbar"
+          >
+            <div
+              className="h-full bg-primary transition-[width]"
+              style={{ width: `${progress.percent}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+      <div className="border-t border-border/60 pt-2">
+        <MessageResponse className="break-words text-xs leading-relaxed [&_h1]:!my-2 [&_h1]:!text-base [&_h2]:!my-2 [&_h2]:!text-sm [&_h3]:!my-1.5 [&_h3]:!text-xs">
+          {notes.content}
+        </MessageResponse>
+      </div>
     </RuntimeTooltipPanel>
   );
 }
@@ -622,7 +622,7 @@ function RuntimeTooltipPanel({
 }) {
   return (
     <div className="min-w-[18rem] max-w-xl space-y-2">
-      <div className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+      <div className="font-mono text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">
         {title}
       </div>
       <div className="space-y-1.5">{children}</div>
@@ -637,42 +637,6 @@ function RuntimeTooltipRow({ label, value }: { label: string; value: string }) {
       <span className="min-w-0 break-words text-popover-foreground">{value}</span>
     </div>
   );
-}
-
-function RuntimeTooltipRecords({
-  records,
-  title,
-}: {
-  records: WorkingStateRecord[];
-  title: string;
-}) {
-  return (
-    <div className="border-t border-border/60 pt-2">
-      <div className="mb-1 font-mono text-[11px] text-muted-foreground">{title}</div>
-      <div className="space-y-1.5">
-        {records.map((record, index) => (
-          <div key={record.id || `${title}:${index}`} className="rounded border border-border/60 bg-background/70 px-2 py-1.5">
-            <div className="break-words text-foreground">{record.text || "-"}</div>
-            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
-              {record.source ? <span>source: {record.source}</span> : null}
-              {record.severity ? <span>severity: {record.severity}</span> : null}
-              {record.confidence != null ? (
-                <span>confidence: {formatConfidence(record.confidence)}</span>
-              ) : null}
-              {record.related_paths && record.related_paths.length > 0 ? (
-                <span>paths: {record.related_paths.join(", ")}</span>
-              ) : null}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function formatConfidence(value: number): string {
-  if (!Number.isFinite(value)) return "-";
-  return `${Math.round(value * 100)}%`;
 }
 
 function ComposerFeedback({

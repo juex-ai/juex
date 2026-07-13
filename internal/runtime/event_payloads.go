@@ -172,6 +172,11 @@ type GoalUpdatedPayload struct {
 	UpdatedAt         time.Time  `json:"updated_at,omitempty"`
 }
 
+type NotesUpdatedPayload struct {
+	Content   string    `json:"content"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
 type GoalContinuedPayload struct {
 	Status                GoalStatus `json:"status"`
 	Reason                string     `json:"reason,omitempty"`

@@ -69,14 +69,10 @@ type Engine struct {
 	// directory. When omitted, the engine creates a session-local queue on
 	// first use.
 	PendingInputQueue *PendingInputQueue
-	// WorkingState persists generic session working memory in the session
-	// directory. When omitted, the engine creates it lazily unless disabled.
-	WorkingState *WorkingStateStore
+	// Notes persists model-owned session working notes.
+	Notes *NotesStore
 	// GoalState persists the current session goal and latest completion check.
 	GoalState *GoalStateStore
-	// DisableWorkingState prevents sidecar persistence, updates, and provider
-	// context injection.
-	DisableWorkingState bool
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool
@@ -488,9 +484,6 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
 	results := toolResultBlocks(toolResults)
 	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
-	if err := e.recordWorkingStateToolBatch(toolCalls, toolResults); err != nil {
-		return err
-	}
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 	if err != nil {
@@ -518,16 +511,35 @@ type toolCallResult struct {
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while
-// preserving provider-facing result order.
+// preserving provider-facing result order. Repeated notes rewrites are
+// serialized so the final call in provider order deterministically wins.
 func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Block) []toolCallResult {
 	results := make([]toolCallResult, len(calls))
+	type indexedToolCall struct {
+		index int
+		call  llm.Block
+	}
+	var notesCalls []indexedToolCall
 	var wg sync.WaitGroup
 	for i, tc := range calls {
+		if tc.ToolName == NotesToolUpdate {
+			notesCalls = append(notesCalls, indexedToolCall{index: i, call: tc})
+			continue
+		}
 		wg.Add(1)
 		go func(idx int, call llm.Block) {
 			defer wg.Done()
 			results[idx] = e.runToolCall(ctx, turnID, call)
 		}(i, tc)
+	}
+	if len(notesCalls) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for _, item := range notesCalls {
+				results[item.index] = e.runToolCall(ctx, turnID, item.call)
+			}
+		}()
 	}
 	wg.Wait()
 	return results

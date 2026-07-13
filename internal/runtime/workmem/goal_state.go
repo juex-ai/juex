@@ -345,7 +345,7 @@ func redactGoalState(state GoalState) GoalState {
 }
 
 func sanitizeGoalText(text string) string {
-	return sanitizeWorkingStateText(text)
+	return sanitizeWorkmemText(text, 1000)
 }
 
 func sanitizeGoalAcceptance(text string) string {

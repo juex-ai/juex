@@ -355,13 +355,7 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	if _, err := juexruntime.NewGoalStateStore(dir, juexruntime.GoalStateOptions{}).Create("show session state near composer", "visible near composer"); err != nil {
 		t.Fatal(err)
 	}
-	if err := juexruntime.NewWorkingStateStore(dir, juexruntime.WorkingStateOptions{}).ApplyPatch(juexruntime.WorkingStatePatch{
-		Goal: &juexruntime.WorkingStateRecord{Text: "keep state visible"},
-		HardConstraints: []juexruntime.WorkingStateRecord{{
-			Text:     "session DTO owns this state",
-			Severity: juexruntime.WorkingStateSeverityHigh,
-		}},
-	}); err != nil {
+	if _, err := juexruntime.NewNotesStore(dir).Update("- [x] keep state visible\n- [ ] session DTO owns this state"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -382,13 +376,9 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 			Description string `json:"description"`
 			Status      string `json:"status"`
 		} `json:"goal"`
-		WorkingState struct {
-			Present bool `json:"present"`
-			State   struct {
-				Goal            *juexruntime.WorkingStateRecord  `json:"goal"`
-				HardConstraints []juexruntime.WorkingStateRecord `json:"hard_constraints"`
-			} `json:"state"`
-		} `json:"working_state"`
+		Notes struct {
+			Content string `json:"content"`
+		} `json:"notes"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
@@ -396,8 +386,8 @@ func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	if parsed.Goal.Description != "show session state near composer" || parsed.Goal.Status != string(juexruntime.GoalStatusInProgress) {
 		t.Fatalf("goal = %+v", parsed.Goal)
 	}
-	if !parsed.WorkingState.Present || parsed.WorkingState.State.Goal == nil || len(parsed.WorkingState.State.HardConstraints) != 1 {
-		t.Fatalf("working_state = %+v", parsed.WorkingState)
+	if parsed.Notes.Content != "- [x] keep state visible\n- [ ] session DTO owns this state" {
+		t.Fatalf("notes = %+v", parsed.Notes)
 	}
 }
 
@@ -413,9 +403,7 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := as.app.Session.ID
-	if err := as.app.Engine.WorkingState.ApplyPatch(juexruntime.WorkingStatePatch{
-		Goal: &juexruntime.WorkingStateRecord{Text: "visible while running"},
-	}); err != nil {
+	if _, err := as.app.Engine.Notes.Update("- [ ] visible while running"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -481,13 +469,19 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var parsed struct {
-		Turn *sessionTurnResponse `json:"turn"`
+		Turn  *sessionTurnResponse `json:"turn"`
+		Notes *struct {
+			Content string `json:"content"`
+		} `json:"notes"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
 	}
 	if parsed.Turn == nil || parsed.Turn.TurnID == "" || parsed.Turn.State != "running" {
 		t.Fatalf("turn = %+v, want running turn", parsed.Turn)
+	}
+	if parsed.Notes == nil || parsed.Notes.Content != "- [ ] visible while running" {
+		t.Fatalf("notes = %+v", parsed.Notes)
 	}
 }
 

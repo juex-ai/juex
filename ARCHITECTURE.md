@@ -112,7 +112,7 @@ juex/
 │   │   ├── compact.go
 │   │   ├── compaction_*.go
 │   │   ├── contextbudget/        # compaction policy, active context, token/context budgets
-│   │   ├── workmem/              # goal_state.json and working_state.json domains
+│   │   ├── workmem/              # goal_state.json and notes.md domains
 │   │   └── context_*.go
 │   ├── sandbox/                 # command sandbox policy, backend selection, wrapping errors
 │   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
@@ -1083,7 +1083,6 @@ runtime:
   external_event_ttl: 24h
   tool_timeout: 60s
   max_output_tokens: 8192
-  working_state_enabled: true
   show_builtin_hook_traces: false
 compaction:
   enabled: true
@@ -1141,7 +1140,6 @@ compaction:
 | `runtime.external_event_ttl` | duration for queued MCP/external event messages while a turn is running; defaults to 24h |
 | `runtime.tool_timeout` | default hard timeout for generic non-shell tool execution; defaults to 60s, is capped at 300s, and is not exposed in model-visible tool schemas |
 | `runtime.max_output_tokens` | optional normal-turn provider output cap; omit it to use the provider default |
-| `runtime.working_state_enabled` | enables the session-local generic working-state sidecar; defaults to true |
 | `runtime.show_builtin_hook_traces` | mirrors built-in runtime hook/gate completions and failures into conversation-visible UI-only hook traces; defaults to false |
 | `compaction.enabled` | enables automatic and manual context compaction |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
@@ -1210,9 +1208,9 @@ configured in `hooks.commands` and receive one JSON object on stdin with the
 event name, session id, turn id, cwd, workspace roots, permission/sandbox
 labels, conversation/event log paths, current `goal_state`, and event-specific
 fields such as tool input/result or compaction reason. Hook stdout may be empty
-or a JSON object containing `decision`, `additional_context`, `block_stop`,
-`continue_prompt`, and `working_state`. Hook requests may include the current
-goal as read-only context, but hook output is not a goal write contract.
+or a JSON object containing `decision`, `additional_context`, `block_stop`, and
+`continue_prompt`. Hook requests may include the current goal as read-only
+context, but hook output cannot mutate Goal or Notes.
 
 The runtime emits `hook.started`, `hook.completed`, `hook.errored`, and
 conversation-visible `hook.trace` events; the existing session bus persists
@@ -1234,12 +1232,10 @@ Tool failures are also tracked in a per-turn unresolved-failure ledger inside
 `nonblocking_exploratory`, records fingerprints and bounded output previews,
 and emits `tool.failure.recorded`, `tool.failure.resolved`, and
 `tool.failure.stale` events. Later successful checks or related file
-writes/edits mark records `resolved` or `stale`. When working state is enabled,
-the same failures are projected into `working_state.open_issues` with severity
-derived from the classification. The ledger is observability and state input;
-it does not independently block finish or inject provider-visible continuation
-prompts. Stop authority belongs to configured Stop hooks and the goal
-completion gate.
+writes/edits mark records `resolved` or `stale`. The ledger is observability;
+it does not independently block finish, mutate Notes, or inject
+provider-visible continuation prompts. Stop authority belongs to configured
+Stop hooks and the goal completion gate.
 
 Finish attempts also pass through the built-in `goal-completion-gate` after
 user-configured Stop command hooks. The runtime stores a session-local
@@ -1250,8 +1246,8 @@ and `failure`. `acceptance` is one free-text field for completion criteria,
 required artifacts, constraints, and verification requirements. Ordinary
 user messages do not create or overwrite goals. Command hooks cannot return
 goal patches; project-specific hooks decide whether tests, PRs, tracker docs,
-or other workflow requirements should add context, update `working_state`, or
-block stop with a `continue_prompt`. The runtime gate reads only the persisted
+or other workflow requirements should add context or block stop with a
+`continue_prompt`. The runtime gate reads only the persisted
 goal status: `success` and `failure` allow finish, while `in_progress` records a
 continuation and asks the model to keep working or call `update_goal` with a
 terminal status. Goal state is exposed through `/status` and
@@ -1293,19 +1289,21 @@ those bounded recovery steps are exhausted; generic provider failures are not
 treated as empty-summary retries. A canceled or expired parent context stops
 before fallback and does not emit a misleading fallback event. Successful
 response attempts remain included in session token usage.
-The runtime also maintains an optional session-local `working_state.json`
-sidecar. The persistence, merge, pruning, rendering, and redaction rules for it
-live in `internal/runtime/workmem`, alongside the `goal_state.json` store. The
-sidecar stores generic records for goal, hard constraints, artifacts, checks,
-open issues, last successful checks, and stale checks, each with source,
-confidence, severity, related paths, created time, and resolved time.
-Tool results update only generic runtime facts: failures become open issues,
-write/edit successes mark related checks stale, and later successful checks
-refresh `last_successful_checks`. Command hooks can output a `working_state`
-patch for project-specific extraction. The provider receives a short advisory
-working-state block only when active sidecar records exist; the block is not
-persisted into `conversation.jsonl`, and low-confidence records do not gate
-final answers.
+The runtime also maintains model-owned Markdown in the session-local
+`notes.md`. The model rewrites the entire document through the `update_notes`
+tool; there is deliberately no `get_notes` tool. The store validates UTF-8 and
+a 2048-character limit, redacts secret-like values, and atomically replaces the
+file. Rejected writes leave the previous document intact. Juex never infers
+Notes from user input, tool results, hooks, or other runtime facts, and never
+reads or migrates legacy `working_state.json` files.
+
+Non-empty Notes are appended to every provider request immediately after Goal
+as a `runtime-notes` runtime-context message. This reconstruction happens from
+the sidecar, so Notes survive compaction without being copied into
+`conversation.jsonl`. `notes.updated` updates the browser read model, and the
+session UI renders the Markdown plus progress derived from `- [ ]` and `- [x]`
+task items.
+
 The separate `goal_state.json` sidecar carries model-owned operational goal
 state instead of advisory context. It is updated through `create_goal` and
 `update_goal`, appears in session status surfaces, and records
@@ -1379,7 +1377,7 @@ Resources split between user-global and work-local:
         ├── session.lock         # held while an app owns the session
         ├── conversation.jsonl
         ├── events.jsonl
-        ├── working_state.json   # generic sidecar injected into provider context when non-empty
+        ├── notes.md             # model-owned Markdown recited after Goal on every provider request
         ├── goal_state.json      # model-owned goal description, verification, status, and continuation count
         ├── trace.jsonl          # structured event trace derived from the bus
         ├── spans.jsonl          # start/end/error/instant spans by turn

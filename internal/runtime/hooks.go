@@ -1,9 +1,7 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -37,31 +35,7 @@ func (e *Engine) runHooks(ctx context.Context, req hooks.Request) ([]hooks.Resul
 	if err != nil {
 		return results, err
 	}
-	if err := e.applyWorkingStateHookResults(results); err != nil {
-		return results, err
-	}
 	return results, nil
-}
-
-func (e *Engine) applyWorkingStateHookResults(results []hooks.Result) error {
-	store := e.workingStateStoreLocked()
-	if store == nil {
-		return nil
-	}
-	for _, result := range results {
-		if len(result.Output.WorkingState) == 0 || bytes.Equal(bytes.TrimSpace(result.Output.WorkingState), []byte("null")) {
-			continue
-		}
-		var patch WorkingStatePatch
-		if err := json.Unmarshal(result.Output.WorkingState, &patch); err != nil {
-			return fmt.Errorf("hooks: %s working_state: %w", result.Hook.Name, err)
-		}
-		defaultWorkingStatePatchSource(&patch, WorkingStateSourceHookExtraction)
-		if err := store.ApplyPatch(patch); err != nil {
-			return fmt.Errorf("hooks: %s working_state: %w", result.Hook.Name, err)
-		}
-	}
-	return nil
 }
 
 func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayload, bool, error) {

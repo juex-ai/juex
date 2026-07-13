@@ -125,7 +125,7 @@ Juex keeps runtime state in the current work directory:
     ├── conversation.jsonl
     ├── events.jsonl
     ├── pending_input.jsonl
-    ├── working_state.json
+    ├── notes.md
     ├── goal_state.json
     ├── trace.jsonl
     ├── spans.jsonl
@@ -263,8 +263,7 @@ During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related
 paths, emits `tool.failure.recorded`, and lets later successful checks or
 related file mutations emit `tool.failure.resolved` or `tool.failure.stale`.
-It also feeds `working_state.open_issues` when working state is enabled. Tool
-failures are state input, not an independent finish authority; final-answer
+The ledger is observability, not an independent finish authority; final-answer
 continuation decisions belong to model-owned `goal_state`, the
 `goal-completion-gate`, and configured Stop hooks.
 
@@ -273,15 +272,13 @@ session's `pending_input.jsonl` and replayed after restart when still safe and
 unexpired. Configure `runtime.pending_input_ttl` for user steer messages and
 `runtime.external_event_ttl` for MCP/external event messages.
 
-When enabled, Juex also keeps a generic session-local `working_state.json`
-sidecar for current goals, hard constraints, artifacts, checks, open issues,
-last successful checks, and stale checks. Non-empty sidecars are injected into
-provider context as an advisory runtime working-state block; empty sidecars do
-not change ordinary runs. Working-state sections are automatically bounded:
-recent and higher-severity active records are retained, while older resolved
-records are kept only as a small audit tail. Set
-`runtime.working_state_enabled: false` to disable sidecar persistence, updates,
-and injection.
+Juex keeps model-owned working notes in the session-local `notes.md`. The model
+rewrites the whole Markdown document through `update_notes`; there is no read
+tool because the current notes are recited after Goal on every provider
+request. Notes are limited to 2048 Unicode characters, survive compaction, and
+may use Markdown task items (`- [ ]` and `- [x]`) for visible progress. Juex
+does not infer or mirror runtime facts into notes, and it never reads or
+migrates legacy `working_state.json` files.
 
 Juex also keeps a session-local `goal_state.json` for the model-owned current
 goal. The active contract is intentionally small: `description`,
@@ -295,7 +292,7 @@ Legacy goal fields are not migrated or normalized and are ignored when old
 state is loaded. The built-in
 `goal-completion-gate` reads the persisted status and queues one continuation
 when the goal is still `in_progress`; project-specific hooks can still add
-context, update `working_state`, or block stop with a `continue_prompt`.
+context or block stop with a `continue_prompt`.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop

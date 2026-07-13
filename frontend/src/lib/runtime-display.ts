@@ -1,11 +1,9 @@
 import type {
   ContextUsage,
   GoalStatusSnapshot,
+  NotesSnapshot,
   RuntimeHooksStatus,
   TokenUsage,
-  WorkingState,
-  WorkingStateRecord,
-  WorkingStateStatusSnapshot,
 } from "../types";
 
 export function formatRuntimeTokenCount(value: number): string {
@@ -59,36 +57,6 @@ function formatRuntimePercent(value: number): string {
   return `${rounded}%`;
 }
 
-export type WorkingStateSectionKey =
-  | "goal"
-  | "hard_constraints"
-  | "artifacts"
-  | "checks"
-  | "open_issues"
-  | "tool_failures"
-  | "last_successful_checks"
-  | "stale_checks"
-  | "active_processes"
-  | "runtime_budget";
-
-export interface WorkingStateSectionDefinition {
-  key: WorkingStateSectionKey;
-  label: string;
-}
-
-export const WORKING_STATE_SECTIONS: WorkingStateSectionDefinition[] = [
-  { key: "goal", label: "Observed summary" },
-  { key: "hard_constraints", label: "Hard constraints" },
-  { key: "artifacts", label: "Artifacts" },
-  { key: "checks", label: "Checks" },
-  { key: "open_issues", label: "Open issues" },
-  { key: "tool_failures", label: "Tool failures" },
-  { key: "active_processes", label: "Active processes" },
-  { key: "runtime_budget", label: "Runtime budget" },
-  { key: "last_successful_checks", label: "Last successful checks" },
-  { key: "stale_checks", label: "Stale checks" },
-];
-
 export function runtimeHooksSummaryLabel(hooks?: RuntimeHooksStatus): string {
   const count = hooks?.configured ?? 0;
   return `${count} ${count === 1 ? "hook" : "hooks"}`;
@@ -112,78 +80,31 @@ export function runtimeGoalContinuationLabel(goal?: GoalStatusSnapshot): string 
   return String(goal.continuation_count ?? 0);
 }
 
-export function workingStatePresenceLabel(
-  snapshot?: WorkingStateStatusSnapshot,
-): string {
-  if (!snapshot) return "no active session";
-  if (snapshot.disabled) return "disabled";
-  if (snapshot.present) return "present";
-  return "empty";
-}
-
-export function workingStateSectionCounts(snapshot?: WorkingStateStatusSnapshot): {
-  key: WorkingStateSectionKey;
-  label: string;
-  count: number;
-}[] {
-  return WORKING_STATE_SECTIONS.map((section) => ({
-    ...section,
-    count: workingStateRecords(snapshot?.state, section.key).length,
-  }));
-}
-
-export function workingStateRecordCount(snapshot?: WorkingStateStatusSnapshot): number {
-  return workingStateSectionCounts(snapshot).reduce((sum, item) => sum + item.count, 0);
-}
-
-export function runtimeWorkingStateBadgeLabel(
-  snapshot?: WorkingStateStatusSnapshot,
-): string {
-  const count = workingStateRecordCount(snapshot);
-  if (count > 0) return `state ${count}`;
-  if (snapshot?.disabled) return "state off";
-  if (!snapshot) return "state none";
-  return `state ${workingStatePresenceLabel(snapshot)}`;
-}
-
 export function runtimeSessionStateBadgeLabel(): string {
   return "state";
 }
 
 export function runtimeSessionStateIsActive(
   goal?: GoalStatusSnapshot,
-  snapshot?: WorkingStateStatusSnapshot,
+  notes?: NotesSnapshot,
 ): boolean {
-  return runtimeGoalIsActive(goal) || Boolean(snapshot?.present);
+  return runtimeGoalIsActive(goal) || Boolean(notes?.content?.trim());
 }
 
-export function workingStateRecords(
-  state: WorkingState | undefined,
-  key: WorkingStateSectionKey,
-): WorkingStateRecord[] {
-  if (!state) return [];
-  switch (key) {
-    case "goal":
-      return state.goal ? [state.goal] : [];
-    case "hard_constraints":
-      return state.hard_constraints ?? [];
-    case "artifacts":
-      return state.artifacts ?? [];
-    case "checks":
-      return state.checks ?? [];
-    case "open_issues":
-      return state.open_issues ?? [];
-    case "tool_failures":
-      return state.tool_failures ?? [];
-    case "last_successful_checks":
-      return state.last_successful_checks ?? [];
-    case "stale_checks":
-      return state.stale_checks ?? [];
-    case "active_processes":
-      return state.active_processes ?? [];
-    case "runtime_budget":
-      return state.runtime_budget ?? [];
+export interface NotesCheckboxProgress {
+  completed: number;
+  total: number;
+  percent: number;
+}
+
+export function notesCheckboxProgress(notes?: NotesSnapshot): NotesCheckboxProgress {
+  let completed = 0;
+  let total = 0;
+  for (const match of notes?.content?.matchAll(/^\s*-\s+\[([ xX])\]\s+/gm) ?? []) {
+    total += 1;
+    if (match[1].toLowerCase() === "x") completed += 1;
   }
+  return { completed, total, percent: total > 0 ? (completed / total) * 100 : 0 };
 }
 
 export function formatRuntimeTimestamp(value?: string): string {
