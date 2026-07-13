@@ -88,6 +88,29 @@ func TestNotesStoreRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestNotesStoreRedactsBearerAssignmentValues(t *testing.T) {
+	dir := t.TempDir()
+	store := NewNotesStore(dir)
+	snapshot, err := store.Update("authorization: Bearer abc123\ntoken: Bearer xyz789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"abc123", "xyz789"} {
+		if strings.Contains(snapshot.Content, secret) {
+			t.Fatalf("snapshot leaked %q: %q", secret, snapshot.Content)
+		}
+	}
+	persisted, err := os.ReadFile(filepath.Join(dir, NotesFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"abc123", "xyz789"} {
+		if strings.Contains(string(persisted), secret) {
+			t.Fatalf("notes.md leaked %q: %q", secret, persisted)
+		}
+	}
+}
+
 func TestNotesSnapshotRendersProviderContext(t *testing.T) {
 	if rendered, ok := (NotesSnapshot{}).RenderProviderContext(); ok || rendered != "" {
 		t.Fatalf("empty notes rendered as %q", rendered)
