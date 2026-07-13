@@ -721,7 +721,7 @@ func TestAnthropicStreamUsageObservationUsesLastNonzeroDeltaFields(t *testing.T)
 }
 
 func TestProviderContextPreservesRuntimeContextKindBoundary(t *testing.T) {
-	runtimeContext := TextMessage(RoleUser, "Current working observations")
+	runtimeContext := TextMessage(RoleUser, "Current working notes")
 	runtimeContext.Kind = MessageKindRuntimeContext
 	ctx, err := BuildProviderContext([]Message{
 		TextMessage(RoleUser, "durable user input"),

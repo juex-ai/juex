@@ -106,11 +106,10 @@ type Request struct {
 }
 
 type Output struct {
-	Decision          Decision        `json:"decision,omitempty"`
-	AdditionalContext string          `json:"additional_context,omitempty"`
-	BlockStop         bool            `json:"block_stop,omitempty"`
-	ContinuePrompt    string          `json:"continue_prompt,omitempty"`
-	WorkingState      json.RawMessage `json:"working_state,omitempty"`
+	Decision          Decision `json:"decision,omitempty"`
+	AdditionalContext string   `json:"additional_context,omitempty"`
+	BlockStop         bool     `json:"block_stop,omitempty"`
+	ContinuePrompt    string   `json:"continue_prompt,omitempty"`
 }
 
 type Result struct {

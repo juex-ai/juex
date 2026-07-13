@@ -184,6 +184,34 @@ test("projectLiveBrowserEvent refreshes session goal state", () => {
   assert.deepEqual(result.state.projection.status, { kind: "idle" });
 });
 
+test("projectLiveBrowserEvent refreshes session notes", () => {
+  const initial = projectSessionLoaded(createSessionReadState(), {
+    ...session("s1", []),
+    notes: {
+      content: "- [ ] old task",
+      updated_at: "2026-06-15T00:00:00Z",
+    },
+  });
+
+  const result = projectLiveBrowserEvent(initial, {
+    id: "evt-notes",
+    type: "notes.updated",
+    ts: "2026-06-15T00:01:00Z",
+    turn_id: "turn-1",
+    payload: {
+      content: "- [x] old task\n- [ ] next task",
+      updated_at: "2026-06-15T00:01:00Z",
+    },
+  });
+
+  assert.deepEqual(result.state.data?.notes, {
+    content: "- [x] old task\n- [ ] next task",
+    updated_at: "2026-06-15T00:01:00Z",
+  });
+  assert.equal(result.state.data?.id, "s1");
+  assert.deepEqual(result.effects, []);
+});
+
 test("projectTurnStatus reconciles running and done states", () => {
   let state = createSessionReadState();
   let result = projectTurnStatus(state, { state: "running", pending_count: 2 });

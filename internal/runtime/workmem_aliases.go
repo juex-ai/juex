@@ -22,33 +22,11 @@ func NewGoalStateStore(sessionDir string, opts GoalStateOptions) *GoalStateStore
 	return workmem.NewGoalStateStore(sessionDir, opts)
 }
 
-type WorkingStateSource = workmem.WorkingStateSource
+const MaxNotesCharacters = workmem.MaxNotesCharacters
 
-const (
-	WorkingStateSourceModelSummary   = workmem.WorkingStateSourceModelSummary
-	WorkingStateSourceToolResult     = workmem.WorkingStateSourceToolResult
-	WorkingStateSourceHookExtraction = workmem.WorkingStateSourceHookExtraction
-	WorkingStateSourceUserInput      = workmem.WorkingStateSourceUserInput
-)
+type NotesSnapshot = workmem.NotesSnapshot
+type NotesStore = workmem.NotesStore
 
-type WorkingStateSeverity = workmem.WorkingStateSeverity
-
-const (
-	WorkingStateSeverityLow      = workmem.WorkingStateSeverityLow
-	WorkingStateSeverityMedium   = workmem.WorkingStateSeverityMedium
-	WorkingStateSeverityHigh     = workmem.WorkingStateSeverityHigh
-	WorkingStateSeverityCritical = workmem.WorkingStateSeverityCritical
-)
-
-type WorkingStateRecord = workmem.WorkingStateRecord
-type WorkingState = workmem.WorkingState
-type WorkingStateStatusSnapshot = workmem.WorkingStateStatusSnapshot
-type WorkingStatePatch = workmem.WorkingStatePatch
-type WorkingStateOptions = workmem.WorkingStateOptions
-type WorkingStateStore = workmem.WorkingStateStore
-type WorkingStateIssueObservation = workmem.WorkingStateIssueObservation
-type WorkingStateCheckObservation = workmem.WorkingStateCheckObservation
-
-func NewWorkingStateStore(sessionDir string, opts WorkingStateOptions) *WorkingStateStore {
-	return workmem.NewWorkingStateStore(sessionDir, opts)
+func NewNotesStore(sessionDir string) *NotesStore {
+	return workmem.NewNotesStore(sessionDir)
 }

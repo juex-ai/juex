@@ -37,7 +37,7 @@ func TestSelectCompactionInput_DoesNotOrphanToolResult(t *testing.T) {
 }
 
 func TestSelectCompactionInput_IgnoresRuntimeContextAsTailTurnStart(t *testing.T) {
-	runtimeContext := testMsg("runtime-working-state", llm.RoleUser, "Current working observations")
+	runtimeContext := testMsg("runtime-notes", llm.RoleUser, "Current working notes")
 	runtimeContext.Kind = llm.MessageKindRuntimeContext
 	h := []llm.Message{
 		testMsg("m1", llm.RoleUser, "old question"),

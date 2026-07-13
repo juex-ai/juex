@@ -2,7 +2,6 @@ package hooks
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,27 +123,12 @@ func TestParseOutputValidatesDecisions(t *testing.T) {
 	}
 }
 
-func TestParseOutputCarriesWorkingStatePatch(t *testing.T) {
-	out, err := ParseOutput([]byte(`{"working_state":{"hard_constraints":[{"text":"keep tests green","confidence":0.9}]}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var patch map[string]any
-	if err := json.Unmarshal(out.WorkingState, &patch); err != nil {
-		t.Fatal(err)
-	}
-	const key = "hard_constraints"
-	if _, ok := patch[key]; !ok {
-		t.Fatalf("working_state missing %q: %+v", key, patch)
-	}
-}
-
 func TestParseOutputIgnoresGoalStatePatch(t *testing.T) {
 	out, err := ParseOutput([]byte(`{"goal_state":{"status":"continue","completion_check":{"status":"continue","summary":"tests missing","continue_prompt":"run tests"}}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Decision != "" || len(out.WorkingState) > 0 || out.BlockStop || out.ContinuePrompt != "" || out.AdditionalContext != "" {
+	if out.Decision != "" || out.BlockStop || out.ContinuePrompt != "" || out.AdditionalContext != "" {
 		t.Fatalf("goal_state output should not be exposed as a hook write contract: %+v", out)
 	}
 }

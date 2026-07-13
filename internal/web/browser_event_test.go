@@ -286,6 +286,16 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-notes-updated",
+			Type:      "notes.updated",
+			Timestamp: ts.Add(7300 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.NotesUpdatedPayload{
+				Content:   "- [x] inspect\n- [ ] verify",
+				UpdatedAt: ts.Add(7300 * time.Millisecond),
+			},
+		},
+		{
 			ID:        "evt-observable-started",
 			Type:      observable.EventObservableStarted,
 			Timestamp: ts.Add(7500 * time.Millisecond),

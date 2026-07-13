@@ -143,7 +143,7 @@ export interface SessionShowResponse extends SessionInfo {
   oldest_message_id?: string;
   turn?: SessionTurnStatus;
   goal?: GoalStatusSnapshot;
-  working_state?: WorkingStateStatusSnapshot;
+  notes?: NotesSnapshot;
 }
 
 export interface SessionsListResponse {
@@ -251,6 +251,7 @@ export const BROWSER_EVENT_TYPES = [
   "pending_input.dropped",
   "pending_input.rejected",
   "goal.updated",
+  "notes.updated",
   "observable.started",
   "observable.stopped",
   "observable.exited",
@@ -602,6 +603,7 @@ export interface ContextProjectionAppliedPayload {
 }
 
 export type GoalUpdatedPayload = GoalStatusSnapshot;
+export type NotesUpdatedPayload = NotesSnapshot;
 
 export type BrowserEvent =
   | (BrowserEventBase<"turn.started"> & { payload: TurnStartedPayload })
@@ -624,6 +626,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
   | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
   | (BrowserEventBase<"goal.updated"> & { payload: GoalUpdatedPayload })
+  | (BrowserEventBase<"notes.updated"> & { payload: NotesUpdatedPayload })
   | (BrowserEventBase<"observable.started"> & { payload: ObservableEventPayload })
   | (BrowserEventBase<"observable.stopped"> & { payload: ObservableEventPayload })
   | (BrowserEventBase<"observable.exited"> & { payload: ObservableEventPayload })
@@ -783,37 +786,9 @@ export interface RuntimeHookInfo {
   max_output_bytes: number;
 }
 
-export interface WorkingStateStatusSnapshot {
-  path?: string;
-  disabled?: boolean;
-  present: boolean;
-  state: WorkingState;
-}
-
-export interface WorkingState {
-  version: number;
+export interface NotesSnapshot {
+  content: string;
   updated_at?: string;
-  goal?: WorkingStateRecord;
-  hard_constraints?: WorkingStateRecord[];
-  artifacts?: WorkingStateRecord[];
-  checks?: WorkingStateRecord[];
-  open_issues?: WorkingStateRecord[];
-  tool_failures?: WorkingStateRecord[];
-  last_successful_checks?: WorkingStateRecord[];
-  stale_checks?: WorkingStateRecord[];
-  active_processes?: WorkingStateRecord[];
-  runtime_budget?: WorkingStateRecord[];
-}
-
-export interface WorkingStateRecord {
-  id?: string;
-  text?: string;
-  source?: string;
-  confidence?: number;
-  severity?: string;
-  related_paths?: string[];
-  created_at?: string;
-  resolved_at?: string;
 }
 
 export interface SystemPromptEntry {

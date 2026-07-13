@@ -276,7 +276,7 @@ func sessionBundleFiles() []sessionBundleFile {
 		{name: "conversation.jsonl", required: true},
 		{name: "events.jsonl", required: true},
 		{name: "pending_input.jsonl"},
-		{name: "working_state.json"},
+		{name: "notes.md"},
 		{name: "goal_state.json"},
 		{name: "trace.jsonl"},
 		{name: "spans.jsonl"},

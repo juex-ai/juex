@@ -576,6 +576,12 @@ flags, and status. Assistant deltas accumulate in provisional blocks keyed by
 provider block index; `llm.responded` then replaces them with the canonical
 ordered blocks so retries or protocol-specific chunking cannot duplicate the
 final transcript.
+The compact session-state control near the composer shows Goal first, followed
+by model-owned Notes. Notes render as Markdown; when they contain task items,
+the tooltip shows completed/total counts and a thin progress indicator. The
+`notes.updated` event updates this state without waiting for a transcript
+refresh.
+
 `src/lib/session-read-controller.ts` owns the session-detail effect interpreter:
 route guards, snapshot/context refresh, EventSource dispatch, turn polling,
 transient timers, navigation effects, and refetching after terminal turn events.

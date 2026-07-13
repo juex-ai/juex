@@ -166,6 +166,16 @@
     }
   },
   {
+    "id": "evt-notes-updated",
+    "type": "notes.updated",
+    "ts": "2026-06-15T00:00:07.3Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "content": "- [x] inspect\n- [ ] verify",
+      "updated_at": "2026-06-15T00:00:07.3Z"
+    }
+  },
+  {
     "id": "evt-observable-started",
     "type": "observable.started",
     "ts": "2026-06-15T00:00:07.5Z",

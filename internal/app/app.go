@@ -312,9 +312,8 @@ func New(opts Options) (*App, error) {
 		PendingInputQueue:     runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
 		PendingInputTTL:       pendingInputTTL,
 		ExternalEventTTL:      externalEventTTL,
-		WorkingState:          workingStateStore(sess, runtimeLimits.WorkingStateEnabled),
+		Notes:                 notesStore(sess),
 		GoalState:             goalStateStore(sess),
-		DisableWorkingState:   !runtimeLimits.WorkingStateEnabled,
 		ShowBuiltinHookTraces: runtimeLimits.ShowBuiltinHookTraces,
 		ContextWindow:         runtimeLimits.ContextWindow,
 		MaxOutputTokens:       runtimeLimits.MaxOutputTokens,
@@ -337,6 +336,11 @@ func New(opts Options) (*App, error) {
 		logLevel:         opts.LogLevel,
 	}
 	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
+		_ = a.detachObservability()
+		closeSessionResources()
+		return nil, err
+	}
+	if err := runtime.RegisterNotesTools(reg, eng); err != nil {
 		_ = a.detachObservability()
 		closeSessionResources()
 		return nil, err
@@ -433,18 +437,18 @@ func New(opts Options) (*App, error) {
 	return a, nil
 }
 
-func workingStateStore(sess *session.Session, enabled bool) *runtime.WorkingStateStore {
-	if !enabled || sess == nil || sess.Dir == "" {
-		return nil
-	}
-	return runtime.NewWorkingStateStore(sess.Dir, runtime.WorkingStateOptions{})
-}
-
 func goalStateStore(sess *session.Session) *runtime.GoalStateStore {
 	if sess == nil || sess.Dir == "" {
 		return nil
 	}
 	return runtime.NewGoalStateStore(sess.Dir, runtime.GoalStateOptions{})
+}
+
+func notesStore(sess *session.Session) *runtime.NotesStore {
+	if sess == nil || sess.Dir == "" {
+		return nil
+	}
+	return runtime.NewNotesStore(sess.Dir)
 }
 
 func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
@@ -495,9 +499,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	if a.Engine != nil {
 		a.Engine.Session = sess
 		a.Engine.PendingInputQueue = runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{})
-		limits := a.cfg.RuntimeLimits()
-		a.Engine.DisableWorkingState = !limits.WorkingStateEnabled
-		a.Engine.WorkingState = workingStateStore(sess, limits.WorkingStateEnabled)
+		a.Engine.Notes = notesStore(sess)
 		a.Engine.GoalState = goalStateStore(sess)
 	}
 	if err := a.attachObservability(sess); err != nil {

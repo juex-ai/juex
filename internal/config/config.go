@@ -41,7 +41,6 @@ type Config struct {
 	PendingInputTTL           time.Duration
 	ExternalEventTTL          time.Duration
 	ToolTimeout               time.Duration
-	DisableWorkingState       bool
 	ShowBuiltinHookTraces     bool
 	Hooks                     hooks.Config
 	Shell                     ShellProfile
@@ -190,8 +189,6 @@ type runtimeConfig struct {
 	ToolTimeoutSet           bool
 	MaxOutputTokens          int
 	MaxOutputTokensSet       bool
-	WorkingStateEnabled      bool
-	WorkingStateEnabledSet   bool
 	ShowBuiltinHookTraces    bool
 	ShowBuiltinHookTracesSet bool
 }
@@ -262,13 +259,6 @@ func (c *runtimeConfig) UnmarshalYAML(node *yaml.Node) error {
 			}
 			c.MaxOutputTokens = n
 			c.MaxOutputTokensSet = true
-		case "working_state_enabled":
-			enabled, err := ParseBoolValue(value.Value)
-			if err != nil {
-				return fmt.Errorf("runtime.%s: %w", key, err)
-			}
-			c.WorkingStateEnabled = enabled
-			c.WorkingStateEnabledSet = true
 		case "show_builtin_hook_traces":
 			enabled, err := ParseBoolValue(value.Value)
 			if err != nil {
@@ -977,9 +967,6 @@ func applyRuntimeConfig(cfg *Config, c runtimeConfig) {
 	}
 	if c.MaxOutputTokensSet {
 		cfg.MaxOutputTokens = c.MaxOutputTokens
-	}
-	if c.WorkingStateEnabledSet {
-		cfg.DisableWorkingState = !c.WorkingStateEnabled
 	}
 	if c.ShowBuiltinHookTracesSet {
 		cfg.ShowBuiltinHookTraces = c.ShowBuiltinHookTraces

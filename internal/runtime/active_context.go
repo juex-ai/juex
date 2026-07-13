@@ -35,8 +35,8 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if text, ok := e.goalStateContextSnapshot(); ok {
 		contextMessages = append(contextMessages, goalStateContextMessage(text))
 	}
-	if text, ok := e.workingStateContextSnapshot(); ok {
-		contextMessages = append(contextMessages, workingStateContextMessage(text))
+	if text, ok := e.notesContextSnapshot(); ok {
+		contextMessages = append(contextMessages, notesContextMessage(text))
 	}
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
@@ -52,8 +52,8 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 	if text, ok := e.goalStateContextLocked(); ok {
 		contextMessages = append(contextMessages, goalStateContextMessage(text))
 	}
-	if text, ok := e.workingStateContextLocked(); ok {
-		contextMessages = append(contextMessages, workingStateContextMessage(text))
+	if text, ok := e.notesContextLocked(); ok {
+		contextMessages = append(contextMessages, notesContextMessage(text))
 	}
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)

@@ -86,17 +86,7 @@ func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 	if _, err := as.app.Engine.GoalState.Create("ship runtime goal status", "waiting on e2e"); err != nil {
 		t.Fatal(err)
 	}
-	if err := as.app.Engine.WorkingState.ApplyPatch(runtime.WorkingStatePatch{
-		Goal: &runtime.WorkingStateRecord{
-			Text:   "show runtime state in the UI",
-			Source: runtime.WorkingStateSourceUserInput,
-		},
-		HardConstraints: []runtime.WorkingStateRecord{{
-			Text:     "do not read sidecar files from the frontend",
-			Source:   runtime.WorkingStateSourceHookExtraction,
-			Severity: runtime.WorkingStateSeverityHigh,
-		}},
-	}); err != nil {
+	if _, err := as.app.Engine.Notes.Update("- [ ] show runtime state in the UI"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -115,8 +105,8 @@ func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 	if _, ok := fields["goal"]; ok {
 		t.Fatalf("runtime status leaked session goal: %s", encoded)
 	}
-	if _, ok := fields["working_state"]; ok {
-		t.Fatalf("runtime status leaked session working state: %s", encoded)
+	if _, ok := fields["notes"]; ok {
+		t.Fatalf("runtime status leaked session notes: %s", encoded)
 	}
 }
 

@@ -69,14 +69,10 @@ type Engine struct {
 	// directory. When omitted, the engine creates a session-local queue on
 	// first use.
 	PendingInputQueue *PendingInputQueue
-	// WorkingState persists generic session working memory in the session
-	// directory. When omitted, the engine creates it lazily unless disabled.
-	WorkingState *WorkingStateStore
+	// Notes persists model-owned session working notes.
+	Notes *NotesStore
 	// GoalState persists the current session goal and latest completion check.
 	GoalState *GoalStateStore
-	// DisableWorkingState prevents sidecar persistence, updates, and provider
-	// context injection.
-	DisableWorkingState bool
 	// ShowBuiltinHookTraces includes built-in runtime gates in UI-only hook
 	// trace messages. Command hook traces are always shown.
 	ShowBuiltinHookTraces bool
@@ -488,9 +484,6 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
 	results := toolResultBlocks(toolResults)
 	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
-	if err := e.recordWorkingStateToolBatch(toolCalls, toolResults); err != nil {
-		return err
-	}
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
 	projectedToolResultMsg, projection, err := e.projectMessageLocked(toolResultMsg, policy)
 	if err != nil {
