@@ -284,9 +284,8 @@ func TestActiveContextAppendsRuntimeContextAfterDurableHistory(t *testing.T) {
 	eng.WorkingState = NewWorkingStateStore(eng.Session.Dir, WorkingStateOptions{})
 
 	if _, err := eng.GoalState.CreateWithContract(GoalStateCreate{
-		Description:        "ship cache fix",
-		AcceptanceCriteria: []string{"history cache breakpoint is stable"},
-		VerificationMethod: "go test ./internal/llm ./internal/runtime",
+		Description: "ship cache fix",
+		Acceptance:  "history cache breakpoint is stable and go test ./internal/llm ./internal/runtime passes",
 	}); err != nil {
 		t.Fatal(err)
 	}

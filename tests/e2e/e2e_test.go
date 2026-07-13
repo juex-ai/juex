@@ -1568,11 +1568,8 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "goal-create", ToolName: runtime.GoalToolCreate, Input: map[string]any{
-						"description":             "ship goal state",
-						"acceptance_criteria":     []any{"completion checks pass"},
-						"required_artifacts":      []any{"goal_state.json"},
-						"validation_requirements": []any{"events include goal.continued"},
-						"verification_method":     "completion checks pass",
+						"description": "ship goal state",
+						"acceptance":  "completion checks pass, goal_state.json exists, and events include goal.continued",
 					}},
 				}},
 				StopReason: llm.StopToolUse,
@@ -1638,14 +1635,18 @@ func TestEndToEnd_GoalToolsContinueThenSucceed(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"description": "ship goal state"`,
-		`"required_artifacts": [`,
-		`"goal_state.json"`,
+		`"acceptance": "completion checks pass, goal_state.json exists, and events include goal.continued"`,
 		`"continuation_count": 1`,
 		`"status": "success"`,
 		`"status_reason": "continuation gate fired and final answer was verified"`,
 	} {
 		if !strings.Contains(string(goalData), want) {
 			t.Fatalf("goal_state.json missing %s:\n%s", want, goalData)
+		}
+	}
+	for _, forbidden := range []string{"acceptance_criteria", "required_artifacts", "artifact_requirements", "validation_requirements", "verification_method"} {
+		if strings.Contains(string(goalData), forbidden) {
+			t.Fatalf("goal_state.json contains removed field %q:\n%s", forbidden, goalData)
 		}
 	}
 	eventsData, err := os.ReadFile(filepath.Join(a.Session.Dir, "events.jsonl"))

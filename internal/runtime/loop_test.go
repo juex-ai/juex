@@ -2057,11 +2057,8 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "goal_create_1", ToolName: GoalToolCreate, Input: map[string]any{
-				"description":             "ship this",
-				"acceptance_criteria":     []any{"tests pass"},
-				"required_artifacts":      []any{"artifact.txt"},
-				"validation_requirements": []any{"go test ./..."},
-				"verification_method":     "tests pass",
+				"description": "ship this",
+				"acceptance":  "artifact.txt exists and go test ./... passes",
 			}},
 		}}, StopReason: llm.StopToolUse},
 		{Message: llm.TextMessage(llm.RoleAssistant, "too early"), StopReason: llm.StopEndTurn},
@@ -2111,7 +2108,7 @@ func TestTurn_GoalCompletionGateContinuesThenCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || len(state.RequiredArtifacts) != 1 {
+	if state.Status != GoalStatusSuccess || state.StatusReason != "tests passed" || state.ContinuationCount != 1 || !strings.Contains(state.Acceptance, "artifact.txt") {
 		t.Fatalf("goal state = %+v", state)
 	}
 }

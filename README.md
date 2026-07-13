@@ -285,10 +285,14 @@ and injection.
 
 Juex also keeps a session-local `goal_state.json` for the model-owned current
 goal. The active contract is intentionally small: `description`,
-`verification_method`, `continuation_count`, `status` (`in_progress`,
-`success`, or `failure`), and `updated_at`. The model writes this state only
-through `get_goal`, `create_goal`, and `update_goal`; ordinary user messages
-do not create goals, and command hook output cannot mutate goals. The built-in
+`acceptance`, `status` (`in_progress`, `success`, or `failure`), optional
+`status_reason`, `continuation_count`, and `updated_at`. `acceptance` is free
+text for criteria, artifacts, constraints, and verification requirements; a
+missing `status_reason` has no behavioral effect. The model writes this state
+only through `get_goal`, `create_goal`, and `update_goal`; ordinary user
+messages do not create goals, and command hook output cannot mutate goals.
+Legacy goal fields are not migrated or normalized and are ignored when old
+state is loaded. The built-in
 `goal-completion-gate` reads the persisted status and queues one continuation
 when the goal is still `in_progress`; project-specific hooks can still add
 context, update `working_state`, or block stop with a `continue_prompt`.
