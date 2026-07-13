@@ -80,6 +80,7 @@ func writeAuthoritativeSummaryState(body *strings.Builder, state SummaryState) {
 	body.WriteString("<authoritative-session-state>\n")
 	if state.Goal != nil {
 		body.WriteString("<goal-contract>\n")
+		// Keep HTML escaping so goal text cannot spell the surrounding prompt tags verbatim.
 		data, _ := json.MarshalIndent(state.Goal, "", "  ")
 		body.Write(data)
 		body.WriteByte('\n')
