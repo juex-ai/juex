@@ -88,14 +88,20 @@ func TestNotesStoreRejectsInvalidUTF8(t *testing.T) {
 	}
 }
 
-func TestNotesStoreRedactsBearerAssignmentValues(t *testing.T) {
+func TestNotesStoreRedactsAssignmentValues(t *testing.T) {
 	dir := t.TempDir()
 	store := NewNotesStore(dir)
-	snapshot, err := store.Update("authorization: Bearer abc123\ntoken: Bearer xyz789")
+	snapshot, err := store.Update(strings.Join([]string{
+		"authorization: Bearer abc123",
+		"token: Bearer xyz789",
+		`authorization: "Bearer quoted456"`,
+		`password: "correct horse"`,
+		"secret: 'multi word'",
+	}, "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"abc123", "xyz789"} {
+	for _, secret := range []string{"abc123", "xyz789", "quoted456", "correct horse", "multi word"} {
 		if strings.Contains(snapshot.Content, secret) {
 			t.Fatalf("snapshot leaked %q: %q", secret, snapshot.Content)
 		}
@@ -104,7 +110,7 @@ func TestNotesStoreRedactsBearerAssignmentValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"abc123", "xyz789"} {
+	for _, secret := range []string{"abc123", "xyz789", "quoted456", "correct horse", "multi word"} {
 		if strings.Contains(string(persisted), secret) {
 			t.Fatalf("notes.md leaked %q: %q", secret, persisted)
 		}
