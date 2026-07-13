@@ -761,11 +761,7 @@ export interface ObservableCreateRequest {
 
 export interface GoalStatusSnapshot {
   description?: string;
-  acceptance_criteria?: string[];
-  required_artifacts?: string[];
-  artifact_requirements?: string[];
-  validation_requirements?: string[];
-  verification_method?: string;
+  acceptance?: string;
   continuation_count?: number;
   status?: string;
   status_reason?: string;

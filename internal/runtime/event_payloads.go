@@ -164,16 +164,12 @@ type ToolFailureStalePayload struct {
 }
 
 type GoalUpdatedPayload struct {
-	Description            string     `json:"description,omitempty"`
-	AcceptanceCriteria     []string   `json:"acceptance_criteria,omitempty"`
-	RequiredArtifacts      []string   `json:"required_artifacts,omitempty"`
-	ArtifactRequirements   []string   `json:"artifact_requirements,omitempty"`
-	ValidationRequirements []string   `json:"validation_requirements,omitempty"`
-	VerificationMethod     string     `json:"verification_method,omitempty"`
-	ContinuationCount      int        `json:"continuation_count,omitempty"`
-	Status                 GoalStatus `json:"status,omitempty"`
-	StatusReason           string     `json:"status_reason,omitempty"`
-	UpdatedAt              time.Time  `json:"updated_at,omitempty"`
+	Description       string     `json:"description,omitempty"`
+	Acceptance        string     `json:"acceptance,omitempty"`
+	ContinuationCount int        `json:"continuation_count,omitempty"`
+	Status            GoalStatus `json:"status,omitempty"`
+	StatusReason      string     `json:"status_reason,omitempty"`
+	UpdatedAt         time.Time  `json:"updated_at,omitempty"`
 }
 
 type GoalContinuedPayload struct {

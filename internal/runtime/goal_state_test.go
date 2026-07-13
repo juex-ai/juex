@@ -3,7 +3,6 @@ package runtime
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,18 +13,14 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{Now: func() time.Time { return now }})
 
 	state, err := store.CreateWithContract(GoalStateCreate{
-		Description:            "ship feature with api_key=secret",
-		AcceptanceCriteria:     []string{"tests pass", "artifact exists"},
-		RequiredArtifacts:      []string{"dist/report.json"},
-		ArtifactRequirements:   []string{"report is valid JSON"},
-		ValidationRequirements: []string{"go test ./..."},
-		VerificationMethod:     "run focused tests",
-		StatusReason:           "waiting for validation",
+		Description:  "ship feature with api_key=secret",
+		Acceptance:   "tests pass; dist/report.json exists and is valid JSON",
+		StatusReason: "waiting for validation",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusInProgress || state.Description == "" || len(state.AcceptanceCriteria) != 2 || len(state.RequiredArtifacts) != 1 {
+	if state.Status != GoalStatusInProgress || state.Description == "" || !strings.Contains(state.Acceptance, "dist/report.json") {
 		t.Fatalf("created state = %+v", state)
 	}
 	if strings.Contains(state.Description, "secret") {
@@ -33,16 +28,16 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	}
 
 	reason := "all validation passed"
-	validation := []string{"go test ./internal/runtime"}
+	acceptance := "go test ./internal/runtime passes"
 	state, err = store.Update(GoalStateUpdate{
-		Status:                 GoalStatusSuccess,
-		StatusReason:           &reason,
-		ValidationRequirements: &validation,
+		Acceptance:   &acceptance,
+		Status:       GoalStatusSuccess,
+		StatusReason: &reason,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Status != GoalStatusSuccess || state.StatusReason != reason || strings.Join(state.ValidationRequirements, ",") != validation[0] {
+	if state.Status != GoalStatusSuccess || state.StatusReason != reason || state.Acceptance != acceptance {
 		t.Fatalf("updated state = %+v", state)
 	}
 
@@ -51,15 +46,38 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, forbidden := range []string{"objective", "evidence", "budget", "blocked_reason", "next_user_input", "last_progress", "last_check", "secret"} {
+	for _, forbidden := range []string{"acceptance_criteria", "required_artifacts", "artifact_requirements", "validation_requirements", "verification_method", "objective", "evidence", "budget", "blocked_reason", "next_user_input", "last_progress", "last_check", "secret"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("goal_state.json contains old or unredacted field %q:\n%s", forbidden, text)
 		}
 	}
-	for _, want := range []string{`"acceptance_criteria"`, `"required_artifacts"`, `"validation_requirements"`, `"status_reason"`} {
+	for _, want := range []string{`"acceptance"`, `"status_reason"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("goal_state.json missing %s:\n%s", want, text)
 		}
+	}
+}
+
+func TestGoalStateStorePreservesAndRedactsLongAcceptance(t *testing.T) {
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	acceptance := strings.Repeat("required-check ", 100) + "api_key=secret final-check-must-survive"
+
+	state, err := store.CreateWithContract(GoalStateCreate{
+		Description: "ship the complete contract",
+		Acceptance:  acceptance,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Acceptance) <= 1000 || !strings.Contains(state.Acceptance, "final-check-must-survive") {
+		t.Fatalf("long acceptance was truncated: len=%d tail=%q", len(state.Acceptance), state.Acceptance[max(0, len(state.Acceptance)-80):])
+	}
+	if strings.Contains(state.Acceptance, "secret") {
+		t.Fatalf("long acceptance retained a secret: %q", state.Acceptance)
+	}
+	rendered, ok := state.RenderProviderContext()
+	if !ok || !strings.Contains(rendered, "final-check-must-survive") || strings.Contains(rendered, "secret") {
+		t.Fatalf("provider context did not preserve the redacted contract:\n%s", rendered)
 	}
 }
 
@@ -74,11 +92,8 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	}
 
 	if _, err := store.CreateWithContract(GoalStateCreate{
-		Description:            "finish task",
-		AcceptanceCriteria:     []string{"tests pass"},
-		RequiredArtifacts:      []string{"artifact.txt"},
-		ValidationRequirements: []string{"go test ./..."},
-		VerificationMethod:     "tests pass",
+		Description: "finish task",
+		Acceptance:  "artifact.txt exists and go test ./... passes",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +104,7 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	if !decision.BlockStop || decision.Reason != "goal_in_progress" ||
 		!strings.Contains(decision.ContinuePrompt, "Current goal contract") ||
 		!strings.Contains(decision.ContinuePrompt, "artifact.txt") ||
-		!strings.Contains(decision.ContinuePrompt, "tests pass") {
+		!strings.Contains(decision.ContinuePrompt, "go test ./... passes") {
 		t.Fatalf("in-progress decision = %+v", decision)
 	}
 	if err := store.RecordContinuation(decision); err != nil {
@@ -115,12 +130,15 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	}
 }
 
-func TestGoalStateStoreReadsLegacyGoalStateDefensively(t *testing.T) {
+func TestGoalStateStoreIgnoresRemovedLegacyFieldsWithoutMigrating(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "goal_state.json"), []byte(`{
   "version": 1,
-  "objective": "legacy objective",
-  "status": "complete",
+  "description": "current description survives",
+  "acceptance_criteria": ["legacy criterion"],
+  "required_artifacts": ["legacy.txt"],
+  "verification_method": "legacy verification",
+  "status": "success",
   "budget": {"continuations_used": 2},
   "last_progress": "old"
 }`), 0o644); err != nil {
@@ -130,21 +148,43 @@ func TestGoalStateStoreReadsLegacyGoalStateDefensively(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Description != "legacy objective" || state.Status != GoalStatusSuccess || state.ContinuationCount != 2 {
+	if state.Description != "current description survives" || state.Acceptance != "" || state.Status != GoalStatusSuccess || state.ContinuationCount != 0 {
 		t.Fatalf("legacy state = %+v", state)
+	}
+}
+
+func TestGoalStateStoreDoesNotResurrectLegacyStatusWithDescription(t *testing.T) {
+	for _, status := range []string{"complete", "blocked"} {
+		t.Run(status, func(t *testing.T) {
+			dir := t.TempDir()
+			data := `{
+  "version": 1,
+  "objective": "legacy objective",
+  "description": "legacy description",
+  "acceptance_criteria": ["legacy criterion"],
+  "status": "` + status + `",
+  "budget": {"continuations_used": 2}
+			}`
+			if err := os.WriteFile(filepath.Join(dir, "goal_state.json"), []byte(data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := NewGoalStateStore(dir, GoalStateOptions{}).StatusSnapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot != nil {
+				t.Fatalf("goal with legacy status should be absent: %+v", snapshot)
+			}
+		})
 	}
 }
 
 func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 	state := GoalState{
-		Description:            "complete\ndocs",
-		AcceptanceCriteria:     []string{"reviewed\nby tester", "published"},
-		RequiredArtifacts:      []string{"docs/guide.md"},
-		ArtifactRequirements:   []string{"guide explains migration"},
-		ValidationRequirements: []string{"markdown links pass"},
-		VerificationMethod:     "run docs check",
-		Status:                 GoalStatusInProgress,
-		StatusReason:           "docs still need review",
+		Description:  "complete\ndocs",
+		Acceptance:   "docs/guide.md is reviewed\nby tester, published, and passes link checks",
+		Status:       GoalStatusInProgress,
+		StatusReason: "docs still need review",
 	}
 	rendered, ok := state.RenderProviderContext()
 	if !ok {
@@ -152,9 +192,7 @@ func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Current goal contract",
-		"acceptance criteria",
-		"required artifacts",
-		"validation requirements",
+		"acceptance",
 		"status reason",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -164,25 +202,35 @@ func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 	if !strings.Contains(rendered, "complete docs") || !strings.Contains(rendered, "reviewed by tester") {
 		t.Fatalf("provider context should collapse multiline values:\n%s", rendered)
 	}
+	if lines := strings.Count(rendered, "\n") + 1; lines != 5 {
+		t.Fatalf("provider context lines = %d, want 5:\n%s", lines, rendered)
+	}
 }
 
-func TestGoalStateProviderContextRendersAllStoredContractItems(t *testing.T) {
-	criteria := make([]string, 24)
-	for i := range criteria {
-		criteria[i] = "criterion-" + strconv.Itoa(i+1)
-	}
+func TestGoalStateProviderContextOmitsEmptyStatusReason(t *testing.T) {
 	state := GoalState{
-		Description:        "complete task",
-		AcceptanceCriteria: criteria,
+		Description: "complete task",
+		Acceptance:  "tests pass",
+		Status:      GoalStatusInProgress,
 	}
 	rendered, ok := state.RenderProviderContext()
 	if !ok {
 		t.Fatal("expected provider context")
 	}
-	if !strings.Contains(rendered, "criterion-24") {
-		t.Fatalf("provider context should render every stored criterion:\n%s", rendered)
+	if strings.Contains(rendered, "status reason") {
+		t.Fatalf("provider context should omit an empty reason:\n%s", rendered)
 	}
-	if strings.Contains(rendered, "omitted") {
-		t.Fatalf("provider context should not hide stored goal requirements:\n%s", rendered)
+	if lines := strings.Count(rendered, "\n") + 1; lines != 4 {
+		t.Fatalf("provider context lines = %d, want 4:\n%s", lines, rendered)
+	}
+}
+
+func TestGoalStateStatusReasonAloneDoesNotCreateGoal(t *testing.T) {
+	state := GoalState{StatusReason: "explanatory text without a goal"}
+	if snapshot := state.StatusSnapshot(); snapshot != nil {
+		t.Fatalf("status_reason alone should not create a goal: %+v", snapshot)
+	}
+	if rendered, ok := state.RenderProviderContext(); ok || rendered != "" {
+		t.Fatalf("status_reason alone should not render provider context: %q", rendered)
 	}
 }

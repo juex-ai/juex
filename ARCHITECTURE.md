@@ -1244,8 +1244,10 @@ completion gate.
 Finish attempts also pass through the built-in `goal-completion-gate` after
 user-configured Stop command hooks. The runtime stores a session-local
 `goal_state.json` owned by model-facing goal tools. Its public contract is
-`description`, `verification_method`, `continuation_count`, `status`, and
-`updated_at`; statuses are `in_progress`, `success`, and `failure`. Ordinary
+`description`, `acceptance`, `status`, optional `status_reason`,
+`continuation_count`, and `updated_at`; statuses are `in_progress`, `success`,
+and `failure`. `acceptance` is one free-text field for completion criteria,
+required artifacts, constraints, and verification requirements. Ordinary
 user messages do not create or overwrite goals. Command hooks cannot return
 goal patches; project-specific hooks decide whether tests, PRs, tracker docs,
 or other workflow requirements should add context, update `working_state`, or
@@ -1253,8 +1255,9 @@ block stop with a `continue_prompt`. The runtime gate reads only the persisted
 goal status: `success` and `failure` allow finish, while `in_progress` records a
 continuation and asks the model to keep working or call `update_goal` with a
 terminal status. Goal state is exposed through `/status` and
-`/api/sessions/<id>`; it is not injected into provider context as an advisory
-message.
+`/api/sessions/<id>` and rendered as a bounded runtime-context contract. Legacy
+goal fields are not migrated or normalized; unknown fields in an old
+`goal_state.json` are ignored by JSON decoding.
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine
@@ -1307,6 +1310,8 @@ The separate `goal_state.json` sidecar carries model-owned operational goal
 state instead of advisory context. It is updated through `create_goal` and
 `update_goal`, appears in session status surfaces, and records
 `continuation_count` when the goal-completion gate asks the model to continue.
+`status_reason` is explanatory only: omitting it does not affect the gate,
+runtime context, or browser state.
 Manual compact and active-context inspection are available through
 `juex sessions compact --instructions`, `juex sessions context`, local
 `/compact [instructions]` and `/status` slash commands, and matching Web API

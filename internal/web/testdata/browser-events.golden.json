@@ -159,7 +159,7 @@
     "turn_id": "turn-1",
     "payload": {
       "description": "ship the fix",
-      "verification_method": "tests pass",
+      "acceptance": "tests pass",
       "continuation_count": 2,
       "status": "in_progress",
       "updated_at": "2026-06-15T00:00:07.2Z"

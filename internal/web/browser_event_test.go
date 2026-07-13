@@ -278,11 +278,11 @@ func browserEventFixtureEvents() []events.Event {
 			Timestamp: ts.Add(7200 * time.Millisecond),
 			TurnID:    "turn-1",
 			Payload: juexruntime.GoalUpdatedPayload{
-				Description:        "ship the fix",
-				VerificationMethod: "tests pass",
-				ContinuationCount:  2,
-				Status:             juexruntime.GoalStatusInProgress,
-				UpdatedAt:          ts.Add(7200 * time.Millisecond),
+				Description:       "ship the fix",
+				Acceptance:        "tests pass",
+				ContinuationCount: 2,
+				Status:            juexruntime.GoalStatusInProgress,
+				UpdatedAt:         ts.Add(7200 * time.Millisecond),
 			},
 		},
 		{

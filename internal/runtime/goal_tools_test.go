@@ -14,6 +14,35 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	if err := RegisterGoalTools(reg, eng); err != nil {
 		t.Fatal(err)
 	}
+	createTool, ok := reg.Get(GoalToolCreate)
+	if !ok {
+		t.Fatal("create_goal is not registered")
+	}
+	createProperties := createTool.Schema["properties"].(map[string]any)
+	for _, key := range []string{"description", "acceptance", "status_reason"} {
+		if _, ok := createProperties[key]; !ok {
+			t.Fatalf("create_goal schema missing %q: %#v", key, createProperties)
+		}
+	}
+	if len(createProperties) != 3 {
+		t.Fatalf("create_goal properties = %#v", createProperties)
+	}
+	updateTool, ok := reg.Get(GoalToolUpdate)
+	if !ok {
+		t.Fatal("update_goal is not registered")
+	}
+	updateProperties := updateTool.Schema["properties"].(map[string]any)
+	for _, key := range []string{"description", "acceptance", "status", "status_reason"} {
+		if _, ok := updateProperties[key]; !ok {
+			t.Fatalf("update_goal schema missing %q: %#v", key, updateProperties)
+		}
+	}
+	if len(updateProperties) != 4 {
+		t.Fatalf("update_goal properties = %#v", updateProperties)
+	}
+	if !strings.Contains(strings.ToLower(updateTool.Description), "failure") || !strings.Contains(strings.ToLower(updateTool.Description), "status_reason") {
+		t.Fatalf("update_goal description should recommend status_reason for failure: %q", updateTool.Description)
+	}
 
 	out, err := reg.Call(context.Background(), GoalToolGet, nil)
 	if err != nil {
@@ -24,13 +53,9 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	}
 
 	if _, err := reg.Call(context.Background(), GoalToolCreate, map[string]any{
-		"description":             "finish the feature",
-		"acceptance_criteria":     []any{"command succeeds", "artifact is updated"},
-		"required_artifacts":      []any{"docs/contract.md"},
-		"artifact_requirements":   []any{"document names the contract boundary"},
-		"validation_requirements": []any{"go test ./..."},
-		"verification_method":     "go test ./...",
-		"status_reason":           "created from taskline spec",
+		"description":   "finish the feature",
+		"acceptance":    "command succeeds, docs/contract.md is updated, and go test ./... passes",
+		"status_reason": "created from taskline spec",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -47,15 +72,19 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	for _, want := range []string{
 		`"present":true`,
 		`"description":"finish the feature"`,
-		`"acceptance_criteria":["command succeeds","artifact is updated"]`,
-		`"required_artifacts":["docs/contract.md"]`,
-		`"validation_requirements":["go test ./..."]`,
+		`"acceptance":"command succeeds, docs/contract.md is updated, and go test ./... passes"`,
 		`"status":"success"`,
 		`"status_reason":"validated by tests"`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("get missing %s:\n%s", want, out)
 		}
+	}
+
+	if _, err := reg.Call(context.Background(), GoalToolUpdate, map[string]any{
+		"status": string(GoalStatusFailure),
+	}); err != nil {
+		t.Fatalf("failure without status_reason should remain valid: %v", err)
 	}
 
 	other := NewGoalStateStore(t.TempDir(), GoalStateOptions{})

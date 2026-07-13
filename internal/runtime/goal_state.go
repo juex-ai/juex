@@ -73,16 +73,12 @@ func goalUpdatedPayload(snapshot *GoalStatusSnapshot) GoalUpdatedPayload {
 		return GoalUpdatedPayload{}
 	}
 	return GoalUpdatedPayload{
-		Description:            snapshot.Description,
-		AcceptanceCriteria:     append([]string(nil), snapshot.AcceptanceCriteria...),
-		RequiredArtifacts:      append([]string(nil), snapshot.RequiredArtifacts...),
-		ArtifactRequirements:   append([]string(nil), snapshot.ArtifactRequirements...),
-		ValidationRequirements: append([]string(nil), snapshot.ValidationRequirements...),
-		VerificationMethod:     snapshot.VerificationMethod,
-		ContinuationCount:      snapshot.ContinuationCount,
-		Status:                 snapshot.Status,
-		StatusReason:           snapshot.StatusReason,
-		UpdatedAt:              snapshot.UpdatedAt,
+		Description:       snapshot.Description,
+		Acceptance:        snapshot.Acceptance,
+		ContinuationCount: snapshot.ContinuationCount,
+		Status:            snapshot.Status,
+		StatusReason:      snapshot.StatusReason,
+		UpdatedAt:         snapshot.UpdatedAt,
 	}
 }
 

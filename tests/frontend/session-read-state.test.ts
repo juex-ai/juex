@@ -155,7 +155,7 @@ test("projectLiveBrowserEvent refreshes session goal state", () => {
       goal: {
         status: "in_progress",
         description: "old goal",
-        verification_method: "old checks",
+        acceptance: "old checks",
         continuation_count: 7,
         updated_at: "2026-06-15T00:00:00Z",
       },
