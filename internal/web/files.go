@@ -168,17 +168,37 @@ func resolveScratchpadTreePath(root, dir string) (string, string, error) {
 		return root, relPath, nil
 	}
 	root = resolvedRoot
+	if err := rejectScratchpadTreeSymlinks(root, relPath); err != nil {
+		return "", "", err
+	}
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		// Lazy sessions intentionally have no directory yet. Their lexical path
 		// remains valid relative to the resolved workspace root.
 		return root, relPath, nil
 	}
-	relPath, err = relativeInside(root, resolvedDir)
-	if err != nil {
+	if _, err := relativeInside(root, resolvedDir); err != nil {
 		return "", "", errors.New("scratchpad is outside workspace")
 	}
 	return root, relPath, nil
+}
+
+func rejectScratchpadTreeSymlinks(root, relPath string) error {
+	current := root
+	for _, part := range strings.Split(filepath.Clean(relPath), string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("scratchpad path contains a symlink")
+		}
+	}
+	return nil
 }
 
 func (s *Server) sessionScratchpadDir(id string) (string, bool) {

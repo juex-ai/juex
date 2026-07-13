@@ -267,6 +267,28 @@ func TestSessionScratchpadTreeRejectsOutsideSymlink(t *testing.T) {
 	}
 }
 
+func TestSessionScratchpadTreeRejectsInsideSymlink(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-linked-in"
+	seedSession(t, srv.opts.Cfg.WorkDir, id,
+		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
+	if err := os.Symlink(srv.opts.Cfg.WorkDir, filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad")); err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+}
+
 func TestFilesContentReturnsPreview(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteFile(t, filepath.Join(srv.opts.Cfg.WorkDir, "notes", "today.txt"), "line one\nline two\n")
