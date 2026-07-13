@@ -10,7 +10,10 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { loadWorkspaceSnapshot } from "@/lib/workspace-refresh";
+import {
+  loadWorkspaceSnapshot,
+  type LoadFileTree,
+} from "@/lib/workspace-refresh";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -29,7 +32,21 @@ import {
 
 const WORKSPACE_REFRESH_INTERVAL_MS = 5_000;
 
-export function FileTreePanel({ active = true }: { active?: boolean }) {
+type FileTreePanelProps = {
+  active?: boolean;
+  emptyLabel?: string;
+  loadTree?: LoadFileTree;
+  refreshLabel?: string;
+  title?: string;
+};
+
+export function FileTreePanel({
+  active = true,
+  emptyLabel = "This directory is empty.",
+  loadTree = getFileTree,
+  refreshLabel = "Refresh workspace",
+  title = "Workspace",
+}: FileTreePanelProps) {
   const [tree, setTree] = useState<FileNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -47,7 +64,7 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
     setRefreshing(true);
     if (!treeRef.current) setLoading(true);
     loadWorkspaceSnapshot({
-      loadTree: getFileTree,
+      loadTree,
       loadContent: getFileContent,
       previewPath: previewFile?.path,
       signal: controller.signal,
@@ -71,7 +88,7 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
         setLoading(false);
         setRefreshing(false);
       });
-  }, [active, previewFile?.path]);
+  }, [active, loadTree, previewFile?.path]);
 
   useEffect(() => {
     if (!active) return;
@@ -115,7 +132,7 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
   return (
     <div className="flex h-full min-w-0 flex-col bg-card text-card-foreground">
       <div className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between gap-2 border-b px-4 pr-12 font-sans text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:pr-4">
-        <span>Workspace</span>
+        <span>{title}</span>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -126,18 +143,20 @@ export function FileTreePanel({ active = true }: { active?: boolean }) {
                 className="size-7 text-muted-foreground hover:text-foreground"
                 onClick={handleRefreshClick}
                 disabled={refreshing}
-                aria-label="Refresh workspace"
+                aria-label={refreshLabel}
               >
                 <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Refresh workspace</TooltipContent>
+            <TooltipContent>{refreshLabel}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>
       <ScrollArea className="flex-1 p-3">
         {loading ? (
           <div className="animate-pulse p-2 text-sm text-muted-foreground">Loading...</div>
+        ) : tree && tree.is_dir && !tree.children_truncated && !tree.children?.length ? (
+          <div className="p-2 text-sm text-muted-foreground">{emptyLabel}</div>
         ) : tree ? (
           <TreeNode node={tree} depth={0} onFileClick={handleFileClick} />
         ) : (

@@ -264,6 +264,7 @@ func New(opts Options) (*App, error) {
 		AgentsMDDirs:       resourcePaths.AgentsMDDirs,
 		Memory:             memStore,
 		Skills:             skillLoader,
+		ScratchpadDir:      sess.ScratchpadDir(),
 		WorkDir:            runtimePaths.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(cfg.Shell),
 		RuntimeSections: func() []prompt.Section {

@@ -1,5 +1,6 @@
 import {
   type ReactNode,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -36,6 +37,13 @@ import {
 import { useShellTitle } from "@/components/AppShell";
 import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
+import { FileTreePanel } from "@/components/FileTreePanel";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   messagesToGroups,
   toolState,
@@ -117,6 +125,7 @@ import {
 import {
   getSession,
   getSessionContext,
+  getSessionScratchpad,
   getTurnStatus,
   interrupt,
   startTurn,
@@ -130,6 +139,7 @@ import {
   ChevronUpIcon,
   CircleGaugeIcon,
   CopyIcon,
+  FolderOpenIcon,
   ImagePlusIcon,
   LoaderCircleIcon,
   RadioIcon,
@@ -381,6 +391,7 @@ export function Session() {
                       tokenUsage={tokenUsage}
                     />
                     <SessionRuntimeStateBadges data={data} />
+                    <ScratchpadButton sessionID={data.id} />
                   </PromptInputTools>
                   <div className="flex shrink-0 items-center gap-1">
                     <ComposerSubmitButton
@@ -494,6 +505,55 @@ function SessionRuntimeStateBadges({ data }: { data: SessionShowResponse }) {
     >
       <SessionStateTooltip goal={data.goal} notes={data.notes} />
     </SessionStateBadge>
+  );
+}
+
+function ScratchpadButton({ sessionID }: { sessionID: string }) {
+  const [open, setOpen] = useState(false);
+  const loadTree = useCallback(
+    (signal?: AbortSignal) => getSessionScratchpad(sessionID, signal),
+    [sessionID],
+  );
+
+  return (
+    <>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="Browse session scratchpad"
+              className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={() => setOpen(true)}
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              <FolderOpenIcon className="size-3.5" aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Browse session scratchpad</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          className="flex !w-full !max-w-none flex-col gap-0 border-l bg-card p-0 sm:!max-w-xl"
+          side="right"
+        >
+          <SheetTitle className="sr-only">Session scratchpad</SheetTitle>
+          <SheetDescription className="sr-only">
+            Files saved as temporary working material for this session.
+          </SheetDescription>
+          <FileTreePanel
+            key={sessionID}
+            active={open}
+            emptyLabel="No scratchpad files yet."
+            loadTree={loadTree}
+            refreshLabel="Refresh scratchpad"
+            title="Scratchpad"
+          />
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 
@@ -819,9 +879,10 @@ function ComposerSubmitButton({
 function ReadOnlySessionBar({ data }: { data: SessionShowResponse }) {
   return (
     <div className="flex min-h-[52px] flex-wrap items-center gap-3 rounded-md border bg-muted/50 px-3 py-2 text-sm">
-      <div className="min-w-0 text-muted-foreground">
+      <div className="min-w-0 flex-1 text-muted-foreground">
         {sessionReadOnlyMessage(data)}
       </div>
+      <ScratchpadButton sessionID={data.id} />
     </div>
   );
 }

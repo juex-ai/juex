@@ -5,8 +5,9 @@
 //  1. AGENTS.md hierarchy (user-global -> project root -> cwd subdir)
 //  2. Skills index (descriptions only)
 //  3. Memory section (Layer 2 entries)
-//  4. Tool list (auto-supplied to the provider, not duplicated here)
-//  5. Operating context (cwd, time, OS)
+//  4. Session scratchpad guidance
+//  5. Tool list (auto-supplied to the provider, not duplicated here)
+//  6. Operating context (cwd, time, OS)
 //
 // The builder is rebuilt from scratch every turn so that memory edits and
 // skill changes propagate immediately.
@@ -30,6 +31,7 @@ type Builder struct {
 	AgentsMDDirs       []string // loaded after global AGENTS.md, in caller-provided order
 	Memory             *memory.Store
 	Skills             *skills.Loader
+	ScratchpadDir      string
 	WorkDir            string
 	Shell              ShellProfile
 	RuntimeSections    func() []Section
@@ -96,6 +98,10 @@ func (b *Builder) Sections() []Section {
 		}
 	}
 
+	if section, ok := b.scratchpadSection(); ok {
+		sections = append(sections, section)
+	}
+
 	if b.RuntimeSections != nil {
 		for _, section := range b.RuntimeSections() {
 			if section.Text != "" {
@@ -106,6 +112,31 @@ func (b *Builder) Sections() []Section {
 
 	sections = append(sections, Section{Key: "operating_context", Label: "Operating Context", Source: "runtime", Text: b.operatingContext()})
 	return sections
+}
+
+func (b *Builder) scratchpadSection() (Section, bool) {
+	dir := strings.TrimSpace(b.ScratchpadDir)
+	if dir == "" {
+		return Section{}, false
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	text := strings.Join([]string{
+		"## Session Scratchpad",
+		fmt.Sprintf("- path: %s", dir),
+		"- Use this directory for long drafts, intermediate files, and working material that exceeds the compact Notes budget.",
+		"- Scratchpad contents are not automatically added to context. When needed, use `read` or `grep` to retrieve them.",
+		"- Keep the current plan and short progress checkpoints in Notes; keep substantial working material here.",
+		"- Save important intermediate conclusions here before compaction so a later turn can read them back.",
+	}, "\n")
+	return Section{
+		Key:    "session_scratchpad",
+		Label:  "Session Scratchpad",
+		Source: "runtime",
+		Path:   dir,
+		Text:   text,
+	}, true
 }
 
 func JoinSections(sections []Section) string {

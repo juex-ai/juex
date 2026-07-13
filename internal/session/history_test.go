@@ -463,3 +463,26 @@ func TestDeleteLastHistoryEntryClearsActive(t *testing.T) {
 		t.Fatalf("history = %+v, want empty sessions and nil active", h)
 	}
 }
+
+func TestDeleteRemovesScratchpadContents(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := s.ID
+	dir := s.Dir
+	if err := os.WriteFile(filepath.Join(s.ScratchpadDir(), "draft.md"), []byte("temporary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Delete(root, "", id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("session dir stat err = %v, want not exist", err)
+	}
+}

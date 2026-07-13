@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/juex-ai/juex/internal/app"
 )
 
 func TestFilesTreeReturnsSortedWorkDir(t *testing.T) {
@@ -85,6 +87,98 @@ func TestFilesTreeLimitsDepth(t *testing.T) {
 	}
 	if !node.ChildrenTruncated || len(node.Children) != 0 {
 		t.Fatalf("truncated node = %+v", node)
+	}
+}
+
+func TestSessionScratchpadTreeReturnsScopedFiles(t *testing.T) {
+	srv := newTestServer(t)
+	id := "20260507T101010-pad001"
+	seedSession(t, srv.opts.Cfg.WorkDir, id,
+		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
+	root := filepath.Join(srv.opts.Cfg.SessionsDir(), id, "scratchpad")
+	mustWriteFile(t, filepath.Join(root, "draft.md"), "draft")
+	mustWriteFile(t, filepath.Join(root, "dist", "result.txt"), "kept")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var tree FileNode
+	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad"))
+	if tree.Name != "scratchpad" || tree.Path != wantPath || !tree.IsDir {
+		t.Fatalf("root = %+v, want scoped scratchpad %q", tree, wantPath)
+	}
+	if got, want := strings.Join(childNames(tree.Children), ","), "dist,draft.md"; got != want {
+		t.Fatalf("children = %q, want %q", got, want)
+	}
+	if got := tree.Children[0].Children[0].Path; got != wantPath+"/dist/result.txt" {
+		t.Fatalf("nested path = %q", got)
+	}
+}
+
+func TestSessionScratchpadTreeDoesNotPersistLazySession(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "conversation.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("lazy conversation stat err = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "scratchpad")); !os.IsNotExist(err) {
+		t.Fatalf("lazy scratchpad stat err = %v, want not exist", err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/sessions/" + as.app.Session.ID + "/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
+	}
+	var tree FileNode
+	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
+		t.Fatal(err)
+	}
+	if tree.Name != "scratchpad" || !tree.IsDir || len(tree.Children) != 0 {
+		t.Fatalf("lazy scratchpad tree = %+v", tree)
+	}
+	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "conversation.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("scratchpad read persisted lazy conversation: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(as.app.Session.Dir, "scratchpad")); !os.IsNotExist(err) {
+		t.Fatalf("scratchpad read created lazy directory: %v", err)
+	}
+}
+
+func TestSessionScratchpadTreeRejectsUnknownSession(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/missing/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d body = %s", resp.StatusCode, body)
 	}
 }
 

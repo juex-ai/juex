@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/session"
 )
 
 const maxFilePreviewBytes = 256 * 1024
@@ -61,6 +63,10 @@ func (s *Server) handleFilesTree(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildFileTree(root, relPath string, depth int) (*FileNode, error) {
+	return buildFileTreeWithSkip(root, relPath, depth, shouldSkipTreeEntry)
+}
+
+func buildFileTreeWithSkip(root, relPath string, depth int, skip func(string) bool) (*FileNode, error) {
 	absPath := filepath.Join(root, relPath)
 	info, err := os.Lstat(absPath)
 	if err != nil {
@@ -89,11 +95,11 @@ func buildFileTree(root, relPath string, depth int) (*FileNode, error) {
 		var children []*FileNode
 		for _, e := range entries {
 			name := e.Name()
-			if shouldSkipTreeEntry(name) {
+			if skip != nil && skip(name) {
 				continue
 			}
 			childRel := filepath.Join(relPath, name)
-			child, err := buildFileTree(root, childRel, depth+1)
+			child, err := buildFileTreeWithSkip(root, childRel, depth+1, skip)
 			if err == nil && child != nil {
 				children = append(children, child)
 			}
@@ -108,6 +114,71 @@ func buildFileTree(root, relPath string, depth int) (*FileNode, error) {
 	}
 
 	return node, nil
+}
+
+func (s *Server) handleSessionScratchpad(w http.ResponseWriter, r *http.Request, id string) {
+	dir, ok := s.sessionScratchpadDir(id)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+
+	root := s.opts.Cfg.WorkDir
+	if root == "" {
+		root = "."
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	relPath, err := filepath.Rel(root, dir)
+	if err != nil || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+		writeErr(w, http.StatusInternalServerError, "general_error", "scratchpad is outside workspace")
+		return
+	}
+
+	tree, err := buildFileTreeWithSkip(root, relPath, 0, nil)
+	if os.IsNotExist(err) {
+		tree = &FileNode{
+			Name:  scratchpadName(dir),
+			Path:  filepath.ToSlash(relPath),
+			IsDir: true,
+		}
+		err = nil
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tree)
+}
+
+func (s *Server) sessionScratchpadDir(id string) (string, bool) {
+	if active, ok := s.sessions.Load(id); ok {
+		return active.(*activeSession).app.Session.ScratchpadDir(), true
+	}
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
+		return "", false
+	}
+	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	if !session.HasConversation(dir) {
+		return "", false
+	}
+	return session.ScratchpadDir(dir), true
+}
+
+func scratchpadName(dir string) string {
+	name := filepath.Base(dir)
+	if name == "." || name == string(filepath.Separator) || name == "" {
+		return "scratchpad"
+	}
+	return name
 }
 
 func shouldSkipTreeEntry(name string) bool {
