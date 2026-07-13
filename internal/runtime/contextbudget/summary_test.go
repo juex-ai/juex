@@ -1,6 +1,7 @@
 package contextbudget
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -157,9 +158,15 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 }
 
 func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscriptIsOmitted(t *testing.T) {
+	goal := SummaryGoal{
+		Description:  "Ship compaction fidelity",
+		Acceptance:   "Goal and Notes survive compaction:\n- [ ] preserve first line\n- [ ] preserve second line",
+		Status:       "in_progress",
+		StatusReason: "verification remains:\nrun the live evaluation",
+	}
 	state := SummaryState{
-		GoalContract: "description: Ship compaction fidelity\nacceptance: Goal and Notes survive compaction\nstatus: in_progress",
-		Notes:        "- [x] map the runtime\n- [ ] run the live compaction evaluation",
+		Goal:  &goal,
+		Notes: "- [x] map the runtime\n- [ ] run the live compaction evaluation",
 	}
 	var input []llm.Message
 	for i := 0; i < 12; i++ {
@@ -184,13 +191,15 @@ func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscript
 	body := hist[0].FirstText()
 	for _, want := range []string{
 		"<authoritative-session-state>",
-		state.GoalContract,
 		state.Notes,
 		"</authoritative-session-state>",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary body missing authoritative state %q:\n%s", want, body)
 		}
+	}
+	if got := summaryGoalFromBody(t, body); got != goal {
+		t.Fatalf("summary goal = %+v, want lossless %+v", got, goal)
 	}
 	if !strings.Contains(body, "messages omitted") || strings.Contains(body, "message-00") {
 		t.Fatalf("transcript was not omitted before authoritative state:\n%s", body)
@@ -199,6 +208,26 @@ func TestBuildCompactionSummaryRequest_PreservesAuthoritativeStateWhenTranscript
 	if got := EstimateContextTokens(sys, nil, hist); got > limit {
 		t.Fatalf("summary request tokens = %d, want <= %d", got, limit)
 	}
+}
+
+func summaryGoalFromBody(t *testing.T, body string) SummaryGoal {
+	t.Helper()
+	const openTag = "<goal-contract>\n"
+	const closeTag = "\n</goal-contract>"
+	start := strings.Index(body, openTag)
+	if start < 0 {
+		t.Fatalf("summary body missing %s:\n%s", strings.TrimSpace(openTag), body)
+	}
+	start += len(openTag)
+	end := strings.Index(body[start:], closeTag)
+	if end < 0 {
+		t.Fatalf("summary body missing %s:\n%s", strings.TrimSpace(closeTag), body)
+	}
+	var goal SummaryGoal
+	if err := json.Unmarshal([]byte(body[start:start+end]), &goal); err != nil {
+		t.Fatalf("decode summary goal: %v\n%s", err, body)
+	}
+	return goal
 }
 
 func TestCompactionSummaryRequestTokenLimitCapsLargeWindows(t *testing.T) {

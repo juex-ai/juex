@@ -304,7 +304,7 @@ goal. The active contract is intentionally small: `description`,
 `acceptance`, `status` (`in_progress`, `success`, or `failure`), optional
 `status_reason`, `continuation_count`, and `updated_at`. `acceptance` is free
 text for criteria, artifacts, constraints, and verification requirements; a
-missing `status_reason` has no behavioral effect. The model writes this state
+missing `status_reason` has no behavioral effect. The model accesses this state
 only through `get_goal`, `create_goal`, and `update_goal`; ordinary user
 messages do not create goals, and command hook output cannot mutate goals.
 Legacy goal fields are not migrated or normalized and are ignored when old

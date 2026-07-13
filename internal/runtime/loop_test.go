@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1269,7 +1270,7 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	if _, err := eng.GoalState.CreateWithContract(GoalStateCreate{
 		Description: "Ship authoritative compaction state",
-		Acceptance:  "The persisted goal and notes remain exact",
+		Acceptance:  "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1303,15 +1304,36 @@ func TestCompactCarriesAuthoritativeStateAndMergesInstructionSources(t *testing.
 	body := prov.histories[0][0].FirstText()
 	for _, want := range []string{
 		"<authoritative-session-state>",
-		"description: Ship authoritative compaction state",
-		"acceptance: The persisted goal and notes remain exact",
-		"status: in_progress",
 		"- [x] map the runtime",
 		"- [ ] run the live compaction evaluation",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary request missing authoritative state %q:\n%s", want, body)
 		}
+	}
+	const goalOpen = "<goal-contract>\n"
+	const goalClose = "\n</goal-contract>"
+	start := strings.Index(body, goalOpen)
+	if start < 0 {
+		t.Fatalf("summary request missing goal contract:\n%s", body)
+	}
+	start += len(goalOpen)
+	end := strings.Index(body[start:], goalClose)
+	if end < 0 {
+		t.Fatalf("summary request has unterminated goal contract:\n%s", body)
+	}
+	var goal struct {
+		Description string `json:"description"`
+		Acceptance  string `json:"acceptance"`
+		Status      string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(body[start:start+end]), &goal); err != nil {
+		t.Fatalf("decode summary goal contract: %v\n%s", err, body)
+	}
+	if goal.Description != "Ship authoritative compaction state" ||
+		goal.Acceptance != "The persisted goal remains exact:\n- [ ] preserve acceptance line one\n- [ ] preserve acceptance line two" ||
+		goal.Status != string(GoalStatusInProgress) {
+		t.Fatalf("summary goal contract = %+v", goal)
 	}
 }
 
@@ -3181,6 +3203,60 @@ func TestTurn_SerializesUpdateNotesCallsInProviderOrder(t *testing.T) {
 	}
 	if snapshot.Content != "second" {
 		t.Fatalf("notes content = %q, want final provider-ordered rewrite", snapshot.Content)
+	}
+}
+
+func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
+	if err := RegisterGoalTools(eng.Tools, eng); err != nil {
+		t.Fatal(err)
+	}
+	eng.Hooks = hookRunnerFunc(func(ctx context.Context, req hooks.Request) ([]hooks.Result, error) {
+		if req.EventName == hooks.EventPreToolUse && req.ToolName == GoalToolCreate {
+			select {
+			case <-time.After(100 * time.Millisecond):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return nil, nil
+	})
+
+	results := eng.runToolCalls(context.Background(), "turn-goal-order", []llm.Block{
+		{
+			Type:      llm.BlockToolUse,
+			ToolUseID: "goal-create",
+			ToolName:  GoalToolCreate,
+			Input: map[string]any{
+				"description": "ship ordered goal state",
+				"acceptance":  "goal updates observe provider order",
+			},
+		},
+		{
+			Type:      llm.BlockToolUse,
+			ToolUseID: "goal-update",
+			ToolName:  GoalToolUpdate,
+			Input: map[string]any{
+				"status":        string(GoalStatusSuccess),
+				"status_reason": "ordered update applied",
+			},
+		},
+	})
+	if len(results) != 2 {
+		t.Fatalf("results = %d, want 2", len(results))
+	}
+	for i, result := range results {
+		if result.Block.IsError {
+			t.Fatalf("result %d unexpectedly failed: %s", i, result.Block.Content)
+		}
+	}
+	snapshot, err := eng.GoalState.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Status != GoalStatusSuccess || snapshot.StatusReason != "ordered update applied" {
+		t.Fatalf("goal state = %+v, want provider-ordered success update", snapshot)
 	}
 }
 

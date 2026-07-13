@@ -13,8 +13,15 @@ import (
 const maxCompactionSummaryRequestTokens = 16000
 
 type SummaryState struct {
-	GoalContract string
-	Notes        string
+	Goal  *SummaryGoal
+	Notes string
+}
+
+type SummaryGoal struct {
+	Description  string `json:"description,omitempty"`
+	Acceptance   string `json:"acceptance,omitempty"`
+	Status       string `json:"status,omitempty"`
+	StatusReason string `json:"status_reason,omitempty"`
 }
 
 func BuildCompactionSummaryRequest(base string, previous llm.Message, input []llm.Message, state SummaryState, policy Policy, instructions string) (string, []llm.Message) {
@@ -67,16 +74,15 @@ func BuildCompactionSummaryBody(previous llm.Message, input []llm.Message, state
 }
 
 func writeAuthoritativeSummaryState(body *strings.Builder, state SummaryState) {
-	if strings.TrimSpace(state.GoalContract) == "" && strings.TrimSpace(state.Notes) == "" {
+	if state.Goal == nil && strings.TrimSpace(state.Notes) == "" {
 		return
 	}
 	body.WriteString("<authoritative-session-state>\n")
-	if strings.TrimSpace(state.GoalContract) != "" {
+	if state.Goal != nil {
 		body.WriteString("<goal-contract>\n")
-		body.WriteString(state.GoalContract)
-		if !strings.HasSuffix(state.GoalContract, "\n") {
-			body.WriteByte('\n')
-		}
+		data, _ := json.MarshalIndent(state.Goal, "", "  ")
+		body.Write(data)
+		body.WriteByte('\n')
 		body.WriteString("</goal-contract>\n")
 	}
 	if strings.TrimSpace(state.Notes) != "" {
