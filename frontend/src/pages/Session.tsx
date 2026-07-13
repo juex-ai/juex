@@ -572,7 +572,7 @@ function SessionStateTooltip({
 }
 
 function NotesStateTooltip({ notes }: { notes?: NotesSnapshot }) {
-  if (!notes?.content.trim()) {
+  if (!notes?.content?.trim()) {
     return (
       <RuntimeTooltipPanel title="Notes">
         <div className="text-muted-foreground">No working notes for this session.</div>

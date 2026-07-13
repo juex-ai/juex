@@ -88,7 +88,7 @@ export function runtimeSessionStateIsActive(
   goal?: GoalStatusSnapshot,
   notes?: NotesSnapshot,
 ): boolean {
-  return runtimeGoalIsActive(goal) || Boolean(notes?.content.trim());
+  return runtimeGoalIsActive(goal) || Boolean(notes?.content?.trim());
 }
 
 export interface NotesCheckboxProgress {
@@ -100,7 +100,7 @@ export interface NotesCheckboxProgress {
 export function notesCheckboxProgress(notes?: NotesSnapshot): NotesCheckboxProgress {
   let completed = 0;
   let total = 0;
-  for (const match of notes?.content.matchAll(/^\s*-\s+\[([ xX])\]\s+/gm) ?? []) {
+  for (const match of notes?.content?.matchAll(/^\s*-\s+\[([ xX])\]\s+/gm) ?? []) {
     total += 1;
     if (match[1].toLowerCase() === "x") completed += 1;
   }

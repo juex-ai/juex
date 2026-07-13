@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import type { NotesSnapshot } from "../../frontend/src/types.ts";
+
 import {
   formatRuntimeTokenCount,
   notesCheckboxProgress,
@@ -146,6 +148,11 @@ test("notesCheckboxProgress counts Markdown task items", () => {
   assert.equal(progress.completed, 2);
   assert.equal(progress.total, 3);
   assert.ok(Math.abs(progress.percent - 200 / 3) < 1e-10);
+  assert.deepEqual(notesCheckboxProgress({} as NotesSnapshot), {
+    completed: 0,
+    total: 0,
+    percent: 0,
+  });
 });
 
 test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
@@ -160,4 +167,9 @@ test("runtimeSessionStateIsActive merges goal and notes presence", () => {
     true,
   );
   assert.equal(runtimeSessionStateIsActive(undefined, { content: "  " }), false);
+  assert.equal(runtimeSessionStateIsActive(undefined, {} as NotesSnapshot), false);
+  assert.equal(
+    runtimeSessionStateIsActive(undefined, { content: null } as unknown as NotesSnapshot),
+    false,
+  );
 });
