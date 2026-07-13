@@ -1075,7 +1075,7 @@ hooks:
   commands:
     - name: add-ticket-context
       events: [UserPromptSubmit]
-      command: ["bash", "-lc", "jq -n '{additional_context:\"ticket: ABC-123\"}'"]
+      command: ["printf", "ticket: ABC-123"]
       timeout_seconds: 5
       max_output_bytes: 65536
 runtime:
@@ -1207,24 +1207,28 @@ Lifecycle hooks are trusted command hooks executed by the runtime. They are
 configured in `hooks.commands` and receive one JSON object on stdin with the
 event name, session id, turn id, cwd, workspace roots, permission/sandbox
 labels, conversation/event log paths, current `goal_state`, and event-specific
-fields such as tool input/result or compaction reason. Hook stdout may be empty
-or a JSON object containing `decision`, `additional_context`, `block_stop`, and
-`continue_prompt`. Hook requests may include the current goal as read-only
-context, but hook output cannot mutate Goal or Notes.
+fields such as tool input/result or compaction reason. Hook commands return
+plain text on stdout: exit `0` allows the action and exposes non-empty stdout
+as model context, exit `2` requests the event-specific block or correction,
+and any other exit code records a non-blocking hook error. For exit `2`, stderr
+is used as the text only when stdout is empty; otherwise stderr is diagnostic.
+JSON-looking stdout is still plain text. Hook requests may include the current
+goal as read-only context, but hook output cannot mutate Goal or Notes.
 
 The runtime emits `hook.started`, `hook.completed`, `hook.errored`, and
 conversation-visible `hook.trace` events; the existing session bus persists
 those events to `events.jsonl`. Command hooks always produce UI-only hook trace
 rows. Built-in runtime hook/gate completions and failures only produce those
 rows when `runtime.show_builtin_hook_traces` is true.
-`UserPromptSubmit` hooks can add context to the user message before projection
-and provider submission. `PreToolUse` hooks can deny a tool call, producing an
-error tool result so the model can recover. `PostToolUse` hook failures are
-folded into the tool result. `PreCompact` can deny compaction. `PostCompact`
-runs after a successful compact summary append; failures or deny decisions are
-emitted as warning-style compaction error events and do not fail or roll back
-the persisted compaction. `Stop` can block turn completion by queuing a
-`continue_prompt`.
+`SessionStart` exit `2` rejects startup. `UserPromptSubmit` stdout can extend
+the user message, while exit `2` rejects the turn. `PreToolUse` exit `2`
+produces an error tool result so the model can recover. `PostToolUse` exit `2`
+adds corrective context without changing whether the completed tool itself
+failed. `PreCompact` stdout extends the summary instructions; compact hooks
+cannot veto compaction, so exit `2` is reported as `hook.errored`.
+`PostCompact` stdout is appended as runtime context for the next model request.
+`Stop` exit `2` blocks turn completion and uses its text as the continuation
+prompt.
 
 Tool failures are also tracked in a per-turn unresolved-failure ledger inside
 `internal/runtime`. The ledger classifies each failed tool result as
@@ -1245,9 +1249,9 @@ user-configured Stop command hooks. The runtime stores a session-local
 and `failure`. `acceptance` is one free-text field for completion criteria,
 required artifacts, constraints, and verification requirements. Ordinary
 user messages do not create or overwrite goals. Command hooks cannot return
-goal patches; project-specific hooks decide whether tests, PRs, tracker docs,
-or other workflow requirements should add context or block stop with a
-`continue_prompt`. The runtime gate reads only the persisted
+goal patches; project-specific hooks can report tests, PRs, tracker docs, or
+other workflow requirements as plain-text context or use Stop exit `2` to
+request continuation. The runtime gate reads only the persisted
 goal status: `success` and `failure` allow finish, while `in_progress` records a
 continuation and asks the model to keep working or call `update_goal` with a
 terminal status. Goal state is exposed through `/status` and

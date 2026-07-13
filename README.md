@@ -292,12 +292,15 @@ Legacy goal fields are not migrated or normalized and are ignored when old
 state is loaded. The built-in
 `goal-completion-gate` reads the persisted status and queues one continuation
 when the goal is still `in_progress`; project-specific hooks can still add
-context or block stop with a `continue_prompt`.
+plain-text context or request Stop continuation with exit code `2`.
 
 Lifecycle command hooks can be configured under `hooks.commands` to observe or
 gate session start, user prompt submission, tool use, compaction, and stop
 checks. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
 project-local hooks must set `hooks.trusted: true` before Juex executes them.
+Hooks receive JSON on stdin and respond with plain stdout plus an exit code:
+`0` allows, `2` requests the event-specific block/correction, and other exit
+codes report a non-blocking hook error. JSON-looking stdout is treated as text.
 Set `runtime.show_builtin_hook_traces: true` to mirror built-in hook/gate
 completions and failures into the conversation as UI-only hook trace rows.
 

@@ -36,19 +36,16 @@ type HookStartedPayload struct {
 }
 
 type HookCompletedPayload struct {
-	Name                 string `json:"name"`
-	Source               string `json:"source,omitempty"`
-	EventName            string `json:"event_name"`
-	ToolName             string `json:"tool_name,omitempty"`
-	DurationMS           int64  `json:"duration_ms"`
-	Decision             string `json:"decision,omitempty"`
-	AdditionalContextLen int    `json:"additional_context_len,omitempty"`
-	BlockStop            bool   `json:"block_stop,omitempty"`
-	ContinuePromptLen    int    `json:"continue_prompt_len,omitempty"`
-	StdoutLen            int    `json:"stdout_len,omitempty"`
-	StderrLen            int    `json:"stderr_len,omitempty"`
-	StdoutPreview        string `json:"stdout_preview,omitempty"`
-	StderrPreview        string `json:"stderr_preview,omitempty"`
+	Name          string `json:"name"`
+	Source        string `json:"source,omitempty"`
+	EventName     string `json:"event_name"`
+	ToolName      string `json:"tool_name,omitempty"`
+	DurationMS    int64  `json:"duration_ms"`
+	ExitCode      int    `json:"exit_code"`
+	StdoutLen     int    `json:"stdout_len,omitempty"`
+	StderrLen     int    `json:"stderr_len,omitempty"`
+	StdoutPreview string `json:"stdout_preview,omitempty"`
+	StderrPreview string `json:"stderr_preview,omitempty"`
 }
 
 type HookErroredPayload struct {
@@ -57,6 +54,7 @@ type HookErroredPayload struct {
 	EventName     string `json:"event_name"`
 	ToolName      string `json:"tool_name,omitempty"`
 	DurationMS    int64  `json:"duration_ms"`
+	ExitCode      int    `json:"exit_code,omitempty"`
 	Error         string `json:"error"`
 	StdoutLen     int    `json:"stdout_len,omitempty"`
 	StderrLen     int    `json:"stderr_len,omitempty"`

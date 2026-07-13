@@ -331,7 +331,7 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	if err != nil {
 		return preparedTurnContext{}, err
 	}
-	if denied, reason := hookDenied(userHookResults); denied {
+	if denied, reason := hookBlocked(userHookResults); denied {
 		return preparedTurnContext{}, hookDeniedError(hooks.EventUserPromptSubmit, reason)
 	}
 	userMsg = appendHookAdditionalContext(userMsg, userHookResults)
@@ -561,7 +561,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 	if err != nil {
 		return e.hookToolErrorResult(turnID, call, err)
 	}
-	if denied, reason := hookDenied(preResults); denied {
+	if denied, reason := hookBlocked(preResults); denied {
 		return e.hookToolErrorResult(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
 	}
 
@@ -588,6 +588,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 			block.ChunkedWrite = &event
 		}
 	}
+	appendToolHookContext(&block, preResults, false)
 
 	postReq := e.newHookRequest(hooks.EventPostToolUse, turnID)
 	postReq.ToolName = call.ToolName
@@ -600,11 +601,7 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		block.IsError = true
 		toolErr = postErr
 	}
-	if denied, reason := hookDenied(postResults); denied {
-		toolErr = fmt.Errorf("hooks: tool %q denied after use%s", call.ToolName, hookReasonSuffix(reason))
-		block.Content = toolErrorContent(block.Content, toolErr)
-		block.IsError = true
-	}
+	appendToolHookContext(&block, postResults, true)
 	if !block.IsError {
 		if media, ok := tools.MediaRefFromStructuredResult(info.StructuredResult); ok {
 			block.Media = media

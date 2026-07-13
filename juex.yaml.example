@@ -78,7 +78,7 @@ model: openai:gpt-4.1
 #   commands:
 #     - name: add-ticket-context
 #       events: [UserPromptSubmit]
-#       command: ["bash", "-lc", "jq -n '{additional_context:\"ticket: ABC-123\"}'"]
+#       command: ["printf", "ticket: ABC-123"]
 #       # Defaults to 10 and cannot exceed 300.
 #       timeout_seconds: 5
 #       max_output_bytes: 65536

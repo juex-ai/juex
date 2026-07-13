@@ -63,7 +63,7 @@ func TestBuiltinHookTraceTextRequiresPolicy(t *testing.T) {
 		Source:     "builtin",
 		EventName:  string(hooks.EventStop),
 		DurationMS: 3,
-		Decision:   string(hooks.DecisionAllow),
+		ExitCode:   0,
 	}
 	if got := hookCompletedTraceText(payload, false); got != "" {
 		t.Fatalf("builtin trace without policy = %q", got)
@@ -80,7 +80,7 @@ func TestBuiltinHookTraceMessageRequiresPolicy(t *testing.T) {
 		Source:     "builtin",
 		EventName:  string(hooks.EventStop),
 		DurationMS: 3,
-		Decision:   string(hooks.DecisionAllow),
+		ExitCode:   0,
 	}
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	var traces []HookTracePayload

@@ -89,15 +89,7 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 		}})
 		return CompactionResult{}, compactErr
 	}
-	if denied, denyReason := hookDenied(preResults); denied {
-		err := fmt.Errorf("compact context: denied by hook%s", hookReasonSuffix(denyReason))
-		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
-			Reason: reason,
-			Auto:   auto,
-			Error:  err.Error(),
-		}})
-		return CompactionResult{}, err
-	}
+	instructions = appendCompactHookInstructions(instructions, preResults)
 
 	contextWindow := e.ContextWindow
 	if contextWindow <= 0 {
@@ -197,11 +189,11 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 			Auto:   auto,
 			Error:  fmt.Sprintf("compact context: post hook failed: %v", err),
 		}})
-	} else if denied, denyReason := hookDenied(postResults); denied {
+	} else if err := e.appendHookRuntimeContext(postResults); err != nil {
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
-			Error:  fmt.Sprintf("compact context: post hook denied%s", hookReasonSuffix(denyReason)),
+			Error:  fmt.Sprintf("compact context: post hook context failed: %v", err),
 		}})
 	}
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{

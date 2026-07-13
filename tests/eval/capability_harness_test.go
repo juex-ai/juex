@@ -2,7 +2,6 @@ package eval
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -257,7 +256,7 @@ func runCapabilityHookHelper(args []string) int {
 	}
 	switch args[0] {
 	case "inject":
-		writeHookOutput(map[string]any{"additional_context": "hook context token"})
+		fmt.Fprint(os.Stdout, "hook context token")
 	case "stop-once":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "missing stop-once state path")
@@ -269,20 +268,12 @@ func runCapabilityHookHelper(args []string) int {
 				fmt.Fprintln(os.Stderr, err)
 				return 1
 			}
-			writeHookOutput(map[string]any{"block_stop": true, "continue_prompt": "continue after hook gate"})
-			return 0
+			fmt.Fprint(os.Stdout, "continue after hook gate")
+			return 2
 		}
-		writeHookOutput(map[string]any{"decision": "allow"})
 	default:
 		fmt.Fprintf(os.Stderr, "unknown capability hook mode %q\n", args[0])
 		return 2
 	}
 	return 0
-}
-
-func writeHookOutput(v map[string]any) {
-	if err := json.NewEncoder(os.Stdout).Encode(v); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 }

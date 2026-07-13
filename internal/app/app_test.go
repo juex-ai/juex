@@ -1077,11 +1077,10 @@ func TestAppHookHelperProcess(t *testing.T) {
 	}
 	switch os.Args[len(os.Args)-1] {
 	case "allow":
-		_, _ = os.Stdout.WriteString(`{"decision":"allow"}`)
+		os.Exit(0)
 	case "deny":
-		_, _ = os.Stdout.WriteString(`{"decision":"deny","additional_context":"startup blocked"}`)
-	default:
-		_, _ = os.Stdout.WriteString(`{}`)
+		_, _ = os.Stdout.WriteString("startup blocked")
+		os.Exit(2)
 	}
 	os.Exit(0)
 }

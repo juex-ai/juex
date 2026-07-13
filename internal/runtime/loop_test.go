@@ -169,9 +169,15 @@ func (m *mockProviderWithErrors) Complete(ctx context.Context, sys string, histo
 }
 
 type fakeHookRunner struct {
-	responses map[hooks.EventName][]hooks.Output
+	responses map[hooks.EventName][]fakeHookResponse
 	errors    map[hooks.EventName]error
 	requests  []hooks.Request
+}
+
+type fakeHookResponse struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
 }
 
 type hookRunnerFunc func(context.Context, hooks.Request) ([]hooks.Result, error)
@@ -185,17 +191,19 @@ func (r *fakeHookRunner) Run(ctx context.Context, req hooks.Request) ([]hooks.Re
 	if err := r.errors[req.EventName]; err != nil {
 		return nil, err
 	}
-	outputs := r.responses[req.EventName]
-	if len(outputs) == 0 {
+	responses := r.responses[req.EventName]
+	if len(responses) == 0 {
 		return nil, nil
 	}
-	out := outputs[0]
-	r.responses[req.EventName] = outputs[1:]
+	response := responses[0]
+	r.responses[req.EventName] = responses[1:]
 	return []hooks.Result{{
 		Hook:      hooks.CommandHook{Name: "fake", Events: []hooks.EventName{req.EventName}},
 		EventName: req.EventName,
 		ToolName:  req.ToolName,
-		Output:    out,
+		ExitCode:  response.ExitCode,
+		Stdout:    response.Stdout,
+		Stderr:    response.Stderr,
 	}}, nil
 }
 
@@ -211,13 +219,15 @@ func TestRuntimeHookHelperProcess(t *testing.T) {
 	case "fail":
 		_, _ = os.Stderr.WriteString("stop hook failed")
 		os.Exit(1)
+	case "block":
+		_, _ = os.Stdout.WriteString("compaction cannot be blocked")
+		_, _ = os.Stderr.WriteString("compact guard diagnostic")
+		os.Exit(2)
 	case "goal-output":
 		_, _ = os.Stdout.WriteString(`{"goal_state":{"description":"hook should not write","status":"success"}}`)
 		os.Exit(0)
-	default:
-		_, _ = os.Stdout.WriteString(`{}`)
-		os.Exit(0)
 	}
+	os.Exit(0)
 }
 
 func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
@@ -227,7 +237,7 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 
 	out := appendHookAdditionalContext(msg, []hooks.Result{{
 		Hook:   hooks.CommandHook{Name: "context"},
-		Output: hooks.Output{AdditionalContext: "extra"},
+		Stdout: "extra",
 	}})
 
 	if len(msg.Blocks) != 1 || msg.Blocks[0].Text != "original" {
@@ -239,6 +249,36 @@ func TestAppendHookAdditionalContextDoesNotMutateInputBlocks(t *testing.T) {
 	extendedOriginal := msg.Blocks[:cap(msg.Blocks)]
 	if extendedOriginal[1].Text != "" {
 		t.Fatalf("input backing array mutated: %+v", extendedOriginal)
+	}
+}
+
+func TestRunSessionStartHooksAppendsStdoutRuntimeContext(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventSessionStart: {{Stdout: "load project policy"}},
+	}}
+
+	if err := eng.RunSessionStartHooks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(eng.Session.History) != 1 {
+		t.Fatalf("history = %+v", eng.Session.History)
+	}
+	msg := eng.Session.History[0]
+	if msg.Kind != llm.MessageKindRuntimeContext || !strings.Contains(msg.FirstText(), "load project policy") {
+		t.Fatalf("session hook context = %+v", msg)
+	}
+}
+
+func TestRunSessionStartHooksUsesStderrFallbackForExitTwo(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventSessionStart: {{ExitCode: 2, Stderr: "workspace is not trusted"}},
+	}}
+
+	err := eng.RunSessionStartHooks(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "workspace is not trusted") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -1121,7 +1161,7 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 	eng.Compaction = DefaultCompactionPolicy()
 	eng.Compaction.KeepRecentTokens = 1
 	eng.Compaction.TailTurns = 0
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreCompact:  {{}},
 		hooks.EventPostCompact: {{}},
 	}}
@@ -1146,6 +1186,105 @@ func TestCompactRunsPreAndPostHooks(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("hook order = %+v, want %+v", got, want)
 		}
+	}
+}
+
+func TestCompactPreHookStdoutExtendsSummaryInstructions(t *testing.T) {
+	prov := &scriptedCompactionProvider{
+		name: "summary",
+		attempts: []scriptedCompactionAttempt{{
+			response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+		}},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPreCompact: {{Stdout: "Preserve deployment command exactly."}},
+	}}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
+		t.Fatal(err)
+	}
+	if len(prov.systems) != 1 || !strings.Contains(prov.systems[0], "Hook compact instructions (fake):\nPreserve deployment command exactly.") {
+		t.Fatalf("compaction system = %q", strings.Join(prov.systems, "\n---\n"))
+	}
+}
+
+func TestCompactExitTwoEmitsHookErrorWithoutVeto(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
+		Name:    "compact-guard",
+		Events:  []hooks.EventName{hooks.EventPreCompact},
+		Command: runtimeHookCommand("block"),
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.Hooks = runner
+	var hookError HookErroredPayload
+	bus.Subscribe("hook.errored", func(event events.Event) {
+		payload, _ := event.Payload.(HookErroredPayload)
+		if payload.Name == "compact-guard" {
+			hookError = payload
+		}
+	})
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID == "" {
+		t.Fatalf("result = %+v", result)
+	}
+	if hookError.ExitCode != 2 || !strings.Contains(hookError.Error, "cannot block compaction") {
+		t.Fatalf("hook error = %+v", hookError)
+	}
+}
+
+func TestCompactPostHookStdoutAppendsRuntimeContext(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary of old work"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Compaction.KeepRecentTokens = 1
+	eng.Compaction.TailTurns = 0
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPostCompact: {{Stdout: "Recheck the release branch on the next turn."}},
+	}}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleAssistant, strings.Repeat("reply ", 80))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Compact(context.Background(), "compact-turn", "system", "manual", false); err != nil {
+		t.Fatal(err)
+	}
+	last := eng.Session.History[len(eng.Session.History)-1]
+	if last.Kind != llm.MessageKindRuntimeContext || !strings.Contains(last.FirstText(), "Recheck the release branch") {
+		t.Fatalf("post-compact context = %+v", last)
 	}
 }
 
@@ -1500,22 +1639,24 @@ func TestCompactDoesNotFallbackAfterContextCancellation(t *testing.T) {
 
 func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	cases := []struct {
-		name   string
-		runner *fakeHookRunner
+		name             string
+		runner           *fakeHookRunner
+		wantCompactError bool
 	}{
 		{
 			name: "error",
 			runner: &fakeHookRunner{
-				responses: map[hooks.EventName][]hooks.Output{hooks.EventPreCompact: {{}}},
+				responses: map[hooks.EventName][]fakeHookResponse{hooks.EventPreCompact: {{}}},
 				errors:    map[hooks.EventName]error{hooks.EventPostCompact: errors.New("audit sink unavailable")},
 			},
+			wantCompactError: true,
 		},
 		{
 			name: "deny",
 			runner: &fakeHookRunner{
-				responses: map[hooks.EventName][]hooks.Output{
+				responses: map[hooks.EventName][]fakeHookResponse{
 					hooks.EventPreCompact:  {{}},
-					hooks.EventPostCompact: {{Decision: hooks.DecisionDeny, AdditionalContext: "audit failed"}},
+					hooks.EventPostCompact: {{ExitCode: 2, Stdout: "audit failed"}},
 				},
 			},
 		},
@@ -1558,8 +1699,8 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 					sawCompleted = true
 				}
 			}
-			if !sawErrored || !sawCompleted {
-				t.Fatalf("events = %+v, want errored and completed", eventTypes)
+			if sawErrored != tc.wantCompactError || !sawCompleted {
+				t.Fatalf("events = %+v, want compact error=%v and completed", eventTypes, tc.wantCompactError)
 			}
 		})
 	}
@@ -1894,8 +2035,8 @@ func TestTurn_PostToolUseHookDenyPreservesChunkedWriteLifecycleFact(t *testing.T
 			}, nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
-		hooks.EventPostToolUse: {{Decision: hooks.DecisionDeny, AdditionalContext: "redaction required"}},
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
 	}}
 
 	out, err := eng.Turn(context.Background(), "commit chunked write")
@@ -1910,8 +2051,8 @@ func TestTurn_PostToolUseHookDenyPreservesChunkedWriteLifecycleFact(t *testing.T
 		t.Fatalf("tool result message = %+v", result)
 	}
 	block := result.Blocks[0]
-	if !block.IsError || !strings.Contains(block.Content, "redaction required") {
-		t.Fatalf("tool result block = %+v, want post hook error", block)
+	if block.IsError || !strings.Contains(block.Content, "redaction required") {
+		t.Fatalf("tool result block = %+v, want corrective context without error", block)
 	}
 	if block.ChunkedWrite == nil || block.ChunkedWrite.Kind != chunkedwrite.EventCommit || block.ChunkedWrite.WriteID != "w_runtime" {
 		t.Fatalf("chunked write fact = %+v", block.ChunkedWrite)
@@ -1923,8 +2064,8 @@ func TestTurn_UserPromptSubmitHookInjectsContext(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
-		hooks.EventUserPromptSubmit: {{AdditionalContext: "ticket: ABC-123"}},
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventUserPromptSubmit: {{Stdout: "ticket: ABC-123"}},
 	}}
 
 	out, err := eng.Turn(context.Background(), "summarize")
@@ -1948,8 +2089,8 @@ func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "should not run"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
-		hooks.EventUserPromptSubmit: {{Decision: hooks.DecisionDeny, AdditionalContext: "missing approval"}},
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventUserPromptSubmit: {{ExitCode: 2, Stdout: "missing approval"}},
 	}}
 
 	_, err := eng.Turn(context.Background(), "summarize")
@@ -1958,6 +2099,33 @@ func TestTurn_UserPromptSubmitHookDenyStopsBeforeProvider(t *testing.T) {
 	}
 	if len(prov.histories) != 0 {
 		t.Fatalf("provider should not be called, calls = %d", len(prov.histories))
+	}
+}
+
+func TestTurn_PreToolUseStdoutAddsToolResultContext(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "inspect", Input: map[string]any{}},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	}}
+	eng, _ := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "inspect",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "inspection complete", nil
+		},
+	})
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPreToolUse: {{Stdout: "compare against approved baseline"}},
+	}}
+
+	if _, err := eng.Turn(context.Background(), "inspect"); err != nil {
+		t.Fatal(err)
+	}
+	result := eng.Session.History[2].Blocks[0]
+	if result.IsError || !strings.Contains(result.Content, "inspection complete") || !strings.Contains(result.Content, "compare against approved baseline") {
+		t.Fatalf("tool result = %+v", result)
 	}
 }
 
@@ -1976,8 +2144,8 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 			return "", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
-		hooks.EventPreToolUse: {{Decision: hooks.DecisionDeny, AdditionalContext: "policy denied"}},
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPreToolUse: {{ExitCode: 2, Stdout: "policy denied"}},
 	}}
 
 	out, err := eng.Turn(context.Background(), "run danger")
@@ -1996,7 +2164,7 @@ func TestTurn_PreToolUseHookDenyReturnsToolError(t *testing.T) {
 	}
 }
 
-func TestTurn_PostToolUseHookDenyReturnsToolError(t *testing.T) {
+func TestTurn_PostToolUseExitTwoAddsCorrectiveContext(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "audit", Input: map[string]any{"path": "x"}},
@@ -2010,9 +2178,9 @@ func TestTurn_PostToolUseHookDenyReturnsToolError(t *testing.T) {
 			return "sensitive output", nil
 		},
 	})
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventPreToolUse:  {{}},
-		hooks.EventPostToolUse: {{Decision: hooks.DecisionDeny, AdditionalContext: "redaction required"}},
+		hooks.EventPostToolUse: {{ExitCode: 2, Stdout: "redaction required"}},
 	}}
 
 	out, err := eng.Turn(context.Background(), "run audit")
@@ -2026,7 +2194,7 @@ func TestTurn_PostToolUseHookDenyReturnsToolError(t *testing.T) {
 		t.Fatalf("provider calls = %d, want no failure-ledger continuation", len(prov.histories))
 	}
 	tr := eng.Session.History[2]
-	if len(tr.Blocks) != 1 || !tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "redaction required") {
+	if len(tr.Blocks) != 1 || tr.Blocks[0].IsError || !strings.Contains(tr.Blocks[0].Content, "sensitive output") || !strings.Contains(tr.Blocks[0].Content, "redaction required") {
 		t.Fatalf("tool result = %+v", tr)
 	}
 }
@@ -2037,9 +2205,9 @@ func TestTurn_StopHookBlockContinuesWithPrompt(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "final"), StopReason: llm.StopEndTurn},
 	}}
 	eng, _ := newEngine(t, prov, false)
-	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]hooks.Output{
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
 		hooks.EventStop: {
-			{BlockStop: true, ContinuePrompt: "continue until done"},
+			{ExitCode: 2, Stdout: "continue until done"},
 			{},
 		},
 	}}
@@ -3638,7 +3806,7 @@ func TestTurn_FailureLedgerUsesToolObservationExitCode(t *testing.T) {
 	}
 }
 
-func TestTurn_StopHookFailureFailsOnceAndEmitsHookErrored(t *testing.T) {
+func TestTurn_StopHookOtherExitDoesNotBlockAndEmitsHookErrored(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
 	}}
@@ -3661,14 +3829,17 @@ func TestTurn_StopHookFailureFailsOnceAndEmitsHookErrored(t *testing.T) {
 		}
 	})
 
-	_, err = eng.Turn(context.Background(), "finish")
-	if err == nil || !strings.Contains(err.Error(), "hooks: stop-fails failed") {
-		t.Fatalf("err = %v, want stop hook failure", err)
+	out, err := eng.Turn(context.Background(), "finish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "done" {
+		t.Fatalf("out = %q", out)
 	}
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want no retry loop", prov.called)
 	}
-	if errored.EventName != string(hooks.EventStop) || !strings.Contains(errored.Error, "stop hook failed") {
+	if errored.EventName != string(hooks.EventStop) || errored.ExitCode != 1 || !strings.Contains(errored.Error, "stop hook failed") {
 		t.Fatalf("hook errored payload = %+v", errored)
 	}
 }

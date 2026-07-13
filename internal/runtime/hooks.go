@@ -78,12 +78,12 @@ func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayl
 		snapshot, _ := store.StatusSnapshot()
 		payload := goalContinuedPayload(decision, snapshot)
 		e.emitHookCompleted(turnID, HookCompletedPayload{
-			Name:              goalCompletionGateName,
-			Source:            "builtin",
-			EventName:         string(hooks.EventStop),
-			DurationMS:        time.Since(start).Milliseconds(),
-			BlockStop:         true,
-			ContinuePromptLen: len(decision.ContinuePrompt),
+			Name:       goalCompletionGateName,
+			Source:     "builtin",
+			EventName:  string(hooks.EventStop),
+			DurationMS: time.Since(start).Milliseconds(),
+			ExitCode:   2,
+			StdoutLen:  len(decision.ContinuePrompt),
 		})
 		e.emitGoalUpdated(turnID)
 		return decision.ContinuePrompt, payload, true, nil
@@ -93,7 +93,7 @@ func (e *Engine) runGoalCompletionGate(turnID string) (string, GoalContinuedPayl
 		Source:     "builtin",
 		EventName:  string(hooks.EventStop),
 		DurationMS: time.Since(start).Milliseconds(),
-		Decision:   string(hooks.DecisionAllow),
+		ExitCode:   0,
 	})
 	return "", GoalContinuedPayload{}, false, nil
 }
@@ -104,16 +104,19 @@ func (e *Engine) RunSessionStartHooks(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if denied, reason := hookDenied(results); denied {
+	if denied, reason := hookBlocked(results); denied {
 		return hookDeniedError(hooks.EventSessionStart, reason)
 	}
-	return nil
+	return e.appendHookRuntimeContext(results)
 }
 
 func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Message {
 	copied := false
 	for _, result := range results {
-		contextText := strings.TrimSpace(result.Output.AdditionalContext)
+		if result.ExitCode != 0 {
+			continue
+		}
+		contextText := strings.TrimSpace(result.Stdout)
 		if contextText == "" {
 			continue
 		}
@@ -133,10 +136,10 @@ func appendHookAdditionalContext(msg llm.Message, results []hooks.Result) llm.Me
 	return msg
 }
 
-func hookDenied(results []hooks.Result) (bool, string) {
+func hookBlocked(results []hooks.Result) (bool, string) {
 	for _, result := range results {
-		if result.Output.Decision == hooks.DecisionDeny {
-			return true, result.Output.AdditionalContext
+		if result.ExitCode == 2 {
+			return true, hookText(result)
 		}
 	}
 	return false, ""
@@ -156,8 +159,8 @@ func hookDeniedError(event hooks.EventName, reason string) error {
 
 func stopContinuation(results []hooks.Result) (string, bool) {
 	for _, result := range results {
-		if result.Output.BlockStop {
-			return result.Output.ContinuePrompt, true
+		if result.ExitCode == 2 {
+			return hookText(result), true
 		}
 	}
 	return "", false
@@ -184,6 +187,14 @@ func (o hookObserver) HookCompleted(result hooks.Result) {
 	if o.engine == nil {
 		return
 	}
+	if result.ExitCode == 2 && (result.EventName == hooks.EventPreCompact || result.EventName == hooks.EventPostCompact) {
+		o.engine.emitHookErrored(o.turnID, hookErroredPayload(result, fmt.Errorf(
+			"hooks: %s hook %q cannot block compaction",
+			result.EventName,
+			result.Hook.Name,
+		)))
+		return
+	}
 	payload := hookCompletedPayload(result)
 	o.engine.emitHookCompleted(o.turnID, payload)
 }
@@ -198,19 +209,16 @@ func (o hookObserver) HookErrored(result hooks.Result, err error) {
 
 func hookCompletedPayload(result hooks.Result) HookCompletedPayload {
 	return HookCompletedPayload{
-		Name:                 result.Hook.Name,
-		Source:               result.Hook.Source,
-		EventName:            resultEventName(result),
-		ToolName:             resultToolName(result),
-		DurationMS:           result.Duration.Milliseconds(),
-		Decision:             string(result.Output.Decision),
-		AdditionalContextLen: len(result.Output.AdditionalContext),
-		BlockStop:            result.Output.BlockStop,
-		ContinuePromptLen:    len(result.Output.ContinuePrompt),
-		StdoutLen:            len(result.Stdout),
-		StderrLen:            len(result.Stderr),
-		StdoutPreview:        truncate(result.Stdout, 200),
-		StderrPreview:        truncate(result.Stderr, 200),
+		Name:          result.Hook.Name,
+		Source:        result.Hook.Source,
+		EventName:     resultEventName(result),
+		ToolName:      resultToolName(result),
+		DurationMS:    result.Duration.Milliseconds(),
+		ExitCode:      result.ExitCode,
+		StdoutLen:     len(result.Stdout),
+		StderrLen:     len(result.Stderr),
+		StdoutPreview: truncate(result.Stdout, 200),
+		StderrPreview: truncate(result.Stderr, 200),
 	}
 }
 
@@ -221,6 +229,7 @@ func hookErroredPayload(result hooks.Result, err error) HookErroredPayload {
 		EventName:     resultEventName(result),
 		ToolName:      resultToolName(result),
 		DurationMS:    result.Duration.Milliseconds(),
+		ExitCode:      result.ExitCode,
 		Error:         fmt.Sprint(err),
 		StdoutLen:     len(result.Stdout),
 		StderrLen:     len(result.Stderr),
@@ -261,10 +270,14 @@ func hookCompletedTraceText(payload HookCompletedPayload, includeBuiltin bool) s
 		return ""
 	}
 	status := "completed"
-	if payload.BlockStop {
-		status = "blocked stop"
-	} else if payload.Decision != "" {
-		status = payload.Decision
+	if payload.Source == "builtin" {
+		if payload.ExitCode == 2 {
+			status = "blocked stop"
+		} else {
+			status = "allow"
+		}
+	} else if payload.ExitCode != 0 {
+		status = fmt.Sprintf("exit %d", payload.ExitCode)
 	}
 	return fmt.Sprintf(
 		"hook %s %s %s in %dms",
@@ -273,6 +286,86 @@ func hookCompletedTraceText(payload HookCompletedPayload, includeBuiltin bool) s
 		hookTraceTarget(payload.EventName, payload.ToolName),
 		payload.DurationMS,
 	)
+}
+
+func hookText(result hooks.Result) string {
+	if text := strings.TrimSpace(result.Stdout); text != "" {
+		return text
+	}
+	if result.ExitCode == 2 {
+		return strings.TrimSpace(result.Stderr)
+	}
+	return ""
+}
+
+func hookContextLabel(result hooks.Result, kind string) string {
+	name := strings.TrimSpace(result.Hook.Name)
+	if name == "" {
+		name = "hook"
+	}
+	return "Hook " + kind + " (" + name + "):\n"
+}
+
+func (e *Engine) appendHookRuntimeContext(results []hooks.Result) error {
+	if e == nil || e.Session == nil {
+		return nil
+	}
+	for _, result := range results {
+		if result.ExitCode != 0 {
+			continue
+		}
+		text := strings.TrimSpace(result.Stdout)
+		if text == "" {
+			continue
+		}
+		msg := llm.TextMessage(llm.RoleUser, hookContextLabel(result, "additional context")+text)
+		msg.Kind = llm.MessageKindRuntimeContext
+		if err := e.Session.Append(msg); err != nil {
+			return fmt.Errorf("append hook runtime context: %w", err)
+		}
+	}
+	return nil
+}
+
+func appendToolHookContext(block *llm.Block, results []hooks.Result, includeExitTwo bool) {
+	if block == nil {
+		return
+	}
+	for _, result := range results {
+		kind := "additional context"
+		text := ""
+		switch {
+		case result.ExitCode == 0:
+			text = strings.TrimSpace(result.Stdout)
+		case includeExitTwo && result.ExitCode == 2:
+			kind = "corrective context"
+			text = hookText(result)
+		}
+		if text == "" {
+			continue
+		}
+		if strings.TrimSpace(block.Content) != "" {
+			block.Content += "\n\n"
+		}
+		block.Content += hookContextLabel(result, kind) + text
+	}
+}
+
+func appendCompactHookInstructions(instructions string, results []hooks.Result) string {
+	for _, result := range results {
+		if result.ExitCode != 0 {
+			continue
+		}
+		text := strings.TrimSpace(result.Stdout)
+		if text == "" {
+			continue
+		}
+		if strings.TrimSpace(instructions) != "" {
+			instructions += "\n\n"
+		}
+		instructions += hookContextLabel(result, "compact instructions") + text
+	}
+	return instructions
 }
 
 func hookErroredTraceText(payload HookErroredPayload, includeBuiltin bool) string {

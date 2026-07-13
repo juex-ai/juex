@@ -31,6 +31,23 @@ func TestEventPayloadJSONShapePreservesConditionalFields(t *testing.T) {
 			},
 		},
 		{
+			name: "hook completed keeps zero exit code",
+			payload: HookCompletedPayload{
+				Name:       "policy",
+				EventName:  "UserPromptSubmit",
+				DurationMS: 4,
+				ExitCode:   0,
+				StdoutLen:  7,
+			},
+			want: map[string]any{
+				"name":        "policy",
+				"event_name":  "UserPromptSubmit",
+				"duration_ms": float64(4),
+				"exit_code":   float64(0),
+				"stdout_len":  float64(7),
+			},
+		},
+		{
 			name: "llm responded omits nil context usage",
 			payload: LLMRespondedPayload{
 				StopReason: llm.StopToolUse,
