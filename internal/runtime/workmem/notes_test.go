@@ -97,11 +97,13 @@ func TestNotesStoreRedactsAssignmentValues(t *testing.T) {
 		`authorization: "Bearer quoted456"`,
 		`password: "correct horse"`,
 		"secret: 'multi word'",
+		"standalone Bearer slash/tail==",
+		"standalone Bearer plus+tail",
 	}, "\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"abc123", "xyz789", "quoted456", "correct horse", "multi word"} {
+	for _, secret := range []string{"abc123", "xyz789", "quoted456", "correct horse", "multi word", "tail==", "+tail"} {
 		if strings.Contains(snapshot.Content, secret) {
 			t.Fatalf("snapshot leaked %q: %q", secret, snapshot.Content)
 		}
@@ -110,7 +112,7 @@ func TestNotesStoreRedactsAssignmentValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"abc123", "xyz789", "quoted456", "correct horse", "multi word"} {
+	for _, secret := range []string{"abc123", "xyz789", "quoted456", "correct horse", "multi word", "tail==", "+tail"} {
 		if strings.Contains(string(persisted), secret) {
 			t.Fatalf("notes.md leaked %q: %q", secret, persisted)
 		}
