@@ -110,6 +110,29 @@ func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusIncludesActiveSessionScratchpadPrompt(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range got.SystemPrompt.Items {
+		if item.Key == "session_scratchpad" {
+			wantPath := as.app.Session.ScratchpadDir()
+			if item.Path != wantPath || !strings.Contains(item.Text, wantPath) {
+				t.Fatalf("scratchpad prompt = %+v, want path %q", item, wantPath)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime system prompt missing session scratchpad: %+v", got.SystemPrompt.Items)
+}
+
 func TestGetRuntimeStatus_IgnoresMissingMCPConfig(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())

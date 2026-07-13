@@ -31,6 +31,7 @@ type RuntimeStatusOptions struct {
 	MCPToolCounts map[string]int
 	MCPErrors     map[string]string
 	SkillCache    *RuntimeStatusSkillCache
+	ScratchpadDir string
 }
 
 // RuntimeStatusSkillCache caches loaded skills for repeated status snapshots.
@@ -159,7 +160,7 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
-	systemPrompt, err := s.systemPromptStatus(skillLoader)
+	systemPrompt, err := s.systemPromptStatus(skillLoader, opts.ScratchpadDir)
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
@@ -207,7 +208,7 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 	return RuntimeHooksStatus{Configured: len(commands), Commands: commands}
 }
 
-func (s RuntimeStatusService) systemPromptStatus(skillLoader *skills.Loader) (RuntimeSystemPromptStatus, error) {
+func (s RuntimeStatusService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
 	var memStore *memory.Store
 	if memoryDir := s.cfg.MemoryDir(); memoryDir != "" {
 		memStore = memory.NewStore(memoryDir)
@@ -217,6 +218,7 @@ func (s RuntimeStatusService) systemPromptStatus(skillLoader *skills.Loader) (Ru
 		AgentsMDDirs:       s.cfg.AgentsMDDirs(),
 		Memory:             memStore,
 		Skills:             skillLoader,
+		ScratchpadDir:      scratchpadDir,
 		WorkDir:            s.cfg.WorkDir,
 		Shell:              prompt.ShellProfileFromConfig(s.cfg.Shell),
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/sandbox"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 type runtimeStatusResponse struct {
@@ -136,15 +137,31 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 			toolCounts[serverName] = count
 		}
 	}
+	scratchpadDir, err := s.runtimeScratchpadDir()
+	if err != nil {
+		return runtimeStatusResponse{}, err
+	}
 	status, err := app.NewRuntimeStatusService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
 		MCPToolCounts: toolCounts,
 		MCPErrors:     s.mcpErrors(),
 		SkillCache:    s.runtimeSkills,
+		ScratchpadDir: scratchpadDir,
 	})
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
 	return runtimeStatusResponseFromApp(status), nil
+}
+
+func (s *Server) runtimeScratchpadDir() (string, error) {
+	id, ok, err := s.activePrimarySessionID()
+	if err != nil || !ok {
+		return "", err
+	}
+	if active, exists := s.sessions.Load(id); exists {
+		return active.(*activeSession).app.Session.ScratchpadDir(), nil
+	}
+	return session.ScratchpadDir(filepath.Join(s.opts.Cfg.SessionsDir(), id)), nil
 }
 
 func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusResponse {

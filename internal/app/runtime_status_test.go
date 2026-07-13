@@ -70,6 +70,26 @@ body`)
 	}
 }
 
+func TestRuntimeStatusServiceIncludesSessionScratchpadPrompt(t *testing.T) {
+	work := t.TempDir()
+	scratchpadDir := filepath.Join(work, ".juex", "sessions", "session-1", "scratchpad")
+	status, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
+		ScratchpadDir: scratchpadDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range status.SystemPrompt.Items {
+		if item.Key == "session_scratchpad" {
+			if item.Path != scratchpadDir || !strings.Contains(item.Text, scratchpadDir) {
+				t.Fatalf("scratchpad prompt = %+v, want path %q", item, scratchpadDir)
+			}
+			return
+		}
+	}
+	t.Fatalf("system prompt missing session scratchpad: %+v", status.SystemPrompt.Items)
+}
+
 func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()
