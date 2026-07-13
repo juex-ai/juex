@@ -58,6 +58,29 @@ func TestGoalStateStoreCreatesAndUpdatesModelOwnedGoal(t *testing.T) {
 	}
 }
 
+func TestGoalStateStorePreservesAndRedactsLongAcceptance(t *testing.T) {
+	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
+	acceptance := strings.Repeat("required-check ", 100) + "api_key=secret final-check-must-survive"
+
+	state, err := store.CreateWithContract(GoalStateCreate{
+		Description: "ship the complete contract",
+		Acceptance:  acceptance,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Acceptance) <= 1000 || !strings.Contains(state.Acceptance, "final-check-must-survive") {
+		t.Fatalf("long acceptance was truncated: len=%d tail=%q", len(state.Acceptance), state.Acceptance[max(0, len(state.Acceptance)-80):])
+	}
+	if strings.Contains(state.Acceptance, "secret") {
+		t.Fatalf("long acceptance retained a secret: %q", state.Acceptance)
+	}
+	rendered, ok := state.RenderProviderContext()
+	if !ok || !strings.Contains(rendered, "final-check-must-survive") || strings.Contains(rendered, "secret") {
+		t.Fatalf("provider context did not preserve the redacted contract:\n%s", rendered)
+	}
+}
+
 func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	store := NewGoalStateStore(t.TempDir(), GoalStateOptions{})
 	decision, err := store.CompletionGateDecision()

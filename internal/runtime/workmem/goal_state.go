@@ -19,6 +19,8 @@ const (
 	GoalStatusInProgress GoalStatus = "in_progress"
 	GoalStatusSuccess    GoalStatus = "success"
 	GoalStatusFailure    GoalStatus = "failure"
+
+	maxGoalAcceptanceBytes = 32 * 1024
 )
 
 type GoalState struct {
@@ -114,7 +116,7 @@ func (s *GoalStateStore) CreateWithContract(create GoalStateCreate) (GoalState, 
 	state := GoalState{
 		Version:           1,
 		Description:       description,
-		Acceptance:        sanitizeGoalText(create.Acceptance),
+		Acceptance:        sanitizeGoalAcceptance(create.Acceptance),
 		ContinuationCount: 0,
 		Status:            GoalStatusInProgress,
 		StatusReason:      sanitizeGoalText(create.StatusReason),
@@ -146,7 +148,7 @@ func (s *GoalStateStore) Update(update GoalStateUpdate) (GoalState, error) {
 		}
 	}
 	if update.Acceptance != nil {
-		state.Acceptance = sanitizeGoalText(*update.Acceptance)
+		state.Acceptance = sanitizeGoalAcceptance(*update.Acceptance)
 	}
 	if update.Status != "" {
 		if err := validateGoalStatus(update.Status); err != nil {
@@ -307,7 +309,7 @@ func (s *GoalStateStore) now() time.Time {
 func normalizeGoalState(state GoalState) GoalState {
 	state.Version = 1
 	state.Description = sanitizeGoalText(state.Description)
-	state.Acceptance = sanitizeGoalText(state.Acceptance)
+	state.Acceptance = sanitizeGoalAcceptance(state.Acceptance)
 	state.StatusReason = sanitizeGoalText(state.StatusReason)
 	if state.ContinuationCount < 0 {
 		state.ContinuationCount = 0
@@ -337,13 +339,17 @@ func validateGoalStatus(status GoalStatus) error {
 
 func redactGoalState(state GoalState) GoalState {
 	state.Description = sanitizeGoalText(state.Description)
-	state.Acceptance = sanitizeGoalText(state.Acceptance)
+	state.Acceptance = sanitizeGoalAcceptance(state.Acceptance)
 	state.StatusReason = sanitizeGoalText(state.StatusReason)
 	return state
 }
 
 func sanitizeGoalText(text string) string {
 	return sanitizeWorkingStateText(text)
+}
+
+func sanitizeGoalAcceptance(text string) string {
+	return sanitizeWorkmemText(text, maxGoalAcceptanceBytes)
 }
 
 func (s GoalState) present() bool {

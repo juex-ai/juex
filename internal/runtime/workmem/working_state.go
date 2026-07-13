@@ -848,7 +848,11 @@ var (
 )
 
 func sanitizeWorkingStateText(text string) string {
-	text = truncate(text, 1000)
+	return sanitizeWorkmemText(text, 1000)
+}
+
+func sanitizeWorkmemText(text string, maxBytes int) string {
+	text = truncate(text, maxBytes)
 	text = workingStateSecretAssignmentPattern.ReplaceAllString(text, "[REDACTED]")
 	text = workingStateBearerPattern.ReplaceAllString(text, "Bearer [REDACTED]")
 	text = workingStateOpenAIKeyPattern.ReplaceAllString(text, "[REDACTED]")
