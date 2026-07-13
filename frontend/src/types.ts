@@ -402,10 +402,7 @@ export interface HookStartedPayload {
 
 export interface HookCompletedPayload extends HookStartedPayload {
   duration_ms: number;
-  decision?: string;
-  additional_context_len?: number;
-  block_stop?: boolean;
-  continue_prompt_len?: number;
+  exit_code: number;
   stdout_len?: number;
   stderr_len?: number;
   stdout_preview?: string;
@@ -414,6 +411,7 @@ export interface HookCompletedPayload extends HookStartedPayload {
 
 export interface HookErroredPayload extends HookStartedPayload {
   duration_ms: number;
+  exit_code?: number;
   error: string;
   stdout_len?: number;
   stderr_len?: number;

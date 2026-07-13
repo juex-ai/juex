@@ -38,12 +38,17 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if text, ok := e.notesContextSnapshot(); ok {
 		contextMessages = append(contextMessages, notesContextMessage(text))
 	}
+	contextMessages = append(contextMessages, e.pendingHookRuntimeContextSnapshot()...)
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
 	return snap
 }
 
 func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnapshot {
+	return e.activeContextLockedWithHookContext(e.pendingHookRuntimeContextSnapshot(), incoming...)
+}
+
+func (e *Engine) activeContextLockedWithHookContext(hookContext []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {
 	if e == nil || e.Session == nil {
 		return ActiveContextSnapshot{}
 	}
@@ -55,6 +60,7 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 	if text, ok := e.notesContextLocked(); ok {
 		contextMessages = append(contextMessages, notesContextMessage(text))
 	}
+	contextMessages = append(contextMessages, hookContext...)
 	snap = appendRuntimeContextMessages(snap, contextMessages...)
 	snap.EstimatedTokens = e.estimateMessageTokens(snap.Messages)
 	return snap

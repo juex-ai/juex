@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,10 +27,10 @@ func TestCommandHookMatchesEventAndTool(t *testing.T) {
 	}
 }
 
-func TestRunnerRunStableOrderAndAdditionalContext(t *testing.T) {
+func TestRunnerRunStableOrderAndStdout(t *testing.T) {
 	r, err := NewRunner(Config{Commands: []CommandHook{
-		{Name: "first", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("context:first")},
-		{Name: "second", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("context:second")},
+		{Name: "first", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:first")},
+		{Name: "second", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:second")},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -42,14 +43,57 @@ func TestRunnerRunStableOrderAndAdditionalContext(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("results len = %d", len(results))
 	}
-	if results[0].Hook.Name != "first" || results[0].Output.AdditionalContext != "first" {
+	if results[0].Hook.Name != "first" || results[0].ExitCode != 0 || results[0].Stdout != "first" {
 		t.Fatalf("first result = %+v", results[0])
 	}
 	if results[0].EventName != EventUserPromptSubmit {
 		t.Fatalf("first event = %q", results[0].EventName)
 	}
-	if results[1].Hook.Name != "second" || results[1].Output.AdditionalContext != "second" {
+	if results[1].Hook.Name != "second" || results[1].ExitCode != 0 || results[1].Stdout != "second" {
 		t.Fatalf("second result = %+v", results[1])
+	}
+}
+
+func TestRunnerRunExitTwoReturnsTextResult(t *testing.T) {
+	r, err := NewRunner(Config{Commands: []CommandHook{
+		{Name: "guard", Events: []EventName{EventPreToolUse}, Command: helperCommand("block")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Run(context.Background(), Request{EventName: EventPreToolUse, ToolName: "exec_command"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].ExitCode != 2 {
+		t.Fatalf("results = %+v", results)
+	}
+	if results[0].Stdout != "policy denied" || results[0].Stderr != "guard diagnostic" {
+		t.Fatalf("result streams = %+v", results[0])
+	}
+}
+
+func TestRunnerRunOtherExitErrorsAndContinues(t *testing.T) {
+	observer := &recordingObserver{}
+	r, err := NewRunner(Config{Commands: []CommandHook{
+		{Name: "first", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:first")},
+		{Name: "broken", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("exit-seven")},
+		{Name: "last", Events: []EventName{EventUserPromptSubmit}, Command: helperCommand("stdout:last")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := r.Run(context.Background(), Request{EventName: EventUserPromptSubmit, Observer: observer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].Hook.Name != "first" || results[1].Hook.Name != "last" {
+		t.Fatalf("results = %+v", results)
+	}
+	if len(observer.errors) != 1 || observer.errors[0].result.ExitCode != 7 || !strings.Contains(observer.errors[0].err.Error(), "exited with code 7") {
+		t.Fatalf("observer errors = %+v", observer.errors)
 	}
 }
 
@@ -87,6 +131,23 @@ func TestRunnerRunTimeout(t *testing.T) {
 	}
 }
 
+func TestRunnerRunPropagatesParentCancellation(t *testing.T) {
+	r, err := NewRunner(Config{Commands: []CommandHook{
+		{Name: "slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("sleep"), TimeoutSeconds: 5},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	defer cancel()
+
+	_, err = r.Run(ctx, Request{EventName: EventPreToolUse, ToolName: "exec_command"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context canceled", err)
+	}
+}
+
 func TestNewRunnerRejectsTimeoutAboveMax(t *testing.T) {
 	_, err := NewRunner(Config{Commands: []CommandHook{
 		{Name: "too-slow", Events: []EventName{EventPreToolUse}, Command: helperCommand("allow"), TimeoutSeconds: MaxTimeoutSeconds + 1},
@@ -107,29 +168,6 @@ func TestRunnerRunOutputLimit(t *testing.T) {
 	_, err = r.Run(context.Background(), Request{EventName: EventPostToolUse, ToolName: "read"})
 	if err == nil || !strings.Contains(err.Error(), "stdout exceeded") {
 		t.Fatalf("err = %v, want output limit", err)
-	}
-}
-
-func TestParseOutputValidatesDecisions(t *testing.T) {
-	out, err := ParseOutput([]byte(`{"decision":"deny","additional_context":"ctx","block_stop":true,"continue_prompt":"more"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Decision != DecisionDeny || out.AdditionalContext != "ctx" || !out.BlockStop || out.ContinuePrompt != "more" {
-		t.Fatalf("out = %+v", out)
-	}
-	if _, err := ParseOutput([]byte(`{"decision":"maybe"}`)); err == nil {
-		t.Fatal("expected invalid decision error")
-	}
-}
-
-func TestParseOutputIgnoresGoalStatePatch(t *testing.T) {
-	out, err := ParseOutput([]byte(`{"goal_state":{"status":"continue","completion_check":{"status":"continue","summary":"tests missing","continue_prompt":"run tests"}}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Decision != "" || out.BlockStop || out.ContinuePrompt != "" || out.AdditionalContext != "" {
-		t.Fatalf("goal_state output should not be exposed as a hook write contract: %+v", out)
 	}
 }
 
@@ -158,15 +196,36 @@ func TestHookHelperProcess(t *testing.T) {
 	}
 	mode := os.Args[len(os.Args)-1]
 	switch {
-	case strings.HasPrefix(mode, "context:"):
-		value := strings.TrimPrefix(mode, "context:")
-		_, _ = os.Stdout.WriteString(`{"additional_context":"` + value + `"}`)
+	case strings.HasPrefix(mode, "stdout:"):
+		_, _ = os.Stdout.WriteString(strings.TrimPrefix(mode, "stdout:"))
+	case mode == "block":
+		_, _ = os.Stdout.WriteString("policy denied")
+		_, _ = os.Stderr.WriteString("guard diagnostic")
+		os.Exit(2)
+	case mode == "exit-seven":
+		_, _ = os.Stderr.WriteString("hook failed")
+		os.Exit(7)
 	case mode == "sleep":
 		time.Sleep(5 * time.Second)
 	case mode == "large":
 		_, _ = os.Stdout.WriteString(strings.Repeat("x", 32))
-	default:
-		_, _ = os.Stdout.WriteString(`{"decision":"allow"}`)
 	}
 	os.Exit(0)
+}
+
+type observedHookError struct {
+	result Result
+	err    error
+}
+
+type recordingObserver struct {
+	errors []observedHookError
+}
+
+func (*recordingObserver) HookStarted(CommandHook, Request) {}
+
+func (*recordingObserver) HookCompleted(Result) {}
+
+func (o *recordingObserver) HookErrored(result Result, err error) {
+	o.errors = append(o.errors, observedHookError{result: result, err: err})
 }

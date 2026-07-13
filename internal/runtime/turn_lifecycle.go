@@ -141,6 +141,7 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 	if err != nil {
 		return turnFinishOutcome{}, err
 	}
+	e.queueHookRuntimeContext(stopResults)
 
 	if prompt, payload, ok, err := e.runGoalCompletionGate(l.turnID); err != nil {
 		return turnFinishOutcome{}, err
@@ -154,7 +155,7 @@ func (l *turnLifecycle) applyFinishPolicyLocked(ctx context.Context, recorded re
 
 	if prompt, ok := stopContinuation(stopResults); ok {
 		if strings.TrimSpace(prompt) == "" {
-			return turnFinishOutcome{}, fmt.Errorf("hooks: Stop hook requested block_stop without continue_prompt")
+			return turnFinishOutcome{}, fmt.Errorf("hooks: Stop hook exited with code 2 without text")
 		}
 		if err := l.enqueueContinuationLocked(ctx, prompt); err != nil {
 			return turnFinishOutcome{}, err

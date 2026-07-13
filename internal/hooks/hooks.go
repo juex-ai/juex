@@ -34,13 +34,6 @@ const (
 	EventStop             EventName = "Stop"
 )
 
-type Decision string
-
-const (
-	DecisionAllow Decision = "allow"
-	DecisionDeny  Decision = "deny"
-)
-
 type Config struct {
 	Commands []CommandHook `json:"commands" yaml:"commands"`
 }
@@ -105,18 +98,11 @@ type Request struct {
 	Observer         Observer        `json:"-"`
 }
 
-type Output struct {
-	Decision          Decision `json:"decision,omitempty"`
-	AdditionalContext string   `json:"additional_context,omitempty"`
-	BlockStop         bool     `json:"block_stop,omitempty"`
-	ContinuePrompt    string   `json:"continue_prompt,omitempty"`
-}
-
 type Result struct {
 	Hook      CommandHook
 	EventName EventName
 	ToolName  string
-	Output    Output
+	ExitCode  int
 	Stdout    string
 	Stderr    string
 	Duration  time.Duration
@@ -170,34 +156,22 @@ func (r *Runner) Run(ctx context.Context, req Request) ([]Result, error) {
 			req.Observer.HookStarted(hook, req)
 		}
 		result, err := runCommandHook(ctx, hook, req)
-		results = append(results, result)
 		if err != nil {
 			if req.Observer != nil {
 				req.Observer.HookErrored(result, err)
 			}
+			var exitErr *commandExitError
+			if errors.As(err, &exitErr) {
+				continue
+			}
 			return results, err
 		}
+		results = append(results, result)
 		if req.Observer != nil {
 			req.Observer.HookCompleted(result)
 		}
 	}
 	return results, nil
-}
-
-func ParseOutput(data []byte) (Output, error) {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return Output{}, nil
-	}
-	var out Output
-	if err := json.Unmarshal(data, &out); err != nil {
-		return Output{}, fmt.Errorf("hooks: parse output: %w", err)
-	}
-	switch out.Decision {
-	case "", DecisionAllow, DecisionDeny:
-		return out, nil
-	default:
-		return Output{}, fmt.Errorf("hooks: invalid decision %q", out.Decision)
-	}
 }
 
 func ResolveFileConfig(fc FileConfig, source string, requireTrust bool) (Config, error) {
@@ -270,6 +244,13 @@ func runCommandHook(parent context.Context, hook CommandHook, req Request) (Resu
 	result.Duration = time.Since(start)
 	result.Stdout = stdout.String()
 	result.Stderr = stderr.String()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		result.ExitCode = exitErr.ExitCode()
+	}
+	if err := parent.Err(); err != nil {
+		return result, err
+	}
 	if stdout.exceeded {
 		return result, fmt.Errorf("hooks: %s stdout exceeded %d bytes", hook.Name, limit)
 	}
@@ -280,14 +261,29 @@ func runCommandHook(parent context.Context, hook CommandHook, req Request) (Resu
 		return result, fmt.Errorf("hooks: %s timed out after %ds", hook.Name, timeout)
 	}
 	if err != nil {
+		if exitErr != nil {
+			if result.ExitCode == 2 {
+				return result, nil
+			}
+			return result, &commandExitError{
+				hookName: hook.Name,
+				exitCode: result.ExitCode,
+				stderr:   result.Stderr,
+			}
+		}
 		return result, fmt.Errorf("hooks: %s failed: %w%s", hook.Name, err, stderrSuffix(result.Stderr))
 	}
-	out, err := ParseOutput([]byte(result.Stdout))
-	if err != nil {
-		return result, fmt.Errorf("hooks: %s: %w", hook.Name, err)
-	}
-	result.Output = out
 	return result, nil
+}
+
+type commandExitError struct {
+	hookName string
+	exitCode int
+	stderr   string
+}
+
+func (e *commandExitError) Error() string {
+	return fmt.Sprintf("hooks: %s exited with code %d%s", e.hookName, e.exitCode, stderrSuffix(e.stderr))
 }
 
 func validateHook(h CommandHook) error {

@@ -1371,11 +1371,15 @@ func TestEndToEnd_ResumeRoundTrip(t *testing.T) {
 
 func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	work := t.TempDir()
+	if err := os.WriteFile(filepath.Join(work, "observed.txt"), []byte("source material"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	prov := &recordingProvider{
 		steps: []llm.Response{
 			{
 				Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
 					{Type: llm.BlockToolUse, ToolUseID: "blocked", ToolName: "write", Input: map[string]any{"path": "blocked.txt", "content": "x"}},
+					{Type: llm.BlockToolUse, ToolUseID: "observed", ToolName: "read", Input: map[string]any{"path": "observed.txt"}},
 				}},
 				StopReason: llm.StopToolUse,
 			},
@@ -1396,6 +1400,7 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 			Hooks: hooks.Config{Commands: []hooks.CommandHook{
 				{Name: "inject", Events: []hooks.EventName{hooks.EventUserPromptSubmit}, Command: e2eHookCommand("inject")},
 				{Name: "deny-write", Events: []hooks.EventName{hooks.EventPreToolUse}, Tools: []string{"write"}, Command: e2eHookCommand("deny")},
+				{Name: "correct-read", Events: []hooks.EventName{hooks.EventPostToolUse}, Tools: []string{"read"}, Command: e2eHookCommand("correct")},
 				{Name: "continue-once", Events: []hooks.EventName{hooks.EventStop}, Command: e2eHookCommand("stop")},
 			}},
 		},
@@ -1419,6 +1424,18 @@ func TestEndToEnd_CommandLifecycleHooks(t *testing.T) {
 	}
 	if got := messagesText(prov.history[0]); !strings.Contains(got, "hook-context: visible") {
 		t.Fatalf("first provider history missing injected context:\n%s", got)
+	}
+	var corrected *llm.Block
+	for i := range prov.history[1] {
+		for j := range prov.history[1][i].Blocks {
+			block := &prov.history[1][i].Blocks[j]
+			if block.Type == llm.BlockToolResult && block.ToolUseID == "observed" {
+				corrected = block
+			}
+		}
+	}
+	if corrected == nil || corrected.IsError || !strings.Contains(corrected.Content, "source material") || !strings.Contains(corrected.Content, "review source classification") {
+		t.Fatalf("corrected tool result = %+v", corrected)
 	}
 	stopHistory := prov.history[2]
 	if len(stopHistory) < 2 {
@@ -1704,20 +1721,21 @@ func TestE2EHookHelperProcess(t *testing.T) {
 	}
 	switch os.Args[len(os.Args)-1] {
 	case "inject":
-		_, _ = os.Stdout.WriteString(`{"additional_context":"hook-context: visible"}`)
+		_, _ = os.Stdout.WriteString("hook-context: visible")
 	case "deny":
-		_, _ = os.Stdout.WriteString(`{"decision":"deny","additional_context":"policy denied write"}`)
+		_, _ = os.Stdout.WriteString("policy denied write")
+		os.Exit(2)
+	case "correct":
+		_, _ = os.Stdout.WriteString("review source classification")
+		os.Exit(2)
 	case "stop":
 		wd, _ := os.Getwd()
 		counterPath := filepath.Join(wd, ".juex-hook-stop-count")
 		if _, err := os.Stat(counterPath); os.IsNotExist(err) {
 			_ = os.WriteFile(counterPath, []byte("1"), 0o644)
-			_, _ = os.Stdout.WriteString(`{"block_stop":true,"continue_prompt":"continue from hook"}`)
-			break
+			_, _ = os.Stdout.WriteString("continue from hook")
+			os.Exit(2)
 		}
-		_, _ = os.Stdout.WriteString(`{"decision":"allow"}`)
-	default:
-		_, _ = os.Stdout.WriteString(`{}`)
 	}
 	os.Exit(0)
 }
