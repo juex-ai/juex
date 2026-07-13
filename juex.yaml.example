@@ -141,6 +141,8 @@ providers:
 
 compaction:
   enabled: true
+  # Optional persistent focus applied before per-request and PreCompact hook instructions.
+  # instructions: Preserve exact release gates and unfinished Notes items.
   reserve_tokens: 16384
   keep_recent_tokens: 20000
   tail_turns: 2

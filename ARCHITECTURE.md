@@ -1095,6 +1095,7 @@ runtime:
   show_builtin_hook_traces: false
 compaction:
   enabled: true
+  instructions: ""
   reserve_tokens: 16384
   keep_recent_tokens: 20000
   tail_turns: 2
@@ -1151,6 +1152,7 @@ compaction:
 | `runtime.max_output_tokens` | optional normal-turn provider output cap; omit it to use the provider default |
 | `runtime.show_builtin_hook_traces` | mirrors built-in runtime hook/gate completions and failures into conversation-visible UI-only hook traces; defaults to false |
 | `compaction.enabled` | enables automatic and manual context compaction |
+| `compaction.instructions` | persistent summary focus applied before per-request instructions and successful `PreCompact` hook stdout |
 | `compaction.reserve_tokens` | token budget held back from the provider window |
 | `compaction.keep_recent_tokens` | approximate recent-message budget retained verbatim |
 | `compaction.tail_turns` | minimum recent user turns retained verbatim |
@@ -1340,6 +1342,14 @@ Manual compact and active-context inspection are available through
 `/compact [instructions]` and `/status` slash commands, and matching Web API
 routes. Slash commands are parsed in `internal/app` so CLI and web inputs share
 one whitelist and result contract before any provider turn is started.
+Each summary request snapshots the session's goal contract and Notes under the
+runtime lock and renders them as a data-only authoritative-state block before
+the transcript. `internal/runtime/contextbudget` includes this block in every
+fit calculation and omits transcript messages before it can omit authoritative
+state. Summary instructions require the `Goal` section to copy the contract
+rather than infer it from history and require `Next Steps` to match unfinished
+Notes items. Configured `compaction.instructions`, per-request instructions,
+and successful `PreCompact` stdout are merged in that order.
 Successful compaction records summary-call token usage and updates the session
 context usage snapshot to the estimated active context after the compact marker.
 `context.compact.summary_retry` records the empty-summary retry, stop reason,

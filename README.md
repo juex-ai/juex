@@ -281,6 +281,14 @@ may use Markdown task items (`- [ ]` and `- [x]`) for visible progress. Juex
 does not infer or mirror runtime facts into notes, and it never reads or
 migrates legacy `working_state.json` files.
 
+Compaction summary requests carry the current goal contract and Notes as
+authoritative session state. The summary model copies the contract into `Goal`
+instead of reconstructing it from transcript history, while unfinished Notes
+items constrain `Next Steps`. Set `compaction.instructions` for persistent
+summary focus. Instructions from configuration, a manual `/compact <focus>` or
+`juex sessions compact --instructions`, and successful `PreCompact` hook stdout
+are applied in that order.
+
 Each persisted session also has a `scratchpad/` directory for long drafts,
 intermediate files, and working material that exceeds the Notes budget. The
 system prompt provides its absolute path, and the model uses the existing

@@ -6,6 +6,7 @@ type CompactionPolicy = runtimepolicy.CompactionPolicy
 
 type Policy struct {
 	Enabled                    bool
+	Instructions               string
 	ReserveTokens              int
 	KeepRecentTokens           int
 	TailTurns                  int
@@ -33,8 +34,10 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 	defaults := DefaultCompactionPolicy()
 	if policy.ReserveTokens <= 0 && policy.KeepRecentTokens <= 0 && policy.TailTurns <= 0 && policy.SummaryMaxTokens <= 0 && policy.ToolResultMaxChars <= 0 {
 		enabled := policy.Enabled
+		instructions := policy.Instructions
 		policy = defaults
 		policy.Enabled = enabled
+		policy.Instructions = instructions
 	}
 	reserve := policy.ReserveTokens
 	if reserve <= 0 {
@@ -98,6 +101,7 @@ func EffectivePolicy(policy CompactionPolicy, contextWindow int, defaultContextW
 	}
 	return Policy{
 		Enabled:                    policy.Enabled,
+		Instructions:               policy.Instructions,
 		ReserveTokens:              reserve,
 		KeepRecentTokens:           keep,
 		TailTurns:                  tailTurns,

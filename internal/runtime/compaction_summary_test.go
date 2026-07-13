@@ -14,7 +14,7 @@ func TestBuildCompactionSummaryRequest_UsesPreviousSummaryAndTruncatesToolResult
 	input := []llm.Message{
 		{ID: "tool-result", Role: llm.RoleUser, Blocks: []llm.Block{{Type: llm.BlockToolResult, ToolUseID: "tu1", Content: strings.Repeat("x", 50)}}},
 	}
-	sys, hist := buildCompactionSummaryRequest("base", prev, input, compactionPolicy{ToolResultMaxChars: 10}, "")
+	sys, hist := buildCompactionSummaryRequest("base", prev, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 10}, "")
 	if !strings.Contains(sys, "Goal") || !strings.Contains(sys, "Tool Failures") {
 		t.Fatalf("system prompt missing required headings: %s", sys)
 	}
@@ -31,7 +31,7 @@ func TestBuildCompactionSummaryRequest_TruncatesTextAndToolUseInput(t *testing.T
 			{Type: llm.BlockToolUse, ToolUseID: "tu1", ToolName: "write", Input: map[string]any{"payload": strings.Repeat("x", 50)}},
 		}},
 	}
-	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionPolicy{ToolResultMaxChars: 10}, "")
+	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 10}, "")
 	body := hist[0].FirstText()
 	if !strings.Contains(body, "text: tttttttttt ...(truncated, total 50 bytes)") {
 		t.Fatalf("text was not truncated:\n%s", body)
@@ -65,7 +65,7 @@ func TestBuildCompactionSummaryRequest_OmitsRedactedReasoningContent(t *testing.
 		}}},
 	}
 
-	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionPolicy{ToolResultMaxChars: 2000}, "")
+	_, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 2000}, "")
 	body := hist[0].FirstText()
 
 	if strings.Contains(body, encrypted) || strings.Contains(body, "enc_keep_metadata_only") {
@@ -93,7 +93,7 @@ func TestBuildCompactionSummaryRequest_RequiresConcreteFactValues(t *testing.T) 
 		}, "\n")),
 	}
 
-	sys, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionPolicy{ToolResultMaxChars: 400}, "")
+	sys, hist := buildCompactionSummaryRequest("", llm.Message{}, input, compactionSummaryState{}, compactionPolicy{ToolResultMaxChars: 400}, "")
 
 	if !strings.Contains(sys, "copy the actual values of labeled facts") {
 		t.Fatalf("system prompt does not require concrete facts:\n%s", sys)
@@ -137,7 +137,7 @@ func TestBuildCompactionSummaryRequest_BoundsOversizedTranscript(t *testing.T) {
 		SummaryMaxTokens:   100,
 	}
 
-	sys, hist := buildCompactionSummaryRequest("base", llm.Message{}, input, policy, "")
+	sys, hist := buildCompactionSummaryRequest("base", llm.Message{}, input, compactionSummaryState{}, policy, "")
 
 	limit := policy.TriggerTokens - policy.SummaryMaxTokens
 	if got := estimateContextTokens(sys, nil, hist); got > limit {
@@ -176,13 +176,13 @@ func TestFitCompactionSummaryInputKeepsLongestFittingSuffix(t *testing.T) {
 	policy := compactionPolicy{ToolResultMaxChars: 500}
 	wantStart := len(input) - 3
 	limit := estimateContextTokens(sys, nil, []llm.Message{
-		llm.TextMessage(llm.RoleUser, buildCompactionSummaryBody(llm.Message{}, input[wantStart:], policy.ToolResultMaxChars, wantStart)),
+		llm.TextMessage(llm.RoleUser, buildCompactionSummaryBody(llm.Message{}, input[wantStart:], compactionSummaryState{}, policy.ToolResultMaxChars, wantStart)),
 	})
-	if compactionSummaryFits(sys, llm.Message{}, input[wantStart-1:], policy.ToolResultMaxChars, wantStart-1, limit) {
+	if compactionSummaryFits(sys, llm.Message{}, input[wantStart-1:], compactionSummaryState{}, policy.ToolResultMaxChars, wantStart-1, limit) {
 		t.Fatal("test setup invalid: four-message suffix should not fit")
 	}
 
-	selected, omitted, _ := fitCompactionSummaryInput(sys, llm.Message{}, input, policy, limit)
+	selected, omitted, _ := fitCompactionSummaryInput(sys, llm.Message{}, input, compactionSummaryState{}, policy, limit)
 
 	if omitted != wantStart {
 		t.Fatalf("omitted = %d, want %d", omitted, wantStart)

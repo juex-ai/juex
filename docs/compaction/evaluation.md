@@ -1,6 +1,6 @@
 # Context Compaction Evaluation
 
-Date: 2026-06-04
+Date: 2026-07-13
 
 ## Purpose
 
@@ -27,12 +27,15 @@ quarter range while keeping the test cheap enough to repeat.
 
 ## Case: Gold-Fact Retention After Auto Compact
 
-The case has three turns:
+The case has three turns and a sidecar-state seed between the first two:
 
-1. Seed the session with old task state and large irrelevant noise.
-2. Add more noise so the next request triggers auto-compaction.
+1. Seed the session with old task state and enough irrelevant noise to exceed
+   the compact trigger on the following turn.
+2. Persist a three-field goal contract and exact Notes, then add a small amount
+   of noise. The existing history triggers one auto-compaction while the small
+   new turn keeps a second compact from obscuring the state-fidelity case.
 3. Ask the model, with no tools, to answer objective questions about the old
-   facts.
+   facts and recited authoritative state.
 
 Gold facts:
 
@@ -53,13 +56,17 @@ Scoring:
 | Correctly states no tools were needed | 4 |
 | Does not invent a merge/PR result | 6 |
 | Mentions compacted context or summary as the source of old facts | 6 |
-| Total | 52 |
+| Legacy subtotal | 52 |
+| Goal description, acceptance, and status present in compact `Goal` | 6 each |
+| Notes remain byte-identical, unfinished item appears in compact `Next Steps`, and Notes are recited after compaction | 4 each |
+| Total | 82 |
 
 Pass thresholds:
 
-- `>= 44`: good enough for default strategy comparison.
-- `>= 36`: acceptable but needs prompt or projection tuning.
-- `< 36`: regression for long-running coding tasks.
+- The legacy subtotal must remain `>= 36`.
+- All six authoritative-state checks must pass, regardless of total score.
+- A fully passing run therefore scores at least `66/82`; higher legacy fact
+  retention remains useful for provider comparison.
 
 ## Cache Metrics
 
@@ -129,6 +136,7 @@ Each provider directory contains:
 - `turn3.txt`
 - `events.jsonl` copies, when available
 - `conversation.jsonl` copies, when available
+- `goal_state.json` and `notes.md`
 - `scorecard.md`
 
 ## Automated Regression
@@ -137,6 +145,8 @@ Normal `make test` covers the non-live regression shape with fake providers:
 
 - Small-context auto-compaction and compact-marker active context.
 - Bounded compaction summary requests.
+- Authoritative goal/Notes preservation while transcript input is omitted.
+- Stable configured, per-request, and hook instruction ordering.
 - Oversized user-input and tool-result externalization before provider
   requests.
 - Context-usage accounting for compact summaries and artifact references.

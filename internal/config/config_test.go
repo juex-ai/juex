@@ -1256,6 +1256,7 @@ providers:
       - id: gpt-4
 compaction:
   enabled: false
+  instructions: Preserve the current release gate and exact verification command.
   reserve_tokens: 1000
   keep_recent_tokens: 2000
   tail_turns: 3
@@ -1269,8 +1270,23 @@ compaction:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Compaction.Enabled || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.TailTurns != 3 || cfg.Compaction.SummaryModel != "compact:gpt-4-mini" || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
+	if cfg.Compaction.Enabled || cfg.Compaction.Instructions != "Preserve the current release gate and exact verification command." || cfg.Compaction.ReserveTokens != 1000 || cfg.Compaction.KeepRecentTokens != 2000 || cfg.Compaction.TailTurns != 3 || cfg.Compaction.SummaryModel != "compact:gpt-4-mini" || cfg.Compaction.SummaryMaxTokens != 777 || cfg.Compaction.ToolResultMaxChars != 888 {
 		t.Fatalf("Compaction = %+v", cfg.Compaction)
+	}
+}
+
+func TestApplyCompactionConfigExplicitEmptyClearsInstructions(t *testing.T) {
+	cfg := Config{Compaction: DefaultCompactionConfig()}
+	global := "Preserve the global release focus."
+	applyCompactionConfig(&cfg, compactionConfig{Instructions: &global})
+	if cfg.Compaction.Instructions != global {
+		t.Fatalf("global instructions = %q", cfg.Compaction.Instructions)
+	}
+
+	empty := ""
+	applyCompactionConfig(&cfg, compactionConfig{Instructions: &empty})
+	if cfg.Compaction.Instructions != "" {
+		t.Fatalf("explicit empty instructions did not clear inherited value: %q", cfg.Compaction.Instructions)
 	}
 }
 

@@ -4,6 +4,7 @@ const DefaultContextWindowTokens = 256000
 
 type CompactionPolicy struct {
 	Enabled                    bool
+	Instructions               string
 	ReserveTokens              int
 	KeepRecentTokens           int
 	TailTurns                  int

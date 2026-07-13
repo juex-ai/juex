@@ -164,20 +164,21 @@ func (e *ModelOverrideError) Unwrap() error {
 }
 
 type compactionConfig struct {
-	Enabled                    *bool  `yaml:"enabled"`
-	ReserveTokens              int    `yaml:"reserve_tokens"`
-	KeepRecentTokens           int    `yaml:"keep_recent_tokens"`
-	TailTurns                  int    `yaml:"tail_turns"`
-	SummaryModel               string `yaml:"summary_model"`
-	SummaryMaxTokens           int    `yaml:"summary_max_tokens"`
-	ToolResultMaxChars         int    `yaml:"tool_result_max_chars"`
-	UserInputInlineMaxBytes    int    `yaml:"user_input_inline_max_bytes"`
-	UserInputPreviewHeadBytes  int    `yaml:"user_input_preview_head_bytes"`
-	UserInputPreviewTailBytes  int    `yaml:"user_input_preview_tail_bytes"`
-	ToolResultInlineMaxBytes   int    `yaml:"tool_result_inline_max_bytes"`
-	ToolResultPreviewHeadBytes int    `yaml:"tool_result_preview_head_bytes"`
-	ToolResultPreviewTailBytes int    `yaml:"tool_result_preview_tail_bytes"`
-	MaxAutoFailures            int    `yaml:"max_auto_failures"`
+	Enabled                    *bool   `yaml:"enabled"`
+	Instructions               *string `yaml:"instructions"`
+	ReserveTokens              int     `yaml:"reserve_tokens"`
+	KeepRecentTokens           int     `yaml:"keep_recent_tokens"`
+	TailTurns                  int     `yaml:"tail_turns"`
+	SummaryModel               string  `yaml:"summary_model"`
+	SummaryMaxTokens           int     `yaml:"summary_max_tokens"`
+	ToolResultMaxChars         int     `yaml:"tool_result_max_chars"`
+	UserInputInlineMaxBytes    int     `yaml:"user_input_inline_max_bytes"`
+	UserInputPreviewHeadBytes  int     `yaml:"user_input_preview_head_bytes"`
+	UserInputPreviewTailBytes  int     `yaml:"user_input_preview_tail_bytes"`
+	ToolResultInlineMaxBytes   int     `yaml:"tool_result_inline_max_bytes"`
+	ToolResultPreviewHeadBytes int     `yaml:"tool_result_preview_head_bytes"`
+	ToolResultPreviewTailBytes int     `yaml:"tool_result_preview_tail_bytes"`
+	MaxAutoFailures            int     `yaml:"max_auto_failures"`
 }
 
 type runtimeConfig struct {
@@ -913,6 +914,9 @@ func applyProviderSelectorConfig(cfg *Config, id, protocol string) {
 func applyCompactionConfig(cfg *Config, c compactionConfig) {
 	if c.Enabled != nil {
 		cfg.Compaction.Enabled = *c.Enabled
+	}
+	if c.Instructions != nil {
+		cfg.Compaction.Instructions = strings.TrimSpace(*c.Instructions)
 	}
 	if c.ReserveTokens > 0 {
 		cfg.Compaction.ReserveTokens = c.ReserveTokens

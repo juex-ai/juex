@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import re
@@ -22,6 +23,19 @@ DEFAULT_COMPACTION = {
     "tool_result_max_chars": 1200,
     "user_input_inline_max_bytes": 524288,
 }
+
+AUTHORITATIVE_GOAL = {
+    "version": 1,
+    "description": "Ship authoritative compaction state fidelity for task CMP-2417.",
+    "acceptance": "The compact Goal matches goal_state and Notes survive unchanged.",
+    "status": "success",
+}
+AUTHORITATIVE_COMPLETED_NOTE = "Map the compaction runtime."
+AUTHORITATIVE_OPEN_NOTE = "Run the live compaction evaluation and inspect its scorecard."
+AUTHORITATIVE_NOTES = (
+    f"- [x] {AUTHORITATIVE_COMPLETED_NOTE}\n"
+    f"- [ ] {AUTHORITATIVE_OPEN_NOTE}\n"
+)
 
 
 def add_args(parser: argparse.ArgumentParser) -> None:
@@ -168,19 +182,39 @@ def run_model(args: argparse.Namespace, cfg: dict, model: str, out_root: pathlib
             print(f"FAIL {model}: {turn} failed", file=sys.stderr)
             return 1
 
-    score = score_answer((out_dir / "turn3.txt").read_text(encoding="utf-8", errors="replace"))
+        if turn == "turn1":
+            try:
+                seed_authoritative_state(work)
+            except Exception as exc:  # noqa: BLE001
+                error = out_dir / "state-seed-error.txt"
+                error.write_text(str(exc), encoding="utf-8")
+                compacted = "yes" if has_compaction(work) else "no"
+                cache_ratio = cache_ratio_from_work(work)
+                copy_runtime_artifacts(work, out_dir)
+                write_failure_scorecard(model, work, out_dir, "state-seed", compacted, cache_ratio, error, args.keep_workdir, args.context_window, args.turn_timeout)
+                print(f"FAIL {model}: unable to seed authoritative state", file=sys.stderr)
+                return 1
+
+    answer = (out_dir / "turn3.txt").read_text(encoding="utf-8", errors="replace")
+    legacy_score = score_answer(answer)
+    authoritative = score_authoritative_state(work, answer)
+    score = legacy_score + authoritative["score"]
     compacted = "yes" if has_compaction(work) else "no"
     cache_ratio = cache_ratio_from_work(work)
-    write_scorecard(model, work, out_dir, score, compacted, cache_ratio, args.keep_workdir, args.context_window, args.turn_timeout)
+    write_scorecard(model, work, out_dir, legacy_score, authoritative, compacted, cache_ratio, args.keep_workdir, args.context_window, args.turn_timeout)
     copy_runtime_artifacts(work, out_dir)
     failed = 0
     if compacted != "yes":
         print(f"FAIL {model}: compaction did not run", file=sys.stderr)
         failed = 1
-    if score < 36:
-        print(f"FAIL {model}: score {score}/52 is below the regression threshold", file=sys.stderr)
+    if legacy_score < 36:
+        print(f"FAIL {model}: legacy score {legacy_score}/52 is below the regression threshold", file=sys.stderr)
         failed = 1
-    print(f"==> {model} score {score}/52, compacted={compacted}")
+    failed_state_checks = [name for name, passed in authoritative["checks"].items() if not passed]
+    if failed_state_checks:
+        print(f"FAIL {model}: authoritative state checks failed: {', '.join(failed_state_checks)}", file=sys.stderr)
+        failed = 1
+    print(f"==> {model} score {score}/82, compacted={compacted}")
     return failed
 
 
@@ -204,7 +238,7 @@ GF6: The next command is go test ./internal/runtime -run TestTurn_AutoCompaction
 
 Ignore the following noise for later recall.
 """
-        + noise("turn1", 1400),
+        + noise("turn1", 900),
         encoding="utf-8",
     )
     turn2.write_text(
@@ -214,7 +248,7 @@ in conversation context only. Answer only: TURN2 STORED.
 
 Irrelevant context begins below.
 """
-        + noise("turn2", 1100),
+        + noise("turn2", 40),
         encoding="utf-8",
     )
     turn3.write_text(
@@ -232,6 +266,11 @@ GF6:
 Tools:
 CompactionSource:
 NoInventedMerge:
+GoalDescription:
+GoalAcceptance:
+GoalStatus:
+NotesCompleted:
+NotesOpen:
 """,
         encoding="utf-8",
     )
@@ -290,6 +329,85 @@ def score_answer(answer: str) -> int:
     return score
 
 
+def seed_authoritative_state(work: pathlib.Path) -> None:
+    conversations = session_files(work, "conversation.jsonl")
+    if len(conversations) != 1:
+        raise ValueError(f"expected one active session after turn1, found {len(conversations)}")
+    session = conversations[0].parent
+    (session / "goal_state.json").write_text(
+        json.dumps(AUTHORITATIVE_GOAL, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    (session / "notes.md").write_text(AUTHORITATIVE_NOTES, encoding="utf-8")
+
+
+def score_authoritative_state(work: pathlib.Path, answer: str) -> dict:
+    goal = read_latest_json(work, "goal_state.json")
+    notes = read_latest_text(work, "notes.md")
+    summary = latest_compact_summary(work)
+    goal_section = summary_section(summary, "Goal", "Critical Context")
+    next_steps = summary_section(summary, "Next Steps", "Relevant Files")
+    checks = {
+        "goal_description": bool(goal.get("description")) and goal["description"] in goal_section,
+        "goal_acceptance": bool(goal.get("acceptance")) and goal["acceptance"] in goal_section,
+        "goal_status": bool(goal.get("status")) and goal["status"] in goal_section,
+        "notes_unchanged": notes == AUTHORITATIVE_NOTES,
+        "notes_in_next_steps": contains_note_text(next_steps, AUTHORITATIVE_OPEN_NOTE),
+        "notes_recited_after_compaction": contains_note_text(answer, AUTHORITATIVE_COMPLETED_NOTE) and contains_note_text(answer, AUTHORITATIVE_OPEN_NOTE),
+    }
+    goal_score = sum(6 for name in ["goal_description", "goal_acceptance", "goal_status"] if checks[name])
+    notes_score = sum(4 for name in ["notes_unchanged", "notes_in_next_steps", "notes_recited_after_compaction"] if checks[name])
+    return {"score": goal_score + notes_score, "checks": checks}
+
+
+def contains_note_text(haystack: str, note: str) -> bool:
+    normalized_haystack = " ".join(haystack.casefold().split())
+    normalized_note = " ".join(note.casefold().split()).rstrip(".!?")
+    return bool(normalized_note) and normalized_note in normalized_haystack
+
+
+def read_latest_json(work: pathlib.Path, name: str) -> dict:
+    paths = session_files(work, name)
+    if not paths:
+        return {}
+    try:
+        value = json.loads(paths[-1].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def read_latest_text(work: pathlib.Path, name: str) -> str:
+    paths = session_files(work, name)
+    if not paths:
+        return ""
+    return paths[-1].read_text(encoding="utf-8", errors="replace")
+
+
+def latest_compact_summary(work: pathlib.Path) -> str:
+    latest = ""
+    for path in session_files(work, "conversation.jsonl"):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("kind") != "compact":
+                continue
+            for block in message.get("blocks") or []:
+                if block.get("type") == "text" and block.get("text"):
+                    latest = str(block["text"])
+                    break
+    return latest
+
+
+def summary_section(summary: str, heading: str, next_heading: str) -> str:
+    heading_pattern = rf"^\s*(?:#{{1,6}}\s*)?{re.escape(heading)}\s*:?\s*$"
+    next_pattern = rf"^\s*(?:#{{1,6}}\s*)?{re.escape(next_heading)}\s*:?\s*$"
+    match = re.search(heading_pattern + rf"\n(.*?)(?={next_pattern})", summary, re.I | re.M | re.S)
+    return match.group(1).strip() if match else ""
+
+
 def session_files(work: pathlib.Path, name: str) -> list[pathlib.Path]:
     sessions = work / ".juex" / "sessions"
     return sorted(sessions.rglob(name)) if sessions.is_dir() else []
@@ -325,7 +443,7 @@ def match_int(text: str, pattern: str) -> int:
 
 
 def copy_runtime_artifacts(work: pathlib.Path, out_dir: pathlib.Path) -> None:
-    for name in ["conversation.jsonl", "events.jsonl"]:
+    for name in ["conversation.jsonl", "events.jsonl", "goal_state.json", "notes.md"]:
         for path in session_files(work, name):
             shutil.copy2(path, out_dir / name)
 
@@ -334,14 +452,16 @@ def write_scorecard(
     model: str,
     work: pathlib.Path,
     out_dir: pathlib.Path,
-    score: int,
+    legacy_score: int,
+    authoritative: dict,
     compacted: str,
     cache_ratio: str,
     keep_workdir: bool,
     context_window: int,
     timeout: int,
 ) -> None:
-    write_scorecard_common(model, work, out_dir, f"{score}/52", compacted, cache_ratio, "", "", keep_workdir, context_window, timeout)
+    total = legacy_score + authoritative["score"]
+    write_scorecard_common(model, work, out_dir, f"{total}/82", compacted, cache_ratio, "", "", keep_workdir, context_window, timeout, legacy_score, authoritative)
 
 
 def write_failure_scorecard(
@@ -357,7 +477,7 @@ def write_failure_scorecard(
     timeout: int,
 ) -> None:
     error_tail = "\n".join(output_file.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]) if output_file.is_file() else ""
-    write_scorecard_common(model, work, out_dir, "n/a", compacted, cache_ratio, stage, error_tail, keep_workdir, context_window, timeout)
+    write_scorecard_common(model, work, out_dir, "n/a", compacted, cache_ratio, stage, error_tail, keep_workdir, context_window, timeout, None, None)
 
 
 def write_scorecard_common(
@@ -372,6 +492,8 @@ def write_scorecard_common(
     keep_workdir: bool,
     context_window: int,
     timeout: int,
+    legacy_score: int | None,
+    authoritative: dict | None,
 ) -> None:
     lines = [
         "# Compaction Eval Scorecard",
@@ -384,6 +506,25 @@ def write_scorecard_common(
         f"- Compacted: {compacted}",
         f"- Cache ratio: {cache_ratio}",
     ]
+    if legacy_score is not None and authoritative is not None:
+        lines += [
+            f"- Legacy fact score: {legacy_score}/52",
+            f"- Authoritative state score: {authoritative['score']}/30",
+            "",
+            "## Authoritative State Checks",
+            "",
+        ]
+        labels = {
+            "goal_description": "Goal description in compact Goal",
+            "goal_acceptance": "Goal acceptance in compact Goal",
+            "goal_status": "Goal status in compact Goal",
+            "notes_unchanged": "Notes unchanged on disk",
+            "notes_in_next_steps": "Unfinished Notes item in compact Next Steps",
+            "notes_recited_after_compaction": "Notes recited after compaction",
+        }
+        for name, label in labels.items():
+            status = "pass" if authoritative["checks"].get(name) else "fail"
+            lines.append(f"- {label}: {status}")
     if stage:
         lines += ["- Error stage: " + stage, "", "## Error Tail", "", "```text", error_tail, "```"]
     (out_dir / "scorecard.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
