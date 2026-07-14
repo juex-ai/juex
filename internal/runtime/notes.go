@@ -22,8 +22,9 @@ func (e *Engine) notesStoreLocked() *NotesStore {
 	}
 	e.notesStoreMu.Lock()
 	defer e.notesStoreMu.Unlock()
-	if e.Notes == nil && e.Session != nil && e.Session.Dir != "" {
-		e.Notes = NewNotesStore(e.Session.Dir)
+	sess := e.Session
+	if e.Notes == nil && sess != nil && sess.Dir != "" {
+		e.Notes = NewNotesStore(sess.Dir)
 	}
 	return e.Notes
 }
