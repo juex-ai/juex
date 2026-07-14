@@ -20,21 +20,39 @@ func (e *Engine) notesStoreLocked() *NotesStore {
 	if e == nil {
 		return nil
 	}
+	e.notesStoreMu.Lock()
+	defer e.notesStoreMu.Unlock()
+	if e.Notes == nil && e.Session != nil && e.Session.Dir != "" {
+		e.Notes = NewNotesStore(e.Session.Dir)
+	}
 	return e.Notes
 }
 
+// SetNotesStore installs the store used by all Notes runtime paths.
+func (e *Engine) SetNotesStore(store *NotesStore) {
+	if e == nil {
+		return
+	}
+	e.notesStoreMu.Lock()
+	e.Notes = store
+	e.notesStoreMu.Unlock()
+	e.clearNotesContextError()
+}
+
 func (e *Engine) NotesStatusSnapshot() (*NotesSnapshot, error) {
-	if e == nil || e.Session == nil || e.Session.Dir == "" {
+	store := e.notesStoreLocked()
+	if store == nil {
 		return nil, nil
 	}
-	return NewNotesStore(e.Session.Dir).StatusSnapshot()
+	return store.StatusSnapshot()
 }
 
 func (e *Engine) notesContextSnapshot() (string, bool) {
-	if e == nil || e.Session == nil || e.Session.Dir == "" {
+	store := e.notesStoreLocked()
+	if store == nil {
 		return "", false
 	}
-	return e.notesContextFromStore(NewNotesStore(e.Session.Dir))
+	return e.notesContextFromStore(store)
 }
 
 func (e *Engine) notesContextLocked() (string, bool) {

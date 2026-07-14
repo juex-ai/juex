@@ -108,6 +108,7 @@ type Engine struct {
 	tokenCalibrationMu sync.RWMutex
 	tokenCalibration   tokenEstimateCalibration
 
+	notesStoreMu         sync.Mutex
 	notesContextErrorMu  sync.Mutex
 	notesContextErrorKey string
 }
