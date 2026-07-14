@@ -22,7 +22,10 @@ func NewGoalStateStore(sessionDir string, opts GoalStateOptions) *GoalStateStore
 	return workmem.NewGoalStateStore(sessionDir, opts)
 }
 
-const MaxNotesCharacters = workmem.MaxNotesCharacters
+const (
+	NotesFileName      = workmem.NotesFileName
+	MaxNotesCharacters = workmem.MaxNotesCharacters
+)
 
 type NotesSnapshot = workmem.NotesSnapshot
 type NotesStore = workmem.NotesStore

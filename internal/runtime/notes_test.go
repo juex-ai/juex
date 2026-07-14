@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -123,6 +125,127 @@ func TestActiveContextAppendsGoalThenNotes(t *testing.T) {
 			t.Fatalf("empty notes leaked into context: %+v", snapshot.Messages)
 		}
 	}
+}
+
+func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
+	tests := []struct {
+		name      string
+		corrupt   []byte
+		wantError string
+	}{
+		{
+			name:      "oversized",
+			corrupt:   []byte(strings.Repeat("x", MaxNotesCharacters+1)),
+			wantError: "maximum is 2048",
+		},
+		{
+			name:      "invalid UTF-8",
+			corrupt:   []byte{0xff, 0xfe, 0xfd},
+			wantError: "valid UTF-8",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eng, bus := newEngine(t, &mockProvider{}, false)
+			eng.Notes = NewNotesStore(eng.Session.Dir)
+			if err := RegisterNotesTools(eng.Tools, eng); err != nil {
+				t.Fatal(err)
+			}
+			notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
+			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			var errored []NotesErroredPayload
+			bus.Subscribe("notes.errored", func(event events.Event) {
+				payload, _ := event.Payload.(NotesErroredPayload)
+				errored = append(errored, payload)
+			})
+
+			for range 2 {
+				snapshot := eng.ActiveContext(llm.TextMessage(llm.RoleUser, "continue"))
+				message := runtimeContextMessage(snapshot.Messages, "runtime-notes")
+				if message == nil {
+					t.Fatalf("active context missing Notes error placeholder: %+v", snapshot.Messages)
+				}
+				text := message.FirstText()
+				relativePath := filepath.ToSlash(filepath.Join(".juex", "sessions", filepath.Base(eng.Session.Dir), NotesFileName))
+				for _, want := range []string{"Working notes unavailable", tt.wantError, relativePath, "update_notes"} {
+					if !strings.Contains(text, want) {
+						t.Fatalf("Notes placeholder missing %q: %q", want, text)
+					}
+				}
+			}
+			if len(errored) != 1 {
+				t.Fatalf("notes.errored events = %+v, want exactly one", errored)
+			}
+			if errored[0].Path != notesPath || !strings.Contains(errored[0].Error, tt.wantError) {
+				t.Fatalf("notes.errored payload = %+v", errored[0])
+			}
+
+			if _, err := eng.Tools.Call(context.Background(), NotesToolUpdate, map[string]any{
+				"content": "- [ ] recovered through update_notes",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			recovered := runtimeContextMessage(eng.ActiveContext().Messages, "runtime-notes")
+			if recovered == nil || !strings.Contains(recovered.FirstText(), "Current working notes") || !strings.Contains(recovered.FirstText(), "recovered through update_notes") || strings.Contains(recovered.FirstText(), "unavailable") {
+				t.Fatalf("recovered Notes context = %+v", recovered)
+			}
+
+			if err := os.WriteFile(notesPath, tt.corrupt, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_ = eng.ActiveContext()
+			if len(errored) != 2 {
+				t.Fatalf("notes.errored events after recovery and recurrence = %+v, want two", errored)
+			}
+		})
+	}
+}
+
+func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{{
+		Message:    llm.TextMessage(llm.RoleAssistant, "acknowledged"),
+		StopReason: llm.StopEndTurn,
+	}}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Notes = NewNotesStore(eng.Session.Dir)
+	notesPath := filepath.Join(eng.Session.Dir, NotesFileName)
+	if err := os.WriteFile(notesPath, []byte{0xff}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var errored int
+	bus.Subscribe("notes.errored", func(events.Event) {
+		errored++
+	})
+
+	out, err := eng.Turn(context.Background(), "continue")
+	if err != nil || out != "acknowledged" {
+		t.Fatalf("Turn() = %q, %v", out, err)
+	}
+	if len(prov.histories) != 1 {
+		t.Fatalf("provider calls = %d, want one", len(prov.histories))
+	}
+	providerText := messagesText(prov.histories[0])
+	for _, want := range []string{"Working notes unavailable", "valid UTF-8", "update_notes"} {
+		if !strings.Contains(providerText, want) {
+			t.Fatalf("provider context missing %q:\n%s", want, providerText)
+		}
+	}
+	if errored != 1 {
+		t.Fatalf("notes.errored events = %d, want one", errored)
+	}
+}
+
+func runtimeContextMessage(messages []llm.Message, id string) *llm.Message {
+	for i := range messages {
+		if messages[i].ID == id {
+			return &messages[i]
+		}
+	}
+	return nil
 }
 
 func TestRegisterNotesToolsRejectsMissingStore(t *testing.T) {

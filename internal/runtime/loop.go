@@ -107,6 +107,9 @@ type Engine struct {
 
 	tokenCalibrationMu sync.RWMutex
 	tokenCalibration   tokenEstimateCalibration
+
+	notesContextErrorMu  sync.Mutex
+	notesContextErrorKey string
 }
 
 type HookRunner interface {

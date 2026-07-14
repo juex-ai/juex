@@ -1325,6 +1325,14 @@ the sidecar, so Notes survive compaction without being copied into
 session UI renders the Markdown plus progress derived from `- [ ]` and `- [x]`
 task items.
 
+If `notes.md` exists but fails read or validation, the runtime keeps the Notes
+context position and replaces its content with a recovery message containing
+the reason, session-relative path, and `update_notes` repair option. It emits a
+typed `notes.errored` event with the concrete path once per uninterrupted
+session/error incident; repeated provider-context assembly keeps the recovery
+message without repeating the event. A successful read or `update_notes`
+rewrite clears the active incident and restores normal recitation.
+
 The session scratchpad is the larger complement to Notes. A named prompt section
 provides its absolute path and asks the model to keep long drafts and
 intermediate files there, retrieve them explicitly with `read` or `grep`, and

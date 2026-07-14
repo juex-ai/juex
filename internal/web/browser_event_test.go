@@ -296,6 +296,16 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-notes-errored",
+			Type:      "notes.errored",
+			Timestamp: ts.Add(7400 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.NotesErroredPayload{
+				Error: "notes read: notes content must be valid UTF-8",
+				Path:  "/workspace/.juex/sessions/session-1/notes.md",
+			},
+		},
+		{
 			ID:        "evt-observable-started",
 			Type:      observable.EventObservableStarted,
 			Timestamp: ts.Add(7500 * time.Millisecond),
