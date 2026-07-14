@@ -176,6 +176,16 @@
     }
   },
   {
+    "id": "evt-notes-errored",
+    "type": "notes.errored",
+    "ts": "2026-06-15T00:00:07.4Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "error": "notes read: notes content must be valid UTF-8",
+      "path": "/workspace/.juex/sessions/session-1/notes.md"
+    }
+  },
+  {
     "id": "evt-observable-started",
     "type": "observable.started",
     "ts": "2026-06-15T00:00:07.5Z",

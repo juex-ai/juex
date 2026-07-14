@@ -252,6 +252,7 @@ export const BROWSER_EVENT_TYPES = [
   "pending_input.rejected",
   "goal.updated",
   "notes.updated",
+  "notes.errored",
   "observable.started",
   "observable.stopped",
   "observable.exited",
@@ -603,6 +604,11 @@ export interface ContextProjectionAppliedPayload {
 export type GoalUpdatedPayload = GoalStatusSnapshot;
 export type NotesUpdatedPayload = NotesSnapshot;
 
+export interface NotesErroredPayload {
+  error: string;
+  path: string;
+}
+
 export type BrowserEvent =
   | (BrowserEventBase<"turn.started"> & { payload: TurnStartedPayload })
   | (BrowserEventBase<"turn.completed"> & { payload: TurnCompletedPayload })
@@ -625,6 +631,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
   | (BrowserEventBase<"goal.updated"> & { payload: GoalUpdatedPayload })
   | (BrowserEventBase<"notes.updated"> & { payload: NotesUpdatedPayload })
+  | (BrowserEventBase<"notes.errored"> & { payload: NotesErroredPayload })
   | (BrowserEventBase<"observable.started"> & { payload: ObservableEventPayload })
   | (BrowserEventBase<"observable.stopped"> & { payload: ObservableEventPayload })
   | (BrowserEventBase<"observable.exited"> & { payload: ObservableEventPayload })

@@ -48,9 +48,11 @@ func (e *Engine) compactionSummaryStateLocked() (compactionSummaryState, error) 
 	if store := e.notesStoreLocked(); store != nil {
 		snapshot, err := store.Snapshot()
 		if err != nil {
-			return compactionSummaryState{}, fmt.Errorf("compaction notes: %w", err)
+			e.recordNotesContextError(store, err)
+		} else {
+			e.clearNotesContextError()
+			summaryState.Notes = snapshot.Content
 		}
-		summaryState.Notes = snapshot.Content
 	}
 	return summaryState, nil
 }

@@ -175,6 +175,11 @@ type NotesUpdatedPayload struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
+type NotesErroredPayload struct {
+	Error string `json:"error"`
+	Path  string `json:"path"`
+}
+
 type GoalContinuedPayload struct {
 	Status                GoalStatus `json:"status"`
 	Reason                string     `json:"reason,omitempty"`

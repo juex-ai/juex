@@ -18,6 +18,10 @@ test("frontend browser event type list matches backend contract fixture", () => 
 
 test("frontend projects backend browser event fixture stream", () => {
   const events = readJSON("browser-events.golden.json") as BrowserEvent[];
+  const notesError = events.find((event) => event.type === "notes.errored");
+  assert.equal(notesError?.payload.error, "notes read: notes content must be valid UTF-8");
+  assert.equal(notesError?.payload.path, "/workspace/.juex/sessions/session-1/notes.md");
+
   let state = createLiveSessionProjection();
   const effects = [];
 
