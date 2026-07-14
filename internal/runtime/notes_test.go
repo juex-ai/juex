@@ -205,6 +205,18 @@ func TestNotesContextFailsLoudOnceAndRecoversThroughUpdateTool(t *testing.T) {
 	}
 }
 
+func TestNotesContextFromStoreHandlesNil(t *testing.T) {
+	var nilEngine *Engine
+	if text, ok := nilEngine.notesContextFromStore(NewNotesStore(t.TempDir())); ok || text != "" {
+		t.Fatalf("nil engine notes context = %q, %v", text, ok)
+	}
+
+	eng := &Engine{}
+	if text, ok := eng.notesContextFromStore(nil); ok || text != "" {
+		t.Fatalf("nil store notes context = %q, %v", text, ok)
+	}
+}
+
 func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "acknowledged"),

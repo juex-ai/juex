@@ -46,6 +46,9 @@ func (e *Engine) notesContextLocked() (string, bool) {
 }
 
 func (e *Engine) notesContextFromStore(store *NotesStore) (string, bool) {
+	if e == nil || store == nil {
+		return "", false
+	}
 	snapshot, err := store.Snapshot()
 	if err != nil {
 		return e.notesUnavailableContext(store, err), true
