@@ -18,7 +18,7 @@
 user types a prompt in the CLI
   -> assemble system prompt from AGENTS.md + skills + memory entries + bounded runtime sections
   -> call the LLM (Anthropic or OpenAI-compatible)
-  -> execute tool calls in parallel (builtin / MCP / skill helpers)
+  -> execute independent tool calls in parallel and model-owned state calls in provider order
   -> persist conversation + emit events
   -> append jsonl into <WorkDir>/.juex/sessions/<id>/
 ```
@@ -838,9 +838,12 @@ alive after the yield window; their process lifetime is bounded by parent
 cancellation, app shutdown, explicit interrupt input, and session-manager
 cleanup rather than `runtime.tool_timeout`.
 
-`Turn` runs §2.1 of the design doc. Parallel `tool_use` blocks within a
-single LLM response run via `sync.WaitGroup`-backed goroutines; results are
-re-attached to history in the original order.
+`Turn` runs §2.1 of the design doc. Independent `tool_use` blocks within a
+single LLM response run via `sync.WaitGroup`-backed goroutines; model-owned
+session-state tools (`get_goal`, `create_goal`, `update_goal`, and
+`update_notes`) run serially in provider order so dependent reads and writes
+are deterministic. All results are re-attached to history in the original
+order.
 
 While a turn is active, user messages and critical external events may be
 queued as pending input. The queue is bounded (`MaxPendingInputs`), rejects
@@ -1344,8 +1347,10 @@ routes. Slash commands are parsed in `internal/app` so CLI and web inputs share
 one whitelist and result contract before any provider turn is started.
 Each summary request snapshots the session's goal contract and Notes under the
 runtime lock and renders them as a data-only authoritative-state block before
-the transcript. `internal/runtime/contextbudget` includes this block in every
-fit calculation and omits transcript messages before it can omit authoritative
+the transcript. Goal fields use structured JSON so multiline acceptance and
+status text remain lossless instead of passing through the compact ordinary-turn
+renderer. `internal/runtime/contextbudget` includes this block in every fit
+calculation and omits transcript messages before it can omit authoritative
 state. Summary instructions require the `Goal` section to copy the contract
 rather than infer it from history and require `Next Steps` to match unfinished
 Notes items. Configured `compaction.instructions`, per-request instructions,

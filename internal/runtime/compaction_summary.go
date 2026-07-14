@@ -36,8 +36,13 @@ func (e *Engine) compactionSummaryStateLocked() (compactionSummaryState, error) 
 		if err != nil {
 			return compactionSummaryState{}, fmt.Errorf("compaction goal state: %w", err)
 		}
-		if rendered, ok := state.RenderProviderContext(); ok {
-			summaryState.GoalContract = rendered
+		if snapshot := state.StatusSnapshot(); snapshot != nil {
+			summaryState.Goal = &contextbudget.SummaryGoal{
+				Description:  snapshot.Description,
+				Acceptance:   snapshot.Acceptance,
+				Status:       string(snapshot.Status),
+				StatusReason: snapshot.StatusReason,
+			}
 		}
 	}
 	if store := e.notesStoreLocked(); store != nil {

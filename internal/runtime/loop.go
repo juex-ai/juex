@@ -10,8 +10,9 @@
 //     before provider submission while preserving recoverable session history.
 //   - Automatic and manual compaction keep active context bounded with compact
 //     summary markers and retained recent tail messages.
-//   - tool_use blocks within a single LLM response run in parallel; results
-//     are collected and reattached to history in the original order.
+//   - independent tool_use blocks within one LLM response run in parallel;
+//     model-owned session-state tools run in provider order, and all results
+//     are reattached to history in the original order.
 //   - Pending input lets transports queue user or critical external messages
 //     while preserving assistant tool-use / user tool-result adjacency.
 //   - Turns run until the model finishes, the parent context is cancelled, or a
@@ -516,19 +517,19 @@ type toolCallResult struct {
 }
 
 // runToolCalls executes one assistant tool-use batch concurrently while
-// preserving provider-facing result order. Repeated notes rewrites are
-// serialized so the final call in provider order deterministically wins.
+// preserving provider-facing result order. Model-owned session-state tools are
+// serialized so dependent reads and writes observe provider order.
 func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Block) []toolCallResult {
 	results := make([]toolCallResult, len(calls))
 	type indexedToolCall struct {
 		index int
 		call  llm.Block
 	}
-	var notesCalls []indexedToolCall
+	var sessionStateCalls []indexedToolCall
 	var wg sync.WaitGroup
 	for i, tc := range calls {
-		if tc.ToolName == NotesToolUpdate {
-			notesCalls = append(notesCalls, indexedToolCall{index: i, call: tc})
+		if isSerializedSessionStateTool(tc.ToolName) {
+			sessionStateCalls = append(sessionStateCalls, indexedToolCall{index: i, call: tc})
 			continue
 		}
 		wg.Add(1)
@@ -537,17 +538,26 @@ func (e *Engine) runToolCalls(ctx context.Context, turnID string, calls []llm.Bl
 			results[idx] = e.runToolCall(ctx, turnID, call)
 		}(i, tc)
 	}
-	if len(notesCalls) > 0 {
+	if len(sessionStateCalls) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for _, item := range notesCalls {
+			for _, item := range sessionStateCalls {
 				results[item.index] = e.runToolCall(ctx, turnID, item.call)
 			}
 		}()
 	}
 	wg.Wait()
 	return results
+}
+
+func isSerializedSessionStateTool(name string) bool {
+	switch name {
+	case GoalToolGet, GoalToolCreate, GoalToolUpdate, NotesToolUpdate:
+		return true
+	default:
+		return false
+	}
 }
 
 func toolResultBlocks(results []toolCallResult) []llm.Block {
