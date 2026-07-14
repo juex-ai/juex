@@ -1245,7 +1245,11 @@ runtime context for exactly the next model request; it is never persisted as a
 transcript message. `PostCompact` therefore cannot affect the summary request
 that already completed.
 `Stop` exit `2` blocks turn completion and uses its text as the continuation
-prompt.
+prompt. Matching hooks run in configuration order. If multiple Stop hooks
+return exit `2` during one finish attempt, only the first such result supplies
+the continuation prompt; later blocking results do not contribute to that
+attempt. All matching Stop hooks run again at the next finish attempt, so a
+later blocker can take effect after an earlier one clears.
 
 Tool failures are also tracked in a per-turn unresolved-failure ledger inside
 `internal/runtime`. The ledger classifies each failed tool result as

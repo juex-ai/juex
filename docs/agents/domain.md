@@ -22,6 +22,11 @@ If `CONTEXT.md` or `docs/adr/` do not exist, proceed silently. Do not create the
 
 When naming domain concepts in issues, refactor proposals, hypotheses, or tests, prefer the vocabulary already used in the project docs and nearby code.
 
+| Term | Meaning | Primary owner |
+| --- | --- | --- |
+| Notes | Model-owned session working Markdown in `notes.md`; rewritten wholesale through `update_notes`, limited to 2048 characters, and recited after Goal on every provider request | `internal/runtime` |
+| Session scratchpad | Session-local temporary file space managed explicitly by the model, never automatically added to provider context, and removed with the session | `internal/session` |
+
 ## Flag ADR conflicts
 
 If output contradicts an existing ADR, surface the conflict explicitly rather than silently overriding it.
