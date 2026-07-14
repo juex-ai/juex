@@ -313,13 +313,13 @@ func New(opts Options) (*App, error) {
 		PendingInputQueue:     runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
 		PendingInputTTL:       pendingInputTTL,
 		ExternalEventTTL:      externalEventTTL,
-		Notes:                 notesStore(sess),
 		GoalState:             goalStateStore(sess),
 		ShowBuiltinHookTraces: runtimeLimits.ShowBuiltinHookTraces,
 		ContextWindow:         runtimeLimits.ContextWindow,
 		MaxOutputTokens:       runtimeLimits.MaxOutputTokens,
 		Compaction:            runtimeLimits.Compaction,
 	}
+	eng.SetNotesStore(notesStore(sess))
 
 	a := &App{
 		Engine:           eng,
@@ -503,7 +503,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 			a.Engine.Prompt.ScratchpadDir = sess.ScratchpadDir()
 		}
 		a.Engine.PendingInputQueue = runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{})
-		a.Engine.Notes = notesStore(sess)
+		a.Engine.SetNotesStore(notesStore(sess))
 		a.Engine.GoalState = goalStateStore(sess)
 	}
 	if err := a.attachObservability(sess); err != nil {

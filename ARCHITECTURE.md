@@ -1325,6 +1325,11 @@ the sidecar, so Notes survive compaction without being copied into
 session UI renders the Markdown plus progress derived from `- [ ]` and `- [x]`
 task items.
 
+Each Engine owns one session NotesStore shared by status snapshots, context
+recitation, tools, and compaction. Application session attachment installs the
+store eagerly; partially composed Engines initialize it once from `Session.Dir`
+on first use.
+
 If `notes.md` exists but fails read or validation, the runtime keeps the Notes
 context position and replaces its content with a recovery message containing
 the reason, session-relative path, and `update_notes` repair option. It emits a

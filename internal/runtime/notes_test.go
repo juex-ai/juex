@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -61,6 +62,62 @@ func TestNotesToolRewritesSessionNotesAndEmitsEvent(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum is 2048") {
 		t.Fatalf("oversize tool error = %v", err)
+	}
+}
+
+func TestNotesSnapshotEntrypointsUseEngineStore(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	if _, err := NewNotesStore(eng.Session.Dir).Update("session directory store"); err != nil {
+		t.Fatal(err)
+	}
+	injected := NewNotesStore(t.TempDir())
+	if _, err := injected.Update("engine-owned store"); err != nil {
+		t.Fatal(err)
+	}
+	eng.SetNotesStore(injected)
+
+	status, err := eng.NotesStatusSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status == nil || status.Content != "engine-owned store" {
+		t.Fatalf("NotesStatusSnapshot() = %+v, want engine-owned store", status)
+	}
+	contextText, ok := eng.notesContextSnapshot()
+	if !ok || !strings.Contains(contextText, "engine-owned store") || strings.Contains(contextText, "session directory store") {
+		t.Fatalf("notesContextSnapshot() = %q, %v", contextText, ok)
+	}
+}
+
+func TestNotesStoreLazyInitializationReturnsOneEngineInstance(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	const callers = 32
+	stores := make([]*NotesStore, callers)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for i := range stores {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			stores[index] = eng.notesStoreLocked()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	first := stores[0]
+	if first == nil || first.SessionDir != eng.Session.Dir {
+		t.Fatalf("lazy store = %+v, want session dir %q", first, eng.Session.Dir)
+	}
+	for i, store := range stores[1:] {
+		if store != first {
+			t.Fatalf("store %d = %p, want singleton %p", i+1, store, first)
+		}
+	}
+	if eng.Notes != first {
+		t.Fatalf("Engine.Notes = %p, want lazy singleton %p", eng.Notes, first)
 	}
 }
 
