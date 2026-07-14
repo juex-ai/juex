@@ -1245,7 +1245,14 @@ runtime context for exactly the next model request; it is never persisted as a
 transcript message. `PostCompact` therefore cannot affect the summary request
 that already completed.
 `Stop` exit `2` blocks turn completion and uses its text as the continuation
-prompt.
+prompt. Matching user-configured hooks run in configuration order. The built-in
+`goal-completion-gate` is evaluated after those hooks run but before the runtime
+selects a user Stop continuation; if the gate blocks, its prompt takes
+precedence and user Stop exit `2` results do not contribute to that attempt.
+Otherwise, when multiple user Stop hooks return exit `2`, only the first such
+result supplies the continuation prompt. All matching user Stop hooks run again
+at the next finish attempt, so a later blocker can take effect after an earlier
+one clears.
 
 Tool failures are also tracked in a per-turn unresolved-failure ledger inside
 `internal/runtime`. The ledger classifies each failed tool result as

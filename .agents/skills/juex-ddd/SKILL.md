@@ -51,7 +51,8 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Primary session | A session eligible to become the workspace active session | `internal/session`, `internal/app` |
 | Side session | A non-active exploratory session that must not replace the active primary | `internal/session`, `internal/app` |
 | Active session | The primary session selected in workspace history for default CLI/web continuation | `internal/session`, `internal/app`, `internal/web` |
-| Session scratchpad | Session-local long working files managed explicitly by the model and never automatically added to provider context | `internal/session`, `internal/prompt`, `internal/web` |
+| Notes | Model-owned session working Markdown in `notes.md`; rewritten wholesale through `update_notes`, limited to 2048 characters, and recited after Goal on every provider request | `internal/runtime` |
+| Session scratchpad | Session-local temporary file space managed explicitly by the model, never automatically added to provider context, and removed with the session | `internal/session` |
 | Turn | One user-originated or system-originated input driven through provider calls and tool batches until completion/error | `internal/runtime` |
 | Pending input | User or MCP-originated input queued while a turn or compact phase is active | `internal/runtime`, `internal/web` |
 | Provider | A model adapter satisfying the canonical LLM interface | `internal/llm` |
