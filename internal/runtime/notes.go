@@ -58,6 +58,17 @@ func (e *Engine) notesContextFromStore(store *NotesStore) (string, bool) {
 }
 
 func (e *Engine) notesUnavailableContext(store *NotesStore, err error) string {
+	errorText := err.Error()
+	e.recordNotesContextError(store, err)
+
+	reason := strings.Join(strings.Fields(errorText), " ")
+	return fmt.Sprintf("Working notes unavailable (%s); fix %s or rewrite with update_notes", reason, notesProviderPath(store))
+}
+
+func (e *Engine) recordNotesContextError(store *NotesStore, err error) {
+	if e == nil || store == nil || err == nil {
+		return
+	}
 	notesPath := filepath.Join(store.SessionDir, NotesFileName)
 	errorText := err.Error()
 	errorKey := notesPath + "\x00" + errorText
@@ -71,9 +82,6 @@ func (e *Engine) notesUnavailableContext(store *NotesStore, err error) string {
 			Path:  notesPath,
 		}})
 	}
-
-	reason := strings.Join(strings.Fields(errorText), " ")
-	return fmt.Sprintf("Working notes unavailable (%s); fix %s or rewrite with update_notes", reason, notesProviderPath(store))
 }
 
 func notesProviderPath(store *NotesStore) string {

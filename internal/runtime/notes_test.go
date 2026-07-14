@@ -217,6 +217,47 @@ func TestNotesContextFromStoreHandlesNil(t *testing.T) {
 	}
 }
 
+func TestTurnRecitesNotesReadFailurePlaceholderAfterAutoCompaction(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn},
+		{Message: llm.TextMessage(llm.RoleAssistant, "acknowledged"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.Notes = NewNotesStore(eng.Session.Dir)
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(eng.Session.Dir, NotesFileName), []byte{0xff}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var notesErrors, compactErrors int
+	bus.Subscribe("notes.errored", func(events.Event) { notesErrors++ })
+	bus.Subscribe("context.compact.errored", func(events.Event) { compactErrors++ })
+
+	out, err := eng.Turn(context.Background(), "continue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "acknowledged" {
+		t.Fatalf("Turn() = %q, want acknowledged", out)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d, want compaction plus turn", len(prov.histories))
+	}
+	providerText := messagesText(prov.histories[1])
+	for _, want := range []string{"Working notes unavailable", "valid UTF-8", "update_notes"} {
+		if !strings.Contains(providerText, want) {
+			t.Fatalf("post-compaction provider context missing %q:\n%s", want, providerText)
+		}
+	}
+	if notesErrors != 1 || compactErrors != 0 {
+		t.Fatalf("notes errors = %d, compact errors = %d", notesErrors, compactErrors)
+	}
+}
+
 func TestTurnRecitesNotesReadFailurePlaceholder(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{{
 		Message:    llm.TextMessage(llm.RoleAssistant, "acknowledged"),
