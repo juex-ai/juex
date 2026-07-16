@@ -472,8 +472,9 @@ its lifecycle.
 `Registry.Specs` intentionally omits group and timeout metadata from
 provider-facing `llm.ToolSpec`.
 
-The runtime registry combines builtin file/search/exec/session-state tools,
-three memory tools, and the app-registered `skill_search` / `skill_load` tools.
+The runtime registry combines all registered JueX tools across the `file`,
+`chunked_write`, `shell`, `search`, `skill`, `memory`, `session_state`,
+`observable`, and `mcp` groups.
 Skills themselves remain markdown resource packages rather than executable
 tool definitions: the prompt exposes a compact catalog, `skill_search`
 discovers loaded entries, and `skill_load` returns one selected SKILL.md body.

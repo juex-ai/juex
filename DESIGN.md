@@ -318,15 +318,17 @@ shows seconds; a tool-managed lifecycle is labeled as such instead of showing
 a misleading duration. Empty groups remain visible with a zero count and an
 explicit empty state.
 
-MCP uses per-server cards that keep source, connection state, tool count,
-command, and startup error visible while collapsed. Their tool disclosures
-reuse the same rows as builtin groups. Failed and not-started servers explain
+MCP uses per-server cards that always show source, connection state, tool
+count, command, and startup error. A nested `Tool details` disclosure is
+collapsed by default and reuses the same rows as builtin groups. Failed and
+not-started servers explain
 why no tools are available, while a connected zero-tool server states that it
 advertised none. MCP servers and skills list project-local sources before
 user-global sources.
 `juex serve` starts MCP at server startup, so this page reports live
 process-level MCP state rather than waiting for a chat session to be opened.
-Disclosure bodies mount only while open. Dense parameter tables scroll inside
+Tool group, tool, raw-schema, and MCP tool disclosure bodies mount only while
+open. Dense parameter tables scroll inside
 their cards on narrow screens, summaries wrap or truncate previews without
 hiding their labels, and native summary controls retain keyboard behavior and
 visible focus rings. This is operational metadata, not a conversational

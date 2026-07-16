@@ -60,7 +60,7 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Provider profile | Resolved provider identity, protocol, model, capability gates, compatibility fields, headers, and query params | `internal/llm`, `internal/config` |
 | Protocol | Provider wire family such as `anthropic/messages`, `openai/responses`, `openai-codex/responses`, or `openai/chat` | `internal/llm` |
 | Capability set | Explicit gates for tools, streaming, reasoning effort, reasoning replay, and max output tokens | `internal/llm` |
-| Tool registry | Runtime catalog and dispatcher for builtin, memory, and MCP tools | `internal/tools`, `internal/app` |
+| Tool registry | Runtime catalog and dispatcher for all registered JueX tools | `internal/tools`, `internal/app` |
 | Tool group | Stable classification of registered tools for runtime inspection: `file`, `chunked_write`, `shell`, `search`, `skill`, `memory`, `session_state`, `observable`, or `mcp` | `internal/tools`, registration owners |
 | Tool call | Canonical provider-requested operation represented as an `llm.Block` and normalized before execution | `internal/runtime`, `internal/tools` |
 | MCP server | Configured stdio process that contributes tools and notifications | `internal/mcp` |

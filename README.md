@@ -211,9 +211,10 @@ runtime system-prompt section on later turns and compaction requests so the
 model can keep polling by `session_id` without replaying command output.
 `yield_time_ms` only bounds the current observation window; it does not kill a
 still-running command.
-Shell tools are not governed by the generic `runtime.tool_timeout`, which
-remains a runtime policy for ordinary non-shell tools rather than a
-model-visible parameter. Shell processes still stop on parent cancellation,
+`exec_command` and `write_stdin` are not governed by the generic
+`runtime.tool_timeout`; their observation windows and process lifecycles are
+managed explicitly. `list_shell_sessions` remains subject to the ordinary
+bounded tool timeout. Shell processes still stop on parent cancellation,
 JueX shutdown, manager cleanup, or explicit interrupt input. A completed
 command with a non-zero exit code is returned as an error tool result with the
 captured output preserved. Shell execution metadata is also emitted as
