@@ -708,6 +708,10 @@ export interface RuntimeStatusResponse {
     count: number;
     items: SystemPromptEntry[];
   };
+  tools: {
+    count: number;
+    groups: RuntimeToolGroup[];
+  };
   mcp: {
     configured: number;
     connected: number;
@@ -813,7 +817,25 @@ export interface MCPServerInfo {
   status: "not_started" | "connected" | "error";
   connected: boolean;
   tool_count: number;
+  tools: RuntimeToolInfo[];
   error?: string;
+}
+
+export interface RuntimeToolTimeout {
+  mode: "bounded" | "disabled" | string;
+  seconds: number;
+}
+
+export interface RuntimeToolInfo {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  timeout: RuntimeToolTimeout;
+}
+
+export interface RuntimeToolGroup {
+  group: string;
+  tools: RuntimeToolInfo[];
 }
 
 export interface SkillInfo {
