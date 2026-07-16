@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
@@ -83,17 +84,24 @@ const (
 )
 
 type App struct {
-	Engine        *runtime.Engine
-	Bus           *events.Bus
-	Session       *session.Session
-	cleanup       []func() error
-	ctx           context.Context
-	cancel        context.CancelFunc
-	cfg           config.Config
-	skills        []skills.Skill
-	mcp           MCPStatus
-	obsv          *observable.Manager
-	chunkedWrites *tools.ChunkedWriteManager
+	Engine         *runtime.Engine
+	Bus            *events.Bus
+	Session        *session.Session
+	cleanup        []func() error
+	closeMu        sync.Mutex
+	closeCancel    sync.Once
+	cleanupIndex   int
+	closeErr       error
+	closeRunning   bool
+	closeRunDone   chan struct{}
+	closeRunResult *error
+	ctx            context.Context
+	cancel         context.CancelFunc
+	cfg            config.Config
+	skills         []skills.Skill
+	mcp            MCPStatus
+	obsv           *observable.Manager
+	chunkedWrites  *tools.ChunkedWriteManager
 
 	turnAdmission turnAdmission
 
@@ -112,6 +120,28 @@ type MCPStatus struct {
 	Connected  int               `json:"connected"`
 	Errors     int               `json:"errors"`
 	Servers    []MCPServerStatus `json:"servers"`
+}
+
+// CloseDeferredError reports that another App cleanup pass is in progress.
+// Callback callers must return before waiting on it.
+type CloseDeferredError struct {
+	done   <-chan struct{}
+	result *error
+}
+
+func (*CloseDeferredError) Error() string {
+	return "app: close deferred while cleanup is in progress"
+}
+
+func (e *CloseDeferredError) Wait() error {
+	if e == nil || e.done == nil {
+		return nil
+	}
+	<-e.done
+	if e.result == nil {
+		return nil
+	}
+	return *e.result
 }
 
 type MCPServerStatus struct {
@@ -1076,16 +1106,71 @@ func FormatTokenUsage(usage llm.Usage) string {
 		FormatCompactTokenCount(usage.OutputTokens))
 }
 
-// Close releases session file handles and MCP subprocesses.
-func (a *App) Close() error {
-	if a.cancel != nil {
-		a.cancel()
+// Close advances cleanup until it completes or an observable close must be
+// deferred. A deferred result leaves later resources untouched so callback
+// callers can return safely and an external owner can resume cleanup.
+func (a *App) Close() (result error) {
+	if a == nil {
+		return nil
 	}
-	var firstErr error
-	for _, fn := range a.cleanup {
-		if err := fn(); err != nil && firstErr == nil {
-			firstErr = err
+	a.closeMu.Lock()
+	if a.closeRunning {
+		done := a.closeRunDone
+		activeResult := a.closeRunResult
+		a.closeMu.Unlock()
+		return &CloseDeferredError{done: done, result: activeResult}
+	}
+	a.closeRunning = true
+	a.closeRunDone = make(chan struct{})
+	a.closeRunResult = &result
+	done := a.closeRunDone
+	a.closeMu.Unlock()
+	defer func() {
+		a.closeMu.Lock()
+		a.closeRunning = false
+		close(done)
+		a.closeMu.Unlock()
+	}()
+	a.closeCancel.Do(func() {
+		if a.cancel != nil {
+			a.cancel()
 		}
+	})
+	for {
+		a.closeMu.Lock()
+		if a.cleanupIndex >= len(a.cleanup) {
+			result = a.closeErr
+			a.closeMu.Unlock()
+			return result
+		}
+		fn := a.cleanup[a.cleanupIndex]
+		a.closeMu.Unlock()
+		err := fn()
+		var deferred interface{ Wait() error }
+		if errors.As(err, &deferred) {
+			return err
+		}
+		a.closeMu.Lock()
+		a.cleanupIndex++
+		if err != nil && a.closeErr == nil {
+			a.closeErr = err
+		}
+		a.closeMu.Unlock()
 	}
-	return firstErr
+}
+
+// CloseAndWait fully drains deferred observable work before releasing later
+// resources. It is for process and transport owners, not callback code.
+func (a *App) CloseAndWait() error {
+	if a == nil {
+		return nil
+	}
+	for {
+		err := a.Close()
+		var deferred interface{ Wait() error }
+		if !errors.As(err, &deferred) {
+			return err
+		}
+		_ = deferred.Wait()
+	}
 }

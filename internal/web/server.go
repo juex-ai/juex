@@ -246,7 +246,7 @@ func (as *activeSession) close() {
 			as.bcast.close()
 		}
 		if as.app != nil {
-			as.app.Close()
+			_ = as.app.CloseAndWait()
 		}
 	})
 }

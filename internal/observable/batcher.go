@@ -17,7 +17,7 @@ type BatcherOptions struct {
 }
 
 type Batcher struct {
-	spec          Spec
+	spec          commandRuntimeSpec
 	store         *Store
 	runID         string
 	workDir       string
@@ -37,7 +37,15 @@ type activeBatch struct {
 	windowEnd        time.Time
 }
 
-func NewBatcher(spec Spec, store *Store, opts BatcherOptions) *Batcher {
+func NewBatcher(spec Spec, store *Store, opts BatcherOptions) (*Batcher, error) {
+	runtimeSpec, ok := spec.commandRuntime()
+	if !ok {
+		return nil, fmt.Errorf("observable %q is not a command source", spec.ID)
+	}
+	return newCommandBatcher(runtimeSpec, store, opts), nil
+}
+
+func newCommandBatcher(spec commandRuntimeSpec, store *Store, opts BatcherOptions) *Batcher {
 	maxEventBytes := opts.MaxEventBytes
 	if maxEventBytes <= 0 {
 		maxEventBytes = eventmedia.DefaultMaxEventBytes

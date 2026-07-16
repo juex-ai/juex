@@ -295,8 +295,16 @@ func (s *Store) LatestRuns() (map[string]RunRecord, error) {
 }
 
 func (s *Store) RecordObservation(record ObservationRecord) (ObservationRecord, error) {
+	persisted, _, err := s.RecordObservationOnce(record)
+	return persisted, err
+}
+
+// RecordObservationOnce atomically checks both the stable source-event key and
+// the derived record id before appending. The created result is false when an
+// equivalent durable observation already exists.
+func (s *Store) RecordObservationOnce(record ObservationRecord) (ObservationRecord, bool, error) {
 	if s == nil {
-		return ObservationRecord{}, fmt.Errorf("observable store: nil")
+		return ObservationRecord{}, false, fmt.Errorf("observable store: nil")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -316,15 +324,22 @@ func (s *Store) RecordObservation(record ObservationRecord) (ObservationRecord, 
 	}
 	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
 	if err != nil {
-		return ObservationRecord{}, err
+		return ObservationRecord{}, false, err
+	}
+	if record.SourceEventID != "" {
+		for _, existing := range records {
+			if existing.SourceEventID == record.SourceEventID {
+				return existing, false, nil
+			}
+		}
 	}
 	if existing, ok := records[record.ID]; ok {
-		return existing, nil
+		return existing, false, nil
 	}
 	if err := appendJSONL(filepath.Join(s.root, "observations.jsonl"), record); err != nil {
-		return ObservationRecord{}, err
+		return ObservationRecord{}, false, err
 	}
-	return record, nil
+	return record, true, nil
 }
 
 func (s *Store) UpdateObservation(id string, update func(ObservationRecord) ObservationRecord) error {
@@ -374,6 +389,38 @@ func (s *Store) ListObservations(filter ObservationFilter) ([]ObservationRecord,
 	})
 	if filter.Limit > 0 && len(out) > filter.Limit {
 		out = out[:filter.Limit]
+	}
+	return out, nil
+}
+
+// RecordedObservationsBySourceEvent returns the newest durable recovery
+// candidates after applying all source filters. Filtering before limiting
+// prevents unrelated or already-transitioned records from hiding candidates.
+func (s *Store) RecordedObservationsBySourceEvent(observableID, sourceEventPrefix string, limit int) ([]ObservationRecord, error) {
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ObservationRecord, 0)
+	for _, record := range records {
+		if record.ObservableID != observableID || record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, sourceEventPrefix) {
+			continue
+		}
+		out = append(out, record)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }

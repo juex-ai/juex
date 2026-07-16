@@ -23,8 +23,10 @@ func TestPipeline_TextNoFiltersEmitsContent(t *testing.T) {
 
 func TestPipeline_FilterOverridesDefaults(t *testing.T) {
 	spec := validSpec("test-watch")
-	spec.Defaults = observable.Defaults{Kind: "log_batch", Severity: "info"}
-	spec.Filters = []observable.FilterSpec{{Contains: "FAIL", Kind: "test_failure", Severity: "error"}}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Observation = observable.CommandObservationSpec{Kind: "log_batch", Severity: "info"}
+		config.Filters = []observable.FilterSpec{{Contains: "FAIL", Kind: "test_failure", Severity: "error"}}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +49,9 @@ func TestPipeline_FilterOverridesDefaults(t *testing.T) {
 
 func TestPipeline_RegexFilterMatches(t *testing.T) {
 	spec := validSpec("panic-watch")
-	spec.Filters = []observable.FilterSpec{{Regex: `panic: .*`, Kind: "panic", Severity: "critical"}}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Filters = []observable.FilterSpec{{Regex: `panic: .*`, Kind: "panic", Severity: "critical"}}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -63,12 +67,14 @@ func TestPipeline_RegexFilterMatches(t *testing.T) {
 
 func TestPipeline_JSONLFieldMapping(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{
-		Type:          "jsonl",
-		ContentField:  "content",
-		KindField:     "type",
-		SeverityField: "level",
-	}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{
+			Type:          "jsonl",
+			ContentField:  "content",
+			KindField:     "type",
+			SeverityField: "level",
+		}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -84,11 +90,13 @@ func TestPipeline_JSONLFieldMapping(t *testing.T) {
 
 func TestPipeline_JSONLAttachmentFieldMapping(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{
-		Type:             "jsonl",
-		ContentField:     "content",
-		AttachmentsField: "attachments",
-	}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{
+			Type:             "jsonl",
+			ContentField:     "content",
+			AttachmentsField: "attachments",
+		}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -109,11 +117,13 @@ func TestPipeline_JSONLAttachmentFieldMapping(t *testing.T) {
 
 func TestPipeline_JSONLAttachmentFieldErrorPreservesContent(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{
-		Type:             "jsonl",
-		ContentField:     "content",
-		AttachmentsField: "attachments",
-	}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{
+			Type:             "jsonl",
+			ContentField:     "content",
+			AttachmentsField: "attachments",
+		}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -132,11 +142,13 @@ func TestPipeline_JSONLAttachmentFieldErrorPreservesContent(t *testing.T) {
 
 func TestPipeline_JSONLAttachmentFieldErrorPreservesValidRefs(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{
-		Type:             "jsonl",
-		ContentField:     "content",
-		AttachmentsField: "attachments",
-	}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{
+			Type:             "jsonl",
+			ContentField:     "content",
+			AttachmentsField: "attachments",
+		}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -156,11 +168,13 @@ func TestPipeline_JSONLAttachmentFieldErrorPreservesValidRefs(t *testing.T) {
 
 func TestPipeline_JSONLNormalizesSeverity(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{
-		Type:          "jsonl",
-		ContentField:  "content",
-		SeverityField: "level",
-	}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{
+			Type:          "jsonl",
+			ContentField:  "content",
+			SeverityField: "level",
+		}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +197,9 @@ func TestPipeline_JSONLNormalizesSeverity(t *testing.T) {
 
 func TestPipeline_JSONLInvalidLineReturnsError(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{Type: "jsonl", ContentField: "content"}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{Type: "jsonl", ContentField: "content"}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +215,9 @@ func TestPipeline_JSONLInvalidLineReturnsError(t *testing.T) {
 
 func TestPipeline_JSONLPreservesValidLinesAroundMalformedLine(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{Type: "jsonl", ContentField: "content"}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{Type: "jsonl", ContentField: "content"}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -216,11 +234,13 @@ func TestPipeline_JSONLPreservesValidLinesAroundMalformedLine(t *testing.T) {
 
 func TestPipeline_JSONLFlushesFinalLineWithoutNewline(t *testing.T) {
 	spec := validSpec("lark-events")
-	spec.Parser = &observable.ParserSpec{
-		Type:         "jsonl",
-		ContentField: "content",
-		KindField:    "type",
-	}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Parser = &observable.ParserSpec{
+			Type:         "jsonl",
+			ContentField: "content",
+			KindField:    "type",
+		}
+	})
 	pipe, err := observable.NewPipeline(spec)
 	if err != nil {
 		t.Fatal(err)

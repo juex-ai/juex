@@ -14,38 +14,40 @@ import (
 )
 
 type runnerOptions struct {
-	spec          Spec
+	spec          commandRuntimeSpec
 	runID         string
 	workDir       string
 	sandboxPolicy sandbox.Policy
 	sandboxRunner sandbox.Runner
 	store         *Store
-	deliver       DeliveryFunc
+	submit        func(context.Context, ObservationRecord) bool
 }
 
 type runner struct {
-	opts       runnerOptions
-	pipe       *Pipeline
-	batcher    *Batcher
-	cmd        *exec.Cmd
-	mu         sync.Mutex
-	wg         sync.WaitGroup
-	deliveryWG sync.WaitGroup
-	flushCh    chan struct{}
+	opts    runnerOptions
+	pipe    *Pipeline
+	batcher *Batcher
+	cmd     *exec.Cmd
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	flushCh chan struct{}
 }
 
 func newRunner(opts runnerOptions) *runner {
-	pipe, _ := NewPipeline(opts.spec)
+	pipe, _ := newCommandPipeline(opts.spec)
 	return &runner{
 		opts:    opts,
 		pipe:    pipe,
-		batcher: NewBatcher(opts.spec, opts.store, BatcherOptions{RunID: opts.runID, WorkDir: opts.workDir}),
+		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{RunID: opts.runID, WorkDir: opts.workDir}),
 	}
 }
 
 func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.Cmd, error) {
 	if callCtx == nil {
 		callCtx = context.Background()
+	}
+	if err := callCtx.Err(); err != nil {
+		return nil, err
 	}
 	cwd := r.opts.workDir
 	if r.opts.spec.CWD != "" {
@@ -75,6 +77,9 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 		}
 		spec = prepared
 	}
+	if err := callCtx.Err(); err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(runCtx, spec.Binary, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
@@ -85,6 +90,9 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		return nil, err
+	}
+	if err := callCtx.Err(); err != nil {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
@@ -120,7 +128,6 @@ func (r *runner) wait() (*int, error) {
 		close(r.flushCh)
 	}
 	r.wg.Wait()
-	r.deliveryWG.Wait()
 	var exitCode *int
 	if r.cmd.ProcessState != nil {
 		code := r.cmd.ProcessState.ExitCode()
@@ -220,13 +227,8 @@ func (r *runner) drainStream(reader io.Reader) {
 
 func (r *runner) deliver(records []ObservationRecord) {
 	for _, record := range records {
-		if r.opts.deliver != nil {
-			record := record
-			r.deliveryWG.Add(1)
-			go func() {
-				defer r.deliveryWG.Done()
-				_, _ = r.opts.deliver(context.Background(), record)
-			}()
+		if r.opts.submit != nil {
+			r.opts.submit(context.Background(), record)
 		}
 	}
 }

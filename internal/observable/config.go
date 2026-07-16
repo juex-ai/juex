@@ -1,8 +1,10 @@
 package observable
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -49,44 +51,52 @@ type ConfigIssue struct {
 	Error error
 }
 
-type Spec struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name,omitempty"`
-	Source      SourceSpec      `json:"source,omitempty"`
-	Observation ObservationSpec `json:"observation,omitempty"`
-
-	// Legacy command shorthand. It remains accepted on read and through older
-	// callers, but explicit source config is the preferred persisted shape.
-	Command  string            `json:"command,omitempty"`
-	Args     []string          `json:"args,omitempty"`
-	CWD      string            `json:"cwd,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
-	Streams  []string          `json:"streams,omitempty"`
-	Defaults Defaults          `json:"defaults,omitempty"`
-	Parser   *ParserSpec       `json:"parser,omitempty"`
-	Filters  []FilterSpec      `json:"filters,omitempty"`
-	Batch    BatchSpec         `json:"batch,omitempty"`
-	OnExit   OnExitSpec        `json:"on_exit,omitempty"`
+type sourceConfig interface {
+	sourceType() string
 }
 
-type SourceSpec struct {
-	Type string `json:"type,omitempty"`
+type Spec struct {
+	ID     string
+	Name   string
+	source sourceConfig
+}
 
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	CWD     string            `json:"cwd,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Streams []string          `json:"streams,omitempty"`
-	Parser  *ParserSpec       `json:"parser,omitempty"`
-	Filters []FilterSpec      `json:"filters,omitempty"`
-	Batch   BatchSpec         `json:"batch,omitempty"`
-	OnExit  OnExitSpec        `json:"on_exit,omitempty"`
+type CommandSourceSpec struct {
+	Command     string                 `json:"command"`
+	Args        []string               `json:"args,omitempty"`
+	CWD         string                 `json:"cwd,omitempty"`
+	Env         map[string]string      `json:"env,omitempty"`
+	Streams     []string               `json:"streams,omitempty"`
+	Parser      *ParserSpec            `json:"parser,omitempty"`
+	Filters     []FilterSpec           `json:"filters,omitempty"`
+	Batch       BatchSpec              `json:"batch,omitempty"`
+	OnExit      OnExitSpec             `json:"on_exit,omitempty"`
+	Observation CommandObservationSpec `json:"observation,omitempty"`
+}
 
-	Timezone string            `json:"timezone,omitempty"`
-	Once     *OnceSchedule     `json:"once,omitempty"`
-	Daily    *DailySchedule    `json:"daily,omitempty"`
-	Interval *IntervalSchedule `json:"interval,omitempty"`
-	CatchUp  CatchUpSpec       `json:"catch_up,omitempty"`
+func (CommandSourceSpec) sourceType() string { return SourceTypeCommand }
+
+type ScheduleSourceSpec struct {
+	Timezone    string                  `json:"timezone,omitempty"`
+	Once        *OnceSchedule           `json:"once,omitempty"`
+	Daily       *DailySchedule          `json:"daily,omitempty"`
+	Interval    *IntervalSchedule       `json:"interval,omitempty"`
+	CatchUp     CatchUpSpec             `json:"catch_up,omitempty"`
+	Observation ScheduleObservationSpec `json:"observation"`
+}
+
+func (ScheduleSourceSpec) sourceType() string { return SourceTypeSchedule }
+
+type CommandObservationSpec struct {
+	Kind     string `json:"kind,omitempty"`
+	Severity string `json:"severity,omitempty"`
+}
+
+type ScheduleObservationSpec struct {
+	Kind        string           `json:"kind,omitempty"`
+	Severity    string           `json:"severity,omitempty"`
+	Content     string           `json:"content"`
+	Attachments []AttachmentSpec `json:"attachments,omitempty"`
 }
 
 type OnceSchedule struct {
@@ -107,104 +117,7 @@ type CatchUpSpec struct {
 	MaxLatenessMinutes int    `json:"max_lateness_minutes,omitempty"`
 }
 
-type ObservationSpec struct {
-	Kind        string           `json:"kind,omitempty"`
-	Severity    string           `json:"severity,omitempty"`
-	Content     string           `json:"content,omitempty"`
-	Attachments []AttachmentSpec `json:"attachments,omitempty"`
-}
-
 type AttachmentSpec = eventmedia.AttachmentRef
-
-func (spec Spec) MarshalJSON() ([]byte, error) {
-	type specJSON struct {
-		ID          string            `json:"id"`
-		Name        string            `json:"name,omitempty"`
-		Source      *SourceSpec       `json:"source,omitempty"`
-		Observation *ObservationSpec  `json:"observation,omitempty"`
-		Command     string            `json:"command,omitempty"`
-		Args        []string          `json:"args,omitempty"`
-		CWD         string            `json:"cwd,omitempty"`
-		Env         map[string]string `json:"env,omitempty"`
-		Streams     []string          `json:"streams,omitempty"`
-		Defaults    *Defaults         `json:"defaults,omitempty"`
-		Parser      *ParserSpec       `json:"parser,omitempty"`
-		Filters     []FilterSpec      `json:"filters,omitempty"`
-		Batch       *BatchSpec        `json:"batch,omitempty"`
-		OnExit      *OnExitSpec       `json:"on_exit,omitempty"`
-	}
-	out := specJSON{
-		ID:      spec.ID,
-		Name:    spec.Name,
-		Command: spec.Command,
-		Args:    spec.Args,
-		CWD:     spec.CWD,
-		Env:     spec.Env,
-		Streams: spec.Streams,
-		Parser:  spec.Parser,
-		Filters: spec.Filters,
-	}
-	if spec.Source.Type != "" {
-		out.Source = &spec.Source
-	}
-	if !isZeroObservationSpec(spec.Observation) {
-		out.Observation = &spec.Observation
-	}
-	if spec.Defaults != (Defaults{}) {
-		out.Defaults = &spec.Defaults
-	}
-	if spec.Batch != (BatchSpec{}) {
-		out.Batch = &spec.Batch
-	}
-	if spec.OnExit != (OnExitSpec{}) {
-		out.OnExit = &spec.OnExit
-	}
-	return json.Marshal(out)
-}
-
-func (source SourceSpec) MarshalJSON() ([]byte, error) {
-	type sourceJSON struct {
-		Type     string            `json:"type,omitempty"`
-		Command  string            `json:"command,omitempty"`
-		Args     []string          `json:"args,omitempty"`
-		CWD      string            `json:"cwd,omitempty"`
-		Env      map[string]string `json:"env,omitempty"`
-		Streams  []string          `json:"streams,omitempty"`
-		Parser   *ParserSpec       `json:"parser,omitempty"`
-		Filters  []FilterSpec      `json:"filters,omitempty"`
-		Batch    *BatchSpec        `json:"batch,omitempty"`
-		OnExit   *OnExitSpec       `json:"on_exit,omitempty"`
-		Timezone string            `json:"timezone,omitempty"`
-		Once     *OnceSchedule     `json:"once,omitempty"`
-		Daily    *DailySchedule    `json:"daily,omitempty"`
-		Interval *IntervalSchedule `json:"interval,omitempty"`
-		CatchUp  *CatchUpSpec      `json:"catch_up,omitempty"`
-	}
-	out := sourceJSON{
-		Type:     source.Type,
-		Command:  source.Command,
-		Args:     source.Args,
-		CWD:      source.CWD,
-		Env:      source.Env,
-		Streams:  source.Streams,
-		Parser:   source.Parser,
-		Filters:  source.Filters,
-		Timezone: source.Timezone,
-		Once:     source.Once,
-		Daily:    source.Daily,
-		Interval: source.Interval,
-	}
-	if source.Batch != (BatchSpec{}) {
-		out.Batch = &source.Batch
-	}
-	if source.OnExit != (OnExitSpec{}) {
-		out.OnExit = &source.OnExit
-	}
-	if source.CatchUp != (CatchUpSpec{}) {
-		out.CatchUp = &source.CatchUp
-	}
-	return json.Marshal(out)
-}
 
 type Defaults struct {
 	Kind     string `json:"kind,omitempty"`
@@ -236,22 +149,187 @@ type OnExitSpec struct {
 	Notify string `json:"notify,omitempty"`
 }
 
-func LoadConfig(path string) (FileConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return FileConfig{}, nil
+type commandRuntimeSpec struct {
+	ID string
+	CommandSourceSpec
+	Defaults Defaults
+}
+
+type scheduleRuntimeSpec struct {
+	ID string
+	ScheduleSourceSpec
+}
+
+func NewCommandSpec(id, name string, config CommandSourceSpec) (Spec, error) {
+	return ValidateSpec(Spec{ID: id, Name: name, source: cloneCommandSourceSpec(config)})
+}
+
+func NewScheduleSpec(id, name string, config ScheduleSourceSpec) (Spec, error) {
+	return ValidateSpec(Spec{ID: id, Name: name, source: cloneScheduleSourceSpec(config)})
+}
+
+func (spec Spec) SourceType() string {
+	if spec.source == nil {
+		return ""
+	}
+	return spec.source.sourceType()
+}
+
+func (spec Spec) CommandConfig() (CommandSourceSpec, bool) {
+	config, ok := spec.source.(CommandSourceSpec)
+	if !ok {
+		return CommandSourceSpec{}, false
+	}
+	return cloneCommandSourceSpec(config), true
+}
+
+func (spec Spec) ScheduleConfig() (ScheduleSourceSpec, bool) {
+	config, ok := spec.source.(ScheduleSourceSpec)
+	if !ok {
+		return ScheduleSourceSpec{}, false
+	}
+	return cloneScheduleSourceSpec(config), true
+}
+
+func (spec Spec) commandRuntime() (commandRuntimeSpec, bool) {
+	config, ok := spec.CommandConfig()
+	if !ok {
+		return commandRuntimeSpec{}, false
+	}
+	return commandRuntimeSpec{
+		ID:                spec.ID,
+		CommandSourceSpec: config,
+		Defaults: Defaults{
+			Kind:     config.Observation.Kind,
+			Severity: config.Observation.Severity,
+		},
+	}, true
+}
+
+func (spec Spec) scheduleRuntime() (scheduleRuntimeSpec, bool) {
+	config, ok := spec.ScheduleConfig()
+	if !ok {
+		return scheduleRuntimeSpec{}, false
+	}
+	return scheduleRuntimeSpec{ID: spec.ID, ScheduleSourceSpec: config}, true
+}
+
+type wireSpec struct {
+	ID             string              `json:"id"`
+	Name           string              `json:"name,omitempty"`
+	Type           string              `json:"type"`
+	CommandConfig  *CommandSourceSpec  `json:"command_config,omitempty"`
+	ScheduleConfig *ScheduleSourceSpec `json:"schedule_config,omitempty"`
+}
+
+type wireCommandSourceSpec struct {
+	Command     string                  `json:"command"`
+	Args        []string                `json:"args,omitempty"`
+	CWD         string                  `json:"cwd,omitempty"`
+	Env         map[string]string       `json:"env,omitempty"`
+	Streams     []string                `json:"streams,omitempty"`
+	Parser      *ParserSpec             `json:"parser,omitempty"`
+	Filters     []FilterSpec            `json:"filters,omitempty"`
+	Batch       *BatchSpec              `json:"batch,omitempty"`
+	OnExit      *OnExitSpec             `json:"on_exit,omitempty"`
+	Observation *CommandObservationSpec `json:"observation,omitempty"`
+}
+
+type marshalWireSpec struct {
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name,omitempty"`
+	Type           string                 `json:"type"`
+	CommandConfig  *wireCommandSourceSpec `json:"command_config,omitempty"`
+	ScheduleConfig *ScheduleSourceSpec    `json:"schedule_config,omitempty"`
+}
+
+func (spec Spec) MarshalJSON() ([]byte, error) {
+	wire := marshalWireSpec{ID: spec.ID, Name: spec.Name, Type: spec.SourceType()}
+	switch spec.SourceType() {
+	case SourceTypeCommand:
+		config, _ := spec.CommandConfig()
+		wireConfig := wireCommandSourceSpec{
+			Command: config.Command,
+			Args:    config.Args,
+			CWD:     config.CWD,
+			Env:     config.Env,
+			Streams: config.Streams,
+			Parser:  config.Parser,
+			Filters: config.Filters,
 		}
+		if config.Batch != (BatchSpec{}) {
+			wireConfig.Batch = &config.Batch
+		}
+		if config.OnExit != (OnExitSpec{}) {
+			wireConfig.OnExit = &config.OnExit
+		}
+		if config.Observation != (CommandObservationSpec{}) {
+			wireConfig.Observation = &config.Observation
+		}
+		wire.CommandConfig = &wireConfig
+	case SourceTypeSchedule:
+		config, _ := spec.ScheduleConfig()
+		wire.ScheduleConfig = &config
+	default:
+		return nil, fmt.Errorf("observable spec %q has no source", spec.ID)
+	}
+	return json.Marshal(wire)
+}
+
+func (spec *Spec) UnmarshalJSON(data []byte) error {
+	decoded, err := decodeWireSpec(data)
+	if err != nil {
+		return err
+	}
+	*spec = decoded
+	return nil
+}
+
+func decodeWireSpec(data []byte) (Spec, error) {
+	var wire wireSpec
+	if err := decodeStrict(data, &wire); err != nil {
+		return Spec{}, err
+	}
+	switch strings.TrimSpace(wire.Type) {
+	case SourceTypeCommand:
+		if wire.CommandConfig == nil || wire.ScheduleConfig != nil {
+			return Spec{}, fmt.Errorf("type command requires command_config and forbids schedule_config")
+		}
+		return NewCommandSpec(wire.ID, wire.Name, *wire.CommandConfig)
+	case SourceTypeSchedule:
+		if wire.ScheduleConfig == nil || wire.CommandConfig != nil {
+			return Spec{}, fmt.Errorf("type schedule requires schedule_config and forbids command_config")
+		}
+		return NewScheduleSpec(wire.ID, wire.Name, *wire.ScheduleConfig)
+	default:
+		return Spec{}, fmt.Errorf("type must be command or schedule, got %q", wire.Type)
+	}
+}
+
+func decodeStrict(data []byte, dst any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON")
+		}
+		return err
+	}
+	return nil
+}
+
+func LoadConfig(path string) (FileConfig, error) {
+	cfg, issues, err := LoadConfigLenient(path)
+	if err != nil {
 		return FileConfig{}, err
 	}
-	if len(strings.TrimSpace(string(data))) == 0 {
-		return FileConfig{}, nil
+	if len(issues) > 0 {
+		return FileConfig{}, issues[0].Error
 	}
-	var cfg FileConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return FileConfig{}, fmt.Errorf("observable config: parse %s: %w", path, err)
-	}
-	return ValidateConfig(cfg)
+	return cfg, nil
 }
 
 func LoadConfigLenient(path string) (FileConfig, []ConfigIssue, error) {
@@ -265,38 +343,62 @@ func LoadConfigLenient(path string) (FileConfig, []ConfigIssue, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return FileConfig{}, nil, nil
 	}
-	var raw FileConfig
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return FileConfig{}, []ConfigIssue{{
-			ID:    "config",
-			Error: fmt.Errorf("observable config: parse %s: %w", path, err),
-		}}, nil
+	var raw struct {
+		Observables []json.RawMessage `json:"observables"`
+	}
+	if err := decodeStrict(data, &raw); err != nil {
+		return FileConfig{}, []ConfigIssue{{ID: "config", Error: fmt.Errorf("observable config: parse %s: %w", path, err)}}, nil
 	}
 	seen := map[string]struct{}{}
 	out := FileConfig{Observables: make([]Spec, 0, len(raw.Observables))}
 	var issues []ConfigIssue
-	for i, spec := range raw.Observables {
-		normalized, err := ValidateSpec(spec)
+	for i, entry := range raw.Observables {
+		spec, err := decodeWireSpec(entry)
 		if err != nil {
+			id, name, hint := rawEntryIdentity(entry, i)
+			issueSpec := Spec{ID: id, Name: name}
 			issues = append(issues, ConfigIssue{
-				ID:    issueID(spec, i),
-				Spec:  spec,
-				Error: fmt.Errorf("observable config: observables[%d] %q: %w", i, spec.ID, err),
+				ID:    id,
+				Spec:  issueSpec,
+				Error: fmt.Errorf("observable config: observables[%d] %q: %w; rewrite as type plus %s", i, id, err, hint),
 			})
 			continue
 		}
-		if _, ok := seen[normalized.ID]; ok {
-			issues = append(issues, ConfigIssue{
-				ID:    fmt.Sprintf("%s#%d", normalized.ID, i),
-				Spec:  normalized,
-				Error: fmt.Errorf("observable config: duplicate id %q", normalized.ID),
-			})
+		if _, ok := seen[spec.ID]; ok {
+			id := fmt.Sprintf("%s#%d", spec.ID, i)
+			issues = append(issues, ConfigIssue{ID: id, Spec: spec, Error: fmt.Errorf("observable config: duplicate id %q", spec.ID)})
 			continue
 		}
-		seen[normalized.ID] = struct{}{}
-		out.Observables = append(out.Observables, normalized)
+		seen[spec.ID] = struct{}{}
+		out.Observables = append(out.Observables, spec)
 	}
 	return out, issues, nil
+}
+
+func rawEntryIdentity(data []byte, index int) (string, string, string) {
+	var raw map[string]json.RawMessage
+	_ = json.Unmarshal(data, &raw)
+	var id, name, typ string
+	_ = json.Unmarshal(raw["id"], &id)
+	_ = json.Unmarshal(raw["name"], &name)
+	_ = json.Unmarshal(raw["type"], &typ)
+	if !validID(strings.TrimSpace(id)) {
+		id = fmt.Sprintf("config-%d", index)
+	} else {
+		id = strings.TrimSpace(id)
+	}
+	hint := "command_config"
+	if typ == SourceTypeSchedule || raw["schedule_config"] != nil {
+		hint = "schedule_config"
+	} else if source := raw["source"]; source != nil {
+		var sourceType struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(source, &sourceType) == nil && sourceType.Type == SourceTypeSchedule {
+			hint = "schedule_config"
+		}
+	}
+	return id, name, hint
 }
 
 func SaveConfig(path string, cfg FileConfig) error {
@@ -304,7 +406,6 @@ func SaveConfig(path string, cfg FileConfig) error {
 	if err != nil {
 		return err
 	}
-	cfg = PreferredConfig(cfg)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -352,106 +453,65 @@ func ValidateSpec(spec Spec) (Spec, error) {
 	if spec.ID == "" && spec.Name != "" {
 		spec.ID = slugObservableID(spec.Name)
 	}
-	spec.Command = strings.TrimSpace(spec.Command)
-	spec.Source.Type = strings.TrimSpace(spec.Source.Type)
-	if spec.ID == "" {
-		return Spec{}, fmt.Errorf("missing or invalid id")
-	}
 	if !validID(spec.ID) {
 		return Spec{}, fmt.Errorf("missing or invalid id: id must use lower-case letters, digits, '_' or '-'")
 	}
-	if spec.Source.Type == "" {
-		if hasLegacyCommandShorthand(spec) {
-			spec.Source.Type = SourceTypeCommand
-			spec.Source.Command = spec.Command
-			spec.Source.Args = append([]string(nil), spec.Args...)
-			spec.Source.CWD = spec.CWD
-			spec.Source.Env = cloneStringMap(spec.Env)
-			spec.Source.Streams = append([]string(nil), spec.Streams...)
-			spec.Source.Parser = cloneParserSpec(spec.Parser)
-			spec.Source.Filters = append([]FilterSpec(nil), spec.Filters...)
-			spec.Source.Batch = spec.Batch
-			spec.Source.OnExit = spec.OnExit
-		} else {
-			return Spec{}, fmt.Errorf("source.type is required")
-		}
-	} else if hasLegacyCommandShorthand(spec) && !legacyMirrorsCommandSource(spec) {
-		return Spec{}, fmt.Errorf("legacy command shorthand cannot be mixed with explicit source")
-	}
-	switch spec.Source.Type {
-	case SourceTypeCommand:
-		return validateCommandSpec(spec)
-	case SourceTypeSchedule:
-		return validateScheduleSpec(spec)
+	switch source := spec.source.(type) {
+	case CommandSourceSpec:
+		return validateCommandSpec(spec.ID, spec.Name, source)
+	case ScheduleSourceSpec:
+		return validateScheduleSpec(spec.ID, spec.Name, source)
 	default:
-		return Spec{}, fmt.Errorf("source.type must be command or schedule, got %q", spec.Source.Type)
+		return Spec{}, fmt.Errorf("source is required")
 	}
 }
 
-func validateCommandSpec(spec Spec) (Spec, error) {
-	spec.Source.Command = strings.TrimSpace(spec.Source.Command)
-	if err := rejectInactiveScheduleFields(spec.Source); err != nil {
-		return Spec{}, err
+func validateCommandSpec(id, name string, source CommandSourceSpec) (Spec, error) {
+	source = cloneCommandSourceSpec(source)
+	source.Command = strings.TrimSpace(source.Command)
+	if source.Command == "" {
+		return Spec{}, fmt.Errorf("command_config.command is required")
 	}
-	if spec.Source.Command == "" {
-		return Spec{}, fmt.Errorf("source.command is required")
+	if source.Batch.IntervalSeconds == 0 {
+		source.Batch.IntervalSeconds = DefaultBatchIntervalSeconds
 	}
-	if spec.Source.Batch.IntervalSeconds == 0 {
-		spec.Source.Batch.IntervalSeconds = DefaultBatchIntervalSeconds
+	if source.Batch.MaxChars == 0 {
+		source.Batch.MaxChars = DefaultBatchMaxChars
 	}
-	if spec.Source.Batch.MaxChars == 0 {
-		spec.Source.Batch.MaxChars = DefaultBatchMaxChars
+	if len(source.Streams) == 0 {
+		source.Streams = []string{StreamStdout, StreamStderr}
 	}
-	if len(spec.Source.Streams) == 0 {
-		spec.Source.Streams = []string{StreamStdout, StreamStderr}
-	}
-	for _, stream := range spec.Source.Streams {
-		switch stream {
-		case StreamStdout, StreamStderr:
-		default:
+	for _, stream := range source.Streams {
+		if stream != StreamStdout && stream != StreamStderr {
 			return Spec{}, fmt.Errorf("stream must be stdout or stderr, got %q", stream)
 		}
 	}
-	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
-	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
-	if len(spec.Observation.Attachments) > 0 {
-		return Spec{}, fmt.Errorf("command source cannot set observation.attachments; use parser.attachments_field")
-	}
-	if spec.Observation.Kind != "" {
-		spec.Defaults.Kind = spec.Observation.Kind
-	}
-	if err := validateSeverity("observation.severity", spec.Observation.Severity); err != nil {
+	source.Observation.Kind = strings.TrimSpace(source.Observation.Kind)
+	source.Observation.Severity = strings.TrimSpace(source.Observation.Severity)
+	if err := validateSeverity("observation.severity", source.Observation.Severity); err != nil {
 		return Spec{}, err
 	}
-	if spec.Observation.Severity != "" {
-		spec.Defaults.Severity = spec.Observation.Severity
-	}
-	if err := validateSeverity("defaults.severity", spec.Defaults.Severity); err != nil {
-		return Spec{}, err
-	}
-	if spec.Source.Parser != nil {
-		parserType := spec.Source.Parser.Type
+	if source.Parser != nil {
+		parserType := source.Parser.Type
 		if parserType == "" {
 			parserType = ParserText
-			spec.Source.Parser.Type = parserType
+			source.Parser.Type = parserType
 		}
-		switch parserType {
-		case ParserText, ParserJSONL:
-		default:
+		if parserType != ParserText && parserType != ParserJSONL {
 			return Spec{}, fmt.Errorf("parser.type must be text or jsonl, got %q", parserType)
 		}
-		spec.Source.Parser.AttachmentsField = strings.TrimSpace(spec.Source.Parser.AttachmentsField)
-		if spec.Source.Parser.AttachmentsField != "" && parserType != ParserJSONL {
+		source.Parser.AttachmentsField = strings.TrimSpace(source.Parser.AttachmentsField)
+		if source.Parser.AttachmentsField != "" && parserType != ParserJSONL {
 			return Spec{}, fmt.Errorf("parser.attachments_field requires parser.type jsonl")
 		}
 	}
-	if spec.Source.Batch.IntervalSeconds < MinBatchIntervalSeconds || spec.Source.Batch.IntervalSeconds > MaxBatchIntervalSeconds {
+	if source.Batch.IntervalSeconds < MinBatchIntervalSeconds || source.Batch.IntervalSeconds > MaxBatchIntervalSeconds {
 		return Spec{}, fmt.Errorf("batch.interval_seconds must be between %d and %d", MinBatchIntervalSeconds, MaxBatchIntervalSeconds)
 	}
-	if spec.Source.Batch.MaxChars < 1 || spec.Source.Batch.MaxChars > MaxBatchChars {
+	if source.Batch.MaxChars < 1 || source.Batch.MaxChars > MaxBatchChars {
 		return Spec{}, fmt.Errorf("batch.max_chars must be between 1 and %d", MaxBatchChars)
 	}
-	for i, filter := range spec.Source.Filters {
+	for i, filter := range source.Filters {
 		hasContains := strings.TrimSpace(filter.Contains) != ""
 		hasRegex := strings.TrimSpace(filter.Regex) != ""
 		if hasContains == hasRegex {
@@ -466,163 +526,91 @@ func validateCommandSpec(spec Spec) (Spec, error) {
 			}
 		}
 	}
-	switch spec.Source.OnExit.Notify {
+	switch source.OnExit.Notify {
 	case "", "never", "always", "nonzero":
 	default:
-		return Spec{}, fmt.Errorf("on_exit.notify must be never, always, or nonzero, got %q", spec.Source.OnExit.Notify)
+		return Spec{}, fmt.Errorf("on_exit.notify must be never, always, or nonzero, got %q", source.OnExit.Notify)
 	}
-	spec.Command = spec.Source.Command
-	spec.Args = append([]string(nil), spec.Source.Args...)
-	spec.CWD = spec.Source.CWD
-	spec.Env = cloneStringMap(spec.Source.Env)
-	spec.Streams = append([]string(nil), spec.Source.Streams...)
-	spec.Parser = cloneParserSpec(spec.Source.Parser)
-	spec.Filters = append([]FilterSpec(nil), spec.Source.Filters...)
-	spec.Batch = spec.Source.Batch
-	spec.OnExit = spec.Source.OnExit
-	return spec, nil
+	return Spec{ID: id, Name: name, source: source}, nil
 }
 
-func validateScheduleSpec(spec Spec) (Spec, error) {
-	if err := rejectInactiveCommandFields(spec.Source); err != nil {
-		return Spec{}, err
-	}
-	if strings.TrimSpace(spec.Defaults.Kind) != "" || strings.TrimSpace(spec.Defaults.Severity) != "" {
-		return Spec{}, fmt.Errorf("schedule source cannot set defaults; use observation.kind and observation.severity")
-	}
-	spec.Observation.Kind = strings.TrimSpace(spec.Observation.Kind)
-	spec.Observation.Severity = strings.TrimSpace(spec.Observation.Severity)
-	spec.Observation.Content = strings.TrimSpace(spec.Observation.Content)
+func validateScheduleSpec(id, name string, source ScheduleSourceSpec) (Spec, error) {
+	source = cloneScheduleSourceSpec(source)
+	source.Observation.Kind = strings.TrimSpace(source.Observation.Kind)
+	source.Observation.Severity = strings.TrimSpace(source.Observation.Severity)
+	source.Observation.Content = strings.TrimSpace(source.Observation.Content)
 	var err error
-	spec.Observation.Attachments, err = normalizeAttachments(spec.Observation.Attachments)
+	source.Observation.Attachments, err = normalizeAttachments(source.Observation.Attachments)
 	if err != nil {
 		return Spec{}, err
 	}
-	if spec.Observation.Kind == "" {
-		spec.Observation.Kind = DefaultScheduleKind
+	if source.Observation.Kind == "" {
+		source.Observation.Kind = DefaultScheduleKind
 	}
-	if err := validateSeverity("observation.severity", spec.Observation.Severity); err != nil {
+	if err := validateSeverity("observation.severity", source.Observation.Severity); err != nil {
 		return Spec{}, err
 	}
-	if spec.Observation.Severity == "" {
-		spec.Observation.Severity = DefaultSeverity
+	if source.Observation.Severity == "" {
+		source.Observation.Severity = DefaultSeverity
 	}
-	if spec.Observation.Content == "" {
+	if source.Observation.Content == "" {
 		return Spec{}, fmt.Errorf("observation.content is required for schedule sources")
 	}
-	if len([]rune(spec.Observation.Content)) > MaxScheduleContentChars {
+	if len([]rune(source.Observation.Content)) > MaxScheduleContentChars {
 		return Spec{}, fmt.Errorf("observation.content must be at most %d characters", MaxScheduleContentChars)
 	}
 	enabled := 0
-	if spec.Source.Once != nil {
+	if source.Once != nil {
 		enabled++
-		if _, err := parseOnceAt(spec.Source.Once.At); err != nil {
+		if _, err := parseOnceAt(source.Once.At); err != nil {
 			return Spec{}, err
 		}
 	}
-	if spec.Source.Daily != nil {
+	if source.Daily != nil {
 		enabled++
-		spec.Source.Timezone = strings.TrimSpace(spec.Source.Timezone)
-		if spec.Source.Timezone == "" {
-			return Spec{}, fmt.Errorf("source.timezone is required for daily schedules")
+		source.Timezone = strings.TrimSpace(source.Timezone)
+		if source.Timezone == "" {
+			return Spec{}, fmt.Errorf("schedule_config.timezone is required for daily schedules")
 		}
-		if _, err := time.LoadLocation(spec.Source.Timezone); err != nil {
-			return Spec{}, fmt.Errorf("source.timezone must be a valid IANA timezone: %w", err)
+		if _, err := time.LoadLocation(source.Timezone); err != nil {
+			return Spec{}, fmt.Errorf("schedule_config.timezone must be a valid IANA timezone: %w", err)
 		}
-		if len(spec.Source.Daily.Times) == 0 {
-			return Spec{}, fmt.Errorf("source.daily.times is required")
+		if len(source.Daily.Times) == 0 {
+			return Spec{}, fmt.Errorf("schedule_config.daily.times is required")
 		}
-		for _, value := range spec.Source.Daily.Times {
+		for _, value := range source.Daily.Times {
 			if _, err := parseDailyClock(value); err != nil {
 				return Spec{}, err
 			}
 		}
-		for _, value := range spec.Source.Daily.Weekdays {
+		for _, value := range source.Daily.Weekdays {
 			if _, ok := weekdayNumber(value); !ok {
-				return Spec{}, fmt.Errorf("source.daily.weekdays contains invalid weekday %q", value)
+				return Spec{}, fmt.Errorf("schedule_config.daily.weekdays contains invalid weekday %q", value)
 			}
 		}
 	}
-	if spec.Source.Interval != nil {
+	if source.Interval != nil {
 		enabled++
-		if spec.Source.Interval.EverySeconds < MinIntervalScheduleSecond {
-			return Spec{}, fmt.Errorf("source.interval.every_seconds must be at least %d", MinIntervalScheduleSecond)
+		if source.Interval.EverySeconds < MinIntervalScheduleSecond {
+			return Spec{}, fmt.Errorf("schedule_config.interval.every_seconds must be at least %d", MinIntervalScheduleSecond)
 		}
 	}
 	if enabled != 1 {
 		return Spec{}, fmt.Errorf("schedule source must set exactly one of once, daily, or interval")
 	}
-	if spec.Source.CatchUp.Mode == "" {
-		spec.Source.CatchUp.Mode = ScheduleCatchUpNone
+	if source.CatchUp.Mode == "" {
+		source.CatchUp.Mode = ScheduleCatchUpNone
 	}
-	switch spec.Source.CatchUp.Mode {
+	switch source.CatchUp.Mode {
 	case ScheduleCatchUpNone:
 	case ScheduleCatchUpLatest:
-		if spec.Source.CatchUp.MaxLatenessMinutes < 1 || spec.Source.CatchUp.MaxLatenessMinutes > 1440 {
-			return Spec{}, fmt.Errorf("source.catch_up.max_lateness_minutes must be between 1 and 1440")
+		if source.CatchUp.MaxLatenessMinutes < 1 || source.CatchUp.MaxLatenessMinutes > 1440 {
+			return Spec{}, fmt.Errorf("schedule_config.catch_up.max_lateness_minutes must be between 1 and 1440")
 		}
 	default:
-		return Spec{}, fmt.Errorf("source.catch_up.mode must be none or latest, got %q", spec.Source.CatchUp.Mode)
+		return Spec{}, fmt.Errorf("schedule_config.catch_up.mode must be none or latest, got %q", source.CatchUp.Mode)
 	}
-	return spec, nil
-}
-
-func rejectInactiveCommandFields(source SourceSpec) error {
-	var fields []string
-	if strings.TrimSpace(source.Command) != "" {
-		fields = append(fields, "source.command")
-	}
-	if len(source.Args) > 0 {
-		fields = append(fields, "source.args")
-	}
-	if strings.TrimSpace(source.CWD) != "" {
-		fields = append(fields, "source.cwd")
-	}
-	if len(source.Env) > 0 {
-		fields = append(fields, "source.env")
-	}
-	if len(source.Streams) > 0 {
-		fields = append(fields, "source.streams")
-	}
-	if source.Parser != nil {
-		fields = append(fields, "source.parser")
-	}
-	if len(source.Filters) > 0 {
-		fields = append(fields, "source.filters")
-	}
-	if source.Batch != (BatchSpec{}) {
-		fields = append(fields, "source.batch")
-	}
-	if source.OnExit != (OnExitSpec{}) {
-		fields = append(fields, "source.on_exit")
-	}
-	if len(fields) > 0 {
-		return fmt.Errorf("schedule source cannot set command fields: %s", strings.Join(fields, ", "))
-	}
-	return nil
-}
-
-func rejectInactiveScheduleFields(source SourceSpec) error {
-	var fields []string
-	if strings.TrimSpace(source.Timezone) != "" {
-		fields = append(fields, "source.timezone")
-	}
-	if source.Once != nil {
-		fields = append(fields, "source.once")
-	}
-	if source.Daily != nil {
-		fields = append(fields, "source.daily")
-	}
-	if source.Interval != nil {
-		fields = append(fields, "source.interval")
-	}
-	if source.CatchUp != (CatchUpSpec{}) {
-		fields = append(fields, "source.catch_up")
-	}
-	if len(fields) > 0 {
-		return fmt.Errorf("command source cannot set schedule fields: %s", strings.Join(fields, ", "))
-	}
-	return nil
+	return Spec{ID: id, Name: name, source: source}, nil
 }
 
 func ExpandVariables(value, workDir string) string {
@@ -635,128 +623,34 @@ func ExpandVariables(value, workDir string) string {
 	return replacer.Replace(value)
 }
 
-func PreferredConfig(cfg FileConfig) FileConfig {
-	out := FileConfig{Observables: make([]Spec, 0, len(cfg.Observables))}
-	for _, spec := range cfg.Observables {
-		out.Observables = append(out.Observables, PreferredSpec(spec))
-	}
+func cloneCommandSourceSpec(in CommandSourceSpec) CommandSourceSpec {
+	out := in
+	out.Args = append([]string(nil), in.Args...)
+	out.Env = cloneStringMap(in.Env)
+	out.Streams = append([]string(nil), in.Streams...)
+	out.Parser = cloneParserSpec(in.Parser)
+	out.Filters = append([]FilterSpec(nil), in.Filters...)
 	return out
 }
 
-func PreferredSpec(spec Spec) Spec {
-	switch spec.Source.Type {
-	case SourceTypeCommand:
-		spec.Source.Command = spec.Command
-		spec.Source.Args = append([]string(nil), spec.Args...)
-		spec.Source.CWD = spec.CWD
-		spec.Source.Env = cloneStringMap(spec.Env)
-		spec.Source.Streams = append([]string(nil), spec.Streams...)
-		spec.Source.Parser = cloneParserSpec(spec.Parser)
-		spec.Source.Filters = append([]FilterSpec(nil), spec.Filters...)
-		spec.Source.Batch = spec.Batch
-		spec.Source.OnExit = spec.OnExit
-		spec.Command = ""
-		spec.Args = nil
-		spec.CWD = ""
-		spec.Env = nil
-		spec.Streams = nil
-		spec.Parser = nil
-		spec.Filters = nil
-		spec.Batch = BatchSpec{}
-		spec.OnExit = OnExitSpec{}
-	case SourceTypeSchedule:
-		spec.Command = ""
-		spec.Args = nil
-		spec.CWD = ""
-		spec.Env = nil
-		spec.Streams = nil
-		spec.Defaults = Defaults{}
-		spec.Parser = nil
-		spec.Filters = nil
-		spec.Batch = BatchSpec{}
-		spec.OnExit = OnExitSpec{}
+func cloneScheduleSourceSpec(in ScheduleSourceSpec) ScheduleSourceSpec {
+	out := in
+	if in.Once != nil {
+		once := *in.Once
+		out.Once = &once
 	}
-	return spec
-}
-
-func hasLegacyCommandShorthand(spec Spec) bool {
-	return strings.TrimSpace(spec.Command) != "" ||
-		len(spec.Args) > 0 ||
-		strings.TrimSpace(spec.CWD) != "" ||
-		len(spec.Env) > 0 ||
-		len(spec.Streams) > 0 ||
-		spec.Parser != nil ||
-		len(spec.Filters) > 0 ||
-		spec.Batch != (BatchSpec{}) ||
-		spec.OnExit != (OnExitSpec{})
-}
-
-func legacyMirrorsCommandSource(spec Spec) bool {
-	if spec.Source.Type != SourceTypeCommand {
-		return false
+	if in.Daily != nil {
+		daily := *in.Daily
+		daily.Times = append([]string(nil), in.Daily.Times...)
+		daily.Weekdays = append([]string(nil), in.Daily.Weekdays...)
+		out.Daily = &daily
 	}
-	if strings.TrimSpace(spec.Command) != strings.TrimSpace(spec.Source.Command) {
-		return false
+	if in.Interval != nil {
+		interval := *in.Interval
+		out.Interval = &interval
 	}
-	if !stringSlicesEqual(spec.Args, spec.Source.Args) {
-		return false
-	}
-	if spec.CWD != spec.Source.CWD || !stringMapsEqual(spec.Env, spec.Source.Env) {
-		return false
-	}
-	if !stringSlicesEqual(spec.Streams, spec.Source.Streams) {
-		return false
-	}
-	if !parserSpecEqual(spec.Parser, spec.Source.Parser) {
-		return false
-	}
-	if !filterSpecsEqual(spec.Filters, spec.Source.Filters) {
-		return false
-	}
-	return spec.Batch == spec.Source.Batch && spec.OnExit == spec.Source.OnExit
-}
-
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func stringMapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for key, av := range a {
-		if b[key] != av {
-			return false
-		}
-	}
-	return true
-}
-
-func parserSpecEqual(a, b *ParserSpec) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-	return *a == *b
-}
-
-func filterSpecsEqual(a, b []FilterSpec) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	out.Observation.Attachments = append([]AttachmentSpec(nil), in.Observation.Attachments...)
+	return out
 }
 
 func cloneStringMap(in map[string]string) map[string]string {
@@ -794,13 +688,6 @@ func normalizeAttachments(in []AttachmentSpec) ([]AttachmentSpec, error) {
 	return out, nil
 }
 
-func isZeroObservationSpec(spec ObservationSpec) bool {
-	return spec.Kind == "" &&
-		spec.Severity == "" &&
-		spec.Content == "" &&
-		len(spec.Attachments) == 0
-}
-
 func validID(id string) bool {
 	if id == "" {
 		return false
@@ -834,11 +721,6 @@ func slugObservableID(name string) string {
 				b.WriteByte(byte(r))
 				lastSep = true
 			}
-		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
-			if b.Len() > 0 && !lastSep {
-				b.WriteByte('-')
-				lastSep = true
-			}
 		default:
 			if b.Len() > 0 && !lastSep {
 				b.WriteByte('-')
@@ -846,24 +728,17 @@ func slugObservableID(name string) string {
 			}
 		}
 	}
-	out := strings.Trim(b.String(), "-_")
-	return out
-}
-
-func issueID(spec Spec, index int) string {
-	if validID(strings.TrimSpace(spec.ID)) {
-		return strings.TrimSpace(spec.ID)
-	}
-	return fmt.Sprintf("config-%d", index)
+	return strings.Trim(b.String(), "-_")
 }
 
 func validateSeverity(field, severity string) error {
-	switch severity {
-	case "", "info", "warning", "error", "critical":
+	if severity == "" {
 		return nil
-	default:
+	}
+	if !validSeverityValue(severity) {
 		return fmt.Errorf("%s must be info, warning, error, or critical, got %q", field, severity)
 	}
+	return nil
 }
 
 func resolvedKind(kind string) string {
