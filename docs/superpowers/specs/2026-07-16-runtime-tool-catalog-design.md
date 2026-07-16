@@ -128,9 +128,9 @@ not bind or dispatch handlers and therefore creates no shell manager, session,
 memory store, or observable manager. MCP definitions are excluded from this
 pass and supplied from the process manager descriptors.
 
-The resulting builtin snapshot is cached per web server because the tool set
-is fixed for the lifetime of `juex serve`. `internal/tools` resolves effective
-timeout metadata with the same normalization and cap used by registry calls.
+The service rebuilds the small builtin projection from immutable definitions
+for each Runtime status request. `internal/tools` resolves effective timeout
+metadata with the same normalization and cap used by registry calls.
 Ordinary tools use `mode=bounded` with seconds; `exec_command` and
 `write_stdin` use `mode=disabled`, meaning the generic hard timeout is disabled
 while cancellation, process cleanup, and yield-window semantics still apply.
