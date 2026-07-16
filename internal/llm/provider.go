@@ -129,6 +129,27 @@ func streamIdleTimeout(opts CompleteOptions) time.Duration {
 	return DefaultStreamIdleTimeout
 }
 
+type streamIdleTimeoutError struct {
+	operation string
+	timeout   time.Duration
+	cause     error
+}
+
+func (e *streamIdleTimeoutError) Error() string {
+	if e.cause == nil {
+		return fmt.Sprintf("%s idle timeout after %s", e.operation, e.timeout)
+	}
+	return fmt.Sprintf("%s idle timeout after %s: %v", e.operation, e.timeout, e.cause)
+}
+
+func (e *streamIdleTimeoutError) Unwrap() error {
+	return context.DeadlineExceeded
+}
+
+func newStreamIdleTimeoutError(operation string, timeout time.Duration, cause error) error {
+	return &streamIdleTimeoutError{operation: operation, timeout: timeout, cause: cause}
+}
+
 func newStreamIdleContext(ctx context.Context, timeout time.Duration) (context.Context, func(), func(), func() bool) {
 	if timeout <= 0 {
 		return ctx, func() {}, func() {}, func() bool { return false }

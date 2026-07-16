@@ -178,6 +178,25 @@ test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final re
   ]);
 
   state = apply(state, {
+    id: "e-retry",
+    type: "llm.retry",
+    ts: "2026-06-15T00:00:03.500Z",
+    turn_id: "turn-stream",
+    payload: {
+      purpose: "turn",
+      provider: "openai-codex",
+      model: "gpt-test",
+      operation: "responses.sse",
+      attempt: 1,
+      max_attempts: 2,
+      retry_reason: "codex_sse_idle_timeout",
+      will_retry: true,
+    },
+  });
+  assert.equal(state.messages[1].pending, true);
+  assert.deepEqual(state.messages[1].blocks, []);
+
+  state = apply(state, {
     id: "e5",
     type: "llm.responded",
     ts: "2026-06-15T00:00:04Z",

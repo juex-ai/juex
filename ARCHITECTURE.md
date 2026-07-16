@@ -371,6 +371,11 @@ diagnostics with provider, model,
 transport, attempt, delay, reason, and exhaustion state so session event logs
 and debug bundles can explain retry behavior. Semantic stream events such as
 `response.failed` are returned without retry.
+The Codex SSE adapter retries one stream-idle timeout, including a stall after
+transient reasoning or text deltas. The retry event clears the browser's
+pending assistant projection before replay, while completed assistant messages
+and tool effects remain untouched. An exhausted idle retry is classified as a
+deadline timeout rather than user cancellation.
 Provider adapters share a canonical projection helper before they encode SDK
 requests. The runtime also applies the same provider-visible tool input
 projection before invoking any provider implementation. The helper compacts

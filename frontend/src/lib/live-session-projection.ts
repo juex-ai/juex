@@ -289,10 +289,13 @@ export function projectLiveSessionEvent(
       };
       break;
     case "llm.retry":
-      next =
-        event.payload.purpose === "compaction"
-          ? { ...next, compactActive: true, status: { kind: "running" } }
-          : { ...next, turnActive: true, status: { kind: "running" } };
+      next = event.payload.purpose === "compaction"
+        ? { ...next, compactActive: true, status: { kind: "running" } }
+        : {
+            ...resetPendingAssistantOutput(next, event.turn_id, event.payload.will_retry),
+            turnActive: true,
+            status: { kind: "running" },
+          };
       break;
     case "tool.requested": {
       const name = event.payload.name || "?";
@@ -687,6 +690,22 @@ function applyAssistantResponse(
       ...messages,
       { role: "assistant", turn_id: event.turn_id, pending: false, blocks, model },
     ],
+  };
+}
+
+function resetPendingAssistantOutput(
+  state: LiveSessionProjection,
+  turnID: string | undefined,
+  willRetry: boolean,
+): LiveSessionProjection {
+  if (!turnID || !willRetry) return state;
+  return {
+    ...state,
+    messages: state.messages.map((message) =>
+      message.turn_id === turnID && message.role === "assistant" && message.pending
+        ? { ...message, blocks: [] }
+        : message,
+    ),
   };
 }
 

@@ -66,7 +66,7 @@ func (t *codexResponsesWebsocketTransport) Complete(ctx context.Context, params 
 	if err != nil {
 		t.closeLocked()
 		if idleExpired() {
-			return nil, fmt.Errorf("codex websocket idle timeout after %s: %w", idleTimeout, err)
+			return nil, newStreamIdleTimeoutError("codex websocket", idleTimeout, err)
 		}
 		return nil, err
 	}

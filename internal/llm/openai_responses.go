@@ -121,7 +121,7 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 	}
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return Response{}, fmt.Errorf("openai responses stream idle timeout after %s: %w", idleTimeout, err)
+			return Response{}, newStreamIdleTimeoutError("openai responses stream", idleTimeout, err)
 		}
 		return Response{}, fmt.Errorf("openai responses stream: %w", err)
 	}
