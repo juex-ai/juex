@@ -57,6 +57,16 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
+	if got.Tools.Count != 27 || len(got.Tools.Groups) != 8 {
+		t.Fatalf("tools = %+v", got.Tools)
+	}
+	mcpTools := got.MCP.Servers[0].Tools
+	if len(mcpTools) != 1 || mcpTools[0].Name != "echo" || mcpTools[0].Description != "Echo input" {
+		t.Fatalf("mcp tools = %+v", mcpTools)
+	}
+	if mcpTools[0].Schema["type"] != "object" || mcpTools[0].Timeout.Mode != "bounded" || mcpTools[0].Timeout.Seconds != tools.DefaultTimeoutSeconds {
+		t.Fatalf("mcp echo metadata = %+v", mcpTools[0])
+	}
 	if got.Skills.Count != 1 || got.Skills.Items[0].Name != "review" {
 		t.Fatalf("skills = %+v", got.Skills)
 	}
@@ -224,12 +234,11 @@ func TestRuntimeStatusIncludesSandboxPolicy(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatus_CountsConnectedMCPServersFromActiveTools(t *testing.T) {
+func TestRuntimeStatusIgnoresActiveSessionRegistryForMCPCatalog(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteRuntimeFile(t, filepath.Join(srv.opts.Cfg.WorkDir, ".agents", "mcp.json"), `{
   "mcpServers": {
-    "alpha": { "command": "alpha-cmd" },
-    "beta": { "command": "beta-cmd" }
+	"alpha": { "command": "" }
   }
 }`)
 	reg := tools.NewRegistry()
@@ -256,14 +265,11 @@ func TestRuntimeStatus_CountsConnectedMCPServersFromActiveTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MCP.Configured != 2 || got.MCP.Connected != 1 {
+	if got.MCP.Configured != 1 || got.MCP.Connected != 0 || got.MCP.Errors != 1 {
 		t.Fatalf("mcp = %+v", got.MCP)
 	}
-	if got.MCP.Servers[0].Name != "alpha" || !got.MCP.Servers[0].Connected || got.MCP.Servers[0].ToolCount != 2 {
+	if got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Connected || got.MCP.Servers[0].ToolCount != 0 || len(got.MCP.Servers[0].Tools) != 0 || got.MCP.Servers[0].Status != "error" {
 		t.Fatalf("alpha = %+v", got.MCP.Servers[0])
-	}
-	if got.MCP.Servers[1].Name != "beta" || got.MCP.Servers[1].Connected {
-		t.Fatalf("beta = %+v", got.MCP.Servers[1])
 	}
 }
 
@@ -564,6 +570,9 @@ func TestRuntimeStatusReportsPartialMCPStartup(t *testing.T) {
 	}
 	if got.MCP.Servers[1].Name != "beta" || got.MCP.Servers[1].Status != "error" || !strings.Contains(got.MCP.Servers[1].Error, "missing command") {
 		t.Fatalf("beta = %+v", got.MCP.Servers[1])
+	}
+	if len(got.MCP.Servers[1].Tools) != 0 {
+		t.Fatalf("failed beta tools = %+v", got.MCP.Servers[1].Tools)
 	}
 }
 

@@ -514,12 +514,12 @@ func (s *Server) mcpManagerSnapshot() *mcp.Manager {
 	return s.mcpManager
 }
 
-func (s *Server) mcpToolCounts() map[string]int {
+func (s *Server) mcpToolDescriptors() map[string][]mcp.ToolDescriptor {
 	mgr := s.mcpManagerSnapshot()
 	if mgr == nil {
-		return map[string]int{}
+		return map[string][]mcp.ToolDescriptor{}
 	}
-	return mgr.ToolCounts()
+	return mgr.ToolDescriptors()
 }
 
 func (s *Server) closeMCPManager() {

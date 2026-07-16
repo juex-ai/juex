@@ -989,6 +989,68 @@ func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T
 	}
 }
 
+func TestManagerToolDescriptorsReturnsSortedDefensiveSnapshot(t *testing.T) {
+	mgr := &Manager{tools: map[string][]ToolDescriptor{
+		"empty": {},
+		"alpha": {
+			{
+				Name:        "zeta",
+				Description: "last",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"items": map[string]any{
+							"type": "array",
+							"items": []any{
+								map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			},
+			{Name: "alpha", Description: "first", InputSchema: map[string]any{"type": "object"}},
+		},
+	}}
+
+	got := mgr.ToolDescriptors()
+	if descriptors, ok := got["empty"]; !ok || len(descriptors) != 0 {
+		t.Fatalf("zero-tool server = %#v, present=%v", descriptors, ok)
+	}
+	if names := []string{got["alpha"][0].Name, got["alpha"][1].Name}; strings.Join(names, ",") != "alpha,zeta" {
+		t.Fatalf("descriptor order = %v", names)
+	}
+
+	properties := got["alpha"][1].InputSchema["properties"].(map[string]any)
+	itemsSchema := properties["items"].(map[string]any)
+	items := itemsSchema["items"].([]any)
+	items[0].(map[string]any)["type"] = "number"
+	properties["new"] = map[string]any{"type": "boolean"}
+
+	fresh := mgr.ToolDescriptors()
+	freshProperties := fresh["alpha"][1].InputSchema["properties"].(map[string]any)
+	if _, ok := freshProperties["new"]; ok {
+		t.Fatalf("caller mutation leaked into manager cache: %#v", freshProperties)
+	}
+	freshItems := freshProperties["items"].(map[string]any)["items"].([]any)
+	if gotType := freshItems[0].(map[string]any)["type"]; gotType != "string" {
+		t.Fatalf("nested slice mutation leaked into manager cache: type=%v", gotType)
+	}
+	if mgr.tools["alpha"][0].Name != "zeta" {
+		t.Fatalf("snapshot sorting mutated manager cache: %#v", mgr.tools["alpha"])
+	}
+}
+
+func TestManagerToolDescriptorsReturnsEmptyForNilOrClosedManager(t *testing.T) {
+	var nilManager *Manager
+	if got := nilManager.ToolDescriptors(); len(got) != 0 {
+		t.Fatalf("nil manager descriptors = %#v", got)
+	}
+	closed := &Manager{closed: true, tools: map[string][]ToolDescriptor{"alpha": {{Name: "echo"}}}}
+	if got := closed.ToolDescriptors(); len(got) != 0 {
+		t.Fatalf("closed manager descriptors = %#v", got)
+	}
+}
+
 func TestManagerRegisterTools_StrictNoArgToolRejectsPlaceholder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

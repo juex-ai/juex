@@ -3,14 +3,125 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/tools"
 )
+
+func TestRuntimeStatusServiceProjectsBuiltinToolCatalog(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
+	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantGroups := []tools.ToolGroup{
+		tools.ToolGroupFile,
+		tools.ToolGroupChunkedWrite,
+		tools.ToolGroupShell,
+		tools.ToolGroupSearch,
+		tools.ToolGroupSkill,
+		tools.ToolGroupMemory,
+		tools.ToolGroupSessionState,
+		tools.ToolGroupObservable,
+	}
+	if len(status.Tools.Groups) != len(wantGroups) {
+		t.Fatalf("tool groups = %#v, want %v", status.Tools.Groups, wantGroups)
+	}
+	count := 0
+	for i, wantGroup := range wantGroups {
+		group := status.Tools.Groups[i]
+		if group.Group != string(wantGroup) {
+			t.Fatalf("group[%d] = %q, want %q", i, group.Group, wantGroup)
+		}
+		names := make([]string, 0, len(group.Tools))
+		for _, tool := range group.Tools {
+			names = append(names, tool.Name)
+		}
+		if !sort.StringsAreSorted(names) {
+			t.Fatalf("group %q tools are not sorted: %v", group.Group, names)
+		}
+		count += len(group.Tools)
+	}
+	if status.Tools.Count != count || count != 27 {
+		t.Fatalf("tool count = %d, grouped=%d, want 27", status.Tools.Count, count)
+	}
+}
+
+func TestRuntimeStatusServiceCatalogMatchesRealAppRegistry(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
+	a, err := New(Options{Config: cfg, Provider: &stubProvider{}, WorkDir: work, DisableMCP: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+
+	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type catalogEntry struct {
+		group string
+		info  RuntimeToolInfo
+	}
+	catalog := make(map[string]catalogEntry, status.Tools.Count)
+	for _, group := range status.Tools.Groups {
+		for _, info := range group.Tools {
+			catalog[info.Name] = catalogEntry{group: group.Group, info: info}
+		}
+	}
+
+	actualCount := 0
+	for _, actual := range a.Engine.Tools.List() {
+		if actual.Group == tools.ToolGroupMCP {
+			continue
+		}
+		actualCount++
+		entry, ok := catalog[actual.Name]
+		if !ok {
+			t.Errorf("registered tool %q missing from runtime catalog", actual.Name)
+			continue
+		}
+		info := entry.info
+		definition := actual.Definition()
+		if info.Description != definition.Description || entry.group != string(definition.Group) || !reflect.DeepEqual(info.Schema, definition.Schema) {
+			t.Errorf("catalog %q = %#v, registered definition = %#v", actual.Name, info, definition)
+		}
+		effective := tools.EffectiveToolTimeout(definition, durationSeconds(cfg.RuntimeLimits().ToolTimeout))
+		if info.Timeout.Mode != string(effective.Mode) || info.Timeout.Seconds != effective.Seconds {
+			t.Errorf("catalog %q timeout = %#v, want %#v", actual.Name, info.Timeout, effective)
+		}
+	}
+	if actualCount != status.Tools.Count {
+		t.Fatalf("registered non-MCP tools = %d, catalog count = %d", actualCount, status.Tools.Count)
+	}
+}
+
+func TestRuntimeToolsStatusRejectsInvalidBuiltinGroups(t *testing.T) {
+	for _, group := range []tools.ToolGroup{"", tools.ToolGroupMCP, "unknown"} {
+		t.Run(string(group), func(t *testing.T) {
+			_, err := runtimeToolsStatusFromDefinitions([]tools.ToolDefinition{{
+				Name:   "bad",
+				Group:  group,
+				Schema: map[string]any{"type": "object"},
+			}}, tools.DefaultTimeoutSeconds)
+			if err == nil {
+				t.Fatalf("group %q unexpectedly accepted", group)
+			}
+		})
+	}
+}
 
 func TestRuntimeStatusServiceIncludesPromptSkillsAndProvider(t *testing.T) {
 	work := t.TempDir()
@@ -112,8 +223,13 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	}
 
 	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{
-		MCPToolCounts: map[string]int{"shared": 2},
-		MCPErrors:     map[string]string{"zeta": "boom"},
+		MCPToolDescriptors: map[string][]mcp.ToolDescriptor{
+			"shared": {
+				{Name: "alpha", Description: "first", InputSchema: map[string]any{"type": "object"}},
+				{Name: "zeta", Description: "last", InputSchema: map[string]any{"type": "object"}},
+			},
+		},
+		MCPErrors: map[string]string{"zeta": "boom"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,6 +249,28 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	}
 	if zeta.Name != "zeta" || zeta.Source != "user" || zeta.Status != "error" || zeta.Error != "boom" {
 		t.Fatalf("zeta = %+v", zeta)
+	}
+}
+
+func TestRuntimeStatusServiceTreatsZeroToolDescriptorMembershipAsConnected(t *testing.T) {
+	work := t.TempDir()
+	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
+  "mcpServers": {
+    "empty": { "command": "empty-server" }
+  }
+}`)
+	status, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
+		MCPToolDescriptors: map[string][]mcp.ToolDescriptor{"empty": {}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.MCP.Connected != 1 || len(status.MCP.Servers) != 1 {
+		t.Fatalf("mcp = %+v", status.MCP)
+	}
+	server := status.MCP.Servers[0]
+	if !server.Connected || server.Status != "connected" || server.ToolCount != 0 || len(server.Tools) != 0 {
+		t.Fatalf("zero-tool server = %+v", server)
 	}
 }
 

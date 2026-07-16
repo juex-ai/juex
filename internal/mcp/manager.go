@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/juex-ai/juex/internal/tools"
@@ -102,6 +103,57 @@ func (m *Manager) ToolCounts() map[string]int {
 		out[serverName] = len(descs)
 	}
 	return out
+}
+
+// ToolDescriptors returns a deterministic defensive snapshot of the tools
+// discovered for each connected MCP server. Map membership is preserved for
+// connected servers that advertised zero tools.
+func (m *Manager) ToolDescriptors() map[string][]ToolDescriptor {
+	out := map[string][]ToolDescriptor{}
+	if m == nil {
+		return out
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.closed {
+		return out
+	}
+	for serverName, descriptors := range m.tools {
+		copied := make([]ToolDescriptor, len(descriptors))
+		for i, descriptor := range descriptors {
+			copied[i] = descriptor
+			copied[i].InputSchema = cloneJSONMap(descriptor.InputSchema)
+		}
+		sort.Slice(copied, func(i, j int) bool { return copied[i].Name < copied[j].Name })
+		out[serverName] = copied
+	}
+	return out
+}
+
+func cloneJSONMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(value))
+	for key, item := range value {
+		cloned[key] = cloneJSONValue(item)
+	}
+	return cloned
+}
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for i, item := range typed {
+			cloned[i] = cloneJSONValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 func (m *Manager) StartupErrors() map[string]string {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,10 +12,12 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/memory"
+	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/prompt"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/skills"
+	"github.com/juex-ai/juex/internal/tools"
 )
 
 // RuntimeStatusService assembles read-only runtime facts for presentation
@@ -28,10 +31,10 @@ func NewRuntimeStatusService(cfg config.Config) RuntimeStatusService {
 }
 
 type RuntimeStatusOptions struct {
-	MCPToolCounts map[string]int
-	MCPErrors     map[string]string
-	SkillCache    *RuntimeStatusSkillCache
-	ScratchpadDir string
+	MCPToolDescriptors map[string][]mcp.ToolDescriptor
+	MCPErrors          map[string]string
+	SkillCache         *RuntimeStatusSkillCache
+	ScratchpadDir      string
 }
 
 // RuntimeStatusSkillCache caches loaded skills for repeated status snapshots.
@@ -57,9 +60,32 @@ type RuntimeStatus struct {
 	Shell        config.ShellProfile
 	Sandbox      sandbox.Policy
 	SystemPrompt RuntimeSystemPromptStatus
+	Tools        RuntimeToolsStatus
 	MCP          RuntimeMCPStatus
 	Hooks        RuntimeHooksStatus
 	Skills       RuntimeSkillsStatus
+}
+
+type RuntimeToolsStatus struct {
+	Count  int
+	Groups []RuntimeToolGroupStatus
+}
+
+type RuntimeToolGroupStatus struct {
+	Group string
+	Tools []RuntimeToolInfo
+}
+
+type RuntimeToolInfo struct {
+	Name        string
+	Description string
+	Schema      map[string]any
+	Timeout     RuntimeToolTimeout
+}
+
+type RuntimeToolTimeout struct {
+	Mode    string
+	Seconds int
 }
 
 type RuntimeProviderStatus struct {
@@ -99,6 +125,7 @@ type RuntimeMCPServerStatus struct {
 	Status    string
 	Connected bool
 	ToolCount int
+	Tools     []RuntimeToolInfo
 	Error     string
 }
 
@@ -168,16 +195,87 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 	if err != nil {
 		return RuntimeStatus{}, err
 	}
+	toolsStatus, err := s.toolsStatus()
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
 	return RuntimeStatus{
 		WorkDir:      s.absoluteWorkDir(),
 		Provider:     providerRuntimeStatusFromConfig(s.cfg),
 		Shell:        s.cfg.Shell,
 		Sandbox:      s.cfg.SandboxPolicy(),
 		SystemPrompt: systemPrompt,
+		Tools:        toolsStatus,
 		MCP:          mcpStatus,
 		Hooks:        hooksStatus(resourceGraph.HooksConfig()),
 		Skills:       skillStatus,
 	}, nil
+}
+
+func (s RuntimeStatusService) toolsStatus() (RuntimeToolsStatus, error) {
+	definitions := tools.DefaultBuiltinToolDefinitions(tools.BuiltinDefinitionOptions{
+		Shell: toolsShellProfile(s.cfg.Shell),
+	})
+	definitions = append(definitions, skillToolDefinitions()...)
+	definitions = append(definitions, memory.ToolDefinitions()...)
+	definitions = append(definitions, juexruntime.GoalToolDefinitions()...)
+	definitions = append(definitions, juexruntime.NotesToolDefinitions()...)
+	definitions = append(definitions, observable.ToolDefinitions()...)
+	return runtimeToolsStatusFromDefinitions(definitions, durationSeconds(s.cfg.RuntimeLimits().ToolTimeout))
+}
+
+func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defaultTimeoutSeconds int) (RuntimeToolsStatus, error) {
+	groupOrder := []tools.ToolGroup{
+		tools.ToolGroupFile,
+		tools.ToolGroupChunkedWrite,
+		tools.ToolGroupShell,
+		tools.ToolGroupSearch,
+		tools.ToolGroupSkill,
+		tools.ToolGroupMemory,
+		tools.ToolGroupSessionState,
+		tools.ToolGroupObservable,
+	}
+	groups := make([]RuntimeToolGroupStatus, len(groupOrder))
+	groupIndexes := make(map[tools.ToolGroup]int, len(groupOrder))
+	for i, group := range groupOrder {
+		groups[i] = RuntimeToolGroupStatus{Group: string(group), Tools: []RuntimeToolInfo{}}
+		groupIndexes[group] = i
+	}
+	seen := make(map[string]struct{}, len(definitions))
+	for _, definition := range definitions {
+		groupIndex, ok := groupIndexes[definition.Group]
+		if !ok {
+			return RuntimeToolsStatus{}, fmt.Errorf("runtime tools: tool %q has invalid builtin group %q", definition.Name, definition.Group)
+		}
+		if _, exists := seen[definition.Name]; exists {
+			return RuntimeToolsStatus{}, fmt.Errorf("runtime tools: duplicate tool %q", definition.Name)
+		}
+		seen[definition.Name] = struct{}{}
+		groups[groupIndex].Tools = append(groups[groupIndex].Tools, runtimeToolInfoFromDefinition(definition, defaultTimeoutSeconds))
+	}
+	for i := range groups {
+		sort.Slice(groups[i].Tools, func(left, right int) bool {
+			return groups[i].Tools[left].Name < groups[i].Tools[right].Name
+		})
+	}
+	return RuntimeToolsStatus{Count: len(definitions), Groups: groups}, nil
+}
+
+func runtimeToolInfoFromDefinition(definition tools.ToolDefinition, defaultTimeoutSeconds int) RuntimeToolInfo {
+	schema := definition.Schema
+	if schema == nil {
+		schema = map[string]any{"type": "object"}
+	}
+	effective := tools.EffectiveToolTimeout(definition, defaultTimeoutSeconds)
+	return RuntimeToolInfo{
+		Name:        definition.Name,
+		Description: definition.Description,
+		Schema:      schema,
+		Timeout: RuntimeToolTimeout{
+			Mode:    string(effective.Mode),
+			Seconds: effective.Seconds,
+		},
+	}
 }
 
 func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
@@ -380,14 +478,18 @@ func (s RuntimeStatusService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCon
 	connectedCount := 0
 	errorCount := 0
 	statuses := make([]RuntimeMCPServerStatus, 0, len(servers))
+	defaultTimeoutSeconds := durationSeconds(s.cfg.RuntimeLimits().ToolTimeout)
 	for _, server := range servers {
-		toolCount, connected := opts.MCPToolCounts[server.Name]
+		descriptors, connected := opts.MCPToolDescriptors[server.Name]
 		errText := opts.MCPErrors[server.Name]
 		status := "not_started"
-		if connected {
-			status = "connected"
-		} else if errText != "" {
+		projectedTools := runtimeMCPToolInfos(nil, defaultTimeoutSeconds)
+		if errText != "" {
 			status = "error"
+			connected = false
+		} else if connected {
+			status = "connected"
+			projectedTools = runtimeMCPToolInfos(descriptors, defaultTimeoutSeconds)
 		}
 		info := RuntimeMCPServerStatus{
 			Name:      server.Name,
@@ -396,7 +498,8 @@ func (s RuntimeStatusService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCon
 			Args:      append([]string(nil), server.Spec.Args...),
 			Status:    status,
 			Connected: connected,
-			ToolCount: toolCount,
+			ToolCount: len(projectedTools),
+			Tools:     projectedTools,
 			Error:     errText,
 		}
 		if info.Connected {
@@ -412,6 +515,20 @@ func (s RuntimeStatusService) mcpStatus(opts RuntimeStatusOptions, refs []mcpCon
 		Errors:     errorCount,
 		Servers:    statuses,
 	}, nil
+}
+
+func runtimeMCPToolInfos(descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds int) []RuntimeToolInfo {
+	infos := make([]RuntimeToolInfo, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		infos = append(infos, runtimeToolInfoFromDefinition(tools.ToolDefinition{
+			Name:        descriptor.Name,
+			Group:       tools.ToolGroupMCP,
+			Description: descriptor.Description,
+			Schema:      descriptor.InputSchema,
+		}, defaultTimeoutSeconds))
+	}
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+	return infos
 }
 
 func (s RuntimeStatusService) configuredMCPServers(refs []mcpConfigRef) ([]runtimeMCPServerConfig, error) {
