@@ -15,11 +15,11 @@ type ScheduledOccurrence struct {
 	ScheduleSummary string
 }
 
-func nextScheduledOccurrence(spec Spec, state ScheduleStateRecord, now time.Time) (ScheduledOccurrence, bool, error) {
+func nextScheduledOccurrence(spec scheduleRuntimeSpec, state ScheduleStateRecord, now time.Time) (ScheduledOccurrence, bool, error) {
 	now = normalizeNow(now)
 	switch {
-	case spec.Source.Once != nil:
-		at, err := parseOnceAt(spec.Source.Once.At)
+	case spec.Once != nil:
+		at, err := parseOnceAt(spec.Once.At)
 		if err != nil {
 			return ScheduledOccurrence{}, false, err
 		}
@@ -27,10 +27,10 @@ func nextScheduledOccurrence(spec Spec, state ScheduleStateRecord, now time.Time
 			return ScheduledOccurrence{}, false, nil
 		}
 		return occurrenceFor(spec, at), true, nil
-	case spec.Source.Daily != nil:
+	case spec.Daily != nil:
 		return nextDailyOccurrence(spec, now)
-	case spec.Source.Interval != nil:
-		every := time.Duration(spec.Source.Interval.EverySeconds) * time.Second
+	case spec.Interval != nil:
+		every := time.Duration(spec.Interval.EverySeconds) * time.Second
 		anchor := state.LastEmittedScheduledAt
 		if anchor.IsZero() {
 			anchor = state.LastEvaluatedAt
@@ -48,15 +48,15 @@ func nextScheduledOccurrence(spec Spec, state ScheduleStateRecord, now time.Time
 	}
 }
 
-func latestMissedScheduledOccurrence(spec Spec, state ScheduleStateRecord, now time.Time) (ScheduledOccurrence, bool, error) {
+func latestMissedScheduledOccurrence(spec scheduleRuntimeSpec, state ScheduleStateRecord, now time.Time) (ScheduledOccurrence, bool, error) {
 	now = normalizeNow(now)
 	if state.LastEvaluatedAt.IsZero() || !state.LastEvaluatedAt.Before(now) {
 		return ScheduledOccurrence{}, false, nil
 	}
 	last := state.LastEvaluatedAt
 	switch {
-	case spec.Source.Once != nil:
-		at, err := parseOnceAt(spec.Source.Once.At)
+	case spec.Once != nil:
+		at, err := parseOnceAt(spec.Once.At)
 		if err != nil {
 			return ScheduledOccurrence{}, false, err
 		}
@@ -64,10 +64,10 @@ func latestMissedScheduledOccurrence(spec Spec, state ScheduleStateRecord, now t
 			return occurrenceFor(spec, at), true, nil
 		}
 		return ScheduledOccurrence{}, false, nil
-	case spec.Source.Daily != nil:
+	case spec.Daily != nil:
 		return latestDailyOccurrence(spec, last, now)
-	case spec.Source.Interval != nil:
-		every := time.Duration(spec.Source.Interval.EverySeconds) * time.Second
+	case spec.Interval != nil:
+		every := time.Duration(spec.Interval.EverySeconds) * time.Second
 		anchor := state.LastEmittedScheduledAt
 		if anchor.IsZero() {
 			anchor = state.LastEvaluatedAt
@@ -87,8 +87,8 @@ func latestMissedScheduledOccurrence(spec Spec, state ScheduleStateRecord, now t
 	}
 }
 
-func catchUpAllows(spec Spec, occurrence ScheduledOccurrence, now time.Time) bool {
-	catchUp := spec.Source.CatchUp
+func catchUpAllows(spec scheduleRuntimeSpec, occurrence ScheduledOccurrence, now time.Time) bool {
+	catchUp := spec.CatchUp
 	if catchUp.Mode != ScheduleCatchUpLatest {
 		return false
 	}
@@ -99,19 +99,19 @@ func catchUpAllows(spec Spec, occurrence ScheduledOccurrence, now time.Time) boo
 	return lateFor <= time.Duration(catchUp.MaxLatenessMinutes)*time.Minute
 }
 
-func nextDailyOccurrence(spec Spec, now time.Time) (ScheduledOccurrence, bool, error) {
-	loc, err := time.LoadLocation(spec.Source.Timezone)
+func nextDailyOccurrence(spec scheduleRuntimeSpec, now time.Time) (ScheduledOccurrence, bool, error) {
+	loc, err := time.LoadLocation(spec.Timezone)
 	if err != nil {
 		return ScheduledOccurrence{}, false, err
 	}
-	clocks, err := sortedDailyClocks(spec.Source.Daily.Times)
+	clocks, err := sortedDailyClocks(spec.Daily.Times)
 	if err != nil {
 		return ScheduledOccurrence{}, false, err
 	}
 	start := now.In(loc)
 	for day := 0; day <= 366; day++ {
 		date := start.AddDate(0, 0, day)
-		if !dailyWeekdayAllowed(spec.Source.Daily, date.Weekday()) {
+		if !dailyWeekdayAllowed(spec.Daily, date.Weekday()) {
 			continue
 		}
 		for _, clock := range clocks {
@@ -124,12 +124,12 @@ func nextDailyOccurrence(spec Spec, now time.Time) (ScheduledOccurrence, bool, e
 	return ScheduledOccurrence{}, false, nil
 }
 
-func latestDailyOccurrence(spec Spec, last, now time.Time) (ScheduledOccurrence, bool, error) {
-	loc, err := time.LoadLocation(spec.Source.Timezone)
+func latestDailyOccurrence(spec scheduleRuntimeSpec, last, now time.Time) (ScheduledOccurrence, bool, error) {
+	loc, err := time.LoadLocation(spec.Timezone)
 	if err != nil {
 		return ScheduledOccurrence{}, false, err
 	}
-	clocks, err := sortedDailyClocks(spec.Source.Daily.Times)
+	clocks, err := sortedDailyClocks(spec.Daily.Times)
 	if err != nil {
 		return ScheduledOccurrence{}, false, err
 	}
@@ -137,7 +137,7 @@ func latestDailyOccurrence(spec Spec, last, now time.Time) (ScheduledOccurrence,
 	end := now.In(loc)
 	var latest time.Time
 	for date := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc); !date.After(end); date = date.AddDate(0, 0, 1) {
-		if !dailyWeekdayAllowed(spec.Source.Daily, date.Weekday()) {
+		if !dailyWeekdayAllowed(spec.Daily, date.Weekday()) {
 			continue
 		}
 		for _, clock := range clocks {
@@ -153,7 +153,7 @@ func latestDailyOccurrence(spec Spec, last, now time.Time) (ScheduledOccurrence,
 	return occurrenceFor(spec, latest), true, nil
 }
 
-func occurrenceFor(spec Spec, scheduledAt time.Time) ScheduledOccurrence {
+func occurrenceFor(spec scheduleRuntimeSpec, scheduledAt time.Time) ScheduledOccurrence {
 	scheduledAt = scheduledAt.UTC()
 	return ScheduledOccurrence{
 		ObservableID:    spec.ID,
@@ -171,18 +171,18 @@ func scheduleSourceEventID(observableID string, scheduledAt time.Time) string {
 	return scheduleSourceEventPrefix(observableID) + scheduledAt.UTC().Format(time.RFC3339Nano)
 }
 
-func scheduleSummary(spec Spec) string {
+func scheduleSummary(spec scheduleRuntimeSpec) string {
 	switch {
-	case spec.Source.Once != nil:
-		return "once " + strings.TrimSpace(spec.Source.Once.At)
-	case spec.Source.Daily != nil:
+	case spec.Once != nil:
+		return "once " + strings.TrimSpace(spec.Once.At)
+	case spec.Daily != nil:
 		weekdays := "every day"
-		if len(spec.Source.Daily.Weekdays) > 0 {
-			weekdays = strings.Join(spec.Source.Daily.Weekdays, ",")
+		if len(spec.Daily.Weekdays) > 0 {
+			weekdays = strings.Join(spec.Daily.Weekdays, ",")
 		}
-		return fmt.Sprintf("daily %s %s %s", strings.Join(spec.Source.Daily.Times, ","), weekdays, spec.Source.Timezone)
-	case spec.Source.Interval != nil:
-		return fmt.Sprintf("every %ds", spec.Source.Interval.EverySeconds)
+		return fmt.Sprintf("daily %s %s %s", strings.Join(spec.Daily.Times, ","), weekdays, spec.Timezone)
+	case spec.Interval != nil:
+		return fmt.Sprintf("every %ds", spec.Interval.EverySeconds)
 	default:
 		return ""
 	}

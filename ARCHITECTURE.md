@@ -1043,7 +1043,7 @@ Routes:
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
 | GET | `/api/observables` | list workspace Observables with runtime status |
-| POST | `/api/observables` | create and start an Observable |
+| POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |
 | POST | `/api/observables/<id>/start` | start a stopped or exited Observable |
 | POST | `/api/observables/<id>/stop` | stop a running Observable |
@@ -1054,6 +1054,29 @@ Routes:
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
 | GET | `/api/media?path=<path>` | image bytes with immutable caching for content-addressed artifacts and revalidation for mutable workdir paths |
 | GET | `/api/runtime` | app-assembled provider, grouped builtin/MCP tool catalog, shell, hooks, system prompt, and skills status translated to the web DTO |
+
+### 3.9 Observables
+
+`internal/observable` owns one shared Observation kernel and two source
+adapters. A Command Observable adapter manages a process and converts parsed,
+filtered, bounded output into Observations. A Schedule adapter owns timetable
+evaluation, catch-up, pause state, and pre-authored Observation payloads. Both
+adapters use the kernel for run transitions, durable Observation state,
+source-event idempotency, tracked delivery, events, and the shared
+list/start/stop/delete/history lifecycle.
+
+Persisted entries and `POST /api/observables` use a strict tagged union:
+`type: "command"` requires `command_config`, while `type: "schedule"` requires
+`schedule_config`. The loader reports old top-level command fields and the
+earlier nested `source` shape as per-entry config issues; it does not provide a
+legacy reader or migration. Valid sibling entries still start, but config
+edits remain blocked until all issues are fixed.
+
+The model-facing creation tools are source-specific: `observable_create`
+creates Command Observables and `schedule_create` creates Schedules. The
+remaining Observable tools and all Web lifecycle routes stay source-agnostic.
+The frontend mirrors the tagged Web DTO and does not duplicate source
+validation policy.
 
 ---
 

@@ -361,7 +361,7 @@ func compactSession(ctx context.Context, cfg config.Config, id, reason, instruct
 	if err != nil {
 		return runtime.CompactionResult{}, err
 	}
-	defer a.Close()
+	defer func() { _ = a.CloseAndWait() }()
 	return a.CompactWithInstructions(ctx, reason, false, instructions)
 }
 

@@ -46,11 +46,13 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 			},
 		},
 	}
-	spec := Spec{
-		ID:          "interval-delivery",
-		Observation: ObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
-	}
+	spec := mustScheduleSpec("interval-delivery", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 60},
+		Observation: ScheduleObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
+	})
 	run := &observableRun{id: spec.ID, runID: "run-1", spec: spec}
+	scheduleSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: scheduleSpec, kernel: mgr, store: store}
 	occurrence := ScheduledOccurrence{
 		ObservableID:  spec.ID,
 		ScheduledAt:   now,
@@ -62,7 +64,7 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 	}
 	done := make(chan emitResult, 1)
 	go func() {
-		record, _, err := mgr.emitScheduledOccurrence(context.Background(), run, occurrence, now)
+		record, _, err := source.emitOccurrence(context.Background(), run, occurrence, now)
 		done <- emitResult{record: record, err: err}
 	}()
 	var result emitResult
@@ -99,14 +101,10 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 	now := time.Now().UTC()
 	scheduledAt := now.Add(-time.Minute)
 	store := NewStore(t.TempDir(), StoreOptions{Now: func() time.Time { return now }})
-	spec := Spec{
-		ID: "interval-recovery",
-		Source: SourceSpec{
-			Type:     SourceTypeSchedule,
-			Interval: &IntervalSchedule{EverySeconds: 60},
-		},
-		Observation: ObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
-	}
+	spec := mustScheduleSpec("interval-recovery", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 60},
+		Observation: ScheduleObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
+	})
 	if err := store.RecordScheduleState(ScheduleStateRecord{
 		ObservableID:           spec.ID,
 		LastEvaluatedAt:        now,
@@ -141,7 +139,9 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 		},
 	}
 	run := &observableRun{id: spec.ID, runID: "run-2", spec: spec}
-	if err := mgr.evaluateScheduleStartup(context.Background(), run); err != nil {
+	scheduleSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: scheduleSpec, kernel: mgr, store: store}
+	if err := source.evaluateStartup(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -152,12 +152,19 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("recorded schedule observation was not recovered")
 	}
-	records, err := store.ListObservations(ObservationFilter{ObservableID: spec.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 1 || records[0].State != ObservationStateQueued {
-		t.Fatalf("recovered observations = %+v, want one queued record", records)
+	deadline := time.Now().Add(time.Second)
+	for {
+		records, err := store.ListObservations(ObservationFilter{ObservableID: spec.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(records) == 1 && records[0].State == ObservationStateQueued {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recovered observations = %+v, want one queued record", records)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -260,4 +267,12 @@ func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
 	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetSession != "sess-1" || !delivered.DeliveredAt.Equal(now) {
 		t.Fatalf("delivered observation = %+v", delivered)
 	}
+}
+
+func mustScheduleSpec(id string, config ScheduleSourceSpec) Spec {
+	spec, err := NewScheduleSpec(id, "", config)
+	if err != nil {
+		panic(err)
+	}
+	return spec
 }

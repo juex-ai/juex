@@ -52,11 +52,25 @@ func TestRuntimeStatusServiceProjectsBuiltinToolCatalog(t *testing.T) {
 		if !sort.StringsAreSorted(names) {
 			t.Fatalf("group %q tools are not sorted: %v", group.Group, names)
 		}
+		if wantGroup == tools.ToolGroupObservable {
+			if len(names) != 7 || !containsString(names, "schedule_create") {
+				t.Fatalf("observable tools = %v, want seven including schedule_create", names)
+			}
+		}
 		count += len(group.Tools)
 	}
-	if status.Tools.Count != count || count != 27 {
-		t.Fatalf("tool count = %d, grouped=%d, want 27", status.Tools.Count, count)
+	if status.Tools.Count != count || count != 28 {
+		t.Fatalf("tool count = %d, grouped=%d, want 28", status.Tools.Count, count)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRuntimeStatusServiceCatalogMatchesRealAppRegistry(t *testing.T) {

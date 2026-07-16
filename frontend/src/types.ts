@@ -740,24 +740,19 @@ export interface ObservableObservationsResponse {
   observations: ObservationRecord[];
 }
 
-export interface ObservableCreateRequest {
-  id: string;
-  name?: string;
+export interface ObservableCommandConfig {
   command: string;
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
   streams?: string[];
-  defaults?: {
-    kind?: string;
-    severity?: string;
-  };
   parser?: {
     type: "text" | "jsonl" | string;
     content_field?: string;
     kind_field?: string;
     severity_field?: string;
     time_field?: string;
+    attachments_field?: string;
   };
   filters?: Array<{
     contains?: string;
@@ -765,11 +760,48 @@ export interface ObservableCreateRequest {
     kind?: string;
     severity?: string;
   }>;
-  batch: ObservableBatchSpec;
+  batch?: ObservableBatchSpec;
   on_exit?: {
     notify?: "never" | "always" | "nonzero" | string;
   };
+  observation?: {
+    kind?: string;
+    severity?: string;
+  };
 }
+
+export interface ObservableScheduleConfig {
+  timezone?: string;
+  once?: { at: string };
+  daily?: { times: string[]; weekdays?: string[] };
+  interval?: { every_seconds: number };
+  catch_up?: {
+    mode?: "none" | "latest" | string;
+    max_lateness_minutes?: number;
+  };
+  observation: {
+    kind?: string;
+    severity?: string;
+    content: string;
+    attachments?: EventAttachmentRef[];
+  };
+}
+
+export type ObservableCreateRequest =
+  | {
+      id?: string;
+      name?: string;
+      type: "command";
+      command_config: ObservableCommandConfig;
+      schedule_config?: never;
+    }
+  | {
+      id?: string;
+      name?: string;
+      type: "schedule";
+      schedule_config: ObservableScheduleConfig;
+      command_config?: never;
+    };
 
 export interface GoalStatusSnapshot {
   description?: string;

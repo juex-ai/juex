@@ -39,6 +39,120 @@ type stubProvider struct {
 	histories [][]llm.Message
 }
 
+func TestAppClosePausesCleanupWhenObservableCloseIsDeferred(t *testing.T) {
+	closeCalls := 0
+	laterCleanupCalls := 0
+	a := &App{cleanup: []func() error{
+		func() error {
+			closeCalls++
+			if closeCalls == 1 {
+				return &observable.CloseDeferredError{}
+			}
+			return nil
+		},
+		func() error {
+			laterCleanupCalls++
+			return nil
+		},
+	}}
+	var deferred *observable.CloseDeferredError
+	if err := a.Close(); !errors.As(err, &deferred) {
+		t.Fatalf("first Close error = %v, want CloseDeferredError", err)
+	}
+	if laterCleanupCalls != 0 {
+		t.Fatalf("later cleanup calls after deferred Close = %d, want 0", laterCleanupCalls)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("retry Close = %v", err)
+	}
+	if closeCalls != 2 || laterCleanupCalls != 1 {
+		t.Fatalf("cleanup calls = first:%d later:%d", closeCalls, laterCleanupCalls)
+	}
+}
+
+func TestAppCloseAndWaitResumesDeferredCleanup(t *testing.T) {
+	closeCalls := 0
+	laterCleanupCalls := 0
+	a := &App{cleanup: []func() error{
+		func() error {
+			closeCalls++
+			if closeCalls == 1 {
+				return &observable.CloseDeferredError{}
+			}
+			return nil
+		},
+		func() error {
+			laterCleanupCalls++
+			return nil
+		},
+	}}
+	if err := a.CloseAndWait(); err != nil {
+		t.Fatalf("CloseAndWait = %v", err)
+	}
+	if closeCalls != 2 || laterCleanupCalls != 1 {
+		t.Fatalf("cleanup calls = first:%d later:%d", closeCalls, laterCleanupCalls)
+	}
+}
+
+func TestAppConcurrentCloseReturnsDeferredWithoutBlockingCleanup(t *testing.T) {
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	a := &App{cleanup: []func() error{func() error {
+		close(cleanupStarted)
+		<-releaseCleanup
+		return nil
+	}}}
+	externalResult := make(chan error, 1)
+	go func() { externalResult <- a.CloseAndWait() }()
+	<-cleanupStarted
+	callbackResult := make(chan error, 1)
+	go func() { callbackResult <- a.Close() }()
+	select {
+	case err := <-callbackResult:
+		var deferred interface{ Wait() error }
+		if !errors.As(err, &deferred) {
+			t.Fatalf("concurrent Close error = %v, want waitable deferred error", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("concurrent Close blocked behind in-flight cleanup")
+	}
+	close(releaseCleanup)
+	select {
+	case err := <-externalResult:
+		if err != nil {
+			t.Fatalf("CloseAndWait = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("CloseAndWait did not finish after cleanup release")
+	}
+}
+
+func TestAppConcurrentCloseWaitReturnsActiveCleanupError(t *testing.T) {
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	wantErr := errors.New("cleanup failed")
+	a := &App{cleanup: []func() error{func() error {
+		close(cleanupStarted)
+		<-releaseCleanup
+		return wantErr
+	}}}
+	activeResult := make(chan error, 1)
+	go func() { activeResult <- a.Close() }()
+	<-cleanupStarted
+	err := a.Close()
+	var deferred interface{ Wait() error }
+	if !errors.As(err, &deferred) {
+		t.Fatalf("concurrent Close error = %v, want waitable deferred error", err)
+	}
+	close(releaseCleanup)
+	if err := <-activeResult; !errors.Is(err, wantErr) {
+		t.Fatalf("active Close error = %v, want %v", err, wantErr)
+	}
+	if err := deferred.Wait(); !errors.Is(err, wantErr) {
+		t.Fatalf("deferred Wait error = %v, want %v", err, wantErr)
+	}
+}
+
 type failingWriter struct {
 	calls int
 }
