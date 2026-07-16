@@ -92,6 +92,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 	resp, err := l.engine.requestProviderTurnLocked(ctx, l.turnID, l.prepared, request)
 	if err != nil {
 		if contextErr := cancellation.ContextError(ctx); contextErr != nil && errors.Is(err, context.Canceled) {
+			l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
 			return contextErr
 		}
 		if llm.IsContextOverflowError(err) && !l.retriedOverflow {
@@ -104,6 +105,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		if l.engine.continueAfterProviderFailure(ctx, l.turnID, iter, err) {
 			return nil
 		}
+		l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
 		return fmt.Errorf("llm: %w", err)
 	}
 	l.engine.consumePendingHookRuntimeContext(request.hookContextCount)

@@ -2824,6 +2824,41 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 	}
 }
 
+func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
+	release := make(chan struct{})
+	close(release)
+	prov := &queuedFailureProvider{
+		started:  make(chan struct{}, 1),
+		release:  release,
+		firstErr: errors.New("unauthorized API key"),
+		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered later"), StopReason: llm.StopEndTurn},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "one-shot"},
+		Stdout: "one-shot provider context",
+	}})
+
+	if _, err := eng.Turn(context.Background(), "failing turn"); err == nil {
+		t.Fatal("first turn error = nil, want provider failure")
+	}
+	if out, err := eng.Turn(context.Background(), "next turn"); err != nil || out != "recovered later" {
+		t.Fatalf("next turn out=%q err=%v", out, err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
+	}
+	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot provider context") {
+		t.Fatalf("failed provider request missing hook context:\n%s", got)
+	}
+	if got := messagesText(prov.histories[1]); strings.Contains(got, "one-shot provider context") {
+		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+	}
+	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("hook context remaining after terminal provider failure = %+v", remaining)
+	}
+}
+
 func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
 	prov := &mockProvider{
 		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}},
