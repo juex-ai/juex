@@ -143,10 +143,45 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 	if oneOf, ok := schedule.Schema["oneOf"].([]any); !ok || len(oneOf) != 3 {
 		t.Fatalf("schedule_create oneOf = %#v, want once/daily/interval alternatives", schedule.Schema["oneOf"])
 	} else {
-		dailyBranch := schemaMapFromValue(t, oneOf[1])
-		req, ok := dailyBranch["required"].([]any)
-		if !ok || len(req) != 2 || req[0] != "daily" || req[1] != "timezone" {
-			t.Fatalf("schedule daily branch required = %#v, want daily and timezone", req)
+		wantBranches := []struct {
+			required  []string
+			forbidden []string
+		}{
+			{required: []string{"once"}, forbidden: []string{"daily", "interval"}},
+			{required: []string{"daily", "timezone"}, forbidden: []string{"once", "interval"}},
+			{required: []string{"interval"}, forbidden: []string{"once", "daily"}},
+		}
+		for i, want := range wantBranches {
+			branch := schemaMapFromValue(t, oneOf[i])
+			if got := schemaRequiredStrings(t, branch); !reflect.DeepEqual(got, want.required) {
+				t.Fatalf("schedule branch %d required = %v, want %v", i, got, want.required)
+			}
+			if got := schemaForbiddenRequiredStrings(t, branch); !reflect.DeepEqual(got, want.forbidden) {
+				t.Fatalf("schedule branch %d forbidden recurrence fields = %v, want %v", i, got, want.forbidden)
+			}
+		}
+		cases := []struct {
+			name string
+			keys []string
+			want int
+		}{
+			{name: "once", keys: []string{"once"}, want: 1},
+			{name: "daily", keys: []string{"daily", "timezone"}, want: 1},
+			{name: "interval", keys: []string{"interval"}, want: 1},
+			{name: "once and daily without timezone", keys: []string{"once", "daily"}, want: 0},
+			{name: "once and daily", keys: []string{"once", "daily", "timezone"}, want: 0},
+			{name: "once and interval", keys: []string{"once", "interval"}, want: 0},
+			{name: "daily and interval without timezone", keys: []string{"daily", "interval"}, want: 0},
+			{name: "daily and interval", keys: []string{"daily", "interval", "timezone"}, want: 0},
+			{name: "all recurrences without timezone", keys: []string{"once", "daily", "interval"}, want: 0},
+			{name: "all recurrences", keys: []string{"once", "daily", "interval", "timezone"}, want: 0},
+		}
+		for _, tt := range cases {
+			t.Run("schedule schema "+tt.name, func(t *testing.T) {
+				if got := schemaMatchingBranches(t, oneOf, tt.keys); got != tt.want {
+					t.Fatalf("matching recurrence branches = %d, want %d for keys %v", got, tt.want, tt.keys)
+				}
+			})
 		}
 	}
 	for name, required := range map[string]string{
@@ -530,4 +565,64 @@ func schemaMapFromValue(t *testing.T, value any) map[string]any {
 		t.Fatalf("schema value = %#v, want map[string]any", value)
 	}
 	return schema
+}
+
+func schemaRequiredStrings(t *testing.T, schema map[string]any) []string {
+	t.Helper()
+	values, ok := schema["required"].([]any)
+	if !ok {
+		t.Fatalf("schema required = %#v, want []any", schema["required"])
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		text, ok := value.(string)
+		if !ok {
+			t.Fatalf("schema required value = %#v, want string", value)
+		}
+		result = append(result, text)
+	}
+	return result
+}
+
+func schemaForbiddenRequiredStrings(t *testing.T, schema map[string]any) []string {
+	t.Helper()
+	notSchema := schemaMapFromValue(t, schema["not"])
+	branches, ok := notSchema["anyOf"].([]any)
+	if !ok {
+		t.Fatalf("schema not.anyOf = %#v, want []any", notSchema["anyOf"])
+	}
+	result := make([]string, 0, len(branches))
+	for _, value := range branches {
+		required := schemaRequiredStrings(t, schemaMapFromValue(t, value))
+		if len(required) != 1 {
+			t.Fatalf("forbidden branch required = %v, want one field", required)
+		}
+		result = append(result, required[0])
+	}
+	return result
+}
+
+func schemaMatchingBranches(t *testing.T, branches []any, keys []string) int {
+	t.Helper()
+	present := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		present[key] = true
+	}
+	matches := 0
+	for _, value := range branches {
+		branch := schemaMapFromValue(t, value)
+		matched := true
+		for _, required := range schemaRequiredStrings(t, branch) {
+			matched = matched && present[required]
+		}
+		if forbidden, ok := branch["not"]; ok {
+			for _, field := range schemaForbiddenRequiredStrings(t, map[string]any{"not": forbidden}) {
+				matched = matched && !present[field]
+			}
+		}
+		if matched {
+			matches++
+		}
+	}
+	return matches
 }

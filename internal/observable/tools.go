@@ -310,10 +310,21 @@ func scheduleCreateSchema() map[string]any {
 			"observation": scheduleObservationSchema(),
 		},
 		"oneOf": []any{
-			map[string]any{"required": []any{"once"}},
-			map[string]any{"required": []any{"daily", "timezone"}},
-			map[string]any{"required": []any{"interval"}},
+			exclusiveScheduleBranch([]any{"once"}, "daily", "interval"),
+			exclusiveScheduleBranch([]any{"daily", "timezone"}, "once", "interval"),
+			exclusiveScheduleBranch([]any{"interval"}, "once", "daily"),
 		},
+	}
+}
+
+func exclusiveScheduleBranch(required []any, forbidden ...string) map[string]any {
+	forbiddenBranches := make([]any, 0, len(forbidden))
+	for _, field := range forbidden {
+		forbiddenBranches = append(forbiddenBranches, map[string]any{"required": []any{field}})
+	}
+	return map[string]any{
+		"required": required,
+		"not":      map[string]any{"anyOf": forbiddenBranches},
 	}
 }
 
