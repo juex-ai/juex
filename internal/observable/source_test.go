@@ -1,0 +1,520 @@
+package observable
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type fakeSourceRuntime struct {
+	startFn        func(context.Context, *observableRun) error
+	stopFn         func(context.Context, *observableRun, sourceStopReason) (sourceStopResult, error)
+	deleteFn       func(context.Context, string) error
+	statusCalls    atomic.Int32
+	deleteCalls    atomic.Int32
+	lastStopReason sourceStopReason
+}
+
+type fakeSourceKernel struct {
+	nowValue       time.Time
+	recorded       []ObservationRecord
+	recordedID     string
+	recordedPrefix string
+	recordedLimit  int
+	submitted      atomic.Int32
+}
+
+func (f *fakeSourceKernel) activateRun(*observableRun, ObservableStatus) error { return nil }
+func (f *fakeSourceKernel) finishRun(*observableRun, terminalOutcome) (bool, error) {
+	return true, nil
+}
+func (f *fakeSourceKernel) recordObservation(record ObservationRecord) (ObservationRecord, bool, error) {
+	return record, true, nil
+}
+func (f *fakeSourceKernel) recordedObservations(id, prefix string, limit int) ([]ObservationRecord, error) {
+	f.recordedID, f.recordedPrefix, f.recordedLimit = id, prefix, limit
+	return append([]ObservationRecord(nil), f.recorded...), nil
+}
+func (f *fakeSourceKernel) submitDelivery(context.Context, ObservationRecord) bool {
+	f.submitted.Add(1)
+	return true
+}
+func (f *fakeSourceKernel) now() time.Time { return f.nowValue }
+func (f *fakeSourceKernel) isClosed() bool { return false }
+
+type fakeScheduleStateStore struct {
+	state     ScheduleStateRecord
+	found     bool
+	recordErr error
+}
+
+func (f *fakeScheduleStateStore) ScheduleState(string) (ScheduleStateRecord, bool, error) {
+	return f.state, f.found, nil
+}
+func (f *fakeScheduleStateStore) RecordScheduleState(ScheduleStateRecord) error {
+	return f.recordErr
+}
+func (f *fakeScheduleStateStore) ClearScheduleState(string) error { return nil }
+func (f *fakeScheduleStateStore) DropRecordedScheduleObservations(string, string) error {
+	return nil
+}
+
+func (f *fakeSourceRuntime) start(ctx context.Context, run *observableRun) error {
+	if f.startFn != nil {
+		return f.startFn(ctx, run)
+	}
+	status := run.state
+	status.State = RunStateRunning
+	return run.source.(*fakeSourceRuntime).kernel(run).activateRun(run, status)
+}
+
+func (f *fakeSourceRuntime) kernel(run *observableRun) sourceKernel {
+	state, _ := run.sourceState.(sourceKernel)
+	return state
+}
+
+func (f *fakeSourceRuntime) stop(ctx context.Context, run *observableRun, reason sourceStopReason) (sourceStopResult, error) {
+	f.lastStopReason = reason
+	if f.stopFn != nil {
+		return f.stopFn(ctx, run, reason)
+	}
+	run.cancel()
+	run.closeQuiesced()
+	run.closeDone()
+	return sourceStopResult{Quiesced: true}, nil
+}
+
+func (f *fakeSourceRuntime) deleteState(ctx context.Context, id string) error {
+	f.deleteCalls.Add(1)
+	if f.deleteFn != nil {
+		return f.deleteFn(ctx, id)
+	}
+	return nil
+}
+
+func (f *fakeSourceRuntime) statusSnapshot(status ObservableStatus) ObservableStatus {
+	f.statusCalls.Add(1)
+	return status
+}
+
+func TestSourceRuntimeFactoryResolvesSealedSources(t *testing.T) {
+	store := NewStore(t.TempDir(), StoreOptions{})
+	kernel := &Manager{store: store}
+	command, err := newSourceRuntime(mustCommandSpecForSourceTest("command"), kernel, sourceDependencies{store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := command.(*commandSourceRuntime); !ok {
+		t.Fatalf("command source = %T", command)
+	}
+	schedule, err := newSourceRuntime(mustScheduleSpec("schedule", ScheduleSourceSpec{
+		Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"},
+	}), kernel, sourceDependencies{store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := schedule.(*scheduleSourceRuntime); !ok {
+		t.Fatalf("schedule source = %T", schedule)
+	}
+}
+
+func TestSourceManagerRoutesLifecycleThroughStoredAdapter(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("routed")
+	var mgr *Manager
+	source := &fakeSourceRuntime{}
+	mgr = newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		return mgr.activateRun(run, status)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Stop(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	_ = mgr.Status()
+	if source.lastStopReason != sourceStopUser {
+		t.Fatalf("stop reason = %q", source.lastStopReason)
+	}
+	if source.statusCalls.Load() < 3 {
+		t.Fatalf("status adapter calls = %d, want create/start/status projections", source.statusCalls.Load())
+	}
+}
+
+func TestSourceKernelRejectsNonCurrentRunActivationAndFinish(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("identity")
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	current := &observableRun{id: spec.ID, runID: "current", spec: spec, source: source, ctx: ctx, cancel: cancel, state: baseStatusFromSpec(spec, RunStateStarting)}
+	stale := &observableRun{id: spec.ID, runID: "stale", spec: spec, source: source, ctx: ctx, cancel: cancel, state: baseStatusFromSpec(spec, RunStateStarting)}
+	mgr.runs[spec.ID] = current
+	if err := mgr.activateRun(stale, stale.state); err == nil {
+		t.Fatal("stale run activation succeeded")
+	}
+	if finished, err := mgr.finishRun(stale, terminalOutcome{State: RunStateExited}); err != nil || finished {
+		t.Fatalf("stale finish = %v, %v", finished, err)
+	}
+	if mgr.runs[spec.ID] != current {
+		t.Fatal("stale lifecycle operation replaced current run")
+	}
+}
+
+func TestTerminalClaimPreventsWorkerOverwriteAndRollbackRetriesFinish(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("claim")
+	stopEntered := make(chan struct{})
+	releaseStop := make(chan struct{})
+	workerDone := make(chan struct{})
+	var mgr *Manager
+	source := &fakeSourceRuntime{}
+	mgr = newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		if err := mgr.activateRun(run, status); err != nil {
+			return err
+		}
+		go func() {
+			<-run.ctx.Done()
+			run.closeQuiesced()
+			_, _ = mgr.finishRun(run, terminalOutcome{State: RunStateExited})
+			run.closeDone()
+			close(workerDone)
+		}()
+		return nil
+	}
+	source.stopFn = func(_ context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+		close(stopEntered)
+		run.cancel()
+		<-run.quiesced
+		<-releaseStop
+		return sourceStopResult{}, errors.New("not quiesced")
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	stopErr := make(chan error, 1)
+	go func() { stopErr <- mgr.Stop(context.Background(), spec.ID) }()
+	<-stopEntered
+	select {
+	case <-workerDone:
+		t.Fatal("worker terminal overwrote an unresolved Stop claim")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseStop)
+	if err := <-stopErr; err == nil || err.Error() != "not quiesced" {
+		t.Fatalf("Stop error = %v", err)
+	}
+	select {
+	case <-workerDone:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not retry terminal finish after claim rollback")
+	}
+	status, _ := mgr.StatusByID(spec.ID)
+	if status.State != RunStateExited {
+		t.Fatalf("status = %s, want ordinary worker exit after rollback", status.State)
+	}
+}
+
+func TestStopQuiescedErrorCommitsOneErroredTerminal(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("pause-error")
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		return mgr.activateRun(run, status)
+	}
+	source.stopFn = func(_ context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+		run.cancel()
+		run.closeQuiesced()
+		run.closeDone()
+		return sourceStopResult{Quiesced: true}, errors.New("pause failed")
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Stop(context.Background(), spec.ID); err == nil || err.Error() != "pause failed" {
+		t.Fatalf("Stop error = %v", err)
+	}
+	status, _ := mgr.StatusByID(spec.ID)
+	if status.State != RunStateErrored || status.LastError != "pause failed" {
+		t.Fatalf("status = %+v", status)
+	}
+	runs, err := mgr.store.LatestRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs[spec.ID].State != RunStateErrored {
+		t.Fatalf("terminal run = %+v", runs[spec.ID])
+	}
+}
+
+func TestScheduleStopPauseFailureReportsQuiesced(t *testing.T) {
+	now := time.Now().UTC()
+	kernel := &fakeSourceKernel{nowValue: now}
+	store := &fakeScheduleStateStore{found: true, recordErr: errors.New("pause failed")}
+	spec := mustScheduleSpec("pause", ScheduleSourceSpec{Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"}})
+	runtimeSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
+	ctx, cancel := context.WithCancel(context.Background())
+	run := &observableRun{id: spec.ID, ctx: ctx, cancel: cancel, quiesced: make(chan struct{})}
+	run.closeQuiesced()
+	result, err := source.stop(context.Background(), run, sourceStopUser)
+	if err == nil || err.Error() != "pause failed" || !result.Quiesced {
+		t.Fatalf("stop = %+v, %v; want quiesced pause failure", result, err)
+	}
+}
+
+func TestScheduleRecoveryUsesBoundedKernelQuery(t *testing.T) {
+	now := time.Now().UTC()
+	kernel := &fakeSourceKernel{
+		nowValue: now,
+		recorded: []ObservationRecord{{ID: "recorded", ObservableID: "recover", SourceEventID: "schedule:recover:one", State: ObservationStateRecorded}},
+	}
+	store := &fakeScheduleStateStore{}
+	spec := mustScheduleSpec("recover", ScheduleSourceSpec{Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"}})
+	runtimeSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
+	if err := source.recoverRecorded(context.Background(), &observableRun{id: spec.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if kernel.recordedID != spec.ID || kernel.recordedPrefix != scheduleSourceEventPrefix(spec.ID) || kernel.recordedLimit != scheduleRecoveryLimit {
+		t.Fatalf("bounded query = id:%q prefix:%q limit:%d", kernel.recordedID, kernel.recordedPrefix, kernel.recordedLimit)
+	}
+	if kernel.submitted.Load() != 1 {
+		t.Fatalf("submissions = %d", kernel.submitted.Load())
+	}
+}
+
+func TestDeletePreservesConfigWhenPrivateCleanupFails(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("delete-cleanup")
+	source := &fakeSourceRuntime{deleteFn: func(context.Context, string) error { return errors.New("cleanup failed") }}
+	mgr := newSourceTestManager(t, spec, source)
+	if err := mgr.Delete(context.Background(), spec.ID); err == nil || err.Error() != "cleanup failed" {
+		t.Fatalf("Delete error = %v", err)
+	}
+	if _, ok := mgr.specs[spec.ID]; !ok {
+		t.Fatal("config removed after private cleanup failure")
+	}
+	loaded, err := LoadConfig(mgr.opts.ConfigPath)
+	if err != nil || len(loaded.Observables) != 1 {
+		t.Fatalf("persisted config = %+v, err=%v", loaded, err)
+	}
+}
+
+func TestDeletePreservesConfigWhenSaveFailsAfterCleanup(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("delete-save")
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	mgr.opts.ConfigPath = filepath.Join(t.TempDir(), "missing", "observables.json")
+	if err := os.WriteFile(filepath.Dir(mgr.opts.ConfigPath), []byte("not-a-directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Delete(context.Background(), spec.ID); err == nil {
+		t.Fatal("Delete error = nil, want SaveConfig failure")
+	}
+	if _, ok := mgr.specs[spec.ID]; !ok || source.deleteCalls.Load() != 1 {
+		t.Fatalf("spec retained=%v cleanup calls=%d", ok, source.deleteCalls.Load())
+	}
+}
+
+func TestDeleteBlocksNewRunUntilConfigRemovalCompletes(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("delete-reservation")
+	cleanupEntered := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	source := &fakeSourceRuntime{deleteFn: func(context.Context, string) error {
+		close(cleanupEntered)
+		<-releaseCleanup
+		return nil
+	}}
+	mgr := newSourceTestManager(t, spec, source)
+	deleteErr := make(chan error, 1)
+	go func() { deleteErr <- mgr.Delete(context.Background(), spec.ID) }()
+	<-cleanupEntered
+	if err := mgr.Start(context.Background(), spec.ID); err == nil || err.Error() != "observable: \"delete-reservation\" is being deleted" {
+		t.Fatalf("Start during Delete error = %v", err)
+	}
+	close(releaseCleanup)
+	if err := <-deleteErr; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloseKeepsAdmissionOpenUntilSourcesQuiesceAndDrainsDelivery(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("close")
+	deliveryStarted := make(chan struct{})
+	releaseDelivery := make(chan struct{})
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	mgr.opts.Deliver = func(context.Context, ObservationRecord) (DeliveryOutcome, error) {
+		close(deliveryStarted)
+		<-releaseDelivery
+		return DeliveryOutcome{State: ObservationStateDelivered}, nil
+	}
+	accepted := mgr.submitDelivery(context.Background(), ObservationRecord{ID: "pre-close", State: ObservationStateRecorded})
+	if !accepted {
+		t.Fatal("pre-close delivery rejected")
+	}
+	<-deliveryStarted
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- mgr.Close() }()
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before tracked delivery drained")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseDelivery)
+	if err := <-closeDone; err != nil {
+		t.Fatal(err)
+	}
+	if mgr.submitDelivery(context.Background(), ObservationRecord{}) {
+		t.Fatal("delivery admitted after Close")
+	}
+	if source.lastStopReason != "" {
+		t.Fatalf("stopped non-running source with reason %q", source.lastStopReason)
+	}
+}
+
+func TestCloseClaimsRunningSourceBeforeCancelAndAllowsFinalSubmission(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("close-running")
+	var mgr *Manager
+	source := &fakeSourceRuntime{}
+	mgr = newSourceTestManager(t, spec, source)
+	accepted := make(chan bool, 1)
+	delivered := make(chan struct{}, 1)
+	mgr.opts.Deliver = func(context.Context, ObservationRecord) (DeliveryOutcome, error) {
+		delivered <- struct{}{}
+		return DeliveryOutcome{State: ObservationStateDelivered}, nil
+	}
+	workerDone := make(chan struct{})
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		if err := mgr.activateRun(run, status); err != nil {
+			return err
+		}
+		go func() {
+			<-run.ctx.Done()
+			accepted <- mgr.submitDelivery(context.Background(), ObservationRecord{ID: "final", State: ObservationStateRecorded})
+			run.closeQuiesced()
+			_, _ = mgr.finishRun(run, terminalOutcome{State: RunStateExited})
+			run.closeDone()
+			close(workerDone)
+		}()
+		return nil
+	}
+	source.stopFn = func(ctx context.Context, run *observableRun, reason sourceStopReason) (sourceStopResult, error) {
+		if reason != sourceStopShutdown {
+			t.Fatalf("stop reason = %q", reason)
+		}
+		run.cancel()
+		if err := waitRunQuiesced(ctx, run); err != nil {
+			return sourceStopResult{}, err
+		}
+		return sourceStopResult{Quiesced: true}, nil
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !<-accepted {
+		t.Fatal("command final submission was rejected before source quiesced")
+	}
+	select {
+	case <-delivered:
+	default:
+		t.Fatal("Close returned before admitted final delivery executed")
+	}
+	select {
+	case <-workerDone:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not finish after shutdown claim resolved")
+	}
+	status, _ := mgr.StatusByID(spec.ID)
+	if status.State != RunStateRunning {
+		t.Fatalf("shutdown published a user terminal status: %+v", status)
+	}
+	runs, err := mgr.store.LatestRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs[spec.ID].State != RunStateRunning {
+		t.Fatalf("shutdown wrote terminal run: %+v", runs[spec.ID])
+	}
+}
+
+func TestRecordObservationSourceEventIsAtomic(t *testing.T) {
+	store := NewStore(t.TempDir(), StoreOptions{})
+	const callers = 32
+	var created atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, wasCreated, err := store.RecordObservationOnce(ObservationRecord{
+				ObservableID: "schedule", SourceEventID: "schedule:same", Kind: "tick", Severity: "info", Content: "same", State: ObservationStateRecorded,
+			})
+			if err != nil {
+				t.Errorf("RecordObservationOnce: %v", err)
+			}
+			if wasCreated {
+				created.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if created.Load() != 1 {
+		t.Fatalf("created = %d, want 1", created.Load())
+	}
+	records, err := store.ListObservations(ObservationFilter{ObservableID: "schedule"})
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records = %+v, err=%v", records, err)
+	}
+}
+
+func newSourceTestManager(t *testing.T, spec Spec, source sourceRuntime) *Manager {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "observables.json")
+	if err := SaveConfig(path, FileConfig{Observables: []Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore(filepath.Join(dir, "state"), StoreOptions{})
+	mgr := &Manager{
+		opts:       ManagerOptions{ConfigPath: path, StateDir: filepath.Join(dir, "state")},
+		cfg:        FileConfig{Observables: []Spec{spec}},
+		store:      store,
+		specs:      map[string]Spec{spec.ID: spec},
+		sources:    map[string]sourceRuntime{spec.ID: source},
+		deleting:   map[string]bool{},
+		runs:       map[string]*observableRun{},
+		lastStatus: map[string]ObservableStatus{spec.ID: source.statusSnapshot(baseStatusFromSpec(spec, RunStateStopped))},
+	}
+	return mgr
+}
+
+func mustCommandSpecForSourceTest(id string) Spec {
+	spec, err := NewCommandSpec(id, "", CommandSourceSpec{
+		Command: "test", Streams: []string{StreamStdout}, Batch: BatchSpec{IntervalSeconds: MinBatchIntervalSeconds, MaxChars: 100},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return spec
+}

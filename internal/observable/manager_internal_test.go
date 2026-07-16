@@ -51,6 +51,8 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 		Observation: ScheduleObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
 	})
 	run := &observableRun{id: spec.ID, runID: "run-1", spec: spec}
+	scheduleSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: scheduleSpec, kernel: mgr, store: store}
 	occurrence := ScheduledOccurrence{
 		ObservableID:  spec.ID,
 		ScheduledAt:   now,
@@ -62,7 +64,7 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 	}
 	done := make(chan emitResult, 1)
 	go func() {
-		record, _, err := mgr.emitScheduledOccurrence(context.Background(), run, occurrence, now)
+		record, _, err := source.emitOccurrence(context.Background(), run, occurrence, now)
 		done <- emitResult{record: record, err: err}
 	}()
 	var result emitResult
@@ -137,7 +139,9 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 		},
 	}
 	run := &observableRun{id: spec.ID, runID: "run-2", spec: spec}
-	if err := mgr.evaluateScheduleStartup(context.Background(), run); err != nil {
+	scheduleSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: scheduleSpec, kernel: mgr, store: store}
+	if err := source.evaluateStartup(context.Background(), run); err != nil {
 		t.Fatal(err)
 	}
 	select {

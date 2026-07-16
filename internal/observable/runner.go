@@ -20,18 +20,17 @@ type runnerOptions struct {
 	sandboxPolicy sandbox.Policy
 	sandboxRunner sandbox.Runner
 	store         *Store
-	deliver       DeliveryFunc
+	submit        func(context.Context, ObservationRecord) bool
 }
 
 type runner struct {
-	opts       runnerOptions
-	pipe       *Pipeline
-	batcher    *Batcher
-	cmd        *exec.Cmd
-	mu         sync.Mutex
-	wg         sync.WaitGroup
-	deliveryWG sync.WaitGroup
-	flushCh    chan struct{}
+	opts    runnerOptions
+	pipe    *Pipeline
+	batcher *Batcher
+	cmd     *exec.Cmd
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	flushCh chan struct{}
 }
 
 func newRunner(opts runnerOptions) *runner {
@@ -120,7 +119,6 @@ func (r *runner) wait() (*int, error) {
 		close(r.flushCh)
 	}
 	r.wg.Wait()
-	r.deliveryWG.Wait()
 	var exitCode *int
 	if r.cmd.ProcessState != nil {
 		code := r.cmd.ProcessState.ExitCode()
@@ -220,13 +218,8 @@ func (r *runner) drainStream(reader io.Reader) {
 
 func (r *runner) deliver(records []ObservationRecord) {
 	for _, record := range records {
-		if r.opts.deliver != nil {
-			record := record
-			r.deliveryWG.Add(1)
-			go func() {
-				defer r.deliveryWG.Done()
-				_, _ = r.opts.deliver(context.Background(), record)
-			}()
+		if r.opts.submit != nil {
+			r.opts.submit(context.Background(), record)
 		}
 	}
 }

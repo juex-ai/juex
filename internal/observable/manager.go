@@ -27,26 +27,37 @@ type ManagerOptions struct {
 }
 
 type Manager struct {
-	opts       ManagerOptions
-	cfg        FileConfig
-	issues     []ConfigIssue
-	store      *Store
-	specs      map[string]Spec
-	runs       map[string]*observableRun
-	lastStatus map[string]ObservableStatus
-	mu         sync.Mutex
-	closed     bool
+	opts           ManagerOptions
+	cfg            FileConfig
+	issues         []ConfigIssue
+	store          *Store
+	specs          map[string]Spec
+	sources        map[string]sourceRuntime
+	deleting       map[string]bool
+	runs           map[string]*observableRun
+	lastStatus     map[string]ObservableStatus
+	mu             sync.Mutex
+	closed         bool
+	closeCompleted bool
+	deliveryMu     sync.Mutex
+	deliveryWG     sync.WaitGroup
+	deliveryClosed bool
 }
 
 type observableRun struct {
-	id       string
-	runID    string
-	spec     Spec
-	ctx      context.Context
-	cancel   context.CancelFunc
-	state    ObservableStatus
-	done     chan struct{}
-	doneOnce sync.Once
+	id           string
+	runID        string
+	spec         Spec
+	source       sourceRuntime
+	sourceState  any
+	ctx          context.Context
+	cancel       context.CancelFunc
+	state        ObservableStatus
+	claim        *terminalClaim
+	quiesced     chan struct{}
+	quiescedOnce sync.Once
+	done         chan struct{}
+	doneOnce     sync.Once
 }
 
 type StatusSnapshot struct {
@@ -98,12 +109,19 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		issues:     issues,
 		store:      NewStore(opts.StateDir, StoreOptions{Now: opts.Now}),
 		specs:      map[string]Spec{},
+		sources:    map[string]sourceRuntime{},
+		deleting:   map[string]bool{},
 		runs:       map[string]*observableRun{},
 		lastStatus: map[string]ObservableStatus{},
 	}
 	for _, spec := range cfg.Observables {
+		source, sourceErr := newSourceRuntime(spec, m, sourceDependencies{opts: opts, store: m.store})
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
 		m.specs[spec.ID] = spec
-		m.lastStatus[spec.ID] = statusFromSpec(spec, "stopped")
+		m.sources[spec.ID] = source
+		m.lastStatus[spec.ID] = source.statusSnapshot(baseStatusFromSpec(spec, RunStateStopped))
 	}
 	for _, issue := range issues {
 		status := statusFromSpec(issue.Spec, RunStateErrored)
@@ -151,98 +169,54 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		cancel()
 		return nil
 	}
+	if m.deleting[id] {
+		m.mu.Unlock()
+		cancel()
+		return fmt.Errorf("observable: %q is being deleted", id)
+	}
 	spec, ok := m.specs[id]
 	if !ok {
 		m.mu.Unlock()
 		cancel()
 		return fmt.Errorf("observable: unknown id %q", id)
 	}
+	source := m.sources[id]
+	if source == nil {
+		m.mu.Unlock()
+		cancel()
+		return fmt.Errorf("observable: source runtime missing for %q", id)
+	}
 	run := &observableRun{
-		id:     id,
-		runID:  runID,
-		spec:   spec,
-		ctx:    runCtx,
-		cancel: cancel,
-		done:   make(chan struct{}),
-		state:  statusFromSpec(spec, RunStateStarting),
+		id:       id,
+		runID:    runID,
+		spec:     spec,
+		source:   source,
+		ctx:      runCtx,
+		cancel:   cancel,
+		quiesced: make(chan struct{}),
+		done:     make(chan struct{}),
+		state:    source.statusSnapshot(baseStatusFromSpec(spec, RunStateStarting)),
 	}
 	run.state.RunID = runID
-	run.state.StartedAt = time.Now().UTC()
+	run.state.StartedAt = m.now()
 	m.runs[id] = run
 	m.lastStatus[id] = run.state
 	m.mu.Unlock()
 	if err := m.recordRun(RunRecord{ObservableID: id, RunID: runID, State: RunStateStarting, StartedAt: run.state.StartedAt}); err != nil {
-		m.failReservedRun(run, err)
-		return err
-	}
-	switch spec.SourceType() {
-	case SourceTypeSchedule:
-		return m.startScheduleRun(ctx, run)
-	default:
-		return m.startCommandRun(ctx, runCtx, run)
-	}
-}
-
-func (m *Manager) startCommandRun(ctx context.Context, runCtx context.Context, run *observableRun) error {
-	commandSpec, _ := run.spec.commandRuntime()
-	r := newRunner(runnerOptions{
-		spec:          commandSpec,
-		runID:         run.runID,
-		workDir:       m.opts.WorkDir,
-		sandboxPolicy: m.opts.Sandbox,
-		sandboxRunner: m.opts.SandboxRunner,
-		store:         m.store,
-		deliver: func(ctx context.Context, record ObservationRecord) (DeliveryOutcome, error) {
-			return DeliveryOutcome{}, m.deliverObservation(ctx, record)
-		},
-	})
-	cmd, err := r.start(ctx, runCtx)
-	if err != nil {
-		run.cancel()
-		status := statusFromSpec(run.spec, RunStateErrored)
-		status.RunID = run.runID
-		status.StartedAt = run.state.StartedAt
-		status.ExitedAt = time.Now().UTC()
-		status.LastError = err.Error()
-		m.setStatus(run.id, status)
-		_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateErrored, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, Error: err.Error()})
-		m.mu.Lock()
-		delete(m.runs, run.id)
-		m.mu.Unlock()
-		m.emitObservable(EventObservableErrored, status)
+		run.closeQuiesced()
+		_, _ = m.finishRun(run, terminalOutcome{State: RunStateErrored, Err: err})
 		run.closeDone()
 		return err
 	}
-	run.state.State = RunStateRunning
-	run.state.PID = cmd.Process.Pid
-	m.setStatus(run.id, run.state)
-	if err := m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateRunning, PID: cmd.Process.Pid, StartedAt: run.state.StartedAt}); err != nil {
-		m.cleanupStartedRun(run, r, err)
-		return err
-	}
-	m.emitObservable(EventObservableStarted, run.state)
-	go m.waitRun(run, r)
-	return nil
-}
-
-func (m *Manager) startScheduleRun(ctx context.Context, run *observableRun) error {
-	run.state.State = RunStateRunning
-	m.setStatus(run.id, run.state)
-	if err := m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateRunning, StartedAt: run.state.StartedAt}); err != nil {
-		m.failReservedRun(run, err)
-		return err
-	}
-	if err := m.evaluateScheduleStartup(ctx, run); err != nil {
-		m.failReservedRun(run, err)
-		return err
-	}
-	m.emitObservable(EventObservableStarted, run.state)
-	go m.scheduleLoop(run)
-	return nil
+	return source.start(ctx, run)
 }
 
 func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, error) {
 	normalized, err := ValidateSpec(spec)
+	if err != nil {
+		return ObservableStatus{}, err
+	}
+	source, err := newSourceRuntime(normalized, m, sourceDependencies{opts: m.opts, store: m.store})
 	if err != nil {
 		return ObservableStatus{}, err
 	}
@@ -262,7 +236,8 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, erro
 	}
 	m.cfg = cfg
 	m.specs[normalized.ID] = normalized
-	status := statusFromSpec(normalized, RunStateStopped)
+	m.sources[normalized.ID] = source
+	status := source.statusSnapshot(baseStatusFromSpec(normalized, RunStateStopped))
 	m.lastStatus[normalized.ID] = status
 	m.mu.Unlock()
 	if err := m.Start(ctx, normalized.ID); err != nil {
@@ -272,38 +247,33 @@ func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, erro
 }
 
 func (m *Manager) Stop(ctx context.Context, id string) error {
-	_ = ctx
 	if m == nil {
 		return nil
 	}
-	m.mu.Lock()
-	run := m.runs[id]
-	status, ok := m.lastStatus[id]
-	m.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("observable: unknown id %q", id)
-	}
-	if run != nil {
-		run.cancel()
-	}
-	stoppedAt := m.now()
-	status.State = RunStateStopped
-	status.ExitedAt = stoppedAt
-	status.LastError = ""
-	m.setStatus(id, status)
-	m.mu.Lock()
-	delete(m.runs, id)
-	m.mu.Unlock()
-	if run != nil && run.spec.SourceType() == SourceTypeSchedule {
-		if err := m.recordPausedScheduleState(id, stoppedAt); err != nil {
-			return err
-		}
-	}
-	if err := m.recordRun(RunRecord{ObservableID: id, RunID: status.RunID, State: RunStateStopped, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt}); err != nil {
+	run, claim, err := m.claimTerminal(ctx, id)
+	if err != nil || run == nil {
 		return err
 	}
-	m.emitObservable(EventObservableStopped, status)
-	waitRunDone(run, 2*time.Second)
+	result, stopErr := run.source.stop(ctx, run, sourceStopUser)
+	if stopErr != nil && !result.Quiesced {
+		m.rollbackTerminal(run, claim)
+		return stopErr
+	}
+	if stopErr != nil {
+		commitErr := m.commitTerminal(run, claim, terminalOutcome{State: RunStateErrored, Err: stopErr}, true)
+		_ = waitRunDone(ctx, run)
+		if commitErr != nil {
+			return fmt.Errorf("%w; record terminal state: %v", stopErr, commitErr)
+		}
+		return stopErr
+	}
+	if err := m.commitTerminal(run, claim, terminalOutcome{State: RunStateStopped}, true); err != nil {
+		_ = waitRunDone(ctx, run)
+		return err
+	}
+	if err := waitRunDone(ctx, run); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -316,12 +286,52 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return err
 	}
-	if _, ok := m.specs[id]; !ok {
-		m.mu.Unlock()
-		return fmt.Errorf("observable: unknown id %q", id)
+	source := m.sources[id]
+	_, exists := m.specs[id]
+	if exists && source != nil {
+		if m.deleting[id] {
+			m.mu.Unlock()
+			return fmt.Errorf("observable: %q is already being deleted", id)
+		}
+		m.deleting[id] = true
 	}
 	m.mu.Unlock()
-	_ = m.Stop(ctx, id)
+	if !exists || source == nil {
+		return fmt.Errorf("observable: unknown id %q", id)
+	}
+	deleted := false
+	defer func() {
+		if deleted {
+			return
+		}
+		m.mu.Lock()
+		delete(m.deleting, id)
+		m.mu.Unlock()
+	}()
+	run, claim, err := m.claimTerminal(ctx, id)
+	if err != nil {
+		return err
+	}
+	if run != nil {
+		result, stopErr := source.stop(ctx, run, sourceStopDelete)
+		if stopErr != nil && !result.Quiesced {
+			m.rollbackTerminal(run, claim)
+			return stopErr
+		}
+		if stopErr != nil {
+			_ = m.commitTerminal(run, claim, terminalOutcome{State: RunStateErrored, Err: stopErr}, true)
+			return stopErr
+		}
+		if err := m.commitTerminal(run, claim, terminalOutcome{State: RunStateStopped}, true); err != nil {
+			return err
+		}
+		if err := waitRunDone(ctx, run); err != nil {
+			return err
+		}
+	}
+	if err := source.deleteState(ctx, id); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	if err := m.configEditableLocked(); err != nil {
 		m.mu.Unlock()
@@ -341,20 +351,13 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		m.mu.Unlock()
 		return err
 	}
-	if m.store != nil {
-		if err := m.store.ClearScheduleState(id); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-		if err := m.store.DropRecordedScheduleObservations(id, "observable deleted"); err != nil {
-			m.mu.Unlock()
-			return err
-		}
-	}
 	delete(m.specs, id)
+	delete(m.sources, id)
+	delete(m.deleting, id)
 	delete(m.runs, id)
 	delete(m.lastStatus, id)
 	m.cfg = cfg
+	deleted = true
 	m.mu.Unlock()
 	return nil
 }
@@ -367,7 +370,9 @@ func (m *Manager) Status() StatusSnapshot {
 	defer m.mu.Unlock()
 	out := StatusSnapshot{Observables: make([]ObservableStatus, 0, len(m.lastStatus))}
 	for id, status := range m.lastStatus {
-		status = m.statusWithScheduleSnapshot(status)
+		if source := m.sources[id]; source != nil {
+			status = source.statusSnapshot(status)
+		}
 		if latest, ok := m.latestObservationLocked(id); ok {
 			status.LastObservation = latest
 		}
@@ -458,26 +463,64 @@ func (m *Manager) Close() error {
 	if m == nil {
 		return nil
 	}
-	m.mu.Lock()
-	if m.closed {
+	var firstErr error
+	for {
+		m.mu.Lock()
+		if m.closeCompleted {
+			m.mu.Unlock()
+			return nil
+		}
+		m.closed = true
+		type claimedRun struct {
+			run   *observableRun
+			claim *terminalClaim
+		}
+		claimed := make([]claimedRun, 0, len(m.runs))
+		waiting := make([]<-chan struct{}, 0)
+		for _, run := range m.runs {
+			if run.claim != nil {
+				waiting = append(waiting, run.claim.resolved)
+				continue
+			}
+			claim := newTerminalClaim()
+			run.claim = claim
+			claimed = append(claimed, claimedRun{run: run, claim: claim})
+		}
 		m.mu.Unlock()
-		return nil
-	}
-	m.closed = true
-	runs := make([]*observableRun, 0, len(m.runs))
-	for _, run := range m.runs {
-		runs = append(runs, run)
-	}
-	m.mu.Unlock()
-	for _, run := range runs {
-		if run.cancel != nil {
-			run.cancel()
+		if len(claimed) == 0 && len(waiting) == 0 {
+			break
+		}
+		unquiesced := false
+		for _, item := range claimed {
+			result, stopErr := item.run.source.stop(context.Background(), item.run, sourceStopShutdown)
+			if stopErr != nil && !result.Quiesced {
+				m.rollbackTerminal(item.run, item.claim)
+				unquiesced = true
+				if firstErr == nil {
+					firstErr = stopErr
+				}
+				continue
+			}
+			m.commitShutdown(item.run, item.claim)
+			if stopErr != nil && firstErr == nil {
+				firstErr = stopErr
+			}
+		}
+		if unquiesced {
+			return firstErr
+		}
+		for _, resolved := range waiting {
+			<-resolved
 		}
 	}
-	for _, run := range runs {
-		waitRunDone(run, 2*time.Second)
-	}
-	return nil
+	m.deliveryMu.Lock()
+	m.deliveryClosed = true
+	m.deliveryMu.Unlock()
+	m.deliveryWG.Wait()
+	m.mu.Lock()
+	m.closeCompleted = true
+	m.mu.Unlock()
+	return firstErr
 }
 
 func (s StatusSnapshot) ByID(id string) (ObservableStatus, bool) {
@@ -496,310 +539,6 @@ func (m *Manager) configEditableLocked() error {
 	return fmt.Errorf("observable config has %d issue(s); fix invalid entries before editing", len(m.issues))
 }
 
-func (m *Manager) waitRun(run *observableRun, r *runner) {
-	defer run.closeDone()
-	exitCode, err := r.wait()
-	flushed, flushErr := r.flush("exit")
-	if flushErr != nil && err == nil {
-		err = flushErr
-	}
-	for _, record := range flushed {
-		_ = m.deliverObservation(context.Background(), record)
-	}
-	m.mu.Lock()
-	current := m.runs[run.id]
-	status := m.lastStatus[run.id]
-	if current != run || status.State == RunStateStopped {
-		m.mu.Unlock()
-		return
-	}
-	delete(m.runs, run.id)
-	status.State = RunStateExited
-	status.ExitedAt = time.Now().UTC()
-	status.ExitCode = exitCode
-	if err != nil {
-		status.LastError = err.Error()
-	}
-	m.lastStatus[run.id] = status
-	m.mu.Unlock()
-	_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateExited, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, ExitCode: exitCode, Error: status.LastError})
-	m.emitObservable(EventObservableExited, status)
-	m.notifyOnExit(run, status, err)
-}
-
-func (m *Manager) notifyOnExit(run *observableRun, status ObservableStatus, err error) {
-	if m == nil || run == nil {
-		return
-	}
-	commandSpec, ok := run.spec.commandRuntime()
-	if !ok {
-		return
-	}
-	notify := commandSpec.OnExit.Notify
-	if notify == "" || notify == "never" {
-		return
-	}
-	nonzero := err != nil
-	if status.ExitCode != nil && *status.ExitCode != 0 {
-		nonzero = true
-	}
-	if notify == "nonzero" && !nonzero {
-		return
-	}
-	severity := "info"
-	if nonzero {
-		severity = "error"
-	}
-	when := status.ExitedAt
-	if when.IsZero() {
-		when = time.Now().UTC()
-	}
-	content := fmt.Sprintf("observable %s exited", run.id)
-	if status.ExitCode != nil {
-		content = fmt.Sprintf("%s with code %d", content, *status.ExitCode)
-	}
-	if err != nil {
-		content = fmt.Sprintf("%s: %s", content, err.Error())
-	}
-	record, recordErr := m.RecordObservation(ObservationRecord{
-		ObservableID: run.id,
-		RunID:        run.runID,
-		Kind:         "observable_exit",
-		Severity:     severity,
-		WindowStart:  when,
-		WindowEnd:    when,
-		Content:      content,
-		State:        ObservationStateRecorded,
-	})
-	if recordErr == nil {
-		_ = m.deliverObservation(context.Background(), record)
-	}
-}
-
-func (m *Manager) evaluateScheduleStartup(ctx context.Context, run *observableRun) error {
-	if m == nil || run == nil || m.store == nil {
-		return nil
-	}
-	now := m.now()
-	state, ok, err := m.store.ScheduleState(run.id)
-	if err != nil {
-		return err
-	}
-	if ok && state.Paused {
-		return m.recordScheduleState(run.id, now, state.LastEmittedScheduledAt)
-	}
-	if ok {
-		if err := m.recoverRecordedScheduleObservations(ctx, run); err != nil {
-			return err
-		}
-	}
-	if !ok || state.LastEvaluatedAt.IsZero() {
-		return m.recordScheduleState(run.id, now, time.Time{})
-	}
-	scheduleSpec, _ := run.spec.scheduleRuntime()
-	latest, missed, err := latestMissedScheduledOccurrence(scheduleSpec, state, now)
-	if err != nil {
-		return err
-	}
-	if missed && catchUpAllows(scheduleSpec, latest, now) {
-		_, emitted, err := m.emitScheduledOccurrence(ctx, run, latest, now)
-		if err != nil {
-			return err
-		}
-		if emitted {
-			return nil
-		}
-		return m.recordScheduleState(run.id, now, latest.ScheduledAt)
-	}
-	if !missed && shouldPreserveIntervalStartupBaseline(scheduleSpec, state) {
-		return m.recordScheduleState(run.id, state.LastEvaluatedAt, state.LastEmittedScheduledAt)
-	}
-	return m.recordScheduleState(run.id, now, state.LastEmittedScheduledAt)
-}
-
-func shouldPreserveIntervalStartupBaseline(spec scheduleRuntimeSpec, state ScheduleStateRecord) bool {
-	return spec.Interval != nil && !state.LastEvaluatedAt.IsZero() && state.LastEmittedScheduledAt.IsZero()
-}
-
-func (m *Manager) recoverRecordedScheduleObservations(ctx context.Context, run *observableRun) error {
-	if m == nil || run == nil || m.store == nil || m.opts.Deliver == nil {
-		return nil
-	}
-	records, err := m.store.ListObservations(ObservationFilter{ObservableID: run.id})
-	if err != nil {
-		return err
-	}
-	deliverCtx := context.Background()
-	if ctx != nil {
-		deliverCtx = context.WithoutCancel(ctx)
-	}
-	prefix := scheduleSourceEventPrefix(run.id)
-	for i := len(records) - 1; i >= 0; i-- {
-		record := records[i]
-		if record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, prefix) {
-			continue
-		}
-		_ = m.deliverObservation(deliverCtx, record)
-	}
-	return nil
-}
-
-func (m *Manager) scheduleLoop(run *observableRun) {
-	defer run.closeDone()
-	scheduleSpec, _ := run.spec.scheduleRuntime()
-	for {
-		if m.isClosed() {
-			return
-		}
-		state, _, err := m.store.ScheduleState(run.id)
-		if err != nil {
-			m.finishScheduleRun(run, RunStateErrored, err)
-			return
-		}
-		next, ok, err := nextScheduledOccurrence(scheduleSpec, state, m.now())
-		if err != nil {
-			m.finishScheduleRun(run, RunStateErrored, err)
-			return
-		}
-		if !ok {
-			m.finishScheduleRun(run, RunStateExited, nil)
-			return
-		}
-		delay := time.Until(next.ScheduledAt)
-		if delay < 0 {
-			delay = 0
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-run.ctx.Done():
-			stopScheduleTimer(timer)
-			return
-		case <-timer.C:
-			if _, _, err := m.emitScheduledOccurrence(context.Background(), run, next, m.now()); err != nil {
-				m.finishScheduleRun(run, RunStateErrored, err)
-				return
-			}
-		}
-	}
-}
-
-func stopScheduleTimer(timer *time.Timer) {
-	if timer == nil || timer.Stop() {
-		return
-	}
-	select {
-	case <-timer.C:
-	default:
-	}
-}
-
-func (m *Manager) emitScheduledOccurrence(ctx context.Context, run *observableRun, occurrence ScheduledOccurrence, observedAt time.Time) (ObservationRecord, bool, error) {
-	if m == nil || run == nil || m.store == nil {
-		return ObservationRecord{}, false, nil
-	}
-	observedAt = normalizeNow(observedAt)
-	scheduleSpec, _ := run.spec.scheduleRuntime()
-	if existing, ok, err := m.store.FindObservationBySourceEventID(occurrence.SourceEventID); err != nil {
-		return ObservationRecord{}, false, err
-	} else if ok {
-		if err := m.recordScheduleState(run.id, observedAt, occurrence.ScheduledAt); err != nil {
-			return existing, false, err
-		}
-		return existing, false, nil
-	}
-	record, err := m.RecordObservation(ObservationRecord{
-		ObservableID:  run.id,
-		RunID:         run.runID,
-		SourceEventID: occurrence.SourceEventID,
-		Kind:          resolvedKind(scheduleSpec.Observation.Kind),
-		Severity:      resolvedSeverity(scheduleSpec.Observation.Severity),
-		WindowStart:   occurrence.ScheduledAt,
-		WindowEnd:     observedAt,
-		Content:       scheduleSpec.Observation.Content,
-		Attachments:   append([]eventmedia.AttachmentRef(nil), scheduleSpec.Observation.Attachments...),
-		State:         ObservationStateRecorded,
-	})
-	if err != nil {
-		return ObservationRecord{}, false, err
-	}
-	if err := m.recordScheduleState(run.id, observedAt, occurrence.ScheduledAt); err != nil {
-		return record, false, err
-	}
-	m.deliverScheduledObservation(ctx, record)
-	return record, true, nil
-}
-
-func (m *Manager) deliverScheduledObservation(ctx context.Context, record ObservationRecord) {
-	deliverCtx := context.Background()
-	if ctx != nil {
-		deliverCtx = context.WithoutCancel(ctx)
-	}
-	go func() {
-		_ = m.deliverObservation(deliverCtx, record)
-	}()
-}
-
-func (m *Manager) recordScheduleState(id string, evaluatedAt time.Time, emittedAt time.Time) error {
-	if m == nil || m.store == nil {
-		return nil
-	}
-	if evaluatedAt.IsZero() {
-		evaluatedAt = m.now()
-	}
-	return m.store.RecordScheduleState(ScheduleStateRecord{
-		ObservableID:           id,
-		LastEvaluatedAt:        evaluatedAt.UTC(),
-		LastEmittedScheduledAt: emittedAt.UTC(),
-		UpdatedAt:              m.now(),
-	})
-}
-
-func (m *Manager) recordPausedScheduleState(id string, pausedAt time.Time) error {
-	if m == nil || m.store == nil {
-		return nil
-	}
-	if pausedAt.IsZero() {
-		pausedAt = m.now()
-	}
-	var emittedAt time.Time
-	if state, ok, err := m.store.ScheduleState(id); err != nil {
-		return err
-	} else if ok {
-		emittedAt = state.LastEmittedScheduledAt
-	}
-	return m.store.RecordScheduleState(ScheduleStateRecord{
-		ObservableID:           id,
-		Paused:                 true,
-		LastEvaluatedAt:        pausedAt.UTC(),
-		LastEmittedScheduledAt: emittedAt.UTC(),
-		UpdatedAt:              m.now(),
-	})
-}
-
-func (m *Manager) finishScheduleRun(run *observableRun, state string, cause error) {
-	if m == nil || run == nil {
-		return
-	}
-	status := run.state
-	status.State = state
-	status.ExitedAt = m.now()
-	if cause != nil {
-		status.LastError = cause.Error()
-	}
-	m.mu.Lock()
-	if m.runs[run.id] == run {
-		delete(m.runs, run.id)
-		m.lastStatus[run.id] = status
-	}
-	m.mu.Unlock()
-	_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: state, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, Error: status.LastError})
-	if state == RunStateErrored {
-		m.emitObservable(EventObservableErrored, status)
-	} else {
-		m.emitObservable(EventObservableExited, status)
-	}
-}
-
 func (m *Manager) recordRun(record RunRecord) error {
 	if m == nil || m.store == nil {
 		return nil
@@ -807,13 +546,182 @@ func (m *Manager) recordRun(record RunRecord) error {
 	return m.store.AppendRun(record)
 }
 
-func (m *Manager) setStatus(id string, status ObservableStatus) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.lastStatus[id] = status
-	if run := m.runs[id]; run != nil {
-		run.state = status
+func (m *Manager) activateRun(run *observableRun, status ObservableStatus) error {
+	if m == nil || run == nil {
+		return fmt.Errorf("observable: invalid run activation")
 	}
+	m.mu.Lock()
+	if m.runs[run.id] != run || run.claim != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("observable: run %q is no longer activatable", run.runID)
+	}
+	if err := m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateRunning, PID: status.PID, StartedAt: status.StartedAt}); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	run.state = status
+	m.lastStatus[run.id] = status
+	m.mu.Unlock()
+	m.emitObservable(EventObservableStarted, status)
+	return nil
+}
+
+func (m *Manager) finishRun(run *observableRun, outcome terminalOutcome) (bool, error) {
+	if m == nil || run == nil {
+		return false, nil
+	}
+	for {
+		m.mu.Lock()
+		if m.runs[run.id] != run {
+			m.mu.Unlock()
+			return false, nil
+		}
+		if claim := run.claim; claim != nil {
+			resolved := claim.resolved
+			m.mu.Unlock()
+			<-resolved
+			continue
+		}
+		claim := newTerminalClaim()
+		run.claim = claim
+		m.mu.Unlock()
+		err := m.commitTerminal(run, claim, outcome, true)
+		return true, err
+	}
+}
+
+func (m *Manager) claimTerminal(ctx context.Context, id string) (*observableRun, *terminalClaim, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for {
+		m.mu.Lock()
+		if _, ok := m.lastStatus[id]; !ok {
+			m.mu.Unlock()
+			return nil, nil, fmt.Errorf("observable: unknown id %q", id)
+		}
+		run := m.runs[id]
+		if run == nil {
+			m.mu.Unlock()
+			return nil, nil, nil
+		}
+		if run.claim == nil {
+			claim := newTerminalClaim()
+			run.claim = claim
+			m.mu.Unlock()
+			return run, claim, nil
+		}
+		resolved := run.claim.resolved
+		m.mu.Unlock()
+		select {
+		case <-resolved:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+}
+
+func (m *Manager) rollbackTerminal(run *observableRun, claim *terminalClaim) {
+	m.mu.Lock()
+	if m.runs[run.id] == run && run.claim == claim {
+		run.claim = nil
+	}
+	m.mu.Unlock()
+	claim.resolve()
+}
+
+func (m *Manager) commitTerminal(run *observableRun, claim *terminalClaim, outcome terminalOutcome, emit bool) error {
+	status := run.state
+	status.State = outcome.State
+	status.ExitedAt = m.now()
+	status.ExitCode = outcome.ExitCode
+	status.LastError = ""
+	if outcome.Err != nil {
+		status.LastError = outcome.Err.Error()
+	}
+	m.mu.Lock()
+	if m.runs[run.id] != run || run.claim != claim {
+		m.mu.Unlock()
+		claim.resolve()
+		return nil
+	}
+	delete(m.runs, run.id)
+	m.lastStatus[run.id] = status
+	m.mu.Unlock()
+	err := m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: status.State, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, ExitCode: status.ExitCode, Error: status.LastError})
+	if emit {
+		switch status.State {
+		case RunStateStopped:
+			m.emitObservable(EventObservableStopped, status)
+		case RunStateErrored:
+			m.emitObservable(EventObservableErrored, status)
+		default:
+			m.emitObservable(EventObservableExited, status)
+		}
+	}
+	claim.resolve()
+	return err
+}
+
+func (m *Manager) commitShutdown(run *observableRun, claim *terminalClaim) {
+	m.mu.Lock()
+	if m.runs[run.id] == run && run.claim == claim {
+		delete(m.runs, run.id)
+	}
+	m.mu.Unlock()
+	claim.resolve()
+}
+
+func (m *Manager) recordObservation(record ObservationRecord) (ObservationRecord, bool, error) {
+	if m == nil || m.store == nil {
+		return ObservationRecord{}, false, nil
+	}
+	snapshot := snapshotAttachmentRefs(m.opts.WorkDir, record.Attachments, eventmedia.DefaultMaxEventBytes)
+	record.Attachments = snapshot.refs
+	record.AttachmentErrors = append(record.AttachmentErrors, snapshot.errors...)
+	if len(record.AttachmentErrors) > 0 {
+		record.AttachmentState = ObservationAttachmentStateError
+	}
+	return m.store.RecordObservationOnce(record)
+}
+
+func (m *Manager) recordedObservations(id, sourceEventPrefix string, limit int) ([]ObservationRecord, error) {
+	if m == nil || m.store == nil {
+		return nil, nil
+	}
+	records, err := m.store.ListObservations(ObservationFilter{ObservableID: id, Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ObservationRecord, 0, len(records))
+	for _, record := range records {
+		if record.State == ObservationStateRecorded && strings.HasPrefix(record.SourceEventID, sourceEventPrefix) {
+			out = append(out, record)
+		}
+	}
+	return out, nil
+}
+
+func (m *Manager) submitDelivery(ctx context.Context, record ObservationRecord) bool {
+	if m == nil {
+		return false
+	}
+	m.deliveryMu.Lock()
+	if m.deliveryClosed {
+		m.deliveryMu.Unlock()
+		return false
+	}
+	m.deliveryWG.Add(1)
+	m.deliveryMu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deliveryCtx := context.WithoutCancel(ctx)
+	go func() {
+		defer m.deliveryWG.Done()
+		_ = m.deliverObservation(deliveryCtx, record)
+	}()
+	return true
 }
 
 func (m *Manager) latestObservationLocked(id string) (ObservationRecord, bool) {
@@ -845,9 +753,6 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 		return nil
 	}
 	m.emitObservation(EventObservationRecorded, current, "")
-	if m.isClosed() {
-		return nil
-	}
 	if m.opts.Deliver != nil {
 		outcome, err := m.opts.Deliver(ctx, current)
 		if err != nil {
@@ -941,64 +846,6 @@ func observationEventType(state string) string {
 	}
 }
 
-func statusFromSpec(spec Spec, state string) ObservableStatus {
-	status := ObservableStatus{
-		ID:         spec.ID,
-		Name:       spec.Name,
-		SourceType: spec.SourceType(),
-		State:      state,
-	}
-	if commandSpec, ok := spec.commandRuntime(); ok {
-		status.Command = commandSpec.Command
-		status.Args = append([]string(nil), commandSpec.Args...)
-		status.Streams = append([]string(nil), commandSpec.Streams...)
-		status.Batch = commandSpec.Batch
-	}
-	if scheduleSpec, ok := spec.scheduleRuntime(); ok {
-		status.Schedule = &ScheduleStatus{
-			Summary:     scheduleSummary(scheduleSpec),
-			Timezone:    scheduleSpec.Timezone,
-			CatchUpMode: scheduleSpec.CatchUp.Mode,
-		}
-	}
-	return status
-}
-
-func (m *Manager) statusWithScheduleSnapshot(status ObservableStatus) ObservableStatus {
-	if status.SourceType != SourceTypeSchedule || m == nil || m.store == nil {
-		return status
-	}
-	spec, ok := m.specs[status.ID]
-	if !ok || spec.SourceType() != SourceTypeSchedule {
-		return status
-	}
-	scheduleSpec, _ := spec.scheduleRuntime()
-	schedule := &ScheduleStatus{
-		Summary:     scheduleSummary(scheduleSpec),
-		Timezone:    scheduleSpec.Timezone,
-		CatchUpMode: scheduleSpec.CatchUp.Mode,
-	}
-	if state, ok, err := m.store.ScheduleState(status.ID); err == nil && ok {
-		if !state.LastEvaluatedAt.IsZero() {
-			value := state.LastEvaluatedAt
-			schedule.LastEvaluatedAt = &value
-		}
-		if !state.LastEmittedScheduledAt.IsZero() {
-			value := state.LastEmittedScheduledAt
-			schedule.LastEmittedScheduledAt = &value
-		}
-		if next, ok, err := nextScheduledOccurrence(scheduleSpec, state, m.now()); err == nil && ok {
-			value := next.ScheduledAt
-			schedule.NextOccurrence = &value
-		}
-	} else if next, ok, err := nextScheduledOccurrence(scheduleSpec, ScheduleStateRecord{}, m.now()); err == nil && ok {
-		value := next.ScheduledAt
-		schedule.NextOccurrence = &value
-	}
-	status.Schedule = schedule
-	return status
-}
-
 func (m *Manager) now() time.Time {
 	if m != nil && m.opts.Now != nil {
 		return m.opts.Now().UTC()
@@ -1017,75 +864,17 @@ func (r *observableRun) closeDone() {
 	r.doneOnce.Do(func() { close(r.done) })
 }
 
-func waitRunDone(run *observableRun, timeout time.Duration) {
+func waitRunDone(ctx context.Context, run *observableRun) error {
 	if run == nil || run.done == nil {
-		return
+		return nil
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	select {
 	case <-run.done:
-	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-}
-
-func (m *Manager) failReservedRun(run *observableRun, err error) {
-	if run == nil {
-		return
-	}
-	if run.cancel != nil {
-		run.cancel()
-	}
-	status := run.state
-	status.State = RunStateErrored
-	status.ExitedAt = time.Now().UTC()
-	if err != nil {
-		status.LastError = err.Error()
-	}
-	m.mu.Lock()
-	if m.runs[run.id] == run {
-		delete(m.runs, run.id)
-		m.lastStatus[run.id] = status
-	}
-	m.mu.Unlock()
-	_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateErrored, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, Error: status.LastError})
-	m.emitObservable(EventObservableErrored, status)
-	run.closeDone()
-}
-
-func (m *Manager) cleanupStartedRun(run *observableRun, r *runner, cause error) {
-	if run == nil {
-		return
-	}
-	if run.cancel != nil {
-		run.cancel()
-	}
-	exitCode, waitErr := r.wait()
-	flushed, flushErr := r.flush("start_failed")
-	for _, record := range flushed {
-		_ = m.deliverObservation(context.Background(), record)
-	}
-	status := run.state
-	status.State = RunStateErrored
-	status.ExitedAt = time.Now().UTC()
-	status.ExitCode = exitCode
-	status.LastError = firstErrorText(cause, waitErr, flushErr)
-	m.mu.Lock()
-	if m.runs[run.id] == run {
-		delete(m.runs, run.id)
-		m.lastStatus[run.id] = status
-	}
-	m.mu.Unlock()
-	_ = m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: RunStateErrored, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, ExitCode: exitCode, Error: status.LastError})
-	m.emitObservable(EventObservableErrored, status)
-	run.closeDone()
-}
-
-func firstErrorText(errs ...error) string {
-	for _, err := range errs {
-		if err != nil {
-			return err.Error()
-		}
-	}
-	return ""
 }
