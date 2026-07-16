@@ -168,6 +168,42 @@ func TestEffectiveToolTimeout(t *testing.T) {
 	}
 }
 
+func TestToolDefinitionNormalizedCopiesAndNormalizesSchema(t *testing.T) {
+	definition := ToolDefinition{
+		Name: "nullable",
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": nil,
+			"properties": map[string]any{
+				"query": nil,
+				"items": map[string]any{
+					"type":  "array",
+					"items": nil,
+				},
+			},
+		},
+	}
+
+	normalized := definition.Normalized()
+	want := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{},
+			"items": map[string]any{
+				"type":  "array",
+				"items": map[string]any{},
+			},
+		},
+	}
+	if !reflect.DeepEqual(normalized.Schema, want) {
+		t.Fatalf("normalized schema = %#v, want %#v", normalized.Schema, want)
+	}
+	properties := definition.Schema["properties"].(map[string]any)
+	if properties["query"] != nil || definition.Schema["additionalProperties"] != nil {
+		t.Fatalf("normalization mutated source definition: %#v", definition.Schema)
+	}
+}
+
 func TestRegistry_RegisterDuplicate(t *testing.T) {
 	r := NewRegistry()
 	tool := Tool{Name: "x", Handler: func(ctx context.Context, in map[string]any) (string, error) { return "", nil }}

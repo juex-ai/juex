@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -120,6 +121,48 @@ func TestRuntimeToolsStatusRejectsInvalidBuiltinGroups(t *testing.T) {
 				t.Fatalf("group %q unexpectedly accepted", group)
 			}
 		})
+	}
+}
+
+func TestRuntimeMCPToolSchemaMatchesNormalizedRegistryDefinition(t *testing.T) {
+	descriptor := mcp.ToolDescriptor{
+		Name:        "nullable",
+		Description: "Contains nullable schema fragments",
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": nil,
+			"properties": map[string]any{
+				"query": nil,
+				"items": map[string]any{
+					"type":  "array",
+					"items": nil,
+				},
+			},
+		},
+	}
+	definition := tools.ToolDefinition{
+		Name:        descriptor.Name,
+		Group:       tools.ToolGroupMCP,
+		Description: descriptor.Description,
+		Schema:      descriptor.InputSchema,
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(definition.Bind(func(context.Context, map[string]any) (string, error) {
+		return "", nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	registered, ok := registry.Get(descriptor.Name)
+	if !ok {
+		t.Fatal("normalized MCP tool was not registered")
+	}
+
+	projected := runtimeMCPToolInfos([]mcp.ToolDescriptor{descriptor}, 0)
+	if len(projected) != 1 {
+		t.Fatalf("projected tools = %#v", projected)
+	}
+	if !reflect.DeepEqual(projected[0].Schema, registered.Schema) {
+		t.Fatalf("catalog schema = %#v, registered schema = %#v", projected[0].Schema, registered.Schema)
 	}
 }
 

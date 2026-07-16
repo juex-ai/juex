@@ -262,15 +262,12 @@ func runtimeToolsStatusFromDefinitions(definitions []tools.ToolDefinition, defau
 }
 
 func runtimeToolInfoFromDefinition(definition tools.ToolDefinition, defaultTimeoutSeconds int) RuntimeToolInfo {
-	schema := definition.Schema
-	if schema == nil {
-		schema = map[string]any{"type": "object"}
-	}
+	definition = definition.Normalized()
 	effective := tools.EffectiveToolTimeout(definition, defaultTimeoutSeconds)
 	return RuntimeToolInfo{
 		Name:        definition.Name,
 		Description: definition.Description,
-		Schema:      schema,
+		Schema:      definition.Schema,
 		Timeout: RuntimeToolTimeout{
 			Mode:    string(effective.Mode),
 			Seconds: effective.Seconds,

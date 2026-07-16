@@ -74,6 +74,13 @@ type EffectiveTimeout struct {
 	Seconds int
 }
 
+// Normalized returns a definition copy with the registry's canonical input
+// schema normalization applied.
+func (d ToolDefinition) Normalized() ToolDefinition {
+	d.Schema = normalizeInputSchema(d.Schema)
+	return d
+}
+
 type Tool struct {
 	Name           string
 	Group          ToolGroup
@@ -176,7 +183,7 @@ func (r *Registry) Register(t Tool) error {
 	if t.Handler == nil && t.ResultHandler == nil {
 		return fmt.Errorf("tools: %s: nil handler", t.Name)
 	}
-	t.Schema = normalizeInputSchema(t.Schema)
+	t.Schema = t.Definition().Normalized().Schema
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.tools[t.Name]; ok {
@@ -228,10 +235,11 @@ func (r *Registry) Specs() []llm.ToolSpec {
 	tools := r.List()
 	out := make([]llm.ToolSpec, 0, len(tools))
 	for _, t := range tools {
+		definition := t.Definition().Normalized()
 		out = append(out, llm.ToolSpec{
-			Name:        t.Name,
-			Description: t.Description,
-			Schema:      normalizeInputSchema(t.Schema),
+			Name:        definition.Name,
+			Description: definition.Description,
+			Schema:      definition.Schema,
 		})
 	}
 	return out

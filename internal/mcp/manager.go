@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
 	"sync"
 
@@ -134,21 +135,48 @@ func cloneJSONMap(value map[string]any) map[string]any {
 	if value == nil {
 		return nil
 	}
-	cloned := make(map[string]any, len(value))
-	for key, item := range value {
-		cloned[key] = cloneJSONValue(item)
-	}
-	return cloned
+	return cloneJSONValue(value).(map[string]any)
 }
 
 func cloneJSONValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return cloneJSONMap(typed)
-	case []any:
-		cloned := make([]any, len(typed))
-		for i, item := range typed {
-			cloned[i] = cloneJSONValue(item)
+	if value == nil {
+		return nil
+	}
+	return cloneJSONReflectValue(reflect.ValueOf(value)).Interface()
+}
+
+func cloneJSONReflectValue(value reflect.Value) reflect.Value {
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(cloneJSONReflectValue(value.Elem()))
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			cloned.SetMapIndex(iter.Key(), cloneJSONReflectValue(iter.Value()))
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneJSONReflectValue(value.Index(i)))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneJSONReflectValue(value.Index(i)))
 		}
 		return cloned
 	default:

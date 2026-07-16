@@ -87,6 +87,40 @@ body`)
 	}
 }
 
+func TestRuntimeStatusResponseSerializesEmptyCatalogCollectionsAsArrays(t *testing.T) {
+	response := runtimeStatusResponseFromApp(app.RuntimeStatus{
+		Tools: app.RuntimeToolsStatus{},
+		MCP: app.RuntimeMCPStatus{Servers: []app.RuntimeMCPServerStatus{{
+			Name: "failed",
+		}}},
+	})
+	recorder := httptest.NewRecorder()
+	writeJSON(recorder, http.StatusOK, response)
+
+	var got struct {
+		Tools struct {
+			Groups json.RawMessage `json:"groups"`
+		} `json:"tools"`
+		MCP struct {
+			Servers []struct {
+				Tools json.RawMessage `json:"tools"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Tools.Groups) != "[]" {
+		t.Fatalf("empty groups JSON = %s, body=%s", got.Tools.Groups, recorder.Body.Bytes())
+	}
+	if len(got.MCP.Servers) != 1 {
+		t.Fatalf("MCP servers JSON = %+v, body=%s", got.MCP.Servers, recorder.Body.Bytes())
+	}
+	if string(got.MCP.Servers[0].Tools) != "[]" {
+		t.Fatalf("empty MCP tools JSON = %s, body=%s", got.MCP.Servers[0].Tools, recorder.Body.Bytes())
+	}
+}
+
 func TestRuntimeStatusOmitsActiveSessionState(t *testing.T) {
 	srv := newTestServer(t)
 	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)

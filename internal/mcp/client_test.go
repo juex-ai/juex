@@ -1051,6 +1051,41 @@ func TestManagerToolDescriptorsReturnsEmptyForNilOrClosedManager(t *testing.T) {
 	}
 }
 
+func TestManagerToolDescriptorsDeepClonesTypedJSONContainers(t *testing.T) {
+	mgr := &Manager{tools: map[string][]ToolDescriptor{
+		"typed": {{
+			Name: "typed",
+			InputSchema: map[string]any{
+				"required": []string{"name"},
+				"labels":   map[string]string{"tier": "prod"},
+				"variants": []map[string]any{{"type": "string"}},
+				"tuple":    [1]map[string]any{{"type": "number"}},
+			},
+		}},
+	}}
+
+	snapshot := mgr.ToolDescriptors()["typed"][0].InputSchema
+	snapshot["required"].([]string)[0] = "mutated"
+	snapshot["labels"].(map[string]string)["tier"] = "dev"
+	snapshot["variants"].([]map[string]any)[0]["type"] = "boolean"
+	tuple := snapshot["tuple"].([1]map[string]any)
+	tuple[0]["type"] = "integer"
+
+	fresh := mgr.ToolDescriptors()["typed"][0].InputSchema
+	if got := fresh["required"].([]string)[0]; got != "name" {
+		t.Fatalf("typed slice mutation leaked into manager cache: %q", got)
+	}
+	if got := fresh["labels"].(map[string]string)["tier"]; got != "prod" {
+		t.Fatalf("typed map mutation leaked into manager cache: %q", got)
+	}
+	if got := fresh["variants"].([]map[string]any)[0]["type"]; got != "string" {
+		t.Fatalf("typed slice-of-map mutation leaked into manager cache: %v", got)
+	}
+	if got := fresh["tuple"].([1]map[string]any)[0]["type"]; got != "number" {
+		t.Fatalf("typed array mutation leaked into manager cache: %v", got)
+	}
+}
+
 func TestManagerRegisterTools_StrictNoArgToolRejectsPlaceholder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
