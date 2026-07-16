@@ -3189,6 +3189,16 @@ func TestIsContextOverflowError(t *testing.T) {
 }
 
 func TestIsRetryableProviderError(t *testing.T) {
+	openAIServerErr := &openaisdk.Error{
+		StatusCode: http.StatusInternalServerError,
+		Request:    httptest.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", nil),
+		Response:   &http.Response{StatusCode: http.StatusInternalServerError},
+	}
+	anthropicPermissionErr := &anthropic.Error{
+		StatusCode: http.StatusForbidden,
+		Request:    httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages", nil),
+		Response:   &http.Response{StatusCode: http.StatusForbidden},
+	}
 	tests := []struct {
 		name string
 		err  error
@@ -3202,16 +3212,18 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{name: "conflict status", err: errors.New("provider request failed: status code 409"), want: true},
 		{name: "rate limit status", err: errors.New("provider request failed: HTTP 429"), want: true},
 		{name: "server status", err: errors.New("codex websocket error: status 503: unavailable"), want: true},
-		{name: "typed openai server status", err: &openaisdk.Error{StatusCode: 500}, want: true},
+		{name: "typed openai server status", err: openAIServerErr, want: true},
 		{name: "bad request status", err: errors.New("codex websocket error: status 400: bad request"), want: false},
 		{name: "payment status", err: errors.New("provider request failed: status 402"), want: false},
 		{name: "not found status", err: errors.New("provider request failed: HTTP 404"), want: false},
 		{name: "auth status", err: errors.New("provider request failed: status 401"), want: false},
-		{name: "typed anthropic permission status", err: &anthropic.Error{StatusCode: 403}, want: false},
+		{name: "typed anthropic permission status", err: anthropicPermissionErr, want: false},
 		{name: "context overflow", err: errors.New("context_length_exceeded"), want: false},
 		{name: "semantic error", err: errors.New("invalid request: unsupported tool schema"), want: false},
 		{name: "streamed semantic error", err: errors.New("openai responses stream error: invalid_request_error"), want: false},
 		{name: "retry suppressed after delta", err: errors.New("codex SSE read failed after emitting output; retry suppressed: stream error: INTERNAL_ERROR"), want: false},
+		{name: "retry suppressed before status text", err: errors.New("codex SSE read failed after emitting output; retry suppressed: status 503: unavailable"), want: false},
+		{name: "retry suppressed before typed status", err: fmt.Errorf("codex SSE read failed after emitting output; retry suppressed: %w", openAIServerErr), want: false},
 		{name: "exit code", err: errors.New("provider helper exit code 500"), want: false},
 		{name: "port number", err: errors.New("dial localhost port 500"), want: false},
 		{name: "cancelled", err: context.Canceled, want: false},

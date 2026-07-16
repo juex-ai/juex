@@ -248,6 +248,10 @@ func IsRetryableProviderError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "retry suppressed") {
+		return false
+	}
 	if status, ok := providerHTTPStatusCode(err); ok {
 		return status == http.StatusRequestTimeout ||
 			status == http.StatusConflict ||
@@ -265,10 +269,6 @@ func IsRetryableProviderError(err error) bool {
 		return true
 	}
 
-	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "retry suppressed") {
-		return false
-	}
 	if strings.Contains(lower, "stream error: stream id") && strings.Contains(lower, "received from peer") {
 		return true
 	}

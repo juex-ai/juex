@@ -3034,6 +3034,7 @@ func TestTurn_NonRetryableProviderFailurePreservesPendingInputWithoutContinuing(
 	}{
 		{name: "bad-request", providerErr: errors.New("codex websocket error: status 400: bad request"), wantError: "status 400"},
 		{name: "retry-suppressed", providerErr: errors.New("codex SSE read failed after emitting output; retry suppressed: stream error: INTERNAL_ERROR"), wantError: "retry suppressed"},
+		{name: "retry-suppressed-status", providerErr: errors.New("codex SSE read failed after emitting output; retry suppressed: status 503: unavailable"), wantError: "retry suppressed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
