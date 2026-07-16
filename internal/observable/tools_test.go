@@ -99,6 +99,9 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 	if got := create.Schema["additionalProperties"]; got != false {
 		t.Fatalf("observable_create additionalProperties = %v, want false", got)
 	}
+	if got := schemaRequiredStrings(t, create.Schema); !reflect.DeepEqual(got, []string{"command"}) {
+		t.Fatalf("observable_create required = %v, want command only so name can derive id", got)
+	}
 	commandProps := schemaMap(t, create.Schema, "properties")
 	for _, required := range []string{"id", "command", "args", "cwd", "env", "streams", "parser", "filters", "batch", "on_exit", "observation"} {
 		if _, ok := commandProps[required]; !ok {
@@ -140,6 +143,9 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 	}
 	if schedule.Schema["additionalProperties"] != false {
 		t.Fatalf("schedule_create additionalProperties = %#v, want false", schedule.Schema["additionalProperties"])
+	}
+	if got := schemaRequiredStrings(t, schedule.Schema); !reflect.DeepEqual(got, []string{"observation"}) {
+		t.Fatalf("schedule_create required = %v, want observation only so name can derive id", got)
 	}
 	schemaDescription, _ := schedule.Schema["description"].(string)
 	if !strings.Contains(schemaDescription, "exactly one of once, daily, or interval") ||
@@ -327,6 +333,27 @@ func TestScheduleCreatePersistsTaggedSpecAndStartsSchedule(t *testing.T) {
 	}
 	if strings.Contains(text, `"command_config"`) || strings.Contains(text, `"source"`) {
 		t.Fatalf("persisted schedule contains cross-source shape: %s", text)
+	}
+}
+
+func TestScheduleCreateDerivesIDFromName(t *testing.T) {
+	mgr := newToolTestManager(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := reg.CallWithInfo(context.Background(), "schedule_create", map[string]any{
+		"name":     "Morning Brief!",
+		"interval": map[string]any{"every_seconds": float64(3600)},
+		"observation": map[string]any{
+			"content": "Prepare the brief.",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"id": "morning-brief"`) {
+		t.Fatalf("schedule_create output = %s, want slugged id", out)
 	}
 }
 

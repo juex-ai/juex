@@ -338,7 +338,7 @@ func commandCreateSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []any{"id", "command"},
+		"required":             []any{"command"},
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string"},
 			"name":        map[string]any{"type": "string"},
@@ -361,7 +361,7 @@ func scheduleCreateSchema() map[string]any {
 		"type":                 "object",
 		"description":          "Set exactly one of once, daily, or interval; daily requires timezone.",
 		"additionalProperties": false,
-		"required":             []any{"id", "observation"},
+		"required":             []any{"observation"},
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string"},
 			"name":        map[string]any{"type": "string"},

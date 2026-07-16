@@ -127,6 +127,32 @@ func TestAppConcurrentCloseReturnsDeferredWithoutBlockingCleanup(t *testing.T) {
 	}
 }
 
+func TestAppConcurrentCloseWaitReturnsActiveCleanupError(t *testing.T) {
+	cleanupStarted := make(chan struct{})
+	releaseCleanup := make(chan struct{})
+	wantErr := errors.New("cleanup failed")
+	a := &App{cleanup: []func() error{func() error {
+		close(cleanupStarted)
+		<-releaseCleanup
+		return wantErr
+	}}}
+	activeResult := make(chan error, 1)
+	go func() { activeResult <- a.Close() }()
+	<-cleanupStarted
+	err := a.Close()
+	var deferred interface{ Wait() error }
+	if !errors.As(err, &deferred) {
+		t.Fatalf("concurrent Close error = %v, want waitable deferred error", err)
+	}
+	close(releaseCleanup)
+	if err := <-activeResult; !errors.Is(err, wantErr) {
+		t.Fatalf("active Close error = %v, want %v", err, wantErr)
+	}
+	if err := deferred.Wait(); !errors.Is(err, wantErr) {
+		t.Fatalf("deferred Wait error = %v, want %v", err, wantErr)
+	}
+}
+
 type failingWriter struct {
 	calls int
 }

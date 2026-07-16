@@ -84,23 +84,24 @@ const (
 )
 
 type App struct {
-	Engine        *runtime.Engine
-	Bus           *events.Bus
-	Session       *session.Session
-	cleanup       []func() error
-	closeMu       sync.Mutex
-	closeCancel   sync.Once
-	cleanupIndex  int
-	closeErr      error
-	closeRunning  bool
-	closeRunDone  chan struct{}
-	ctx           context.Context
-	cancel        context.CancelFunc
-	cfg           config.Config
-	skills        []skills.Skill
-	mcp           MCPStatus
-	obsv          *observable.Manager
-	chunkedWrites *tools.ChunkedWriteManager
+	Engine         *runtime.Engine
+	Bus            *events.Bus
+	Session        *session.Session
+	cleanup        []func() error
+	closeMu        sync.Mutex
+	closeCancel    sync.Once
+	cleanupIndex   int
+	closeErr       error
+	closeRunning   bool
+	closeRunDone   chan struct{}
+	closeRunResult *error
+	ctx            context.Context
+	cancel         context.CancelFunc
+	cfg            config.Config
+	skills         []skills.Skill
+	mcp            MCPStatus
+	obsv           *observable.Manager
+	chunkedWrites  *tools.ChunkedWriteManager
 
 	turnAdmission turnAdmission
 
@@ -124,7 +125,8 @@ type MCPStatus struct {
 // CloseDeferredError reports that another App cleanup pass is in progress.
 // Callback callers must return before waiting on it.
 type CloseDeferredError struct {
-	done <-chan struct{}
+	done   <-chan struct{}
+	result *error
 }
 
 func (*CloseDeferredError) Error() string {
@@ -136,7 +138,10 @@ func (e *CloseDeferredError) Wait() error {
 		return nil
 	}
 	<-e.done
-	return nil
+	if e.result == nil {
+		return nil
+	}
+	return *e.result
 }
 
 type MCPServerStatus struct {
@@ -1111,11 +1116,13 @@ func (a *App) Close() (result error) {
 	a.closeMu.Lock()
 	if a.closeRunning {
 		done := a.closeRunDone
+		activeResult := a.closeRunResult
 		a.closeMu.Unlock()
-		return &CloseDeferredError{done: done}
+		return &CloseDeferredError{done: done, result: activeResult}
 	}
 	a.closeRunning = true
 	a.closeRunDone = make(chan struct{})
+	a.closeRunResult = &result
 	done := a.closeRunDone
 	a.closeMu.Unlock()
 	defer func() {
