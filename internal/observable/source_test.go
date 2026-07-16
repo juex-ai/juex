@@ -19,6 +19,7 @@ type fakeSourceRuntime struct {
 	deleteFn       func(context.Context, string) error
 	statusCalls    atomic.Int32
 	deleteCalls    atomic.Int32
+	stopCalls      atomic.Int32
 	lastStopReason sourceStopReason
 }
 
@@ -88,6 +89,7 @@ func (f *fakeSourceRuntime) kernel(run *observableRun) sourceKernel {
 }
 
 func (f *fakeSourceRuntime) stop(ctx context.Context, run *observableRun, reason sourceStopReason) (sourceStopResult, error) {
+	f.stopCalls.Add(1)
 	f.lastStopReason = reason
 	if f.stopFn != nil {
 		return f.stopFn(ctx, run, reason)
@@ -444,7 +446,7 @@ func TestDeleteBlocksNewRunUntilConfigRemovalCompletes(t *testing.T) {
 	}
 }
 
-func TestCloseKeepsAdmissionOpenUntilSourcesQuiesceAndDrainsDelivery(t *testing.T) {
+func TestCloseDefersWhileExternalCallerOverlapsDeliveryCallback(t *testing.T) {
 	spec := mustCommandSpecForSourceTest("close")
 	deliveryStarted := make(chan struct{})
 	releaseDelivery := make(chan struct{})
@@ -460,15 +462,25 @@ func TestCloseKeepsAdmissionOpenUntilSourcesQuiesceAndDrainsDelivery(t *testing.
 		t.Fatal("pre-close delivery rejected")
 	}
 	<-deliveryStarted
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- mgr.Close() }()
-	select {
-	case <-closeDone:
-		t.Fatal("Close returned before tracked delivery drained")
-	case <-time.After(25 * time.Millisecond):
+	var deferred *CloseDeferredError
+	if err := mgr.Close(); !errors.As(err, &deferred) {
+		t.Fatalf("Close error = %v, want CloseDeferredError", err)
 	}
 	close(releaseDelivery)
-	if err := <-closeDone; err != nil {
+	deadline := time.Now().Add(time.Second)
+	for {
+		mgr.closeMu.Lock()
+		active := mgr.callbackActive
+		mgr.closeMu.Unlock()
+		if active == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("delivery callback did not exit")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := mgr.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if mgr.submitDelivery(context.Background(), ObservationRecord{}) {
@@ -547,6 +559,114 @@ func TestCloseClaimsRunningSourceBeforeCancelAndAllowsFinalSubmission(t *testing
 	}
 	if runs[spec.ID].State != RunStateRunning {
 		t.Fatalf("shutdown wrote terminal run: %+v", runs[spec.ID])
+	}
+}
+
+func TestConcurrentCloseCallsShareOneFinalizer(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("concurrent-close")
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		return mgr.activateRun(run, status)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	const callers = 32
+	start := make(chan struct{})
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- mgr.Close()
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Close = %v", err)
+		}
+	}
+	if got := source.stopCalls.Load(); got != 1 {
+		t.Fatalf("source stop calls = %d, want one shared finalizer", got)
+	}
+}
+
+func TestCloseRetriesAfterSourceDoesNotQuiesce(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("retry-close")
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		return mgr.activateRun(run, status)
+	}
+	source.stopFn = func(_ context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+		if source.stopCalls.Load() == 1 {
+			return sourceStopResult{Quiesced: false}, errors.New("still stopping")
+		}
+		run.cancel()
+		run.closeQuiesced()
+		run.closeDone()
+		return sourceStopResult{Quiesced: true}, nil
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Close(); err == nil || err.Error() != "still stopping" {
+		t.Fatalf("first Close error = %v", err)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err == nil || err.Error() != "observable: manager closed" {
+		t.Fatalf("Start after closing began = %v", err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("retry Close = %v", err)
+	}
+	if got := source.stopCalls.Load(); got != 2 {
+		t.Fatalf("source stop calls = %d, want retry attempt", got)
+	}
+}
+
+func TestCloseCompletesAfterQuiescedStopError(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("quiesced-close-error")
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		return mgr.activateRun(run, status)
+	}
+	stopErr := errors.New("pause cleanup failed")
+	source.stopFn = func(_ context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+		run.cancel()
+		run.closeQuiesced()
+		run.closeDone()
+		return sourceStopResult{Quiesced: true}, stopErr
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Close(); !errors.Is(err, stopErr) {
+		t.Fatalf("Close error = %v, want quiesced stop error", err)
+	}
+	if err := mgr.Close(); !errors.Is(err, stopErr) {
+		t.Fatalf("completed Close result = %v, want stable final error", err)
+	}
+	if mgr.submitDelivery(context.Background(), ObservationRecord{}) {
+		t.Fatal("delivery admitted after completed close with error")
+	}
+	if got := source.stopCalls.Load(); got != 1 {
+		t.Fatalf("source stop calls = %d, want completed attempt reused", got)
 	}
 }
 

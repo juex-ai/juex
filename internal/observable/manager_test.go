@@ -869,6 +869,89 @@ func TestManager_CloseDrainsFinalProviderDelivery(t *testing.T) {
 	}
 }
 
+func TestManager_ObservationCallbacksReceiveDeferredClose(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*events.Bus, **observable.Manager, chan<- error) observable.DeliveryFunc
+	}{
+		{
+			name: "recorded event subscriber",
+			configure: func(bus *events.Bus, mgr **observable.Manager, result chan<- error) observable.DeliveryFunc {
+				var once sync.Once
+				bus.Subscribe(observable.EventObservationRecorded, func(events.Event) {
+					once.Do(func() { result <- (*mgr).Close() })
+				})
+				return func(context.Context, observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+					return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+				}
+			},
+		},
+		{
+			name: "outcome event subscriber",
+			configure: func(bus *events.Bus, mgr **observable.Manager, result chan<- error) observable.DeliveryFunc {
+				var once sync.Once
+				bus.Subscribe(observable.EventObservationDelivered, func(events.Event) {
+					once.Do(func() { result <- (*mgr).Close() })
+				})
+				return func(context.Context, observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+					return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+				}
+			},
+		},
+		{
+			name: "delivery callback",
+			configure: func(_ *events.Bus, mgr **observable.Manager, result chan<- error) observable.DeliveryFunc {
+				var once sync.Once
+				return func(context.Context, observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+					once.Do(func() { result <- (*mgr).Close() })
+					return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := helperSpec("callback-close", "json-once")
+			writeObservableConfig(t, dir, spec)
+			bus := events.NewBus()
+			callbackResult := make(chan error, 1)
+			var mgr *observable.Manager
+			deliver := tt.configure(bus, &mgr, callbackResult)
+			var err error
+			mgr, err = observable.NewManager(observable.ManagerOptions{
+				ConfigPath: configPath(dir),
+				StateDir:   stateDir(dir),
+				WorkDir:    dir,
+				Bus:        bus,
+				Deliver:    deliver,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := mgr.Start(context.Background(), spec.ID); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-callbackResult:
+				var deferred *observable.CloseDeferredError
+				if !errors.As(err, &deferred) {
+					t.Fatalf("callback Close error = %v, want CloseDeferredError", err)
+				}
+			case <-time.After(asyncWaitTimeout):
+				t.Fatal("delivery callback did not call Close")
+			}
+			waitUntil(t, asyncWaitTimeout, func() bool {
+				records, err := mgr.Observations(observable.ObservationFilter{ObservableID: spec.ID})
+				return err == nil && len(records) == 1 && records[0].State == observable.ObservationStateDelivered
+			})
+			if err := mgr.Close(); err != nil {
+				t.Fatalf("Close after callback = %v", err)
+			}
+		})
+	}
+}
+
 func TestManager_BadConfigDoesNotFailConstruction(t *testing.T) {
 	dir := t.TempDir()
 	path := configPath(dir)

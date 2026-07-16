@@ -40,10 +40,28 @@ type Manager struct {
 	lastStatus     map[string]ObservableStatus
 	mu             sync.Mutex
 	closed         bool
+	closeMu        sync.Mutex
 	closeCompleted bool
+	closeErr       error
+	closeAttempt   *closeAttempt
+	callbackActive int
 	deliveryMu     sync.Mutex
 	deliveryWG     sync.WaitGroup
 	deliveryClosed bool
+}
+
+type closeAttempt struct {
+	done     chan struct{}
+	err      error
+	complete bool
+}
+
+// CloseDeferredError reports that Close is continuing in the background
+// because a synchronous delivery callback is active.
+type CloseDeferredError struct{}
+
+func (*CloseDeferredError) Error() string {
+	return "observable: close deferred while a delivery callback is active"
 }
 
 type observableRun struct {
@@ -510,14 +528,49 @@ func (m *Manager) Close() error {
 	if m == nil {
 		return nil
 	}
+	m.closeMu.Lock()
+	if m.closeCompleted {
+		err := m.closeErr
+		m.closeMu.Unlock()
+		return err
+	}
+	attempt := m.closeAttempt
+	if attempt == nil {
+		attempt = &closeAttempt{done: make(chan struct{})}
+		m.closeAttempt = attempt
+		m.mu.Lock()
+		m.closed = true
+		m.mu.Unlock()
+		go m.runCloseAttempt(attempt)
+	}
+	deferred := m.callbackActive > 0
+	m.closeMu.Unlock()
+	if deferred {
+		return &CloseDeferredError{}
+	}
+	<-attempt.done
+	return attempt.err
+}
+
+func (m *Manager) runCloseAttempt(attempt *closeAttempt) {
+	complete, err := m.closeSourcesAndDeliveries()
+	m.closeMu.Lock()
+	attempt.err = err
+	attempt.complete = complete
+	if complete {
+		m.closeCompleted = true
+		m.closeErr = err
+	} else if m.closeAttempt == attempt {
+		m.closeAttempt = nil
+	}
+	close(attempt.done)
+	m.closeMu.Unlock()
+}
+
+func (m *Manager) closeSourcesAndDeliveries() (bool, error) {
 	var firstErr error
 	for {
 		m.mu.Lock()
-		if m.closeCompleted {
-			m.mu.Unlock()
-			return nil
-		}
-		m.closed = true
 		type claimedRun struct {
 			run   *observableRun
 			claim *terminalClaim
@@ -540,11 +593,15 @@ func (m *Manager) Close() error {
 		unquiesced := false
 		for _, item := range claimed {
 			result, stopErr := item.run.source.stop(context.Background(), item.run, sourceStopShutdown)
-			if stopErr != nil && !result.Quiesced {
+			if !result.Quiesced {
 				m.rollbackTerminal(item.run, item.claim)
 				unquiesced = true
 				if firstErr == nil {
-					firstErr = stopErr
+					if stopErr != nil {
+						firstErr = stopErr
+					} else {
+						firstErr = fmt.Errorf("observable: source %q did not quiesce", item.run.id)
+					}
 				}
 				continue
 			}
@@ -554,7 +611,7 @@ func (m *Manager) Close() error {
 			}
 		}
 		if unquiesced {
-			return firstErr
+			return false, firstErr
 		}
 		for _, resolved := range waiting {
 			<-resolved
@@ -573,10 +630,7 @@ func (m *Manager) Close() error {
 	m.deliveryClosed = true
 	m.deliveryMu.Unlock()
 	m.deliveryWG.Wait()
-	m.mu.Lock()
-	m.closeCompleted = true
-	m.mu.Unlock()
-	return firstErr
+	return true, firstErr
 }
 
 func (s StatusSnapshot) ByID(id string) (ObservableStatus, bool) {
@@ -862,9 +916,13 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 	if current.State != "" && current.State != ObservationStateRecorded {
 		return nil
 	}
-	m.emitObservation(EventObservationRecorded, current, "")
+	m.emitDeliveryObservation(EventObservationRecorded, current, "")
 	if m.opts.Deliver != nil {
-		outcome, err := m.opts.Deliver(ctx, current)
+		var outcome DeliveryOutcome
+		var err error
+		m.withDeliveryCallback(func() {
+			outcome, err = m.opts.Deliver(ctx, current)
+		})
 		if err != nil {
 			outcome = DeliveryOutcome{
 				State: ObservationStateDropped,
@@ -886,12 +944,36 @@ func (m *Manager) deliverObservation(ctx context.Context, record ObservationReco
 				return updateErr
 			}
 		}
-		m.emitObservation(observationEventType(updated.State), updated, updated.Error)
+		m.emitDeliveryObservation(observationEventType(updated.State), updated, updated.Error)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (m *Manager) withDeliveryCallback(callback func()) {
+	if m == nil || callback == nil {
+		return
+	}
+	m.closeMu.Lock()
+	m.callbackActive++
+	m.closeMu.Unlock()
+	defer func() {
+		m.closeMu.Lock()
+		m.callbackActive--
+		m.closeMu.Unlock()
+	}()
+	callback()
+}
+
+func (m *Manager) emitDeliveryObservation(eventType string, record ObservationRecord, errText string) {
+	if m == nil || m.opts.Bus == nil {
+		return
+	}
+	m.withDeliveryCallback(func() {
+		m.emitObservation(eventType, record, errText)
+	})
 }
 
 func (m *Manager) isClosed() bool {
