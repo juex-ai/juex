@@ -48,15 +48,17 @@ func (f *fakeSourceKernel) now() time.Time { return f.nowValue }
 func (f *fakeSourceKernel) isClosed() bool { return false }
 
 type fakeScheduleStateStore struct {
-	state     ScheduleStateRecord
-	found     bool
-	recordErr error
+	state       ScheduleStateRecord
+	found       bool
+	recordErr   error
+	recordCalls atomic.Int32
 }
 
 func (f *fakeScheduleStateStore) ScheduleState(string) (ScheduleStateRecord, bool, error) {
 	return f.state, f.found, nil
 }
 func (f *fakeScheduleStateStore) RecordScheduleState(ScheduleStateRecord) error {
+	f.recordCalls.Add(1)
 	return f.recordErr
 }
 func (f *fakeScheduleStateStore) ClearScheduleState(string) error { return nil }
@@ -277,6 +279,24 @@ func TestScheduleStopPauseFailureReportsQuiesced(t *testing.T) {
 	}
 }
 
+func TestScheduleShutdownDoesNotPersistPauseBaseline(t *testing.T) {
+	kernel := &fakeSourceKernel{nowValue: time.Now().UTC()}
+	store := &fakeScheduleStateStore{found: true}
+	spec := mustScheduleSpec("shutdown", ScheduleSourceSpec{Interval: &IntervalSchedule{EverySeconds: 60}, Observation: ScheduleObservationSpec{Content: "tick"}})
+	runtimeSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
+	ctx, cancel := context.WithCancel(context.Background())
+	run := &observableRun{id: spec.ID, ctx: ctx, cancel: cancel, quiesced: make(chan struct{})}
+	run.closeQuiesced()
+	result, err := source.stop(context.Background(), run, sourceStopShutdown)
+	if err != nil || !result.Quiesced {
+		t.Fatalf("shutdown stop = %+v, %v", result, err)
+	}
+	if store.recordCalls.Load() != 0 {
+		t.Fatalf("shutdown wrote %d pause records", store.recordCalls.Load())
+	}
+}
+
 func TestScheduleRecoveryUsesBoundedKernelQuery(t *testing.T) {
 	now := time.Now().UTC()
 	kernel := &fakeSourceKernel{
@@ -307,6 +327,35 @@ func TestDeletePreservesConfigWhenPrivateCleanupFails(t *testing.T) {
 	}
 	if _, ok := mgr.specs[spec.ID]; !ok {
 		t.Fatal("config removed after private cleanup failure")
+	}
+	loaded, err := LoadConfig(mgr.opts.ConfigPath)
+	if err != nil || len(loaded.Observables) != 1 {
+		t.Fatalf("persisted config = %+v, err=%v", loaded, err)
+	}
+}
+
+func TestDeletePreservesRunningConfigWhenSourceDoesNotQuiesce(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("delete-stop")
+	var mgr *Manager
+	source := &fakeSourceRuntime{}
+	mgr = newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		return mgr.activateRun(run, status)
+	}
+	source.stopFn = func(context.Context, *observableRun, sourceStopReason) (sourceStopResult, error) {
+		return sourceStopResult{}, errors.New("still running")
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Delete(context.Background(), spec.ID); err == nil || err.Error() != "still running" {
+		t.Fatalf("Delete error = %v", err)
+	}
+	if _, ok := mgr.specs[spec.ID]; !ok || mgr.runs[spec.ID] == nil {
+		t.Fatalf("spec retained=%v run retained=%v", ok, mgr.runs[spec.ID] != nil)
 	}
 	loaded, err := LoadConfig(mgr.opts.ConfigPath)
 	if err != nil || len(loaded.Observables) != 1 {
