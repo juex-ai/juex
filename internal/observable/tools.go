@@ -40,7 +40,7 @@ func ToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        "schedule_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Create a workspace-local Schedule that emits a pre-authored Observation at scheduled times. Use this for scheduled or recurring activation instead of a polling script or command Observable. Call observable_list first and avoid duplicates.",
+			Description: "Create a workspace-local Schedule that emits a pre-authored Observation at scheduled times. Set exactly one of once, daily, or interval; daily requires timezone. Use this for scheduled or recurring activation instead of a polling script or command Observable. Call observable_list first and avoid duplicates.",
 			Schema:      scheduleCreateSchema(),
 		},
 		{
@@ -235,24 +235,86 @@ func scheduleSpecFromCreateInput(in map[string]any) (Spec, error) {
 }
 
 func rejectCommandCreateRouting(in map[string]any) error {
-	for _, field := range []string{
-		"source", "type", "timezone", "once", "daily", "interval", "catch_up",
-		"command_config", "schedule_config",
-	} {
-		if _, exists := in[field]; exists {
-			return fmt.Errorf("observable_create accepts only flat command input; use schedule_create for scheduled Observations (unexpected field %q)", field)
-		}
+	commandRoute, scheduleRoute, err := legacyCreateRoutes(in)
+	if err != nil {
+		return err
 	}
+	flatSchedule := hasAnyCreateField(in, "timezone", "once", "daily", "interval", "catch_up")
 	observation, ok := in["observation"].(map[string]any)
-	if !ok {
-		return nil
+	if ok && hasAnyCreateField(observation, "content", "attachments") {
+		flatSchedule = true
 	}
-	for _, field := range []string{"content", "attachments"} {
-		if _, exists := observation[field]; exists {
-			return fmt.Errorf("observable_create cannot set observation.%s; use schedule_create for scheduled Observations", field)
-		}
+	if commandRoute && (scheduleRoute || flatSchedule) {
+		return fmt.Errorf("observable_create: mixed command and schedule source routing fields are not allowed")
+	}
+	if scheduleRoute || flatSchedule {
+		return fmt.Errorf("observable_create creates command Observables; use schedule_create for scheduled Observations")
+	}
+	if commandRoute {
+		return fmt.Errorf("observable_create expects flat command input; move nested command fields to the top level and remove source, type, or command_config")
 	}
 	return nil
+}
+
+func legacyCreateRoutes(in map[string]any) (command, schedule bool, err error) {
+	if value, exists := in["type"]; exists {
+		command, schedule, err = createRouteFromDiscriminator("type", value)
+		if err != nil {
+			return false, false, err
+		}
+	}
+	if _, exists := in["command_config"]; exists {
+		command = true
+	}
+	if _, exists := in["schedule_config"]; exists {
+		schedule = true
+	}
+	value, exists := in["source"]
+	if !exists {
+		return command, schedule, nil
+	}
+	source, ok := value.(map[string]any)
+	if !ok {
+		return false, false, fmt.Errorf("observable_create: source must be an object")
+	}
+	sourceCommand := hasAnyCreateField(source, "command", "args", "cwd", "env", "streams", "parser", "filters", "batch", "on_exit")
+	sourceSchedule := hasAnyCreateField(source, "timezone", "once", "daily", "interval", "catch_up")
+	if discriminator, exists := source["type"]; exists {
+		discriminatorCommand, discriminatorSchedule, discriminatorErr := createRouteFromDiscriminator("source.type", discriminator)
+		if discriminatorErr != nil {
+			return false, false, discriminatorErr
+		}
+		sourceCommand = sourceCommand || discriminatorCommand
+		sourceSchedule = sourceSchedule || discriminatorSchedule
+	}
+	if !sourceCommand && !sourceSchedule {
+		return false, false, fmt.Errorf("observable_create: source must identify command or schedule fields")
+	}
+	return command || sourceCommand, schedule || sourceSchedule, nil
+}
+
+func createRouteFromDiscriminator(field string, value any) (command, schedule bool, err error) {
+	discriminator, ok := value.(string)
+	if !ok {
+		return false, false, fmt.Errorf("observable_create: unknown source discriminator %s=%v; expected command or schedule", field, value)
+	}
+	switch strings.TrimSpace(discriminator) {
+	case SourceTypeCommand:
+		return true, false, nil
+	case SourceTypeSchedule:
+		return false, true, nil
+	default:
+		return false, false, fmt.Errorf("observable_create: unknown source discriminator %s=%q; expected command or schedule", field, discriminator)
+	}
+}
+
+func hasAnyCreateField(in map[string]any, fields ...string) bool {
+	for _, field := range fields {
+		if _, exists := in[field]; exists {
+			return true
+		}
+	}
+	return false
 }
 
 func decodeCreateInput[T any](in map[string]any) (T, error) {
@@ -297,6 +359,7 @@ func commandCreateSchema() map[string]any {
 func scheduleCreateSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
+		"description":          "Set exactly one of once, daily, or interval; daily requires timezone.",
 		"additionalProperties": false,
 		"required":             []any{"id", "observation"},
 		"properties": map[string]any{

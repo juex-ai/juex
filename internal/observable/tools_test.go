@@ -69,8 +69,20 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 		t.Fatal("schedule_create missing")
 	}
 	if !strings.Contains(schedule.Description, "scheduled") ||
-		!strings.Contains(schedule.Description, "polling") {
+		!strings.Contains(schedule.Description, "polling") ||
+		!strings.Contains(schedule.Description, "exactly one of once, daily, or interval") ||
+		!strings.Contains(schedule.Description, "daily requires timezone") {
 		t.Fatalf("schedule description = %q", schedule.Description)
+	}
+	var providerScheduleDescription string
+	for _, spec := range reg.Specs() {
+		if spec.Name == "schedule_create" {
+			providerScheduleDescription = spec.Description
+		}
+	}
+	if !strings.Contains(providerScheduleDescription, "exactly one of once, daily, or interval") ||
+		!strings.Contains(providerScheduleDescription, "daily requires timezone") {
+		t.Fatalf("provider-visible schedule_create description = %q", providerScheduleDescription)
 	}
 }
 
@@ -128,6 +140,11 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 	}
 	if schedule.Schema["additionalProperties"] != false {
 		t.Fatalf("schedule_create additionalProperties = %#v, want false", schedule.Schema["additionalProperties"])
+	}
+	schemaDescription, _ := schedule.Schema["description"].(string)
+	if !strings.Contains(schemaDescription, "exactly one of once, daily, or interval") ||
+		!strings.Contains(schemaDescription, "daily requires timezone") {
+		t.Fatalf("provider-visible schedule schema description = %q", schemaDescription)
 	}
 	scheduleProps := schemaMap(t, schedule.Schema, "properties")
 	for _, required := range []string{"id", "timezone", "once", "daily", "interval", "catch_up", "observation"} {
@@ -358,12 +375,49 @@ func TestObservableCreatePersistsTaggedSpecAndStartsCommand(t *testing.T) {
 	}
 }
 
-func TestObservableCreateRoutesScheduleAndLegacyShapesToScheduleCreate(t *testing.T) {
+func TestObservableCreateRoutesLegacyAndScheduleShapesWithoutMisleading(t *testing.T) {
 	tests := []struct {
-		name  string
-		input map[string]any
-		want  string
+		name    string
+		input   map[string]any
+		want    string
+		notWant string
 	}{
+		{
+			name: "nested command source",
+			input: map[string]any{
+				"id": "nested-command",
+				"source": map[string]any{
+					"type": "command", "command": "echo",
+				},
+			},
+			want:    "flat command input",
+			notWant: "schedule_create",
+		},
+		{
+			name: "nested command fields without discriminator",
+			input: map[string]any{
+				"id":     "nested-command",
+				"source": map[string]any{"command": "echo"},
+			},
+			want:    "flat command input",
+			notWant: "schedule_create",
+		},
+		{
+			name: "top level command discriminator",
+			input: map[string]any{
+				"id": "tagged-command", "type": "command", "command": "echo",
+			},
+			want:    "flat command input",
+			notWant: "schedule_create",
+		},
+		{
+			name: "nested command config",
+			input: map[string]any{
+				"id": "config-command", "command_config": map[string]any{"command": "echo"},
+			},
+			want:    "flat command input",
+			notWant: "schedule_create",
+		},
 		{
 			name: "nested schedule source",
 			input: map[string]any{
@@ -373,6 +427,13 @@ func TestObservableCreateRoutesScheduleAndLegacyShapesToScheduleCreate(t *testin
 					"interval": map[string]any{"every_seconds": float64(60)},
 				},
 				"observation": map[string]any{"content": "tick"},
+			},
+			want: "schedule_create",
+		},
+		{
+			name: "top level schedule discriminator",
+			input: map[string]any{
+				"id": "tagged-schedule", "type": "schedule",
 			},
 			want: "schedule_create",
 		},
@@ -395,6 +456,16 @@ func TestObservableCreateRoutesScheduleAndLegacyShapesToScheduleCreate(t *testin
 			want: "schedule_create",
 		},
 		{
+			name: "schedule observation attachments",
+			input: map[string]any{
+				"id": "schedule-attachments",
+				"observation": map[string]any{
+					"attachments": []any{map[string]any{"path": "brief.md"}},
+				},
+			},
+			want: "schedule_create",
+		},
+		{
 			name: "legacy tagged persisted shape",
 			input: map[string]any{
 				"id": "legacy-tagged", "type": "schedule",
@@ -404,6 +475,32 @@ func TestObservableCreateRoutesScheduleAndLegacyShapesToScheduleCreate(t *testin
 				},
 			},
 			want: "schedule_create",
+		},
+		{
+			name: "unknown discriminator",
+			input: map[string]any{
+				"id": "unknown-source", "source": map[string]any{"type": "http"},
+			},
+			want:    "unknown source discriminator",
+			notWant: "schedule_create",
+		},
+		{
+			name: "mixed discriminators",
+			input: map[string]any{
+				"id": "mixed-source", "type": "command",
+				"source": map[string]any{"type": "schedule"},
+			},
+			want:    "mixed command and schedule",
+			notWant: "schedule_create",
+		},
+		{
+			name: "command discriminator with schedule config",
+			input: map[string]any{
+				"id": "mixed-config", "type": "command",
+				"schedule_config": map[string]any{"interval": map[string]any{"every_seconds": float64(60)}},
+			},
+			want:    "mixed command and schedule",
+			notWant: "schedule_create",
 		},
 	}
 	for _, tt := range tests {
@@ -415,6 +512,8 @@ func TestObservableCreateRoutesScheduleAndLegacyShapesToScheduleCreate(t *testin
 			}
 			if _, _, err := reg.CallWithInfo(context.Background(), "observable_create", tt.input); err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("observable_create error = %v, want containing %q", err, tt.want)
+			} else if tt.notWant != "" && strings.Contains(err.Error(), tt.notWant) {
+				t.Fatalf("observable_create error = %v, must not contain misleading %q", err, tt.notWant)
 			}
 		})
 	}
