@@ -3,6 +3,7 @@ package observable_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,6 +388,56 @@ func TestStore_UpdateAndListObservations(t *testing.T) {
 	}
 	if len(latest) != 1 || latest[0].ID != second.ID {
 		t.Fatalf("latest observations = %+v, want second first", latest)
+	}
+}
+
+func TestStore_RecordedObservationsBySourceEventFiltersBeforeLimit(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	target, err := store.RecordObservation(observable.ObservationRecord{
+		ObservableID:  "schedule-recovery",
+		SourceEventID: "schedule:schedule-recovery:old",
+		Kind:          "reminder",
+		Severity:      "info",
+		Content:       "recover me",
+		State:         observable.ObservationStateRecorded,
+		CreatedAt:     fixedTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 120; i++ {
+		record := observable.ObservationRecord{
+			ObservableID: "schedule-recovery",
+			Kind:         "noise",
+			Severity:     "info",
+			Content:      fmt.Sprintf("noise-%03d", i),
+			State:        observable.ObservationStateRecorded,
+			CreatedAt:    fixedTime.Add(time.Duration(i+1) * time.Second),
+		}
+		if i%2 == 0 {
+			record.SourceEventID = fmt.Sprintf("schedule:schedule-recovery:delivered-%03d", i)
+		} else {
+			record.SourceEventID = fmt.Sprintf("command:schedule-recovery:recorded-%03d", i)
+		}
+		persisted, err := store.RecordObservation(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i%2 == 0 {
+			if err := store.UpdateObservation(persisted.ID, func(current observable.ObservationRecord) observable.ObservationRecord {
+				current.State = observable.ObservationStateDelivered
+				return current
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	recovered, err := store.RecordedObservationsBySourceEvent("schedule-recovery", "schedule:schedule-recovery:", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].ID != target.ID {
+		t.Fatalf("recovered = %+v, want older recorded schedule item %s", recovered, target.ID)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -528,6 +529,74 @@ func TestManager_OnExitNotifyNonzero(t *testing.T) {
 	deliveredMu.Unlock()
 	if got.Kind != "observable_exit" || got.Severity != "error" || !strings.Contains(got.Content, "code 2") {
 		t.Fatalf("exit observation = %+v", got)
+	}
+}
+
+func TestManager_ExitedSubscriberCloseDrainsOnExitDelivery(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("exit-close", "exit2")
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.OnExit.Notify = "always" })
+	writeObservableConfig(t, dir, spec)
+	bus := events.NewBus()
+	closeEntered := make(chan struct{})
+	closeResult := make(chan error, 1)
+	deliveryStarted := make(chan struct{})
+	releaseDelivery := make(chan struct{})
+	var terminalEvents atomic.Int32
+	var mgr *observable.Manager
+	bus.Subscribe(observable.EventObservableExited, func(events.Event) {
+		terminalEvents.Add(1)
+		close(closeEntered)
+		closeResult <- mgr.Close()
+	})
+	var err error
+	mgr, err = observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Bus:        bus,
+		Deliver: func(ctx context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			if record.Kind == "observable_exit" {
+				close(deliveryStarted)
+				<-releaseDelivery
+			}
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-deliveryStarted:
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("on-exit delivery did not start")
+	}
+	select {
+	case <-closeEntered:
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("exited event subscriber did not call Close")
+	}
+	select {
+	case err := <-closeResult:
+		t.Fatalf("Close returned before on-exit delivery drained: %v", err)
+	default:
+	}
+	close(releaseDelivery)
+	if err := <-closeResult; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents.Load() != 1 {
+		t.Fatalf("terminal events = %d, want exactly 1", terminalEvents.Load())
+	}
+	records, err := mgr.Observations(observable.ObservationFilter{ObservableID: spec.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Kind != "observable_exit" || records[0].State != observable.ObservationStateDelivered {
+		t.Fatalf("on-exit observations = %+v", records)
 	}
 }
 

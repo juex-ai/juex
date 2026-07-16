@@ -393,6 +393,38 @@ func (s *Store) ListObservations(filter ObservationFilter) ([]ObservationRecord,
 	return out, nil
 }
 
+// RecordedObservationsBySourceEvent returns the newest durable recovery
+// candidates after applying all source filters. Filtering before limiting
+// prevents unrelated or already-transitioned records from hiding candidates.
+func (s *Store) RecordedObservationsBySourceEvent(observableID, sourceEventPrefix string, limit int) ([]ObservationRecord, error) {
+	if s == nil {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ObservationRecord, 0)
+	for _, record := range records {
+		if record.ObservableID != observableID || record.State != ObservationStateRecorded || !strings.HasPrefix(record.SourceEventID, sourceEventPrefix) {
+			continue
+		}
+		out = append(out, record)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (s *Store) Observation(id string) (ObservationRecord, bool, error) {
 	if s == nil || stringsTrimSpace(id) == "" {
 		return ObservationRecord{}, false, nil

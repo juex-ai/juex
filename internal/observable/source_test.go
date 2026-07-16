@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/events"
 )
 
 type fakeSourceRuntime struct {
@@ -504,6 +506,142 @@ func TestCloseClaimsRunningSourceBeforeCancelAndAllowsFinalSubmission(t *testing
 	}
 	if runs[spec.ID].State != RunStateRunning {
 		t.Fatalf("shutdown wrote terminal run: %+v", runs[spec.ID])
+	}
+}
+
+func TestCloseTriggeredByExitedEventDrainsPostFinishWorkerDelivery(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("post-finish-close")
+	bus := events.NewBus()
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	mgr.opts.Bus = bus
+	closeEntered := make(chan struct{})
+	closeResult := make(chan error, 1)
+	deliveryStarted := make(chan struct{})
+	releaseDelivery := make(chan struct{})
+	submitAccepted := make(chan bool, 1)
+	var terminalEvents atomic.Int32
+	var closeOnce sync.Once
+	mgr.opts.Deliver = func(context.Context, ObservationRecord) (DeliveryOutcome, error) {
+		close(deliveryStarted)
+		<-releaseDelivery
+		return DeliveryOutcome{State: ObservationStateDelivered}, nil
+	}
+	bus.Subscribe(EventObservableExited, func(events.Event) {
+		terminalEvents.Add(1)
+		closeOnce.Do(func() {
+			close(closeEntered)
+			closeResult <- mgr.Close()
+		})
+	})
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		if err := mgr.activateRun(run, status); err != nil {
+			return err
+		}
+		go func() {
+			run.closeQuiesced()
+			_, _ = mgr.finishRun(run, terminalOutcome{State: RunStateExited})
+			record, _, err := mgr.recordObservation(ObservationRecord{
+				ObservableID: spec.ID, RunID: run.runID, Kind: "observable_exit", Severity: "info", Content: "post-finish", State: ObservationStateRecorded,
+			})
+			if err != nil {
+				submitAccepted <- false
+			} else {
+				submitAccepted <- mgr.submitDelivery(context.Background(), record)
+			}
+			run.closeDone()
+		}()
+		return nil
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("terminal event was not emitted from worker completion")
+	}
+	select {
+	case <-deliveryStarted:
+	case <-time.After(time.Second):
+		t.Fatal("post-finish delivery did not start before Close closed admission")
+	}
+	if !<-submitAccepted {
+		t.Fatal("post-finish worker delivery was rejected")
+	}
+	select {
+	case err := <-closeResult:
+		t.Fatalf("Close returned before tracked delivery drained: %v", err)
+	default:
+	}
+	close(releaseDelivery)
+	if err := <-closeResult; err != nil {
+		t.Fatal(err)
+	}
+	if terminalEvents.Load() != 1 {
+		t.Fatalf("terminal events = %d, want exactly 1", terminalEvents.Load())
+	}
+	mgr.mu.Lock()
+	workers := len(mgr.workers)
+	mgr.mu.Unlock()
+	if workers != 0 {
+		t.Fatalf("registered workers after Close = %d, want 0", workers)
+	}
+}
+
+func TestCloseTriggeredByStoppedEventDoesNotDeadlockClaimedWorker(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("claimed-stop-close")
+	bus := events.NewBus()
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	mgr.opts.Bus = bus
+	closeResult := make(chan error, 1)
+	var terminalEvents atomic.Int32
+	bus.Subscribe(EventObservableStopped, func(events.Event) {
+		terminalEvents.Add(1)
+		closeResult <- mgr.Close()
+	})
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		if err := mgr.activateRun(run, status); err != nil {
+			return err
+		}
+		go func() {
+			<-run.ctx.Done()
+			run.closeQuiesced()
+			_, _ = mgr.finishRun(run, terminalOutcome{State: RunStateExited})
+			run.closeDone()
+		}()
+		return nil
+	}
+	source.stopFn = func(ctx context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+		run.cancel()
+		if err := waitRunQuiesced(ctx, run); err != nil {
+			return sourceStopResult{}, err
+		}
+		return sourceStopResult{Quiesced: true}, nil
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Stop(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-closeResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close deadlocked on worker whose Stop claim had committed")
+	}
+	if terminalEvents.Load() != 1 {
+		t.Fatalf("terminal events = %d, want exactly 1", terminalEvents.Load())
 	}
 }
 
