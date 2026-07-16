@@ -3197,6 +3197,7 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{name: "deadline", err: context.DeadlineExceeded, want: true},
 		{name: "connection reset", err: errors.New("read: connection reset by peer"), want: true},
 		{name: "sse read", err: errors.New("codex SSE read: stream error"), want: true},
+		{name: "http2 stream read", err: errors.New("openai responses stream: stream error: stream ID 7; INTERNAL_ERROR; received from peer"), want: true},
 		{name: "request timeout status", err: errors.New("provider request failed: status 408"), want: true},
 		{name: "conflict status", err: errors.New("provider request failed: status code 409"), want: true},
 		{name: "rate limit status", err: errors.New("provider request failed: HTTP 429"), want: true},
