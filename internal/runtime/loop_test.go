@@ -64,6 +64,33 @@ func (m *mockProvider) Complete(ctx context.Context, sys string, history []llm.M
 	return r, nil
 }
 
+type queuedFailureProvider struct {
+	started   chan struct{}
+	release   chan struct{}
+	firstErr  error
+	recovery  llm.Response
+	called    int
+	histories [][]llm.Message
+}
+
+func (p *queuedFailureProvider) Name() string { return "queued-failure" }
+
+func (p *queuedFailureProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	historyCopy := append([]llm.Message(nil), history...)
+	p.histories = append(p.histories, historyCopy)
+	p.called++
+	if p.called == 1 {
+		signal(p.started)
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-p.release:
+		}
+		return llm.Response{}, p.firstErr
+	}
+	return p.recovery, nil
+}
+
 type captureOptionsProvider struct {
 	opts llm.CompleteOptions
 }
@@ -829,6 +856,83 @@ func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
 	}
 	if prov.called != 3 {
 		t.Fatalf("provider calls = %d, want normal fail + compact + retry", prov.called)
+	}
+}
+
+func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
+	var eng *Engine
+	var enqueueErr error
+	prov := &scriptedCompactionProvider{
+		name: "overflow-twice",
+		attempts: []scriptedCompactionAttempt{
+			{err: errors.New("context_length_exceeded: first turn attempt")},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn}},
+			{
+				err: errors.New("context_length_exceeded: compacted turn attempt"),
+				beforeReturn: func() {
+					_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during second overflow")
+				},
+			},
+		},
+	}
+	eng, _ = newEngine(t, prov, false)
+	eng.ContextWindow = 10000
+	eng.Compaction = DefaultCompactionPolicy()
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err == nil || !strings.Contains(err.Error(), "context_length_exceeded") {
+		t.Fatalf("turn error = %v, want terminal context overflow", err)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("enqueue pending input: %v", enqueueErr)
+	}
+	if prov.calls != 3 {
+		t.Fatalf("provider calls = %d, want initial turn + compact + one retry", prov.calls)
+	}
+	if got := messagesText(eng.Session.History); !strings.Contains(got, "queued during second overflow") {
+		t.Fatalf("terminal overflow did not preserve pending input:\n%s", got)
+	}
+}
+
+func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
+	prov := &scriptedCompactionProvider{
+		name: "compact-failure",
+		attempts: []scriptedCompactionAttempt{
+			{err: errors.New("context_length_exceeded: turn attempt")},
+			{err: errors.New("compaction backend unavailable")},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "next turn"), StopReason: llm.StopEndTurn}},
+		},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 10000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "one-shot"},
+		Stdout: "one-shot compact context",
+	}})
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "failing turn"); err == nil || !strings.Contains(err.Error(), "compact retry failed") {
+		t.Fatalf("turn error = %v, want compact retry failure", err)
+	}
+	if out, err := eng.Turn(context.Background(), "next request"); err != nil || out != "next turn" {
+		t.Fatalf("next turn out=%q err=%v", out, err)
+	}
+	if prov.calls != 3 {
+		t.Fatalf("provider calls = %d, want failed turn + compact + next turn", prov.calls)
+	}
+	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot compact context") {
+		t.Fatalf("failed provider request missing hook context:\n%s", got)
+	}
+	if got := messagesText(prov.histories[2]); strings.Contains(got, "one-shot compact context") {
+		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+	}
+	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("hook context remaining after compact retry failure = %+v", remaining)
 	}
 }
 
@@ -2725,6 +2829,296 @@ func TestTurn_PendingInputContinuesAfterPlainResponse(t *testing.T) {
 	second := prov.histories[1]
 	if got := second[len(second)-1].FirstText(); got != "follow up" {
 		t.Fatalf("second call last message = %q", got)
+	}
+}
+
+func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
+	prov := &queuedFailureProvider{
+		started:  make(chan struct{}, 1),
+		release:  make(chan struct{}),
+		firstErr: errors.New("connection reset by peer"),
+		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}
+	eng, bus := newEngine(t, prov, false)
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "provider-retry"},
+		Stdout: "preserve retry context",
+	}})
+	var retries []LLMRetryPayload
+	var turnErrors int32
+	bus.Subscribe("llm.retry", func(e events.Event) {
+		if payload, ok := e.Payload.(LLMRetryPayload); ok {
+			retries = append(retries, payload)
+		}
+	})
+	bus.Subscribe("turn.errored", func(e events.Event) { atomic.AddInt32(&turnErrors, 1) })
+
+	done := make(chan error, 1)
+	go func() {
+		out, err := eng.Turn(context.Background(), "active")
+		if err == nil && out != "recovered" {
+			err = fmt.Errorf("out = %q, want recovered", out)
+		}
+		done <- err
+	}()
+	waitSignal(t, prov.started, "provider did not start")
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "continue after failure"), PendingInputOptions{
+		ID:  "pending-provider-failure",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(prov.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	if prov.called != 2 || len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d histories = %d, want 2", prov.called, len(prov.histories))
+	}
+	continuedHistory := messagesText(prov.histories[1])
+	if !strings.Contains(continuedHistory, "continue after failure") {
+		t.Fatalf("continued provider history missing pending input:\n%s", continuedHistory)
+	}
+	if !strings.Contains(continuedHistory, "preserve retry context") {
+		t.Fatalf("continued provider history missing hook context:\n%s", continuedHistory)
+	}
+	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("hook context remaining after successful provider request = %+v", remaining)
+	}
+	if len(retries) != 1 || retries[0].RetryReason != "pending_input_after_provider_error" || !retries[0].WillRetry {
+		t.Fatalf("retry diagnostics = %+v", retries)
+	}
+	if got := atomic.LoadInt32(&turnErrors); got != 0 {
+		t.Fatalf("turn.errored count = %d, want 0", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-provider-failure"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	}
+}
+
+func TestTurn_TerminalProviderFailureConsumesHookContext(t *testing.T) {
+	release := make(chan struct{})
+	close(release)
+	prov := &queuedFailureProvider{
+		started:  make(chan struct{}, 1),
+		release:  release,
+		firstErr: errors.New("unauthorized API key"),
+		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered later"), StopReason: llm.StopEndTurn},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "one-shot"},
+		Stdout: "one-shot provider context",
+	}})
+
+	if _, err := eng.Turn(context.Background(), "failing turn"); err == nil {
+		t.Fatal("first turn error = nil, want provider failure")
+	}
+	if out, err := eng.Turn(context.Background(), "next turn"); err != nil || out != "recovered later" {
+		t.Fatalf("next turn out=%q err=%v", out, err)
+	}
+	if len(prov.histories) != 2 {
+		t.Fatalf("provider histories = %d, want 2", len(prov.histories))
+	}
+	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot provider context") {
+		t.Fatalf("failed provider request missing hook context:\n%s", got)
+	}
+	if got := messagesText(prov.histories[1]); strings.Contains(got, "one-shot provider context") {
+		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+	}
+	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("hook context remaining after terminal provider failure = %+v", remaining)
+	}
+}
+
+func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
+	prov := &mockProvider{
+		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}},
+		delay:  500 * time.Millisecond,
+	}
+	eng, bus := newEngine(t, prov, false)
+	requested := make(chan struct{}, 1)
+	var drained, dropped int32
+	bus.Subscribe("llm.requested", func(e events.Event) { signal(requested) })
+	bus.Subscribe("pending_input.drained", func(e events.Event) { atomic.AddInt32(&drained, 1) })
+	bus.Subscribe("pending_input.dropped", func(e events.Event) { atomic.AddInt32(&dropped, 1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(ctx, "active")
+		done <- err
+	}()
+	waitSignal(t, requested, "llm.requested")
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), PendingInputOptions{
+		ID:  "pending-after-cancel",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, cancellation.ErrUserCancelled) {
+		t.Fatalf("turn err = %v, want ErrUserCancelled", err)
+	}
+
+	if got := len(eng.Session.History); got != 2 {
+		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, eng.Session.History)
+	}
+	if got := eng.Session.History[1].FirstText(); got != "preserve me" {
+		t.Fatalf("preserved message = %q", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-after-cancel"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	}
+	if atomic.LoadInt32(&drained) != 1 || atomic.LoadInt32(&dropped) != 0 {
+		t.Fatalf("pending events drained=%d dropped=%d, want 1/0", drained, dropped)
+	}
+	if prov.called != 0 {
+		t.Fatalf("completed provider calls = %d, want none after cancellation", prov.called)
+	}
+}
+
+func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
+	prov := &queuedFailureProvider{
+		started:  make(chan struct{}, 1),
+		release:  make(chan struct{}),
+		firstErr: errors.New("codex websocket connect: status 401: handshake failed"),
+		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+	}
+	eng, _ := newEngine(t, prov, false)
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "active")
+		done <- err
+	}()
+	waitSignal(t, prov.started, "provider did not start")
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "keep after auth failure"), PendingInputOptions{
+		ID:  "pending-auth-failure",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(prov.release)
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "status 401") {
+		t.Fatalf("turn err = %v, want status 401", err)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+	if got := eng.Session.History[len(eng.Session.History)-1].FirstText(); got != "keep after auth failure" {
+		t.Fatalf("preserved message = %q", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-auth-failure"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	}
+}
+
+func TestTurn_NonRetryableProviderFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
+	tests := []struct {
+		name        string
+		providerErr error
+		wantError   string
+	}{
+		{name: "bad-request", providerErr: errors.New("codex websocket error: status 400: bad request"), wantError: "status 400"},
+		{name: "retry-suppressed", providerErr: errors.New("codex SSE read failed after emitting output; retry suppressed: stream error: INTERNAL_ERROR"), wantError: "retry suppressed"},
+		{name: "retry-suppressed-status", providerErr: errors.New("codex SSE read failed after emitting output; retry suppressed: status 503: unavailable"), wantError: "retry suppressed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prov := &queuedFailureProvider{
+				started:  make(chan struct{}, 1),
+				release:  make(chan struct{}),
+				firstErr: tt.providerErr,
+				recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+			}
+			eng, _ := newEngine(t, prov, false)
+			done := make(chan error, 1)
+			go func() {
+				_, err := eng.Turn(context.Background(), "active")
+				done <- err
+			}()
+			waitSignal(t, prov.started, "provider did not start")
+			pendingID := "pending-" + tt.name
+			pendingText := "keep after " + tt.name
+			if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, pendingText), PendingInputOptions{
+				ID:  pendingID,
+				TTL: time.Hour,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			close(prov.release)
+			if err := <-done; err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("turn err = %v, want %q", err, tt.wantError)
+			}
+			if prov.called != 1 {
+				t.Fatalf("provider calls = %d, want 1", prov.called)
+			}
+			if got := eng.Session.History[len(eng.Session.History)-1].FirstText(); got != pendingText {
+				t.Fatalf("preserved message = %q, want %q", got, pendingText)
+			}
+			records, err := eng.PendingInputQueue.Records()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := records[pendingID].State; got != PendingInputStateProcessed {
+				t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+			}
+		})
+	}
+}
+
+func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	turnID := eng.beginActiveTurn("turn-repair-before-preserve")
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "active")); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "interrupted-tool",
+		ToolName:  "read",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve after tool failure"), PendingInputOptions{
+		ID:  "pending-after-tool-failure",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.preservePendingInputAfterFailureLocked(turnID); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(eng.Session.History); got != 4 {
+		t.Fatalf("history len = %d, want user, tool use, repair, and pending input: %+v", got, eng.Session.History)
+	}
+	repair := eng.Session.History[2]
+	if repair.Role != llm.RoleUser || len(repair.Blocks) != 1 || repair.Blocks[0].Type != llm.BlockToolResult || repair.Blocks[0].ToolUseID != "interrupted-tool" || !repair.Blocks[0].IsError {
+		t.Fatalf("transcript repair = %+v", repair)
+	}
+	if got := eng.Session.History[3].FirstText(); got != "preserve after tool failure" {
+		t.Fatalf("preserved pending input = %q", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-after-tool-failure"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
 	}
 }
 

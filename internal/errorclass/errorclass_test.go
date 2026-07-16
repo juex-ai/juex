@@ -93,10 +93,26 @@ func TestClassifySignalCancellation(t *testing.T) {
 }
 
 func TestClassifyPermissionAndAuth(t *testing.T) {
-	if got := ClassifyText("open /root/secret: permission denied"); got.Kind != KindPermission {
-		t.Fatalf("permission kind = %q", got.Kind)
+	tests := []struct {
+		name string
+		raw  string
+		want Kind
+	}{
+		{name: "permission text", raw: "open /root/secret: permission denied", want: KindPermission},
+		{name: "auth text", raw: "provider unauthorized", want: KindAuth},
+		{name: "status 401", raw: "codex websocket connect: status 401: handshake failed", want: KindAuth},
+		{name: "status code 403", raw: "provider request failed: status code 403", want: KindPermission},
+		{name: "error code 401", raw: "provider request failed: error code: 401", want: KindAuth},
+		{name: "http 403 forbidden", raw: "provider request failed: HTTP 403 Forbidden", want: KindPermission},
+		{name: "unrelated status", raw: "provider request failed: status 429", want: KindError},
+		{name: "unrelated exit code", raw: "provider helper exited with code 401", want: KindError},
+		{name: "unrelated port", raw: "connect tcp 127.0.0.1:403: connection refused", want: KindError},
 	}
-	if got := ClassifyText("provider unauthorized"); got.Kind != KindAuth {
-		t.Fatalf("auth kind = %q", got.Kind)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ClassifyText(tt.raw); got.Kind != tt.want {
+				t.Fatalf("ClassifyText(%q) kind = %q, want %q", tt.raw, got.Kind, tt.want)
+			}
+		})
 	}
 }

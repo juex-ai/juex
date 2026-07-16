@@ -2,11 +2,17 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
+	openaisdk "github.com/openai/openai-go"
 )
 
 type Provider interface {
@@ -232,4 +238,108 @@ func IsContextOverflowError(err error) bool {
 		}
 	}
 	return false
+}
+
+// IsRetryableProviderError reports whether a failed provider request is safe to
+// attempt again with newly accepted input. Provider SDKs already perform their
+// own retries; this only distinguishes exhausted transient failures from
+// deterministic request and authentication errors.
+func IsRetryableProviderError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "retry suppressed") {
+		return false
+	}
+	if status, ok := providerHTTPStatusCode(err); ok {
+		return status == http.StatusRequestTimeout ||
+			status == http.StatusConflict ||
+			status == http.StatusTooManyRequests ||
+			status >= http.StatusInternalServerError
+	}
+	if IsContextOverflowError(err) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	if strings.Contains(lower, "stream error: stream id") && strings.Contains(lower, "received from peer") {
+		return true
+	}
+	for _, marker := range []string{
+		"connection reset",
+		"connection refused",
+		"connection aborted",
+		"broken pipe",
+		"network is unreachable",
+		"no route to host",
+		"server disconnected",
+		"unexpected eof",
+		": eof",
+		"sse read",
+		"stream idle timeout",
+		"websocket: close 1006",
+		"rate limit",
+		"too many requests",
+		"temporary server error",
+		"temporarily unavailable",
+		"internal server error",
+		"service unavailable",
+		"bad gateway",
+		"gateway timeout",
+		"deadline exceeded",
+		"timed out",
+		"timeout",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func providerHTTPStatusCode(err error) (int, bool) {
+	var anthropicErr *anthropicsdk.Error
+	if errors.As(err, &anthropicErr) && validHTTPStatusCode(anthropicErr.StatusCode) {
+		return anthropicErr.StatusCode, true
+	}
+	var openAIErr *openaisdk.Error
+	if errors.As(err, &openAIErr) && validHTTPStatusCode(openAIErr.StatusCode) {
+		return openAIErr.StatusCode, true
+	}
+
+	fields := strings.FieldsFunc(strings.ToLower(err.Error()), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	for i, field := range fields {
+		next := i + 1
+		switch {
+		case field == "status":
+			if next < len(fields) && fields[next] == "code" {
+				next++
+			}
+		case field == "http":
+		case field == "code" && i > 0 && fields[i-1] == "error":
+		default:
+			continue
+		}
+		if next >= len(fields) {
+			continue
+		}
+		status, parseErr := strconv.Atoi(fields[next])
+		if parseErr == nil && validHTTPStatusCode(status) {
+			return status, true
+		}
+	}
+	return 0, false
+}
+
+func validHTTPStatusCode(status int) bool {
+	return status >= 100 && status <= 599
 }
