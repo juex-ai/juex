@@ -10,16 +10,17 @@ import (
 
 const NotesToolUpdate = "update_notes"
 
+const notesGuide = "MUST load the `juex-session-state` skill before first use."
+
 func NotesToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{
-		Name:  NotesToolUpdate,
-		Group: tools.ToolGroupSessionState,
-		Description: "Rewrite the model-owned session working notes with concise Markdown for the current plan, progress, and unresolved issues. " +
-			"Use - [ ] and - [x] checkbox items when progress is useful. The full content is replaced on every call and must be at most 2048 characters; move long material to scratchpad files.",
+		Name:        NotesToolUpdate,
+		Group:       tools.ToolGroupSessionState,
+		Description: "Replace concise session working notes; use scratchpad files for long material. " + notesGuide,
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"content": map[string]any{"type": "string", "description": "Complete replacement Markdown for the current working notes"},
+				"content": map[string]any{"type": "string"},
 			},
 			"required": []string{"content"},
 		},

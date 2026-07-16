@@ -483,6 +483,11 @@ The runtime registry combines all registered JueX tools across the `file`,
 Skills themselves remain markdown resource packages rather than executable
 tool definitions: the prompt exposes a compact catalog, `skill_search`
 discovers loaded entries, and `skill_load` returns one selected SKILL.md body.
+Core tool groups keep complete provider-resident guidance. Low-frequency
+`chunked_write`, `session_state`, and `observable` definitions keep a compact
+purpose/routing sentence plus a hard pointer to a binary-embedded builtin
+guide. Their detailed workflows, constraints, defaults, and examples are
+loaded on demand through the existing skill tools.
 
 | Name | Purpose |
 |---|---|
@@ -496,7 +501,7 @@ discovers loaded entries, and `skill_load` returns one selected SKILL.md body.
 | `list_shell_sessions` | recover Juex-managed shell session ids and status after forgotten state, compaction, or background commands; defaults to running sessions |
 | `grep` | content search; `path:line:content` (defaults to WorkDir) |
 | `skill_search` | search loaded skill metadata, including entries omitted from the prompt budget |
-| `skill_load` | load one skill's full SKILL.md, source, and path by name after sandbox path validation |
+| `skill_load` | load one skill's full SKILL.md, source, and path by name; filesystem paths are sandbox-validated and authenticated builtin content uses a virtual path |
 | `memory_write` | persist a memory entry |
 | `memory_search` | substring match |
 | `memory_delete` | remove an entry by name |
@@ -1182,8 +1187,8 @@ compaction:
 | `model` | active model reference in `provider:model` form |
 | `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `~/.juex/extensions` |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
-| `skills.include` | optional skill-name whitelist applied after user, extension, and project skill merging; when non-empty, `skills.exclude` is ignored |
-| `skills.exclude` | optional skill-name blacklist applied after merging when `skills.include` is empty |
+| `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
+| `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
 | `shell` | optional object; omitted or `{}` means `profile: auto`; scalar values are rejected |
 | `shell.profile` | `auto`, `powershell`, `cmd`, `bash`, `zsh`, `sh`, `git-bash`, `wsl`, or `custom`; auto uses the Juex process runtime OS |
 | `shell.binary` | optional executable override for built-in profiles; validated before startup and never silently falls back |
@@ -1653,20 +1658,27 @@ type: model-invocable
 
 Loading flow:
 
-1. on startup, scan user, extension, and project skill dirs
+1. on startup, load the fixed binary-embedded builtin guide catalog, then scan
+   user, extension, and project skill dirs
 2. parse each SKILL.md frontmatter -> `name + description + body`
-3. merge precedence and apply `skills.include` / `skills.exclude`
+3. reserve builtin names, merge filesystem precedence, and apply
+   `skills.include` / `skills.exclude` to filesystem skills
 4. emit a budgeted `## Available Skills` catalog containing compact
    `name + source + description` entries
 5. the model uses `skill_search` to discover entries omitted by the prompt
    budget and `skill_load` to load one skill's full SKILL.md plus source path
 
-Project skills still override user-global skills. Extension skill names must be
-unique and reject collisions with user-global, project, or other extension
-skills. Runtime status uses `user`, `project`, or `ext:<name>` as the skill
-source. `skill_load` enforces the command sandbox path policy before reading
-the selected file. There is no embedding retrieval or automatic activation;
-the model chooses a skill from catalog metadata and loads it explicitly.
+Project skills still override user-global skills. Extension and builtin skill
+names are strict: they reject collisions with user-global, project, or other
+strict resources. Runtime status uses `builtin`, `user`, `project`, or
+`ext:<name>` as the skill source. Builtin paths use
+`builtin://skills/<name>/SKILL.md`; their private loader provenance, not the
+public source label, authorizes reading embedded content. Filesystem skills
+always pass the command sandbox path policy. Builtin guides are excluded from
+the prompt catalog and its budget report because low-frequency tool
+descriptions already point to them, but they remain visible to `All`, search,
+load, dry-run, doctor, and Runtime status. There is no vector retrieval or
+automatic activation; the model loads a selected guide explicitly.
 
 ---
 
@@ -1746,7 +1758,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `version` | default + ldflags override |
 | `tools` | registry duplicate, read/write/edit/apply_patch/chunked_write/grep/exec_command/write_stdin/list_shell_sessions, regex grep, command timeout/session yield, default WorkDir |
 | `mcp` | round-trip, tool errors, env propagation, no-schema default, multi-server, layered project-over-user, ctx cancellation |
-| `skills` | dir scan, project-over-user, name-fallback, malformed-skipped, sort, reload, missing dir |
+| `skills` | fail-loud embedded builtin catalog, private builtin provenance, prompt exclusion, filter immunity, dir scan, project-over-user, strict-name collisions, name-fallback, malformed filesystem skill skip, sort, reload, missing dir |
 | `memory` | round-trip all fields, body-with-fence, write-twice update, idempotent delete, case-insensitive search, index shape, AGENTS.md three-layer |
 | `prompt` | all sources, only-global, only-project, ops context, memory rendering, divider, fresh rebuild |
 | `session` | append → jsonl line counts, event subscription, load round-trip, alias metadata, history index, delete |

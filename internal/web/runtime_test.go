@@ -80,9 +80,10 @@ body`)
 	if mcpTools[0].Schema["type"] != "object" || mcpTools[0].Timeout.Mode != "bounded" || mcpTools[0].Timeout.Seconds != tools.DefaultTimeoutSeconds {
 		t.Fatalf("mcp echo metadata = %+v", mcpTools[0])
 	}
-	if got.Skills.Count != 1 || got.Skills.Items[0].Name != "review" {
+	if got.Skills.Count != 4 || got.Skills.Items[0].Name != "review" {
 		t.Fatalf("skills = %+v", got.Skills)
 	}
+	assertBuiltinRuntimeSkills(t, got.Skills.Items)
 	if got.Hooks.Configured != 1 || len(got.Hooks.Commands) != 1 || got.Hooks.Commands[0].Name != "guard" {
 		t.Fatalf("hooks = %+v", got.Hooks)
 	}
@@ -454,7 +455,7 @@ body`)
 		{name: "shared", source: "project", description: "project shared"},
 		{name: "zeta", source: "user", description: "user zeta"},
 	}
-	if len(got.Skills.Items) != len(wantSkills) {
+	if len(got.Skills.Items) != len(wantSkills)+3 {
 		t.Fatalf("skills = %+v", got.Skills.Items)
 	}
 	for i, want := range wantSkills {
@@ -463,6 +464,7 @@ body`)
 			t.Fatalf("skill[%d] = %+v, want %+v", i, gotSkill, want)
 		}
 	}
+	assertBuiltinRuntimeSkills(t, got.Skills.Items)
 }
 
 func TestRuntimeStatusIncludesExtensionSources(t *testing.T) {
@@ -502,9 +504,10 @@ commands:
 	if len(got.MCP.Servers[0].Args) != 2 || got.MCP.Servers[0].Args[1] != extDir {
 		t.Fatalf("mcp args = %+v", got.MCP.Servers[0].Args)
 	}
-	if len(got.Skills.Items) != 1 || got.Skills.Items[0].Name != "ext-skill" || got.Skills.Items[0].Source != "ext:demo" {
+	if len(got.Skills.Items) != 4 || got.Skills.Items[0].Name != "ext-skill" || got.Skills.Items[0].Source != "ext:demo" {
 		t.Fatalf("skills = %+v", got.Skills.Items)
 	}
+	assertBuiltinRuntimeSkills(t, got.Skills.Items)
 	if got.Hooks.Configured != 1 || got.Hooks.Commands[0].Name != "ext-stop" || got.Hooks.Commands[0].Source != "ext:demo" {
 		t.Fatalf("hooks = %+v", got.Hooks)
 	}
@@ -558,8 +561,32 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "project" || got.MCP.Servers[0].Source != "project" {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if len(got.Skills.Items) != 1 || got.Skills.Items[0].Name != "project" || got.Skills.Items[0].Source != "project" {
+	if len(got.Skills.Items) != 4 || got.Skills.Items[0].Name != "project" || got.Skills.Items[0].Source != "project" {
 		t.Fatalf("skills = %+v", got.Skills.Items)
+	}
+	assertBuiltinRuntimeSkills(t, got.Skills.Items)
+}
+
+func assertBuiltinRuntimeSkills(t *testing.T, items []skillInfo) {
+	t.Helper()
+	want := map[string]bool{
+		"juex-chunked-write": false,
+		"juex-observables":   false,
+		"juex-session-state": false,
+	}
+	for _, skill := range items {
+		if _, ok := want[skill.Name]; !ok {
+			continue
+		}
+		if skill.Source != "builtin" || skill.Path != "builtin://skills/"+skill.Name+"/SKILL.md" {
+			t.Fatalf("builtin skill metadata = %+v", skill)
+		}
+		want[skill.Name] = true
+	}
+	for name, found := range want {
+		if !found {
+			t.Fatalf("runtime skills missing builtin %q: %+v", name, items)
+		}
 	}
 }
 

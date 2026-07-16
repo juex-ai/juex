@@ -1,5 +1,5 @@
-// Package skills loads SKILL.md files from user, extension, and project
-// resource directories.
+// Package skills loads builtin SKILL.md guides and files from user, extension,
+// and project resource directories.
 //
 // Behaviour:
 //   - the system prompt's "Available Skills" section lists a compact,
@@ -27,10 +27,26 @@ type Skill struct {
 	Description string
 	Type        string
 	Body        string
-	Source      string // "project" | "user" | "ext:<name>"
-	Path        string // SKILL.md absolute path
+	Source      string // "builtin" | "project" | "user" | "ext:<name>"
+	Path        string // SKILL.md absolute path or builtin:// virtual path
 
+	raw             string
+	builtin         bool
 	strictConflicts bool
+	promptHidden    bool
+}
+
+// BuiltinContent returns trusted embedded markdown only for a loader-created
+// builtin resource. Source is presentation metadata and is not a trust signal.
+func (s Skill) BuiltinContent() (string, bool) {
+	if !s.builtin {
+		return "", false
+	}
+	return s.raw, true
+}
+
+func (s Skill) IsBuiltin() bool {
+	return s.builtin
 }
 
 type Policy struct {
@@ -113,6 +129,13 @@ func NewLoaderFromDirsWithOptions(dirs []Dir, opts LoaderOptions) *Loader {
 func (l *Loader) Load() error {
 	l.skills = make(map[string]Skill)
 	l.filtered = nil
+	builtins, err := loadBuiltinSkills()
+	if err != nil {
+		return err
+	}
+	for _, skill := range builtins {
+		l.skills[skill.Name] = skill
+	}
 	for _, dir := range l.dirs {
 		if strings.TrimSpace(dir.Path) == "" {
 			continue
@@ -164,6 +187,9 @@ func (l *Loader) applyNameFilters() {
 	include := nameSet(l.policy.Include)
 	exclude := nameSet(l.policy.Exclude)
 	for name, skill := range l.skills {
+		if skill.builtin {
+			continue
+		}
 		if len(include) > 0 {
 			if _, ok := include[name]; !ok {
 				l.filtered = append(l.filtered, FilteredSkill{Name: name, Source: skill.Source, Reason: "not included"})
@@ -255,12 +281,24 @@ func (l *Loader) PromptSection() string {
 }
 
 func (l *Loader) promptSectionAndReport() (string, PromptBudgetReport) {
-	all := l.All()
+	all := l.promptSkills()
 	if len(all) == 0 {
 		return "", PromptBudgetReport{}
 	}
 	section, report := renderPromptSection(all, l.policy.PromptBudgetChars)
 	return section, report
+}
+
+func (l *Loader) promptSkills() []Skill {
+	all := l.All()
+	out := make([]Skill, 0, len(all))
+	for _, skill := range all {
+		if skill.promptHidden {
+			continue
+		}
+		out = append(out, skill)
+	}
+	return out
 }
 
 func renderPromptSection(all []Skill, budgetChars int) (string, PromptBudgetReport) {

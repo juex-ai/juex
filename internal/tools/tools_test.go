@@ -1704,22 +1704,19 @@ func TestRegisterBuiltinsChunkedWriteSchema(t *testing.T) {
 		}
 	}
 	begin, _ := r.Get("write_begin")
-	if !strings.Contains(begin.Description, "2000 characters") || !strings.Contains(begin.Description, "4000 bytes") {
-		t.Fatalf("write_begin description missing recommended chunk guidance: %q", begin.Description)
+	if !strings.Contains(begin.Description, "use write for short content") || !strings.Contains(begin.Description, "MUST load the `juex-chunked-write` skill before first use.") {
+		t.Fatalf("write_begin description missing routing and guide pointer: %q", begin.Description)
 	}
 	chunk, _ := r.Get("write_chunk")
-	if !strings.Contains(chunk.Description, "content_omitted") || !strings.Contains(chunk.Description, "actual content string") || !strings.Contains(chunk.Description, "2000 characters") {
-		t.Fatalf("write_chunk description missing provider-safe guidance: %q", chunk.Description)
+	if !strings.Contains(chunk.Description, "indexed content") || !strings.Contains(chunk.Description, "MUST load the `juex-chunked-write` skill before first use.") {
+		t.Fatalf("write_chunk description missing purpose and guide pointer: %q", chunk.Description)
 	}
 	if chunk.Schema["additionalProperties"] != false {
 		t.Fatalf("write_chunk schema should reject additional properties: %+v", chunk.Schema)
 	}
 	contentSchema, ok := chunk.Schema["properties"].(map[string]any)["content"].(map[string]any)
-	if !ok || !strings.Contains(fmt.Sprint(contentSchema["description"]), "2000 characters") {
-		t.Fatalf("write_chunk content schema missing recommended chunk guidance: %+v", contentSchema)
-	}
-	if contentSchema["maxLength"] != chunkWriteRecommendedChunkChars {
-		t.Fatalf("write_chunk content maxLength = %+v, want %d", contentSchema["maxLength"], chunkWriteRecommendedChunkChars)
+	if !ok || contentSchema["type"] != "string" || len(contentSchema) != 1 {
+		t.Fatalf("write_chunk content schema should keep only its type: %+v", contentSchema)
 	}
 
 	write, _ := r.Get("write")

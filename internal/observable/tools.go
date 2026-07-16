@@ -15,6 +15,7 @@ import (
 const (
 	defaultObservationToolLimit = 20
 	maxObservationToolLimit     = 100
+	observableGuidePointer      = "MUST load the `juex-observables` skill before first use."
 )
 
 func ToolDefinitions() []tools.ToolDefinition {
@@ -28,49 +29,49 @@ func ToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        "observable_list",
 			Group:       tools.ToolGroupObservable,
-			Description: "List configured JueX Observables and their runtime status. Call this before creating a new Observable to avoid duplicates.",
+			Description: "List configured Observables and runtime status; call before creating one. " + observableGuidePointer,
 			Schema:      map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		},
 		{
 			Name:        "observable_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Create a workspace-local command Observable and start it immediately. Call observable_list first and avoid duplicates. The input is flat; batch defaults are safe if omitted. Use schedule_create for scheduled or recurring activation. Stopping is temporary; deleting is permanent.",
+			Description: "Create and start a command Observable; use schedule_create for timed work. " + observableGuidePointer,
 			Schema:      commandCreateSchema(),
 		},
 		{
 			Name:        "schedule_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Create a workspace-local Schedule that emits a pre-authored Observation at scheduled times. Set exactly one of once, daily, or interval; daily requires timezone. Use this for scheduled or recurring activation instead of a polling script or command Observable. Call observable_list first and avoid duplicates.",
+			Description: "Create a Schedule; never use command polling for timed work. " + observableGuidePointer,
 			Schema:      scheduleCreateSchema(),
 		},
 		{
 			Name:        "observable_start",
 			Group:       tools.ToolGroupObservable,
-			Description: "Start a stopped or exited Observable for the current JueX process. Runtime starts are temporary; the config still controls startup on the next process launch.",
+			Description: "Temporarily start an Observable for this process. " + observableGuidePointer,
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_stop",
 			Group:       tools.ToolGroupObservable,
-			Description: "Stop a running Observable for the current JueX process. This is temporary; it starts again on the next JueX process startup unless deleted.",
+			Description: "Temporarily stop an Observable; delete for permanent removal. " + observableGuidePointer,
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_delete",
 			Group:       tools.ToolGroupObservable,
-			Description: "Delete an Observable from .juex/observables.json and stop it if running. Deleting is permanent; use observable_stop for a temporary runtime stop.",
+			Description: "Permanently delete and stop an Observable; use stop for temporary pause. " + observableGuidePointer,
 			Schema:      idSchema,
 		},
 		{
 			Name:        "observable_observations",
 			Group:       tools.ToolGroupObservable,
-			Description: "List recent durable Observations, optionally for one Observable id. Results are bounded and include truncation/artifact metadata.",
+			Description: "List recent durable Observations, optionally for one Observable. " + observableGuidePointer,
 			Schema: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"id":    map[string]any{"type": "string"},
-					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+					"limit": map[string]any{"type": "integer"},
 				},
 			},
 		},
@@ -359,13 +360,12 @@ func commandCreateSchema() map[string]any {
 func scheduleCreateSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"description":          "Set exactly one of once, daily, or interval; daily requires timezone.",
 		"additionalProperties": false,
 		"required":             []any{"observation"},
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string"},
 			"name":        map[string]any{"type": "string"},
-			"timezone":    map[string]any{"type": "string", "description": "IANA timezone for daily schedules, for example Asia/Shanghai"},
+			"timezone":    map[string]any{"type": "string"},
 			"once":        onceScheduleSchema(),
 			"daily":       dailyScheduleSchema(),
 			"interval":    intervalScheduleSchema(),
@@ -410,14 +410,14 @@ func scheduleObservationSchema() map[string]any {
 		"properties": map[string]any{
 			"kind":        map[string]any{"type": "string"},
 			"severity":    severitySchema(),
-			"content":     map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
+			"content":     map[string]any{"type": "string"},
 			"attachments": map[string]any{"type": "array", "items": attachmentSchema()},
 		},
 	}
 }
 
 func severitySchema() map[string]any {
-	return map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}}
+	return map[string]any{"type": "string"}
 }
 
 func parserSchema() map[string]any {
@@ -425,15 +425,12 @@ func parserSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"type":           map[string]any{"type": "string", "enum": []any{"text", "jsonl"}},
-			"content_field":  map[string]any{"type": "string"},
-			"kind_field":     map[string]any{"type": "string"},
-			"severity_field": map[string]any{"type": "string"},
-			"time_field":     map[string]any{"type": "string"},
-			"attachments_field": map[string]any{
-				"type":        "string",
-				"description": "JSONL field containing an array of attachment objects with path and optional media_type.",
-			},
+			"type":              map[string]any{"type": "string"},
+			"content_field":     map[string]any{"type": "string"},
+			"kind_field":        map[string]any{"type": "string"},
+			"severity_field":    map[string]any{"type": "string"},
+			"time_field":        map[string]any{"type": "string"},
+			"attachments_field": map[string]any{"type": "string"},
 		},
 	}
 }
@@ -453,13 +450,12 @@ func attachmentSchema() map[string]any {
 func filterSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"description":          "Keep output lines matching exactly one predicate: contains or regex.",
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"contains": map[string]any{"type": "string"},
 			"regex":    map[string]any{"type": "string"},
 			"kind":     map[string]any{"type": "string"},
-			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
+			"severity": map[string]any{"type": "string"},
 		},
 		"oneOf": []any{
 			map[string]any{"required": []any{"contains"}},
@@ -472,10 +468,9 @@ func batchSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"description":          "Optional for command sources; omitted values default to a safe 5 second interval and 1000 character batch.",
 		"properties": map[string]any{
-			"interval_seconds": map[string]any{"type": "integer", "minimum": MinBatchIntervalSeconds, "maximum": MaxBatchIntervalSeconds},
-			"max_chars":        map[string]any{"type": "integer", "minimum": 1, "maximum": MaxBatchChars},
+			"interval_seconds": map[string]any{"type": "integer"},
+			"max_chars":        map[string]any{"type": "integer"},
 		},
 	}
 }
@@ -485,7 +480,7 @@ func onExitSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"notify": map[string]any{"type": "string", "enum": []any{"never", "always", "nonzero"}},
+			"notify": map[string]any{"type": "string"},
 		},
 	}
 }
@@ -496,7 +491,7 @@ func onceScheduleSchema() map[string]any {
 		"additionalProperties": false,
 		"required":             []any{"at"},
 		"properties": map[string]any{
-			"at": map[string]any{"type": "string", "description": "RFC3339 timestamp with timezone"},
+			"at": map[string]any{"type": "string"},
 		},
 	}
 }
@@ -507,8 +502,8 @@ func dailyScheduleSchema() map[string]any {
 		"additionalProperties": false,
 		"required":             []any{"times"},
 		"properties": map[string]any{
-			"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string", "pattern": "^\\d\\d:\\d\\d$"}},
-			"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}}},
+			"times":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"weekdays": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		},
 	}
 }
@@ -519,7 +514,7 @@ func intervalScheduleSchema() map[string]any {
 		"additionalProperties": false,
 		"required":             []any{"every_seconds"},
 		"properties": map[string]any{
-			"every_seconds": map[string]any{"type": "integer", "minimum": MinIntervalScheduleSecond},
+			"every_seconds": map[string]any{"type": "integer"},
 		},
 	}
 }
@@ -529,14 +524,14 @@ func catchUpSchema() map[string]any {
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"mode":                 map[string]any{"type": "string", "enum": []any{ScheduleCatchUpNone, ScheduleCatchUpLatest}},
-			"max_lateness_minutes": map[string]any{"type": "integer", "minimum": 1, "maximum": 1440},
+			"mode":                 map[string]any{"type": "string"},
+			"max_lateness_minutes": map[string]any{"type": "integer"},
 		},
 	}
 }
 
 func streamSchema() map[string]any {
-	return map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []any{"stdout", "stderr"}}}
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
 }
 
 func jsonString(value any) (string, error) {
