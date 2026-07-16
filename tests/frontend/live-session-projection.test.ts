@@ -442,6 +442,45 @@ test("projectLiveSessionEvent drains queued input before the pending assistant p
   );
 });
 
+test("projectLiveSessionEvent keeps drained input visible after the turn errors", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(state, "paused follow-up", undefined, 1);
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-1",
+    payload: { input: "active" },
+  });
+  state = apply(state, {
+    id: "e2",
+    type: "pending_input.drained",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-1",
+    payload: { count: 1, pending_count: 0, max_pending_inputs: 4 },
+  });
+  state = apply(state, {
+    id: "e3",
+    type: "turn.errored",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-1",
+    payload: { error: "cancelled by user", error_kind: "cancelled" },
+  });
+
+  assert.equal(state.queuedInput.items.length, 0);
+  assert.equal(state.turnActive, false);
+  assert.deepEqual(state.status, { kind: "error", detail: "cancelled by user" });
+  assert.equal(
+    state.messages.some(
+      (message) =>
+        message.role === "user" &&
+        message.blocks?.[0]?.type === "text" &&
+        message.blocks[0].text === "paused follow-up",
+    ),
+    true,
+  );
+});
+
 test("projectLiveSessionEvent projects compact start and completion", () => {
   let state = createLiveSessionProjection();
   state = apply(state, {

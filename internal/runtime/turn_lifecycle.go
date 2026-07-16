@@ -101,6 +101,9 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 			l.retriedOverflow = true
 			return nil
 		}
+		if l.engine.continueAfterProviderFailure(ctx, l.turnID, iter, err) {
+			return nil
+		}
 		return fmt.Errorf("llm: %w", err)
 	}
 	if err := cancellation.ContextError(ctx); err != nil {

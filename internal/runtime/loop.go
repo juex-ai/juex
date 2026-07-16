@@ -301,13 +301,17 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	defer func() {
 		e.toolFailures = previousFailures
 		if !lifecycle.activeClosed {
-			e.finishActiveTurn(turnID, err != nil)
+			e.finishActiveTurn(turnID)
 		}
 	}()
 	var result turnLifecycleResult
 	result, err = lifecycle.runLocked(ctx)
 	if err != nil {
-		return "", e.failTurn(turnID, cancellation.NormalizeErrorWithContext(ctx, err))
+		err = cancellation.NormalizeErrorWithContext(ctx, err)
+		if preserveErr := e.preservePendingInputAfterFailureLocked(turnID); preserveErr != nil {
+			err = errors.Join(err, fmt.Errorf("preserve pending input after turn failure: %w", preserveErr))
+		}
+		return "", e.failTurn(turnID, err)
 	}
 	return result.output, nil
 }
@@ -449,6 +453,37 @@ func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) 
 			Iter:                    iterCopy,
 		}})
 	}
+}
+
+func (e *Engine) continueAfterProviderFailure(ctx context.Context, turnID string, iter int, err error) bool {
+	if err == nil || cancellation.ContextError(ctx) != nil {
+		return false
+	}
+	classification := errorclass.Classify(err)
+	if classification.Kind != errorclass.KindError && classification.Kind != errorclass.KindTimeout {
+		return false
+	}
+	e.pendingMu.Lock()
+	canContinue := e.activeTurnID == turnID && len(e.pendingInput) > 0
+	e.pendingMu.Unlock()
+	if !canContinue {
+		return false
+	}
+	provider := ""
+	if e.Provider != nil {
+		provider = e.Provider.Name()
+	}
+	e.providerRetryObserverLocked(turnID, "turn", &iter)(llm.ProviderRetryDiagnostic{
+		Provider:    provider,
+		Model:       provider,
+		Operation:   "turn.pending_input",
+		Attempt:     1,
+		MaxAttempts: 2,
+		RetryReason: "pending_input_after_provider_error",
+		RawError:    err.Error(),
+		WillRetry:   true,
+	})
+	return true
 }
 
 func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTurnContext, request providerTurnRequest, resp llm.Response) (recordedProviderResponse, error) {
@@ -920,6 +955,33 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	return nil
 }
 
+func (e *Engine) preservePendingInputAfterFailureLocked(turnID string) error {
+	repairedTranscript := false
+	for {
+		e.pendingMu.Lock()
+		if e.activeTurnID != turnID {
+			e.pendingMu.Unlock()
+			return nil
+		}
+		if len(e.pendingInput) > 0 {
+			e.pendingMu.Unlock()
+		} else {
+			e.activeTurnID = ""
+			e.pendingMu.Unlock()
+			return nil
+		}
+		if !repairedTranscript {
+			if err := e.repairTranscriptLocked(turnID, "turn_failure_pending_input"); err != nil {
+				return err
+			}
+			repairedTranscript = true
+		}
+		if err := e.drainPendingInputLocked(context.Background(), turnID); err != nil {
+			return err
+		}
+	}
+}
+
 func (e *Engine) cachePolicyLocked() llm.CachePolicy {
 	if e == nil || e.Session == nil || e.Session.ID == "" {
 		return llm.CachePolicy{}
@@ -940,33 +1002,13 @@ func (e *Engine) finishActiveTurnIfNoPending(turnID string) bool {
 	return true
 }
 
-func (e *Engine) finishActiveTurn(turnID string, dropPending bool) {
+func (e *Engine) finishActiveTurn(turnID string) {
 	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
 	if e.activeTurnID != turnID {
-		e.pendingMu.Unlock()
 		return
 	}
 	e.activeTurnID = ""
-	dropped := 0
-	var droppedIDs []string
-	queue := e.pendingInputQueueLocked()
-	if dropPending {
-		dropped = len(e.pendingInput)
-		droppedIDs = pendingRecordIDs(e.pendingInput)
-		e.pendingInput = nil
-	}
-	max := e.effectiveMaxPendingInputs()
-	e.pendingMu.Unlock()
-	if queue != nil && len(droppedIDs) > 0 {
-		_ = queue.MarkDropped(droppedIDs)
-	}
-	if dropped > 0 {
-		e.emit(events.Event{Type: "pending_input.dropped", TurnID: turnID, Payload: PendingInputDroppedPayload{
-			Count:            dropped,
-			PendingCount:     0,
-			MaxPendingInputs: max,
-		}})
-	}
 }
 
 func (e *Engine) emit(ev events.Event) {

@@ -3,10 +3,12 @@ package web
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/runtime"
 )
 
 func TestWebTurnTransportStatusTracksRunningAndDone(t *testing.T) {
@@ -90,6 +92,38 @@ func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 	status, ok := as.turns.status("turn-1")
 	if !ok || status.State != "errored" {
 		t.Fatalf("interrupted status = %+v, ok=%v", status, ok)
+	}
+}
+
+func TestWebTurnTransportInterruptPreservesQueuedInput(t *testing.T) {
+	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn})
+	_, as := newTurnTransportTestSession(t, prov)
+
+	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "active"))
+	waitPendingProviderStarted(t, prov, "provider did not start")
+	if _, err := as.app.Engine.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), runtime.PendingInputOptions{
+		ID:  "queued-before-interrupt",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !as.turns.interrupt() {
+		t.Fatal("interrupt returned false")
+	}
+	as.turns.wait()
+
+	if got := len(as.app.Session.History); got != 2 {
+		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, as.app.Session.History)
+	}
+	if got := as.app.Session.History[1].FirstText(); got != "preserve me" {
+		t.Fatalf("preserved message = %q", got)
+	}
+	records, err := as.app.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["queued-before-interrupt"].State; got != runtime.PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, runtime.PendingInputStateProcessed)
 	}
 }
 

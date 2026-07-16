@@ -64,6 +64,33 @@ func (m *mockProvider) Complete(ctx context.Context, sys string, history []llm.M
 	return r, nil
 }
 
+type queuedFailureProvider struct {
+	started   chan struct{}
+	release   chan struct{}
+	firstErr  error
+	recovery  llm.Response
+	called    int
+	histories [][]llm.Message
+}
+
+func (p *queuedFailureProvider) Name() string { return "queued-failure" }
+
+func (p *queuedFailureProvider) Complete(ctx context.Context, sys string, history []llm.Message, tools []llm.ToolSpec) (llm.Response, error) {
+	historyCopy := append([]llm.Message(nil), history...)
+	p.histories = append(p.histories, historyCopy)
+	p.called++
+	if p.called == 1 {
+		signal(p.started)
+		select {
+		case <-ctx.Done():
+			return llm.Response{}, ctx.Err()
+		case <-p.release:
+		}
+		return llm.Response{}, p.firstErr
+	}
+	return p.recovery, nil
+}
+
 type captureOptionsProvider struct {
 	opts llm.CompleteOptions
 }
@@ -2725,6 +2752,196 @@ func TestTurn_PendingInputContinuesAfterPlainResponse(t *testing.T) {
 	second := prov.histories[1]
 	if got := second[len(second)-1].FirstText(); got != "follow up" {
 		t.Fatalf("second call last message = %q", got)
+	}
+}
+
+func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
+	prov := &queuedFailureProvider{
+		started:  make(chan struct{}, 1),
+		release:  make(chan struct{}),
+		firstErr: errors.New("connection reset by peer"),
+		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}
+	eng, bus := newEngine(t, prov, false)
+	var retries []LLMRetryPayload
+	var turnErrors int32
+	bus.Subscribe("llm.retry", func(e events.Event) {
+		if payload, ok := e.Payload.(LLMRetryPayload); ok {
+			retries = append(retries, payload)
+		}
+	})
+	bus.Subscribe("turn.errored", func(e events.Event) { atomic.AddInt32(&turnErrors, 1) })
+
+	done := make(chan error, 1)
+	go func() {
+		out, err := eng.Turn(context.Background(), "active")
+		if err == nil && out != "recovered" {
+			err = fmt.Errorf("out = %q, want recovered", out)
+		}
+		done <- err
+	}()
+	waitSignal(t, prov.started, "provider did not start")
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "continue after failure"), PendingInputOptions{
+		ID:  "pending-provider-failure",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(prov.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	if prov.called != 2 || len(prov.histories) != 2 {
+		t.Fatalf("provider calls = %d histories = %d, want 2", prov.called, len(prov.histories))
+	}
+	if got := prov.histories[1][len(prov.histories[1])-1].FirstText(); got != "continue after failure" {
+		t.Fatalf("continued provider input = %q", got)
+	}
+	if len(retries) != 1 || retries[0].RetryReason != "pending_input_after_provider_error" || !retries[0].WillRetry {
+		t.Fatalf("retry diagnostics = %+v", retries)
+	}
+	if got := atomic.LoadInt32(&turnErrors); got != 0 {
+		t.Fatalf("turn.errored count = %d, want 0", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-provider-failure"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	}
+}
+
+func TestTurn_CancellationPreservesPendingInputWithoutContinuing(t *testing.T) {
+	prov := &mockProvider{
+		script: []llm.Response{{Message: llm.TextMessage(llm.RoleAssistant, "unused"), StopReason: llm.StopEndTurn}},
+		delay:  500 * time.Millisecond,
+	}
+	eng, bus := newEngine(t, prov, false)
+	requested := make(chan struct{}, 1)
+	var drained, dropped int32
+	bus.Subscribe("llm.requested", func(e events.Event) { signal(requested) })
+	bus.Subscribe("pending_input.drained", func(e events.Event) { atomic.AddInt32(&drained, 1) })
+	bus.Subscribe("pending_input.dropped", func(e events.Event) { atomic.AddInt32(&dropped, 1) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(ctx, "active")
+		done <- err
+	}()
+	waitSignal(t, requested, "llm.requested")
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve me"), PendingInputOptions{
+		ID:  "pending-after-cancel",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, cancellation.ErrUserCancelled) {
+		t.Fatalf("turn err = %v, want ErrUserCancelled", err)
+	}
+
+	if got := len(eng.Session.History); got != 2 {
+		t.Fatalf("history len = %d, want active and preserved pending input: %+v", got, eng.Session.History)
+	}
+	if got := eng.Session.History[1].FirstText(); got != "preserve me" {
+		t.Fatalf("preserved message = %q", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-after-cancel"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	}
+	if atomic.LoadInt32(&drained) != 1 || atomic.LoadInt32(&dropped) != 0 {
+		t.Fatalf("pending events drained=%d dropped=%d, want 1/0", drained, dropped)
+	}
+	if prov.called != 0 {
+		t.Fatalf("completed provider calls = %d, want none after cancellation", prov.called)
+	}
+}
+
+func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
+	prov := &queuedFailureProvider{
+		started:  make(chan struct{}, 1),
+		release:  make(chan struct{}),
+		firstErr: errors.New("unauthorized API key"),
+		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+	}
+	eng, _ := newEngine(t, prov, false)
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "active")
+		done <- err
+	}()
+	waitSignal(t, prov.started, "provider did not start")
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "keep after auth failure"), PendingInputOptions{
+		ID:  "pending-auth-failure",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	close(prov.release)
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("turn err = %v, want unauthorized", err)
+	}
+	if prov.called != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.called)
+	}
+	if got := eng.Session.History[len(eng.Session.History)-1].FirstText(); got != "keep after auth failure" {
+		t.Fatalf("preserved message = %q", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-auth-failure"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	}
+}
+
+func TestPreservePendingInputAfterFailureRepairsInterruptedToolCall(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	turnID := eng.beginActiveTurn("turn-repair-before-preserve")
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, "active")); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Session.Append(llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "interrupted-tool",
+		ToolName:  "read",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "preserve after tool failure"), PendingInputOptions{
+		ID:  "pending-after-tool-failure",
+		TTL: time.Hour,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.preservePendingInputAfterFailureLocked(turnID); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(eng.Session.History); got != 4 {
+		t.Fatalf("history len = %d, want user, tool use, repair, and pending input: %+v", got, eng.Session.History)
+	}
+	repair := eng.Session.History[2]
+	if repair.Role != llm.RoleUser || len(repair.Blocks) != 1 || repair.Blocks[0].Type != llm.BlockToolResult || repair.Blocks[0].ToolUseID != "interrupted-tool" || !repair.Blocks[0].IsError {
+		t.Fatalf("transcript repair = %+v", repair)
+	}
+	if got := eng.Session.History[3].FirstText(); got != "preserve after tool failure" {
+		t.Fatalf("preserved pending input = %q", got)
+	}
+	records, err := eng.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["pending-after-tool-failure"].State; got != PendingInputStateProcessed {
+		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
 	}
 }
 

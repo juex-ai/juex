@@ -895,7 +895,14 @@ stable message id is already present in conversation history, and marks
 processed records so the same user input or external event is not executed
 twice. That keeps assistant `tool_use` and user `tool_result` adjacency intact
 while still allowing steering messages to join the active turn without
-mid-stream interrupts or rollback.
+mid-stream interrupts or rollback. If a provider request fails with a general
+transport or timeout error while pending input exists, the runtime drains that
+input and continues the same turn with a fresh provider iteration. Terminal
+failures, including an explicit user Stop, authentication, and permission
+errors, instead drain accepted input into conversation history and end the
+turn without another provider call. Accepted input is never marked dropped
+because a turn failed; historical dropped records remain inert compatibility
+data and are not replayed automatically.
 
 ### 3.7 CLI (cobra)
 
