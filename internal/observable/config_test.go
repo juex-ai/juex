@@ -270,6 +270,76 @@ func TestSavedJSONContainsOnlyMatchingConfig(t *testing.T) {
 	}
 }
 
+func TestSaveConfigOmitsEmptyCommandObjectsAndRoundTripsNonEmptyValues(t *testing.T) {
+	minimalPath := filepath.Join(t.TempDir(), "minimal.json")
+	if err := observable.SaveConfig(minimalPath, observable.FileConfig{Observables: []observable.Spec{validSpec("minimal")}}); err != nil {
+		t.Fatal(err)
+	}
+	minimalBody, err := os.ReadFile(minimalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minimalText := string(minimalBody)
+	for _, emptyObject := range []string{`"on_exit": {}`, `"observation": {}`} {
+		if strings.Contains(minimalText, emptyObject) {
+			t.Fatalf("minimal command config contains empty object %s:\n%s", emptyObject, minimalText)
+		}
+	}
+
+	configured, err := observable.NewCommandSpec("configured", "", observable.CommandSourceSpec{
+		Command:     "echo",
+		OnExit:      observable.OnExitSpec{Notify: "nonzero"},
+		Observation: observable.CommandObservationSpec{Kind: "event", Severity: "warning"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuredPath := filepath.Join(t.TempDir(), "configured.json")
+	if err := observable.SaveConfig(configuredPath, observable.FileConfig{Observables: []observable.Spec{configured}}); err != nil {
+		t.Fatal(err)
+	}
+	configuredBody, err := os.ReadFile(configuredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuredText := string(configuredBody)
+	for _, want := range []string{`"on_exit": {`, `"notify": "nonzero"`, `"observation": {`, `"kind": "event"`, `"severity": "warning"`} {
+		if !strings.Contains(configuredText, want) {
+			t.Fatalf("configured command JSON missing %s:\n%s", want, configuredText)
+		}
+	}
+	loaded, err := observable.LoadConfig(configuredPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loaded.Observables[0].CommandConfig()
+	if !ok || got.OnExit.Notify != "nonzero" || got.Observation.Kind != "event" || got.Observation.Severity != "warning" {
+		t.Fatalf("round-tripped command config = %+v, ok = %v", got, ok)
+	}
+
+	schedule, err := observable.NewScheduleSpec("schedule-wire", "", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 60},
+		Observation: observable.ScheduleObservationSpec{Content: "tick"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedulePath := filepath.Join(t.TempDir(), "schedule.json")
+	if err := observable.SaveConfig(schedulePath, observable.FileConfig{Observables: []observable.Spec{schedule}}); err != nil {
+		t.Fatal(err)
+	}
+	scheduleBody, err := os.ReadFile(schedulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduleText := string(scheduleBody)
+	for _, emptyObject := range []string{`"on_exit": {}`, `"command_config": {}`} {
+		if strings.Contains(scheduleText, emptyObject) {
+			t.Fatalf("schedule config contains unrelated object %s:\n%s", emptyObject, scheduleText)
+		}
+	}
+}
+
 func TestExpandVariables(t *testing.T) {
 	got := observable.ExpandVariables("$WORKDIR/${JUEX_WORKDIR}/$JUEX_WORKDIR/${WORKDIR}", "/tmp/work")
 	if got != "/tmp/work//tmp/work//tmp/work//tmp/work" {

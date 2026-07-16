@@ -222,12 +222,51 @@ type wireSpec struct {
 	ScheduleConfig *ScheduleSourceSpec `json:"schedule_config,omitempty"`
 }
 
+type wireCommandSourceSpec struct {
+	Command     string                  `json:"command"`
+	Args        []string                `json:"args,omitempty"`
+	CWD         string                  `json:"cwd,omitempty"`
+	Env         map[string]string       `json:"env,omitempty"`
+	Streams     []string                `json:"streams,omitempty"`
+	Parser      *ParserSpec             `json:"parser,omitempty"`
+	Filters     []FilterSpec            `json:"filters,omitempty"`
+	Batch       *BatchSpec              `json:"batch,omitempty"`
+	OnExit      *OnExitSpec             `json:"on_exit,omitempty"`
+	Observation *CommandObservationSpec `json:"observation,omitempty"`
+}
+
+type marshalWireSpec struct {
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name,omitempty"`
+	Type           string                 `json:"type"`
+	CommandConfig  *wireCommandSourceSpec `json:"command_config,omitempty"`
+	ScheduleConfig *ScheduleSourceSpec    `json:"schedule_config,omitempty"`
+}
+
 func (spec Spec) MarshalJSON() ([]byte, error) {
-	wire := wireSpec{ID: spec.ID, Name: spec.Name, Type: spec.SourceType()}
+	wire := marshalWireSpec{ID: spec.ID, Name: spec.Name, Type: spec.SourceType()}
 	switch spec.SourceType() {
 	case SourceTypeCommand:
 		config, _ := spec.CommandConfig()
-		wire.CommandConfig = &config
+		wireConfig := wireCommandSourceSpec{
+			Command: config.Command,
+			Args:    config.Args,
+			CWD:     config.CWD,
+			Env:     config.Env,
+			Streams: config.Streams,
+			Parser:  config.Parser,
+			Filters: config.Filters,
+		}
+		if config.Batch != (BatchSpec{}) {
+			wireConfig.Batch = &config.Batch
+		}
+		if config.OnExit != (OnExitSpec{}) {
+			wireConfig.OnExit = &config.OnExit
+		}
+		if config.Observation != (CommandObservationSpec{}) {
+			wireConfig.Observation = &config.Observation
+		}
+		wire.CommandConfig = &wireConfig
 	case SourceTypeSchedule:
 		config, _ := spec.ScheduleConfig()
 		wire.ScheduleConfig = &config
