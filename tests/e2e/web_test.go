@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -95,6 +96,9 @@ func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T
 			Count  int `json:"count"`
 			Groups []struct {
 				Group string `json:"group"`
+				Tools []struct {
+					Name string `json:"name"`
+				} `json:"tools"`
 			} `json:"groups"`
 		} `json:"tools"`
 		MCP struct {
@@ -116,8 +120,20 @@ func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Tools.Count != 27 || len(got.Tools.Groups) != 8 {
+	if got.Tools.Count != 28 || len(got.Tools.Groups) != 8 {
 		t.Fatalf("builtin catalog = %+v", got.Tools)
+	}
+	var observableToolNames []string
+	for _, group := range got.Tools.Groups {
+		if group.Group != "observable" {
+			continue
+		}
+		for _, tool := range group.Tools {
+			observableToolNames = append(observableToolNames, tool.Name)
+		}
+	}
+	if len(observableToolNames) != 7 || !slices.Contains(observableToolNames, "schedule_create") {
+		t.Fatalf("observable tools = %v, want seven including schedule_create", observableToolNames)
 	}
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "local" || got.MCP.Servers[0].ToolCount != 1 || len(got.MCP.Servers[0].Tools) != 1 {
 		t.Fatalf("mcp catalog = %+v", got.MCP)

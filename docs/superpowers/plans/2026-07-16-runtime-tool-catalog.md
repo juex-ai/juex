@@ -208,7 +208,7 @@ Extend `/api/runtime` tests to require:
 
 ```json
 {
-  "tools": {"count": 27, "groups": []},
+  "tools": {"count": 28, "groups": []},
   "mcp": {"servers": [{"tool_count": 1, "tools": [{"name": "echo"}]}]}
 }
 ```

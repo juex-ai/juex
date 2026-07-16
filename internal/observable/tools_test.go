@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
+	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -26,6 +29,7 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 		"observable_observations",
 		"observable_start",
 		"observable_stop",
+		"schedule_create",
 	}
 	var got []string
 	for _, tool := range reg.List() {
@@ -57,12 +61,20 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 	}
 	if !strings.Contains(create.Description, "Call observable_list first") ||
 		!strings.Contains(create.Description, "batch defaults are safe") ||
-		!strings.Contains(create.Description, "schedule sources do not run commands") {
+		!strings.Contains(create.Description, "schedule_create") {
 		t.Fatalf("description = %q", create.Description)
+	}
+	schedule, ok := reg.Get("schedule_create")
+	if !ok {
+		t.Fatal("schedule_create missing")
+	}
+	if !strings.Contains(schedule.Description, "scheduled") ||
+		!strings.Contains(schedule.Description, "polling") {
+		t.Fatalf("schedule description = %q", schedule.Description)
 	}
 }
 
-func TestObservableCreateSchemaGuidesSingleSourceShape(t *testing.T) {
+func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 	mgr := newToolTestManager(t)
 	reg := tools.NewRegistry()
 	if err := observable.RegisterTools(reg, mgr); err != nil {
@@ -73,30 +85,21 @@ func TestObservableCreateSchemaGuidesSingleSourceShape(t *testing.T) {
 		t.Fatal("observable_create missing")
 	}
 	if got := create.Schema["additionalProperties"]; got != false {
-		t.Fatalf("create schema additionalProperties = %v, want false", got)
+		t.Fatalf("observable_create additionalProperties = %v, want false", got)
 	}
-	props := schemaMap(t, create.Schema, "properties")
-	for _, legacy := range []string{"command", "args", "cwd", "env", "streams", "defaults", "parser", "filters", "batch", "on_exit"} {
-		if _, ok := props[legacy]; ok {
-			t.Fatalf("create schema exposes legacy top-level %q: %#v", legacy, props[legacy])
+	commandProps := schemaMap(t, create.Schema, "properties")
+	for _, required := range []string{"id", "command", "args", "cwd", "env", "streams", "parser", "filters", "batch", "on_exit", "observation"} {
+		if _, ok := commandProps[required]; !ok {
+			t.Fatalf("observable_create missing command field %q", required)
 		}
 	}
-	source := schemaMapFromValue(t, props["source"])
-	oneOf, ok := source["oneOf"].([]any)
-	if !ok || len(oneOf) != 2 {
-		t.Fatalf("source oneOf = %#v, want two source shapes", source["oneOf"])
+	for _, forbidden := range []string{"source", "type", "timezone", "once", "daily", "interval", "catch_up", "content", "attachments", "command_config", "schedule_config"} {
+		if _, ok := commandProps[forbidden]; ok {
+			t.Fatalf("observable_create exposes cross-source field %q", forbidden)
+		}
 	}
-	command := schemaMapFromValue(t, oneOf[0])
-	schedule := schemaMapFromValue(t, oneOf[1])
-	if command["additionalProperties"] != false || schedule["additionalProperties"] != false {
-		t.Fatalf("source shapes must be closed: command=%v schedule=%v", command["additionalProperties"], schedule["additionalProperties"])
-	}
-	commandProps := schemaMap(t, command, "properties")
-	if _, ok := commandProps["batch"]; !ok {
-		t.Fatalf("command source missing batch property: %#v", commandProps)
-	}
-	if _, ok := commandProps["interval"]; ok {
-		t.Fatalf("command source exposes schedule interval: %#v", commandProps["interval"])
+	if _, ok := create.Schema["oneOf"]; ok {
+		t.Fatalf("observable_create retains old source union: %#v", create.Schema["oneOf"])
 	}
 	for _, name := range []string{"parser", "batch", "on_exit"} {
 		if schemaMapFromValue(t, commandProps[name])["additionalProperties"] != false {
@@ -111,12 +114,34 @@ func TestObservableCreateSchemaGuidesSingleSourceShape(t *testing.T) {
 	if oneOf, ok := filter["oneOf"].([]any); !ok || len(oneOf) != 2 {
 		t.Fatalf("filter item oneOf = %#v, want contains/regex alternatives", filter["oneOf"])
 	}
-	scheduleProps := schemaMap(t, schedule, "properties")
-	if _, ok := scheduleProps["command"]; ok {
-		t.Fatalf("schedule source exposes command: %#v", scheduleProps["command"])
+	commandObservation := schemaMapFromValue(t, commandProps["observation"])
+	commandObservationProps := schemaMap(t, commandObservation, "properties")
+	for _, forbidden := range []string{"content", "attachments"} {
+		if _, ok := commandObservationProps[forbidden]; ok {
+			t.Fatalf("command observation exposes %q", forbidden)
+		}
 	}
-	if oneOf, ok := schedule["oneOf"].([]any); !ok || len(oneOf) != 3 {
-		t.Fatalf("schedule source oneOf = %#v, want once/daily/interval alternatives", schedule["oneOf"])
+
+	schedule, ok := reg.Get("schedule_create")
+	if !ok {
+		t.Fatal("schedule_create missing")
+	}
+	if schedule.Schema["additionalProperties"] != false {
+		t.Fatalf("schedule_create additionalProperties = %#v, want false", schedule.Schema["additionalProperties"])
+	}
+	scheduleProps := schemaMap(t, schedule.Schema, "properties")
+	for _, required := range []string{"id", "timezone", "once", "daily", "interval", "catch_up", "observation"} {
+		if _, ok := scheduleProps[required]; !ok {
+			t.Fatalf("schedule_create missing schedule field %q", required)
+		}
+	}
+	for _, forbidden := range []string{"source", "type", "command", "args", "cwd", "env", "streams", "parser", "filters", "batch", "on_exit", "command_config", "schedule_config"} {
+		if _, ok := scheduleProps[forbidden]; ok {
+			t.Fatalf("schedule_create exposes command field %q", forbidden)
+		}
+	}
+	if oneOf, ok := schedule.Schema["oneOf"].([]any); !ok || len(oneOf) != 3 {
+		t.Fatalf("schedule_create oneOf = %#v, want once/daily/interval alternatives", schedule.Schema["oneOf"])
 	} else {
 		dailyBranch := schemaMapFromValue(t, oneOf[1])
 		req, ok := dailyBranch["required"].([]any)
@@ -137,6 +162,32 @@ func TestObservableCreateSchemaGuidesSingleSourceShape(t *testing.T) {
 	if schemaMapFromValue(t, scheduleProps["interval"])["additionalProperties"] != false {
 		t.Fatalf("interval schema is open: %#v", scheduleProps["interval"])
 	}
+	if schemaMapFromValue(t, scheduleProps["once"])["additionalProperties"] != false ||
+		schemaMapFromValue(t, scheduleProps["daily"])["additionalProperties"] != false ||
+		schemaMapFromValue(t, scheduleProps["catch_up"])["additionalProperties"] != false {
+		t.Fatal("schedule recurrence sub-schemas must be closed")
+	}
+}
+
+func TestCreateToolSchemaCostsAreMeasuredWithoutOldUnion(t *testing.T) {
+	mgr := newToolTestManager(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	var commandTokens, scheduleTokens int
+	for _, spec := range reg.Specs() {
+		switch spec.Name {
+		case "observable_create":
+			commandTokens = contextbudget.EstimateToolTokens([]llm.ToolSpec{spec})
+		case "schedule_create":
+			scheduleTokens = contextbudget.EstimateToolTokens([]llm.ToolSpec{spec})
+		}
+	}
+	if commandTokens <= 0 || scheduleTokens <= 0 {
+		t.Fatalf("create schema token estimates = command:%d schedule:%d", commandTokens, scheduleTokens)
+	}
+	t.Logf("create schema token estimates: observable_create=%d schedule_create=%d delta=%d", commandTokens, scheduleTokens, scheduleTokens-commandTokens)
 }
 
 func TestObservableToolsCreateListDelete(t *testing.T) {
@@ -182,25 +233,22 @@ func TestObservableToolsCreateListDelete(t *testing.T) {
 	}
 }
 
-func TestObservableToolsCreateScheduleSource(t *testing.T) {
-	mgr := newToolTestManager(t)
+func TestScheduleCreatePersistsTaggedSpecAndStartsSchedule(t *testing.T) {
+	mgr, config := newToolTestManagerWithConfigPath(t)
 	reg := tools.NewRegistry()
 	if err := observable.RegisterTools(reg, mgr); err != nil {
 		t.Fatal(err)
 	}
 	input := map[string]any{
-		"id": "weekday-brief",
-		"source": map[string]any{
-			"type":     "schedule",
-			"timezone": "Asia/Shanghai",
-			"daily": map[string]any{
-				"times":    []any{"09:00"},
-				"weekdays": []any{"mon", "tue", "wed", "thu", "fri"},
-			},
-			"catch_up": map[string]any{
-				"mode":                 "latest",
-				"max_lateness_minutes": float64(120),
-			},
+		"id":       "weekday-brief",
+		"timezone": "Asia/Shanghai",
+		"daily": map[string]any{
+			"times":    []any{"09:00"},
+			"weekdays": []any{"mon", "tue", "wed", "thu", "fri"},
+		},
+		"catch_up": map[string]any{
+			"mode":                 "latest",
+			"max_lateness_minutes": float64(120),
 		},
 		"observation": map[string]any{
 			"kind":     "heartbeat",
@@ -208,28 +256,38 @@ func TestObservableToolsCreateScheduleSource(t *testing.T) {
 			"content":  "Prepare a concise work brief.",
 		},
 	}
-	out, _, err := reg.CallWithInfo(context.Background(), "observable_create", input)
+	out, _, err := reg.CallWithInfo(context.Background(), "schedule_create", input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, `"source_type": "schedule"`) {
 		t.Fatalf("create schedule output = %s", out)
 	}
+	body, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{`"type": "schedule"`, `"schedule_config"`, `"content": "Prepare a concise work brief."`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("persisted schedule missing %s: %s", want, text)
+		}
+	}
+	if strings.Contains(text, `"command_config"`) || strings.Contains(text, `"source"`) {
+		t.Fatalf("persisted schedule contains cross-source shape: %s", text)
+	}
 }
 
-func TestObservableToolsCreateCommandSourceDefaultsBatch(t *testing.T) {
+func TestObservableCreatePersistsTaggedSpecAndStartsCommand(t *testing.T) {
 	mgr, config := newToolTestManagerWithConfigPath(t)
 	reg := tools.NewRegistry()
 	if err := observable.RegisterTools(reg, mgr); err != nil {
 		t.Fatal(err)
 	}
 	input := map[string]any{
-		"id": "lark-events",
-		"source": map[string]any{
-			"type":    "command",
-			"command": "echo",
-			"args":    []any{"hello"},
-		},
+		"id":      "lark-events",
+		"command": "echo",
+		"args":    []any{"hello"},
 	}
 	out, _, err := reg.CallWithInfo(context.Background(), "observable_create", input)
 	if err != nil {
@@ -252,52 +310,65 @@ func TestObservableToolsCreateCommandSourceDefaultsBatch(t *testing.T) {
 		body, _ := json.MarshalIndent(cfg, "", "  ")
 		t.Fatalf("persisted command config missing batch defaults: %s", body)
 	}
+	body, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, `"type": "command"`) || !strings.Contains(text, `"command_config"`) {
+		t.Fatalf("persisted command is not tagged: %s", text)
+	}
+	if strings.Contains(text, `"schedule_config"`) || strings.Contains(text, `"source"`) {
+		t.Fatalf("persisted command contains cross-source shape: %s", text)
+	}
 }
 
-func TestObservableToolsCreateRejectsAmbiguousSourceShapes(t *testing.T) {
+func TestObservableCreateRoutesScheduleAndLegacyShapesToScheduleCreate(t *testing.T) {
 	tests := []struct {
 		name  string
 		input map[string]any
 		want  string
 	}{
 		{
-			name: "unknown source type",
+			name: "nested schedule source",
 			input: map[string]any{
-				"id":     "unknown-source",
-				"source": map[string]any{"type": "http", "command": "echo"},
-			},
-			want: "source.type must be command or schedule",
-		},
-		{
-			name: "command source with schedule field",
-			input: map[string]any{
-				"id": "mixed-command",
+				"id": "nested-schedule",
 				"source": map[string]any{
-					"type": "command", "command": "echo",
-					"interval": map[string]any{"every_seconds": float64(60)},
-				},
-			},
-			want: "command source cannot set schedule fields",
-		},
-		{
-			name: "schedule source with command field",
-			input: map[string]any{
-				"id": "mixed-schedule",
-				"source": map[string]any{
-					"type": "schedule", "command": "echo",
+					"type":     "schedule",
 					"interval": map[string]any{"every_seconds": float64(60)},
 				},
 				"observation": map[string]any{"content": "tick"},
 			},
-			want: "schedule source cannot set command fields",
+			want: "schedule_create",
 		},
 		{
-			name: "explicit source with top level command fields",
+			name: "flat schedule recurrence",
 			input: map[string]any{
-				"id": "mixed-levels", "command": "printf",
-				"source": map[string]any{"type": "command", "command": "echo"},
+				"id":          "flat-schedule",
+				"interval":    map[string]any{"every_seconds": float64(60)},
+				"observation": map[string]any{"content": "tick"},
 			},
-			want: "top-level command fields cannot be mixed with source",
+			want: "schedule_create",
+		},
+		{
+			name: "schedule observation content",
+			input: map[string]any{
+				"id":          "schedule-content",
+				"command":     "echo",
+				"observation": map[string]any{"content": "tick"},
+			},
+			want: "schedule_create",
+		},
+		{
+			name: "legacy tagged persisted shape",
+			input: map[string]any{
+				"id": "legacy-tagged", "type": "schedule",
+				"schedule_config": map[string]any{
+					"interval":    map[string]any{"every_seconds": float64(60)},
+					"observation": map[string]any{"content": "tick"},
+				},
+			},
+			want: "schedule_create",
 		},
 	}
 	for _, tt := range tests {
@@ -311,6 +382,50 @@ func TestObservableToolsCreateRejectsAmbiguousSourceShapes(t *testing.T) {
 				t.Fatalf("observable_create error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestCreateHandlersRejectUnknownCrossSourceFields(t *testing.T) {
+	mgr := newToolTestManager(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reg.CallWithInfo(context.Background(), "schedule_create", map[string]any{
+		"id": "bad-schedule", "command": "echo",
+		"interval":    map[string]any{"every_seconds": float64(60)},
+		"observation": map[string]any{"content": "tick"},
+	}); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("schedule_create command-field error = %v, want strict unknown field", err)
+	}
+	if _, _, err := reg.CallWithInfo(context.Background(), "observable_create", map[string]any{
+		"id": "bad-command", "command": "echo", "mystery": true,
+	}); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("observable_create unknown-field error = %v, want strict unknown field", err)
+	}
+}
+
+func TestCreateHandlersRequireOneFilterAndRecurrenceBranch(t *testing.T) {
+	mgr := newToolTestManager(t)
+	reg := tools.NewRegistry()
+	if err := observable.RegisterTools(reg, mgr); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reg.CallWithInfo(context.Background(), "observable_create", map[string]any{
+		"id": "bad-filter", "command": "echo",
+		"filters": []any{map[string]any{"contains": "ok", "regex": "ok"}},
+	}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("observable_create filter error = %v, want exactly one predicate", err)
+	}
+	if _, _, err := reg.CallWithInfo(context.Background(), "schedule_create", map[string]any{
+		"id":       "bad-recurrence",
+		"once":     map[string]any{"at": "2030-01-01T00:00:00Z"},
+		"interval": map[string]any{"every_seconds": float64(60)},
+		"observation": map[string]any{
+			"content": "tick",
+		},
+	}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("schedule_create recurrence error = %v, want exactly one recurrence", err)
 	}
 }
 

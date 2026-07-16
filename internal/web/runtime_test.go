@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,8 +58,20 @@ body`)
 	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "alpha" || got.MCP.Servers[0].Command != os.Args[0] || got.MCP.Servers[0].Status != "connected" || got.MCP.Servers[0].ToolCount != 1 {
 		t.Fatalf("servers = %+v", got.MCP.Servers)
 	}
-	if got.Tools.Count != 27 || len(got.Tools.Groups) != 8 {
+	if got.Tools.Count != 28 || len(got.Tools.Groups) != 8 {
 		t.Fatalf("tools = %+v", got.Tools)
+	}
+	var observableToolNames []string
+	for _, group := range got.Tools.Groups {
+		if group.Group != string(tools.ToolGroupObservable) {
+			continue
+		}
+		for _, tool := range group.Tools {
+			observableToolNames = append(observableToolNames, tool.Name)
+		}
+	}
+	if len(observableToolNames) != 7 || !slices.Contains(observableToolNames, "schedule_create") {
+		t.Fatalf("observable tools = %v, want seven including schedule_create", observableToolNames)
 	}
 	mcpTools := got.MCP.Servers[0].Tools
 	if len(mcpTools) != 1 || mcpTools[0].Name != "echo" || mcpTools[0].Description != "Echo input" {

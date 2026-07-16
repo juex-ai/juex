@@ -1,9 +1,11 @@
 package observable
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -32,8 +34,14 @@ func ToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        "observable_create",
 			Group:       tools.ToolGroupObservable,
-			Description: "Create a workspace-local Observable with exactly one source shape and start it immediately. Call observable_list first and avoid duplicates. Use source.type=\"command\" to run a process and batch its output; batch defaults are safe if omitted. Use source.type=\"schedule\" only to emit observation.content at scheduled times; schedule sources do not run commands. Do not mix top-level command fields with source. Stopping is temporary; deleting is permanent.",
-			Schema:      specSchema(),
+			Description: "Create a workspace-local command Observable and start it immediately. Call observable_list first and avoid duplicates. The input is flat; batch defaults are safe if omitted. Use schedule_create for scheduled or recurring activation. Stopping is temporary; deleting is permanent.",
+			Schema:      commandCreateSchema(),
+		},
+		{
+			Name:        "schedule_create",
+			Group:       tools.ToolGroupObservable,
+			Description: "Create a workspace-local Schedule that emits a pre-authored Observation at scheduled times. Use this for scheduled or recurring activation instead of a polling script or command Observable. Call observable_list first and avoid duplicates.",
+			Schema:      scheduleCreateSchema(),
 		},
 		{
 			Name:        "observable_start",
@@ -90,11 +98,7 @@ func observableTools(manager *Manager) []tools.Tool {
 			return jsonString(manager.Status())
 		}),
 		definitions[1].Bind(func(ctx context.Context, in map[string]any) (string, error) {
-			body, err := json.Marshal(in)
-			if err != nil {
-				return "", err
-			}
-			spec, err := specFromCreateInput(body)
+			spec, err := commandSpecFromCreateInput(in)
 			if err != nil {
 				return "", err
 			}
@@ -105,6 +109,17 @@ func observableTools(manager *Manager) []tools.Tool {
 			return jsonString(status)
 		}),
 		definitions[2].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			spec, err := scheduleSpecFromCreateInput(in)
+			if err != nil {
+				return "", err
+			}
+			status, err := manager.Create(ctx, spec)
+			if err != nil {
+				return "", err
+			}
+			return jsonString(status)
+		}),
+		definitions[3].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			id, err := requiredString(in, "id")
 			if err != nil {
 				return "", err
@@ -118,7 +133,7 @@ func observableTools(manager *Manager) []tools.Tool {
 			}
 			return jsonString(status)
 		}),
-		definitions[3].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		definitions[4].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			id, err := requiredString(in, "id")
 			if err != nil {
 				return "", err
@@ -132,7 +147,7 @@ func observableTools(manager *Manager) []tools.Tool {
 			}
 			return jsonString(status)
 		}),
-		definitions[4].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		definitions[5].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			id, err := requiredString(in, "id")
 			if err != nil {
 				return "", err
@@ -142,7 +157,7 @@ func observableTools(manager *Manager) []tools.Tool {
 			}
 			return jsonString(map[string]any{"deleted": id})
 		}),
-		definitions[5].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		definitions[6].Bind(func(ctx context.Context, in map[string]any) (string, error) {
 			_ = ctx
 			records, err := manager.Observations(ObservationFilter{
 				ObservableID: optionalString(in, "id"),
@@ -156,12 +171,10 @@ func observableTools(manager *Manager) []tools.Tool {
 	}
 }
 
-type createInput struct {
+type commandCreateInput struct {
 	ID          string                 `json:"id"`
 	Name        string                 `json:"name,omitempty"`
-	Source      *createSourceInput     `json:"source,omitempty"`
-	Observation createObservationInput `json:"observation,omitempty"`
-	Command     string                 `json:"command,omitempty"`
+	Command     string                 `json:"command"`
 	Args        []string               `json:"args,omitempty"`
 	CWD         string                 `json:"cwd,omitempty"`
 	Env         map[string]string      `json:"env,omitempty"`
@@ -170,83 +183,29 @@ type createInput struct {
 	Filters     []FilterSpec           `json:"filters,omitempty"`
 	Batch       BatchSpec              `json:"batch,omitempty"`
 	OnExit      OnExitSpec             `json:"on_exit,omitempty"`
-	Defaults    Defaults               `json:"defaults,omitempty"`
+	Observation CommandObservationSpec `json:"observation,omitempty"`
 }
 
-type createSourceInput struct {
-	Type     string            `json:"type"`
-	Command  string            `json:"command,omitempty"`
-	Args     []string          `json:"args,omitempty"`
-	CWD      string            `json:"cwd,omitempty"`
-	Env      map[string]string `json:"env,omitempty"`
-	Streams  []string          `json:"streams,omitempty"`
-	Parser   *ParserSpec       `json:"parser,omitempty"`
-	Filters  []FilterSpec      `json:"filters,omitempty"`
-	Batch    BatchSpec         `json:"batch,omitempty"`
-	OnExit   OnExitSpec        `json:"on_exit,omitempty"`
-	Timezone string            `json:"timezone,omitempty"`
-	Once     *OnceSchedule     `json:"once,omitempty"`
-	Daily    *DailySchedule    `json:"daily,omitempty"`
-	Interval *IntervalSchedule `json:"interval,omitempty"`
-	CatchUp  CatchUpSpec       `json:"catch_up,omitempty"`
+type scheduleCreateInput struct {
+	ID          string                  `json:"id"`
+	Name        string                  `json:"name,omitempty"`
+	Timezone    string                  `json:"timezone,omitempty"`
+	Once        *OnceSchedule           `json:"once,omitempty"`
+	Daily       *DailySchedule          `json:"daily,omitempty"`
+	Interval    *IntervalSchedule       `json:"interval,omitempty"`
+	CatchUp     CatchUpSpec             `json:"catch_up,omitempty"`
+	Observation ScheduleObservationSpec `json:"observation"`
 }
 
-type createObservationInput struct {
-	Kind        string           `json:"kind,omitempty"`
-	Severity    string           `json:"severity,omitempty"`
-	Content     string           `json:"content,omitempty"`
-	Attachments []AttachmentSpec `json:"attachments,omitempty"`
-}
-
-func specFromCreateInput(body []byte) (Spec, error) {
-	var input createInput
-	if err := json.Unmarshal(body, &input); err != nil {
+func commandSpecFromCreateInput(in map[string]any) (Spec, error) {
+	if err := rejectCommandCreateRouting(in); err != nil {
 		return Spec{}, err
 	}
-	if input.Source != nil {
-		switch input.Source.Type {
-		case SourceTypeCommand, SourceTypeSchedule:
-		default:
-			return Spec{}, fmt.Errorf("source.type must be command or schedule, got %q", input.Source.Type)
-		}
-		if fields := input.topLevelCommandFields(); len(fields) > 0 {
-			return Spec{}, fmt.Errorf("top-level command fields cannot be mixed with source: %s", strings.Join(fields, ", "))
-		}
+	input, err := decodeCreateInput[commandCreateInput](in)
+	if err != nil {
+		return Spec{}, fmt.Errorf("observable_create: %w", err)
 	}
-	if input.Source != nil && input.Source.Type == SourceTypeSchedule {
-		if fields := input.Source.commandFields(); len(fields) > 0 {
-			return Spec{}, fmt.Errorf("schedule source cannot set command fields: %s", strings.Join(fields, ", "))
-		}
-		return NewScheduleSpec(input.ID, input.Name, ScheduleSourceSpec{
-			Timezone: input.Source.Timezone,
-			Once:     input.Source.Once,
-			Daily:    input.Source.Daily,
-			Interval: input.Source.Interval,
-			CatchUp:  input.Source.CatchUp,
-			Observation: ScheduleObservationSpec{
-				Kind:        input.Observation.Kind,
-				Severity:    input.Observation.Severity,
-				Content:     input.Observation.Content,
-				Attachments: input.Observation.Attachments,
-			},
-		})
-	}
-	if input.Source != nil {
-		if fields := input.Source.scheduleFields(); len(fields) > 0 {
-			return Spec{}, fmt.Errorf("command source cannot set schedule fields: %s", strings.Join(fields, ", "))
-		}
-	}
-	if len(input.Observation.Attachments) > 0 {
-		return Spec{}, fmt.Errorf("command source cannot set observation.attachments; use parser.attachments_field")
-	}
-	observation := CommandObservationSpec{Kind: input.Defaults.Kind, Severity: input.Defaults.Severity}
-	if input.Observation.Kind != "" {
-		observation.Kind = input.Observation.Kind
-	}
-	if input.Observation.Severity != "" {
-		observation.Severity = input.Observation.Severity
-	}
-	config := CommandSourceSpec{
+	return NewCommandSpec(input.ID, input.Name, CommandSourceSpec{
 		Command:     input.Command,
 		Args:        input.Args,
 		CWD:         input.CWD,
@@ -256,167 +215,99 @@ func specFromCreateInput(body []byte) (Spec, error) {
 		Filters:     input.Filters,
 		Batch:       input.Batch,
 		OnExit:      input.OnExit,
-		Observation: observation,
-	}
-	if input.Source != nil {
-		config.Command = input.Source.Command
-		config.Args = input.Source.Args
-		config.CWD = input.Source.CWD
-		config.Env = input.Source.Env
-		config.Streams = input.Source.Streams
-		config.Parser = input.Source.Parser
-		config.Filters = input.Source.Filters
-		config.Batch = input.Source.Batch
-		config.OnExit = input.Source.OnExit
-	}
-	return NewCommandSpec(input.ID, input.Name, config)
+		Observation: input.Observation,
+	})
 }
 
-func (input createInput) topLevelCommandFields() []string {
-	var fields []string
-	if strings.TrimSpace(input.Command) != "" {
-		fields = append(fields, "command")
+func scheduleSpecFromCreateInput(in map[string]any) (Spec, error) {
+	input, err := decodeCreateInput[scheduleCreateInput](in)
+	if err != nil {
+		return Spec{}, fmt.Errorf("schedule_create: %w", err)
 	}
-	if len(input.Args) > 0 {
-		fields = append(fields, "args")
-	}
-	if strings.TrimSpace(input.CWD) != "" {
-		fields = append(fields, "cwd")
-	}
-	if len(input.Env) > 0 {
-		fields = append(fields, "env")
-	}
-	if len(input.Streams) > 0 {
-		fields = append(fields, "streams")
-	}
-	if input.Parser != nil {
-		fields = append(fields, "parser")
-	}
-	if len(input.Filters) > 0 {
-		fields = append(fields, "filters")
-	}
-	if input.Batch != (BatchSpec{}) {
-		fields = append(fields, "batch")
-	}
-	if input.OnExit != (OnExitSpec{}) {
-		fields = append(fields, "on_exit")
-	}
-	if input.Defaults != (Defaults{}) {
-		fields = append(fields, "defaults")
-	}
-	return fields
+	return NewScheduleSpec(input.ID, input.Name, ScheduleSourceSpec{
+		Timezone:    input.Timezone,
+		Once:        input.Once,
+		Daily:       input.Daily,
+		Interval:    input.Interval,
+		CatchUp:     input.CatchUp,
+		Observation: input.Observation,
+	})
 }
 
-func (source createSourceInput) commandFields() []string {
-	var fields []string
-	if strings.TrimSpace(source.Command) != "" {
-		fields = append(fields, "source.command")
+func rejectCommandCreateRouting(in map[string]any) error {
+	for _, field := range []string{
+		"source", "type", "timezone", "once", "daily", "interval", "catch_up",
+		"command_config", "schedule_config",
+	} {
+		if _, exists := in[field]; exists {
+			return fmt.Errorf("observable_create accepts only flat command input; use schedule_create for scheduled Observations (unexpected field %q)", field)
+		}
 	}
-	if len(source.Args) > 0 {
-		fields = append(fields, "source.args")
+	observation, ok := in["observation"].(map[string]any)
+	if !ok {
+		return nil
 	}
-	if strings.TrimSpace(source.CWD) != "" {
-		fields = append(fields, "source.cwd")
+	for _, field := range []string{"content", "attachments"} {
+		if _, exists := observation[field]; exists {
+			return fmt.Errorf("observable_create cannot set observation.%s; use schedule_create for scheduled Observations", field)
+		}
 	}
-	if len(source.Env) > 0 {
-		fields = append(fields, "source.env")
-	}
-	if len(source.Streams) > 0 {
-		fields = append(fields, "source.streams")
-	}
-	if source.Parser != nil {
-		fields = append(fields, "source.parser")
-	}
-	if len(source.Filters) > 0 {
-		fields = append(fields, "source.filters")
-	}
-	if source.Batch != (BatchSpec{}) {
-		fields = append(fields, "source.batch")
-	}
-	if source.OnExit != (OnExitSpec{}) {
-		fields = append(fields, "source.on_exit")
-	}
-	return fields
+	return nil
 }
 
-func (source createSourceInput) scheduleFields() []string {
-	var fields []string
-	if strings.TrimSpace(source.Timezone) != "" {
-		fields = append(fields, "source.timezone")
+func decodeCreateInput[T any](in map[string]any) (T, error) {
+	var input T
+	body, err := json.Marshal(in)
+	if err != nil {
+		return input, err
 	}
-	if source.Once != nil {
-		fields = append(fields, "source.once")
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return input, err
 	}
-	if source.Daily != nil {
-		fields = append(fields, "source.daily")
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return input, fmt.Errorf("unexpected trailing input")
 	}
-	if source.Interval != nil {
-		fields = append(fields, "source.interval")
-	}
-	if source.CatchUp != (CatchUpSpec{}) {
-		fields = append(fields, "source.catch_up")
-	}
-	return fields
+	return input, nil
 }
 
-func specSchema() map[string]any {
+func commandCreateSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
-		"required":             []any{"id", "source"},
+		"required":             []any{"id", "command"},
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string"},
 			"name":        map[string]any{"type": "string"},
-			"source":      sourceSchema(),
-			"observation": observationSchema(),
+			"command":     map[string]any{"type": "string"},
+			"args":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"cwd":         map[string]any{"type": "string"},
+			"env":         map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+			"streams":     streamSchema(),
+			"parser":      parserSchema(),
+			"filters":     map[string]any{"type": "array", "items": filterSchema()},
+			"batch":       batchSchema(),
+			"on_exit":     onExitSchema(),
+			"observation": commandObservationSchema(),
 		},
 	}
 }
 
-func sourceSchema() map[string]any {
-	return map[string]any{
-		"type":        "object",
-		"description": "Choose either the command source shape or the schedule source shape. Do not combine command fields with schedule fields.",
-		"oneOf":       []any{commandSourceSchema(), scheduleSourceSchema()},
-	}
-}
-
-func commandSourceSchema() map[string]any {
+func scheduleCreateSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"title":                "Command source",
-		"description":          "Runs a command and batches stdout/stderr into Observations. Use this for recurring command output; omit batch to use safe defaults.",
 		"additionalProperties": false,
-		"required":             []any{"type", "command"},
+		"required":             []any{"id", "observation"},
 		"properties": map[string]any{
-			"type":    map[string]any{"type": "string", "enum": []any{SourceTypeCommand}},
-			"command": map[string]any{"type": "string"},
-			"args":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"cwd":     map[string]any{"type": "string"},
-			"env":     map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
-			"streams": streamSchema(),
-			"parser":  parserSchema(),
-			"filters": map[string]any{"type": "array", "items": filterSchema()},
-			"batch":   batchSchema(),
-			"on_exit": onExitSchema(),
-		},
-	}
-}
-
-func scheduleSourceSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"title":                "Schedule source",
-		"description":          "Emits observation.content at the configured time. It does not run command, args, parser, filters, batch, or on_exit.",
-		"additionalProperties": false,
-		"required":             []any{"type"},
-		"properties": map[string]any{
-			"type":     map[string]any{"type": "string", "enum": []any{SourceTypeSchedule}},
-			"timezone": map[string]any{"type": "string", "description": "IANA timezone for daily schedules, for example Asia/Shanghai"},
-			"once":     onceScheduleSchema(),
-			"daily":    dailyScheduleSchema(),
-			"interval": intervalScheduleSchema(),
-			"catch_up": catchUpSchema(),
+			"id":          map[string]any{"type": "string"},
+			"name":        map[string]any{"type": "string"},
+			"timezone":    map[string]any{"type": "string", "description": "IANA timezone for daily schedules, for example Asia/Shanghai"},
+			"once":        onceScheduleSchema(),
+			"daily":       dailyScheduleSchema(),
+			"interval":    intervalScheduleSchema(),
+			"catch_up":    catchUpSchema(),
+			"observation": scheduleObservationSchema(),
 		},
 		"oneOf": []any{
 			map[string]any{"required": []any{"once"}},
@@ -426,22 +317,33 @@ func scheduleSourceSchema() map[string]any {
 	}
 }
 
-func observationSchema() map[string]any {
+func commandObservationSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"description":          "For schedule sources, content is required and becomes the scheduled Observation text. For command sources, kind and severity set output defaults.",
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"kind":     map[string]any{"type": "string"},
-			"severity": map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}},
-			"content":  map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
-			"attachments": map[string]any{
-				"type":        "array",
-				"description": "Static event attachments for schedule sources. Command sources use parser.attachments_field.",
-				"items":       attachmentSchema(),
-			},
+			"severity": severitySchema(),
 		},
 	}
+}
+
+func scheduleObservationSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"content"},
+		"properties": map[string]any{
+			"kind":        map[string]any{"type": "string"},
+			"severity":    severitySchema(),
+			"content":     map[string]any{"type": "string", "maxLength": MaxScheduleContentChars},
+			"attachments": map[string]any{"type": "array", "items": attachmentSchema()},
+		},
+	}
+}
+
+func severitySchema() map[string]any {
+	return map[string]any{"type": "string", "enum": []any{"info", "warning", "error", "critical"}}
 }
 
 func parserSchema() map[string]any {
