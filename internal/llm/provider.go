@@ -277,7 +277,6 @@ func IsRetryableProviderError(err error) bool {
 		"unexpected eof",
 		": eof",
 		"sse read",
-		"stream error",
 		"stream idle timeout",
 		"websocket: close 1006",
 		"rate limit",

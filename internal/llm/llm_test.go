@@ -3209,6 +3209,7 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{name: "typed anthropic permission status", err: &anthropic.Error{StatusCode: 403}, want: false},
 		{name: "context overflow", err: errors.New("context_length_exceeded"), want: false},
 		{name: "semantic error", err: errors.New("invalid request: unsupported tool schema"), want: false},
+		{name: "streamed semantic error", err: errors.New("openai responses stream error: invalid_request_error"), want: false},
 		{name: "exit code", err: errors.New("provider helper exit code 500"), want: false},
 		{name: "port number", err: errors.New("dial localhost port 500"), want: false},
 		{name: "cancelled", err: context.Canceled, want: false},
