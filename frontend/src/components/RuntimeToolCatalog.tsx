@@ -1,4 +1,5 @@
 import { ChevronRightIcon } from "lucide-react";
+import { useState } from "react";
 
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Badge } from "@/components/ui/badge";
@@ -41,48 +42,61 @@ export function RuntimeToolGroups({ groups }: { groups: RuntimeToolGroup[] }) {
   return (
     <div>
       {groups.map((group) => (
-        <details
-          className="group/runtime-tool-group border-t first:border-t-0"
-          key={group.group}
-        >
-          <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-3 outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
-            <ChevronRightIcon
-              aria-hidden="true"
-              className="text-muted-foreground size-4 shrink-0 transition-transform group-open/runtime-tool-group:rotate-90"
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="font-medium">
-                  {runtimeToolGroupLabel(group.group)}
-                </span>
-                <Badge variant="secondary" className="font-mono text-[11px]">
-                  {group.tools?.length ?? 0}
-                </Badge>
-              </div>
-              <div className="text-muted-foreground mt-1 truncate font-mono text-xs">
-                {(group.tools ?? []).map((tool) => tool.name).join(", ") ||
-                  "No tools"}
-              </div>
-            </div>
-          </summary>
-          <div className="border-t bg-muted/20 pl-4">
-            <RuntimeToolList
-              tools={group.tools ?? []}
-              empty="No tools registered in this group."
-            />
-          </div>
-        </details>
+        <RuntimeToolGroupRow group={group} key={group.group} />
       ))}
     </div>
   );
 }
 
+function RuntimeToolGroupRow({ group }: { group: RuntimeToolGroup }) {
+  const [groupOpen, setGroupOpen] = useState(false);
+
+  return (
+    <details
+      className="group/runtime-tool-group border-t first:border-t-0"
+      onToggle={(event) => setGroupOpen(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-3 outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="text-muted-foreground size-4 shrink-0 transition-transform group-open/runtime-tool-group:rotate-90"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="font-medium">
+              {runtimeToolGroupLabel(group.group)}
+            </span>
+            <Badge variant="secondary" className="font-mono text-[11px]">
+              {group.tools?.length ?? 0}
+            </Badge>
+          </div>
+          <div className="text-muted-foreground mt-1 truncate font-mono text-xs">
+            {(group.tools ?? []).map((tool) => tool.name).join(", ") ||
+              "No tools"}
+          </div>
+        </div>
+      </summary>
+      {groupOpen && (
+        <div className="border-t bg-muted/20 pl-4">
+          <RuntimeToolList
+            tools={group.tools ?? []}
+            empty="No tools registered in this group."
+          />
+        </div>
+      )}
+    </details>
+  );
+}
+
 function RuntimeToolRow({ tool }: { tool: RuntimeToolInfo }) {
-  const parameters = runtimeToolParameters(tool.schema);
+  const [toolOpen, setToolOpen] = useState(false);
   const timeout = runtimeToolTimeoutLabel(tool.timeout);
 
   return (
-    <details className="group/runtime-tool border-t first:border-t-0">
+    <details
+      className="group/runtime-tool border-t first:border-t-0"
+      onToggle={(event) => setToolOpen(event.currentTarget.open)}
+    >
       <summary className="flex cursor-pointer list-none items-center gap-3 px-3 py-2.5 outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
         <ChevronRightIcon
           aria-hidden="true"
@@ -95,72 +109,112 @@ function RuntimeToolRow({ tool }: { tool: RuntimeToolInfo }) {
           {timeout}
         </Badge>
       </summary>
-      <div className="space-y-4 border-t bg-background px-3 py-3">
-        <div className="space-y-1">
-          <p className="text-sm leading-relaxed">
-            {tool.description || "No description provided."}
-          </p>
-          <p className="text-muted-foreground font-mono text-xs">
-            Timeout: {timeout}
-          </p>
-        </div>
-
-        <div className="overflow-x-auto rounded-md border">
-          {parameters.length === 0 ? (
-            <div className="text-muted-foreground px-3 py-3 text-sm">
-              No top-level parameters.
-            </div>
-          ) : (
-            <table className="w-full min-w-[38rem] text-left text-sm">
-              <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Type</th>
-                  <th className="px-3 py-2 font-medium">Required</th>
-                  <th className="px-3 py-2 font-medium">Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {parameters.map((parameter) => (
-                  <tr className="border-t align-top" key={parameter.name}>
-                    <td className="px-3 py-2 font-mono text-xs font-medium">
-                      {parameter.name}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">
-                      {parameter.type}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">
-                      {parameter.required ? "yes" : "no"}
-                    </td>
-                    <td className="max-w-[30rem] px-3 py-2">
-                      {parameter.description || (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-
-        <details className="group/runtime-tool-schema rounded-md border">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-medium outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
-            <ChevronRightIcon
-              aria-hidden="true"
-              className="text-muted-foreground size-3.5 transition-transform group-open/runtime-tool-schema:rotate-90"
-            />
-            <span className="text-sm">Raw JSON schema</span>
-          </summary>
-          <div className="border-t p-3">
-            <CodeBlock
-              className="max-h-96 overflow-auto"
-              code={formatRuntimeToolSchema(tool.schema)}
-              language="json"
-            />
-          </div>
-        </details>
-      </div>
+      {toolOpen && <RuntimeToolDetails timeout={timeout} tool={tool} />}
     </details>
+  );
+}
+
+function RuntimeToolDetails({
+  tool,
+  timeout,
+}: {
+  tool: RuntimeToolInfo;
+  timeout: string;
+}) {
+  const parameters = runtimeToolParameters(tool.schema);
+
+  return (
+    <div className="space-y-4 border-t bg-background px-3 py-3">
+      <div className="space-y-1">
+        <p className="text-sm leading-relaxed">
+          {tool.description || "No description provided."}
+        </p>
+        <p className="text-muted-foreground font-mono text-xs">
+          Timeout: {timeout}
+        </p>
+      </div>
+
+      <div className="overflow-x-auto rounded-md border">
+        {parameters.length === 0 ? (
+          <div className="text-muted-foreground px-3 py-3 text-sm">
+            No top-level parameters.
+          </div>
+        ) : (
+          <table className="w-full min-w-[38rem] text-left text-sm">
+            <caption className="sr-only">Parameters for {tool.name}</caption>
+            <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+              <tr>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Name
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Type
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Required
+                </th>
+                <th scope="col" className="px-3 py-2 font-medium">
+                  Description
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {parameters.map((parameter) => (
+                <tr className="border-t align-top" key={parameter.name}>
+                  <td className="px-3 py-2 font-mono text-xs font-medium">
+                    {parameter.name}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {parameter.type}
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {parameter.required ? "yes" : "no"}
+                  </td>
+                  <td className="max-w-[30rem] px-3 py-2">
+                    {parameter.description || (
+                      <span className="text-muted-foreground">-</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <RuntimeToolSchema schema={tool.schema} />
+    </div>
+  );
+}
+
+function RuntimeToolSchema({ schema }: { schema: unknown }) {
+  const [schemaOpen, setSchemaOpen] = useState(false);
+
+  return (
+    <details
+      className="group/runtime-tool-schema rounded-md border"
+      onToggle={(event) => setSchemaOpen(event.currentTarget.open)}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-medium outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="text-muted-foreground size-3.5 transition-transform group-open/runtime-tool-schema:rotate-90"
+        />
+        <span className="text-sm">Raw JSON schema</span>
+      </summary>
+      {schemaOpen && <RuntimeToolSchemaBody schema={schema} />}
+    </details>
+  );
+}
+
+function RuntimeToolSchemaBody({ schema }: { schema: unknown }) {
+  return (
+    <div className="border-t p-3">
+      <CodeBlock
+        className="max-h-96 overflow-auto"
+        code={formatRuntimeToolSchema(schema)}
+        language="json"
+      />
+    </div>
   );
 }

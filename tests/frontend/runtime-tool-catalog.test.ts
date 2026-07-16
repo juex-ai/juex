@@ -114,6 +114,19 @@ test("runtimeToolParameters formats primitive, enum, array, object, and union ty
   });
 });
 
+test("runtimeToolParameters formats and deduplicates array members in type unions", () => {
+  const [parameter] = runtimeToolParameters({
+    properties: {
+      values: {
+        items: { type: "string" },
+        type: ["array", "null", "array"],
+      },
+    },
+  });
+
+  assert.equal(parameter.type, "array<string> | null");
+});
+
 test("runtimeToolParameters returns an empty list for absent or malformed properties", () => {
   assert.deepEqual(runtimeToolParameters(undefined), []);
   assert.deepEqual(runtimeToolParameters({}), []);
@@ -174,6 +187,16 @@ test("formatRuntimeToolSchema keeps circular and unsupported inputs readable", (
   });
   assert.doesNotThrow(() => formatRuntimeToolSchema(hostile));
   assert.match(formatRuntimeToolSchema(hostile), /Unable to format schema/);
+});
+
+test("formatRuntimeToolSchema preserves an own __proto__ schema key", () => {
+  const schema = Object.create(null) as Record<string, unknown>;
+  schema.alpha = { type: "boolean" };
+  schema.__proto__ = { type: "string" };
+
+  const parsed = JSON.parse(formatRuntimeToolSchema(schema));
+  assert.equal(Object.hasOwn(parsed, "__proto__"), true);
+  assert.deepEqual(parsed.__proto__, { type: "string" });
 });
 
 test("runtime tool catalog helpers remain independent of React and the DOM", () => {

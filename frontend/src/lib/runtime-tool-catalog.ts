@@ -97,16 +97,12 @@ function schemaTypeLabel(
       if (Array.isArray(anyOf)) return unionTypeLabel(anyOf, seen);
 
       const typeValue = safeGet(schema, "type");
-      let label = typeValueLabel(typeValue);
-      if (label === "array") {
-        const items = safeGet(schema, "items");
-        const itemLabel = Array.isArray(items)
-          ? unionTypeLabel(items, seen)
-          : schemaTypeLabel(items, seen);
-        label = `array<${itemLabel}>`;
-      } else if (label === "unknown") {
+      let label = declaredTypeLabel(typeValue, schema, seen);
+      if (label === "unknown") {
         if (isRecord(safeGet(schema, "properties"))) label = "object";
-        else if (safeGet(schema, "items") !== undefined) label = "array<unknown>";
+        else if (safeGet(schema, "items") !== undefined) {
+          label = arrayTypeLabel(schema, seen);
+        }
       }
 
       const enumValue = safeGet(schema, "enum");
@@ -129,18 +125,32 @@ function unionTypeLabel(options: unknown[], seen: WeakSet<object>): string {
   return unique.length > 0 ? unique.join(" | ") : "unknown";
 }
 
-function typeValueLabel(typeValue: unknown): string {
-  if (typeof typeValue === "string" && typeValue.trim() !== "") {
-    return typeValue.trim();
-  }
-  if (Array.isArray(typeValue)) {
-    const types = typeValue.filter(
-      (value): value is string => typeof value === "string" && value.trim() !== "",
-    );
-    const unique = types.filter((value, index) => types.indexOf(value) === index);
-    return unique.length > 0 ? unique.join(" | ") : "unknown";
-  }
-  return "unknown";
+function declaredTypeLabel(
+  typeValue: unknown,
+  schema: Record<string, unknown>,
+  seen: WeakSet<object>,
+): string {
+  const types = Array.isArray(typeValue) ? typeValue : [typeValue];
+  const labels = types
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim() !== "",
+    )
+    .map((value) => value.trim())
+    .map((value) => (value === "array" ? arrayTypeLabel(schema, seen) : value));
+  const unique = labels.filter((value, index) => labels.indexOf(value) === index);
+  return unique.length > 0 ? unique.join(" | ") : "unknown";
+}
+
+function arrayTypeLabel(
+  schema: Record<string, unknown>,
+  seen: WeakSet<object>,
+): string {
+  const items = safeGet(schema, "items");
+  const itemLabel = Array.isArray(items)
+    ? unionTypeLabel(items, seen)
+    : schemaTypeLabel(items, seen);
+  return `array<${itemLabel}>`;
 }
 
 function formatEnumValue(value: unknown): string {
@@ -168,7 +178,7 @@ function normalizeSchemaValue(value: unknown, seen: WeakSet<object>): unknown {
     if (Array.isArray(value)) {
       return value.map((item) => normalizeSchemaValue(item, seen));
     }
-    const normalized: Record<string, unknown> = {};
+    const normalized = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(value).sort()) {
       normalized[key] = normalizeSchemaValue(
         (value as Record<string, unknown>)[key],

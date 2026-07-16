@@ -7,6 +7,7 @@ import {
 } from "@/components/RuntimeToolCatalog";
 import { getRuntimeStatus } from "@/api";
 import type {
+  MCPServerInfo,
   RuntimeHookInfo,
   RuntimeStatusResponse,
   SystemPromptEntry,
@@ -253,56 +254,7 @@ export function Runtime() {
           ) : (
             <div className="space-y-2">
               {mcpServers.map((server) => (
-                <details
-                  className="group/runtime-mcp-server overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]"
-                  key={server.name}
-                >
-                  <summary className="cursor-pointer list-none px-3 py-3 outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <ChevronRightIcon
-                        aria-hidden="true"
-                        className="text-muted-foreground size-4 shrink-0 transition-transform group-open/runtime-mcp-server:rotate-90"
-                      />
-                      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-                        <span className="font-medium">{server.name}</span>
-                        <Badge variant="outline" className="font-mono text-[11px]">
-                          {server.source}
-                        </Badge>
-                        <Badge
-                          variant={mcpStatusVariant(server.status)}
-                          className="font-mono text-[11px]"
-                        >
-                          {mcpStatusLabel(server.status)}
-                        </Badge>
-                        <Badge variant="secondary" className="font-mono text-[11px]">
-                          {server.tool_count ?? server.tools?.length ?? 0} tools
-                        </Badge>
-                      </div>
-                    </div>
-                    <dl className="mt-2 grid min-w-0 gap-x-3 gap-y-1 pl-7 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]">
-                      <dt className="text-muted-foreground font-medium">Command</dt>
-                      <dd className="min-w-0 break-all font-mono">
-                        {mcpServerCommand(server.command, server.args)}
-                      </dd>
-                      <dt className="text-muted-foreground font-medium">Error</dt>
-                      <dd
-                        className={
-                          server.error
-                            ? "min-w-0 break-words font-mono text-destructive"
-                            : "min-w-0 font-mono text-muted-foreground"
-                        }
-                      >
-                        {server.error || "-"}
-                      </dd>
-                    </dl>
-                  </summary>
-                  <div className="border-t bg-muted/20 pl-4">
-                    <RuntimeToolList
-                      tools={server.tools ?? []}
-                      empty={mcpToolEmptyLabel(server.status)}
-                    />
-                  </div>
-                </details>
+                <MCPServerCard key={server.name} server={server} />
               ))}
             </div>
           )}
@@ -487,11 +439,80 @@ function mcpStatusLabel(status: string): string {
   return "not started";
 }
 
+function MCPServerCard({ server }: { server: MCPServerInfo }) {
+  const [serverOpen, setServerOpen] = useState(false);
+  const toolsAvailable = server.tools !== undefined;
+
+  return (
+    <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+      <div className="px-3 py-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="font-medium">{server.name}</span>
+          <Badge variant="outline" className="font-mono text-[11px]">
+            {server.source}
+          </Badge>
+          <Badge
+            variant={mcpStatusVariant(server.status)}
+            className="font-mono text-[11px]"
+          >
+            {mcpStatusLabel(server.status)}
+          </Badge>
+          <Badge variant="secondary" className="font-mono text-[11px]">
+            {server.tool_count ?? server.tools?.length ?? 0} tools
+          </Badge>
+        </div>
+        <dl className="mt-2 grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]">
+          <dt className="text-muted-foreground font-medium">Command</dt>
+          <dd className="min-w-0 break-all font-mono">
+            {mcpServerCommand(server.command, server.args)}
+          </dd>
+          <dt className="text-muted-foreground font-medium">Error</dt>
+          <dd
+            className={
+              server.error
+                ? "min-w-0 break-words font-mono text-destructive"
+                : "min-w-0 font-mono text-muted-foreground"
+            }
+          >
+            {server.error || "-"}
+          </dd>
+        </dl>
+      </div>
+      <details
+        className="group/runtime-mcp-server border-t"
+        onToggle={(event) => setServerOpen(event.currentTarget.open)}
+      >
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
+          <ChevronRightIcon
+            aria-hidden="true"
+            className="text-muted-foreground size-4 shrink-0 transition-transform group-open/runtime-mcp-server:rotate-90"
+          />
+          <span className="font-medium">Tool details</span>
+          <span className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-xs">
+            {server.tools?.map((tool) => tool.name).join(", ") || "No tool preview"}
+          </span>
+        </summary>
+        {serverOpen && (
+          <div className="border-t bg-muted/20 pl-4">
+            <RuntimeToolList
+              tools={server.tools ?? []}
+              empty={mcpToolEmptyLabel(server.status, toolsAvailable)}
+            />
+          </div>
+        )}
+      </details>
+    </div>
+  );
+}
+
 function mcpServerCommand(command: string, args?: string[]): string {
   return [command, ...(args ?? [])].filter(Boolean).join(" ") || "-";
 }
 
-function mcpToolEmptyLabel(status: string): string {
+function mcpToolEmptyLabel(status: string, toolsAvailable: boolean): string {
+  if (!toolsAvailable) {
+    return "Tool details unavailable in this response";
+  }
   if (status === "error") {
     return "No tools available because this server failed to start.";
   }

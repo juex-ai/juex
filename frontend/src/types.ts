@@ -817,7 +817,7 @@ export interface MCPServerInfo {
   status: "not_started" | "connected" | "error";
   connected: boolean;
   tool_count: number;
-  tools: RuntimeToolInfo[];
+  tools?: RuntimeToolInfo[];
   error?: string;
 }
 
