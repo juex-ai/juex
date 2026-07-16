@@ -287,6 +287,13 @@ func TestTerminalPersistenceFailureKeepsOriginalOutcomePending(t *testing.T) {
 	}, 1)
 	errorEvent := make(chan ObservableEventPayload, 1)
 	bus := events.NewBus()
+	var eventMu sync.Mutex
+	var lifecycleEvents []string
+	bus.Subscribe("observable.*", func(event events.Event) {
+		eventMu.Lock()
+		lifecycleEvents = append(lifecycleEvents, event.Type)
+		eventMu.Unlock()
+	})
 	bus.Subscribe(EventObservableErrored, func(event events.Event) {
 		if payload, ok := event.Payload.(ObservableEventPayload); ok {
 			select {
@@ -393,6 +400,12 @@ func TestTerminalPersistenceFailureKeepsOriginalOutcomePending(t *testing.T) {
 	}
 	if runs[spec.ID].State != RunStateStopped {
 		t.Fatalf("recovered terminal = %+v, want original stopped outcome", runs[spec.ID])
+	}
+	eventMu.Lock()
+	gotEvents := append([]string(nil), lifecycleEvents...)
+	eventMu.Unlock()
+	if len(gotEvents) != 1 || gotEvents[0] != EventObservableErrored {
+		t.Fatalf("lifecycle events after persistence recovery = %v, want exactly one errored event", gotEvents)
 	}
 }
 

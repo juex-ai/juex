@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
@@ -87,6 +88,10 @@ type App struct {
 	Bus           *events.Bus
 	Session       *session.Session
 	cleanup       []func() error
+	closeMu       sync.Mutex
+	closeCancel   sync.Once
+	cleanupIndex  int
+	closeErr      error
 	ctx           context.Context
 	cancel        context.CancelFunc
 	cfg           config.Config
@@ -373,14 +378,7 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	a.cleanup = append(a.cleanup, func() error {
-		err := obsv.Close()
-		var deferred *observable.CloseDeferredError
-		if errors.As(err, &deferred) {
-			return deferred.Wait()
-		}
-		return err
-	}, shellSessions.Close, func() error {
+	a.cleanup = append(a.cleanup, obsv.Close, shellSessions.Close, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
@@ -1083,16 +1081,46 @@ func FormatTokenUsage(usage llm.Usage) string {
 		FormatCompactTokenCount(usage.OutputTokens))
 }
 
-// Close releases session file handles and MCP subprocesses.
+// Close advances cleanup until it completes or an observable close must be
+// deferred. A deferred result leaves later resources untouched so callback
+// callers can return safely and an external owner can resume cleanup.
 func (a *App) Close() error {
-	if a.cancel != nil {
-		a.cancel()
+	if a == nil {
+		return nil
 	}
-	var firstErr error
-	for _, fn := range a.cleanup {
-		if err := fn(); err != nil && firstErr == nil {
-			firstErr = err
+	a.closeMu.Lock()
+	defer a.closeMu.Unlock()
+	a.closeCancel.Do(func() {
+		if a.cancel != nil {
+			a.cancel()
+		}
+	})
+	for a.cleanupIndex < len(a.cleanup) {
+		err := a.cleanup[a.cleanupIndex]()
+		var deferred *observable.CloseDeferredError
+		if errors.As(err, &deferred) {
+			return deferred
+		}
+		a.cleanupIndex++
+		if err != nil && a.closeErr == nil {
+			a.closeErr = err
 		}
 	}
-	return firstErr
+	return a.closeErr
+}
+
+// CloseAndWait fully drains deferred observable work before releasing later
+// resources. It is for process and transport owners, not callback code.
+func (a *App) CloseAndWait() error {
+	if a == nil {
+		return nil
+	}
+	for {
+		err := a.Close()
+		var deferred *observable.CloseDeferredError
+		if !errors.As(err, &deferred) {
+			return err
+		}
+		_ = deferred.Wait()
+	}
 }

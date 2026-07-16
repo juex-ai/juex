@@ -39,6 +39,61 @@ type stubProvider struct {
 	histories [][]llm.Message
 }
 
+func TestAppClosePausesCleanupWhenObservableCloseIsDeferred(t *testing.T) {
+	closeCalls := 0
+	laterCleanupCalls := 0
+	a := &App{cleanup: []func() error{
+		func() error {
+			closeCalls++
+			if closeCalls == 1 {
+				return &observable.CloseDeferredError{}
+			}
+			return nil
+		},
+		func() error {
+			laterCleanupCalls++
+			return nil
+		},
+	}}
+	var deferred *observable.CloseDeferredError
+	if err := a.Close(); !errors.As(err, &deferred) {
+		t.Fatalf("first Close error = %v, want CloseDeferredError", err)
+	}
+	if laterCleanupCalls != 0 {
+		t.Fatalf("later cleanup calls after deferred Close = %d, want 0", laterCleanupCalls)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatalf("retry Close = %v", err)
+	}
+	if closeCalls != 2 || laterCleanupCalls != 1 {
+		t.Fatalf("cleanup calls = first:%d later:%d", closeCalls, laterCleanupCalls)
+	}
+}
+
+func TestAppCloseAndWaitResumesDeferredCleanup(t *testing.T) {
+	closeCalls := 0
+	laterCleanupCalls := 0
+	a := &App{cleanup: []func() error{
+		func() error {
+			closeCalls++
+			if closeCalls == 1 {
+				return &observable.CloseDeferredError{}
+			}
+			return nil
+		},
+		func() error {
+			laterCleanupCalls++
+			return nil
+		},
+	}}
+	if err := a.CloseAndWait(); err != nil {
+		t.Fatalf("CloseAndWait = %v", err)
+	}
+	if closeCalls != 2 || laterCleanupCalls != 1 {
+		t.Fatalf("cleanup calls = first:%d later:%d", closeCalls, laterCleanupCalls)
+	}
+}
+
 type failingWriter struct {
 	calls int
 }

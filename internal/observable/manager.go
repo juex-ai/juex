@@ -632,7 +632,7 @@ func (m *Manager) closeSourcesAndDeliveries() (bool, error) {
 				continue
 			}
 			if item.pending {
-				if commitErr := m.commitTerminal(item.run, item.claim, item.pendingOutcome, true); commitErr != nil {
+				if commitErr := m.commitTerminal(item.run, item.claim, item.pendingOutcome, false); commitErr != nil {
 					incomplete = true
 					if firstErr == nil {
 						firstErr = commitErr

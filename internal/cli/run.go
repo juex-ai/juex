@@ -219,7 +219,7 @@ execution is printed and the process exits with code 10.`,
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"check top-level model plus providers[].id/providers[].protocol/providers[].api_key in .juex/juex.yaml", false)
 			}
-			defer a.Close()
+			defer a.CloseAndWait()
 			if flags.verbose {
 				fmt.Fprintln(cmd.ErrOrStderr(), app.FormatResourceSummary(a.ResourceSummary()))
 			}
@@ -294,7 +294,7 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 		return emit(jsonOut, cmd.ErrOrStderr(), err,
 			"dry-run wiring failed; check skills/MCP/memory config", false)
 	}
-	defer a.Close()
+	defer a.CloseAndWait()
 
 	system := a.Engine.Prompt.Build()
 	sections := a.Engine.Prompt.Sections()
