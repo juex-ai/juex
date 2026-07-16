@@ -334,11 +334,14 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	if err != nil || run == nil {
 		return err
 	}
-	if pending, commitErr := m.commitPendingTerminal(run, claim); pending {
+	if pending, outcome, commitErr := m.commitPendingTerminal(run, claim); pending {
 		if commitErr != nil {
 			return commitErr
 		}
-		return waitRunDone(ctx, run)
+		if err := waitRunDone(ctx, run); err != nil {
+			return err
+		}
+		return outcome.Err
 	}
 	result, stopErr := run.source.stop(ctx, run, sourceStopUser)
 	if !result.Quiesced {
@@ -399,13 +402,16 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if run != nil {
-		pending, commitErr := m.commitPendingTerminal(run, claim)
+		pending, outcome, commitErr := m.commitPendingTerminal(run, claim)
 		if pending {
 			if commitErr != nil {
 				return commitErr
 			}
 			if err := waitRunDone(ctx, run); err != nil {
 				return err
+			}
+			if outcome.Err != nil {
+				return outcome.Err
 			}
 		} else {
 			result, stopErr := source.stop(ctx, run, sourceStopDelete)
@@ -655,6 +661,9 @@ func (m *Manager) closeSourcesAndDeliveries() (bool, error) {
 					}
 					continue
 				}
+				if item.pendingOutcome.Err != nil && firstErr == nil {
+					firstErr = item.pendingOutcome.Err
+				}
 				if stopErr != nil && firstErr == nil {
 					firstErr = stopErr
 				}
@@ -814,18 +823,18 @@ func (m *Manager) rollbackTerminal(run *observableRun, claim *terminalClaim) {
 	claim.resolve()
 }
 
-func (m *Manager) commitPendingTerminal(run *observableRun, claim *terminalClaim) (bool, error) {
+func (m *Manager) commitPendingTerminal(run *observableRun, claim *terminalClaim) (bool, terminalOutcome, error) {
 	if m == nil || run == nil || claim == nil {
-		return false, nil
+		return false, terminalOutcome{}, nil
 	}
 	m.mu.Lock()
 	if m.runs[run.id] != run || run.claim != claim || !run.terminalPending {
 		m.mu.Unlock()
-		return false, nil
+		return false, terminalOutcome{}, nil
 	}
 	outcome := run.pendingOutcome
 	m.mu.Unlock()
-	return true, m.commitTerminal(run, claim, outcome, false)
+	return true, outcome, m.commitTerminal(run, claim, outcome, false)
 }
 
 func (m *Manager) commitTerminal(run *observableRun, claim *terminalClaim, outcome terminalOutcome, emit bool) error {

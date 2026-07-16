@@ -492,6 +492,87 @@ func TestExplicitPendingTerminalRetryPreservesOutcomeAndSingleEvent(t *testing.T
 	}
 }
 
+func TestExplicitPendingErroredRetryReturnsOriginalError(t *testing.T) {
+	for _, retry := range []struct {
+		name string
+		run  func(*Manager, string) error
+	}{
+		{name: "stop", run: func(mgr *Manager, id string) error { return mgr.Stop(context.Background(), id) }},
+		{name: "delete", run: func(mgr *Manager, id string) error { return mgr.Delete(context.Background(), id) }},
+	} {
+		t.Run(retry.name, func(t *testing.T) {
+			pauseErr := errors.New("pause failed")
+			spec := mustCommandSpecForSourceTest("errored-pending-" + retry.name)
+			source := &fakeSourceRuntime{}
+			mgr := newSourceTestManager(t, spec, source)
+			bus := events.NewBus()
+			var eventMu sync.Mutex
+			var lifecycleEvents []string
+			bus.Subscribe("observable.*", func(event events.Event) {
+				eventMu.Lock()
+				lifecycleEvents = append(lifecycleEvents, event.Type)
+				eventMu.Unlock()
+			})
+			mgr.opts.Bus = bus
+			source.startFn = func(_ context.Context, run *observableRun) error {
+				run.sourceState = sourceKernel(mgr)
+				status := run.state
+				status.State = RunStateRunning
+				return mgr.activateRun(run, status)
+			}
+			source.stopFn = func(_ context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+				run.cancel()
+				run.closeQuiesced()
+				run.closeDone()
+				return sourceStopResult{Quiesced: true}, pauseErr
+			}
+			if err := mgr.Start(context.Background(), spec.ID); err != nil {
+				t.Fatal(err)
+			}
+			runsPath := filepath.Join(mgr.store.root, "runs.jsonl")
+			backupPath := runsPath + ".before-errored-retry"
+			if err := os.Rename(runsPath, backupPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(runsPath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := mgr.Stop(context.Background(), spec.ID); !errors.Is(err, pauseErr) || !strings.Contains(err.Error(), "record terminal state") {
+				t.Fatalf("initial Stop error = %v, want pause and persistence errors", err)
+			}
+			if err := os.Remove(runsPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(backupPath, runsPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := retry.run(mgr, spec.ID); !errors.Is(err, pauseErr) {
+				t.Fatalf("explicit %s retry error = %v, want original pause error", retry.name, err)
+			}
+			if source.stopCalls.Load() != 1 || source.deleteCalls.Load() != 0 {
+				t.Fatalf("source calls after errored %s retry = stop:%d delete:%d", retry.name, source.stopCalls.Load(), source.deleteCalls.Load())
+			}
+			status, err := mgr.StatusByID(spec.ID)
+			if err != nil || status.State != RunStateErrored {
+				t.Fatalf("status after errored %s retry = %+v, %v", retry.name, status, err)
+			}
+			runs, err := mgr.store.LatestRuns()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runs[spec.ID].State != RunStateErrored || runs[spec.ID].Error != pauseErr.Error() {
+				t.Fatalf("durable errored retry = %+v", runs[spec.ID])
+			}
+			eventMu.Lock()
+			gotEvents := append([]string(nil), lifecycleEvents...)
+			eventMu.Unlock()
+			if len(gotEvents) != 1 || gotEvents[0] != EventObservableErrored {
+				t.Fatalf("lifecycle events after errored %s retry = %v", retry.name, gotEvents)
+			}
+		})
+	}
+}
+
 func TestDeleteReportsStopAndTerminalPersistenceErrors(t *testing.T) {
 	spec := mustCommandSpecForSourceTest("delete-persist-error")
 	source := &fakeSourceRuntime{}

@@ -92,6 +92,8 @@ type App struct {
 	closeCancel   sync.Once
 	cleanupIndex  int
 	closeErr      error
+	closeRunning  bool
+	closeRunDone  chan struct{}
 	ctx           context.Context
 	cancel        context.CancelFunc
 	cfg           config.Config
@@ -117,6 +119,24 @@ type MCPStatus struct {
 	Connected  int               `json:"connected"`
 	Errors     int               `json:"errors"`
 	Servers    []MCPServerStatus `json:"servers"`
+}
+
+// CloseDeferredError reports that another App cleanup pass is in progress.
+// Callback callers must return before waiting on it.
+type CloseDeferredError struct {
+	done <-chan struct{}
+}
+
+func (*CloseDeferredError) Error() string {
+	return "app: close deferred while cleanup is in progress"
+}
+
+func (e *CloseDeferredError) Wait() error {
+	if e == nil || e.done == nil {
+		return nil
+	}
+	<-e.done
+	return nil
 }
 
 type MCPServerStatus struct {
@@ -1084,29 +1104,52 @@ func FormatTokenUsage(usage llm.Usage) string {
 // Close advances cleanup until it completes or an observable close must be
 // deferred. A deferred result leaves later resources untouched so callback
 // callers can return safely and an external owner can resume cleanup.
-func (a *App) Close() error {
+func (a *App) Close() (result error) {
 	if a == nil {
 		return nil
 	}
 	a.closeMu.Lock()
-	defer a.closeMu.Unlock()
+	if a.closeRunning {
+		done := a.closeRunDone
+		a.closeMu.Unlock()
+		return &CloseDeferredError{done: done}
+	}
+	a.closeRunning = true
+	a.closeRunDone = make(chan struct{})
+	done := a.closeRunDone
+	a.closeMu.Unlock()
+	defer func() {
+		a.closeMu.Lock()
+		a.closeRunning = false
+		close(done)
+		a.closeMu.Unlock()
+	}()
 	a.closeCancel.Do(func() {
 		if a.cancel != nil {
 			a.cancel()
 		}
 	})
-	for a.cleanupIndex < len(a.cleanup) {
-		err := a.cleanup[a.cleanupIndex]()
-		var deferred *observable.CloseDeferredError
-		if errors.As(err, &deferred) {
-			return deferred
+	for {
+		a.closeMu.Lock()
+		if a.cleanupIndex >= len(a.cleanup) {
+			result = a.closeErr
+			a.closeMu.Unlock()
+			return result
 		}
+		fn := a.cleanup[a.cleanupIndex]
+		a.closeMu.Unlock()
+		err := fn()
+		var deferred interface{ Wait() error }
+		if errors.As(err, &deferred) {
+			return err
+		}
+		a.closeMu.Lock()
 		a.cleanupIndex++
 		if err != nil && a.closeErr == nil {
 			a.closeErr = err
 		}
+		a.closeMu.Unlock()
 	}
-	return a.closeErr
 }
 
 // CloseAndWait fully drains deferred observable work before releasing later
@@ -1117,7 +1160,7 @@ func (a *App) CloseAndWait() error {
 	}
 	for {
 		err := a.Close()
-		var deferred *observable.CloseDeferredError
+		var deferred interface{ Wait() error }
 		if !errors.As(err, &deferred) {
 			return err
 		}
