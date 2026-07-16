@@ -523,3 +523,23 @@ func TestBuiltinCatalogFailsLoudOnInvalidEmbeddedGuide(t *testing.T) {
 		}
 	})
 }
+
+func TestBuiltinCatalogDoesNotDependOnExpectedNameOrder(t *testing.T) {
+	files := fstest.MapFS{}
+	for _, name := range builtinSkillNames {
+		files["builtin/"+name+"/SKILL.md"] = &fstest.MapFile{Data: []byte("---\nname: " + name + "\ndescription: guide\ntype: builtin-guide\n---\n# Guide\n")}
+	}
+	original := builtinSkillNames
+	builtinSkillNames = []string{"juex-session-state", "juex-chunked-write", "juex-observables"}
+	t.Cleanup(func() { builtinSkillNames = original })
+
+	loaded, err := loadBuiltinSkillsFromFS(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, skill := range loaded {
+		if skill.Name != builtinSkillNames[i] {
+			t.Fatalf("loaded[%d].Name = %q, want %q", i, skill.Name, builtinSkillNames[i])
+		}
+	}
+}

@@ -4,7 +4,6 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"sort"
 
 	"github.com/juex-ai/juex/internal/frontmatter"
 )
@@ -29,16 +28,25 @@ func loadBuiltinSkillsFromFS(source fs.FS) ([]Skill, error) {
 	if err != nil {
 		return nil, fmt.Errorf("skills: list builtin skills: %w", err)
 	}
-	sort.Strings(paths)
 	if len(paths) != len(builtinSkillNames) {
 		return nil, fmt.Errorf("skills: builtin catalog has %d guides, want %d", len(paths), len(builtinSkillNames))
 	}
-	loaded := make([]Skill, 0, len(builtinSkillNames))
-	for i, name := range builtinSkillNames {
+	expectedPaths := make(map[string]struct{}, len(builtinSkillNames))
+	for _, name := range builtinSkillNames {
 		embeddedPath := "builtin/" + name + "/SKILL.md"
-		if paths[i] != embeddedPath {
-			return nil, fmt.Errorf("skills: builtin catalog path %q, want %q", paths[i], embeddedPath)
+		if _, exists := expectedPaths[embeddedPath]; exists {
+			return nil, fmt.Errorf("skills: builtin catalog repeats %q", name)
 		}
+		expectedPaths[embeddedPath] = struct{}{}
+	}
+	for _, path := range paths {
+		if _, ok := expectedPaths[path]; !ok {
+			return nil, fmt.Errorf("skills: unexpected builtin catalog path %q", path)
+		}
+	}
+	loaded := make([]Skill, 0, len(builtinSkillNames))
+	for _, name := range builtinSkillNames {
+		embeddedPath := "builtin/" + name + "/SKILL.md"
 		data, err := fs.ReadFile(source, embeddedPath)
 		if err != nil {
 			return nil, fmt.Errorf("skills: read builtin %s: %w", embeddedPath, err)
