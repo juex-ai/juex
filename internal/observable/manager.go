@@ -58,10 +58,22 @@ type closeAttempt struct {
 
 // CloseDeferredError reports that Close is continuing in the background
 // because a synchronous delivery callback is active.
-type CloseDeferredError struct{}
+type CloseDeferredError struct {
+	attempt *closeAttempt
+}
 
 func (*CloseDeferredError) Error() string {
 	return "observable: close deferred while a delivery callback is active"
+}
+
+// Wait blocks until the deferred close attempt completes. Callers inside a
+// delivery callback must return from the callback before waiting.
+func (e *CloseDeferredError) Wait() error {
+	if e == nil || e.attempt == nil {
+		return nil
+	}
+	<-e.attempt.done
+	return e.attempt.err
 }
 
 type observableRun struct {
@@ -82,6 +94,7 @@ type observableRun struct {
 	workerCompleted    bool
 	completionErr      error
 	completionReported bool
+	completionStatus   ObservableStatus
 	terminalEvent      string
 	terminalStatus     ObservableStatus
 	startPublished     chan struct{}
@@ -552,7 +565,7 @@ func (m *Manager) Close() error {
 	deferred := m.callbackActive > 0
 	m.closeMu.Unlock()
 	if deferred {
-		return &CloseDeferredError{}
+		return &CloseDeferredError{attempt: attempt}
 	}
 	<-attempt.done
 	return attempt.err
@@ -881,8 +894,8 @@ func (m *Manager) reportWorkerError(run *observableRun, err error) {
 	status.State = RunStateErrored
 	status.LastError = err.Error()
 	m.lastStatus[run.id] = status
+	run.completionStatus = status
 	m.mu.Unlock()
-	m.emitObservable(EventObservableErrored, status)
 }
 
 func sourceNotQuiescedError(id string, err error) error {
@@ -1121,8 +1134,13 @@ func (m *Manager) completeWorker(run *observableRun) {
 	run.workerCompleted = true
 	delete(m.workers, run)
 	run.sourceDoneOnce.Do(func() { close(run.sourceDone) })
+	errorStatus := run.completionStatus
+	emitError := run.completionReported
 	finalizable := run.terminalDurable || run.shutdown
 	m.mu.Unlock()
+	if emitError {
+		m.emitObservable(EventObservableErrored, errorStatus)
+	}
 	if finalizable {
 		m.finalizeLifecycle(run)
 		return

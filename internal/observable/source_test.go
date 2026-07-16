@@ -667,19 +667,21 @@ func TestCloseDefersWhileExternalCallerOverlapsDeliveryCallback(t *testing.T) {
 	if err := mgr.Close(); !errors.As(err, &deferred) {
 		t.Fatalf("Close error = %v, want CloseDeferredError", err)
 	}
+	waitResult := make(chan error, 1)
+	go func() { waitResult <- deferred.Wait() }()
+	select {
+	case err := <-waitResult:
+		t.Fatalf("deferred Wait returned before callback exited: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
 	close(releaseDelivery)
-	deadline := time.Now().Add(time.Second)
-	for {
-		mgr.closeMu.Lock()
-		active := mgr.callbackActive
-		mgr.closeMu.Unlock()
-		if active == 0 {
-			break
+	select {
+	case err := <-waitResult:
+		if err != nil {
+			t.Fatalf("deferred Wait = %v", err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("delivery callback did not exit")
-		}
-		time.Sleep(time.Millisecond)
+	case <-time.After(time.Second):
+		t.Fatal("deferred Wait did not observe completed Close")
 	}
 	if err := mgr.Close(); err != nil {
 		t.Fatal(err)

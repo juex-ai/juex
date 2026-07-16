@@ -373,7 +373,14 @@ func New(opts Options) (*App, error) {
 		return nil, err
 	}
 	a.mcp = buildMCPStatus(mergedMCP.MCPServers, nil, nil)
-	a.cleanup = append(a.cleanup, obsv.Close, shellSessions.Close, func() error {
+	a.cleanup = append(a.cleanup, func() error {
+		err := obsv.Close()
+		var deferred *observable.CloseDeferredError
+		if errors.As(err, &deferred) {
+			return deferred.Wait()
+		}
+		return err
+	}, shellSessions.Close, func() error {
 		if err := a.detachObservability(); err != nil {
 			return err
 		}
