@@ -97,6 +97,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		}
 		if llm.IsContextOverflowError(err) && !l.retriedOverflow {
 			if _, compactErr := l.engine.compactLocked(ctx, l.turnID, l.prepared.systemPrompt, l.prepared.tools, "overflow_retry", true, ""); compactErr != nil {
+				l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
 				return fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr)
 			}
 			l.retriedOverflow = true

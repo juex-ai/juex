@@ -859,6 +859,83 @@ func TestTurn_OverflowCompactsAndRetriesOnce(t *testing.T) {
 	}
 }
 
+func TestTurn_SecondOverflowDoesNotRetryForPendingInput(t *testing.T) {
+	var eng *Engine
+	var enqueueErr error
+	prov := &scriptedCompactionProvider{
+		name: "overflow-twice",
+		attempts: []scriptedCompactionAttempt{
+			{err: errors.New("context_length_exceeded: first turn attempt")},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "summary"), StopReason: llm.StopEndTurn}},
+			{
+				err: errors.New("context_length_exceeded: compacted turn attempt"),
+				beforeReturn: func() {
+					_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "queued during second overflow")
+				},
+			},
+		},
+	}
+	eng, _ = newEngine(t, prov, false)
+	eng.ContextWindow = 10000
+	eng.Compaction = DefaultCompactionPolicy()
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "latest"); err == nil || !strings.Contains(err.Error(), "context_length_exceeded") {
+		t.Fatalf("turn error = %v, want terminal context overflow", err)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("enqueue pending input: %v", enqueueErr)
+	}
+	if prov.calls != 3 {
+		t.Fatalf("provider calls = %d, want initial turn + compact + one retry", prov.calls)
+	}
+	if got := messagesText(eng.Session.History); !strings.Contains(got, "queued during second overflow") {
+		t.Fatalf("terminal overflow did not preserve pending input:\n%s", got)
+	}
+}
+
+func TestTurn_CompactRetryFailureConsumesHookContext(t *testing.T) {
+	prov := &scriptedCompactionProvider{
+		name: "compact-failure",
+		attempts: []scriptedCompactionAttempt{
+			{err: errors.New("context_length_exceeded: turn attempt")},
+			{err: errors.New("compaction backend unavailable")},
+			{response: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "next turn"), StopReason: llm.StopEndTurn}},
+		},
+	}
+	eng, _ := newEngine(t, prov, false)
+	eng.ContextWindow = 10000
+	eng.Compaction = DefaultCompactionPolicy()
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "one-shot"},
+		Stdout: "one-shot compact context",
+	}})
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 400))); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := eng.Turn(context.Background(), "failing turn"); err == nil || !strings.Contains(err.Error(), "compact retry failed") {
+		t.Fatalf("turn error = %v, want compact retry failure", err)
+	}
+	if out, err := eng.Turn(context.Background(), "next request"); err != nil || out != "next turn" {
+		t.Fatalf("next turn out=%q err=%v", out, err)
+	}
+	if prov.calls != 3 {
+		t.Fatalf("provider calls = %d, want failed turn + compact + next turn", prov.calls)
+	}
+	if got := messagesText(prov.histories[0]); !strings.Contains(got, "one-shot compact context") {
+		t.Fatalf("failed provider request missing hook context:\n%s", got)
+	}
+	if got := messagesText(prov.histories[2]); strings.Contains(got, "one-shot compact context") {
+		t.Fatalf("next provider request repeated stale hook context:\n%s", got)
+	}
+	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("hook context remaining after compact retry failure = %+v", remaining)
+	}
+}
+
 func messagesText(msgs []llm.Message) string {
 	var sb strings.Builder
 	for _, msg := range msgs {

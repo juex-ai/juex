@@ -461,7 +461,7 @@ func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) 
 }
 
 func (e *Engine) continueAfterProviderFailure(ctx context.Context, turnID string, iter int, err error) bool {
-	if err == nil || cancellation.ContextError(ctx) != nil {
+	if err == nil || cancellation.ContextError(ctx) != nil || llm.IsContextOverflowError(err) {
 		return false
 	}
 	classification := errorclass.Classify(err)
