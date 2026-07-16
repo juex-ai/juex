@@ -2868,7 +2868,7 @@ func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
 	prov := &queuedFailureProvider{
 		started:  make(chan struct{}, 1),
 		release:  make(chan struct{}),
-		firstErr: errors.New("unauthorized API key"),
+		firstErr: errors.New("codex websocket connect: status 401: handshake failed"),
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
 	}
 	eng, _ := newEngine(t, prov, false)
@@ -2885,8 +2885,8 @@ func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(prov.release)
-	if err := <-done; err == nil || !strings.Contains(err.Error(), "unauthorized") {
-		t.Fatalf("turn err = %v, want unauthorized", err)
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "status 401") {
+		t.Fatalf("turn err = %v, want status 401", err)
 	}
 	if prov.called != 1 {
 		t.Fatalf("provider calls = %d, want 1", prov.called)
