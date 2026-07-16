@@ -241,16 +241,22 @@ arbitrary user paths outside the workspace. Unsupported platforms, missing
 helpers, permissions errors, or policies a backend cannot enforce fail closed
 instead of falling back to unsandboxed execution.
 
-Workspace Observables are source-backed event sources configured in
-`.juex/observables.json`. Juex starts configured Observables with the active
-primary app, stores durable Observations under `.juex/observables/`, delivers
-them as external pending input to the active primary session, emits
-`observable.*` and `observation.*` events, and exposes status/history through
-the Web UI and the `observable_*` agent tools. Command sources capture bounded
-stdout/stderr batches from managed commands. Schedule sources emit one-shot,
-daily, or interval Observations without an external wrapper and persist
-schedule state under `.juex/observables/`. JSONL command parsers can map an
-`attachments_field` containing `[{ "path": "...", "media_type": "..." }]`;
+Workspace Observables are configured sources that emit durable Observations.
+A Command Observable captures bounded stdout/stderr batches from a managed
+command; a Schedule emits a pre-authored Observation from a one-shot, daily,
+or interval timetable. Both use the shared list/start/stop/delete/history
+lifecycle, store state under `.juex/observables/`, deliver external pending
+input to the active primary session, emit `observable.*` and `observation.*`
+events, and appear in the Web UI.
+
+`.juex/observables.json` accepts only tagged entries: `type: "command"` with
+`command_config`, or `type: "schedule"` with `schedule_config`. Old top-level
+command fields and the earlier nested `source` shape are reported as config
+issues and are not migrated automatically. The model-facing
+`observable_create` tool creates Command Observables, while `schedule_create`
+creates Schedules; the other `observable_*` tools remain shared. JSONL command
+parsers can map an `attachments_field` containing
+`[{ "path": "...", "media_type": "..." }]`;
 schedule observations can declare static `observation.attachments`. Attachment
 paths are validated inside the workdir, including `.juex/inbox/`; image
 attachments are copied into content-addressed
@@ -258,8 +264,9 @@ attachments are copied into content-addressed
 batching or asynchronous delivery, and then become provider image blocks.
 Validation failures are emitted as `observation.errored` and still leave
 structured text in context.
-Observables are workspace-local in the first version. Created Observables may
-omit `id` when `name` can be slugged into a stable lower-case id.
+Observables are workspace-local in the first version. Creation requests may
+omit `id` when `name` can be slugged into a stable lower-case id; persisted
+entries include the resolved id.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

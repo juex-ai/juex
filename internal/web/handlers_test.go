@@ -181,18 +181,22 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 
 	t.Setenv("JUEX_WEB_OBSERVABLE_HELPER", "1")
 	createBody, err := json.Marshal(map[string]any{
-		"name":    "Web Events",
-		"command": os.Args[0],
-		"args":    []string{"-test.run=TestWebObservableHelperProcess", "--", "json-once"},
-		"env":     map[string]string{"JUEX_WEB_OBSERVABLE_HELPER": "1"},
-		"streams": []string{"stdout"},
-		"parser": map[string]any{
-			"type":           "jsonl",
-			"content_field":  "content",
-			"kind_field":     "type",
-			"severity_field": "level",
+		"id":   "web-events",
+		"name": "Web Events",
+		"type": "command",
+		"command_config": map[string]any{
+			"command": os.Args[0],
+			"args":    []string{"-test.run=TestWebObservableHelperProcess", "--", "json-ready-then-wait"},
+			"env":     map[string]string{"JUEX_WEB_OBSERVABLE_HELPER": "1"},
+			"streams": []string{"stdout"},
+			"parser": map[string]any{
+				"type":           "jsonl",
+				"content_field":  "content",
+				"kind_field":     "type",
+				"severity_field": "level",
+			},
+			"batch": map[string]any{"interval_seconds": 10, "max_chars": 1000},
 		},
-		"batch": map[string]any{"interval_seconds": 10, "max_chars": 1000},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +209,27 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create status = %d body = %s", resp.StatusCode, data)
+	}
+	waitUntilWeb(t, 5*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(srv.opts.Cfg.WorkDir, "web-observable-ready"))
+		return err == nil
+	})
+
+	resp, err = http.Post(ts.URL+"/api/observables/web-events/stop", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("stop status = %d body = %s", resp.StatusCode, data)
+	}
+	var stopped observable.ObservableStatus
+	if err := json.NewDecoder(resp.Body).Decode(&stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped.State != observable.RunStateStopped {
+		t.Fatalf("stop status = %+v", stopped)
 	}
 
 	waitUntilWeb(t, 5*time.Second, func() bool {
@@ -219,7 +244,9 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 			return false
 		}
-		return len(parsed.Observations) == 1 && parsed.Observations[0].Content == "hello from web observable"
+		return len(parsed.Observations) == 1 &&
+			parsed.Observations[0].Content == "hello from web observable" &&
+			parsed.Observations[0].State == observable.ObservationStateDelivered
 	})
 
 	resp, err = http.Get(ts.URL + "/api/observables/web-events")
@@ -263,6 +290,23 @@ func TestObservablesAPI_CreateDetailObservationsDelete(t *testing.T) {
 		t.Fatalf("created_at = %T(%v), want JSON number", createdAt, createdAt)
 	}
 
+	if err := os.Remove(filepath.Join(srv.opts.Cfg.WorkDir, "web-observable-ready")); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Post(ts.URL+"/api/observables/web-events/start", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("start status = %d body = %s", resp.StatusCode, data)
+	}
+	waitUntilWeb(t, 5*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(srv.opts.Cfg.WorkDir, "web-observable-ready"))
+		return err == nil
+	})
+
 	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/web-events", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -295,6 +339,10 @@ func TestWebObservableHelperProcess(t *testing.T) {
 		return
 	}
 	_, _ = os.Stdout.WriteString(`{"type":"lark_notification","level":"info","content":"hello from web observable"}` + "\n")
+	if os.Args[len(os.Args)-1] == "json-ready-then-wait" {
+		_ = os.WriteFile(filepath.Join(os.Getenv("WORKDIR"), "web-observable-ready"), []byte("ready\n"), 0o644)
+		time.Sleep(30 * time.Second)
+	}
 	os.Exit(0)
 }
 

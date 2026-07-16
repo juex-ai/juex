@@ -510,6 +510,19 @@ func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(work, filepath.FromSlash(eventArtifactPath))); err != nil {
 		t.Fatalf("stored observable event artifact unavailable after source removal: %v", err)
 	}
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/observable-e2e", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete command observable status=%d body=%s", resp.StatusCode, body)
+	}
 }
 
 func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
@@ -538,18 +551,19 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 		t.Fatal("no session id")
 	}
 
+	scheduledAt := time.Now().UTC().Add(time.Second)
 	body, err := json.Marshal(map[string]any{
-		"id": "schedule-e2e",
-		"source": map[string]any{
-			"type": "schedule",
+		"id":   "schedule-e2e",
+		"type": "schedule",
+		"schedule_config": map[string]any{
 			"once": map[string]any{
-				"at": time.Now().UTC().Add(150 * time.Millisecond).Format(time.RFC3339Nano),
+				"at": scheduledAt.Format(time.RFC3339Nano),
 			},
-		},
-		"observation": map[string]any{
-			"kind":     "heartbeat",
-			"severity": "info",
-			"content":  "schedule e2e payload",
+			"observation": map[string]any{
+				"kind":     "heartbeat",
+				"severity": "info",
+				"content":  "schedule e2e payload",
+			},
 		},
 	})
 	if err != nil {
@@ -565,6 +579,34 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 		t.Fatalf("create schedule status=%d body=%s", resp.StatusCode, respBody)
 	}
 	resp.Body.Close()
+
+	resp, err = http.Post(ts.URL+"/api/observables/schedule-e2e/stop", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stopped observable.ObservableStatus
+	if err := json.NewDecoder(resp.Body).Decode(&stopped); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || stopped.State != observable.RunStateStopped {
+		t.Fatalf("stop schedule status=%d body=%+v", resp.StatusCode, stopped)
+	}
+
+	resp, err = http.Post(ts.URL+"/api/observables/schedule-e2e/start", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restarted observable.ObservableStatus
+	if err := json.NewDecoder(resp.Body).Decode(&restarted); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || restarted.State != observable.RunStateRunning {
+		t.Fatalf("restart schedule status=%d body=%+v", resp.StatusCode, restarted)
+	}
 
 	var snapshot struct {
 		Observables []observable.ObservableStatus `json:"observables"`
@@ -594,6 +636,86 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 	if got := snapshot.Observables[0]; got.Schedule == nil || got.Schedule.LastEmittedScheduledAt == nil {
 		t.Fatalf("schedule status = %+v", got)
 	}
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/schedule-e2e", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete schedule status=%d body=%s", resp.StatusCode, respBody)
+	}
+}
+
+func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
+	work := t.TempDir()
+	configBody := `{"observables":[` +
+		`{"id":"legacy-command","command":"echo"},` +
+		`{"id":"valid-schedule","type":"schedule","schedule_config":{"interval":{"every_seconds":3600},"observation":{"content":"valid sibling"}}}` +
+		`]}`
+	configPath := filepath.Join(work, ".juex", "observables.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: &webProvider{},
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	var statuses []observable.ObservableStatus
+	waitForCondition(t, 5*time.Second, func() bool {
+		resp, err := http.Get(ts.URL + "/api/observables")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Observables []observable.ObservableStatus `json:"observables"`
+		}
+		if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&body) != nil {
+			return false
+		}
+		statuses = body.Observables
+		valid, legacy := observableStatusByID(statuses, "valid-schedule"), observableStatusByID(statuses, "legacy-command")
+		return valid != nil && valid.State == observable.RunStateRunning && legacy != nil && legacy.State == observable.RunStateErrored
+	})
+	legacy := observableStatusByID(statuses, "legacy-command")
+	if legacy == nil || !strings.Contains(legacy.LastError, "type plus command_config") {
+		t.Fatalf("legacy config issue = %+v, want rewrite hint", legacy)
+	}
+
+	createBody := strings.NewReader(`{"id":"blocked-command","type":"command","command_config":{"command":"echo"}}`)
+	resp, err := http.Post(ts.URL+"/api/observables", "application/json", createBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(responseBody), "fix invalid entries before editing") {
+		t.Fatalf("blocked edit status=%d body=%s", resp.StatusCode, responseBody)
+	}
+}
+
+func observableStatusByID(statuses []observable.ObservableStatus, id string) *observable.ObservableStatus {
+	for i := range statuses {
+		if statuses[i].ID == id {
+			return &statuses[i]
+		}
+	}
+	return nil
 }
 
 type webStartTurnResponse struct {
@@ -772,24 +894,27 @@ func writeE2EObservableConfig(t *testing.T, work string) {
 	cfg := map[string]any{
 		"observables": []map[string]any{
 			{
-				"id":      "observable-e2e",
-				"command": os.Args[0],
-				"args":    []string{"-test.run=TestE2EObservableHelperProcess"},
-				"env": map[string]string{
-					"JUEX_E2E_OBSERVABLE":            "1",
-					"JUEX_E2E_OBSERVABLE_ATTACHMENT": attachmentPath,
-				},
-				"streams": []string{"stdout"},
-				"parser": map[string]string{
-					"type":              "jsonl",
-					"content_field":     "content",
-					"kind_field":        "type",
-					"severity_field":    "level",
-					"attachments_field": "attachments",
-				},
-				"batch": map[string]int{
-					"interval_seconds": 5,
-					"max_chars":        1000,
+				"id":   "observable-e2e",
+				"type": "command",
+				"command_config": map[string]any{
+					"command": os.Args[0],
+					"args":    []string{"-test.run=TestE2EObservableHelperProcess"},
+					"env": map[string]string{
+						"JUEX_E2E_OBSERVABLE":            "1",
+						"JUEX_E2E_OBSERVABLE_ATTACHMENT": attachmentPath,
+					},
+					"streams": []string{"stdout"},
+					"parser": map[string]string{
+						"type":              "jsonl",
+						"content_field":     "content",
+						"kind_field":        "type",
+						"severity_field":    "level",
+						"attachments_field": "attachments",
+					},
+					"batch": map[string]int{
+						"interval_seconds": 5,
+						"max_chars":        1000,
+					},
 				},
 			},
 		},

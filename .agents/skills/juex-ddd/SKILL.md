@@ -65,8 +65,10 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Tool call | Canonical provider-requested operation represented as an `llm.Block` and normalized before execution | `internal/runtime`, `internal/tools` |
 | MCP server | Configured stdio process that contributes tools and notifications | `internal/mcp` |
 | MCP notification | External event that becomes pending input or a system-originated user turn | `internal/mcp`, `internal/app`, `internal/web` |
-| Observable | Workspace-local command-backed event source that watches stdout/stderr and turns parsed output into durable Observations | `internal/observable`, `internal/app` |
-| Observation | Durable, batched external signal delivered as pending input or a system-originated turn in the active primary session | `internal/observable`, `internal/app`, `internal/web` |
+| Observable | Workspace-local configured source that emits durable Observations through one shared lifecycle | `internal/observable`, `internal/app` |
+| Command Observable | Observable backed by a managed command whose parsed, filtered, bounded stdout/stderr batches become Observations | `internal/observable` |
+| Schedule | Observable backed by a one-shot, daily, or interval timetable and a pre-authored Observation payload | `internal/observable` |
+| Observation | Durable external signal delivered as pending input or a system-originated turn in the active primary session | `internal/observable`, `internal/app`, `internal/web` |
 | Skill | Markdown instruction package loaded into the system prompt and read by the model through tools | `internal/skills`, `internal/prompt` |
 | Memory entry | Work-local or user-global contextual material surfaced through memory tools and prompt sections | `internal/memory`, `internal/prompt` |
 | Prompt section | Named slice of the system prompt assembled from AGENTS, skills, memory, runtime metadata, and shell profile | `internal/prompt` |
@@ -91,6 +93,7 @@ Use this map to decide where behavior belongs:
 | `internal/runtime` | Turn loop, tool-call ordering, pending input queue, long-running turn policy, compaction policy, active context, context projection, event emission for turn facts | CLI flags, HTTP routing, provider SDK details, session discovery, MCP process lifecycle |
 | `internal/session` | Session identity/kind/active metadata, history index, JSONL persistence, token/context usage snapshots, locks | Prompt assembly, provider calls, tool dispatch, web authorization |
 | `internal/tools` | Tool registry, builtin tool contracts, shell profile execution seam, timeout and result normalization | Provider protocol quirks, session persistence, prompt assembly |
+| `internal/observable` | Tagged Command Observable and Schedule specs, source adapters, shared lifecycle, durable Observation state, and delivery admission | Session selection, provider protocol, HTTP transport, frontend presentation |
 | `internal/mcp` | MCP config normalization, stdio process/client lifecycle, MCP tool discovery, notification transport | Runtime turn policy, active session selection, web session ownership |
 | `internal/memory` | Memory entry storage and memory tool registration | Prompt section ordering, session history, provider formatting |
 | `internal/skills` | SKILL.md frontmatter loading and skill metadata | Prompt prose generation, task execution policy |
