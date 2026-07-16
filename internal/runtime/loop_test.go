@@ -3026,42 +3026,56 @@ func TestTurn_AuthFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
 	}
 }
 
-func TestTurn_NonRetryableStatusPreservesPendingInputWithoutContinuing(t *testing.T) {
-	prov := &queuedFailureProvider{
-		started:  make(chan struct{}, 1),
-		release:  make(chan struct{}),
-		firstErr: errors.New("codex websocket error: status 400: bad request"),
-		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+func TestTurn_NonRetryableProviderFailurePreservesPendingInputWithoutContinuing(t *testing.T) {
+	tests := []struct {
+		name        string
+		providerErr error
+		wantError   string
+	}{
+		{name: "bad-request", providerErr: errors.New("codex websocket error: status 400: bad request"), wantError: "status 400"},
+		{name: "retry-suppressed", providerErr: errors.New("codex SSE read failed after emitting output; retry suppressed: stream error: INTERNAL_ERROR"), wantError: "retry suppressed"},
 	}
-	eng, _ := newEngine(t, prov, false)
-	done := make(chan error, 1)
-	go func() {
-		_, err := eng.Turn(context.Background(), "active")
-		done <- err
-	}()
-	waitSignal(t, prov.started, "provider did not start")
-	if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, "keep after bad request"), PendingInputOptions{
-		ID:  "pending-bad-request",
-		TTL: time.Hour,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	close(prov.release)
-	if err := <-done; err == nil || !strings.Contains(err.Error(), "status 400") {
-		t.Fatalf("turn err = %v, want status 400", err)
-	}
-	if prov.called != 1 {
-		t.Fatalf("provider calls = %d, want 1", prov.called)
-	}
-	if got := eng.Session.History[len(eng.Session.History)-1].FirstText(); got != "keep after bad request" {
-		t.Fatalf("preserved message = %q", got)
-	}
-	records, err := eng.PendingInputQueue.Records()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := records["pending-bad-request"].State; got != PendingInputStateProcessed {
-		t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prov := &queuedFailureProvider{
+				started:  make(chan struct{}, 1),
+				release:  make(chan struct{}),
+				firstErr: tt.providerErr,
+				recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "must not run"), StopReason: llm.StopEndTurn},
+			}
+			eng, _ := newEngine(t, prov, false)
+			done := make(chan error, 1)
+			go func() {
+				_, err := eng.Turn(context.Background(), "active")
+				done <- err
+			}()
+			waitSignal(t, prov.started, "provider did not start")
+			pendingID := "pending-" + tt.name
+			pendingText := "keep after " + tt.name
+			if _, err := eng.EnqueuePendingMessageWithOptions(context.Background(), llm.TextMessage(llm.RoleUser, pendingText), PendingInputOptions{
+				ID:  pendingID,
+				TTL: time.Hour,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			close(prov.release)
+			if err := <-done; err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("turn err = %v, want %q", err, tt.wantError)
+			}
+			if prov.called != 1 {
+				t.Fatalf("provider calls = %d, want 1", prov.called)
+			}
+			if got := eng.Session.History[len(eng.Session.History)-1].FirstText(); got != pendingText {
+				t.Fatalf("preserved message = %q, want %q", got, pendingText)
+			}
+			records, err := eng.PendingInputQueue.Records()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := records[pendingID].State; got != PendingInputStateProcessed {
+				t.Fatalf("pending state = %q, want %q", got, PendingInputStateProcessed)
+			}
+		})
 	}
 }
 

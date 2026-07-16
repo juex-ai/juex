@@ -266,6 +266,9 @@ func IsRetryableProviderError(err error) bool {
 	}
 
 	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "retry suppressed") {
+		return false
+	}
 	if strings.Contains(lower, "stream error: stream id") && strings.Contains(lower, "received from peer") {
 		return true
 	}
