@@ -59,19 +59,16 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 	if !ok {
 		t.Fatal("observable_create missing")
 	}
-	if !strings.Contains(create.Description, "Call observable_list first") ||
-		!strings.Contains(create.Description, "batch defaults are safe") ||
-		!strings.Contains(create.Description, "schedule_create") {
+	if !strings.Contains(create.Description, "schedule_create") ||
+		!strings.Contains(create.Description, "MUST load the `juex-observables` skill before first use.") {
 		t.Fatalf("description = %q", create.Description)
 	}
 	schedule, ok := reg.Get("schedule_create")
 	if !ok {
 		t.Fatal("schedule_create missing")
 	}
-	if !strings.Contains(schedule.Description, "scheduled") ||
-		!strings.Contains(schedule.Description, "polling") ||
-		!strings.Contains(schedule.Description, "exactly one of once, daily, or interval") ||
-		!strings.Contains(schedule.Description, "daily requires timezone") {
+	if !strings.Contains(schedule.Description, "command polling") ||
+		!strings.Contains(schedule.Description, "MUST load the `juex-observables` skill before first use.") {
 		t.Fatalf("schedule description = %q", schedule.Description)
 	}
 	var providerScheduleDescription string
@@ -80,8 +77,7 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 			providerScheduleDescription = spec.Description
 		}
 	}
-	if !strings.Contains(providerScheduleDescription, "exactly one of once, daily, or interval") ||
-		!strings.Contains(providerScheduleDescription, "daily requires timezone") {
+	if !strings.Contains(providerScheduleDescription, "MUST load the `juex-observables` skill before first use.") {
 		t.Fatalf("provider-visible schedule_create description = %q", providerScheduleDescription)
 	}
 }
@@ -147,10 +143,8 @@ func TestCreateToolSchemasAreClosedAndSourceSpecific(t *testing.T) {
 	if got := schemaRequiredStrings(t, schedule.Schema); !reflect.DeepEqual(got, []string{"observation"}) {
 		t.Fatalf("schedule_create required = %v, want observation only so name can derive id", got)
 	}
-	schemaDescription, _ := schedule.Schema["description"].(string)
-	if !strings.Contains(schemaDescription, "exactly one of once, daily, or interval") ||
-		!strings.Contains(schemaDescription, "daily requires timezone") {
-		t.Fatalf("provider-visible schedule schema description = %q", schemaDescription)
+	if _, ok := schedule.Schema["description"]; ok {
+		t.Fatalf("schedule schema should move prose to builtin guide: %#v", schedule.Schema)
 	}
 	scheduleProps := schemaMap(t, schedule.Schema, "properties")
 	for _, required := range []string{"id", "timezone", "once", "daily", "interval", "catch_up", "observation"} {

@@ -15,6 +15,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/runtime/contextbudget"
 	"github.com/juex-ai/juex/internal/tools"
 )
 
@@ -62,6 +63,88 @@ func TestRuntimeStatusServiceProjectsBuiltinToolCatalog(t *testing.T) {
 	if status.Tools.Count != count || count != 28 {
 		t.Fatalf("tool count = %d, grouped=%d, want 28", status.Tools.Count, count)
 	}
+}
+
+func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
+	status, err := NewRuntimeStatusService(config.Config{WorkDir: t.TempDir()}).Snapshot(RuntimeStatusOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	guides := map[string]string{
+		string(tools.ToolGroupChunkedWrite): "juex-chunked-write",
+		string(tools.ToolGroupSessionState): "juex-session-state",
+		string(tools.ToolGroupObservable):   "juex-observables",
+	}
+	var specs []llm.ToolSpec
+	for _, group := range status.Tools.Groups {
+		guide, ok := guides[group.Group]
+		if !ok {
+			continue
+		}
+		for _, tool := range group.Tools {
+			wantPointer := "MUST load the `" + guide + "` skill before first use."
+			if !strings.Contains(tool.Description, wantPointer) {
+				t.Errorf("%s description missing hard guide pointer %q: %q", tool.Name, wantPointer, tool.Description)
+			}
+			if schemaContainsStringMetadata(tool.Schema, "description") {
+				t.Errorf("%s schema retains descriptive prose: %#v", tool.Name, tool.Schema)
+			}
+			for _, key := range []string{"enum", "minimum", "maximum", "pattern", "maxLength"} {
+				if schemaContainsMetadataKey(tool.Schema, key) {
+					t.Errorf("%s schema retains %s constraint metadata: %#v", tool.Name, key, tool.Schema)
+				}
+			}
+			specs = append(specs, llm.ToolSpec{Name: tool.Name, Description: tool.Description, Schema: tool.Schema})
+		}
+	}
+	if len(specs) != 15 {
+		t.Fatalf("Tier 2 tool count = %d, want 15", len(specs))
+	}
+	if got := contextbudget.EstimateToolTokens(specs); got > 1700 {
+		t.Fatalf("Tier 2 tool estimate = %d tokens, want <= 1700", got)
+	}
+}
+
+func schemaContainsMetadataKey(value any, key string) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for childKey, child := range typed {
+			if childKey == key || schemaContainsMetadataKey(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if schemaContainsMetadataKey(child, key) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func schemaContainsStringMetadata(value any, key string) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for childKey, child := range typed {
+			if childKey == key {
+				if _, ok := child.(string); ok {
+					return true
+				}
+			}
+			if schemaContainsStringMetadata(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if schemaContainsStringMetadata(child, key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func containsString(values []string, want string) bool {
@@ -216,8 +299,27 @@ body`)
 	if status.Sandbox.FileSystem.OutsideWorkspace != config.OutsideWorkspaceReadWrite || !status.Sandbox.Network.Enabled {
 		t.Fatalf("sandbox = %+v", status.Sandbox)
 	}
-	if status.Skills.Count != 1 || status.Skills.Items[0].Name != "review" || status.Skills.Items[0].Source != "project" {
+	if status.Skills.Count != 4 || status.Skills.Items[0].Name != "review" || status.Skills.Items[0].Source != "project" {
 		t.Fatalf("skills = %+v", status.Skills)
+	}
+	builtinNames := map[string]bool{}
+	for _, skill := range status.Skills.Items {
+		if skill.Source == "builtin" {
+			builtinNames[skill.Name] = true
+			if skill.Path != "builtin://skills/"+skill.Name+"/SKILL.md" {
+				t.Fatalf("builtin skill path = %+v", skill)
+			}
+		}
+	}
+	for _, name := range []string{"juex-observables", "juex-session-state", "juex-chunked-write"} {
+		if !builtinNames[name] {
+			t.Fatalf("runtime skills missing builtin %q: %+v", name, status.Skills.Items)
+		}
+	}
+	for _, item := range status.SystemPrompt.Items {
+		if item.Key == "skills" && strings.Contains(item.Text, "juex-observables") {
+			t.Fatalf("builtin guide duplicated in prompt skill catalog: %+v", item)
+		}
 	}
 	var agentsEntry *RuntimeSystemPromptEntry
 	for i := range status.SystemPrompt.Items {

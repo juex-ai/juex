@@ -107,6 +107,9 @@ func registerSkillTools(reg *tools.Registry, loader *skills.Loader, workDir stri
 		if !ok {
 			return "", fmt.Errorf("skill_load: unknown skill %q; call skill_search to inspect available skills", name)
 		}
+		if body, ok := skill.BuiltinContent(); ok {
+			return formatSkillLoadResult(skill, body), nil
+		}
 		if err := guard.Check(skill.Path); err != nil {
 			return "", fmt.Errorf("skill_load: %w", err)
 		}
@@ -119,7 +122,14 @@ func registerSkillTools(reg *tools.Registry, loader *skills.Loader, workDir stri
 }
 
 func formatSkillLoadResult(skill skills.Skill, body string) string {
-	return fmt.Sprintf("Skill: %s\nSource: %s\nPath: %s\nDirectory: %s\n\n--- SKILL.md ---\n%s", skill.Name, skill.Source, skill.Path, filepath.Dir(skill.Path), body)
+	return fmt.Sprintf("Skill: %s\nSource: %s\nPath: %s\nDirectory: %s\n\n--- SKILL.md ---\n%s", skill.Name, skill.Source, skill.Path, skillDirectory(skill), body)
+}
+
+func skillDirectory(skill skills.Skill) string {
+	if skill.IsBuiltin() {
+		return strings.TrimSuffix(skill.Path, "/SKILL.md")
+	}
+	return filepath.Dir(skill.Path)
 }
 
 type skillSearchResult struct {

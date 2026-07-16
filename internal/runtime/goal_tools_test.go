@@ -66,8 +66,9 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	if len(updateProperties) != 4 {
 		t.Fatalf("update_goal properties = %#v", updateProperties)
 	}
-	if !strings.Contains(strings.ToLower(updateTool.Description), "failure") || !strings.Contains(strings.ToLower(updateTool.Description), "status_reason") {
-		t.Fatalf("update_goal description should recommend status_reason for failure: %q", updateTool.Description)
+	if !strings.Contains(strings.ToLower(updateTool.Description), "success requires acceptance") ||
+		!strings.Contains(updateTool.Description, "MUST load the `juex-session-state` skill before first use.") {
+		t.Fatalf("update_goal description should retain routing and guide pointer: %q", updateTool.Description)
 	}
 
 	out, err := reg.Call(context.Background(), GoalToolGet, nil)

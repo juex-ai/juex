@@ -118,6 +118,25 @@ func TestLiveBinary_LoadsSkillsAndMCP(t *testing.T) {
 	if !skillFound {
 		t.Errorf("trim-tool not in plan.skills (skills not loaded?). skills=%+v", plan.Skills)
 	}
+	builtinFound := map[string]bool{
+		"juex-chunked-write": false,
+		"juex-observables":   false,
+		"juex-session-state": false,
+	}
+	for _, skill := range plan.Skills {
+		if _, ok := builtinFound[skill.Name]; !ok {
+			continue
+		}
+		if skill.Path != "builtin://skills/"+skill.Name+"/SKILL.md" {
+			t.Errorf("builtin skill path = %q for %s", skill.Path, skill.Name)
+		}
+		builtinFound[skill.Name] = true
+	}
+	for name, found := range builtinFound {
+		if !found {
+			t.Errorf("builtin skill %s not in compiled-binary plan: %+v", name, plan.Skills)
+		}
+	}
 }
 
 func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {

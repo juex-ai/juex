@@ -13,6 +13,7 @@ const (
 	GoalToolGet    = "get_goal"
 	GoalToolCreate = "create_goal"
 	GoalToolUpdate = "update_goal"
+	goalGuide      = "MUST load the `juex-session-state` skill before first use."
 )
 
 func GoalToolDefinitions() []tools.ToolDefinition {
@@ -20,7 +21,7 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        GoalToolGet,
 			Group:       tools.ToolGroupSessionState,
-			Description: "Read the current session goal. Use this before deciding whether to create, update, complete, or fail a goal.",
+			Description: "Read the current session goal before changing it. " + goalGuide,
 			Schema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -29,13 +30,13 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        GoalToolCreate,
 			Group:       tools.ToolGroupSessionState,
-			Description: "Create or replace the current session goal contract. Put all completion criteria, required artifacts, constraints, and verification requirements in acceptance. The goal starts with status in_progress and belongs only to this session.",
+			Description: "Create or replace this session's in-progress goal contract. " + goalGuide,
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"description":   map[string]any{"type": "string", "description": "Concrete goal the model is trying to complete"},
-					"acceptance":    map[string]any{"type": "string", "description": "Completion criteria, required artifacts, constraints, and verification requirements"},
-					"status_reason": map[string]any{"type": "string", "description": "Current evidence-backed reason for the goal status"},
+					"description":   map[string]any{"type": "string"},
+					"acceptance":    map[string]any{"type": "string"},
+					"status_reason": map[string]any{"type": "string"},
 				},
 				"required": []string{"description"},
 			},
@@ -43,14 +44,14 @@ func GoalToolDefinitions() []tools.ToolDefinition {
 		{
 			Name:        GoalToolUpdate,
 			Group:       tools.ToolGroupSessionState,
-			Description: "Update the current session goal contract or evidence-backed status. Set status to success only after acceptance is satisfied. When marking failure, provide status_reason to explain why.",
+			Description: "Update goal fields or evidence-backed status; success requires acceptance. " + goalGuide,
 			Schema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"description":   map[string]any{"type": "string"},
 					"acceptance":    map[string]any{"type": "string"},
-					"status":        map[string]any{"type": "string", "enum": []string{string(GoalStatusInProgress), string(GoalStatusSuccess), string(GoalStatusFailure)}},
-					"status_reason": map[string]any{"type": "string", "description": "Evidence-backed reason for the current status"},
+					"status":        map[string]any{"type": "string"},
+					"status_reason": map[string]any{"type": "string"},
 				},
 			},
 		},

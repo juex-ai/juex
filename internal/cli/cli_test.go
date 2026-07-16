@@ -421,7 +421,8 @@ body`); err != nil {
 		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
 	}
 	body := out.String()
-	if !strings.Contains(body, `"skill_count": 1`) || !strings.Contains(body, `"name": "global"`) {
+	if !strings.Contains(body, `"skill_count": 4`) || !strings.Contains(body, `"name": "global"`) ||
+		!strings.Contains(body, `"name": "juex-observables"`) {
 		t.Fatalf("dry-run should include user-global skill after bare enable flag:\n%s", body)
 	}
 }
@@ -1083,14 +1084,21 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	}
 	checks, _ := result["checks"].([]any)
 	seen := map[string]bool{}
+	var skillsMessage string
 	for _, raw := range checks {
 		row, _ := raw.(map[string]any)
 		seen[row["name"].(string)] = true
+		if row["name"] == "skills" {
+			skillsMessage, _ = row["message"].(string)
+		}
 	}
 	for _, want := range []string{"config", "credentials", "connectivity", "shell", "workdir", "mcp", "skills"} {
 		if !seen[want] {
 			t.Fatalf("missing check %q in:\n%s", want, out.String())
 		}
+	}
+	if skillsMessage != "4 skill(s) loaded" {
+		t.Fatalf("skills doctor message = %q, want project plus three builtin guides", skillsMessage)
 	}
 }
 

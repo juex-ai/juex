@@ -151,11 +151,17 @@ under `.juex/` so it can stay uncommitted. User-global provider fallback
 configuration lives at `~/.juex/juex.yaml`.
 
 Skills are exposed with progressive disclosure. The system prompt contains a
-compact, budgeted skill catalog instead of every full `SKILL.md`; the model can
-call `skill_search` to discover catalog entries and `skill_load` to read the
-full markdown body plus its source path when a skill is relevant. Configure `skills.include` or
-`skills.exclude` to manually control which merged skills enter the catalog, and
-`skills.prompt_budget_chars` to tune the initial catalog budget. `juex repl`
+compact, budgeted catalog of filesystem skills instead of every full
+`SKILL.md`; the model can call `skill_search` to discover catalog entries and
+`skill_load` to read the full markdown body plus its source path when a skill
+is relevant. JueX also embeds required guides for the low-frequency
+`observable`, `session_state`, and `chunked_write` tool groups. Those guides
+appear as `source=builtin` in search and Runtime status, are listed by dry-run
+and counted by doctor, but stay out of the prompt skill catalog because each
+related tool description already points to its guide. Configure
+`skills.include` or `skills.exclude` to
+control merged filesystem skills; builtin guides are always available.
+`skills.prompt_budget_chars` tunes the initial filesystem catalog budget. `juex repl`
 and `juex run --verbose` print a resource summary, while `juex run --dry-run
 --json` includes per-section system-prompt token estimates.
 

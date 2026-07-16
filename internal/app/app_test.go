@@ -27,7 +27,9 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/sandbox"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/skills"
 	"github.com/juex-ai/juex/internal/tools"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
@@ -405,6 +407,29 @@ func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
 	if !strings.Contains(loaded, body) {
 		t.Fatalf("skill_load = %q, want full body", loaded)
 	}
+	builtinSearch, err := a.Engine.Tools.Call(context.Background(), "skill_search", map[string]any{"query": "juex-observables"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"name": "juex-observables"`, `"source": "builtin"`, `"path": "builtin://skills/juex-observables/SKILL.md"`} {
+		if !strings.Contains(builtinSearch, want) {
+			t.Fatalf("builtin skill_search missing %q in %s", want, builtinSearch)
+		}
+	}
+	builtinLoaded, err := a.Engine.Tools.Call(context.Background(), "skill_load", map[string]any{"name": "juex-observables"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Source: builtin",
+		"Path: builtin://skills/juex-observables/SKILL.md",
+		"Directory: builtin://skills/juex-observables",
+		"# JueX Observables",
+	} {
+		if !strings.Contains(builtinLoaded, want) {
+			t.Fatalf("builtin skill_load missing %q in %s", want, builtinLoaded)
+		}
+	}
 	if _, err := a.Engine.Tools.Call(context.Background(), "skill_load", map[string]any{"name": nil}); err == nil || !strings.Contains(err.Error(), "name is required") {
 		t.Fatalf("skill_load nil name error = %v, want name required", err)
 	}
@@ -443,6 +468,33 @@ func TestAppSkillLoadRespectsSandboxBlockedPaths(t *testing.T) {
 
 	if _, err := a.Engine.Tools.Call(context.Background(), "skill_load", map[string]any{"name": "secret"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
 		t.Fatalf("skill_load blocked path error = %v, want sandbox blocked path", err)
+	}
+}
+
+func TestSkillLoadDoesNotTrustFilesystemSourceLabel(t *testing.T) {
+	work := t.TempDir()
+	skillRoot := filepath.Join(work, "skills")
+	skillDir := filepath.Join(skillRoot, "forged")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: forged\ndescription: external\n---\nEXTERNAL\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader := skills.NewLoaderFromDirs([]skills.Dir{{Path: skillRoot, Source: skills.SourceBuiltin}})
+	if err := loader.Load(); err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry()
+	policy := sandbox.DefaultPolicy()
+	policy.Enabled = true
+	policy.FileSystem.BlockedPaths = []string{skillDir}
+	if err := registerSkillTools(reg, loader, work, policy); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := reg.Call(context.Background(), "skill_load", map[string]any{"name": "forged"}); err == nil || !strings.Contains(err.Error(), "blocked path") {
+		t.Fatalf("skill_load forged builtin source error = %v, want sandbox block", err)
 	}
 }
 

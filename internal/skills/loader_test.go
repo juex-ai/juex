@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func writeSkill(t *testing.T, root, name, body string) {
@@ -18,6 +19,16 @@ func writeSkill(t *testing.T, root, name, body string) {
 	}
 }
 
+func filesystemSkills(loader *Loader) []Skill {
+	var out []Skill
+	for _, skill := range loader.All() {
+		if skill.Source != SourceBuiltin {
+			out = append(out, skill)
+		}
+	}
+	return out
+}
+
 func TestLoader_LoadsBothScopes(t *testing.T) {
 	user := t.TempDir()
 	project := t.TempDir()
@@ -28,7 +39,7 @@ func TestLoader_LoadsBothScopes(t *testing.T) {
 	if err := l.Load(); err != nil {
 		t.Fatal(err)
 	}
-	all := l.All()
+	all := filesystemSkills(l)
 	if len(all) != 2 {
 		t.Fatalf("got %d", len(all))
 	}
@@ -201,8 +212,8 @@ func TestLoader_DirectoryWithoutSkillMD(t *testing.T) {
 	if err := l.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if len(l.All()) != 1 || l.All()[0].Name != "real" {
-		t.Fatalf("got %+v", l.All())
+	if all := filesystemSkills(l); len(all) != 1 || all[0].Name != "real" {
+		t.Fatalf("got %+v", all)
 	}
 }
 
@@ -211,8 +222,8 @@ func TestLoader_SkipsEmptyDirRef(t *testing.T) {
 	if err := l.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if len(l.All()) != 0 {
-		t.Fatalf("loaded skills from empty dir ref: %+v", l.All())
+	if all := filesystemSkills(l); len(all) != 0 {
+		t.Fatalf("loaded filesystem skills from empty dir ref: %+v", all)
 	}
 }
 
@@ -226,7 +237,7 @@ func TestLoader_AllSortedByName(t *testing.T) {
 	if err := l.Load(); err != nil {
 		t.Fatal(err)
 	}
-	all := l.All()
+	all := filesystemSkills(l)
 	if len(all) != 4 {
 		t.Fatalf("len = %d", len(all))
 	}
@@ -286,8 +297,8 @@ func TestLoader_LoadMissingDirIsOK(t *testing.T) {
 	if err := l.Load(); err != nil {
 		t.Fatalf("missing dir should be ok, got %v", err)
 	}
-	if len(l.All()) != 0 {
-		t.Fatal("expected no skills")
+	if len(filesystemSkills(l)) != 0 {
+		t.Fatal("expected no filesystem skills")
 	}
 }
 
@@ -304,7 +315,7 @@ func TestLoader_AppliesIncludeAfterScopeMerge(t *testing.T) {
 	if err := l.Load(); err != nil {
 		t.Fatal(err)
 	}
-	all := l.All()
+	all := filesystemSkills(l)
 	if len(all) != 1 || all[0].Name != "alpha" || all[0].Source != "project" || all[0].Body != "PROJECT" {
 		t.Fatalf("loaded skills = %+v", all)
 	}
@@ -402,5 +413,133 @@ func TestLoader_SearchFindsLoadedSkills(t *testing.T) {
 	results := l.Search("screen", 10)
 	if len(results) != 1 || results[0].Name != "alpha" {
 		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestLoader_LoadsBuiltinGuidesOutsidePromptCatalog(t *testing.T) {
+	l := NewLoader(t.TempDir())
+	if err := l.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"juex-chunked-write", "juex-observables", "juex-session-state"} {
+		skill, ok := l.Get(name)
+		if !ok {
+			t.Fatalf("builtin skill %q missing from %+v", name, l.All())
+		}
+		if skill.Source != "builtin" {
+			t.Fatalf("%s source = %q, want builtin", name, skill.Source)
+		}
+		wantPath := "builtin://skills/" + name + "/SKILL.md"
+		if skill.Path != wantPath {
+			t.Fatalf("%s path = %q, want %q", name, skill.Path, wantPath)
+		}
+		if !strings.Contains(skill.raw, "name: "+name) || !strings.Contains(skill.Body, "# ") {
+			t.Fatalf("%s embedded content incomplete: %+v", name, skill)
+		}
+		if results := l.Search(name, 10); len(results) != 1 || results[0].Name != name {
+			t.Fatalf("search %s = %+v", name, results)
+		}
+	}
+
+	if section := l.PromptSection(); section != "" {
+		t.Fatalf("builtin guides must not enter prompt catalog:\n%s", section)
+	}
+	if report := l.PromptReport(); report.UsedChars != 0 || len(report.Omitted) != 0 {
+		t.Fatalf("builtin guides must not enter prompt report: %+v", report)
+	}
+}
+
+func TestLoader_BuiltinGuidesIgnoreFilesystemSkillFilters(t *testing.T) {
+	for _, policy := range []Policy{
+		{Include: []string{"not-a-builtin"}},
+		{Exclude: []string{"juex-observables", "juex-session-state", "juex-chunked-write"}},
+	} {
+		l := NewLoaderFromDirsWithOptions(nil, LoaderOptions{Policy: policy})
+		if err := l.Load(); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"juex-observables", "juex-session-state", "juex-chunked-write"} {
+			if _, ok := l.Get(name); !ok {
+				t.Fatalf("policy %+v hid required builtin %q", policy, name)
+			}
+		}
+	}
+}
+
+func TestLoader_BuiltinGuideNamesAreReserved(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "override", "---\nname: juex-observables\ndescription: override\n---\nbody")
+
+	l := NewLoaderFromDirs([]Dir{{Path: dir, Source: "project"}})
+	err := l.Load()
+	if err == nil || !strings.Contains(err.Error(), `duplicate skill "juex-observables" from builtin and project`) {
+		t.Fatalf("err = %v, want reserved builtin duplicate error", err)
+	}
+}
+
+func TestLoader_ReloadRetainsBuiltinGuides(t *testing.T) {
+	l := NewLoader(t.TempDir())
+	for i := 0; i < 2; i++ {
+		if err := l.Load(); err != nil {
+			t.Fatal(err)
+		}
+		if skill, ok := l.Get("juex-observables"); !ok || skill.Source != "builtin" || skill.raw == "" {
+			t.Fatalf("reload %d builtin = %+v, %v", i, skill, ok)
+		}
+	}
+}
+
+func TestBuiltinCatalogFailsLoudOnInvalidEmbeddedGuide(t *testing.T) {
+	valid := func() fstest.MapFS {
+		files := fstest.MapFS{}
+		for _, name := range builtinSkillNames {
+			files["builtin/"+name+"/SKILL.md"] = &fstest.MapFile{Data: []byte("---\nname: " + name + "\ndescription: guide\ntype: builtin-guide\n---\n# Guide\n")}
+		}
+		return files
+	}
+
+	t.Run("malformed frontmatter", func(t *testing.T) {
+		files := valid()
+		files["builtin/juex-observables/SKILL.md"] = &fstest.MapFile{Data: []byte("---\nname: broken")}
+		if _, err := loadBuiltinSkillsFromFS(files); err == nil || !strings.Contains(err.Error(), "parse builtin") {
+			t.Fatalf("err = %v, want parse failure", err)
+		}
+	})
+
+	t.Run("name mismatch", func(t *testing.T) {
+		files := valid()
+		files["builtin/juex-observables/SKILL.md"] = &fstest.MapFile{Data: []byte("---\nname: other\ndescription: guide\ntype: builtin-guide\n---\n# Guide\n")}
+		if _, err := loadBuiltinSkillsFromFS(files); err == nil || !strings.Contains(err.Error(), `declares name "other"`) {
+			t.Fatalf("err = %v, want name mismatch", err)
+		}
+	})
+
+	t.Run("missing expected guide", func(t *testing.T) {
+		files := valid()
+		delete(files, "builtin/juex-session-state/SKILL.md")
+		if _, err := loadBuiltinSkillsFromFS(files); err == nil || !strings.Contains(err.Error(), "has 2 guides, want 3") {
+			t.Fatalf("err = %v, want catalog count failure", err)
+		}
+	})
+}
+
+func TestBuiltinCatalogDoesNotDependOnExpectedNameOrder(t *testing.T) {
+	files := fstest.MapFS{}
+	for _, name := range builtinSkillNames {
+		files["builtin/"+name+"/SKILL.md"] = &fstest.MapFile{Data: []byte("---\nname: " + name + "\ndescription: guide\ntype: builtin-guide\n---\n# Guide\n")}
+	}
+	original := builtinSkillNames
+	builtinSkillNames = []string{"juex-session-state", "juex-chunked-write", "juex-observables"}
+	t.Cleanup(func() { builtinSkillNames = original })
+
+	loaded, err := loadBuiltinSkillsFromFS(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, skill := range loaded {
+		if skill.Name != builtinSkillNames[i] {
+			t.Fatalf("loaded[%d].Name = %q, want %q", i, skill.Name, builtinSkillNames[i])
+		}
 	}
 }
