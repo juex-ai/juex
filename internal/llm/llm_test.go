@@ -21,6 +21,7 @@ import (
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
 	"github.com/juex-ai/juex/internal/eventmedia"
+	openaisdk "github.com/openai/openai-go"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -3184,6 +3185,40 @@ func TestIsContextOverflowError(t *testing.T) {
 	}
 	if IsContextOverflowError(fmt.Errorf("rate limit exceeded")) {
 		t.Fatal("rate limit should not be classified as context overflow")
+	}
+}
+
+func TestIsRetryableProviderError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "deadline", err: context.DeadlineExceeded, want: true},
+		{name: "connection reset", err: errors.New("read: connection reset by peer"), want: true},
+		{name: "sse read", err: errors.New("codex SSE read: stream error"), want: true},
+		{name: "request timeout status", err: errors.New("provider request failed: status 408"), want: true},
+		{name: "conflict status", err: errors.New("provider request failed: status code 409"), want: true},
+		{name: "rate limit status", err: errors.New("provider request failed: HTTP 429"), want: true},
+		{name: "server status", err: errors.New("codex websocket error: status 503: unavailable"), want: true},
+		{name: "typed openai server status", err: &openaisdk.Error{StatusCode: 500}, want: true},
+		{name: "bad request status", err: errors.New("codex websocket error: status 400: bad request"), want: false},
+		{name: "payment status", err: errors.New("provider request failed: status 402"), want: false},
+		{name: "not found status", err: errors.New("provider request failed: HTTP 404"), want: false},
+		{name: "auth status", err: errors.New("provider request failed: status 401"), want: false},
+		{name: "typed anthropic permission status", err: &anthropic.Error{StatusCode: 403}, want: false},
+		{name: "context overflow", err: errors.New("context_length_exceeded"), want: false},
+		{name: "semantic error", err: errors.New("invalid request: unsupported tool schema"), want: false},
+		{name: "exit code", err: errors.New("provider helper exit code 500"), want: false},
+		{name: "port number", err: errors.New("dial localhost port 500"), want: false},
+		{name: "cancelled", err: context.Canceled, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsRetryableProviderError(tt.err); got != tt.want {
+				t.Fatalf("IsRetryableProviderError() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
