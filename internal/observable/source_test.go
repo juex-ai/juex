@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -234,6 +235,206 @@ func TestTerminalClaimPreventsWorkerOverwriteAndRollbackRetriesFinish(t *testing
 	status, _ := mgr.StatusByID(spec.ID)
 	if status.State != RunStateExited {
 		t.Fatalf("status = %s, want ordinary worker exit after rollback", status.State)
+	}
+}
+
+func TestStopAndDeletePreserveRunWhenSourceDoesNotQuiesceWithoutError(t *testing.T) {
+	for _, operation := range []struct {
+		name string
+		run  func(context.Context, *Manager, string) error
+	}{
+		{name: "stop", run: func(ctx context.Context, mgr *Manager, id string) error { return mgr.Stop(ctx, id) }},
+		{name: "delete", run: func(ctx context.Context, mgr *Manager, id string) error { return mgr.Delete(ctx, id) }},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			spec := mustCommandSpecForSourceTest("not-quiesced-" + operation.name)
+			source := &fakeSourceRuntime{}
+			mgr := newSourceTestManager(t, spec, source)
+			source.startFn = func(_ context.Context, run *observableRun) error {
+				run.sourceState = sourceKernel(mgr)
+				status := run.state
+				status.State = RunStateRunning
+				return mgr.activateRun(run, status)
+			}
+			source.stopFn = func(context.Context, *observableRun, sourceStopReason) (sourceStopResult, error) {
+				return sourceStopResult{Quiesced: false}, nil
+			}
+			if err := mgr.Start(context.Background(), spec.ID); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			err := operation.run(ctx, mgr, spec.ID)
+			if err == nil || !strings.Contains(err.Error(), "did not quiesce") {
+				t.Fatalf("%s error = %v, want did-not-quiesce error", operation.name, err)
+			}
+			mgr.mu.Lock()
+			current := mgr.runs[spec.ID]
+			mgr.mu.Unlock()
+			if current == nil || current.state.State != RunStateRunning {
+				t.Fatalf("%s removed active run: %+v", operation.name, current)
+			}
+		})
+	}
+}
+
+func TestTerminalPersistenceFailureKeepsOriginalOutcomePending(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("pending-terminal")
+	releaseWorker := make(chan struct{})
+	workerResult := make(chan struct {
+		finished bool
+		err      error
+	}, 1)
+	errorEvent := make(chan ObservableEventPayload, 1)
+	bus := events.NewBus()
+	bus.Subscribe(EventObservableErrored, func(event events.Event) {
+		if payload, ok := event.Payload.(ObservableEventPayload); ok {
+			select {
+			case errorEvent <- payload:
+			default:
+			}
+		}
+	})
+	var mgr *Manager
+	source := &fakeSourceRuntime{}
+	mgr = newSourceTestManager(t, spec, source)
+	mgr.opts.Bus = bus
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		if err := mgr.activateRun(run, status); err != nil {
+			return err
+		}
+		go func() {
+			<-run.ctx.Done()
+			run.closeQuiesced()
+			<-releaseWorker
+			finished, err := mgr.finishRun(run, terminalOutcome{State: RunStateExited})
+			if err != nil {
+				mgr.reportWorkerError(run, err)
+			}
+			run.closeDone()
+			workerResult <- struct {
+				finished bool
+				err      error
+			}{finished: finished, err: err}
+		}()
+		return nil
+	}
+	source.stopFn = func(ctx context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+		run.cancel()
+		if err := waitRunQuiesced(ctx, run); err != nil {
+			return sourceStopResult{}, err
+		}
+		return sourceStopResult{Quiesced: true}, nil
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	runsPath := filepath.Join(mgr.store.root, "runs.jsonl")
+	backupPath := runsPath + ".before-terminal"
+	if err := os.Rename(runsPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- mgr.Stop(context.Background(), spec.ID) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		mgr.mu.Lock()
+		pending := mgr.runs[spec.ID] != nil && mgr.runs[spec.ID].terminalPending
+		mgr.mu.Unlock()
+		if pending {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("terminal persistence failure did not enter pending state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := os.Remove(runsPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backupPath, runsPath); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseWorker)
+	result := <-workerResult
+	if result.finished || result.err == nil || !strings.Contains(result.err.Error(), "persist terminal run") {
+		t.Fatalf("worker finish after pending terminal = (%v, %v), want blocked with persistence error", result.finished, result.err)
+	}
+	if err := <-stopResult; err == nil || !strings.Contains(err.Error(), "persist terminal run") {
+		t.Fatalf("Stop error = %v, want terminal persistence failure", err)
+	}
+	select {
+	case payload := <-errorEvent:
+		if !strings.Contains(payload.Error, "persist terminal run") {
+			t.Fatalf("error event = %+v", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker terminal persistence failure did not emit an errored event")
+	}
+	mgr.mu.Lock()
+	pendingRun := mgr.runs[spec.ID]
+	slot := mgr.slots[spec.ID]
+	mgr.mu.Unlock()
+	if pendingRun == nil || pendingRun != slot || !pendingRun.terminalPending {
+		t.Fatalf("pending run/slot = run:%+v slot:%+v", pendingRun, slot)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close did not retry recovered terminal persistence: %v", err)
+	}
+	runs, err := mgr.store.LatestRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs[spec.ID].State != RunStateStopped {
+		t.Fatalf("recovered terminal = %+v, want original stopped outcome", runs[spec.ID])
+	}
+}
+
+func TestDeleteReportsStopAndTerminalPersistenceErrors(t *testing.T) {
+	spec := mustCommandSpecForSourceTest("delete-persist-error")
+	source := &fakeSourceRuntime{}
+	mgr := newSourceTestManager(t, spec, source)
+	source.startFn = func(_ context.Context, run *observableRun) error {
+		run.sourceState = sourceKernel(mgr)
+		status := run.state
+		status.State = RunStateRunning
+		return mgr.activateRun(run, status)
+	}
+	source.stopFn = func(_ context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+		run.cancel()
+		run.closeQuiesced()
+		run.closeDone()
+		return sourceStopResult{Quiesced: true}, errors.New("delete stop failed")
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	runsPath := filepath.Join(mgr.store.root, "runs.jsonl")
+	backupPath := runsPath + ".before-delete"
+	if err := os.Rename(runsPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := mgr.Delete(context.Background(), spec.ID)
+	if err == nil || !strings.Contains(err.Error(), "delete stop failed") || !strings.Contains(err.Error(), "record terminal state") {
+		t.Fatalf("Delete error = %v, want stop and terminal persistence errors", err)
+	}
+	if removeErr := os.Remove(runsPath); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	if renameErr := os.Rename(backupPath, runsPath); renameErr != nil {
+		t.Fatal(renameErr)
+	}
+	if closeErr := mgr.Close(); closeErr == nil || !strings.Contains(closeErr.Error(), "delete stop failed") {
+		t.Fatalf("Close after restoring terminal store = %v, want stable source stop error", closeErr)
 	}
 }
 

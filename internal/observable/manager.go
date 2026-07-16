@@ -65,35 +65,37 @@ func (*CloseDeferredError) Error() string {
 }
 
 type observableRun struct {
-	id                string
-	runID             string
-	spec              Spec
-	source            sourceRuntime
-	sourceState       any
-	manager           *Manager
-	ctx               context.Context
-	cancel            context.CancelFunc
-	state             ObservableStatus
-	claim             *terminalClaim
-	terminalPending   bool
-	terminalDurable   bool
-	shutdown          bool
-	workerCompleted   bool
-	completionErr     error
-	terminalEvent     string
-	terminalStatus    ObservableStatus
-	startPublished    chan struct{}
-	startPublishOnce  sync.Once
-	workerReady       chan struct{}
-	workerReadyOnce   sync.Once
-	quiesced          chan struct{}
-	quiescedOnce      sync.Once
-	done              chan struct{}
-	doneOnce          sync.Once
-	lifecycleDoneOnce sync.Once
-	sourceDone        chan struct{}
-	sourceDoneOnce    sync.Once
-	finalizeOnce      sync.Once
+	id                 string
+	runID              string
+	spec               Spec
+	source             sourceRuntime
+	sourceState        any
+	manager            *Manager
+	ctx                context.Context
+	cancel             context.CancelFunc
+	state              ObservableStatus
+	claim              *terminalClaim
+	terminalPending    bool
+	pendingOutcome     terminalOutcome
+	terminalDurable    bool
+	shutdown           bool
+	workerCompleted    bool
+	completionErr      error
+	completionReported bool
+	terminalEvent      string
+	terminalStatus     ObservableStatus
+	startPublished     chan struct{}
+	startPublishOnce   sync.Once
+	workerReady        chan struct{}
+	workerReadyOnce    sync.Once
+	quiesced           chan struct{}
+	quiescedOnce       sync.Once
+	done               chan struct{}
+	doneOnce           sync.Once
+	lifecycleDoneOnce  sync.Once
+	sourceDone         chan struct{}
+	sourceDoneOnce     sync.Once
+	finalizeOnce       sync.Once
 }
 
 type StatusSnapshot struct {
@@ -320,9 +322,9 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 		return err
 	}
 	result, stopErr := run.source.stop(ctx, run, sourceStopUser)
-	if stopErr != nil && !result.Quiesced {
+	if !result.Quiesced {
 		m.rollbackTerminal(run, claim)
-		return stopErr
+		return sourceNotQuiescedError(run.id, stopErr)
 	}
 	if stopErr != nil {
 		commitErr := m.commitTerminal(run, claim, terminalOutcome{State: RunStateErrored, Err: stopErr}, true)
@@ -379,12 +381,16 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	}
 	if run != nil {
 		result, stopErr := source.stop(ctx, run, sourceStopDelete)
-		if stopErr != nil && !result.Quiesced {
+		if !result.Quiesced {
 			m.rollbackTerminal(run, claim)
-			return stopErr
+			return sourceNotQuiescedError(run.id, stopErr)
 		}
 		if stopErr != nil {
-			_ = m.commitTerminal(run, claim, terminalOutcome{State: RunStateErrored, Err: stopErr}, true)
+			commitErr := m.commitTerminal(run, claim, terminalOutcome{State: RunStateErrored, Err: stopErr}, true)
+			_ = waitRunDone(ctx, run)
+			if commitErr != nil {
+				return fmt.Errorf("%w; record terminal state: %v", stopErr, commitErr)
+			}
 			return stopErr
 		}
 		if err := m.commitTerminal(run, claim, terminalOutcome{State: RunStateStopped}, true); err != nil {
@@ -572,8 +578,10 @@ func (m *Manager) closeSourcesAndDeliveries() (bool, error) {
 	for {
 		m.mu.Lock()
 		type claimedRun struct {
-			run   *observableRun
-			claim *terminalClaim
+			run            *observableRun
+			claim          *terminalClaim
+			pending        bool
+			pendingOutcome terminalOutcome
 		}
 		claimed := make([]claimedRun, 0, len(m.runs))
 		waiting := make([]<-chan struct{}, 0)
@@ -584,18 +592,23 @@ func (m *Manager) closeSourcesAndDeliveries() (bool, error) {
 			}
 			claim := newTerminalClaim()
 			run.claim = claim
-			claimed = append(claimed, claimedRun{run: run, claim: claim})
+			claimed = append(claimed, claimedRun{
+				run:            run,
+				claim:          claim,
+				pending:        run.terminalPending,
+				pendingOutcome: run.pendingOutcome,
+			})
 		}
 		m.mu.Unlock()
 		if len(claimed) == 0 && len(waiting) == 0 {
 			break
 		}
-		unquiesced := false
+		incomplete := false
 		for _, item := range claimed {
 			result, stopErr := item.run.source.stop(context.Background(), item.run, sourceStopShutdown)
 			if !result.Quiesced {
 				m.rollbackTerminal(item.run, item.claim)
-				unquiesced = true
+				incomplete = true
 				if firstErr == nil {
 					if stopErr != nil {
 						firstErr = stopErr
@@ -605,12 +618,25 @@ func (m *Manager) closeSourcesAndDeliveries() (bool, error) {
 				}
 				continue
 			}
+			if item.pending {
+				if commitErr := m.commitTerminal(item.run, item.claim, item.pendingOutcome, true); commitErr != nil {
+					incomplete = true
+					if firstErr == nil {
+						firstErr = commitErr
+					}
+					continue
+				}
+				if stopErr != nil && firstErr == nil {
+					firstErr = stopErr
+				}
+				continue
+			}
 			m.commitShutdown(item.run, item.claim)
 			if stopErr != nil && firstErr == nil {
 				firstErr = stopErr
 			}
 		}
-		if unquiesced {
+		if incomplete {
 			return false, firstErr
 		}
 		for _, resolved := range waiting {
@@ -700,6 +726,11 @@ func (m *Manager) finishRun(run *observableRun, outcome terminalOutcome) (bool, 
 			m.mu.Unlock()
 			return false, nil
 		}
+		if run.terminalPending {
+			err := run.completionErr
+			m.mu.Unlock()
+			return false, err
+		}
 		if claim := run.claim; claim != nil {
 			resolved := claim.resolved
 			m.mu.Unlock()
@@ -780,6 +811,7 @@ func (m *Manager) commitTerminal(run *observableRun, claim *terminalClaim, outco
 	if persistErr != nil {
 		wrapped := fmt.Errorf("observable: persist terminal run %q: %w", run.runID, persistErr)
 		run.terminalPending = true
+		run.pendingOutcome = outcome
 		run.completionErr = wrapped
 		run.claim = nil
 		errorStatus := status
@@ -793,6 +825,7 @@ func (m *Manager) commitTerminal(run *observableRun, claim *terminalClaim, outco
 	delete(m.runs, run.id)
 	m.lastStatus[run.id] = status
 	run.terminalPending = false
+	run.pendingOutcome = terminalOutcome{}
 	run.terminalDurable = true
 	run.completionErr = nil
 	if emit {
@@ -838,12 +871,25 @@ func (m *Manager) reportWorkerError(run *observableRun, err error) {
 		return
 	}
 	m.mu.Lock()
+	if run.completionReported {
+		m.mu.Unlock()
+		return
+	}
+	run.completionReported = true
 	run.completionErr = err
 	status := m.lastStatus[run.id]
 	status.State = RunStateErrored
 	status.LastError = err.Error()
 	m.lastStatus[run.id] = status
 	m.mu.Unlock()
+	m.emitObservable(EventObservableErrored, status)
+}
+
+func sourceNotQuiescedError(id string, err error) error {
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("observable: source %q did not quiesce", id)
 }
 
 func (m *Manager) recordObservation(record ObservationRecord) (ObservationRecord, bool, error) {

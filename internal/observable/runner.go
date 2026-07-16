@@ -46,6 +46,9 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	if callCtx == nil {
 		callCtx = context.Background()
 	}
+	if err := callCtx.Err(); err != nil {
+		return nil, err
+	}
 	cwd := r.opts.workDir
 	if r.opts.spec.CWD != "" {
 		cwd = ExpandVariables(r.opts.spec.CWD, r.opts.workDir)
@@ -74,6 +77,9 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 		}
 		spec = prepared
 	}
+	if err := callCtx.Err(); err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(runCtx, spec.Binary, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
@@ -84,6 +90,9 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		return nil, err
+	}
+	if err := callCtx.Err(); err != nil {
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {

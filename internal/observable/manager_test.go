@@ -391,6 +391,33 @@ func TestManager_StopCancelsBlockedStartup(t *testing.T) {
 	}
 }
 
+func TestManager_CanceledCallerDoesNotStartUnsandboxedCommand(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("canceled-unsandboxed", "wait")
+	writeObservableConfig(t, dir, spec)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := mgr.Start(ctx, spec.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start error = %v, want context cancellation", err)
+	}
+	status, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State == observable.RunStateRunning || status.PID != 0 {
+		t.Fatalf("canceled Start launched command: %+v", status)
+	}
+}
+
 func TestManager_StartedSubscriberCanStopDeleteOrClose(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -466,6 +493,90 @@ func TestManager_StartedSubscriberCanStopDeleteOrClose(t *testing.T) {
 				}
 			case <-time.After(asyncWaitTimeout):
 				t.Fatal("Start did not return after started callback")
+			}
+			tt.check(t, mgr, spec.ID)
+		})
+	}
+}
+
+func TestManager_ScheduleStartedSubscriberCanStopDeleteOrClose(t *testing.T) {
+	tests := []struct {
+		name   string
+		action func(*observable.Manager, string) error
+		check  func(*testing.T, *observable.Manager, string)
+	}{
+		{
+			name:   "stop",
+			action: func(mgr *observable.Manager, id string) error { return mgr.Stop(context.Background(), id) },
+			check: func(t *testing.T, mgr *observable.Manager, id string) {
+				status, err := mgr.StatusByID(id)
+				if err != nil || status.State != observable.RunStateStopped {
+					t.Fatalf("schedule status after reentrant Stop = %+v, %v", status, err)
+				}
+			},
+		},
+		{
+			name:   "delete",
+			action: func(mgr *observable.Manager, id string) error { return mgr.Delete(context.Background(), id) },
+			check: func(t *testing.T, mgr *observable.Manager, id string) {
+				if _, err := mgr.StatusByID(id); err == nil {
+					t.Fatal("schedule still exists after reentrant Delete")
+				}
+			},
+		},
+		{
+			name:   "close",
+			action: func(mgr *observable.Manager, _ string) error { return mgr.Close() },
+			check: func(t *testing.T, mgr *observable.Manager, _ string) {
+				if err := mgr.Close(); err != nil {
+					t.Fatalf("second Close = %v", err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := scheduleIntervalSpec("schedule-started-"+tt.name, observable.ScheduleSourceSpec{
+				Interval:    &observable.IntervalSchedule{EverySeconds: 3600},
+				Observation: observable.ScheduleObservationSpec{Content: "tick"},
+			})
+			writeObservableConfig(t, dir, spec)
+			bus := events.NewBus()
+			actionResult := make(chan error, 1)
+			var once sync.Once
+			var mgr *observable.Manager
+			bus.Subscribe(observable.EventObservableStarted, func(events.Event) {
+				once.Do(func() { actionResult <- tt.action(mgr, spec.ID) })
+			})
+			var err error
+			mgr, err = observable.NewManager(observable.ManagerOptions{
+				ConfigPath: configPath(dir),
+				StateDir:   stateDir(dir),
+				WorkDir:    dir,
+				Bus:        bus,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = mgr.Close() }()
+			startResult := make(chan error, 1)
+			go func() { startResult <- mgr.Start(context.Background(), spec.ID) }()
+			select {
+			case err := <-actionResult:
+				if err != nil {
+					t.Fatalf("reentrant schedule %s = %v", tt.name, err)
+				}
+			case <-time.After(asyncWaitTimeout):
+				t.Fatalf("reentrant schedule %s deadlocked", tt.name)
+			}
+			select {
+			case err := <-startResult:
+				if err != nil {
+					t.Fatalf("schedule Start = %v", err)
+				}
+			case <-time.After(asyncWaitTimeout):
+				t.Fatal("schedule Start did not return after started callback")
 			}
 			tt.check(t, mgr, spec.ID)
 		})
