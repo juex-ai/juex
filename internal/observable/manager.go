@@ -334,6 +334,12 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	if err != nil || run == nil {
 		return err
 	}
+	if pending, commitErr := m.commitPendingTerminal(run, claim); pending {
+		if commitErr != nil {
+			return commitErr
+		}
+		return waitRunDone(ctx, run)
+	}
 	result, stopErr := run.source.stop(ctx, run, sourceStopUser)
 	if !result.Quiesced {
 		m.rollbackTerminal(run, claim)
@@ -393,24 +399,34 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if run != nil {
-		result, stopErr := source.stop(ctx, run, sourceStopDelete)
-		if !result.Quiesced {
-			m.rollbackTerminal(run, claim)
-			return sourceNotQuiescedError(run.id, stopErr)
-		}
-		if stopErr != nil {
-			commitErr := m.commitTerminal(run, claim, terminalOutcome{State: RunStateErrored, Err: stopErr}, true)
-			_ = waitRunDone(ctx, run)
+		pending, commitErr := m.commitPendingTerminal(run, claim)
+		if pending {
 			if commitErr != nil {
-				return fmt.Errorf("%w; record terminal state: %v", stopErr, commitErr)
+				return commitErr
 			}
-			return stopErr
-		}
-		if err := m.commitTerminal(run, claim, terminalOutcome{State: RunStateStopped}, true); err != nil {
-			return err
-		}
-		if err := waitRunDone(ctx, run); err != nil {
-			return err
+			if err := waitRunDone(ctx, run); err != nil {
+				return err
+			}
+		} else {
+			result, stopErr := source.stop(ctx, run, sourceStopDelete)
+			if !result.Quiesced {
+				m.rollbackTerminal(run, claim)
+				return sourceNotQuiescedError(run.id, stopErr)
+			}
+			if stopErr != nil {
+				commitErr := m.commitTerminal(run, claim, terminalOutcome{State: RunStateErrored, Err: stopErr}, true)
+				_ = waitRunDone(ctx, run)
+				if commitErr != nil {
+					return fmt.Errorf("%w; record terminal state: %v", stopErr, commitErr)
+				}
+				return stopErr
+			}
+			if err := m.commitTerminal(run, claim, terminalOutcome{State: RunStateStopped}, true); err != nil {
+				return err
+			}
+			if err := waitRunDone(ctx, run); err != nil {
+				return err
+			}
 		}
 	}
 	if err := source.deleteState(ctx, id); err != nil {
@@ -798,6 +814,20 @@ func (m *Manager) rollbackTerminal(run *observableRun, claim *terminalClaim) {
 	claim.resolve()
 }
 
+func (m *Manager) commitPendingTerminal(run *observableRun, claim *terminalClaim) (bool, error) {
+	if m == nil || run == nil || claim == nil {
+		return false, nil
+	}
+	m.mu.Lock()
+	if m.runs[run.id] != run || run.claim != claim || !run.terminalPending {
+		m.mu.Unlock()
+		return false, nil
+	}
+	outcome := run.pendingOutcome
+	m.mu.Unlock()
+	return true, m.commitTerminal(run, claim, outcome, false)
+}
+
 func (m *Manager) commitTerminal(run *observableRun, claim *terminalClaim, outcome terminalOutcome, emit bool) error {
 	status := run.state
 	status.State = outcome.State
@@ -823,16 +853,27 @@ func (m *Manager) commitTerminal(run *observableRun, claim *terminalClaim, outco
 	}
 	if persistErr != nil {
 		wrapped := fmt.Errorf("observable: persist terminal run %q: %w", run.runID, persistErr)
+		if !run.terminalPending {
+			run.pendingOutcome = outcome
+		}
 		run.terminalPending = true
-		run.pendingOutcome = outcome
 		run.completionErr = wrapped
 		run.claim = nil
 		errorStatus := status
 		errorStatus.State = RunStateErrored
 		errorStatus.LastError = wrapped.Error()
 		m.lastStatus[run.id] = errorStatus
+		emitError := false
+		if !run.completionReported {
+			run.completionReported = true
+			run.completionStatus = errorStatus
+			emitError = run.workerCompleted
+		}
 		m.mu.Unlock()
 		claim.resolve()
+		if emitError {
+			m.emitObservable(EventObservableErrored, errorStatus)
+		}
 		return wrapped
 	}
 	delete(m.runs, run.id)

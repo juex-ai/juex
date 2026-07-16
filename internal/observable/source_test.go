@@ -362,16 +362,30 @@ func TestTerminalPersistenceFailureKeepsOriginalOutcomePending(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
+	mgr.mu.Lock()
+	pendingRun := mgr.runs[spec.ID]
+	slot := mgr.slots[spec.ID]
+	mgr.mu.Unlock()
+	if pendingRun == nil || pendingRun != slot || !pendingRun.terminalPending {
+		t.Fatalf("pending run/slot = run:%+v slot:%+v", pendingRun, slot)
+	}
 	if err := os.Remove(runsPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(backupPath, runsPath); err != nil {
 		t.Fatal(err)
 	}
+	closeResult := make(chan error, 1)
+	go func() { closeResult <- mgr.Close() }()
+	select {
+	case err := <-closeResult:
+		t.Fatalf("Close returned before pending worker completed: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
 	close(releaseWorker)
 	result := <-workerResult
-	if result.finished || result.err == nil || !strings.Contains(result.err.Error(), "persist terminal run") {
-		t.Fatalf("worker finish after pending terminal = (%v, %v), want blocked with persistence error", result.finished, result.err)
+	if result.finished {
+		t.Fatalf("worker finish after pending terminal = (%v, %v), want no terminal overwrite", result.finished, result.err)
 	}
 	if err := <-stopResult; err == nil || !strings.Contains(err.Error(), "persist terminal run") {
 		t.Fatalf("Stop error = %v, want terminal persistence failure", err)
@@ -384,14 +398,7 @@ func TestTerminalPersistenceFailureKeepsOriginalOutcomePending(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("worker terminal persistence failure did not emit an errored event")
 	}
-	mgr.mu.Lock()
-	pendingRun := mgr.runs[spec.ID]
-	slot := mgr.slots[spec.ID]
-	mgr.mu.Unlock()
-	if pendingRun == nil || pendingRun != slot || !pendingRun.terminalPending {
-		t.Fatalf("pending run/slot = run:%+v slot:%+v", pendingRun, slot)
-	}
-	if err := mgr.Close(); err != nil {
+	if err := <-closeResult; err != nil {
 		t.Fatalf("Close did not retry recovered terminal persistence: %v", err)
 	}
 	runs, err := mgr.store.LatestRuns()
@@ -406,6 +413,82 @@ func TestTerminalPersistenceFailureKeepsOriginalOutcomePending(t *testing.T) {
 	eventMu.Unlock()
 	if len(gotEvents) != 1 || gotEvents[0] != EventObservableErrored {
 		t.Fatalf("lifecycle events after persistence recovery = %v, want exactly one errored event", gotEvents)
+	}
+}
+
+func TestExplicitPendingTerminalRetryPreservesOutcomeAndSingleEvent(t *testing.T) {
+	for _, retry := range []struct {
+		name string
+		run  func(*Manager, string) error
+	}{
+		{name: "stop", run: func(mgr *Manager, id string) error { return mgr.Stop(context.Background(), id) }},
+		{name: "delete", run: func(mgr *Manager, id string) error { return mgr.Delete(context.Background(), id) }},
+	} {
+		t.Run(retry.name, func(t *testing.T) {
+			spec := mustCommandSpecForSourceTest("explicit-pending-" + retry.name)
+			source := &fakeSourceRuntime{}
+			mgr := newSourceTestManager(t, spec, source)
+			bus := events.NewBus()
+			var eventMu sync.Mutex
+			var lifecycleEvents []string
+			bus.Subscribe("observable.*", func(event events.Event) {
+				eventMu.Lock()
+				lifecycleEvents = append(lifecycleEvents, event.Type)
+				eventMu.Unlock()
+			})
+			mgr.opts.Bus = bus
+			source.startFn = func(_ context.Context, run *observableRun) error {
+				run.sourceState = sourceKernel(mgr)
+				status := run.state
+				status.State = RunStateRunning
+				return mgr.activateRun(run, status)
+			}
+			source.stopFn = func(_ context.Context, run *observableRun, _ sourceStopReason) (sourceStopResult, error) {
+				run.cancel()
+				run.closeQuiesced()
+				run.closeDone()
+				return sourceStopResult{Quiesced: true}, nil
+			}
+			if err := mgr.Start(context.Background(), spec.ID); err != nil {
+				t.Fatal(err)
+			}
+			runsPath := filepath.Join(mgr.store.root, "runs.jsonl")
+			backupPath := runsPath + ".before-explicit-retry"
+			if err := os.Rename(runsPath, backupPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(runsPath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := mgr.Stop(context.Background(), spec.ID); err == nil || !strings.Contains(err.Error(), "persist terminal run") {
+				t.Fatalf("initial Stop error = %v, want persistence failure", err)
+			}
+			if err := os.Remove(runsPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(backupPath, runsPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := retry.run(mgr, spec.ID); err != nil {
+				t.Fatalf("explicit %s retry = %v", retry.name, err)
+			}
+			if source.stopCalls.Load() != 1 {
+				t.Fatalf("source stop calls after pending %s retry = %d, want 1", retry.name, source.stopCalls.Load())
+			}
+			runs, err := mgr.store.LatestRuns()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runs[spec.ID].State != RunStateStopped {
+				t.Fatalf("durable retry outcome = %+v, want original stopped", runs[spec.ID])
+			}
+			eventMu.Lock()
+			gotEvents := append([]string(nil), lifecycleEvents...)
+			eventMu.Unlock()
+			if len(gotEvents) != 1 || gotEvents[0] != EventObservableErrored {
+				t.Fatalf("lifecycle events after explicit %s retry = %v, want one errored", retry.name, gotEvents)
+			}
+		})
 	}
 }
 
