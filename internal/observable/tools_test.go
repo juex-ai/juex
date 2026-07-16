@@ -254,6 +254,66 @@ func TestObservableToolsCreateCommandSourceDefaultsBatch(t *testing.T) {
 	}
 }
 
+func TestObservableToolsCreateRejectsAmbiguousSourceShapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input map[string]any
+		want  string
+	}{
+		{
+			name: "unknown source type",
+			input: map[string]any{
+				"id":     "unknown-source",
+				"source": map[string]any{"type": "http", "command": "echo"},
+			},
+			want: "source.type must be command or schedule",
+		},
+		{
+			name: "command source with schedule field",
+			input: map[string]any{
+				"id": "mixed-command",
+				"source": map[string]any{
+					"type": "command", "command": "echo",
+					"interval": map[string]any{"every_seconds": float64(60)},
+				},
+			},
+			want: "command source cannot set schedule fields",
+		},
+		{
+			name: "schedule source with command field",
+			input: map[string]any{
+				"id": "mixed-schedule",
+				"source": map[string]any{
+					"type": "schedule", "command": "echo",
+					"interval": map[string]any{"every_seconds": float64(60)},
+				},
+				"observation": map[string]any{"content": "tick"},
+			},
+			want: "schedule source cannot set command fields",
+		},
+		{
+			name: "explicit source with top level command fields",
+			input: map[string]any{
+				"id": "mixed-levels", "command": "printf",
+				"source": map[string]any{"type": "command", "command": "echo"},
+			},
+			want: "top-level command fields cannot be mixed with source",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newToolTestManager(t)
+			reg := tools.NewRegistry()
+			if err := observable.RegisterTools(reg, mgr); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := reg.CallWithInfo(context.Background(), "observable_create", tt.input); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("observable_create error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestObservableToolsObservations(t *testing.T) {
 	mgr := newToolTestManager(t)
 	rec, err := mgr.RecordObservation(observation("lark-events", "hello", fixedTime))

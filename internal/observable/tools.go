@@ -170,6 +170,7 @@ type createInput struct {
 	Filters     []FilterSpec           `json:"filters,omitempty"`
 	Batch       BatchSpec              `json:"batch,omitempty"`
 	OnExit      OnExitSpec             `json:"on_exit,omitempty"`
+	Defaults    Defaults               `json:"defaults,omitempty"`
 }
 
 type createSourceInput struct {
@@ -202,7 +203,20 @@ func specFromCreateInput(body []byte) (Spec, error) {
 	if err := json.Unmarshal(body, &input); err != nil {
 		return Spec{}, err
 	}
+	if input.Source != nil {
+		switch input.Source.Type {
+		case SourceTypeCommand, SourceTypeSchedule:
+		default:
+			return Spec{}, fmt.Errorf("source.type must be command or schedule, got %q", input.Source.Type)
+		}
+		if fields := input.topLevelCommandFields(); len(fields) > 0 {
+			return Spec{}, fmt.Errorf("top-level command fields cannot be mixed with source: %s", strings.Join(fields, ", "))
+		}
+	}
 	if input.Source != nil && input.Source.Type == SourceTypeSchedule {
+		if fields := input.Source.commandFields(); len(fields) > 0 {
+			return Spec{}, fmt.Errorf("schedule source cannot set command fields: %s", strings.Join(fields, ", "))
+		}
 		return NewScheduleSpec(input.ID, input.Name, ScheduleSourceSpec{
 			Timezone: input.Source.Timezone,
 			Once:     input.Source.Once,
@@ -217,6 +231,21 @@ func specFromCreateInput(body []byte) (Spec, error) {
 			},
 		})
 	}
+	if input.Source != nil {
+		if fields := input.Source.scheduleFields(); len(fields) > 0 {
+			return Spec{}, fmt.Errorf("command source cannot set schedule fields: %s", strings.Join(fields, ", "))
+		}
+	}
+	if len(input.Observation.Attachments) > 0 {
+		return Spec{}, fmt.Errorf("command source cannot set observation.attachments; use parser.attachments_field")
+	}
+	observation := CommandObservationSpec{Kind: input.Defaults.Kind, Severity: input.Defaults.Severity}
+	if input.Observation.Kind != "" {
+		observation.Kind = input.Observation.Kind
+	}
+	if input.Observation.Severity != "" {
+		observation.Severity = input.Observation.Severity
+	}
 	config := CommandSourceSpec{
 		Command:     input.Command,
 		Args:        input.Args,
@@ -227,7 +256,7 @@ func specFromCreateInput(body []byte) (Spec, error) {
 		Filters:     input.Filters,
 		Batch:       input.Batch,
 		OnExit:      input.OnExit,
-		Observation: CommandObservationSpec{Kind: input.Observation.Kind, Severity: input.Observation.Severity},
+		Observation: observation,
 	}
 	if input.Source != nil {
 		config.Command = input.Source.Command
@@ -241,6 +270,93 @@ func specFromCreateInput(body []byte) (Spec, error) {
 		config.OnExit = input.Source.OnExit
 	}
 	return NewCommandSpec(input.ID, input.Name, config)
+}
+
+func (input createInput) topLevelCommandFields() []string {
+	var fields []string
+	if strings.TrimSpace(input.Command) != "" {
+		fields = append(fields, "command")
+	}
+	if len(input.Args) > 0 {
+		fields = append(fields, "args")
+	}
+	if strings.TrimSpace(input.CWD) != "" {
+		fields = append(fields, "cwd")
+	}
+	if len(input.Env) > 0 {
+		fields = append(fields, "env")
+	}
+	if len(input.Streams) > 0 {
+		fields = append(fields, "streams")
+	}
+	if input.Parser != nil {
+		fields = append(fields, "parser")
+	}
+	if len(input.Filters) > 0 {
+		fields = append(fields, "filters")
+	}
+	if input.Batch != (BatchSpec{}) {
+		fields = append(fields, "batch")
+	}
+	if input.OnExit != (OnExitSpec{}) {
+		fields = append(fields, "on_exit")
+	}
+	if input.Defaults != (Defaults{}) {
+		fields = append(fields, "defaults")
+	}
+	return fields
+}
+
+func (source createSourceInput) commandFields() []string {
+	var fields []string
+	if strings.TrimSpace(source.Command) != "" {
+		fields = append(fields, "source.command")
+	}
+	if len(source.Args) > 0 {
+		fields = append(fields, "source.args")
+	}
+	if strings.TrimSpace(source.CWD) != "" {
+		fields = append(fields, "source.cwd")
+	}
+	if len(source.Env) > 0 {
+		fields = append(fields, "source.env")
+	}
+	if len(source.Streams) > 0 {
+		fields = append(fields, "source.streams")
+	}
+	if source.Parser != nil {
+		fields = append(fields, "source.parser")
+	}
+	if len(source.Filters) > 0 {
+		fields = append(fields, "source.filters")
+	}
+	if source.Batch != (BatchSpec{}) {
+		fields = append(fields, "source.batch")
+	}
+	if source.OnExit != (OnExitSpec{}) {
+		fields = append(fields, "source.on_exit")
+	}
+	return fields
+}
+
+func (source createSourceInput) scheduleFields() []string {
+	var fields []string
+	if strings.TrimSpace(source.Timezone) != "" {
+		fields = append(fields, "source.timezone")
+	}
+	if source.Once != nil {
+		fields = append(fields, "source.once")
+	}
+	if source.Daily != nil {
+		fields = append(fields, "source.daily")
+	}
+	if source.Interval != nil {
+		fields = append(fields, "source.interval")
+	}
+	if source.CatchUp != (CatchUpSpec{}) {
+		fields = append(fields, "source.catch_up")
+	}
+	return fields
 }
 
 func specSchema() map[string]any {

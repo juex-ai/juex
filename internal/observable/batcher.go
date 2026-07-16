@@ -37,9 +37,12 @@ type activeBatch struct {
 	windowEnd        time.Time
 }
 
-func NewBatcher(spec Spec, store *Store, opts BatcherOptions) *Batcher {
-	runtimeSpec, _ := spec.commandRuntime()
-	return newCommandBatcher(runtimeSpec, store, opts)
+func NewBatcher(spec Spec, store *Store, opts BatcherOptions) (*Batcher, error) {
+	runtimeSpec, ok := spec.commandRuntime()
+	if !ok {
+		return nil, fmt.Errorf("observable %q is not a command source", spec.ID)
+	}
+	return newCommandBatcher(runtimeSpec, store, opts), nil
 }
 
 func newCommandBatcher(spec commandRuntimeSpec, store *Store, opts BatcherOptions) *Batcher {

@@ -14,7 +14,7 @@ import (
 
 func TestBatcher_FlushesAfterInterval(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{})
 	first := parsedUnit("stdout", "first", fixedTime)
 	if got, err := b.Add(first); err != nil || len(got) != 0 {
 		t.Fatalf("first Add() = %+v, %v; want no flush", got, err)
@@ -38,7 +38,7 @@ func TestBatcher_FlushesAfterInterval(t *testing.T) {
 
 func TestBatcher_EmptyFlushDoesNothing(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{})
 	got, err := b.Flush("shutdown")
 	if err != nil {
 		t.Fatal(err)
@@ -48,9 +48,18 @@ func TestBatcher_EmptyFlushDoesNothing(t *testing.T) {
 	}
 }
 
+func TestNewBatcherRejectsScheduleSpec(t *testing.T) {
+	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
+	spec := scheduleOnceSpec("schedule-batcher", fixedTime.Add(time.Hour))
+	batcher, err := observable.NewBatcher(spec, store, observable.BatcherOptions{})
+	if err == nil || !strings.Contains(err.Error(), "command source") {
+		t.Fatalf("NewBatcher() = %#v, %v; want command source error", batcher, err)
+	}
+}
+
 func TestBatcher_FlushDueFlushesQuietBatch(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{})
 	if got, err := b.Add(parsedUnit("stdout", "quiet", fixedTime)); err != nil || len(got) != 0 {
 		t.Fatalf("Add() = %+v, %v; want no immediate flush", got, err)
 	}
@@ -72,7 +81,7 @@ func TestBatcher_FlushDueFlushesQuietBatch(t *testing.T) {
 
 func TestBatcher_UsesHighestSeverityInWindow(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{})
 	if _, err := b.Add(parsedUnit("stdout", "info", fixedTime)); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +101,7 @@ func TestBatcher_UsesHighestSeverityInWindow(t *testing.T) {
 
 func TestBatcher_PersistsAttachmentErrors(t *testing.T) {
 	store := observable.NewStore(t.TempDir(), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{})
 	unit := parsedUnit("stdout", "keep me", fixedTime)
 	unit.AttachmentErrors = []string{"attachments must be an array"}
 	if _, err := b.Add(unit); err != nil {
@@ -112,7 +121,7 @@ func TestBatcher_SnapshotsAttachmentsBeforeFlush(t *testing.T) {
 	sourcePath := filepath.Join(workDir, ".juex", "inbox", "pixel.png")
 	writeBatcherPNG(t, sourcePath)
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{WorkDir: workDir})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{WorkDir: workDir})
 	unit := parsedUnit("stdout", "image event", fixedTime)
 	unit.Attachments = []eventmedia.AttachmentRef{{Path: ".juex/inbox/pixel.png", MediaType: "image/png"}}
 	if _, err := b.Add(unit); err != nil {
@@ -149,7 +158,7 @@ func TestBatcher_EnforcesAttachmentLimitAcrossBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{
 		WorkDir:       workDir,
 		MaxEventBytes: 1,
 	})
@@ -194,7 +203,7 @@ func TestBatcher_ResetsAttachmentLimitAfterIntervalFlush(t *testing.T) {
 		}
 	}
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{
 		WorkDir:       workDir,
 		MaxEventBytes: 1,
 	})
@@ -226,7 +235,7 @@ func TestBatcher_SnapshotsNewAttachmentBeforeIntervalFlush(t *testing.T) {
 	spec := validSpec("logs")
 	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.Batch.MaxChars = 1 })
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(spec, store, observable.BatcherOptions{WorkDir: workDir})
+	b := newBatcher(t, spec, store, observable.BatcherOptions{WorkDir: workDir})
 	first := parsedUnit("stdout", "old-batch", fixedTime)
 	if _, err := b.Add(first); err != nil {
 		t.Fatal(err)
@@ -278,7 +287,7 @@ func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 	config, _ := spec.CommandConfig()
 	root := t.TempDir()
 	store := observable.NewStore(root, observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(spec, store, observable.BatcherOptions{})
+	b := newBatcher(t, spec, store, observable.BatcherOptions{})
 	_, err := b.Add(parsedUnit("stdout", strings.Repeat("x", 120), fixedTime))
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +319,7 @@ func TestBatcher_KeepsBatchWhenPersistenceFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := observable.NewStore(stateDir, observable.StoreOptions{Now: fixedNow})
-	b := observable.NewBatcher(validSpec("logs"), store, observable.BatcherOptions{})
+	b := newBatcher(t, validSpec("logs"), store, observable.BatcherOptions{})
 	if _, err := b.Add(parsedUnit("stdout", "retry me", fixedTime)); err != nil {
 		t.Fatal(err)
 	}
@@ -340,6 +349,15 @@ func parsedUnit(stream, content string, receivedAt time.Time) observable.ParsedU
 		Severity:   "info",
 		ReceivedAt: receivedAt,
 	}
+}
+
+func newBatcher(t *testing.T, spec observable.Spec, store *observable.Store, opts observable.BatcherOptions) *observable.Batcher {
+	t.Helper()
+	batcher, err := observable.NewBatcher(spec, store, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return batcher
 }
 
 func writeBatcherPNG(t *testing.T, path string) {
