@@ -122,7 +122,7 @@ func (p *openAIProvider) completeStreaming(ctx context.Context, params openai.Ch
 	}
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return Response{}, fmt.Errorf("openai chat stream idle timeout after %s: %w", idleTimeout, err)
+			return Response{}, newStreamIdleTimeoutError("openai chat stream", idleTimeout, err)
 		}
 		return Response{}, fmt.Errorf("openai chat stream: %w", err)
 	}

@@ -41,6 +41,23 @@ func (r errReadCloser) Close() error {
 	return nil
 }
 
+type idleReadCloser struct {
+	ctx    context.Context
+	prefix *strings.Reader
+}
+
+func (r *idleReadCloser) Read(p []byte) (int, error) {
+	if r.prefix != nil && r.prefix.Len() > 0 {
+		return r.prefix.Read(p)
+	}
+	<-r.ctx.Done()
+	return 0, r.ctx.Err()
+}
+
+func (r *idleReadCloser) Close() error {
+	return nil
+}
+
 func testProfile(t testing.TB, cfg Config) ProviderProfile {
 	t.Helper()
 	profile, err := ResolveProfile(cfg)
@@ -53,6 +70,19 @@ func testProfile(t testing.TB, cfg Config) ProviderProfile {
 func testBlockingProfile(t testing.TB, cfg Config) ProviderProfile {
 	t.Helper()
 	return testProfile(t, blockingConfig(cfg))
+}
+
+func requireStreamIdleTimeout(t testing.TB, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
+		t.Fatalf("err = %v, want stream idle timeout", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, must not be context.Canceled", err)
+	}
 }
 
 func blockingConfig(cfg Config) Config {
@@ -958,9 +988,7 @@ func TestOpenAI_StreamIdleTimeout(t *testing.T) {
 
 	p := NewOpenAI(testProfile(t, Config{Protocol: string(ProtocolOpenAIChat), BaseURL: srv.URL, APIKey: "k", Model: "m"}), nil)
 	_, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{StreamIdleTimeout: 20 * time.Millisecond})
-	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
-		t.Fatalf("err = %v, want stream idle timeout", err)
-	}
+	requireStreamIdleTimeout(t, err)
 }
 
 func TestOpenAI_ToolWithoutPropertiesUsesEmptyObject(t *testing.T) {
@@ -1208,6 +1236,79 @@ func TestOpenAICodexResponses_RetriesSSEReadEOF(t *testing.T) {
 	}
 	if resp.Message.FirstText() != "ok" {
 		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+	}
+}
+
+func TestOpenAICodexResponses_StreamIdleTimeoutIsDeadline(t *testing.T) {
+	oldDelay := codexSSERetryBaseDelay
+	codexSSERetryBaseDelay = 0
+	t.Cleanup(func() { codexSSERetryBaseDelay = oldDelay })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	p := NewOpenAICodexResponses(testProfile(t, Config{
+		ID:       "openai-codex",
+		Protocol: string(ProtocolOpenAICodexResponses),
+		BaseURL:  srv.URL,
+		APIKey:   "k",
+		Model:    "m",
+	}), nil)
+	_, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		StreamIdleTimeout: 20 * time.Millisecond,
+	})
+	requireStreamIdleTimeout(t, err)
+}
+
+func TestOpenAICodexResponses_RetriesStreamIdleAfterEmittingDelta(t *testing.T) {
+	oldDelay := codexSSERetryBaseDelay
+	codexSSERetryBaseDelay = 0
+	t.Cleanup(func() { codexSSERetryBaseDelay = oldDelay })
+
+	attempts := 0
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			partial := `data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"partial plan"}` + "\n\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &idleReadCloser{ctx: r.Context(), prefix: strings.NewReader(partial)},
+				Request:    r,
+			}, nil
+		}
+		return codexCompletedTextResponse(r, "recovered"), nil
+	})}
+	p := NewOpenAICodexResponses(testProfile(t, Config{ID: "openai-codex", Protocol: string(ProtocolOpenAICodexResponses), BaseURL: "https://chatgpt.com/backend-api/codex", APIKey: "k", Model: "m"}), client)
+	var diagnostics []ProviderRetryDiagnostic
+	var deltas []StreamDelta
+
+	resp, err := CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
+		StreamIdleTimeout: 20 * time.Millisecond,
+		OnDelta:           func(delta StreamDelta) { deltas = append(deltas, delta) },
+		RetryObserver:     func(d ProviderRetryDiagnostic) { diagnostics = append(diagnostics, d) },
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithOptions: %v", err)
+	}
+	if attempts != 2 || resp.Message.FirstText() != "recovered" {
+		t.Fatalf("attempts = %d, response = %+v", attempts, resp)
+	}
+	if len(deltas) != 1 || deltas[0].Kind != "reasoning" {
+		t.Fatalf("deltas = %+v, want first-attempt reasoning delta", deltas)
+	}
+	if len(diagnostics) != 1 {
+		t.Fatalf("diagnostics = %+v, want one retry", diagnostics)
+	}
+	got := diagnostics[0]
+	if !got.WillRetry || got.Exhausted || got.Attempt != 1 || got.MaxAttempts != codexSSEIdleMaxAttempts || got.RetryReason != "codex_sse_idle_timeout" {
+		t.Fatalf("retry diagnostic = %+v", got)
 	}
 }
 
@@ -2100,9 +2201,7 @@ func TestOpenAIResponses_StreamIdleTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{StreamIdleTimeout: 20 * time.Millisecond})
-	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
-		t.Fatalf("err = %v, want stream idle timeout", err)
-	}
+	requireStreamIdleTimeout(t, err)
 }
 
 func TestOpenAIResponses_ProjectsUserImageAndToolResultImageReference(t *testing.T) {
@@ -2666,9 +2765,7 @@ func TestOpenAICodexResponses_WebsocketIdleTimeout(t *testing.T) {
 	_, err = CompleteWithOptions(context.Background(), p, "", []Message{TextMessage(RoleUser, "hi")}, nil, CompleteOptions{
 		StreamIdleTimeout: 20 * time.Millisecond,
 	})
-	if err == nil || !strings.Contains(err.Error(), "idle timeout") {
-		t.Fatalf("err = %v, want websocket idle timeout", err)
-	}
+	requireStreamIdleTimeout(t, err)
 }
 
 func TestOpenAICodexResponses_WebsocketCachedUsesPreviousResponseIDForIncrementalInput(t *testing.T) {

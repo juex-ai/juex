@@ -22,6 +22,8 @@ const defaultOpenAICodexBaseURL = "https://chatgpt.com/backend-api/codex"
 
 var codexSSERetryBaseDelay = 100 * time.Millisecond
 
+const codexSSEIdleMaxAttempts = 2
+
 type openAICodexResponsesProvider struct {
 	profile   ProviderProfile
 	client    openai.Client
@@ -110,6 +112,7 @@ func (p *openAICodexResponsesProvider) CompleteWithOptions(ctx context.Context, 
 func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params responses.ResponseNewParams, opts CompleteOptions) (*responses.Response, error) {
 	maxAttempts := providerMaxRetries + 1
 	idleTimeout := streamIdleTimeout(opts)
+	idleAttempts := 0
 	for attempt := 0; ; attempt++ {
 		emittedDelta := false
 		onDelta := opts.OnDelta
@@ -131,7 +134,21 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 			return resp, nil
 		}
 		if idleExpired() {
-			return nil, fmt.Errorf("codex SSE idle timeout after %s: %w", idleTimeout, err)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			idleAttempts++
+			idleErr := newStreamIdleTimeoutError("codex SSE", idleTimeout, err)
+			if idleAttempts >= codexSSEIdleMaxAttempts {
+				p.emitCodexSSERetryDiagnostic(opts, idleErr, idleAttempts, codexSSEIdleMaxAttempts, 0, false, true, "codex_sse_idle_timeout")
+				return nil, idleErr
+			}
+			delay := codexSSERetryDelay(idleAttempts - 1)
+			p.emitCodexSSERetryDiagnostic(opts, idleErr, idleAttempts, codexSSEIdleMaxAttempts, delay, true, false, "codex_sse_idle_timeout")
+			if err := waitCodexSSERetry(ctx, delay); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if emittedDelta {
 			return nil, fmt.Errorf("codex SSE read failed after emitting output; retry suppressed: %w", err)
@@ -141,11 +158,11 @@ func (p *openAICodexResponsesProvider) completeSSE(ctx context.Context, params r
 			return nil, err
 		}
 		if attemptNumber >= maxAttempts {
-			p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, 0, false, true)
+			p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, 0, false, true, "codex_sse_read")
 			return nil, fmt.Errorf("codex SSE retry exhausted after %d attempts (max_attempts=%d): %w", attemptNumber, maxAttempts, err)
 		}
 		delay := codexSSERetryDelay(attempt)
-		p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, delay, true, false)
+		p.emitCodexSSERetryDiagnostic(opts, err, attemptNumber, maxAttempts, delay, true, false, "codex_sse_read")
 		if err := waitCodexSSERetry(ctx, delay); err != nil {
 			return nil, err
 		}
@@ -290,7 +307,7 @@ func waitCodexSSERetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func (p *openAICodexResponsesProvider) emitCodexSSERetryDiagnostic(opts CompleteOptions, err error, attempt, maxAttempts int, delay time.Duration, willRetry, exhausted bool) {
+func (p *openAICodexResponsesProvider) emitCodexSSERetryDiagnostic(opts CompleteOptions, err error, attempt, maxAttempts int, delay time.Duration, willRetry, exhausted bool, retryReason string) {
 	if opts.RetryObserver == nil {
 		return
 	}
@@ -303,7 +320,7 @@ func (p *openAICodexResponsesProvider) emitCodexSSERetryDiagnostic(opts Complete
 		Attempt:     attempt,
 		MaxAttempts: maxAttempts,
 		DelayMS:     delay.Milliseconds(),
-		RetryReason: "codex_sse_read",
+		RetryReason: retryReason,
 		RawError:    err.Error(),
 		WillRetry:   willRetry,
 		Exhausted:   exhausted,

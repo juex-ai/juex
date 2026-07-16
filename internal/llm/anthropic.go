@@ -113,7 +113,7 @@ func (p *anthropicProvider) CompleteWithOptions(ctx context.Context, sys string,
 	}
 	if err := stream.Err(); err != nil {
 		if idleExpired() {
-			return Response{}, fmt.Errorf("anthropic stream idle timeout after %s: %w", idleTimeout, err)
+			return Response{}, newStreamIdleTimeoutError("anthropic stream", idleTimeout, err)
 		}
 		if streamErr := anthropicStreamParseErrorFromDiagnostics(p.Name(), streamDiagnostics, err); streamErr != nil {
 			return Response{}, streamErr
