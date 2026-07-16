@@ -46,7 +46,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer a.CloseAndWait()
+			defer func() { _ = a.CloseAndWait() }()
 			cmdPrintln(cmd, "juex repl - type your prompt; /attach <path> stages an image (empty line + Ctrl-D to quit)")
 			cmdPrintln(cmd, app.FormatResourceSummary(a.ResourceSummary()))
 			return a.REPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr())

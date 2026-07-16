@@ -88,8 +88,6 @@ type sourceDependencies struct {
 	store *Store
 }
 
-type sourceRuntimeFactory func(Spec, sourceKernel, sourceDependencies) (sourceRuntime, error)
-
 func newSourceRuntime(spec Spec, kernel sourceKernel, deps sourceDependencies) (sourceRuntime, error) {
 	switch spec.SourceType() {
 	case SourceTypeCommand:
