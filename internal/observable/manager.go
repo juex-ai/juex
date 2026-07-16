@@ -35,6 +35,7 @@ type Manager struct {
 	sources        map[string]sourceRuntime
 	deleting       map[string]bool
 	runs           map[string]*observableRun
+	slots          map[string]*observableRun
 	workers        map[*observableRun]struct{}
 	lastStatus     map[string]ObservableStatus
 	mu             sync.Mutex
@@ -46,22 +47,35 @@ type Manager struct {
 }
 
 type observableRun struct {
-	id             string
-	runID          string
-	spec           Spec
-	source         sourceRuntime
-	sourceState    any
-	manager        *Manager
-	ctx            context.Context
-	cancel         context.CancelFunc
-	state          ObservableStatus
-	claim          *terminalClaim
-	terminalEvent  string
-	terminalStatus ObservableStatus
-	quiesced       chan struct{}
-	quiescedOnce   sync.Once
-	done           chan struct{}
-	doneOnce       sync.Once
+	id                string
+	runID             string
+	spec              Spec
+	source            sourceRuntime
+	sourceState       any
+	manager           *Manager
+	ctx               context.Context
+	cancel            context.CancelFunc
+	state             ObservableStatus
+	claim             *terminalClaim
+	terminalPending   bool
+	terminalDurable   bool
+	shutdown          bool
+	workerCompleted   bool
+	completionErr     error
+	terminalEvent     string
+	terminalStatus    ObservableStatus
+	startPublished    chan struct{}
+	startPublishOnce  sync.Once
+	workerReady       chan struct{}
+	workerReadyOnce   sync.Once
+	quiesced          chan struct{}
+	quiescedOnce      sync.Once
+	done              chan struct{}
+	doneOnce          sync.Once
+	lifecycleDoneOnce sync.Once
+	sourceDone        chan struct{}
+	sourceDoneOnce    sync.Once
+	finalizeOnce      sync.Once
 }
 
 type StatusSnapshot struct {
@@ -116,6 +130,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		sources:    map[string]sourceRuntime{},
 		deleting:   map[string]bool{},
 		runs:       map[string]*observableRun{},
+		slots:      map[string]*observableRun{},
 		workers:    map[*observableRun]struct{}{},
 		lastStatus: map[string]ObservableStatus{},
 	}
@@ -170,9 +185,24 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		return fmt.Errorf("observable: manager closed")
 	}
 	if run := m.runs[id]; run != nil {
+		if run.terminalPending {
+			err := run.completionErr
+			m.mu.Unlock()
+			cancel()
+			return fmt.Errorf("observable: run %q is awaiting terminal persistence: %w", run.runID, err)
+		}
 		m.mu.Unlock()
 		cancel()
 		return nil
+	}
+	if slot := m.slots[id]; slot != nil {
+		err := slot.completionErr
+		m.mu.Unlock()
+		cancel()
+		if err != nil {
+			return fmt.Errorf("observable: previous run %q is awaiting terminal persistence: %w", slot.runID, err)
+		}
+		return fmt.Errorf("observable: previous run %q is still completing", slot.runID)
 	}
 	if m.deleting[id] {
 		m.mu.Unlock()
@@ -192,20 +222,27 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		return fmt.Errorf("observable: source runtime missing for %q", id)
 	}
 	run := &observableRun{
-		id:       id,
-		runID:    runID,
-		spec:     spec,
-		source:   source,
-		manager:  m,
-		ctx:      runCtx,
-		cancel:   cancel,
-		quiesced: make(chan struct{}),
-		done:     make(chan struct{}),
-		state:    source.statusSnapshot(baseStatusFromSpec(spec, RunStateStarting)),
+		id:             id,
+		runID:          runID,
+		spec:           spec,
+		source:         source,
+		manager:        m,
+		ctx:            runCtx,
+		cancel:         cancel,
+		quiesced:       make(chan struct{}),
+		done:           make(chan struct{}),
+		sourceDone:     make(chan struct{}),
+		startPublished: make(chan struct{}),
+		workerReady:    make(chan struct{}),
+		state:          source.statusSnapshot(baseStatusFromSpec(spec, RunStateStarting)),
 	}
 	run.state.RunID = runID
 	run.state.StartedAt = m.now()
 	m.runs[id] = run
+	if m.slots == nil {
+		m.slots = map[string]*observableRun{}
+	}
+	m.slots[id] = run
 	if m.workers == nil {
 		m.workers = map[*observableRun]struct{}{}
 	}
@@ -526,7 +563,7 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	workerDone := make([]<-chan struct{}, 0, len(m.workers))
 	for run := range m.workers {
-		workerDone = append(workerDone, run.done)
+		workerDone = append(workerDone, run.sourceDone)
 	}
 	m.mu.Unlock()
 	for _, done := range workerDone {
@@ -580,6 +617,20 @@ func (m *Manager) activateRun(run *observableRun, status ObservableStatus) error
 	}
 	run.state = status
 	m.lastStatus[run.id] = status
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) publishStarted(run *observableRun) error {
+	if m == nil || run == nil {
+		return fmt.Errorf("observable: invalid started publication")
+	}
+	m.mu.Lock()
+	if m.runs[run.id] != run || run.state.State != RunStateRunning || run.terminalPending {
+		m.mu.Unlock()
+		return fmt.Errorf("observable: run %q is no longer publishable", run.runID)
+	}
+	status := run.state
 	m.mu.Unlock()
 	m.emitObservable(EventObservableStarted, status)
 	return nil
@@ -664,16 +715,43 @@ func (m *Manager) commitTerminal(run *observableRun, claim *terminalClaim, outco
 		claim.resolve()
 		return nil
 	}
+	m.mu.Unlock()
+	persistErr := m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: status.State, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, ExitCode: status.ExitCode, Error: status.LastError})
+	m.mu.Lock()
+	if m.runs[run.id] != run || run.claim != claim {
+		m.mu.Unlock()
+		claim.resolve()
+		return persistErr
+	}
+	if persistErr != nil {
+		wrapped := fmt.Errorf("observable: persist terminal run %q: %w", run.runID, persistErr)
+		run.terminalPending = true
+		run.completionErr = wrapped
+		run.claim = nil
+		errorStatus := status
+		errorStatus.State = RunStateErrored
+		errorStatus.LastError = wrapped.Error()
+		m.lastStatus[run.id] = errorStatus
+		m.mu.Unlock()
+		claim.resolve()
+		return wrapped
+	}
 	delete(m.runs, run.id)
 	m.lastStatus[run.id] = status
+	run.terminalPending = false
+	run.terminalDurable = true
+	run.completionErr = nil
 	if emit {
 		run.terminalEvent = observableTerminalEventType(status.State)
 		run.terminalStatus = status
 	}
+	workerCompleted := run.workerCompleted
 	m.mu.Unlock()
-	err := m.recordRun(RunRecord{ObservableID: run.id, RunID: run.runID, State: status.State, PID: status.PID, StartedAt: status.StartedAt, ExitedAt: status.ExitedAt, ExitCode: status.ExitCode, Error: status.LastError})
 	claim.resolve()
-	return err
+	if workerCompleted {
+		m.finalizeLifecycle(run)
+	}
+	return nil
 }
 
 func observableTerminalEventType(state string) string {
@@ -691,9 +769,27 @@ func (m *Manager) commitShutdown(run *observableRun, claim *terminalClaim) {
 	m.mu.Lock()
 	if m.runs[run.id] == run && run.claim == claim {
 		delete(m.runs, run.id)
+		run.shutdown = true
 	}
+	workerCompleted := run.workerCompleted
 	m.mu.Unlock()
 	claim.resolve()
+	if workerCompleted {
+		m.finalizeLifecycle(run)
+	}
+}
+
+func (m *Manager) reportWorkerError(run *observableRun, err error) {
+	if m == nil || run == nil || err == nil {
+		return
+	}
+	m.mu.Lock()
+	run.completionErr = err
+	status := m.lastStatus[run.id]
+	status.State = RunStateErrored
+	status.LastError = err.Error()
+	m.lastStatus[run.id] = status
+	m.mu.Unlock()
 }
 
 func (m *Manager) recordObservation(record ObservationRecord) (ObservationRecord, bool, error) {
@@ -878,8 +974,14 @@ func (r *observableRun) closeDone() {
 	r.doneOnce.Do(func() {
 		if r.manager != nil {
 			r.manager.completeWorker(r)
+			return
 		}
-		close(r.done)
+		r.sourceDoneOnce.Do(func() {
+			if r.sourceDone != nil {
+				close(r.sourceDone)
+			}
+		})
+		r.closeLifecycleDone()
 	})
 }
 
@@ -888,15 +990,46 @@ func (m *Manager) completeWorker(run *observableRun) {
 		return
 	}
 	m.mu.Lock()
+	run.workerCompleted = true
 	delete(m.workers, run)
-	eventType := run.terminalEvent
-	status := run.terminalStatus
-	run.terminalEvent = ""
-	run.terminalStatus = ObservableStatus{}
+	run.sourceDoneOnce.Do(func() { close(run.sourceDone) })
+	finalizable := run.terminalDurable || run.shutdown
 	m.mu.Unlock()
-	if eventType != "" {
-		m.emitObservable(eventType, status)
+	if finalizable {
+		m.finalizeLifecycle(run)
+		return
 	}
+	run.closeLifecycleDone()
+}
+
+func (m *Manager) finalizeLifecycle(run *observableRun) {
+	if m == nil || run == nil {
+		return
+	}
+	run.finalizeOnce.Do(func() {
+		m.mu.Lock()
+		eventType := run.terminalEvent
+		status := run.terminalStatus
+		m.mu.Unlock()
+		if eventType != "" {
+			m.emitObservable(eventType, status)
+		}
+		m.mu.Lock()
+		run.terminalEvent = ""
+		run.terminalStatus = ObservableStatus{}
+		if m.slots[run.id] == run {
+			delete(m.slots, run.id)
+		}
+		m.mu.Unlock()
+		run.closeLifecycleDone()
+	})
+}
+
+func (r *observableRun) closeLifecycleDone() {
+	if r == nil || r.done == nil {
+		return
+	}
+	r.lifecycleDoneOnce.Do(func() { close(r.done) })
 }
 
 func waitRunDone(ctx context.Context, run *observableRun) error {

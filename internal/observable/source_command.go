@@ -17,6 +17,8 @@ type commandRunState struct {
 }
 
 func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun) error {
+	startupCtx, cancelStartup := linkedStartupContext(callCtx, run.ctx)
+	defer cancelStartup()
 	r := newRunner(runnerOptions{
 		spec:          s.spec,
 		runID:         run.runID,
@@ -27,11 +29,14 @@ func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun
 		submit:        s.kernel.submitDelivery,
 	})
 	run.sourceState = &commandRunState{runner: r}
-	cmd, err := r.start(callCtx, run.ctx)
+	cmd, err := r.start(startupCtx, run.ctx)
 	if err != nil {
 		run.closeQuiesced()
 		_, _ = s.stop(context.Background(), run, sourceStopFailedStartup)
 		_, finishErr := s.kernel.finishRun(run, terminalOutcome{State: RunStateErrored, Err: err})
+		if finishErr != nil {
+			s.kernel.reportWorkerError(run, finishErr)
+		}
 		run.closeDone()
 		if finishErr != nil {
 			return fmt.Errorf("%w; record terminal state: %v", err, finishErr)
@@ -52,6 +57,9 @@ func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun
 		_, _ = s.stop(context.Background(), run, sourceStopFailedStartup)
 		cause := firstNonNil(err, waitErr, flushErr)
 		_, finishErr := s.kernel.finishRun(run, terminalOutcome{State: RunStateErrored, ExitCode: exitCode, Err: cause})
+		if finishErr != nil {
+			s.kernel.reportWorkerError(run, finishErr)
+		}
 		run.closeDone()
 		if finishErr != nil {
 			return fmt.Errorf("%w; record terminal state: %v", err, finishErr)
@@ -59,11 +67,15 @@ func (s *commandSourceRuntime) start(callCtx context.Context, run *observableRun
 		return err
 	}
 	go s.wait(run, r)
-	return nil
+	<-run.workerReady
+	defer run.releaseStarted()
+	return s.kernel.publishStarted(run)
 }
 
 func (s *commandSourceRuntime) wait(run *observableRun, r *runner) {
 	defer run.closeDone()
+	run.markWorkerReady()
+	run.waitForStartedOrCancellation()
 	exitCode, err := r.wait()
 	flushed, flushErr := r.flush("exit")
 	if flushErr != nil && err == nil {
@@ -73,7 +85,10 @@ func (s *commandSourceRuntime) wait(run *observableRun, r *runner) {
 		s.kernel.submitDelivery(context.Background(), record)
 	}
 	run.closeQuiesced()
-	finished, _ := s.kernel.finishRun(run, terminalOutcome{State: RunStateExited, ExitCode: exitCode, Err: err})
+	finished, finishErr := s.kernel.finishRun(run, terminalOutcome{State: RunStateExited, ExitCode: exitCode, Err: err})
+	if finishErr != nil {
+		s.kernel.reportWorkerError(run, finishErr)
+	}
 	if finished {
 		s.notifyOnExit(run, exitCode, err)
 	}

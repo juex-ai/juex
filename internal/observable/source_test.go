@@ -24,6 +24,7 @@ type fakeSourceRuntime struct {
 
 type fakeSourceKernel struct {
 	nowValue       time.Time
+	activationErr  error
 	recorded       []ObservationRecord
 	recordedID     string
 	recordedPrefix string
@@ -31,10 +32,14 @@ type fakeSourceKernel struct {
 	submitted      atomic.Int32
 }
 
-func (f *fakeSourceKernel) activateRun(*observableRun, ObservableStatus) error { return nil }
+func (f *fakeSourceKernel) activateRun(*observableRun, ObservableStatus) error {
+	return f.activationErr
+}
+func (f *fakeSourceKernel) publishStarted(*observableRun) error { return nil }
 func (f *fakeSourceKernel) finishRun(*observableRun, terminalOutcome) (bool, error) {
 	return true, nil
 }
+func (f *fakeSourceKernel) reportWorkerError(*observableRun, error) {}
 func (f *fakeSourceKernel) recordObservation(record ObservationRecord) (ObservationRecord, bool, error) {
 	return record, true, nil
 }
@@ -296,6 +301,42 @@ func TestScheduleShutdownDoesNotPersistPauseBaseline(t *testing.T) {
 	}
 	if store.recordCalls.Load() != 0 {
 		t.Fatalf("shutdown wrote %d pause records", store.recordCalls.Load())
+	}
+}
+
+func TestScheduleActivationFailureHasNoStartupSideEffects(t *testing.T) {
+	kernel := &fakeSourceKernel{
+		nowValue:      time.Now().UTC(),
+		activationErr: errors.New("persist running state"),
+	}
+	store := &fakeScheduleStateStore{found: true}
+	spec := mustScheduleSpec("activation-fails", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 60},
+		Observation: ScheduleObservationSpec{Content: "tick"},
+	})
+	runtimeSpec, _ := spec.scheduleRuntime()
+	source := &scheduleSourceRuntime{spec: runtimeSpec, kernel: kernel, store: store}
+	ctx, cancel := context.WithCancel(context.Background())
+	run := &observableRun{
+		id:             spec.ID,
+		runID:          "run-1",
+		ctx:            ctx,
+		cancel:         cancel,
+		state:          baseStatusFromSpec(spec, RunStateStarting),
+		quiesced:       make(chan struct{}),
+		done:           make(chan struct{}),
+		sourceDone:     make(chan struct{}),
+		startPublished: make(chan struct{}),
+		workerReady:    make(chan struct{}),
+	}
+	if err := source.start(context.Background(), run); !errors.Is(err, kernel.activationErr) {
+		t.Fatalf("start error = %v, want activation persistence failure", err)
+	}
+	if got := store.recordCalls.Load(); got != 0 {
+		t.Fatalf("schedule state writes = %d, want none before durable activation", got)
+	}
+	if got := kernel.submitted.Load(); got != 0 {
+		t.Fatalf("startup deliveries = %d, want none before durable activation", got)
 	}
 }
 

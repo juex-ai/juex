@@ -2,6 +2,7 @@ package observable_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,6 +336,229 @@ func TestManager_ConcurrentStartReservesSingleRun(t *testing.T) {
 	}
 	if err := mgr.Stop(context.Background(), spec.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestManager_StopCancelsBlockedStartup(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("cancel-startup", "wait")
+	writeObservableConfig(t, dir, spec)
+	runner := &blockingSandboxRunner{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Sandbox: sandbox.Policy{
+			Enabled: true,
+			FileSystem: sandbox.FileSystemPolicy{
+				OutsideWorkspace: sandbox.OutsideWorkspaceReadWrite,
+			},
+			Network: sandbox.NetworkPolicy{Enabled: true},
+		},
+		SandboxRunner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	startResult := make(chan error, 1)
+	go func() { startResult <- mgr.Start(context.Background(), spec.ID) }()
+	select {
+	case <-runner.entered:
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("Start did not enter cancellable startup")
+	}
+	stopResult := make(chan error, 1)
+	go func() { stopResult <- mgr.Stop(context.Background(), spec.ID) }()
+	select {
+	case err := <-stopResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("Stop did not cancel blocked startup")
+	}
+	select {
+	case err := <-startResult:
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("Start error = %v, want context cancellation", err)
+		}
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("Start did not return after lifetime cancellation")
+	}
+}
+
+func TestManager_StartedSubscriberCanStopDeleteOrClose(t *testing.T) {
+	tests := []struct {
+		name   string
+		action func(*observable.Manager, string) error
+		check  func(*testing.T, *observable.Manager, string)
+	}{
+		{
+			name:   "stop",
+			action: func(mgr *observable.Manager, id string) error { return mgr.Stop(context.Background(), id) },
+			check: func(t *testing.T, mgr *observable.Manager, id string) {
+				status, err := mgr.StatusByID(id)
+				if err != nil || status.State != observable.RunStateStopped {
+					t.Fatalf("status after reentrant Stop = %+v, %v", status, err)
+				}
+			},
+		},
+		{
+			name:   "delete",
+			action: func(mgr *observable.Manager, id string) error { return mgr.Delete(context.Background(), id) },
+			check: func(t *testing.T, mgr *observable.Manager, id string) {
+				if _, err := mgr.StatusByID(id); err == nil {
+					t.Fatal("observable still exists after reentrant Delete")
+				}
+			},
+		},
+		{
+			name:   "close",
+			action: func(mgr *observable.Manager, _ string) error { return mgr.Close() },
+			check: func(t *testing.T, mgr *observable.Manager, _ string) {
+				if err := mgr.Close(); err != nil {
+					t.Fatalf("second Close = %v", err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := helperSpec("started-"+tt.name, "wait")
+			writeObservableConfig(t, dir, spec)
+			bus := events.NewBus()
+			actionResult := make(chan error, 1)
+			var once sync.Once
+			var mgr *observable.Manager
+			bus.Subscribe(observable.EventObservableStarted, func(events.Event) {
+				once.Do(func() { actionResult <- tt.action(mgr, spec.ID) })
+			})
+			var err error
+			mgr, err = observable.NewManager(observable.ManagerOptions{
+				ConfigPath: configPath(dir),
+				StateDir:   stateDir(dir),
+				WorkDir:    dir,
+				Bus:        bus,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = mgr.Close() }()
+			startResult := make(chan error, 1)
+			go func() { startResult <- mgr.Start(context.Background(), spec.ID) }()
+			select {
+			case err := <-actionResult:
+				if err != nil {
+					t.Fatalf("reentrant %s = %v", tt.name, err)
+				}
+			case <-time.After(asyncWaitTimeout):
+				t.Fatalf("reentrant %s deadlocked", tt.name)
+			}
+			select {
+			case err := <-startResult:
+				if err != nil {
+					t.Fatalf("Start = %v", err)
+				}
+			case <-time.After(asyncWaitTimeout):
+				t.Fatal("Start did not return after started callback")
+			}
+			tt.check(t, mgr, spec.ID)
+		})
+	}
+}
+
+func TestManager_StartedEventPrecedesInstantExit(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("instant-exit-order", "exit2")
+	writeObservableConfig(t, dir, spec)
+	bus := events.NewBus()
+	var mu sync.Mutex
+	var lifecycle []string
+	terminal := make(chan struct{})
+	var terminalOnce sync.Once
+	bus.Subscribe("observable.*", func(event events.Event) {
+		mu.Lock()
+		lifecycle = append(lifecycle, event.Type)
+		mu.Unlock()
+		if event.Type == observable.EventObservableExited {
+			terminalOnce.Do(func() { close(terminal) })
+		}
+	})
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Bus:        bus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-terminal:
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("instant command did not publish terminal event")
+	}
+	mu.Lock()
+	got := append([]string(nil), lifecycle...)
+	mu.Unlock()
+	if len(got) < 2 || got[0] != observable.EventObservableStarted || got[1] != observable.EventObservableExited {
+		t.Fatalf("lifecycle order = %v, want started before exited", got)
+	}
+}
+
+func TestManager_TerminalPersistenceFailureBlocksNextGeneration(t *testing.T) {
+	dir := t.TempDir()
+	spec := helperSpec("terminal-persist", "wait")
+	writeObservableConfig(t, dir, spec)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	first, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runsPath := filepath.Join(stateDir(dir), "runs.jsonl")
+	backupPath := runsPath + ".before-terminal"
+	if err := os.Rename(runsPath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(runsPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Stop(context.Background(), spec.ID); err == nil || !strings.Contains(err.Error(), "persist terminal run") {
+		t.Fatalf("Stop error = %v, want terminal persistence failure", err)
+	}
+	status, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != observable.RunStateErrored || status.LastError == "" || status.RunID != first.RunID {
+		t.Fatalf("status after terminal persistence failure = %+v, first run = %+v", status, first)
+	}
+	if err := mgr.Start(context.Background(), spec.ID); err == nil || !strings.Contains(err.Error(), "awaiting terminal persistence") {
+		t.Fatalf("second Start error = %v, want terminal-pending rejection", err)
+	}
+	status, err = mgr.StatusByID(spec.ID)
+	if err != nil || status.RunID != first.RunID {
+		t.Fatalf("second Start replaced generation: status=%+v err=%v", status, err)
 	}
 }
 

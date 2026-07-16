@@ -44,12 +44,36 @@ type sourceRuntime interface {
 
 type sourceKernel interface {
 	activateRun(*observableRun, ObservableStatus) error
+	publishStarted(*observableRun) error
 	finishRun(*observableRun, terminalOutcome) (bool, error)
+	reportWorkerError(*observableRun, error)
 	recordObservation(ObservationRecord) (ObservationRecord, bool, error)
 	recordedObservations(string, string, int) ([]ObservationRecord, error)
 	submitDelivery(context.Context, ObservationRecord) bool
 	now() time.Time
 	isClosed() bool
+}
+
+func linkedStartupContext(callCtx, lifetimeCtx context.Context) (context.Context, context.CancelFunc) {
+	if callCtx == nil {
+		callCtx = context.Background()
+	}
+	if lifetimeCtx == nil {
+		lifetimeCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(callCtx)
+	stop := context.AfterFunc(lifetimeCtx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+func contextStep(ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
+	return ctx.Err()
 }
 
 type scheduleStateStore interface {
@@ -133,6 +157,30 @@ func (r *observableRun) closeQuiesced() {
 		return
 	}
 	r.quiescedOnce.Do(func() { close(r.quiesced) })
+}
+
+func (r *observableRun) markWorkerReady() {
+	if r == nil || r.workerReady == nil {
+		return
+	}
+	r.workerReadyOnce.Do(func() { close(r.workerReady) })
+}
+
+func (r *observableRun) releaseStarted() {
+	if r == nil || r.startPublished == nil {
+		return
+	}
+	r.startPublishOnce.Do(func() { close(r.startPublished) })
+}
+
+func (r *observableRun) waitForStartedOrCancellation() {
+	if r == nil {
+		return
+	}
+	select {
+	case <-r.startPublished:
+	case <-r.ctx.Done():
+	}
 }
 
 func waitRunQuiesced(ctx context.Context, run *observableRun) error {

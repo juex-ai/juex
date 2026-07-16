@@ -17,24 +17,28 @@ type scheduleSourceRuntime struct {
 }
 
 func (s *scheduleSourceRuntime) start(callCtx context.Context, run *observableRun) error {
-	if err := s.evaluateStartup(callCtx, run); err != nil {
-		run.closeQuiesced()
-		_, _ = s.stop(context.Background(), run, sourceStopFailedStartup)
-		_, _ = s.kernel.finishRun(run, terminalOutcome{State: RunStateErrored, Err: err})
-		run.closeDone()
-		return err
-	}
 	status := run.state
 	status.State = RunStateRunning
 	if err := s.kernel.activateRun(run, status); err != nil {
 		run.closeQuiesced()
 		_, _ = s.stop(context.Background(), run, sourceStopFailedStartup)
-		_, _ = s.kernel.finishRun(run, terminalOutcome{State: RunStateErrored, Err: err})
+		_, finishErr := s.kernel.finishRun(run, terminalOutcome{State: RunStateErrored, Err: err})
+		if finishErr != nil {
+			s.kernel.reportWorkerError(run, finishErr)
+		}
 		run.closeDone()
 		return err
 	}
-	go s.loop(run)
-	return nil
+	startupCtx, cancelStartup := linkedStartupContext(callCtx, run.ctx)
+	defer cancelStartup()
+	startupResult := make(chan error, 1)
+	go s.run(run, startupCtx, startupResult)
+	if err := <-startupResult; err != nil {
+		return err
+	}
+	<-run.workerReady
+	defer run.releaseStarted()
+	return s.kernel.publishStarted(run)
 }
 
 func (s *scheduleSourceRuntime) stop(ctx context.Context, run *observableRun, reason sourceStopReason) (sourceStopResult, error) {
@@ -98,12 +102,18 @@ func (s *scheduleSourceRuntime) statusSnapshot(status ObservableStatus) Observab
 }
 
 func (s *scheduleSourceRuntime) evaluateStartup(ctx context.Context, run *observableRun) error {
+	if err := contextStep(ctx); err != nil {
+		return err
+	}
 	if s.store == nil {
 		return nil
 	}
 	now := s.kernel.now()
 	state, ok, err := s.store.ScheduleState(run.id)
 	if err != nil {
+		return err
+	}
+	if err := contextStep(ctx); err != nil {
 		return err
 	}
 	if ok && state.Paused {
@@ -138,22 +148,40 @@ func (s *scheduleSourceRuntime) evaluateStartup(ctx context.Context, run *observ
 }
 
 func (s *scheduleSourceRuntime) recoverRecorded(ctx context.Context, run *observableRun) error {
+	if err := contextStep(ctx); err != nil {
+		return err
+	}
 	records, err := s.kernel.recordedObservations(run.id, scheduleSourceEventPrefix(run.id), scheduleRecoveryLimit)
 	if err != nil {
 		return err
 	}
-	deliverCtx := context.Background()
-	if ctx != nil {
-		deliverCtx = context.WithoutCancel(ctx)
-	}
 	for i := len(records) - 1; i >= 0; i-- {
-		s.kernel.submitDelivery(deliverCtx, records[i])
+		if err := contextStep(ctx); err != nil {
+			return err
+		}
+		s.kernel.submitDelivery(ctx, records[i])
 	}
 	return nil
 }
 
-func (s *scheduleSourceRuntime) loop(run *observableRun) {
+func (s *scheduleSourceRuntime) run(run *observableRun, startupCtx context.Context, startupResult chan<- error) {
 	defer run.closeDone()
+	run.markWorkerReady()
+	if err := s.evaluateStartup(startupCtx, run); err != nil {
+		run.closeQuiesced()
+		_, finishErr := s.kernel.finishRun(run, terminalOutcome{State: RunStateErrored, Err: err})
+		if finishErr != nil {
+			s.kernel.reportWorkerError(run, finishErr)
+		}
+		startupResult <- err
+		return
+	}
+	startupResult <- nil
+	run.waitForStartedOrCancellation()
+	s.loop(run)
+}
+
+func (s *scheduleSourceRuntime) loop(run *observableRun) {
 	var outcome terminalOutcome
 	for {
 		state, _, err := s.store.ScheduleState(run.id)
@@ -180,22 +208,34 @@ func (s *scheduleSourceRuntime) loop(run *observableRun) {
 			stopScheduleTimer(timer)
 			outcome = terminalOutcome{State: RunStateExited, Err: run.ctx.Err()}
 			run.closeQuiesced()
-			_, _ = s.kernel.finishRun(run, outcome)
+			_, finishErr := s.kernel.finishRun(run, outcome)
+			if finishErr != nil {
+				s.kernel.reportWorkerError(run, finishErr)
+			}
 			return
 		case <-timer.C:
 			if _, _, err := s.emitOccurrence(context.Background(), run, next, s.kernel.now()); err != nil {
 				outcome = terminalOutcome{State: RunStateErrored, Err: err}
 				run.closeQuiesced()
-				_, _ = s.kernel.finishRun(run, outcome)
+				_, finishErr := s.kernel.finishRun(run, outcome)
+				if finishErr != nil {
+					s.kernel.reportWorkerError(run, finishErr)
+				}
 				return
 			}
 		}
 	}
 	run.closeQuiesced()
-	_, _ = s.kernel.finishRun(run, outcome)
+	_, finishErr := s.kernel.finishRun(run, outcome)
+	if finishErr != nil {
+		s.kernel.reportWorkerError(run, finishErr)
+	}
 }
 
 func (s *scheduleSourceRuntime) emitOccurrence(ctx context.Context, run *observableRun, occurrence ScheduledOccurrence, observedAt time.Time) (ObservationRecord, bool, error) {
+	if err := contextStep(ctx); err != nil {
+		return ObservationRecord{}, false, err
+	}
 	observedAt = normalizeNow(observedAt)
 	record, created, err := s.kernel.recordObservation(ObservationRecord{
 		ObservableID:  run.id,
@@ -212,15 +252,17 @@ func (s *scheduleSourceRuntime) emitOccurrence(ctx context.Context, run *observa
 	if err != nil {
 		return ObservationRecord{}, false, err
 	}
+	if err := contextStep(ctx); err != nil {
+		return record, false, err
+	}
 	if err := s.recordState(run.id, observedAt, occurrence.ScheduledAt); err != nil {
 		return record, false, err
 	}
 	if created {
-		deliverCtx := context.Background()
-		if ctx != nil {
-			deliverCtx = context.WithoutCancel(ctx)
+		if err := contextStep(ctx); err != nil {
+			return record, false, err
 		}
-		s.kernel.submitDelivery(deliverCtx, record)
+		s.kernel.submitDelivery(ctx, record)
 	}
 	return record, created, nil
 }
