@@ -152,12 +152,19 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("recorded schedule observation was not recovered")
 	}
-	records, err := store.ListObservations(ObservationFilter{ObservableID: spec.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(records) != 1 || records[0].State != ObservationStateQueued {
-		t.Fatalf("recovered observations = %+v, want one queued record", records)
+	deadline := time.Now().Add(time.Second)
+	for {
+		records, err := store.ListObservations(ObservationFilter{ObservableID: spec.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(records) == 1 && records[0].State == ObservationStateQueued {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("recovered observations = %+v, want one queued record", records)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
