@@ -14,7 +14,7 @@ import (
 )
 
 type runnerOptions struct {
-	spec          Spec
+	spec          commandRuntimeSpec
 	runID         string
 	workDir       string
 	sandboxPolicy sandbox.Policy
@@ -35,11 +35,11 @@ type runner struct {
 }
 
 func newRunner(opts runnerOptions) *runner {
-	pipe, _ := NewPipeline(opts.spec)
+	pipe, _ := newCommandPipeline(opts.spec)
 	return &runner{
 		opts:    opts,
 		pipe:    pipe,
-		batcher: NewBatcher(opts.spec, opts.store, BatcherOptions{RunID: opts.runID, WorkDir: opts.workDir}),
+		batcher: newCommandBatcher(opts.spec, opts.store, BatcherOptions{RunID: opts.runID, WorkDir: opts.workDir}),
 	}
 }
 

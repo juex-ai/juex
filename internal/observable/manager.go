@@ -175,7 +175,7 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		m.failReservedRun(run, err)
 		return err
 	}
-	switch spec.Source.Type {
+	switch spec.SourceType() {
 	case SourceTypeSchedule:
 		return m.startScheduleRun(ctx, run)
 	default:
@@ -184,8 +184,9 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 }
 
 func (m *Manager) startCommandRun(ctx context.Context, runCtx context.Context, run *observableRun) error {
+	commandSpec, _ := run.spec.commandRuntime()
 	r := newRunner(runnerOptions{
-		spec:          run.spec,
+		spec:          commandSpec,
 		runID:         run.runID,
 		workDir:       m.opts.WorkDir,
 		sandboxPolicy: m.opts.Sandbox,
@@ -293,7 +294,7 @@ func (m *Manager) Stop(ctx context.Context, id string) error {
 	m.mu.Lock()
 	delete(m.runs, id)
 	m.mu.Unlock()
-	if run != nil && run.spec.Source.Type == SourceTypeSchedule {
+	if run != nil && run.spec.SourceType() == SourceTypeSchedule {
 		if err := m.recordPausedScheduleState(id, stoppedAt); err != nil {
 			return err
 		}
@@ -530,7 +531,11 @@ func (m *Manager) notifyOnExit(run *observableRun, status ObservableStatus, err 
 	if m == nil || run == nil {
 		return
 	}
-	notify := run.spec.OnExit.Notify
+	commandSpec, ok := run.spec.commandRuntime()
+	if !ok {
+		return
+	}
+	notify := commandSpec.OnExit.Notify
 	if notify == "" || notify == "never" {
 		return
 	}
@@ -591,11 +596,12 @@ func (m *Manager) evaluateScheduleStartup(ctx context.Context, run *observableRu
 	if !ok || state.LastEvaluatedAt.IsZero() {
 		return m.recordScheduleState(run.id, now, time.Time{})
 	}
-	latest, missed, err := latestMissedScheduledOccurrence(run.spec, state, now)
+	scheduleSpec, _ := run.spec.scheduleRuntime()
+	latest, missed, err := latestMissedScheduledOccurrence(scheduleSpec, state, now)
 	if err != nil {
 		return err
 	}
-	if missed && catchUpAllows(run.spec, latest, now) {
+	if missed && catchUpAllows(scheduleSpec, latest, now) {
 		_, emitted, err := m.emitScheduledOccurrence(ctx, run, latest, now)
 		if err != nil {
 			return err
@@ -605,14 +611,14 @@ func (m *Manager) evaluateScheduleStartup(ctx context.Context, run *observableRu
 		}
 		return m.recordScheduleState(run.id, now, latest.ScheduledAt)
 	}
-	if !missed && shouldPreserveIntervalStartupBaseline(run.spec, state) {
+	if !missed && shouldPreserveIntervalStartupBaseline(scheduleSpec, state) {
 		return m.recordScheduleState(run.id, state.LastEvaluatedAt, state.LastEmittedScheduledAt)
 	}
 	return m.recordScheduleState(run.id, now, state.LastEmittedScheduledAt)
 }
 
-func shouldPreserveIntervalStartupBaseline(spec Spec, state ScheduleStateRecord) bool {
-	return spec.Source.Interval != nil && !state.LastEvaluatedAt.IsZero() && state.LastEmittedScheduledAt.IsZero()
+func shouldPreserveIntervalStartupBaseline(spec scheduleRuntimeSpec, state ScheduleStateRecord) bool {
+	return spec.Interval != nil && !state.LastEvaluatedAt.IsZero() && state.LastEmittedScheduledAt.IsZero()
 }
 
 func (m *Manager) recoverRecordedScheduleObservations(ctx context.Context, run *observableRun) error {
@@ -640,6 +646,7 @@ func (m *Manager) recoverRecordedScheduleObservations(ctx context.Context, run *
 
 func (m *Manager) scheduleLoop(run *observableRun) {
 	defer run.closeDone()
+	scheduleSpec, _ := run.spec.scheduleRuntime()
 	for {
 		if m.isClosed() {
 			return
@@ -649,7 +656,7 @@ func (m *Manager) scheduleLoop(run *observableRun) {
 			m.finishScheduleRun(run, RunStateErrored, err)
 			return
 		}
-		next, ok, err := nextScheduledOccurrence(run.spec, state, m.now())
+		next, ok, err := nextScheduledOccurrence(scheduleSpec, state, m.now())
 		if err != nil {
 			m.finishScheduleRun(run, RunStateErrored, err)
 			return
@@ -691,6 +698,7 @@ func (m *Manager) emitScheduledOccurrence(ctx context.Context, run *observableRu
 		return ObservationRecord{}, false, nil
 	}
 	observedAt = normalizeNow(observedAt)
+	scheduleSpec, _ := run.spec.scheduleRuntime()
 	if existing, ok, err := m.store.FindObservationBySourceEventID(occurrence.SourceEventID); err != nil {
 		return ObservationRecord{}, false, err
 	} else if ok {
@@ -703,12 +711,12 @@ func (m *Manager) emitScheduledOccurrence(ctx context.Context, run *observableRu
 		ObservableID:  run.id,
 		RunID:         run.runID,
 		SourceEventID: occurrence.SourceEventID,
-		Kind:          resolvedKind(run.spec.Observation.Kind),
-		Severity:      resolvedSeverity(run.spec.Observation.Severity),
+		Kind:          resolvedKind(scheduleSpec.Observation.Kind),
+		Severity:      resolvedSeverity(scheduleSpec.Observation.Severity),
 		WindowStart:   occurrence.ScheduledAt,
 		WindowEnd:     observedAt,
-		Content:       run.spec.Observation.Content,
-		Attachments:   append([]eventmedia.AttachmentRef(nil), run.spec.Observation.Attachments...),
+		Content:       scheduleSpec.Observation.Content,
+		Attachments:   append([]eventmedia.AttachmentRef(nil), scheduleSpec.Observation.Attachments...),
 		State:         ObservationStateRecorded,
 	})
 	if err != nil {
@@ -937,18 +945,20 @@ func statusFromSpec(spec Spec, state string) ObservableStatus {
 	status := ObservableStatus{
 		ID:         spec.ID,
 		Name:       spec.Name,
-		SourceType: spec.Source.Type,
-		Command:    spec.Command,
-		Args:       append([]string(nil), spec.Args...),
-		Streams:    append([]string(nil), spec.Streams...),
-		Batch:      spec.Batch,
+		SourceType: spec.SourceType(),
 		State:      state,
 	}
-	if spec.Source.Type == SourceTypeSchedule {
+	if commandSpec, ok := spec.commandRuntime(); ok {
+		status.Command = commandSpec.Command
+		status.Args = append([]string(nil), commandSpec.Args...)
+		status.Streams = append([]string(nil), commandSpec.Streams...)
+		status.Batch = commandSpec.Batch
+	}
+	if scheduleSpec, ok := spec.scheduleRuntime(); ok {
 		status.Schedule = &ScheduleStatus{
-			Summary:     scheduleSummary(spec),
-			Timezone:    spec.Source.Timezone,
-			CatchUpMode: spec.Source.CatchUp.Mode,
+			Summary:     scheduleSummary(scheduleSpec),
+			Timezone:    scheduleSpec.Timezone,
+			CatchUpMode: scheduleSpec.CatchUp.Mode,
 		}
 	}
 	return status
@@ -959,13 +969,14 @@ func (m *Manager) statusWithScheduleSnapshot(status ObservableStatus) Observable
 		return status
 	}
 	spec, ok := m.specs[status.ID]
-	if !ok || spec.Source.Type != SourceTypeSchedule {
+	if !ok || spec.SourceType() != SourceTypeSchedule {
 		return status
 	}
+	scheduleSpec, _ := spec.scheduleRuntime()
 	schedule := &ScheduleStatus{
-		Summary:     scheduleSummary(spec),
-		Timezone:    spec.Source.Timezone,
-		CatchUpMode: spec.Source.CatchUp.Mode,
+		Summary:     scheduleSummary(scheduleSpec),
+		Timezone:    scheduleSpec.Timezone,
+		CatchUpMode: scheduleSpec.CatchUp.Mode,
 	}
 	if state, ok, err := m.store.ScheduleState(status.ID); err == nil && ok {
 		if !state.LastEvaluatedAt.IsZero() {
@@ -976,11 +987,11 @@ func (m *Manager) statusWithScheduleSnapshot(status ObservableStatus) Observable
 			value := state.LastEmittedScheduledAt
 			schedule.LastEmittedScheduledAt = &value
 		}
-		if next, ok, err := nextScheduledOccurrence(spec, state, m.now()); err == nil && ok {
+		if next, ok, err := nextScheduledOccurrence(scheduleSpec, state, m.now()); err == nil && ok {
 			value := next.ScheduledAt
 			schedule.NextOccurrence = &value
 		}
-	} else if next, ok, err := nextScheduledOccurrence(spec, ScheduleStateRecord{}, m.now()); err == nil && ok {
+	} else if next, ok, err := nextScheduledOccurrence(scheduleSpec, ScheduleStateRecord{}, m.now()); err == nil && ok {
 		value := next.ScheduledAt
 		schedule.NextOccurrence = &value
 	}

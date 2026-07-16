@@ -26,7 +26,7 @@ type PipelineOptions struct {
 }
 
 type Pipeline struct {
-	spec    Spec
+	spec    commandRuntimeSpec
 	now     func() time.Time
 	filters []compiledFilter
 	buffers map[string]string
@@ -42,16 +42,24 @@ func NewPipeline(spec Spec, opts ...PipelineOptions) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
+	runtimeSpec, ok := normalized.commandRuntime()
+	if !ok {
+		return nil, fmt.Errorf("observable %q is not a command source", normalized.ID)
+	}
+	return newCommandPipeline(runtimeSpec, opts...)
+}
+
+func newCommandPipeline(spec commandRuntimeSpec, opts ...PipelineOptions) (*Pipeline, error) {
 	now := time.Now
 	if len(opts) > 0 && opts[0].Now != nil {
 		now = opts[0].Now
 	}
 	p := &Pipeline{
-		spec:    normalized,
+		spec:    spec,
 		now:     now,
 		buffers: map[string]string{},
 	}
-	for _, filter := range normalized.Filters {
+	for _, filter := range spec.Filters {
 		cf := compiledFilter{spec: filter}
 		if filter.Regex != "" {
 			re, err := regexp.Compile(filter.Regex)

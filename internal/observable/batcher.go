@@ -17,7 +17,7 @@ type BatcherOptions struct {
 }
 
 type Batcher struct {
-	spec          Spec
+	spec          commandRuntimeSpec
 	store         *Store
 	runID         string
 	workDir       string
@@ -38,6 +38,11 @@ type activeBatch struct {
 }
 
 func NewBatcher(spec Spec, store *Store, opts BatcherOptions) *Batcher {
+	runtimeSpec, _ := spec.commandRuntime()
+	return newCommandBatcher(runtimeSpec, store, opts)
+}
+
+func newCommandBatcher(spec commandRuntimeSpec, store *Store, opts BatcherOptions) *Batcher {
 	maxEventBytes := opts.MaxEventBytes
 	if maxEventBytes <= 0 {
 		maxEventBytes = eventmedia.DefaultMaxEventBytes

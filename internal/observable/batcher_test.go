@@ -224,7 +224,7 @@ func TestBatcher_ResetsAttachmentLimitAfterIntervalFlush(t *testing.T) {
 func TestBatcher_SnapshotsNewAttachmentBeforeIntervalFlush(t *testing.T) {
 	workDir := t.TempDir()
 	spec := validSpec("logs")
-	spec.Batch.MaxChars = 1
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.Batch.MaxChars = 1 })
 	store := observable.NewStore(filepath.Join(workDir, ".juex", "observables"), observable.StoreOptions{Now: fixedNow})
 	b := observable.NewBatcher(spec, store, observable.BatcherOptions{WorkDir: workDir})
 	first := parsedUnit("stdout", "old-batch", fixedTime)
@@ -274,7 +274,8 @@ func TestBatcher_SnapshotsNewAttachmentBeforeIntervalFlush(t *testing.T) {
 
 func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 	spec := validSpec("large")
-	spec.Batch.MaxChars = 80
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.Batch.MaxChars = 80 })
+	config, _ := spec.CommandConfig()
 	root := t.TempDir()
 	store := observable.NewStore(root, observable.StoreOptions{Now: fixedNow})
 	b := observable.NewBatcher(spec, store, observable.BatcherOptions{})
@@ -290,7 +291,7 @@ func TestBatcher_WritesArtifactWhenContentExceedsMaxChars(t *testing.T) {
 		t.Fatalf("records = %+v, want 1", got)
 	}
 	rec := got[0]
-	if !rec.Truncated || rec.OriginalChars != 120 || rec.ArtifactPath == "" || len([]rune(rec.Content)) > spec.Batch.MaxChars {
+	if !rec.Truncated || rec.OriginalChars != 120 || rec.ArtifactPath == "" || len([]rune(rec.Content)) > config.Batch.MaxChars {
 		t.Fatalf("record = %+v, want truncated artifact preview", rec)
 	}
 	body, err := os.ReadFile(rec.ArtifactPath)

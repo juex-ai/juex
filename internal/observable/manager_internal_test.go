@@ -46,10 +46,10 @@ func TestEmitScheduledOccurrenceDoesNotBlockOnDelivery(t *testing.T) {
 			},
 		},
 	}
-	spec := Spec{
-		ID:          "interval-delivery",
-		Observation: ObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
-	}
+	spec := mustScheduleSpec("interval-delivery", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 60},
+		Observation: ScheduleObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
+	})
 	run := &observableRun{id: spec.ID, runID: "run-1", spec: spec}
 	occurrence := ScheduledOccurrence{
 		ObservableID:  spec.ID,
@@ -99,14 +99,10 @@ func TestEvaluateScheduleStartupRecoversRecordedScheduleObservation(t *testing.T
 	now := time.Now().UTC()
 	scheduledAt := now.Add(-time.Minute)
 	store := NewStore(t.TempDir(), StoreOptions{Now: func() time.Time { return now }})
-	spec := Spec{
-		ID: "interval-recovery",
-		Source: SourceSpec{
-			Type:     SourceTypeSchedule,
-			Interval: &IntervalSchedule{EverySeconds: 60},
-		},
-		Observation: ObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
-	}
+	spec := mustScheduleSpec("interval-recovery", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 60},
+		Observation: ScheduleObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check"},
+	})
 	if err := store.RecordScheduleState(ScheduleStateRecord{
 		ObservableID:           spec.ID,
 		LastEvaluatedAt:        now,
@@ -260,4 +256,12 @@ func TestDeliverObservationAppliesOutcomeWithoutStore(t *testing.T) {
 	if delivered.ID != record.ID || delivered.State != ObservationStateDelivered || delivered.TargetSession != "sess-1" || !delivered.DeliveredAt.Equal(now) {
 		t.Fatalf("delivered observation = %+v", delivered)
 	}
+}
+
+func mustScheduleSpec(id string, config ScheduleSourceSpec) Spec {
+	spec, err := NewScheduleSpec(id, "", config)
+	if err != nil {
+		panic(err)
+	}
+	return spec
 }

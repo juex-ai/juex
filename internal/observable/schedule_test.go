@@ -58,15 +58,15 @@ func TestLatestMissedScheduledOccurrenceUsesLatestWithinWindow(t *testing.T) {
 }
 
 func TestLatestMissedScheduledOccurrenceInterval(t *testing.T) {
-	spec := Spec{
-		ID: "queue-check",
-		Source: SourceSpec{
-			Type:     SourceTypeSchedule,
-			Interval: &IntervalSchedule{EverySeconds: 1800},
-			CatchUp:  CatchUpSpec{Mode: ScheduleCatchUpLatest, MaxLatenessMinutes: 60},
-		},
-		Observation: ObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check queue"},
+	domain, err := NewScheduleSpec("queue-check", "", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 1800},
+		CatchUp:     CatchUpSpec{Mode: ScheduleCatchUpLatest, MaxLatenessMinutes: 60},
+		Observation: ScheduleObservationSpec{Kind: "heartbeat", Severity: "info", Content: "check queue"},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	spec, _ := domain.scheduleRuntime()
 	last := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	now := last.Add(91 * time.Minute)
 	latest, ok, err := latestMissedScheduledOccurrence(spec, ScheduleStateRecord{LastEvaluatedAt: last}, now)
@@ -82,18 +82,19 @@ func TestLatestMissedScheduledOccurrenceInterval(t *testing.T) {
 	}
 }
 
-func scheduleSpec(id string) Spec {
-	return Spec{
-		ID: id,
-		Source: SourceSpec{
-			Type:     SourceTypeSchedule,
-			Timezone: "Asia/Shanghai",
-			Daily: &DailySchedule{
-				Times:    []string{"09:00"},
-				Weekdays: []string{"mon", "tue", "wed", "thu", "fri"},
-			},
-			CatchUp: CatchUpSpec{Mode: ScheduleCatchUpLatest, MaxLatenessMinutes: 120},
+func scheduleSpec(id string) scheduleRuntimeSpec {
+	spec, err := NewScheduleSpec(id, "", ScheduleSourceSpec{
+		Timezone: "Asia/Shanghai",
+		Daily: &DailySchedule{
+			Times:    []string{"09:00"},
+			Weekdays: []string{"mon", "tue", "wed", "thu", "fri"},
 		},
-		Observation: ObservationSpec{Kind: "heartbeat", Severity: "info", Content: "prepare brief"},
+		CatchUp:     CatchUpSpec{Mode: ScheduleCatchUpLatest, MaxLatenessMinutes: 120},
+		Observation: ScheduleObservationSpec{Kind: "heartbeat", Severity: "info", Content: "prepare brief"},
+	})
+	if err != nil {
+		panic(err)
 	}
+	runtime, _ := spec.scheduleRuntime()
+	return runtime
 }

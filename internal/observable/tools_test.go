@@ -246,8 +246,9 @@ func TestObservableToolsCreateCommandSourceDefaultsBatch(t *testing.T) {
 		t.Fatalf("observables = %+v, want one", cfg.Observables)
 	}
 	got := cfg.Observables[0]
-	if got.Source.Batch.IntervalSeconds != observable.DefaultBatchIntervalSeconds ||
-		got.Source.Batch.MaxChars != observable.DefaultBatchMaxChars {
+	commandConfig, ok := got.CommandConfig()
+	if !ok || commandConfig.Batch.IntervalSeconds != observable.DefaultBatchIntervalSeconds ||
+		commandConfig.Batch.MaxChars != observable.DefaultBatchMaxChars {
 		body, _ := json.MarshalIndent(cfg, "", "  ")
 		t.Fatalf("persisted command config missing batch defaults: %s", body)
 	}

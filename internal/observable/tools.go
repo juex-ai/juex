@@ -90,12 +90,12 @@ func observableTools(manager *Manager) []tools.Tool {
 			return jsonString(manager.Status())
 		}),
 		definitions[1].Bind(func(ctx context.Context, in map[string]any) (string, error) {
-			var spec Spec
 			body, err := json.Marshal(in)
 			if err != nil {
 				return "", err
 			}
-			if err := json.Unmarshal(body, &spec); err != nil {
+			spec, err := specFromCreateInput(body)
+			if err != nil {
 				return "", err
 			}
 			status, err := manager.Create(ctx, spec)
@@ -154,6 +154,93 @@ func observableTools(manager *Manager) []tools.Tool {
 			return jsonString(map[string]any{"observations": records})
 		}),
 	}
+}
+
+type createInput struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name,omitempty"`
+	Source      *createSourceInput     `json:"source,omitempty"`
+	Observation createObservationInput `json:"observation,omitempty"`
+	Command     string                 `json:"command,omitempty"`
+	Args        []string               `json:"args,omitempty"`
+	CWD         string                 `json:"cwd,omitempty"`
+	Env         map[string]string      `json:"env,omitempty"`
+	Streams     []string               `json:"streams,omitempty"`
+	Parser      *ParserSpec            `json:"parser,omitempty"`
+	Filters     []FilterSpec           `json:"filters,omitempty"`
+	Batch       BatchSpec              `json:"batch,omitempty"`
+	OnExit      OnExitSpec             `json:"on_exit,omitempty"`
+}
+
+type createSourceInput struct {
+	Type     string            `json:"type"`
+	Command  string            `json:"command,omitempty"`
+	Args     []string          `json:"args,omitempty"`
+	CWD      string            `json:"cwd,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Streams  []string          `json:"streams,omitempty"`
+	Parser   *ParserSpec       `json:"parser,omitempty"`
+	Filters  []FilterSpec      `json:"filters,omitempty"`
+	Batch    BatchSpec         `json:"batch,omitempty"`
+	OnExit   OnExitSpec        `json:"on_exit,omitempty"`
+	Timezone string            `json:"timezone,omitempty"`
+	Once     *OnceSchedule     `json:"once,omitempty"`
+	Daily    *DailySchedule    `json:"daily,omitempty"`
+	Interval *IntervalSchedule `json:"interval,omitempty"`
+	CatchUp  CatchUpSpec       `json:"catch_up,omitempty"`
+}
+
+type createObservationInput struct {
+	Kind        string           `json:"kind,omitempty"`
+	Severity    string           `json:"severity,omitempty"`
+	Content     string           `json:"content,omitempty"`
+	Attachments []AttachmentSpec `json:"attachments,omitempty"`
+}
+
+func specFromCreateInput(body []byte) (Spec, error) {
+	var input createInput
+	if err := json.Unmarshal(body, &input); err != nil {
+		return Spec{}, err
+	}
+	if input.Source != nil && input.Source.Type == SourceTypeSchedule {
+		return NewScheduleSpec(input.ID, input.Name, ScheduleSourceSpec{
+			Timezone: input.Source.Timezone,
+			Once:     input.Source.Once,
+			Daily:    input.Source.Daily,
+			Interval: input.Source.Interval,
+			CatchUp:  input.Source.CatchUp,
+			Observation: ScheduleObservationSpec{
+				Kind:        input.Observation.Kind,
+				Severity:    input.Observation.Severity,
+				Content:     input.Observation.Content,
+				Attachments: input.Observation.Attachments,
+			},
+		})
+	}
+	config := CommandSourceSpec{
+		Command:     input.Command,
+		Args:        input.Args,
+		CWD:         input.CWD,
+		Env:         input.Env,
+		Streams:     input.Streams,
+		Parser:      input.Parser,
+		Filters:     input.Filters,
+		Batch:       input.Batch,
+		OnExit:      input.OnExit,
+		Observation: CommandObservationSpec{Kind: input.Observation.Kind, Severity: input.Observation.Severity},
+	}
+	if input.Source != nil {
+		config.Command = input.Source.Command
+		config.Args = input.Source.Args
+		config.CWD = input.Source.CWD
+		config.Env = input.Source.Env
+		config.Streams = input.Source.Streams
+		config.Parser = input.Source.Parser
+		config.Filters = input.Source.Filters
+		config.Batch = input.Source.Batch
+		config.OnExit = input.Source.OnExit
+	}
+	return NewCommandSpec(input.ID, input.Name, config)
 }
 
 func specSchema() map[string]any {

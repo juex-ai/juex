@@ -107,7 +107,7 @@ func TestManager_StartAllCapturesAndDeliversObservation(t *testing.T) {
 func TestManager_StartAllContinuesAfterOneStartError(t *testing.T) {
 	dir := t.TempDir()
 	bad := validSpec("bad-start")
-	bad.Command = "definitely-not-a-juex-observable-helper"
+	bad = mutateCommandSpec(bad, func(config *observable.CommandSourceSpec) { config.Command = "definitely-not-a-juex-observable-helper" })
 	good := helperSpec("good-start", "json-once")
 	writeObservableConfig(t, dir, bad, good)
 	var deliveredMu sync.Mutex
@@ -144,7 +144,7 @@ func TestManager_StartAllContinuesAfterOneStartError(t *testing.T) {
 func TestManager_CountsSummarizesRuntimeStates(t *testing.T) {
 	dir := t.TempDir()
 	bad := validSpec("bad-count")
-	bad.Command = "definitely-not-a-juex-observable-helper"
+	bad = mutateCommandSpec(bad, func(config *observable.CommandSourceSpec) { config.Command = "definitely-not-a-juex-observable-helper" })
 	good := helperSpec("good-count", "quiet")
 	writeObservableConfig(t, dir, bad, good)
 	mgr, err := observable.NewManager(observable.ManagerOptions{
@@ -365,7 +365,7 @@ func TestManager_StartCleansUpWhenRunningRecordFails(t *testing.T) {
 func TestManager_StartupErrorRecordsErrored(t *testing.T) {
 	dir := t.TempDir()
 	spec := validSpec("missing")
-	spec.Command = "definitely-not-a-juex-observable-helper"
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.Command = "definitely-not-a-juex-observable-helper" })
 	writeObservableConfig(t, dir, spec)
 	mgr, err := observable.NewManager(observable.ManagerOptions{
 		ConfigPath: configPath(dir),
@@ -388,7 +388,9 @@ func TestManager_StartupErrorRecordsErrored(t *testing.T) {
 func TestManager_TimerFlushesQuietBatch(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("quiet-batch", "json-then-wait")
-	spec.Batch.IntervalSeconds = observable.MinBatchIntervalSeconds
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Batch.IntervalSeconds = observable.MinBatchIntervalSeconds
+	})
 	writeObservableConfig(t, dir, spec)
 	var deliveredMu sync.Mutex
 	var delivered []observable.ObservationRecord
@@ -420,7 +422,7 @@ func TestManager_TimerFlushesQuietBatch(t *testing.T) {
 func TestManager_DrainsUnwatchedStream(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("stdout-only", "stderr-flood")
-	spec.Streams = []string{observable.StreamStdout}
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.Streams = []string{observable.StreamStdout} })
 	writeObservableConfig(t, dir, spec)
 	var deliveredMu sync.Mutex
 	var delivered []observable.ObservationRecord
@@ -489,7 +491,7 @@ func TestManager_DeliversParseErrorObservation(t *testing.T) {
 func TestManager_OnExitNotifyNonzero(t *testing.T) {
 	dir := t.TempDir()
 	spec := helperSpec("exit-notify", "exit2")
-	spec.OnExit.Notify = "nonzero"
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) { config.OnExit.Notify = "nonzero" })
 	writeObservableConfig(t, dir, spec)
 	var deliveredMu sync.Mutex
 	var delivered []observable.ObservationRecord
@@ -680,7 +682,9 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	scheduledAt := fixedTime.Add(-time.Minute)
 	spec := scheduleOnceSpec("catch-up-once", scheduledAt)
-	spec.Source.CatchUp = observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10}
+	scheduleConfig, _ := spec.ScheduleConfig()
+	scheduleConfig.CatchUp = observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10}
+	spec, _ = observable.NewScheduleSpec(spec.ID, spec.Name, scheduleConfig)
 	writeObservableConfig(t, dir, spec)
 	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: fixedNow})
 	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
@@ -750,19 +754,15 @@ func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 func TestManager_DeleteClearsScheduleStateBeforeRecreate(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now().UTC().Add(5 * time.Second)
-	spec := observable.Spec{
-		ID: "recreate-schedule",
-		Source: observable.SourceSpec{
-			Type:     observable.SourceTypeSchedule,
-			Interval: &observable.IntervalSchedule{EverySeconds: 60},
-			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
-		},
-		Observation: observable.ObservationSpec{
+	spec := scheduleIntervalSpec("recreate-schedule", observable.ScheduleSourceSpec{
+		Interval: &observable.IntervalSchedule{EverySeconds: 60},
+		CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
+		Observation: observable.ScheduleObservationSpec{
 			Kind:     "reminder",
 			Severity: "info",
 			Content:  "Recreated schedule should not inherit old cursor.",
 		},
-	}
+	})
 	writeObservableConfig(t, dir, spec)
 	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
 	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
@@ -844,15 +844,11 @@ func TestManager_StoppedScheduleRestartsWithoutCatchUp(t *testing.T) {
 		now = next
 		nowMu.Unlock()
 	}
-	spec := observable.Spec{
-		ID: "paused-schedule",
-		Source: observable.SourceSpec{
-			Type:     observable.SourceTypeSchedule,
-			Interval: &observable.IntervalSchedule{EverySeconds: 60},
-			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
-		},
-		Observation: observable.ObservationSpec{Kind: "reminder", Severity: "info", Content: "Paused schedules should not catch up."},
-	}
+	spec := scheduleIntervalSpec("paused-schedule", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 60},
+		CatchUp:     observable.CatchUpSpec{Mode: observable.ScheduleCatchUpLatest, MaxLatenessMinutes: 10},
+		Observation: observable.ScheduleObservationSpec{Kind: "reminder", Severity: "info", Content: "Paused schedules should not catch up."},
+	})
 	writeObservableConfig(t, dir, spec)
 	var deliveredMu sync.Mutex
 	var delivered []observable.ObservationRecord
@@ -913,15 +909,11 @@ func TestManager_IntervalStartupPreservesFirstBaselineBeforeEmission(t *testing.
 	dir := t.TempDir()
 	baseline := time.Now().UTC().Add(2 * time.Second)
 	now := baseline.Add(30 * time.Second)
-	spec := observable.Spec{
-		ID: "interval-baseline",
-		Source: observable.SourceSpec{
-			Type:     observable.SourceTypeSchedule,
-			Interval: &observable.IntervalSchedule{EverySeconds: 60},
-			CatchUp:  observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
-		},
-		Observation: observable.ObservationSpec{Content: "Check deployment status."},
-	}
+	spec := scheduleIntervalSpec("interval-baseline", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 60},
+		CatchUp:     observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
+		Observation: observable.ScheduleObservationSpec{Content: "Check deployment status."},
+	})
 	writeObservableConfig(t, dir, spec)
 	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
 	if err := store.RecordScheduleState(observable.ScheduleStateRecord{
@@ -1041,36 +1033,40 @@ func (r corruptRunsFileRunner) Prepare(ctx context.Context, req sandbox.Request)
 }
 
 func helperSpec(id, mode string) observable.Spec {
-	spec := validSpec(id)
-	spec.Command = os.Args[0]
-	spec.Args = []string{"-test.run=TestObservableHelperProcess", "--", mode}
-	spec.Env = map[string]string{"OBSERVABLE_HELPER": "1"}
-	spec.Streams = []string{"stdout", "stderr"}
-	spec.Parser = &observable.ParserSpec{
-		Type:          "jsonl",
-		ContentField:  "content",
-		KindField:     "type",
-		SeverityField: "level",
+	return mutateCommandSpec(validSpec(id), func(config *observable.CommandSourceSpec) {
+		config.Command = os.Args[0]
+		config.Args = []string{"-test.run=TestObservableHelperProcess", "--", mode}
+		config.Env = map[string]string{"OBSERVABLE_HELPER": "1"}
+		config.Streams = []string{"stdout", "stderr"}
+		config.Parser = &observable.ParserSpec{
+			Type:          "jsonl",
+			ContentField:  "content",
+			KindField:     "type",
+			SeverityField: "level",
+		}
+	})
+}
+
+func scheduleOnceSpec(id string, at time.Time) observable.Spec {
+	spec, err := observable.NewScheduleSpec(id, "", observable.ScheduleSourceSpec{
+		Once:    &observable.OnceSchedule{At: at.UTC().Format(time.RFC3339Nano)},
+		CatchUp: observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
+		Observation: observable.ScheduleObservationSpec{
+			Kind: "reminder", Severity: "info", Content: "Check deployment status.",
+		},
+	})
+	if err != nil {
+		panic(err)
 	}
 	return spec
 }
 
-func scheduleOnceSpec(id string, at time.Time) observable.Spec {
-	return observable.Spec{
-		ID: id,
-		Source: observable.SourceSpec{
-			Type: observable.SourceTypeSchedule,
-			Once: &observable.OnceSchedule{
-				At: at.UTC().Format(time.RFC3339Nano),
-			},
-			CatchUp: observable.CatchUpSpec{Mode: observable.ScheduleCatchUpNone},
-		},
-		Observation: observable.ObservationSpec{
-			Kind:     "reminder",
-			Severity: "info",
-			Content:  "Check deployment status.",
-		},
+func scheduleIntervalSpec(id string, config observable.ScheduleSourceSpec) observable.Spec {
+	spec, err := observable.NewScheduleSpec(id, "", config)
+	if err != nil {
+		panic(err)
 	}
+	return spec
 }
 
 func TestObservableHelperProcess(t *testing.T) {
