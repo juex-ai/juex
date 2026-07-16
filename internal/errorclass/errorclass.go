@@ -56,7 +56,7 @@ func ClassifyText(raw string) Classification {
 		return Classification{Kind: KindTimeout, TimedOut: true, RawCause: raw}
 	case strings.Contains(lower, "cancel"):
 		return Classification{Kind: KindCancelled, RawCause: raw}
-	case strings.Contains(lower, "permission") || strings.Contains(lower, "denied") || hasStatusCode(lower, "403"):
+	case strings.Contains(lower, "permission") || strings.Contains(lower, "denied") || strings.Contains(lower, "forbidden") || hasStatusCode(lower, "403"):
 		return Classification{Kind: KindPermission, RawCause: raw}
 	case strings.Contains(lower, "auth") || strings.Contains(lower, "unauthorized") || hasStatusCode(lower, "401"):
 		return Classification{Kind: KindAuth, RawCause: raw}
@@ -70,12 +70,16 @@ func hasStatusCode(lower, code string) bool {
 		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
 	})
 	for i, field := range fields {
-		if field != "status" || i+1 >= len(fields) {
-			continue
-		}
 		next := i + 1
-		if fields[next] == "code" {
-			next++
+		switch {
+		case field == "status":
+			if next < len(fields) && fields[next] == "code" {
+				next++
+			}
+		case field == "http":
+		case field == "code" && i > 0 && fields[i-1] == "error":
+		default:
+			continue
 		}
 		if next < len(fields) && fields[next] == code {
 			return true

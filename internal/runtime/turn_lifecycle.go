@@ -106,6 +106,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		}
 		return fmt.Errorf("llm: %w", err)
 	}
+	l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}

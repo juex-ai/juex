@@ -2763,6 +2763,10 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 		recovery: llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
 	}
 	eng, bus := newEngine(t, prov, false)
+	eng.queueHookRuntimeContext([]hooks.Result{{
+		Hook:   hooks.CommandHook{Name: "provider-retry"},
+		Stdout: "preserve retry context",
+	}})
 	var retries []LLMRetryPayload
 	var turnErrors int32
 	bus.Subscribe("llm.retry", func(e events.Event) {
@@ -2795,8 +2799,15 @@ func TestTurn_ProviderFailureContinuesWhenPendingInputExists(t *testing.T) {
 	if prov.called != 2 || len(prov.histories) != 2 {
 		t.Fatalf("provider calls = %d histories = %d, want 2", prov.called, len(prov.histories))
 	}
-	if got := prov.histories[1][len(prov.histories[1])-1].FirstText(); got != "continue after failure" {
-		t.Fatalf("continued provider input = %q", got)
+	continuedHistory := messagesText(prov.histories[1])
+	if !strings.Contains(continuedHistory, "continue after failure") {
+		t.Fatalf("continued provider history missing pending input:\n%s", continuedHistory)
+	}
+	if !strings.Contains(continuedHistory, "preserve retry context") {
+		t.Fatalf("continued provider history missing hook context:\n%s", continuedHistory)
+	}
+	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("hook context remaining after successful provider request = %+v", remaining)
 	}
 	if len(retries) != 1 || retries[0].RetryReason != "pending_input_after_provider_error" || !retries[0].WillRetry {
 		t.Fatalf("retry diagnostics = %+v", retries)

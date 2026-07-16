@@ -328,6 +328,7 @@ type providerTurnRequest struct {
 	iter                 int
 	history              []llm.Message
 	estimatedInputTokens int
+	hookContextCount     int
 }
 
 type recordedProviderResponse struct {
@@ -414,8 +415,12 @@ func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared 
 	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
 	e.emitProjectionApplied(turnID, projection)
 	estimatedInputTokens := estimateContextTokens(prepared.systemPrompt, prepared.tools, projectedHistory)
-	e.consumePendingHookRuntimeContext(len(hookContext))
-	return providerTurnRequest{iter: iter, history: projectedHistory, estimatedInputTokens: estimatedInputTokens}, nil
+	return providerTurnRequest{
+		iter:                 iter,
+		history:              projectedHistory,
+		estimatedInputTokens: estimatedInputTokens,
+		hookContextCount:     len(hookContext),
+	}, nil
 }
 
 func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
