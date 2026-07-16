@@ -484,7 +484,7 @@ func TestMCPClient_ClaudeChannelNotification(t *testing.T) {
 	}
 }
 
-func TestMCPRegisterAll(t *testing.T) {
+func TestMCPRegisterAllToolsUsesMCPGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -507,6 +507,9 @@ func TestMCPRegisterAll(t *testing.T) {
 	tool, ok := r.Get("mcp__fake__echo")
 	if !ok {
 		t.Fatalf("expected registered tool, have: %v", r.List())
+	}
+	if tool.Group != tools.ToolGroupMCP {
+		t.Fatalf("tool group = %q, want %q", tool.Group, tools.ToolGroupMCP)
 	}
 	out, err := tool.Handler(ctx, map[string]any{"text": "x"})
 	if err != nil {
@@ -986,6 +989,103 @@ func TestNewManagerLayeredSoftKeepsHealthyServersAndRecordsFailures(t *testing.T
 	}
 }
 
+func TestManagerToolDescriptorsReturnsSortedDefensiveSnapshot(t *testing.T) {
+	mgr := &Manager{tools: map[string][]ToolDescriptor{
+		"empty": {},
+		"alpha": {
+			{
+				Name:        "zeta",
+				Description: "last",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"items": map[string]any{
+							"type": "array",
+							"items": []any{
+								map[string]any{"type": "string"},
+							},
+						},
+					},
+				},
+			},
+			{Name: "alpha", Description: "first", InputSchema: map[string]any{"type": "object"}},
+		},
+	}}
+
+	got := mgr.ToolDescriptors()
+	if descriptors, ok := got["empty"]; !ok || len(descriptors) != 0 {
+		t.Fatalf("zero-tool server = %#v, present=%v", descriptors, ok)
+	}
+	if names := []string{got["alpha"][0].Name, got["alpha"][1].Name}; strings.Join(names, ",") != "alpha,zeta" {
+		t.Fatalf("descriptor order = %v", names)
+	}
+
+	properties := got["alpha"][1].InputSchema["properties"].(map[string]any)
+	itemsSchema := properties["items"].(map[string]any)
+	items := itemsSchema["items"].([]any)
+	items[0].(map[string]any)["type"] = "number"
+	properties["new"] = map[string]any{"type": "boolean"}
+
+	fresh := mgr.ToolDescriptors()
+	freshProperties := fresh["alpha"][1].InputSchema["properties"].(map[string]any)
+	if _, ok := freshProperties["new"]; ok {
+		t.Fatalf("caller mutation leaked into manager cache: %#v", freshProperties)
+	}
+	freshItems := freshProperties["items"].(map[string]any)["items"].([]any)
+	if gotType := freshItems[0].(map[string]any)["type"]; gotType != "string" {
+		t.Fatalf("nested slice mutation leaked into manager cache: type=%v", gotType)
+	}
+	if mgr.tools["alpha"][0].Name != "zeta" {
+		t.Fatalf("snapshot sorting mutated manager cache: %#v", mgr.tools["alpha"])
+	}
+}
+
+func TestManagerToolDescriptorsReturnsEmptyForNilOrClosedManager(t *testing.T) {
+	var nilManager *Manager
+	if got := nilManager.ToolDescriptors(); len(got) != 0 {
+		t.Fatalf("nil manager descriptors = %#v", got)
+	}
+	closed := &Manager{closed: true, tools: map[string][]ToolDescriptor{"alpha": {{Name: "echo"}}}}
+	if got := closed.ToolDescriptors(); len(got) != 0 {
+		t.Fatalf("closed manager descriptors = %#v", got)
+	}
+}
+
+func TestManagerToolDescriptorsDeepClonesTypedJSONContainers(t *testing.T) {
+	mgr := &Manager{tools: map[string][]ToolDescriptor{
+		"typed": {{
+			Name: "typed",
+			InputSchema: map[string]any{
+				"required": []string{"name"},
+				"labels":   map[string]string{"tier": "prod"},
+				"variants": []map[string]any{{"type": "string"}},
+				"tuple":    [1]map[string]any{{"type": "number"}},
+			},
+		}},
+	}}
+
+	snapshot := mgr.ToolDescriptors()["typed"][0].InputSchema
+	snapshot["required"].([]string)[0] = "mutated"
+	snapshot["labels"].(map[string]string)["tier"] = "dev"
+	snapshot["variants"].([]map[string]any)[0]["type"] = "boolean"
+	tuple := snapshot["tuple"].([1]map[string]any)
+	tuple[0]["type"] = "integer"
+
+	fresh := mgr.ToolDescriptors()["typed"][0].InputSchema
+	if got := fresh["required"].([]string)[0]; got != "name" {
+		t.Fatalf("typed slice mutation leaked into manager cache: %q", got)
+	}
+	if got := fresh["labels"].(map[string]string)["tier"]; got != "prod" {
+		t.Fatalf("typed map mutation leaked into manager cache: %q", got)
+	}
+	if got := fresh["variants"].([]map[string]any)[0]["type"]; got != "string" {
+		t.Fatalf("typed slice-of-map mutation leaked into manager cache: %v", got)
+	}
+	if got := fresh["tuple"].([1]map[string]any)[0]["type"]; got != "number" {
+		t.Fatalf("typed array mutation leaked into manager cache: %v", got)
+	}
+}
+
 func TestManagerRegisterTools_StrictNoArgToolRejectsPlaceholder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1019,6 +1119,13 @@ func TestManagerRegisterTools_StrictNoArgToolRejectsPlaceholder(t *testing.T) {
 	}
 	if out != "noargs ok" {
 		t.Fatalf("got %q", out)
+	}
+	tool, ok := reg.Get("mcp__fake__noargs")
+	if !ok {
+		t.Fatal("mcp__fake__noargs is not registered")
+	}
+	if tool.Group != tools.ToolGroupMCP {
+		t.Fatalf("tool group = %q, want %q", tool.Group, tools.ToolGroupMCP)
 	}
 	_, _, err = reg.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true})
 	if err == nil {

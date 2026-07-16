@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
+import { ChevronRightIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  RuntimeToolGroups,
+  RuntimeToolList,
+} from "@/components/RuntimeToolCatalog";
 import { getRuntimeStatus } from "@/api";
 import type {
+  MCPServerInfo,
   RuntimeHookInfo,
   RuntimeStatusResponse,
   SystemPromptEntry,
@@ -54,6 +60,9 @@ export function Runtime() {
   const systemPromptItems = systemPrompt.items ?? [];
   const hooks = data.hooks ?? { configured: 0, commands: [] };
   const hookCommands = hooks.commands ?? [];
+  const runtimeTools = data.tools ?? { count: 0, groups: [] };
+  const runtimeToolGroups = runtimeTools.groups ?? [];
+  const mcpServers = data.mcp?.servers ?? [];
 
   return (
     <div className="min-h-0 flex-1 overflow-auto bg-background">
@@ -215,6 +224,20 @@ export function Runtime() {
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <h1 className="font-serif text-2xl italic leading-none text-primary">
+              Tools
+            </h1>
+            <Badge variant="secondary" className="font-mono text-[11px]">
+              {runtimeTools.count ?? 0}
+            </Badge>
+          </div>
+          <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            <RuntimeToolGroups groups={runtimeToolGroups} />
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <h1 className="font-serif text-2xl italic leading-none text-primary">
               MCP
             </h1>
             <Badge
@@ -224,57 +247,17 @@ export function Runtime() {
               {mcpSummaryLabel(data)}
             </Badge>
           </div>
-          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
-            <table className="w-full min-w-[56rem] text-left text-sm">
-              <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Server</th>
-                  <th className="px-3 py-2 font-medium">Source</th>
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 font-medium">Tools</th>
-                  <th className="px-3 py-2 font-medium">Command</th>
-                  <th className="px-3 py-2 font-medium">Error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.mcp.servers.length === 0 ? (
-                  <tr>
-                    <td className="text-muted-foreground px-3 py-3" colSpan={6}>
-                      No MCP servers configured.
-                    </td>
-                  </tr>
-                ) : (
-                  data.mcp.servers.map((server) => (
-                    <tr key={server.name} className="border-t">
-                      <td className="px-3 py-2 font-medium">{server.name}</td>
-                      <td className="px-3 py-2">
-                        <Badge variant="outline" className="font-mono text-[11px]">
-                          {server.source}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge
-                          variant={mcpStatusVariant(server.status)}
-                          className="font-mono text-[11px]"
-                        >
-                          {mcpStatusLabel(server.status)}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-xs">
-                        {server.tool_count}
-                      </td>
-                      <td className="max-w-[28rem] truncate px-3 py-2 font-mono text-xs">
-                        {[server.command, ...(server.args ?? [])].join(" ")}
-                      </td>
-                      <td className="text-destructive max-w-[28rem] break-words px-3 py-2 font-mono text-xs">
-                        {server.error || "-"}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+          {mcpServers.length === 0 ? (
+            <div className="text-muted-foreground rounded-[14px] border bg-card px-3 py-3 text-sm shadow-[var(--shadow-sm)]">
+              No MCP servers configured.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {mcpServers.map((server) => (
+                <MCPServerCard key={server.name} server={server} />
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="space-y-3">
@@ -454,6 +437,89 @@ function mcpStatusLabel(status: string): string {
   if (status === "connected") return "connected";
   if (status === "error") return "error";
   return "not started";
+}
+
+function MCPServerCard({ server }: { server: MCPServerInfo }) {
+  const [serverOpen, setServerOpen] = useState(false);
+  const toolsAvailable = server.tools !== undefined;
+
+  return (
+    <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+      <div className="px-3 py-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="font-medium">{server.name}</span>
+          <Badge variant="outline" className="font-mono text-[11px]">
+            {server.source}
+          </Badge>
+          <Badge
+            variant={mcpStatusVariant(server.status)}
+            className="font-mono text-[11px]"
+          >
+            {mcpStatusLabel(server.status)}
+          </Badge>
+          <Badge variant="secondary" className="font-mono text-[11px]">
+            {server.tool_count ?? server.tools?.length ?? 0} tools
+          </Badge>
+        </div>
+        <dl className="mt-2 grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]">
+          <dt className="text-muted-foreground font-medium">Command</dt>
+          <dd className="min-w-0 break-all font-mono">
+            {mcpServerCommand(server.command, server.args)}
+          </dd>
+          <dt className="text-muted-foreground font-medium">Error</dt>
+          <dd
+            className={
+              server.error
+                ? "min-w-0 break-words font-mono text-destructive"
+                : "min-w-0 font-mono text-muted-foreground"
+            }
+          >
+            {server.error || "-"}
+          </dd>
+        </dl>
+      </div>
+      <details
+        className="group/runtime-mcp-server border-t"
+        onToggle={(event) => setServerOpen(event.currentTarget.open)}
+      >
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
+          <ChevronRightIcon
+            aria-hidden="true"
+            className="text-muted-foreground size-4 shrink-0 transition-transform group-open/runtime-mcp-server:rotate-90"
+          />
+          <span className="font-medium">Tool details</span>
+          <span className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-xs">
+            {server.tools?.map((tool) => tool.name).join(", ") || "No tool preview"}
+          </span>
+        </summary>
+        {serverOpen && (
+          <div className="border-t bg-muted/20 pl-4">
+            <RuntimeToolList
+              tools={server.tools ?? []}
+              empty={mcpToolEmptyLabel(server.status, toolsAvailable)}
+            />
+          </div>
+        )}
+      </details>
+    </div>
+  );
+}
+
+function mcpServerCommand(command: string, args?: string[]): string {
+  return [command, ...(args ?? [])].filter(Boolean).join(" ") || "-";
+}
+
+function mcpToolEmptyLabel(status: string, toolsAvailable: boolean): string {
+  if (!toolsAvailable) {
+    return "Tool details unavailable in this response";
+  }
+  if (status === "error") {
+    return "No tools available because this server failed to start.";
+  }
+  if (status !== "connected") {
+    return "No tools available because this server has not started.";
+  }
+  return "This server advertised no tools.";
 }
 
 function providerCapabilities(data: RuntimeStatusResponse): string[] {

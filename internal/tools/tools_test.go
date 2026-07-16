@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -78,6 +79,130 @@ func pwdCommand() string {
 }
 
 var _ = filepath.Join
+
+func TestDefaultBuiltinToolGroups(t *testing.T) {
+	definitions := DefaultBuiltinToolDefinitions(BuiltinDefinitionOptions{Shell: fakeShellProfile()})
+	want := map[string]ToolGroup{
+		"read":                ToolGroupFile,
+		"write":               ToolGroupFile,
+		"edit":                ToolGroupFile,
+		"apply_patch":         ToolGroupFile,
+		"write_begin":         ToolGroupChunkedWrite,
+		"write_chunk":         ToolGroupChunkedWrite,
+		"write_commit":        ToolGroupChunkedWrite,
+		"write_abort":         ToolGroupChunkedWrite,
+		"exec_command":        ToolGroupShell,
+		"list_shell_sessions": ToolGroupShell,
+		"write_stdin":         ToolGroupShell,
+		"grep":                ToolGroupSearch,
+	}
+	if len(definitions) != len(want) {
+		t.Fatalf("definition count = %d, want %d", len(definitions), len(want))
+	}
+	registry := NewRegistry()
+	RegisterBuiltins(registry, BuiltinOptions{Shell: fakeShellProfile()})
+	for _, definition := range definitions {
+		if got, ok := want[definition.Name]; !ok {
+			t.Errorf("unexpected builtin definition %q", definition.Name)
+		} else if definition.Group != got {
+			t.Errorf("%s group = %q, want %q", definition.Name, definition.Group, got)
+		}
+		registered, ok := registry.Get(definition.Name)
+		if !ok {
+			t.Errorf("%s is not registered", definition.Name)
+			continue
+		}
+		if got := registered.Definition(); !reflect.DeepEqual(got, definition) {
+			t.Errorf("%s registered definition = %#v, want %#v", definition.Name, got, definition)
+		}
+	}
+}
+
+func TestToolDefinitionBindsHandlersAndSpecsStayProviderFacing(t *testing.T) {
+	definition := ToolDefinition{
+		Name:           "classified",
+		Group:          ToolGroupMemory,
+		Description:    "A classified tool.",
+		Schema:         map[string]any{"type": "object"},
+		TimeoutPolicy:  ToolTimeoutDefault,
+		TimeoutSeconds: 12,
+	}
+	handler := func(context.Context, map[string]any) (string, error) { return "ok", nil }
+	resultHandler := func(context.Context, map[string]any) (Result, error) { return Result{Text: "ok"}, nil }
+
+	bound := definition.Bind(handler)
+	if bound.Handler == nil || bound.ResultHandler != nil {
+		t.Fatalf("Bind handlers = Handler:%t ResultHandler:%t", bound.Handler != nil, bound.ResultHandler != nil)
+	}
+	if got := bound.Definition(); !reflect.DeepEqual(got, definition) {
+		t.Fatalf("bound definition = %#v, want %#v", got, definition)
+	}
+	boundResult := definition.BindResult(resultHandler)
+	if boundResult.Handler != nil || boundResult.ResultHandler == nil {
+		t.Fatalf("BindResult handlers = Handler:%t ResultHandler:%t", boundResult.Handler != nil, boundResult.ResultHandler != nil)
+	}
+	if got := boundResult.Definition(); !reflect.DeepEqual(got, definition) {
+		t.Fatalf("bound result definition = %#v, want %#v", got, definition)
+	}
+
+	registry := NewRegistry()
+	registry.MustRegister(bound)
+	wantSpecs := []llm.ToolSpec{{Name: definition.Name, Description: definition.Description, Schema: definition.Schema}}
+	if got := registry.Specs(); !reflect.DeepEqual(got, wantSpecs) {
+		t.Fatalf("provider specs = %#v, want %#v", got, wantSpecs)
+	}
+}
+
+func TestEffectiveToolTimeout(t *testing.T) {
+	bounded := EffectiveToolTimeout(ToolDefinition{}, 90)
+	if bounded.Mode != ToolTimeoutModeBounded || bounded.Seconds != 90 {
+		t.Fatalf("bounded timeout = %+v", bounded)
+	}
+	disabled := EffectiveToolTimeout(ToolDefinition{TimeoutPolicy: ToolTimeoutDisabled}, 90)
+	if disabled.Mode != ToolTimeoutModeDisabled || disabled.Seconds != 0 {
+		t.Fatalf("disabled timeout = %+v", disabled)
+	}
+	capped := EffectiveToolTimeout(ToolDefinition{TimeoutSeconds: MaxTimeoutSeconds + 1}, 90)
+	if capped.Mode != ToolTimeoutModeBounded || capped.Seconds != MaxTimeoutSeconds {
+		t.Fatalf("capped timeout = %+v", capped)
+	}
+}
+
+func TestToolDefinitionNormalizedCopiesAndNormalizesSchema(t *testing.T) {
+	definition := ToolDefinition{
+		Name: "nullable",
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": nil,
+			"properties": map[string]any{
+				"query": nil,
+				"items": map[string]any{
+					"type":  "array",
+					"items": nil,
+				},
+			},
+		},
+	}
+
+	normalized := definition.Normalized()
+	want := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{},
+			"items": map[string]any{
+				"type":  "array",
+				"items": map[string]any{},
+			},
+		},
+	}
+	if !reflect.DeepEqual(normalized.Schema, want) {
+		t.Fatalf("normalized schema = %#v, want %#v", normalized.Schema, want)
+	}
+	properties := definition.Schema["properties"].(map[string]any)
+	if properties["query"] != nil || definition.Schema["additionalProperties"] != nil {
+		t.Fatalf("normalization mutated source definition: %#v", definition.Schema)
+	}
+}
 
 func TestRegistry_RegisterDuplicate(t *testing.T) {
 	r := NewRegistry()

@@ -33,6 +33,15 @@ type BuiltinProvider interface {
 	Tools(ctx BuiltinProviderContext) []Tool
 }
 
+type BuiltinDefinitionOptions struct {
+	Shell             ShellProfile
+	DisableApplyPatch bool
+}
+
+type builtinDefinitionProvider interface {
+	definitions(opts BuiltinDefinitionOptions) []ToolDefinition
+}
+
 type BuiltinProviderContext struct {
 	WorkDir            string
 	Shell              ShellProfile
@@ -51,6 +60,21 @@ func DefaultBuiltinProviders() []BuiltinProvider {
 		ShellToolProvider{},
 		SearchToolProvider{},
 	}
+}
+
+func DefaultBuiltinToolDefinitions(opts BuiltinDefinitionOptions) []ToolDefinition {
+	if opts.Shell.Binary == "" {
+		opts.Shell = DefaultShellProfile()
+	}
+	var definitions []ToolDefinition
+	for _, provider := range DefaultBuiltinProviders() {
+		definitionProvider, ok := provider.(builtinDefinitionProvider)
+		if !ok {
+			continue
+		}
+		definitions = append(definitions, definitionProvider.definitions(opts)...)
+	}
+	return definitions
 }
 
 // RegisterBuiltins adds the default builtin tool set.

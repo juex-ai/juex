@@ -2,11 +2,37 @@ package runtime
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/tools"
 )
+
+func TestGoalToolDefinitionsBindSessionStateGroup(t *testing.T) {
+	reg := tools.NewRegistry()
+	eng := &Engine{Tools: reg, GoalState: NewGoalStateStore(t.TempDir(), GoalStateOptions{})}
+	if err := RegisterGoalTools(reg, eng); err != nil {
+		t.Fatal(err)
+	}
+	definitions := GoalToolDefinitions()
+	if len(definitions) != 3 {
+		t.Fatalf("definition count = %d, want 3", len(definitions))
+	}
+	for _, definition := range definitions {
+		if definition.Group != tools.ToolGroupSessionState {
+			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, tools.ToolGroupSessionState)
+		}
+		registered, ok := reg.Get(definition.Name)
+		if !ok {
+			t.Errorf("%s is not registered", definition.Name)
+			continue
+		}
+		if got := registered.Definition(); !reflect.DeepEqual(got, definition) {
+			t.Errorf("%s registered definition = %#v, want %#v", definition.Name, got, definition)
+		}
+	}
+}
 
 func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 	reg := tools.NewRegistry()

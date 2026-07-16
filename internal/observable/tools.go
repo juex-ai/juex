@@ -15,6 +15,60 @@ const (
 	maxObservationToolLimit     = 100
 )
 
+func ToolDefinitions() []tools.ToolDefinition {
+	idSchema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"required":             []any{"id"},
+		"properties":           map[string]any{"id": map[string]any{"type": "string"}},
+	}
+	return []tools.ToolDefinition{
+		{
+			Name:        "observable_list",
+			Group:       tools.ToolGroupObservable,
+			Description: "List configured JueX Observables and their runtime status. Call this before creating a new Observable to avoid duplicates.",
+			Schema:      map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
+		},
+		{
+			Name:        "observable_create",
+			Group:       tools.ToolGroupObservable,
+			Description: "Create a workspace-local Observable with exactly one source shape and start it immediately. Call observable_list first and avoid duplicates. Use source.type=\"command\" to run a process and batch its output; batch defaults are safe if omitted. Use source.type=\"schedule\" only to emit observation.content at scheduled times; schedule sources do not run commands. Do not mix top-level command fields with source. Stopping is temporary; deleting is permanent.",
+			Schema:      specSchema(),
+		},
+		{
+			Name:        "observable_start",
+			Group:       tools.ToolGroupObservable,
+			Description: "Start a stopped or exited Observable for the current JueX process. Runtime starts are temporary; the config still controls startup on the next process launch.",
+			Schema:      idSchema,
+		},
+		{
+			Name:        "observable_stop",
+			Group:       tools.ToolGroupObservable,
+			Description: "Stop a running Observable for the current JueX process. This is temporary; it starts again on the next JueX process startup unless deleted.",
+			Schema:      idSchema,
+		},
+		{
+			Name:        "observable_delete",
+			Group:       tools.ToolGroupObservable,
+			Description: "Delete an Observable from .juex/observables.json and stop it if running. Deleting is permanent; use observable_stop for a temporary runtime stop.",
+			Schema:      idSchema,
+		},
+		{
+			Name:        "observable_observations",
+			Group:       tools.ToolGroupObservable,
+			Description: "List recent durable Observations, optionally for one Observable id. Results are bounded and include truncation/artifact metadata.",
+			Schema: map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"id":    map[string]any{"type": "string"},
+					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+				},
+			},
+		},
+	}
+}
+
 func RegisterTools(reg *tools.Registry, manager *Manager) error {
 	if reg == nil || manager == nil {
 		return nil
@@ -28,119 +82,77 @@ func RegisterTools(reg *tools.Registry, manager *Manager) error {
 }
 
 func observableTools(manager *Manager) []tools.Tool {
-	idSchema := map[string]any{
-		"type":                 "object",
-		"additionalProperties": false,
-		"required":             []any{"id"},
-		"properties":           map[string]any{"id": map[string]any{"type": "string"}},
-	}
+	definitions := ToolDefinitions()
 	return []tools.Tool{
-		{
-			Name:        "observable_list",
-			Description: "List configured JueX Observables and their runtime status. Call this before creating a new Observable to avoid duplicates.",
-			Schema:      map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
-			Handler: func(ctx context.Context, in map[string]any) (string, error) {
-				_ = ctx
-				_ = in
-				return jsonString(manager.Status())
-			},
-		},
-		{
-			Name:        "observable_create",
-			Description: "Create a workspace-local Observable with exactly one source shape and start it immediately. Call observable_list first and avoid duplicates. Use source.type=\"command\" to run a process and batch its output; batch defaults are safe if omitted. Use source.type=\"schedule\" only to emit observation.content at scheduled times; schedule sources do not run commands. Do not mix top-level command fields with source. Stopping is temporary; deleting is permanent.",
-			Schema:      specSchema(),
-			Handler: func(ctx context.Context, in map[string]any) (string, error) {
-				var spec Spec
-				body, err := json.Marshal(in)
-				if err != nil {
-					return "", err
-				}
-				if err := json.Unmarshal(body, &spec); err != nil {
-					return "", err
-				}
-				status, err := manager.Create(ctx, spec)
-				if err != nil {
-					return "", err
-				}
-				return jsonString(status)
-			},
-		},
-		{
-			Name:        "observable_start",
-			Description: "Start a stopped or exited Observable for the current JueX process. Runtime starts are temporary; the config still controls startup on the next process launch.",
-			Schema:      idSchema,
-			Handler: func(ctx context.Context, in map[string]any) (string, error) {
-				id, err := requiredString(in, "id")
-				if err != nil {
-					return "", err
-				}
-				if err := manager.Start(ctx, id); err != nil {
-					return "", err
-				}
-				status, err := manager.StatusByID(id)
-				if err != nil {
-					return "", err
-				}
-				return jsonString(status)
-			},
-		},
-		{
-			Name:        "observable_stop",
-			Description: "Stop a running Observable for the current JueX process. This is temporary; it starts again on the next JueX process startup unless deleted.",
-			Schema:      idSchema,
-			Handler: func(ctx context.Context, in map[string]any) (string, error) {
-				id, err := requiredString(in, "id")
-				if err != nil {
-					return "", err
-				}
-				if err := manager.Stop(ctx, id); err != nil {
-					return "", err
-				}
-				status, err := manager.StatusByID(id)
-				if err != nil {
-					return "", err
-				}
-				return jsonString(status)
-			},
-		},
-		{
-			Name:        "observable_delete",
-			Description: "Delete an Observable from .juex/observables.json and stop it if running. Deleting is permanent; use observable_stop for a temporary runtime stop.",
-			Schema:      idSchema,
-			Handler: func(ctx context.Context, in map[string]any) (string, error) {
-				id, err := requiredString(in, "id")
-				if err != nil {
-					return "", err
-				}
-				if err := manager.Delete(ctx, id); err != nil {
-					return "", err
-				}
-				return jsonString(map[string]any{"deleted": id})
-			},
-		},
-		{
-			Name:        "observable_observations",
-			Description: "List recent durable Observations, optionally for one Observable id. Results are bounded and include truncation/artifact metadata.",
-			Schema: map[string]any{
-				"type":                 "object",
-				"additionalProperties": false,
-				"properties": map[string]any{
-					"id":    map[string]any{"type": "string"},
-					"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
-				},
-			},
-			Handler: func(ctx context.Context, in map[string]any) (string, error) {
-				_ = ctx
-				records, err := manager.Observations(ObservationFilter{
-					ObservableID: optionalString(in, "id"),
-					Limit:        boundedObservationLimit(in),
-				})
-				if err != nil {
-					return "", err
-				}
-				return jsonString(map[string]any{"observations": records})
-			},
-		},
+		definitions[0].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			_ = ctx
+			_ = in
+			return jsonString(manager.Status())
+		}),
+		definitions[1].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			var spec Spec
+			body, err := json.Marshal(in)
+			if err != nil {
+				return "", err
+			}
+			if err := json.Unmarshal(body, &spec); err != nil {
+				return "", err
+			}
+			status, err := manager.Create(ctx, spec)
+			if err != nil {
+				return "", err
+			}
+			return jsonString(status)
+		}),
+		definitions[2].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			id, err := requiredString(in, "id")
+			if err != nil {
+				return "", err
+			}
+			if err := manager.Start(ctx, id); err != nil {
+				return "", err
+			}
+			status, err := manager.StatusByID(id)
+			if err != nil {
+				return "", err
+			}
+			return jsonString(status)
+		}),
+		definitions[3].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			id, err := requiredString(in, "id")
+			if err != nil {
+				return "", err
+			}
+			if err := manager.Stop(ctx, id); err != nil {
+				return "", err
+			}
+			status, err := manager.StatusByID(id)
+			if err != nil {
+				return "", err
+			}
+			return jsonString(status)
+		}),
+		definitions[4].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			id, err := requiredString(in, "id")
+			if err != nil {
+				return "", err
+			}
+			if err := manager.Delete(ctx, id); err != nil {
+				return "", err
+			}
+			return jsonString(map[string]any{"deleted": id})
+		}),
+		definitions[5].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+			_ = ctx
+			records, err := manager.Observations(ObservationFilter{
+				ObservableID: optionalString(in, "id"),
+				Limit:        boundedObservationLimit(in),
+			})
+			if err != nil {
+				return "", err
+			}
+			return jsonString(map[string]any{"observations": records})
+		}),
 	}
 }
 

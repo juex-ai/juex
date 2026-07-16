@@ -15,57 +15,66 @@ const (
 	GoalToolUpdate = "update_goal"
 )
 
+func GoalToolDefinitions() []tools.ToolDefinition {
+	return []tools.ToolDefinition{
+		{
+			Name:        GoalToolGet,
+			Group:       tools.ToolGroupSessionState,
+			Description: "Read the current session goal. Use this before deciding whether to create, update, complete, or fail a goal.",
+			Schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
+			Name:        GoalToolCreate,
+			Group:       tools.ToolGroupSessionState,
+			Description: "Create or replace the current session goal contract. Put all completion criteria, required artifacts, constraints, and verification requirements in acceptance. The goal starts with status in_progress and belongs only to this session.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"description":   map[string]any{"type": "string", "description": "Concrete goal the model is trying to complete"},
+					"acceptance":    map[string]any{"type": "string", "description": "Completion criteria, required artifacts, constraints, and verification requirements"},
+					"status_reason": map[string]any{"type": "string", "description": "Current evidence-backed reason for the goal status"},
+				},
+				"required": []string{"description"},
+			},
+		},
+		{
+			Name:        GoalToolUpdate,
+			Group:       tools.ToolGroupSessionState,
+			Description: "Update the current session goal contract or evidence-backed status. Set status to success only after acceptance is satisfied. When marking failure, provide status_reason to explain why.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"description":   map[string]any{"type": "string"},
+					"acceptance":    map[string]any{"type": "string"},
+					"status":        map[string]any{"type": "string", "enum": []string{string(GoalStatusInProgress), string(GoalStatusSuccess), string(GoalStatusFailure)}},
+					"status_reason": map[string]any{"type": "string", "description": "Evidence-backed reason for the current status"},
+				},
+			},
+		},
+	}
+}
+
 func RegisterGoalTools(reg *tools.Registry, engine *Engine) error {
 	if reg == nil || engine == nil {
 		return nil
 	}
-	if err := reg.Register(tools.Tool{
-		Name:        GoalToolGet,
-		Description: "Read the current session goal. Use this before deciding whether to create, update, complete, or fail a goal.",
-		Schema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			return engine.handleGetGoal()
-		},
-	}); err != nil {
+	definitions := GoalToolDefinitions()
+	if err := reg.Register(definitions[0].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		return engine.handleGetGoal()
+	})); err != nil {
 		return err
 	}
-	if err := reg.Register(tools.Tool{
-		Name:        GoalToolCreate,
-		Description: "Create or replace the current session goal contract. Put all completion criteria, required artifacts, constraints, and verification requirements in acceptance. The goal starts with status in_progress and belongs only to this session.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"description":   map[string]any{"type": "string", "description": "Concrete goal the model is trying to complete"},
-				"acceptance":    map[string]any{"type": "string", "description": "Completion criteria, required artifacts, constraints, and verification requirements"},
-				"status_reason": map[string]any{"type": "string", "description": "Current evidence-backed reason for the goal status"},
-			},
-			"required": []string{"description"},
-		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			return engine.handleCreateGoal(in)
-		},
-	}); err != nil {
+	if err := reg.Register(definitions[1].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		return engine.handleCreateGoal(in)
+	})); err != nil {
 		return err
 	}
-	return reg.Register(tools.Tool{
-		Name:        GoalToolUpdate,
-		Description: "Update the current session goal contract or evidence-backed status. Set status to success only after acceptance is satisfied. When marking failure, provide status_reason to explain why.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"description":   map[string]any{"type": "string"},
-				"acceptance":    map[string]any{"type": "string"},
-				"status":        map[string]any{"type": "string", "enum": []string{string(GoalStatusInProgress), string(GoalStatusSuccess), string(GoalStatusFailure)}},
-				"status_reason": map[string]any{"type": "string", "description": "Evidence-backed reason for the current status"},
-			},
-		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			return engine.handleUpdateGoal(in)
-		},
-	})
+	return reg.Register(definitions[2].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		return engine.handleUpdateGoal(in)
+	}))
 }
 
 func (e *Engine) handleGetGoal() (string, error) {

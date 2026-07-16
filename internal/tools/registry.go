@@ -32,6 +32,20 @@ type Result struct {
 
 type ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
 
+type ToolGroup string
+
+const (
+	ToolGroupFile         ToolGroup = "file"
+	ToolGroupChunkedWrite ToolGroup = "chunked_write"
+	ToolGroupShell        ToolGroup = "shell"
+	ToolGroupSearch       ToolGroup = "search"
+	ToolGroupSkill        ToolGroup = "skill"
+	ToolGroupMemory       ToolGroup = "memory"
+	ToolGroupSessionState ToolGroup = "session_state"
+	ToolGroupObservable   ToolGroup = "observable"
+	ToolGroupMCP          ToolGroup = "mcp"
+)
+
 type ToolTimeoutPolicy int
 
 const (
@@ -39,14 +53,92 @@ const (
 	ToolTimeoutDisabled
 )
 
+type ToolDefinition struct {
+	Name           string
+	Group          ToolGroup
+	Description    string
+	Schema         map[string]any
+	TimeoutPolicy  ToolTimeoutPolicy
+	TimeoutSeconds int
+}
+
+type ToolTimeoutMode string
+
+const (
+	ToolTimeoutModeBounded  ToolTimeoutMode = "bounded"
+	ToolTimeoutModeDisabled ToolTimeoutMode = "disabled"
+)
+
+type EffectiveTimeout struct {
+	Mode    ToolTimeoutMode
+	Seconds int
+}
+
+// Normalized returns a definition copy with the registry's canonical input
+// schema normalization applied.
+func (d ToolDefinition) Normalized() ToolDefinition {
+	d.Schema = normalizeInputSchema(d.Schema)
+	return d
+}
+
 type Tool struct {
 	Name           string
+	Group          ToolGroup
 	Description    string
 	Schema         map[string]any
 	TimeoutPolicy  ToolTimeoutPolicy
 	TimeoutSeconds int
 	Handler        Handler
 	ResultHandler  ResultHandler
+}
+
+func (d ToolDefinition) Bind(handler Handler) Tool {
+	return Tool{
+		Name:           d.Name,
+		Group:          d.Group,
+		Description:    d.Description,
+		Schema:         d.Schema,
+		TimeoutPolicy:  d.TimeoutPolicy,
+		TimeoutSeconds: d.TimeoutSeconds,
+		Handler:        handler,
+	}
+}
+
+func (d ToolDefinition) BindResult(handler ResultHandler) Tool {
+	return Tool{
+		Name:           d.Name,
+		Group:          d.Group,
+		Description:    d.Description,
+		Schema:         d.Schema,
+		TimeoutPolicy:  d.TimeoutPolicy,
+		TimeoutSeconds: d.TimeoutSeconds,
+		ResultHandler:  handler,
+	}
+}
+
+func (t Tool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name:           t.Name,
+		Group:          t.Group,
+		Description:    t.Description,
+		Schema:         t.Schema,
+		TimeoutPolicy:  t.TimeoutPolicy,
+		TimeoutSeconds: t.TimeoutSeconds,
+	}
+}
+
+func EffectiveToolTimeout(def ToolDefinition, defaultSeconds int) EffectiveTimeout {
+	if def.TimeoutPolicy == ToolTimeoutDisabled {
+		return EffectiveTimeout{Mode: ToolTimeoutModeDisabled}
+	}
+	seconds := def.TimeoutSeconds
+	if seconds <= 0 {
+		seconds = defaultSeconds
+	}
+	return EffectiveTimeout{
+		Mode:    ToolTimeoutModeBounded,
+		Seconds: normalizedTimeoutSeconds(seconds),
+	}
 }
 
 type CallInfo struct {
@@ -91,7 +183,7 @@ func (r *Registry) Register(t Tool) error {
 	if t.Handler == nil && t.ResultHandler == nil {
 		return fmt.Errorf("tools: %s: nil handler", t.Name)
 	}
-	t.Schema = normalizeInputSchema(t.Schema)
+	t.Schema = t.Definition().Normalized().Schema
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.tools[t.Name]; ok {
@@ -143,10 +235,11 @@ func (r *Registry) Specs() []llm.ToolSpec {
 	tools := r.List()
 	out := make([]llm.ToolSpec, 0, len(tools))
 	for _, t := range tools {
+		definition := t.Definition().Normalized()
 		out = append(out, llm.ToolSpec{
-			Name:        t.Name,
-			Description: t.Description,
-			Schema:      normalizeInputSchema(t.Schema),
+			Name:        definition.Name,
+			Description: definition.Description,
+			Schema:      definition.Schema,
 		})
 	}
 	return out
@@ -342,13 +435,7 @@ func decodeRawArguments(raw string) (map[string]any, bool) {
 }
 
 func (r *Registry) timeoutSecondsFor(t Tool) int {
-	if t.TimeoutPolicy == ToolTimeoutDisabled {
-		return 0
-	}
-	if t.TimeoutSeconds > 0 {
-		return normalizedTimeoutSeconds(t.TimeoutSeconds)
-	}
-	return normalizedTimeoutSeconds(r.defaultTimeoutSeconds)
+	return EffectiveToolTimeout(t.Definition(), r.defaultTimeoutSeconds).Seconds
 }
 
 func normalizedTimeoutSeconds(timeoutSeconds int) int {

@@ -198,78 +198,87 @@ func (s *Store) rebuildIndex() error {
 	return os.WriteFile(filepath.Join(s.dir, indexFile), []byte(sb.String()), 0o644)
 }
 
+func ToolDefinitions() []tools.ToolDefinition {
+	return []tools.ToolDefinition{
+		{
+			Name:        "memory_write",
+			Group:       tools.ToolGroupMemory,
+			Description: "Persist a memory entry. Types: user, feedback, project, reference.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name":        map[string]any{"type": "string"},
+					"description": map[string]any{"type": "string"},
+					"type":        map[string]any{"type": "string", "enum": []string{"user", "feedback", "project", "reference"}},
+					"body":        map[string]any{"type": "string"},
+				},
+				"required": []string{"name", "description", "type", "body"},
+			},
+		},
+		{
+			Name:        "memory_search",
+			Group:       tools.ToolGroupMemory,
+			Description: "Substring search across memory entries (name/description/type/body). Empty query returns all.",
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+				},
+			},
+		},
+		{
+			Name:        "memory_delete",
+			Group:       tools.ToolGroupMemory,
+			Description: "Delete a memory entry by name.",
+			Schema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"name": map[string]any{"type": "string"}},
+				"required":   []string{"name"},
+			},
+		},
+	}
+}
+
 // RegisterTools adds memory_write / memory_search / memory_delete to reg.
 func (s *Store) RegisterTools(reg *tools.Registry) error {
-	if err := reg.Register(tools.Tool{
-		Name:        "memory_write",
-		Description: "Persist a memory entry. Types: user, feedback, project, reference.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"name":        map[string]any{"type": "string"},
-				"description": map[string]any{"type": "string"},
-				"type":        map[string]any{"type": "string", "enum": []string{"user", "feedback", "project", "reference"}},
-				"body":        map[string]any{"type": "string"},
-			},
-			"required": []string{"name", "description", "type", "body"},
-		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			e := Entry{
-				Name:        getStr(in, "name"),
-				Description: getStr(in, "description"),
-				Type:        getStr(in, "type"),
-				Body:        getStr(in, "body"),
-			}
-			if err := s.Write(e); err != nil {
-				return "", err
-			}
-			return "saved memory: " + e.Name, nil
-		},
-	}); err != nil {
+	definitions := ToolDefinitions()
+	if err := reg.Register(definitions[0].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		e := Entry{
+			Name:        getStr(in, "name"),
+			Description: getStr(in, "description"),
+			Type:        getStr(in, "type"),
+			Body:        getStr(in, "body"),
+		}
+		if err := s.Write(e); err != nil {
+			return "", err
+		}
+		return "saved memory: " + e.Name, nil
+	})); err != nil {
 		return err
 	}
-	if err := reg.Register(tools.Tool{
-		Name:        "memory_search",
-		Description: "Substring search across memory entries (name/description/type/body). Empty query returns all.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"query": map[string]any{"type": "string"},
-			},
-		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			hits, err := s.Search(getStr(in, "query"))
-			if err != nil {
-				return "", err
-			}
-			if len(hits) == 0 {
-				return "(no matches)", nil
-			}
-			var sb strings.Builder
-			for _, e := range hits {
-				fmt.Fprintf(&sb, "## %s (%s)\n%s\n\n%s\n\n", e.Name, e.Type, e.Description, e.Body)
-			}
-			return sb.String(), nil
-		},
-	}); err != nil {
+	if err := reg.Register(definitions[1].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		hits, err := s.Search(getStr(in, "query"))
+		if err != nil {
+			return "", err
+		}
+		if len(hits) == 0 {
+			return "(no matches)", nil
+		}
+		var sb strings.Builder
+		for _, e := range hits {
+			fmt.Fprintf(&sb, "## %s (%s)\n%s\n\n%s\n\n", e.Name, e.Type, e.Description, e.Body)
+		}
+		return sb.String(), nil
+	})); err != nil {
 		return err
 	}
-	return reg.Register(tools.Tool{
-		Name:        "memory_delete",
-		Description: "Delete a memory entry by name.",
-		Schema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"name": map[string]any{"type": "string"}},
-			"required":   []string{"name"},
-		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			name := getStr(in, "name")
-			if err := s.Delete(name); err != nil {
-				return "", err
-			}
-			return "deleted memory: " + name, nil
-		},
-	})
+	return reg.Register(definitions[2].Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		name := getStr(in, "name")
+		if err := s.Delete(name); err != nil {
+			return "", err
+		}
+		return "deleted memory: " + name, nil
+	}))
 }
 
 // LoadAgentsMD returns concatenated AGENTS.md content with file headers.

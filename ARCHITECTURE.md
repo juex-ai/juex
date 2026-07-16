@@ -416,14 +416,39 @@ overriding the provider default. DeepSeek uses the OpenAI Chat
 
 ```go
 // internal/tools/registry.go
-type Tool struct {
+type ToolGroup string // file | chunked_write | shell | search | skill | memory | session_state | observable | mcp
+
+type ToolDefinition struct {
     Name           string
+    Group          ToolGroup
     Description    string
     Schema         map[string]any
+    TimeoutPolicy  ToolTimeoutPolicy
+    TimeoutSeconds int
+}
+
+type Tool struct {
+    Name           string
+    Group          ToolGroup
+    Description    string
+    Schema         map[string]any
+    TimeoutPolicy  ToolTimeoutPolicy
     TimeoutSeconds int
     Handler        func(ctx context.Context, input map[string]any) (string, error)
     ResultHandler  func(ctx context.Context, input map[string]any) (Result, error)
 }
+
+type ToolTimeoutMode string // bounded | disabled
+type EffectiveTimeout struct {
+    Mode    ToolTimeoutMode
+    Seconds int
+}
+
+func (d ToolDefinition) Normalized() ToolDefinition
+func (d ToolDefinition) Bind(handler Handler) Tool
+func (d ToolDefinition) BindResult(handler ResultHandler) Tool
+func (t Tool) Definition() ToolDefinition
+func EffectiveToolTimeout(def ToolDefinition, defaultSeconds int) EffectiveTimeout
 
 type Result struct {
     Text       string
@@ -438,8 +463,18 @@ func (r *Registry) Call(ctx, name, input) (string, error)
 func (r *Registry) CallWithInfo(ctx, name, input) (string, CallInfo, error)
 ```
 
-The runtime registry combines builtin file/search/exec/session tools, three
-memory tools, and the app-registered `skill_search` / `skill_load` tools.
+Each registration owner defines name, group, description, input schema, and
+timeout policy once in a `ToolDefinition`, then binds that metadata
+to its handler. `ToolDefinition.Normalized` applies the registry's canonical
+object-schema normalization. `EffectiveToolTimeout` projects either a capped
+`bounded` timeout in seconds or `disabled` with zero seconds when the tool owns
+its lifecycle.
+`Registry.Specs` intentionally omits group and timeout metadata from
+provider-facing `llm.ToolSpec`.
+
+The runtime registry combines all registered JueX tools across the `file`,
+`chunked_write`, `shell`, `search`, `skill`, `memory`, `session_state`,
+`observable`, and `mcp` groups.
 Skills themselves remain markdown resource packages rather than executable
 tool definitions: the prompt exposes a compact catalog, `skill_search`
 discovers loaded entries, and `skill_load` returns one selected SKILL.md body.
@@ -1006,7 +1041,7 @@ Routes:
 | GET | `/api/files/content?path=<path>` | bounded text preview or image preview metadata for one workdir file |
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
 | GET | `/api/media?path=<path>` | image bytes with immutable caching for content-addressed artifacts and revalidation for mutable workdir paths |
-| GET | `/api/runtime` | app-assembled system prompt, provider, shell, hooks, MCP, and skills status translated to the web DTO |
+| GET | `/api/runtime` | app-assembled provider, grouped builtin/MCP tool catalog, shell, hooks, system prompt, and skills status translated to the web DTO |
 
 ---
 
@@ -1514,6 +1549,11 @@ Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
 `mcp.Manager` owns the stdio clients for one process and can register those
 tools into multiple per-session registries. In `serve`, session tool handlers
 forward calls into the shared manager; closing a session does not close MCP.
+`Manager.ToolDescriptors` returns a defensive deep copy of the per-server
+descriptors cached during startup, sorted by tool name within each server. Map
+membership is preserved for a connected server that advertised zero tools, so
+callers can distinguish it from a server that never connected without another
+discovery request.
 
 Claude channel notifications preserve the full JSON-RPC `params` object. They
 run through the normal Agent turn loop as `mcp_event` user messages rendered as
@@ -1535,11 +1575,16 @@ notification targets.
 
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.
-The app runtime status service assembles read-only runtime facts for
-`/api/runtime`: provider, shell, system prompt sections, hooks, skills, and
-configured MCP servers. The web layer keeps serve-process observations, such as
-the latest per-server MCP connection error and connected tool counts, then
-translates the app status into the browser DTO.
+The app runtime status service assembles read-only facts for `/api/runtime`:
+provider, shell, system prompt sections, hooks, skills, a fixed-order grouped
+builtin tool catalog, and configured MCP servers with their advertised tool
+details. Tool entries expose normalized schema plus semantic timeout metadata:
+`bounded` carries the effective seconds and `disabled` means the tool owns its
+lifecycle. The catalog is the process startup view: builtin definitions are
+static, MCP descriptors come from the manager cache, no active session is
+required, and status reads do not rediscover tools. The web layer adds the
+latest per-server startup error and translates the app status into the browser
+DTO.
 
 Production paths load user-global MCP configs, extension MCP configs, and
 project MCP configs, then start a best-effort process manager with

@@ -22,6 +22,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	"github.com/juex-ai/juex/internal/web"
 )
@@ -53,6 +54,80 @@ func (p *webProvider) history(idx int) []llm.Message {
 		return nil
 	}
 	return append([]llm.Message(nil), p.histories[idx]...)
+}
+
+func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T) {
+	work := t.TempDir()
+	projectAgents := filepath.Join(work, ".agents")
+	if err := os.MkdirAll(projectAgents, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mcpConfig := mcp.Config{MCPServers: map[string]mcp.ServerSpec{
+		"local": {Command: os.Args[0], Env: map[string]string{"JUEX_E2E_MCP": "1"}},
+	}}
+	body, err := json.Marshal(mcpConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectAgents, "mcp.json"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: &webProvider{},
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(resp.Body)
+		t.Fatalf("runtime status = %d body=%s", resp.StatusCode, payload)
+	}
+	var got struct {
+		Tools struct {
+			Count  int `json:"count"`
+			Groups []struct {
+				Group string `json:"group"`
+			} `json:"groups"`
+		} `json:"tools"`
+		MCP struct {
+			Servers []struct {
+				Name      string `json:"name"`
+				ToolCount int    `json:"tool_count"`
+				Tools     []struct {
+					Name        string         `json:"name"`
+					Description string         `json:"description"`
+					Schema      map[string]any `json:"schema"`
+					Timeout     struct {
+						Mode    string `json:"mode"`
+						Seconds int    `json:"seconds"`
+					} `json:"timeout"`
+				} `json:"tools"`
+			} `json:"servers"`
+		} `json:"mcp"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Tools.Count != 27 || len(got.Tools.Groups) != 8 {
+		t.Fatalf("builtin catalog = %+v", got.Tools)
+	}
+	if len(got.MCP.Servers) != 1 || got.MCP.Servers[0].Name != "local" || got.MCP.Servers[0].ToolCount != 1 || len(got.MCP.Servers[0].Tools) != 1 {
+		t.Fatalf("mcp catalog = %+v", got.MCP)
+	}
+	echo := got.MCP.Servers[0].Tools[0]
+	properties, _ := echo.Schema["properties"].(map[string]any)
+	textSchema, _ := properties["text"].(map[string]any)
+	if echo.Name != "echo" || echo.Description != "Echo input" || textSchema["type"] != "string" || echo.Timeout.Mode != "bounded" || echo.Timeout.Seconds != 60 {
+		t.Fatalf("echo descriptor = %+v", echo)
+	}
 }
 
 func TestWeb_TurnRoundTripPersists(t *testing.T) {

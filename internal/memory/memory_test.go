@@ -120,6 +120,31 @@ func TestStore_Tools(t *testing.T) {
 	}
 }
 
+func TestRegisterMemoryToolsUsesToolDefinitions(t *testing.T) {
+	s := NewStore(t.TempDir())
+	reg := tools.NewRegistry()
+	if err := s.RegisterTools(reg); err != nil {
+		t.Fatal(err)
+	}
+	definitions := ToolDefinitions()
+	if len(definitions) != 3 {
+		t.Fatalf("definition count = %d, want 3", len(definitions))
+	}
+	for _, definition := range definitions {
+		if definition.Group != tools.ToolGroupMemory {
+			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, tools.ToolGroupMemory)
+		}
+		registered, ok := reg.Get(definition.Name)
+		if !ok {
+			t.Errorf("%s is not registered", definition.Name)
+			continue
+		}
+		if registered.Group != tools.ToolGroupMemory {
+			t.Errorf("%s registered group = %q, want %q", definition.Name, registered.Group, tools.ToolGroupMemory)
+		}
+	}
+}
+
 func TestLoadAgentsMD(t *testing.T) {
 	dir1 := t.TempDir()
 	dir2 := t.TempDir()

@@ -20,9 +20,32 @@ type runtimeStatusResponse struct {
 	Shell        config.ShellProfile `json:"shell"`
 	Sandbox      sandbox.Policy      `json:"sandbox"`
 	SystemPrompt systemPromptStatus  `json:"system_prompt"`
+	Tools        runtimeToolsStatus  `json:"tools"`
 	MCP          mcpStatus           `json:"mcp"`
 	Hooks        hooksStatus         `json:"hooks"`
 	Skills       skillsStatus        `json:"skills"`
+}
+
+type runtimeToolsStatus struct {
+	Count  int                    `json:"count"`
+	Groups []runtimeToolGroupInfo `json:"groups"`
+}
+
+type runtimeToolGroupInfo struct {
+	Group string            `json:"group"`
+	Tools []runtimeToolInfo `json:"tools"`
+}
+
+type runtimeToolInfo struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Schema      map[string]any     `json:"schema"`
+	Timeout     runtimeToolTimeout `json:"timeout"`
+}
+
+type runtimeToolTimeout struct {
+	Mode    string `json:"mode"`
+	Seconds int    `json:"seconds"`
 }
 
 type providerStatus struct {
@@ -55,14 +78,15 @@ type mcpStatus struct {
 }
 
 type mcpServerInfo struct {
-	Name      string   `json:"name"`
-	Source    string   `json:"source"`
-	Command   string   `json:"command"`
-	Args      []string `json:"args,omitempty"`
-	Status    string   `json:"status"`
-	Connected bool     `json:"connected"`
-	ToolCount int      `json:"tool_count"`
-	Error     string   `json:"error,omitempty"`
+	Name      string            `json:"name"`
+	Source    string            `json:"source"`
+	Command   string            `json:"command"`
+	Args      []string          `json:"args,omitempty"`
+	Status    string            `json:"status"`
+	Connected bool              `json:"connected"`
+	ToolCount int               `json:"tool_count"`
+	Tools     []runtimeToolInfo `json:"tools"`
+	Error     string            `json:"error,omitempty"`
 }
 
 type hooksStatus struct {
@@ -131,21 +155,15 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err := s.ensureMCPStarted(context.Background()); err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	toolCounts := s.connectedMCPServers()
-	for serverName, count := range s.mcpToolCounts() {
-		if existing, ok := toolCounts[serverName]; !ok || existing < count {
-			toolCounts[serverName] = count
-		}
-	}
 	scratchpadDir, err := s.runtimeScratchpadDir()
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
 	status, err := app.NewRuntimeStatusService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
-		MCPToolCounts: toolCounts,
-		MCPErrors:     s.mcpErrors(),
-		SkillCache:    s.runtimeSkills,
-		ScratchpadDir: scratchpadDir,
+		MCPToolDescriptors: s.mcpToolDescriptors(),
+		MCPErrors:          s.mcpErrors(),
+		SkillCache:         s.runtimeSkills,
+		ScratchpadDir:      scratchpadDir,
 	})
 	if err != nil {
 		return runtimeStatusResponse{}, err
@@ -171,10 +189,38 @@ func runtimeStatusResponseFromApp(status app.RuntimeStatus) runtimeStatusRespons
 		Shell:        status.Shell,
 		Sandbox:      status.Sandbox,
 		SystemPrompt: systemPromptStatusFromApp(status.SystemPrompt),
+		Tools:        runtimeToolsStatusFromApp(status.Tools),
 		MCP:          mcpStatusFromApp(status.MCP),
 		Hooks:        hooksStatusFromApp(status.Hooks),
 		Skills:       skillsStatusFromApp(status.Skills),
 	}
+}
+
+func runtimeToolsStatusFromApp(status app.RuntimeToolsStatus) runtimeToolsStatus {
+	groups := make([]runtimeToolGroupInfo, 0, len(status.Groups))
+	for _, group := range status.Groups {
+		groups = append(groups, runtimeToolGroupInfo{
+			Group: group.Group,
+			Tools: runtimeToolInfosFromApp(group.Tools),
+		})
+	}
+	return runtimeToolsStatus{Count: status.Count, Groups: groups}
+}
+
+func runtimeToolInfosFromApp(tools []app.RuntimeToolInfo) []runtimeToolInfo {
+	infos := make([]runtimeToolInfo, 0, len(tools))
+	for _, tool := range tools {
+		infos = append(infos, runtimeToolInfo{
+			Name:        tool.Name,
+			Description: tool.Description,
+			Schema:      tool.Schema,
+			Timeout: runtimeToolTimeout{
+				Mode:    tool.Timeout.Mode,
+				Seconds: tool.Timeout.Seconds,
+			},
+		})
+	}
+	return infos
 }
 
 func providerStatusFromApp(status app.RuntimeProviderStatus) providerStatus {
@@ -213,6 +259,7 @@ func mcpStatusFromApp(status app.RuntimeMCPStatus) mcpStatus {
 			Status:    server.Status,
 			Connected: server.Connected,
 			ToolCount: server.ToolCount,
+			Tools:     runtimeToolInfosFromApp(server.Tools),
 			Error:     server.Error,
 		})
 	}
@@ -290,29 +337,4 @@ func (s *Server) absoluteWorkDir() string {
 
 func (s *Server) loadMCPConfigs() ([]mcp.Config, error) {
 	return app.LoadMCPConfigs(s.opts.Cfg, s.absoluteWorkDir())
-}
-
-func (s *Server) connectedMCPServers() map[string]int {
-	toolsByServer := map[string]map[string]struct{}{}
-	s.sessions.Range(func(_, v any) bool {
-		as := v.(*activeSession)
-		if as.app.Engine == nil || as.app.Engine.Tools == nil {
-			return true
-		}
-		for _, tool := range as.app.Engine.Tools.List() {
-			serverName, _, ok := mcp.ParseToolName(tool.Name)
-			if ok {
-				if toolsByServer[serverName] == nil {
-					toolsByServer[serverName] = map[string]struct{}{}
-				}
-				toolsByServer[serverName][tool.Name] = struct{}{}
-			}
-		}
-		return true
-	})
-	connected := map[string]int{}
-	for serverName, tools := range toolsByServer {
-		connected[serverName] = len(tools)
-	}
-	return connected
 }

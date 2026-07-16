@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"sort"
 	"sync"
 
 	"github.com/juex-ai/juex/internal/tools"
@@ -79,20 +81,11 @@ func (m *Manager) RegisterTools(reg *tools.Registry) error {
 				return &ServerError{Server: serverName, Op: "tool name", Err: err}
 			}
 			toolName := ToolName(serverName, d.Name)
-			schema := d.InputSchema
-			if schema == nil {
-				schema = map[string]any{"type": "object"}
-			}
 			cli := client
 			descName := d.Name
-			if err := reg.Register(tools.Tool{
-				Name:        toolName,
-				Description: d.Description,
-				Schema:      schema,
-				Handler: func(ctx context.Context, in map[string]any) (string, error) {
-					return cli.CallTool(ctx, descName, in)
-				},
-			}); err != nil {
+			if err := reg.Register(toolDefinition(toolName, d).Bind(func(ctx context.Context, in map[string]any) (string, error) {
+				return cli.CallTool(ctx, descName, in)
+			})); err != nil {
 				return &ServerError{Server: serverName, Op: "register tool " + toolName, Err: err}
 			}
 		}
@@ -111,6 +104,84 @@ func (m *Manager) ToolCounts() map[string]int {
 		out[serverName] = len(descs)
 	}
 	return out
+}
+
+// ToolDescriptors returns a deterministic defensive snapshot of the tools
+// discovered for each connected MCP server. Map membership is preserved for
+// connected servers that advertised zero tools.
+func (m *Manager) ToolDescriptors() map[string][]ToolDescriptor {
+	out := map[string][]ToolDescriptor{}
+	if m == nil {
+		return out
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.closed {
+		return out
+	}
+	for serverName, descriptors := range m.tools {
+		copied := make([]ToolDescriptor, len(descriptors))
+		for i, descriptor := range descriptors {
+			copied[i] = descriptor
+			copied[i].InputSchema = cloneJSONMap(descriptor.InputSchema)
+		}
+		sort.Slice(copied, func(i, j int) bool { return copied[i].Name < copied[j].Name })
+		out[serverName] = copied
+	}
+	return out
+}
+
+func cloneJSONMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	return cloneJSONValue(value).(map[string]any)
+}
+
+func cloneJSONValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return cloneJSONReflectValue(reflect.ValueOf(value)).Interface()
+}
+
+func cloneJSONReflectValue(value reflect.Value) reflect.Value {
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(cloneJSONReflectValue(value.Elem()))
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			cloned.SetMapIndex(iter.Key(), cloneJSONReflectValue(iter.Value()))
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneJSONReflectValue(value.Index(i)))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			cloned.Index(i).Set(cloneJSONReflectValue(value.Index(i)))
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 func (m *Manager) StartupErrors() map[string]string {
