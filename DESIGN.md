@@ -308,14 +308,29 @@ Shows service runtime metadata first, including the absolute cwd used by the
 running `juex serve` process. Then it shows the effective system prompt as
 default-collapsed rows with each row's label, source/path, approximate token
 count, and full text on expansion. The provider profile follows, including
-protocol, auth source, model, base URL, and capability gates. Below that it
-shows the MCP configured/connected/error count, per-server status, source,
-tool counts, latest connection error, and the loaded skill list. MCP
-servers and skills list project-local sources before user-global sources.
+protocol, model, base URL, and capability gates. `Tools` follows Provider and
+precedes MCP. It keeps the fixed `file`, `chunked_write`, `shell`, `search`,
+`skill`, `memory`, `session_state`, and `observable` groups in native
+two-level disclosures: a group summary exposes its count and tool-name preview,
+then each tool expands to its description, semantic timeout, top-level
+parameter table, and a separately disclosed raw JSON schema. A bounded timeout
+shows seconds; a tool-managed lifecycle is labeled as such instead of showing
+a misleading duration. Empty groups remain visible with a zero count and an
+explicit empty state.
+
+MCP uses per-server cards that keep source, connection state, tool count,
+command, and startup error visible while collapsed. Their tool disclosures
+reuse the same rows as builtin groups. Failed and not-started servers explain
+why no tools are available, while a connected zero-tool server states that it
+advertised none. MCP servers and skills list project-local sources before
+user-global sources.
 `juex serve` starts MCP at server startup, so this page reports live
 process-level MCP state rather than waiting for a chat session to be opened.
-The page uses dense tables because this is operational metadata, not a
-conversational surface.
+Disclosure bodies mount only while open. Dense parameter tables scroll inside
+their cards on narrow screens, summaries wrap or truncate previews without
+hiding their labels, and native summary controls retain keyboard behavior and
+visible focus rings. This is operational metadata, not a conversational
+surface.
 
 ---
 

@@ -72,6 +72,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/queued-inputs.ts` | pure queued-input stack state transitions |
 | `src/lib/route-state.ts` | pure route matching helpers for shell state |
 | `src/lib/runtime-display.ts` | pure runtime and session-state display formatting helpers |
+| `src/lib/runtime-tool-catalog.ts` | pure runtime tool group labels, timeout labels, parameter projection, and defensive schema formatting |
 | `src/lib/session-messages.ts` | pure helpers for merging paged transcript windows |
 | `src/lib/session-read-controller.ts` | session-detail read-model effect interpreter for route guards, fetch/context refresh, SSE dispatch, polling, timers, and navigation effects |
 | `src/lib/session-read-state.ts` | pure session-detail controller state transitions and effect descriptors |
@@ -89,10 +90,11 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
+| `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
 | `src/pages/Observables.tsx` | workspace Observable list, status, and start/stop/delete controls |
 | `src/pages/ObservableDetail.tsx` | Observable source details and recent Observation history |
-| `src/pages/Runtime.tsx` | Provider, shell, sandbox, MCP, hooks, system prompt, and skills detail view for `/runtime` |
+| `src/pages/Runtime.tsx` | Provider, shell, sandbox, grouped builtin/MCP tool catalog, hooks, system prompt, and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |
 

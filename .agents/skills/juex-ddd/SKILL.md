@@ -53,6 +53,7 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Active session | The primary session selected in workspace history for default CLI/web continuation | `internal/session`, `internal/app`, `internal/web` |
 | Notes | Model-owned session working Markdown in `notes.md`; rewritten wholesale through `update_notes`, limited to 2048 characters, and recited after Goal on every provider request | `internal/runtime` |
 | Session scratchpad | Session-local temporary file space managed explicitly by the model, never automatically added to provider context, and removed with the session | `internal/session` |
+| Session state | Model-owned goal and working notes for one session, exposed through the `session_state` tool group and distinct from workspace Runtime state | `internal/runtime`, `internal/session` |
 | Turn | One user-originated or system-originated input driven through provider calls and tool batches until completion/error | `internal/runtime` |
 | Pending input | User or MCP-originated input queued while a turn or compact phase is active | `internal/runtime`, `internal/web` |
 | Provider | A model adapter satisfying the canonical LLM interface | `internal/llm` |
@@ -60,6 +61,7 @@ Prefer these JueX terms in code, tests, tickets, and docs:
 | Protocol | Provider wire family such as `anthropic/messages`, `openai/responses`, `openai-codex/responses`, or `openai/chat` | `internal/llm` |
 | Capability set | Explicit gates for tools, streaming, reasoning effort, reasoning replay, and max output tokens | `internal/llm` |
 | Tool registry | Runtime catalog and dispatcher for builtin, memory, and MCP tools | `internal/tools`, `internal/app` |
+| Tool group | Stable classification of registered tools for runtime inspection: `file`, `chunked_write`, `shell`, `search`, `skill`, `memory`, `session_state`, `observable`, or `mcp` | `internal/tools`, registration owners |
 | Tool call | Canonical provider-requested operation represented as an `llm.Block` and normalized before execution | `internal/runtime`, `internal/tools` |
 | MCP server | Configured stdio process that contributes tools and notifications | `internal/mcp` |
 | MCP notification | External event that becomes pending input or a system-originated user turn | `internal/mcp`, `internal/app`, `internal/web` |

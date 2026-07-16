@@ -150,7 +150,7 @@ the app status service, then maps the returned plain types to JSON:
 ```json
 {
   "tools": {
-    "count": 26,
+    "count": 27,
     "groups": [{"group": "file", "tools": [{"name": "read"}]}]
   },
   "mcp": {
