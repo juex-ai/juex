@@ -32,6 +32,20 @@ type Result struct {
 
 type ResultHandler func(ctx context.Context, input map[string]any) (Result, error)
 
+type ToolGroup string
+
+const (
+	ToolGroupFile         ToolGroup = "file"
+	ToolGroupChunkedWrite ToolGroup = "chunked_write"
+	ToolGroupShell        ToolGroup = "shell"
+	ToolGroupSearch       ToolGroup = "search"
+	ToolGroupSkill        ToolGroup = "skill"
+	ToolGroupMemory       ToolGroup = "memory"
+	ToolGroupSessionState ToolGroup = "session_state"
+	ToolGroupObservable   ToolGroup = "observable"
+	ToolGroupMCP          ToolGroup = "mcp"
+)
+
 type ToolTimeoutPolicy int
 
 const (
@@ -39,14 +53,85 @@ const (
 	ToolTimeoutDisabled
 )
 
+type ToolDefinition struct {
+	Name           string
+	Group          ToolGroup
+	Description    string
+	Schema         map[string]any
+	TimeoutPolicy  ToolTimeoutPolicy
+	TimeoutSeconds int
+}
+
+type ToolTimeoutMode string
+
+const (
+	ToolTimeoutModeBounded  ToolTimeoutMode = "bounded"
+	ToolTimeoutModeDisabled ToolTimeoutMode = "disabled"
+)
+
+type EffectiveTimeout struct {
+	Mode    ToolTimeoutMode
+	Seconds int
+}
+
 type Tool struct {
 	Name           string
+	Group          ToolGroup
 	Description    string
 	Schema         map[string]any
 	TimeoutPolicy  ToolTimeoutPolicy
 	TimeoutSeconds int
 	Handler        Handler
 	ResultHandler  ResultHandler
+}
+
+func (d ToolDefinition) Bind(handler Handler) Tool {
+	return Tool{
+		Name:           d.Name,
+		Group:          d.Group,
+		Description:    d.Description,
+		Schema:         d.Schema,
+		TimeoutPolicy:  d.TimeoutPolicy,
+		TimeoutSeconds: d.TimeoutSeconds,
+		Handler:        handler,
+	}
+}
+
+func (d ToolDefinition) BindResult(handler ResultHandler) Tool {
+	return Tool{
+		Name:           d.Name,
+		Group:          d.Group,
+		Description:    d.Description,
+		Schema:         d.Schema,
+		TimeoutPolicy:  d.TimeoutPolicy,
+		TimeoutSeconds: d.TimeoutSeconds,
+		ResultHandler:  handler,
+	}
+}
+
+func (t Tool) Definition() ToolDefinition {
+	return ToolDefinition{
+		Name:           t.Name,
+		Group:          t.Group,
+		Description:    t.Description,
+		Schema:         t.Schema,
+		TimeoutPolicy:  t.TimeoutPolicy,
+		TimeoutSeconds: t.TimeoutSeconds,
+	}
+}
+
+func EffectiveToolTimeout(def ToolDefinition, defaultSeconds int) EffectiveTimeout {
+	if def.TimeoutPolicy == ToolTimeoutDisabled {
+		return EffectiveTimeout{Mode: ToolTimeoutModeDisabled}
+	}
+	seconds := def.TimeoutSeconds
+	if seconds <= 0 {
+		seconds = defaultSeconds
+	}
+	return EffectiveTimeout{
+		Mode:    ToolTimeoutModeBounded,
+		Seconds: normalizedTimeoutSeconds(seconds),
+	}
 }
 
 type CallInfo struct {
@@ -342,13 +427,7 @@ func decodeRawArguments(raw string) (map[string]any, bool) {
 }
 
 func (r *Registry) timeoutSecondsFor(t Tool) int {
-	if t.TimeoutPolicy == ToolTimeoutDisabled {
-		return 0
-	}
-	if t.TimeoutSeconds > 0 {
-		return normalizedTimeoutSeconds(t.TimeoutSeconds)
-	}
-	return normalizedTimeoutSeconds(r.defaultTimeoutSeconds)
+	return EffectiveToolTimeout(t.Definition(), r.defaultTimeoutSeconds).Seconds
 }
 
 func normalizedTimeoutSeconds(timeoutSeconds int) int {

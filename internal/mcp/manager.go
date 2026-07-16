@@ -79,20 +79,11 @@ func (m *Manager) RegisterTools(reg *tools.Registry) error {
 				return &ServerError{Server: serverName, Op: "tool name", Err: err}
 			}
 			toolName := ToolName(serverName, d.Name)
-			schema := d.InputSchema
-			if schema == nil {
-				schema = map[string]any{"type": "object"}
-			}
 			cli := client
 			descName := d.Name
-			if err := reg.Register(tools.Tool{
-				Name:        toolName,
-				Description: d.Description,
-				Schema:      schema,
-				Handler: func(ctx context.Context, in map[string]any) (string, error) {
-					return cli.CallTool(ctx, descName, in)
-				},
-			}); err != nil {
+			if err := reg.Register(toolDefinition(toolName, d).Bind(func(ctx context.Context, in map[string]any) (string, error) {
+				return cli.CallTool(ctx, descName, in)
+			})); err != nil {
 				return &ServerError{Server: serverName, Op: "register tool " + toolName, Err: err}
 			}
 		}

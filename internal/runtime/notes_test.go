@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,29 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/tools"
 )
+
+func TestNotesToolDefinitionsBindSessionStateGroup(t *testing.T) {
+	reg := tools.NewRegistry()
+	eng := &Engine{Tools: reg}
+	if err := RegisterNotesTools(reg, eng); err != nil {
+		t.Fatal(err)
+	}
+	definitions := NotesToolDefinitions()
+	if len(definitions) != 1 {
+		t.Fatalf("definition count = %d, want 1", len(definitions))
+	}
+	definition := definitions[0]
+	if definition.Group != tools.ToolGroupSessionState {
+		t.Fatalf("definition group = %q, want %q", definition.Group, tools.ToolGroupSessionState)
+	}
+	registered, ok := reg.Get(definition.Name)
+	if !ok {
+		t.Fatalf("%s is not registered", definition.Name)
+	}
+	if got := registered.Definition(); !reflect.DeepEqual(got, definition) {
+		t.Fatalf("registered definition = %#v, want %#v", got, definition)
+	}
+}
 
 func TestNotesToolRewritesSessionNotesAndEmitsEvent(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)

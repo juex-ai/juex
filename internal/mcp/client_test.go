@@ -484,7 +484,7 @@ func TestMCPClient_ClaudeChannelNotification(t *testing.T) {
 	}
 }
 
-func TestMCPRegisterAll(t *testing.T) {
+func TestMCPRegisterAllToolsUsesMCPGroup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -507,6 +507,9 @@ func TestMCPRegisterAll(t *testing.T) {
 	tool, ok := r.Get("mcp__fake__echo")
 	if !ok {
 		t.Fatalf("expected registered tool, have: %v", r.List())
+	}
+	if tool.Group != tools.ToolGroupMCP {
+		t.Fatalf("tool group = %q, want %q", tool.Group, tools.ToolGroupMCP)
 	}
 	out, err := tool.Handler(ctx, map[string]any{"text": "x"})
 	if err != nil {
@@ -1019,6 +1022,13 @@ func TestManagerRegisterTools_StrictNoArgToolRejectsPlaceholder(t *testing.T) {
 	}
 	if out != "noargs ok" {
 		t.Fatalf("got %q", out)
+	}
+	tool, ok := reg.Get("mcp__fake__noargs")
+	if !ok {
+		t.Fatal("mcp__fake__noargs is not registered")
+	}
+	if tool.Group != tools.ToolGroupMCP {
+		t.Fatalf("tool group = %q, want %q", tool.Group, tools.ToolGroupMCP)
 	}
 	_, _, err = reg.CallWithInfo(ctx, "mcp__fake__noargs", map[string]any{"_": true})
 	if err == nil {

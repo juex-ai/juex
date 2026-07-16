@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,23 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("tools = %v, want %v", got, want)
+	}
+	definitions := observable.ToolDefinitions()
+	if len(definitions) != len(want) {
+		t.Fatalf("definition count = %d, want %d", len(definitions), len(want))
+	}
+	for _, definition := range definitions {
+		if definition.Group != tools.ToolGroupObservable {
+			t.Errorf("%s definition group = %q, want %q", definition.Name, definition.Group, tools.ToolGroupObservable)
+		}
+		registered, ok := reg.Get(definition.Name)
+		if !ok {
+			t.Errorf("%s is not registered", definition.Name)
+			continue
+		}
+		if got := registered.Definition(); !reflect.DeepEqual(got, definition) {
+			t.Errorf("%s registered definition = %#v, want %#v", definition.Name, got, definition)
+		}
 	}
 	create, ok := reg.Get("observable_create")
 	if !ok {

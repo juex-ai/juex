@@ -10,15 +10,10 @@ import (
 
 const NotesToolUpdate = "update_notes"
 
-func RegisterNotesTools(reg *tools.Registry, engine *Engine) error {
-	if reg == nil {
-		return fmt.Errorf("notes tools: nil registry")
-	}
-	if engine == nil {
-		return fmt.Errorf("notes tools: nil engine")
-	}
-	return reg.Register(tools.Tool{
-		Name: NotesToolUpdate,
+func NotesToolDefinitions() []tools.ToolDefinition {
+	return []tools.ToolDefinition{{
+		Name:  NotesToolUpdate,
+		Group: tools.ToolGroupSessionState,
 		Description: "Rewrite the model-owned session working notes with concise Markdown for the current plan, progress, and unresolved issues. " +
 			"Use - [ ] and - [x] checkbox items when progress is useful. The full content is replaced on every call and must be at most 2048 characters; move long material to scratchpad files.",
 		Schema: map[string]any{
@@ -28,10 +23,19 @@ func RegisterNotesTools(reg *tools.Registry, engine *Engine) error {
 			},
 			"required": []string{"content"},
 		},
-		Handler: func(ctx context.Context, input map[string]any) (string, error) {
-			return engine.handleUpdateNotes(input)
-		},
-	})
+	}}
+}
+
+func RegisterNotesTools(reg *tools.Registry, engine *Engine) error {
+	if reg == nil {
+		return fmt.Errorf("notes tools: nil registry")
+	}
+	if engine == nil {
+		return fmt.Errorf("notes tools: nil engine")
+	}
+	return reg.Register(NotesToolDefinitions()[0].Bind(func(ctx context.Context, input map[string]any) (string, error) {
+		return engine.handleUpdateNotes(input)
+	}))
 }
 
 func (e *Engine) handleUpdateNotes(input map[string]any) (string, error) {

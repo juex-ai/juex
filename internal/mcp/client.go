@@ -70,6 +70,19 @@ type ToolDescriptor struct {
 	InputSchema map[string]any `json:"inputSchema"`
 }
 
+func toolDefinition(name string, descriptor ToolDescriptor) tools.ToolDefinition {
+	schema := descriptor.InputSchema
+	if schema == nil {
+		schema = map[string]any{"type": "object"}
+	}
+	return tools.ToolDefinition{
+		Name:        name,
+		Group:       tools.ToolGroupMCP,
+		Description: descriptor.Description,
+		Schema:      schema,
+	}
+}
+
 // Client is one MCP server connection.
 type Client struct {
 	name string
@@ -292,20 +305,11 @@ func RegisterAllWithOptions(ctx context.Context, cfg Config, reg *tools.Registry
 				return nil, &ServerError{Server: name, Op: "tool name", Err: err}
 			}
 			toolName := ToolName(name, d.Name)
-			schema := d.InputSchema
-			if schema == nil {
-				schema = map[string]any{"type": "object"}
-			}
 			cli := client
 			descName := d.Name
-			err := reg.Register(tools.Tool{
-				Name:        toolName,
-				Description: d.Description,
-				Schema:      schema,
-				Handler: func(ctx context.Context, in map[string]any) (string, error) {
-					return cli.CallTool(ctx, descName, in)
-				},
-			})
+			err := reg.Register(toolDefinition(toolName, d).Bind(func(ctx context.Context, in map[string]any) (string, error) {
+				return cli.CallTool(ctx, descName, in)
+			}))
 			if err != nil {
 				closeAll(clients)
 				return nil, &ServerError{Server: name, Op: "register tool " + toolName, Err: err}

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -253,6 +254,22 @@ func TestAppRegistersSkillSearchAndLoadTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
+	definitions := skillToolDefinitions()
+	if len(definitions) != 2 {
+		t.Fatalf("skill definition count = %d, want 2", len(definitions))
+	}
+	for _, definition := range definitions {
+		tool, ok := a.Engine.Tools.Get(definition.Name)
+		if !ok {
+			t.Fatalf("%s is not registered", definition.Name)
+		}
+		if tool.Group != tools.ToolGroupSkill {
+			t.Errorf("%s group = %q, want %q", definition.Name, tool.Group, tools.ToolGroupSkill)
+		}
+		if got := tool.Definition(); !reflect.DeepEqual(got, definition) {
+			t.Errorf("%s registered definition = %#v, want %#v", definition.Name, got, definition)
+		}
+	}
 
 	out, err := a.Engine.Tools.Call(context.Background(), "skill_search", map[string]any{"query": "screen"})
 	if err != nil {

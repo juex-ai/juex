@@ -12,6 +12,18 @@ import (
 
 type ShellToolProvider struct{}
 
+func (ShellToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefinition {
+	profile := opts.Shell
+	if profile.Binary == "" {
+		profile = DefaultShellProfile()
+	}
+	return []ToolDefinition{
+		execCommandToolDefinition(profile),
+		listShellSessionsToolDefinition(),
+		writeStdinToolDefinition(),
+	}
+}
+
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
 		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.SandboxRunner),
@@ -20,9 +32,10 @@ func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	}
 }
 
-func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner) Tool {
-	return Tool{
+func execCommandToolDefinition(profile ShellProfile) ToolDefinition {
+	return ToolDefinition{
 		Name:          "exec_command",
+		Group:         ToolGroupShell,
 		Description:   execCommandToolDescription(profile),
 		TimeoutPolicy: ToolTimeoutDisabled,
 		Schema: map[string]any{
@@ -48,59 +61,13 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 			},
 			"required": []string{"cmd"},
 		},
-		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
-			cmd, _ := in["cmd"].(string)
-			if cmd == "" {
-				return Result{}, fmt.Errorf("exec_command: missing cmd")
-			}
-			workdir, _ := in["workdir"].(string)
-			if workdir == "" {
-				workdir = defaultWorkdir
-			} else {
-				workdir = resolveWorkPath(defaultWorkdir, workdir)
-			}
-			tty, _ := in["tty"].(bool)
-			maxOutputTokens := defaultMaxOutputTokens(in)
-			yield := defaultShellExecYield
-			if yieldMS, ok := positiveInt(in["yield_time_ms"]); ok {
-				yield = time.Duration(yieldMS) * time.Millisecond
-			}
-			result, err := sessions.Start(ShellStartRequest{
-				Binary:          profile.Binary,
-				Args:            profile.Args,
-				Command:         cmd,
-				Cwd:             workdir,
-				WorkspaceRoots:  shellWorkspaceRoots(defaultWorkdir),
-				Sandbox:         sandboxPolicy,
-				SandboxRunner:   sandboxRunner,
-				Yield:           yield,
-				MaxOutputTokens: maxOutputTokens,
-				TTY:             tty,
-				CallContext:     ctx,
-				Events:          ToolCallEventsFromContext(ctx),
-			})
-			if err != nil {
-				return Result{}, err
-			}
-			out := shellToolResult(result)
-			if err := shellSessionExitError("exec_command", result); err != nil {
-				return out, err
-			}
-			return out, nil
-		},
 	}
 }
 
-func shellWorkspaceRoots(defaultWorkdir string) []string {
-	if strings.TrimSpace(defaultWorkdir) == "" {
-		return nil
-	}
-	return []string{defaultWorkdir}
-}
-
-func listShellSessionsTool(sessions *ShellSessionManager) Tool {
-	return Tool{
+func listShellSessionsToolDefinition() ToolDefinition {
+	return ToolDefinition{
 		Name:        "list_shell_sessions",
+		Group:       ToolGroupShell,
 		Description: "List JueX-managed exec_command shell sessions so you can recover session_id values. exec_command starts and observes commands, write_stdin polls or sends input to a known session_id, and list_shell_sessions finds active session ids. By default only running sessions are returned; set include_completed to inspect retained completed sessions.",
 		Schema: map[string]any{
 			"type": "object",
@@ -111,20 +78,13 @@ func listShellSessionsTool(sessions *ShellSessionManager) Tool {
 				},
 			},
 		},
-		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
-			includeCompleted, _ := in["include_completed"].(bool)
-			result := ShellSessionListResult{Sessions: sessions.List(includeCompleted)}
-			return Result{
-				Text:       formatShellSessionList(result, includeCompleted),
-				Structured: result,
-			}, nil
-		},
 	}
 }
 
-func writeStdinTool(sessions *ShellSessionManager) Tool {
-	return Tool{
+func writeStdinToolDefinition() ToolDefinition {
+	return ToolDefinition{
 		Name:          "write_stdin",
+		Group:         ToolGroupShell,
 		Description:   "Poll a running exec_command session or write chars to a tty session. Use the numeric session_id returned by exec_command.",
 		TimeoutPolicy: ToolTimeoutDisabled,
 		Schema: map[string]any{
@@ -149,37 +109,101 @@ func writeStdinTool(sessions *ShellSessionManager) Tool {
 			},
 			"required": []string{"session_id"},
 		},
-		ResultHandler: func(ctx context.Context, in map[string]any) (Result, error) {
-			sessionID, ok := toInt(in["session_id"])
-			if !ok || sessionID <= 0 {
-				return Result{}, fmt.Errorf("write_stdin: missing session_id")
-			}
-			input, _ := in["chars"].(string)
-			yield := defaultShellInputPollYield
-			if input != "" {
-				yield = defaultShellInputWriteYield
-			}
-			if yieldMS, ok := positiveInt(in["yield_time_ms"]); ok {
-				yield = time.Duration(yieldMS) * time.Millisecond
-			}
-			maxOutputTokens := defaultMaxOutputTokens(in)
-			result, err := sessions.Continue(ShellContinueRequest{
-				SessionID:       sessionID,
-				Stdin:           input,
-				Yield:           yield,
-				MaxOutputTokens: maxOutputTokens,
-				CallContext:     ctx,
-			})
-			out := shellToolResult(result)
-			if err != nil {
-				return out, err
-			}
-			if err := shellSessionExitError("write_stdin", result); err != nil {
-				return out, err
-			}
-			return out, nil
-		},
 	}
+}
+
+func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner) Tool {
+	return execCommandToolDefinition(profile).BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
+		cmd, _ := in["cmd"].(string)
+		if cmd == "" {
+			return Result{}, fmt.Errorf("exec_command: missing cmd")
+		}
+		workdir, _ := in["workdir"].(string)
+		if workdir == "" {
+			workdir = defaultWorkdir
+		} else {
+			workdir = resolveWorkPath(defaultWorkdir, workdir)
+		}
+		tty, _ := in["tty"].(bool)
+		maxOutputTokens := defaultMaxOutputTokens(in)
+		yield := defaultShellExecYield
+		if yieldMS, ok := positiveInt(in["yield_time_ms"]); ok {
+			yield = time.Duration(yieldMS) * time.Millisecond
+		}
+		result, err := sessions.Start(ShellStartRequest{
+			Binary:          profile.Binary,
+			Args:            profile.Args,
+			Command:         cmd,
+			Cwd:             workdir,
+			WorkspaceRoots:  shellWorkspaceRoots(defaultWorkdir),
+			Sandbox:         sandboxPolicy,
+			SandboxRunner:   sandboxRunner,
+			Yield:           yield,
+			MaxOutputTokens: maxOutputTokens,
+			TTY:             tty,
+			CallContext:     ctx,
+			Events:          ToolCallEventsFromContext(ctx),
+		})
+		if err != nil {
+			return Result{}, err
+		}
+		out := shellToolResult(result)
+		if err := shellSessionExitError("exec_command", result); err != nil {
+			return out, err
+		}
+		return out, nil
+	})
+}
+
+func shellWorkspaceRoots(defaultWorkdir string) []string {
+	if strings.TrimSpace(defaultWorkdir) == "" {
+		return nil
+	}
+	return []string{defaultWorkdir}
+}
+
+func listShellSessionsTool(sessions *ShellSessionManager) Tool {
+	return listShellSessionsToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
+		includeCompleted, _ := in["include_completed"].(bool)
+		result := ShellSessionListResult{Sessions: sessions.List(includeCompleted)}
+		return Result{
+			Text:       formatShellSessionList(result, includeCompleted),
+			Structured: result,
+		}, nil
+	})
+}
+
+func writeStdinTool(sessions *ShellSessionManager) Tool {
+	return writeStdinToolDefinition().BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
+		sessionID, ok := toInt(in["session_id"])
+		if !ok || sessionID <= 0 {
+			return Result{}, fmt.Errorf("write_stdin: missing session_id")
+		}
+		input, _ := in["chars"].(string)
+		yield := defaultShellInputPollYield
+		if input != "" {
+			yield = defaultShellInputWriteYield
+		}
+		if yieldMS, ok := positiveInt(in["yield_time_ms"]); ok {
+			yield = time.Duration(yieldMS) * time.Millisecond
+		}
+		maxOutputTokens := defaultMaxOutputTokens(in)
+		result, err := sessions.Continue(ShellContinueRequest{
+			SessionID:       sessionID,
+			Stdin:           input,
+			Yield:           yield,
+			MaxOutputTokens: maxOutputTokens,
+			CallContext:     ctx,
+		})
+		out := shellToolResult(result)
+		if err != nil {
+			return out, err
+		}
+		if err := shellSessionExitError("write_stdin", result); err != nil {
+			return out, err
+		}
+		return out, nil
+	})
 }
 
 func formatShellSessionList(result ShellSessionListResult, includeCompleted bool) string {

@@ -77,31 +77,17 @@ type patchSnapshot struct {
 }
 
 func applyPatchTool(workDir string, guard sandbox.PathGuard) Tool {
-	return Tool{
-		Name:        "apply_patch",
-		Description: "Apply a Codex-style patch inside the workspace. Supports add, update, delete, and move operations. Input is {patch_text: \"*** Begin Patch\\n...\\n*** End Patch\"}.",
-		Schema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"patch_text": map[string]any{
-					"type":        "string",
-					"description": "Codex-style patch text with *** Begin Patch / *** End Patch envelope.",
-				},
-			},
-			"required": []string{"patch_text"},
-		},
-		Handler: func(ctx context.Context, in map[string]any) (string, error) {
-			patchText, _ := in["patch_text"].(string)
-			if strings.TrimSpace(patchText) == "" {
-				return "", fmt.Errorf("apply_patch: missing patch_text")
-			}
-			summary, err := applyPatch(ctx, workDir, patchText, guard)
-			if err != nil {
-				return "", err
-			}
-			return formatPatchSummary(summary), nil
-		},
-	}
+	return applyPatchToolDefinition().Bind(func(ctx context.Context, in map[string]any) (string, error) {
+		patchText, _ := in["patch_text"].(string)
+		if strings.TrimSpace(patchText) == "" {
+			return "", fmt.Errorf("apply_patch: missing patch_text")
+		}
+		summary, err := applyPatch(ctx, workDir, patchText, guard)
+		if err != nil {
+			return "", err
+		}
+		return formatPatchSummary(summary), nil
+	})
 }
 
 func applyPatch(ctx context.Context, workDir, patchText string, guard sandbox.PathGuard) (patchSummary, error) {
