@@ -114,11 +114,35 @@ func cleanupPublishedLegacyState(workDir, agentDir string) (bool, error) {
 func removeLegacyState(workDir string) error {
 	legacyDir := filepath.Join(workDir, ".juex")
 	for _, name := range legacyStateEntries {
-		if err := os.RemoveAll(filepath.Join(legacyDir, name)); err != nil {
+		path := filepath.Join(legacyDir, name)
+		if err := makeDirectoriesRemovable(path); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(path); err != nil {
 			return err
 		}
 	}
 	return syncDir(legacyDir)
+}
+
+func makeDirectoriesRemovable(root string) error {
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		return os.Chmod(path, info.Mode().Perm()|0o700)
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func copyTree(source, destination string) error {
@@ -130,7 +154,7 @@ func copyTree(source, destination string) error {
 	case info.Mode().IsRegular():
 		return copyRegularFile(source, destination, info.Mode().Perm())
 	case info.IsDir():
-		if err := os.MkdirAll(destination, info.Mode().Perm()); err != nil {
+		if err := os.MkdirAll(destination, info.Mode().Perm()|0o700); err != nil {
 			return err
 		}
 		entries, err := os.ReadDir(source)
@@ -228,7 +252,7 @@ func buildManifest(root string) ([]manifestEntry, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		info, err := os.Lstat(path)
+		info, err := entry.Info()
 		if err != nil {
 			return err
 		}

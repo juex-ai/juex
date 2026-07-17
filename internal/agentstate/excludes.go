@@ -2,6 +2,8 @@ package agentstate
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +17,7 @@ func ensureGlobalExclude() error {
 	if err != nil {
 		return err
 	}
-	lockPath := filepath.Join(filepath.Dir(excludesPath), ".juex-global-ignore.lock")
+	lockPath := globalExcludeLockPath(excludesPath)
 	guard, err := acquireLockGuard(lockPath)
 	if err != nil {
 		return fmt.Errorf("agentstate: lock global Git excludes: %w", err)
@@ -45,6 +47,15 @@ func ensureGlobalExclude() error {
 		return fmt.Errorf("agentstate: update global Git excludes %s: %w", excludesPath, err)
 	}
 	return nil
+}
+
+func globalExcludeLockPath(excludesPath string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(excludesPath)))
+	return filepath.Join(
+		os.TempDir(),
+		"juex-agentstate-global-excludes",
+		hex.EncodeToString(sum[:])+".lock",
+	)
 }
 
 func globalExcludesPath() (string, error) {

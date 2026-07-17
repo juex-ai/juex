@@ -221,6 +221,35 @@ func TestResolveMigratesSymlinkWithoutFollowingIt(t *testing.T) {
 	}
 }
 
+func TestResolveMigratesReadOnlyDirectoryAndPreservesMode(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("Windows does not enforce Unix directory permission bits")
+	}
+	home, workDir := prepareResolveTest(t)
+	legacyDir := filepath.Join(workDir, ".juex", "memory", "readonly")
+	legacyFile := filepath.Join(legacyDir, "note.md")
+	writeText(t, legacyFile, "# retained\n")
+	if err := os.Chmod(legacyDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(legacyDir, 0o755) })
+
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migratedDir := filepath.Join(resolved.AgentDir, "memory", "readonly")
+	t.Cleanup(func() { _ = os.Chmod(migratedDir, 0o755) })
+	assertText(t, filepath.Join(migratedDir, "note.md"), "# retained\n")
+	info, err := os.Stat(migratedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o555 {
+		t.Fatalf("migrated directory mode = %o, want 555", got)
+	}
+}
+
 func TestResolvePreservesLegacyStateWhenVerificationFails(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
 	legacyPath := filepath.Join(workDir, ".juex", "memory", "MEMORY.md")
@@ -334,6 +363,13 @@ func TestResolveUsesConfiguredGlobalExcludesFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workDir, ".gitignore")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("repository .gitignore unexpectedly exists: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Dir(customIgnore))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(customIgnore) {
+		t.Fatalf("custom excludes directory entries = %v, want only %s", entries, filepath.Base(customIgnore))
 	}
 }
 
