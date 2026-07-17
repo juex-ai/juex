@@ -182,8 +182,12 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 	if strings.Contains(run, "kill") || strings.Contains(run, "pkill") {
 		t.Fatalf("run script group-kills descendants:\n%s", run)
 	}
-	if !strings.Contains(logRun, "exec "+shellQuote(filepath.Join(prefix, "bin", "svlogger"))) {
+	wantLogger := filepath.Join(prefix, "share", "termux-services", "svlogger")
+	if !strings.Contains(logRun, "exec "+shellQuote(wantLogger)) {
 		t.Fatalf("unexpected log script:\n%s", logRun)
+	}
+	if strings.Contains(logRun, filepath.Join(prefix, "bin", "svlogger")) {
+		t.Fatalf("log script used the wrong Termux svlogger path:\n%s", logRun)
 	}
 	for _, file := range plan.files {
 		if file.mode != 0o700 {
@@ -260,10 +264,16 @@ func TestTermuxInstallRequiresManagerAndEnablesService(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"sh", "sv", "sv-enable", "sv-disable", "svlogger"} {
+	if err := os.MkdirAll(filepath.Join(prefix, "share", "termux-services"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"sh", "sv", "sv-enable", "sv-disable"} {
 		if err := os.WriteFile(filepath.Join(prefix, "bin", name), []byte("#!/bin/sh\n"), 0o700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "share", "termux-services", "svlogger"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	runner := &fakeRunner{}
 	manager, err := newManagerForHost(testOptions(t.TempDir()), hostInfo{goos: "linux", userHome: t.TempDir(), termuxPrefix: prefix}, runner)

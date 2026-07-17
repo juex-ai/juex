@@ -228,8 +228,14 @@ func (m *Manager) validateTermuxInstall() error {
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("fleet service: Termux service root %s is unavailable; install termux-services and initialize its service daemon", serviceRoot)
 	}
-	for _, name := range []string{"sh", "sv", "sv-enable", "sv-disable", "svlogger"} {
-		path := filepath.Join(m.plan.termuxPrefix, "bin", name)
+	paths := []string{
+		filepath.Join(m.plan.termuxPrefix, "bin", "sh"),
+		filepath.Join(m.plan.termuxPrefix, "bin", "sv"),
+		filepath.Join(m.plan.termuxPrefix, "bin", "sv-enable"),
+		filepath.Join(m.plan.termuxPrefix, "bin", "sv-disable"),
+		filepath.Join(m.plan.termuxPrefix, "share", "termux-services", "svlogger"),
+	}
+	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
 			return fmt.Errorf("fleet service: required Termux command %s is unavailable; run pkg install termux-services", path)

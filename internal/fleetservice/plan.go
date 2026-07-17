@@ -371,7 +371,7 @@ func buildTermuxPlan(home, executable string, args []string, identity string, ho
 	}, "\n")
 	logRun := strings.Join([]string{
 		"#!" + filepath.Join(prefix, "bin", "sh"),
-		"exec " + shellQuote(filepath.Join(prefix, "bin", "svlogger")),
+		"exec " + shellQuote(filepath.Join(prefix, "share", "termux-services", "svlogger")),
 		"",
 	}, "\n")
 	return registrationPlan{
