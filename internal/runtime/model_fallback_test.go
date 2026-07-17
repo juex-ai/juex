@@ -310,6 +310,32 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 	}
 }
 
+func TestTurnExhaustionErrorIncludesEarlierBreakerSkip(t *testing.T) {
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	opened, ok := health.Acquire([]string{"primary:model"}, nil)
+	if !ok {
+		t.Fatal("missing circuit ticket")
+	}
+	health.Complete(opened.Ticket, llm.ModelHealthEligibleFailure, "transient")
+
+	primary := &fallbackProvider{name: "primary:model"}
+	backup := &fallbackProvider{name: "backup:model", results: []fallbackProviderResult{{err: errors.New("status 403")}}}
+	eng, _ := newEngine(t, primary, false)
+	eng.ModelCandidates = []ModelCandidate{
+		{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
+		{Ref: "backup:model", Provider: backup, ContextWindow: 128000},
+	}
+	eng.ModelHealth = health
+
+	_, err := eng.Turn(context.Background(), "continue")
+	if err == nil || !strings.Contains(err.Error(), "primary:model: unavailable (transient") || !strings.Contains(err.Error(), "backup:model: status 403") {
+		t.Fatalf("exhaustion error = %v", err)
+	}
+	if primary.calls != 0 || backup.calls != 1 {
+		t.Fatalf("calls primary=%d backup=%d", primary.calls, backup.calls)
+	}
+}
+
 func TestTurnFallbackAfterToolResultDoesNotRerunTool(t *testing.T) {
 	primary := &fallbackProvider{name: "primary:model", results: []fallbackProviderResult{
 		{response: llm.Response{

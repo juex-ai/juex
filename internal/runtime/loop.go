@@ -442,12 +442,14 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 	attempted := map[string]struct{}{}
 	previousModel := previousAssistantModel(e.Session.History)
 	var failures []modelAttemptFailure
+	var skipped []llm.ModelHealthSkip
 	var pending *modelFallbackTransition
 
 	for {
 		selection, ok := health.Acquire(refs, attempted)
-		for _, skipped := range selection.Skipped {
-			attempted[skipped.Ref] = struct{}{}
+		skipped = append(skipped, selection.Skipped...)
+		for _, skip := range selection.Skipped {
+			attempted[skip.Ref] = struct{}{}
 		}
 		if !ok {
 			if pending != nil {
@@ -460,7 +462,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 					cooldown: skipped.CooldownRemaining,
 				}, "")
 			}
-			return providerTurnResult{}, modelChainError(failures, selection.Skipped)
+			return providerTurnResult{}, modelChainError(failures, skipped)
 		}
 		candidate := candidates[selection.Index]
 		attempted[candidate.Ref] = struct{}{}
