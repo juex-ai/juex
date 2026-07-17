@@ -293,7 +293,7 @@ function ObservableRow({
         )}
       </div>
       <div
-        className="sticky right-0 z-20 cursor-default border-l bg-card px-3 py-2 group-hover:bg-muted/35"
+        className="sticky right-0 z-20 cursor-default border-l bg-card px-3 py-2 group-hover:bg-muted/35 group-focus-within:bg-muted/40"
         role="cell"
       >
         <div className="flex justify-end gap-1">

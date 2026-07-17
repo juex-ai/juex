@@ -69,7 +69,7 @@ test("Observables table keeps desktop columns compact and actions visible", () =
   );
   assert.match(
     observablesPageSource,
-    /"sticky right-0 z-20 cursor-default border-l bg-card px-3 py-2 group-hover:bg-muted\/35"/,
+    /"sticky right-0 z-20 cursor-default border-l bg-card px-3 py-2 group-hover:bg-muted\/35 group-focus-within:bg-muted\/40"/,
   );
 });
 
