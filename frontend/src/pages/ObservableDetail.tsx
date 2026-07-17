@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowLeft, Pause, Play, RefreshCw, Trash2, Zap } from "lucide-react";
 
 import {
   deleteObservable,
   getObservable,
+  runObservable,
   startObservable,
   stopObservable,
 } from "@/api";
@@ -63,7 +64,7 @@ export function ObservableDetail() {
     };
   }, [refresh]);
 
-  async function runAction(action: "start" | "stop" | "delete") {
+  async function runAction(action: "run" | "start" | "stop" | "delete") {
     if (!id) return;
     if (action === "delete" && !window.confirm(`Delete observable "${id}"?`)) {
       return;
@@ -71,7 +72,9 @@ export function ObservableDetail() {
     setBusy(true);
     setError(null);
     try {
-      if (action === "start") {
+      if (action === "run") {
+        await runObservable(id);
+      } else if (action === "start") {
         await startObservable(id);
       } else if (action === "stop") {
         await stopObservable(id);
@@ -117,7 +120,7 @@ export function ObservableDetail() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             <Button
               type="button"
               variant="outline"
@@ -130,6 +133,18 @@ export function ObservableDetail() {
               />
               Refresh
             </Button>
+            {observable?.source_type === "schedule" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void runAction("run")}
+                disabled={busy}
+              >
+                <Zap className="size-3.5" />
+                Run
+              </Button>
+            ) : null}
             {observable?.state === "running" ? (
               <Button
                 type="button"

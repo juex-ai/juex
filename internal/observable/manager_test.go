@@ -1170,6 +1170,231 @@ func TestManager_ScheduleSourceDeliversOnceObservation(t *testing.T) {
 	}
 }
 
+func TestManager_RunOnceDeliversStoppedScheduleWithoutChangingScheduleState(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC().Add(5 * time.Second)
+	attachmentPath := filepath.Join(".juex", "inbox", "manual.txt")
+	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(attachmentPath)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, attachmentPath), []byte("manual attachment"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := scheduleIntervalSpec("manual-stopped", observable.ScheduleSourceSpec{
+		Interval: &observable.IntervalSchedule{EverySeconds: 3600},
+		Observation: observable.ScheduleObservationSpec{
+			Kind:     "reminder",
+			Severity: "warning",
+			Content:  "Run the configured schedule now.",
+			Attachments: []eventmedia.AttachmentRef{{
+				Path:      attachmentPath,
+				MediaType: "text/plain",
+			}},
+		},
+	})
+	writeObservableConfig(t, dir, spec)
+	delivered := make(chan observable.ObservationRecord, 1)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        func() time.Time { return now },
+		Deliver: func(_ context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			delivered <- record
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	record, err := mgr.RunOnce(context.Background(), spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.RunID != "" {
+		t.Fatalf("manual RunID = %q, want empty", record.RunID)
+	}
+	if !strings.HasPrefix(record.SourceEventID, "schedule:"+spec.ID+":manual:") {
+		t.Fatalf("manual SourceEventID = %q", record.SourceEventID)
+	}
+	persistedNow := now.Truncate(time.Millisecond)
+	if !record.WindowStart.Equal(persistedNow) || !record.WindowEnd.Equal(persistedNow) {
+		t.Fatalf("manual window = %s..%s, want %s", record.WindowStart, record.WindowEnd, persistedNow)
+	}
+	if record.Kind != "reminder" || record.Severity != "warning" || record.Content != "Run the configured schedule now." {
+		t.Fatalf("manual record = %+v", record)
+	}
+	if len(record.Attachments) != 1 || record.Attachments[0].Path == attachmentPath {
+		t.Fatalf("manual attachments were not snapshotted: %+v", record.Attachments)
+	}
+	select {
+	case got := <-delivered:
+		if got.ID != record.ID {
+			t.Fatalf("delivered record = %s, want %s", got.ID, record.ID)
+		}
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("manual schedule Observation was not delivered")
+	}
+	status, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != observable.RunStateStopped {
+		t.Fatalf("schedule state = %q, want stopped", status.State)
+	}
+	store := observable.NewStore(stateDir(dir), observable.StoreOptions{Now: func() time.Time { return now }})
+	if state, ok, err := store.ScheduleState(spec.ID); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatalf("manual trigger wrote schedule state: %+v", state)
+	}
+}
+
+func TestManager_RunOnceKeepsRunningScheduleActive(t *testing.T) {
+	dir := t.TempDir()
+	spec := scheduleIntervalSpec("manual-running", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 3600},
+		Observation: observable.ScheduleObservationSpec{Content: "Run while active."},
+	})
+	writeObservableConfig(t, dir, spec)
+	delivered := make(chan observable.ObservationRecord, 1)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(_ context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			delivered <- record
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.Start(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.RunOnce(context.Background(), spec.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-delivered:
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("manual running Schedule Observation was not delivered")
+	}
+	status, err := mgr.StatusByID(spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != observable.RunStateRunning {
+		t.Fatalf("schedule state = %q, want running", status.State)
+	}
+}
+
+func TestManager_RunOnceCreatesDistinctRecordsAtFixedTime(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC().Add(5 * time.Second)
+	spec := scheduleIntervalSpec("manual-distinct", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 3600},
+		Observation: observable.ScheduleObservationSpec{Content: "Run distinctly."},
+	})
+	writeObservableConfig(t, dir, spec)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Now:        func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	first, err := mgr.RunOnce(context.Background(), spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := mgr.RunOnce(context.Background(), spec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SourceEventID == second.SourceEventID || first.ID == second.ID {
+		t.Fatalf("manual records collided: %+v %+v", first, second)
+	}
+	records, err := mgr.Observations(observable.ObservationFilter{ObservableID: spec.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("manual records = %d, want 2", len(records))
+	}
+}
+
+func TestManager_RunOnceRejectsInvalidTargets(t *testing.T) {
+	dir := t.TempDir()
+	command := helperSpec("manual-command", "json-once")
+	schedule := scheduleIntervalSpec("manual-closed", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 3600},
+		Observation: observable.ScheduleObservationSpec{Content: "Run once."},
+	})
+	writeObservableConfig(t, dir, command, schedule)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.RunOnce(context.Background(), "missing"); !errors.Is(err, observable.ErrObservableNotFound) {
+		t.Fatalf("unknown error = %v, want ErrObservableNotFound", err)
+	}
+	if _, err := mgr.RunOnce(context.Background(), command.ID); !errors.Is(err, observable.ErrRunOnceUnsupported) {
+		t.Fatalf("command error = %v, want ErrRunOnceUnsupported", err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.RunOnce(context.Background(), schedule.ID); !errors.Is(err, observable.ErrManagerClosed) {
+		t.Fatalf("closed error = %v, want ErrManagerClosed", err)
+	}
+}
+
+func TestManager_RunOnceDoesNotDeliverAfterPersistenceFailure(t *testing.T) {
+	dir := t.TempDir()
+	spec := scheduleIntervalSpec("manual-persist-failure", observable.ScheduleSourceSpec{
+		Interval:    &observable.IntervalSchedule{EverySeconds: 3600},
+		Observation: observable.ScheduleObservationSpec{Content: "Must persist first."},
+	})
+	writeObservableConfig(t, dir, spec)
+	stateFile := filepath.Join(dir, "state-file")
+	if err := os.WriteFile(stateFile, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var deliveries atomic.Int32
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateFile,
+		WorkDir:    dir,
+		Deliver: func(context.Context, observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			deliveries.Add(1)
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if _, err := mgr.RunOnce(context.Background(), spec.ID); err == nil {
+		t.Fatal("RunOnce persistence error = nil")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := deliveries.Load(); got != 0 {
+		t.Fatalf("deliveries after persistence failure = %d, want 0", got)
+	}
+}
+
 func TestManager_ScheduleCatchUpDeduplicatesAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	scheduledAt := fixedTime.Add(-time.Minute)

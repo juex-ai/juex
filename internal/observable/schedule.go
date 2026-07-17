@@ -1,6 +1,8 @@
 package observable
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -169,6 +171,14 @@ func scheduleSourceEventPrefix(observableID string) string {
 
 func scheduleSourceEventID(observableID string, scheduledAt time.Time) string {
 	return scheduleSourceEventPrefix(observableID) + scheduledAt.UTC().Format(time.RFC3339Nano)
+}
+
+func scheduleManualSourceEventID(observableID string) (string, error) {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("schedule manual source event id: %w", err)
+	}
+	return scheduleSourceEventPrefix(observableID) + "manual:" + hex.EncodeToString(suffix[:]), nil
 }
 
 func scheduleSummary(spec scheduleRuntimeSpec) string {

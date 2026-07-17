@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
-import { createObservable } from "../../frontend/src/api.ts";
+import {
+  createObservable,
+  runObservable,
+} from "../../frontend/src/api.ts";
 
 const requireFromFrontend = createRequire(
   new URL("../../frontend/package.json", import.meta.url),
@@ -102,4 +105,40 @@ test("createObservable posts tagged command and schedule bodies unchanged", asyn
       },
     },
   ]);
+});
+
+test("runObservable posts to the encoded manual-run endpoint", async () => {
+  const originalFetch = globalThis.fetch;
+  let requestURL = "";
+  let requestMethod = "";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requestURL = String(input);
+    requestMethod = String(init?.method);
+    return new Response(JSON.stringify({
+      id: "observation-1",
+      observable_id: "schedule / source",
+      source_event_id: "schedule:schedule / source:manual:abc",
+      kind: "heartbeat",
+      severity: "info",
+      window_start: 1,
+      window_end: 1,
+      content: "manual payload",
+      original_chars: 14,
+      state: "recorded",
+      created_at: 1,
+    }), {
+      status: 201,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await runObservable("schedule / source");
+    assert.equal(result.id, "observation-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(requestURL, "/api/observables/schedule%20%2F%20source/run");
+  assert.equal(requestMethod, "POST");
 });

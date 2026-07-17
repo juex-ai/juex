@@ -2,6 +2,7 @@ package observable
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,6 +13,13 @@ import (
 	"github.com/juex-ai/juex/internal/eventmedia"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/sandbox"
+)
+
+var (
+	ErrObservableNotFound = errors.New("observable: not found")
+	ErrManagerClosed      = errors.New("observable: manager closed")
+	ErrObservableDeleting = errors.New("observable: deleting")
+	ErrRunOnceUnsupported = errors.New("observable: run once unsupported")
 )
 
 type ManagerOptions struct {
@@ -289,6 +297,29 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 		return err
 	}
 	return source.start(ctx, run)
+}
+
+func (m *Manager) RunOnce(ctx context.Context, id string) (ObservationRecord, error) {
+	if m == nil {
+		return ObservationRecord{}, fmt.Errorf("%w: nil manager", ErrManagerClosed)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ObservationRecord{}, ErrManagerClosed
+	}
+	if m.deleting[id] {
+		return ObservationRecord{}, fmt.Errorf("%w: %q", ErrObservableDeleting, id)
+	}
+	source, ok := m.sources[id]
+	if !ok {
+		return ObservationRecord{}, fmt.Errorf("%w: %q", ErrObservableNotFound, id)
+	}
+	runnable, ok := source.(runOnceSource)
+	if !ok {
+		return ObservationRecord{}, fmt.Errorf("%w: %q", ErrRunOnceUnsupported, id)
+	}
+	return runnable.runOnce(ctx)
 }
 
 func (m *Manager) Create(ctx context.Context, spec Spec) (ObservableStatus, error) {

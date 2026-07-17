@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -31,6 +32,39 @@ import (
 type blockingProvider struct {
 	started chan struct{}
 	release chan struct{}
+}
+
+func TestWriteRunOnceErrorMapsDomainErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{name: "not found", err: fmt.Errorf("%w: missing", observable.ErrObservableNotFound), wantStatus: http.StatusNotFound, wantCode: "not_found"},
+		{name: "closed", err: observable.ErrManagerClosed, wantStatus: http.StatusConflict, wantCode: "conflict"},
+		{name: "deleting", err: observable.ErrObservableDeleting, wantStatus: http.StatusConflict, wantCode: "conflict"},
+		{name: "unsupported", err: observable.ErrRunOnceUnsupported, wantStatus: http.StatusConflict, wantCode: "conflict"},
+		{name: "persistence", err: errors.New("persist observation"), wantStatus: http.StatusInternalServerError, wantCode: "general_error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writeRunOnceError(recorder, tt.err)
+			if recorder.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", recorder.Code, tt.wantStatus)
+			}
+			var body struct {
+				Error string `json:"error"`
+			}
+			if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error != tt.wantCode {
+				t.Fatalf("error = %q, want %q", body.Error, tt.wantCode)
+			}
+		})
+	}
 }
 
 func (p *blockingProvider) Name() string { return "blocking" }

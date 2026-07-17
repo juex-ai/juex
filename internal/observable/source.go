@@ -42,6 +42,10 @@ type sourceRuntime interface {
 	statusSnapshot(ObservableStatus) ObservableStatus
 }
 
+type runOnceSource interface {
+	runOnce(context.Context) (ObservationRecord, error)
+}
+
 type sourceKernel interface {
 	activateRun(*observableRun, ObservableStatus) error
 	publishStarted(*observableRun) error

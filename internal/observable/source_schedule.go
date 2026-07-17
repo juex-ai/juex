@@ -72,6 +72,38 @@ func (s *scheduleSourceRuntime) deleteState(_ context.Context, id string) error 
 	return s.store.DropRecordedScheduleObservations(id, "observable deleted")
 }
 
+func (s *scheduleSourceRuntime) runOnce(ctx context.Context) (ObservationRecord, error) {
+	if err := contextStep(ctx); err != nil {
+		return ObservationRecord{}, err
+	}
+	sourceEventID, err := scheduleManualSourceEventID(s.spec.ID)
+	if err != nil {
+		return ObservationRecord{}, err
+	}
+	triggeredAt := normalizeNow(s.kernel.now())
+	record, created, err := s.kernel.recordObservation(ObservationRecord{
+		ObservableID:  s.spec.ID,
+		SourceEventID: sourceEventID,
+		Kind:          resolvedKind(s.spec.Observation.Kind),
+		Severity:      resolvedSeverity(s.spec.Observation.Severity),
+		WindowStart:   triggeredAt,
+		WindowEnd:     triggeredAt,
+		Content:       s.spec.Observation.Content,
+		Attachments:   append([]eventmedia.AttachmentRef(nil), s.spec.Observation.Attachments...),
+		State:         ObservationStateRecorded,
+	})
+	if err != nil {
+		return ObservationRecord{}, err
+	}
+	if !created {
+		return ObservationRecord{}, fmt.Errorf("observable: duplicate manual source event %q", sourceEventID)
+	}
+	if !s.kernel.submitDelivery(ctx, record) {
+		return record, fmt.Errorf("observable: delivery admission closed")
+	}
+	return record, nil
+}
+
 func (s *scheduleSourceRuntime) statusSnapshot(status ObservableStatus) ObservableStatus {
 	schedule := &ScheduleStatus{
 		Summary:     scheduleSummary(s.spec),

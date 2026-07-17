@@ -1,22 +1,30 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Pause, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Pause, Play, RefreshCw, Trash2, Zap } from "lucide-react";
 
 import {
   deleteObservable,
   listObservables,
+  runObservable,
   startObservable,
   stopObservable,
 } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ObservableStatus } from "@/types";
 
 const observableGridColumns =
-  "grid-cols-[24rem_minmax(8rem,0.6fr)_minmax(18rem,1.2fr)_minmax(18rem,1fr)_8rem]";
-const observableGridMinWidth = "min-w-[76rem]";
+  "grid-cols-[minmax(10rem,1.15fr)_5.5rem_minmax(10rem,1fr)_minmax(10rem,1fr)_8rem]";
+const observableGridMinWidth = "min-w-[44rem]";
 
 export function Observables() {
   const navigate = useNavigate();
@@ -61,7 +69,7 @@ export function Observables() {
 
   async function runAction(
     id: string,
-    action: "start" | "stop" | "delete",
+    action: "run" | "start" | "stop" | "delete",
   ) {
     if (action === "delete" && !window.confirm(`Delete observable "${id}"?`)) {
       return;
@@ -69,7 +77,9 @@ export function Observables() {
     setBusyID(id);
     setError(null);
     try {
-      if (action === "start") {
+      if (action === "run") {
+        await runObservable(id);
+      } else if (action === "start") {
         await startObservable(id);
       } else if (action === "stop") {
         await stopObservable(id);
@@ -121,45 +131,50 @@ export function Observables() {
               No observables configured.
             </div>
           ) : (
-            <div
-              className={cn("w-full text-left text-sm", observableGridMinWidth)}
-              role="table"
-              aria-label="Observables"
-            >
+            <TooltipProvider delayDuration={300}>
               <div
-                className={cn(
-                  "grid bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground",
-                  observableGridColumns,
-                )}
-                role="row"
+                className={cn("w-full text-left text-sm", observableGridMinWidth)}
+                role="table"
+                aria-label="Observables"
               >
-                <div className="px-3 py-2 font-medium" role="columnheader">
-                  Observable
+                <div
+                  className={cn(
+                    "grid bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground",
+                    observableGridColumns,
+                  )}
+                  role="row"
+                >
+                  <div className="px-3 py-2 font-medium" role="columnheader">
+                    Observable
+                  </div>
+                  <div className="px-3 py-2 font-medium" role="columnheader">
+                    State
+                  </div>
+                  <div className="px-3 py-2 font-medium" role="columnheader">
+                    Source
+                  </div>
+                  <div className="px-3 py-2 font-medium" role="columnheader">
+                    Last Observation
+                  </div>
+                  <div
+                    className="sticky right-0 z-20 border-l bg-muted/95 px-3 py-2 text-right font-medium"
+                    role="columnheader"
+                  >
+                    Actions
+                  </div>
                 </div>
-                <div className="px-3 py-2 font-medium" role="columnheader">
-                  State
-                </div>
-                <div className="px-3 py-2 font-medium" role="columnheader">
-                  Source
-                </div>
-                <div className="px-3 py-2 font-medium" role="columnheader">
-                  Last Observation
-                </div>
-                <div className="px-3 py-2 text-right font-medium" role="columnheader">
-                  Actions
+                <div role="rowgroup">
+                  {observables.map((item) => (
+                    <ObservableRow
+                      key={item.id}
+                      item={item}
+                      busy={busyID === item.id}
+                      onAction={runAction}
+                    />
+                  ))}
                 </div>
               </div>
-              <div role="rowgroup">
-                {observables.map((item) => (
-                  <ObservableRow
-                    key={item.id}
-                    item={item}
-                    busy={busyID === item.id}
-                    onAction={runAction}
-                  />
-                ))}
-              </div>
-            </div>
+            </TooltipProvider>
           )}
         </div>
       </div>
@@ -174,11 +189,15 @@ function ObservableRow({
 }: {
   item: ObservableStatus;
   busy: boolean;
-  onAction: (id: string, action: "start" | "stop" | "delete") => Promise<void>;
+  onAction: (
+    id: string,
+    action: "run" | "start" | "stop" | "delete",
+  ) => Promise<void>;
 }) {
   const last = item.last_observation?.id ? item.last_observation : null;
   const detailHref = `/observables/${encodeURIComponent(item.id)}`;
   const detailLabel = `Open observable ${item.name || item.id}`;
+  const tooltipContentRef = useRef<HTMLDivElement>(null);
 
   return (
     <div
@@ -188,11 +207,45 @@ function ObservableRow({
       )}
       role="row"
     >
-      <Link
-        to={detailHref}
-        className="absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35"
-        aria-label={detailLabel}
-      />
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Link
+            to={detailHref}
+            className="absolute inset-0 z-0 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35"
+            aria-label={detailLabel}
+            aria-keyshortcuts="ArrowUp ArrowDown PageUp PageDown Home End"
+            onKeyDown={(event) => {
+              scrollTooltipContent(event, tooltipContentRef.current);
+            }}
+          />
+        </TooltipTrigger>
+        <TooltipContent
+          ref={tooltipContentRef}
+          side="top"
+          className="block max-h-64 max-w-md overscroll-contain overflow-y-auto whitespace-normal break-words px-3 py-2"
+        >
+          <div className="space-y-1.5 text-xs">
+            <div>
+              <span className="font-semibold">Observable: </span>
+              <span>{item.name || item.id}</span>
+            </div>
+            <div className="font-mono text-[11px]">{item.id}</div>
+            <div>
+              <span className="font-semibold">Source: </span>
+              <span className="font-mono">{sourceSummary(item)}</span>
+            </div>
+            {last ? (
+              <div>
+                <span className="font-semibold">Last observation: </span>
+                <span>{last.content || "-"}</span>
+              </div>
+            ) : null}
+            <div className="border-t border-background/20 pt-1 text-[10px] opacity-75">
+              Use Up/Down or Page Up/Down while the row is focused to scroll.
+            </div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
       <div className="pointer-events-none relative z-10 min-w-0 px-3 py-2" role="cell">
         <div className="pointer-events-none relative z-10 min-w-0 rounded-md px-1 py-1">
           <span className="min-w-0">
@@ -239,8 +292,24 @@ function ObservableRow({
           <span className="pointer-events-none relative z-10 text-muted-foreground">-</span>
         )}
       </div>
-      <div className="relative z-20 cursor-default px-3 py-2" role="cell">
+      <div
+        className="sticky right-0 z-20 cursor-default border-l bg-card px-3 py-2 group-hover:bg-muted/35"
+        role="cell"
+      >
         <div className="flex justify-end gap-1">
+          {item.source_type === "schedule" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              title="Run"
+              aria-label="Run schedule now"
+              disabled={busy}
+              onClick={() => void onAction(item.id, "run")}
+            >
+              <Zap className="size-3.5" />
+            </Button>
+          ) : null}
           {item.state === "running" ? (
             <Button
               type="button"
@@ -282,6 +351,39 @@ function ObservableRow({
       </div>
     </div>
   );
+}
+
+function scrollTooltipContent(
+  event: KeyboardEvent<HTMLAnchorElement>,
+  content: HTMLDivElement | null,
+) {
+  if (!content || content.scrollHeight <= content.clientHeight) return;
+
+  let nextTop: number;
+  switch (event.key) {
+    case "ArrowDown":
+      nextTop = content.scrollTop + 40;
+      break;
+    case "ArrowUp":
+      nextTop = content.scrollTop - 40;
+      break;
+    case "PageDown":
+      nextTop = content.scrollTop + content.clientHeight;
+      break;
+    case "PageUp":
+      nextTop = content.scrollTop - content.clientHeight;
+      break;
+    case "Home":
+      nextTop = 0;
+      break;
+    case "End":
+      nextTop = content.scrollHeight;
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+  content.scrollTo({ top: nextTop, behavior: "smooth" });
 }
 
 function sourceSummary(item: ObservableStatus): string {

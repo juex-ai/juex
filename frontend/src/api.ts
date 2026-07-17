@@ -15,6 +15,7 @@ import type {
   ObservableCreateRequest,
   ObservableDetailResponse,
   ObservableObservationsResponse,
+  ObservationRecord,
   ObservableStatus,
   ObservablesListResponse,
   RuntimeStatusResponse,
@@ -248,6 +249,14 @@ export async function startObservable(id: string): Promise<ObservableStatus> {
 export async function stopObservable(id: string): Promise<ObservableStatus> {
   return jsonOrThrow(
     await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}/stop`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function runObservable(id: string): Promise<ObservationRecord> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}/run`, {
       method: "POST",
     }),
   );
