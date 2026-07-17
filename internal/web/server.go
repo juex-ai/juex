@@ -16,6 +16,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
@@ -28,10 +29,18 @@ type Options struct {
 	Addr         string
 	Provider     llm.Provider // optional; injected for tests
 	AllowAnyBind bool         // bypass the loopback bind check; CLI sets this for --unsafe-bind-any
+	Headless     bool         // skip the browser TCP listener and serve only the agent endpoint
 	Verbose      bool
 	Debug        bool
 	LogLevel     string
 	Stderr       io.Writer
+	OnReady      func(ReadyInfo)
+}
+
+type ReadyInfo struct {
+	AgentEndpoint  string
+	WebAddress     string
+	FallbackReason string
 }
 
 // Server is a long-running HTTP server for one WorkDir.
@@ -86,13 +95,19 @@ func NewServer(opts Options) *Server {
 // tests can mount it under httptest without spinning a real listener.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	s.registerRoutes(mux)
+	s.registerAPIRoutes(mux)
+	s.registerSPARoutes(mux)
 	return mux
 }
 
-// registerRoutes wires every URL pattern. Subsequent tasks add more
-// handlers; for now /healthz is enough.
-func (s *Server) registerRoutes(mux *http.ServeMux) {
+// APIHandler returns the local agent API without the browser SPA fallback.
+func (s *Server) APIHandler() http.Handler {
+	mux := http.NewServeMux()
+	s.registerAPIRoutes(mux)
+	return mux
+}
+
+func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -106,7 +121,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/observables", s.handleObservables)
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
-	// SPA: anything else is the React app.
+}
+
+func (s *Server) registerSPARoutes(mux *http.ServeMux) {
 	spa := spaHandler()
 	mux.Handle("/", spa)
 	mux.Handle("/sessions/", spa)
@@ -150,39 +167,75 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled. On
-// shutdown it cancels every running turn, closes every active app, and
-// then calls http.Server.Shutdown with a 10s deadline.
+// Run starts the canonical agent API endpoint and, unless headless, the browser
+// TCP listener. It blocks until cancellation or a listener/startup failure.
 func (s *Server) Run(ctx context.Context) error {
-	if !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
+	if !s.opts.Headless && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex serve: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
 	if err := app.EnsureActivePrimarySessionRecord(s.opts.Cfg); err != nil {
 		return err
 	}
-	srv := &http.Server{
-		Addr:              s.opts.Addr,
-		Handler:           s.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
+
+	agentDir := s.opts.Cfg.RuntimePaths().StateDir
+	if agentDir == "" {
+		return errors.New("juex serve: agent state directory is empty")
 	}
-	ln, err := net.Listen("tcp", s.opts.Addr)
+	binding, err := endpoint.Listen(ctx, agentDir)
 	if err != nil {
 		return err
 	}
-	errCh := make(chan error, 1)
-	go func() {
-		err := srv.Serve(ln)
-		if !errors.Is(err, http.ErrServerClosed) {
-			errCh <- err
+	defer func() { _ = binding.Close() }()
+
+	servers := []httpServerBinding{{
+		server:   newHTTPServer(s.APIHandler()),
+		listener: binding.Listener(),
+	}}
+	webAddress := ""
+	if !s.opts.Headless {
+		webListener, err := net.Listen("tcp", s.opts.Addr)
+		if err != nil {
+			return err
 		}
-	}()
+		webAddress = webListener.Addr().String()
+		servers = append(servers, httpServerBinding{
+			server:   newHTTPServer(s.Handler()),
+			listener: webListener,
+		})
+	}
+
+	errCh := make(chan error, len(servers))
+	for _, running := range servers {
+		running := running
+		go func() {
+			if err := running.server.Serve(running.listener); !errors.Is(err, http.ErrServerClosed) {
+				errCh <- err
+			}
+		}()
+	}
+	if err := binding.Publish(); err != nil {
+		s.Close()
+		_ = shutdownHTTPServers(servers, 10*time.Second)
+		return err
+	}
+	if s.opts.OnReady != nil {
+		info := ReadyInfo{
+			AgentEndpoint: binding.Runtime().Endpoint,
+			WebAddress:    webAddress,
+		}
+		if binding.FallbackReason() != nil {
+			info.FallbackReason = binding.FallbackReason().Error()
+		}
+		s.opts.OnReady(info)
+	}
+
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	defer cancelStartup()
 	startupErrCh := make(chan error, 1)
 	startupDone := make(chan struct{})
 	go func() {
 		defer close(startupDone)
-		// Keep MCP/session warmup behind the listener so startup notifications cannot hide the web UI.
+		// Keep warmup behind both listeners so startup notifications cannot hide readiness.
 		if err := s.ensureMCPStarted(startupCtx); err != nil {
 			startupErrCh <- err
 			return
@@ -191,31 +244,45 @@ func (s *Server) Run(ctx context.Context) error {
 			startupErrCh <- err
 		}
 	}()
+	var runErr error
 	select {
 	case <-ctx.Done():
 	case err := <-errCh:
-		cancelStartup()
-		s.Close()
-		waitForStartup(startupDone, 10*time.Second)
-		return err
+		runErr = err
 	case err := <-startupErrCh:
 		if ctx.Err() == nil {
-			cancelStartup()
-			s.Close()
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_ = srv.Shutdown(shutdownCtx)
-			waitForStartup(startupDone, 10*time.Second)
-			return err
+			runErr = err
 		}
 	}
 	cancelStartup()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	s.Close()
-	err = srv.Shutdown(shutdownCtx)
+	shutdownErr := shutdownHTTPServers(servers, 10*time.Second)
 	waitForStartup(startupDone, 10*time.Second)
-	return err
+	return errors.Join(runErr, shutdownErr)
+}
+
+type httpServerBinding struct {
+	server   *http.Server
+	listener net.Listener
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+}
+
+func shutdownHTTPServers(servers []httpServerBinding, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var errs []error
+	for _, running := range servers {
+		if err := running.server.Shutdown(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func waitForStartup(done <-chan struct{}, timeout time.Duration) {

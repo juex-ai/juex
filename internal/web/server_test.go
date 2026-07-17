@@ -16,6 +16,7 @@ import (
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -135,6 +136,56 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	}
 	if _, ok := srv.sessions.Load(h.Active.ID); ok {
 		t.Fatalf("server opened runtime app for %s without provider config", h.Active.ID)
+	}
+}
+
+func TestRunHeadlessPublishesAPIOnlyAgentEndpoint(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Headless = true
+	srv.opts.Cfg.AgentStateDir = t.TempDir()
+	ready := make(chan ReadyInfo, 1)
+	srv.opts.OnReady = func(info ReadyInfo) { ready <- info }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+
+	var info ReadyInfo
+	select {
+	case info = <-ready:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("headless server did not become ready")
+	}
+	if info.AgentEndpoint == "" || info.WebAddress != "" {
+		t.Fatalf("ready info = %+v", info)
+	}
+	runtimeState, err := endpoint.ReadRuntime(srv.opts.Cfg.AgentStateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeState.Endpoint != info.AgentEndpoint {
+		t.Fatalf("runtime endpoint = %q, ready endpoint = %q", runtimeState.Endpoint, info.AgentEndpoint)
+	}
+	target, err := endpoint.Parse(info.AgentEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := target.NewClient()
+	for path, want := range map[string]int{"/healthz": http.StatusOK, "/": http.StatusNotFound} {
+		response, err := client.Get(target.URL(path))
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("GET %s status = %d, want %d", path, response.StatusCode, want)
+		}
+	}
+
+	stopRunServer(t, cancel, errCh)
+	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.AgentStateDir, "runtime.json")); !os.IsNotExist(err) {
+		t.Fatalf("runtime.json remains after shutdown: %v", err)
 	}
 }
 

@@ -4,15 +4,20 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/endpoint"
 )
 
 // TestLiveBinary_LoadsSkillsAndMCP builds the real `juex` binary, points
@@ -453,6 +458,116 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 	if !strings.Contains(stderr, "appears to be a copy") || !strings.Contains(stderr, "remove") {
 		t.Fatalf("copy error is not actionable:\n%s", stderr)
 	}
+}
+
+func TestLiveBinary_HeadlessServeExposesAgentEndpoint(t *testing.T) {
+	bin := buildJuex(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	work := filepath.Join(root, "workspace")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configFile := filepath.Join(work, "juex.yaml")
+	configBody := "model: openai:test-model\n" +
+		"providers:\n" +
+		"  - id: openai\n" +
+		"    base_url: https://example.invalid\n" +
+		"    api_key: test-key\n" +
+		"    models:\n" +
+		"      - id: test-model\n"
+	if err := os.WriteFile(configFile, []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "--config", configFile, "serve", "--headless")
+	cmd.Env = filteredEnv(
+		"HOME", "USERPROFILE", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
+	)
+	cmd.Env = append(cmd.Env,
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"JUEX_HOME="+home,
+		"GIT_CONFIG_GLOBAL="+filepath.Join(home, "gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	processDone := false
+	defer func() {
+		if processDone {
+			return
+		}
+		_ = cmd.Process.Kill()
+		<-done
+	}()
+
+	var runtimeState endpoint.Runtime
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			processDone = true
+			t.Fatalf(
+				"headless serve exited before readiness: %v\nstdout:\n%s\nstderr:\n%s",
+				err,
+				stdout.String(),
+				stderr.String(),
+			)
+		default:
+		}
+		markerData, err := os.ReadFile(filepath.Join(work, ".juex", "juex.local.json"))
+		if err == nil {
+			var marker struct {
+				AgentID string `json:"agent_id"`
+			}
+			if json.Unmarshal(markerData, &marker) == nil && marker.AgentID != "" {
+				runtimeState, err = endpoint.ReadRuntime(filepath.Join(home, "agents", marker.AgentID))
+				if err == nil {
+					break
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if runtimeState.Endpoint == "" {
+		t.Fatalf("runtime endpoint was not published\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+
+	target, err := endpoint.Parse(runtimeState.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := target.NewClient()
+	for path, want := range map[string]int{"/healthz": http.StatusOK, "/": http.StatusNotFound} {
+		request, err := http.NewRequest(http.MethodGet, target.URL(path), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requestCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		response, err := client.Do(request.WithContext(requestCtx))
+		cancel()
+		if err != nil {
+			t.Fatalf("GET %s through %s: %v", path, runtimeState.Endpoint, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("GET %s status = %d, want %d", path, response.StatusCode, want)
+		}
+	}
+
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	processDone = true
 }
 
 func runAgentStateCommand(bin, home, work string, args ...string) (string, string, error) {
