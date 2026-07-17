@@ -942,6 +942,8 @@ juex
 ├── serve [--addr <host:port>] [--unsafe-bind-any] [--headless]
 ├── fleet
 │   ├── serve [--addr <host:port>] [--unsafe-bind-any]
+│   ├── install [--addr <host:port>] [--unsafe-bind-any]
+│   ├── uninstall
 │   ├── status [--format table|json]
 │   ├── start|stop|restart <agent>
 │   ├── logs <agent> [--lines N]
@@ -1048,7 +1050,31 @@ renames its registry directory to a hidden sibling, and only then removes it.
 Fleet commands resolve the effective home directly and do not load or mint a
 workspace identity for their current directory.
 
-### 3.8.2 Fleet Web Backend
+### 3.8.2 Fleet Service Registration
+
+`internal/fleetservice` owns user-service definitions and service-manager
+transactions for the resident fleet supervisor. `juex fleet install` validates
+a stable non-zero loopback address, resolves the current executable and
+effective `JUEX_HOME`, and derives a filesystem-safe service identity from that
+home. It writes definitions atomically and rolls back earlier definition files
+if a later file cannot be published. `juex fleet uninstall` queries the native
+manager even when its definition is already missing, stops and confirms the
+supervisor, and only then removes the definition.
+
+macOS uses a per-user LaunchAgent with `AbandonProcessGroup`; desktop Linux
+uses a systemd user unit with `KillMode=process`; Termux uses termux-services
+run and log scripts, publishes a `down` sentinel before exposing `run`, and
+confirms `sv status` reports `down` on removal. Install explicitly restarts an
+existing Termux service after publishing so it uses the new command. These
+policies let the service manager restart or remove the supervisor without
+terminating detached agent processes. Registration paths live in the platform
+service manager's user directory rather than under `JUEX_HOME`; the
+home-derived name keeps multiple installations distinct. The package owns
+rendering, paths, manager commands, and strict state classification.
+`internal/cli` owns flags and presentation, while agent reconciliation remains
+in `internal/fleet`.
+
+### 3.8.3 Fleet Web Backend
 
 `internal/fleetweb` owns the loopback fleet HTTP listener, JSON routes, status
 mapping, embedded SPA fallback, and agent reverse proxy. Fleet roster,

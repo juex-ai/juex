@@ -23,3 +23,6 @@ The package composes `internal/agentstate` for registry identity,
 `internal/config` for replacement workspace config validation. HTTP routing,
 JSON shapes, and reverse proxy behavior stay in `internal/fleetweb`; Cobra
 output, prompts, and stable CLI exit categories stay in `internal/cli`.
+Native launchd, systemd user, and termux-services registration stays in
+`internal/fleetservice`; this package neither renders service definitions nor
+invokes a platform service manager.

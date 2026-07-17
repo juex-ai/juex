@@ -94,6 +94,11 @@ running agents, and then serves the fleet browser API on loopback
 only to a freshly verified runtime endpoint. The supervisor remains resident
 without stopping detached agents when it exits. Use `--addr` to choose another
 loopback address; binding beyond loopback requires `--unsafe-bind-any`.
+`fleet install` registers that supervisor with the current user's launchd,
+systemd, or termux-services manager. Registration names are derived from the
+effective `JUEX_HOME`, so independent homes can coexist. `fleet uninstall`
+removes only the supervisor registration; already detached agents keep running
+and remain manageable with the ordinary fleet lifecycle commands.
 
 ## Common Commands
 
@@ -120,11 +125,21 @@ loopback address; binding beyond loopback requires `--unsafe-bind-any`.
 | `juex serve` | Serve the current agent JSON/SSE API through its endpoint and loopback TCP. |
 | `juex serve --headless` | Serve the JSON/SSE API only through the current agent endpoint. |
 | `juex fleet serve [--addr 127.0.0.1:8080]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
+| `juex fleet install [--addr 127.0.0.1:8080]` | Register and start the fleet supervisor with the current user's native service manager. |
+| `juex fleet uninstall` | Stop and remove the supervisor service without stopping detached agents. |
 | `juex fleet status [--format table\|json]` | Show every registry entry with separate workspace binding and runtime health. |
 | `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity. |
 | `juex fleet logs <agent> [--lines 200]` | Print a line- and byte-bounded tail of the combined fleet log. |
 | `juex fleet gc [--yes]` | Review and explicitly delete definitely orphaned agent state. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |
+
+On macOS, `fleet install` writes a LaunchAgent under
+`~/Library/LaunchAgents`. On desktop Linux it writes a user unit under
+`$XDG_CONFIG_HOME/systemd/user` or `~/.config/systemd/user`; use
+`loginctl enable-linger "$USER"` when the user manager must start before login.
+On Termux it writes a runit service under `$PREFIX/var/service`; install and
+initialize `termux-services`, and use Termux:Boot when startup after device
+reboot is required.
 
 ## Runtime Files
 
