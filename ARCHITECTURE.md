@@ -114,6 +114,7 @@ juex/
 │   │   ├── contextbudget/        # compaction policy, active context, token/context budgets
 │   │   ├── workmem/              # goal_state.json and notes.md domains
 │   │   └── context_*.go
+│   ├── endpoint/                 # agent listener, endpoint URI/dialing, runtime.json lifecycle
 │   ├── sandbox/                 # command sandbox policy, backend selection, wrapping errors
 │   ├── netbootstrap/              # init-time DNS + TLS-roots fallbacks (Termux/minimal envs)
 │   └── web/                      # HTTP API, SSE, SPA asset embedding
@@ -926,7 +927,7 @@ juex
 │   ├── context <id> [--format json|text]
 │   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
-├── serve [--addr <host:port>] [--unsafe-bind-any]
+├── serve [--addr <host:port>] [--unsafe-bind-any] [--headless]
 ├── bundle --session <id> --out <file.tar.gz> [--redact=true] [--force]
 ├── schema
 └── version [-v]
@@ -978,20 +979,42 @@ Persistent flags inherited by all subcommands:
 `cmd/juex/main.go` stays intentionally thin: startup bootstrap imports plus
 `os.Exit(cli.Execute())`.
 
-### 3.8 Web Layer
+### 3.8 Agent Endpoint
+
+`internal/endpoint` is the single transport boundary for addressing a running
+agent. `Listen` holds an exclusive process-lifetime lock, prefers
+`<agent-state-dir>/api.sock`, removes only confirmed stale socket files, and
+falls back to an ephemeral `127.0.0.1` TCP port when AF_UNIX cannot be used.
+The resulting `Binding` publishes `runtime.json` explicitly after the HTTP
+server starts and conditionally removes only its own runtime record on close.
+
+Endpoint URIs are `unix:///absolute/path/api.sock` or
+`tcp://127.0.0.1:<port>`. `Parse` accepts only Unix paths and numeric loopback
+TCP addresses. A parsed `Target` owns `DialContext` plus proxy-free
+`http.Transport` and `http.Client` constructors; the client has no global
+timeout so SSE callers can set request-scoped deadlines without truncating
+streams. The module owns no routes or HTTP serving.
+
+### 3.9 Web Layer
 
 ```go
 // internal/web/server.go
 type Server struct { ... }
 func NewServer(Options) *Server
 func (s *Server) Handler() http.Handler
+func (s *Server) APIHandler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
 `juex serve` defaults to `127.0.0.1:8080` (loopback only, no auth). Binding
-beyond loopback requires `--unsafe-bind-any`. Startup ensures an active primary
-session record exists, starts listening, and then warms the shared MCP manager
-plus the active primary session. Each session gets its own `*app.App`; the web
+beyond loopback requires `--unsafe-bind-any`. Every serving process also starts
+the canonical agent endpoint and records it in the identity-owned
+`runtime.json`. The agent endpoint uses `APIHandler` and never serves the SPA;
+the browser listener continues to use `Handler` for API plus SPA routes.
+`--headless` skips the browser listener entirely. Startup ensures an active
+primary session record exists, starts the selected listeners, publishes the
+endpoint, and then warms the shared MCP manager plus the active primary
+session. Each session gets its own `*app.App`; the web
 broadcaster is registered as a live delivery adapter on the app's durable event
 sink, so SSE clients only receive events after `events.jsonl` append succeeds.
 Slow clients are dropped after a 5s buffer-full timeout.
@@ -1063,7 +1086,7 @@ Routes:
 | GET | `/api/media?path=<path>` | image bytes with immutable caching for content-addressed artifacts and revalidation for mutable workdir paths |
 | GET | `/api/runtime` | app-assembled provider, grouped builtin/MCP tool catalog, shell, hooks, system prompt, and skills status translated to the web DTO |
 
-### 3.9 Observables
+### 3.10 Observables
 
 `internal/observable` owns one shared Observation kernel and two source
 adapters. A Command Observable adapter manages a process and converts parsed,

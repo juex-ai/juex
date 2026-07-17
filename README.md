@@ -56,6 +56,7 @@ juex --model openai:gpt-4.1 run "summarize this repository"
 juex --debug run --json "summarize this repository"
 juex repl
 juex serve
+juex serve --headless
 ```
 
 `--model` uses the same `provider:model` format as config and can select
@@ -71,7 +72,10 @@ blocking responses.
 If you built from source without installing, use `./dist/juex` instead of
 `juex`.
 
-`juex serve` starts a loopback-only web UI on `127.0.0.1:8080`.
+`juex serve` starts a loopback-only web UI on `127.0.0.1:8080` and always
+publishes the same JSON/SSE API through the current agent endpoint. Use
+`juex serve --headless` to run only the agent endpoint without a browser
+listener or SPA.
 
 ## Common Commands
 
@@ -96,6 +100,7 @@ If you built from source without installing, use `./dist/juex` instead of
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 | `juex serve` | Start the React web UI and JSON/SSE API. |
+| `juex serve --headless` | Serve the JSON/SSE API only through the current agent endpoint. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |
 
 ## Runtime Files
@@ -117,6 +122,9 @@ $JUEX_HOME/
 ├── extensions/
 └── agents/<agent-id>/
     ├── agent.json
+    ├── runtime.json             # pid, endpoint URI, and start time while serving
+    ├── api.sock                 # preferred local API endpoint while serving
+    ├── api.lock                 # single-serving-process lifetime lock
     ├── history.json
     ├── logs/
     ├── memory/
@@ -152,7 +160,9 @@ extension hooks are trusted by location. Extension MCP servers receive
 `JUEX_EXT_DIR` alongside `WORKDIR` and `JUEX_WORKDIR`. Identity-owned runtime
 state lives under `$JUEX_HOME/agents/<id>`; workspace artifacts and observable
 state remain under `.juex/`. User-global provider fallback configuration lives
-at `$JUEX_HOME/juex.yaml`.
+at `$JUEX_HOME/juex.yaml`. A serving agent prefers
+`unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
+`tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.
 
 Skills are exposed with progressive disclosure. The system prompt contains a
 compact, budgeted catalog of filesystem skills instead of every full

@@ -14,12 +14,15 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/version"
+	"github.com/juex-ai/juex/internal/web"
 )
 
 type warningFailingWriter struct {
@@ -219,6 +222,7 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "include-artifacts"`,
 		`"name": "include-worktree-summary"`,
 		`"name": "addr"`,
+		`"name": "headless"`,
 		`"name": "unsafe-bind-any"`,
 		`"name": "resume"`,  // flag
 		`"name": "session"`, // flag
@@ -1741,6 +1745,52 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	// Confirm the warning was printed.
 	if !strings.Contains(out2.String(), "WARNING: --unsafe-bind-any") {
 		t.Errorf("expected stderr warning, got: %s", out2.String())
+	}
+}
+
+func TestServeCmd_HeadlessRejectsBrowserFlags(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "juex.yaml")
+	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"serve", "--headless", "--addr", "127.0.0.1:9000"},
+		{"serve", "--headless", "--unsafe-bind-any"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			root := newRootCmd()
+			root.SetArgs(append([]string{"-C", dir, "--config", configFile}, args...))
+			err := root.Execute()
+			var usage *usageError
+			if !errors.As(err, &usage) {
+				t.Fatalf("error = %T %v, want usageError", err, err)
+			}
+		})
+	}
+}
+
+func TestReportServeReadyIncludesEndpointSchemeAndFallback(t *testing.T) {
+	cmd := &cobra.Command{}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	reportServeReady(cmd, web.ReadyInfo{
+		AgentEndpoint:  "tcp://127.0.0.1:43123",
+		WebAddress:     "127.0.0.1:8080",
+		FallbackReason: "unix sockets unsupported",
+	})
+	for _, want := range []string{"tcp://127.0.0.1:43123", "http://127.0.0.1:8080"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
+		}
+	}
+	for _, want := range []string{"WARNING", "unix sockets unsupported", "tcp://127.0.0.1:43123"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 func newServeCmd(flags *persistentFlags) *cobra.Command {
 	var (
 		addr          string
+		headless      bool
 		unsafeBindAny bool
 	)
 	cmd := &cobra.Command{
@@ -23,12 +24,22 @@ func newServeCmd(flags *persistentFlags) *cobra.Command {
 		Long: `Starts a loopback-only HTTP server that lists, shows, and drives
 sessions through a browser. No authentication; bind only to 127.0.0.1.
 
+Every serving process also exposes the same API through its agent endpoint.
+Use --headless to run only that endpoint without a browser listener or SPA.
+
 Hit Ctrl-C to shut down. In-flight turns receive context cancellation
 and the server flushes session jsonl before exit.`,
 		Example: `  juex serve
-  juex serve --addr 127.0.0.1:9000`,
+  juex serve --addr 127.0.0.1:9000
+  juex serve --headless`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if headless && cmd.Flags().Changed("addr") {
+				return &usageError{msg: "juex serve: --headless cannot be combined with --addr"}
+			}
+			if headless && unsafeBindAny {
+				return &usageError{msg: "juex serve: --headless cannot be combined with --unsafe-bind-any"}
+			}
 			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
@@ -36,7 +47,7 @@ and the server flushes session jsonl before exit.`,
 			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 				return err
 			}
-			if !unsafeBindAny && !isLoopbackAddr(addr) {
+			if !headless && !unsafeBindAny && !isLoopbackAddr(addr) {
 				return &usageError{msg: "juex serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
 			}
 			if unsafeBindAny {
@@ -46,22 +57,39 @@ and the server flushes session jsonl before exit.`,
 				Cfg:          cfg,
 				Addr:         addr,
 				AllowAnyBind: unsafeBindAny,
+				Headless:     headless,
 				Verbose:      flags.verbose,
 				Debug:        flags.debug,
 				LogLevel:     flags.logLevel,
 				Stderr:       cmd.ErrOrStderr(),
+				OnReady:      func(info web.ReadyInfo) { reportServeReady(cmd, info) },
 			})
 
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
-			cmdPrintln(cmd, "juex serve listening on http://"+addr)
 			return srv.Run(ctx)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
+	cmd.Flags().BoolVar(&headless, "headless", false, "serve only the agent API endpoint without a browser listener or SPA")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
 	return cmd
+}
+
+func reportServeReady(cmd *cobra.Command, info web.ReadyInfo) {
+	if info.FallbackReason != "" {
+		fmt.Fprintf(
+			cmd.ErrOrStderr(),
+			"WARNING: agent unix endpoint unavailable (%s); using %s\n",
+			info.FallbackReason,
+			info.AgentEndpoint,
+		)
+	}
+	cmdPrintln(cmd, "juex serve agent endpoint listening on "+info.AgentEndpoint)
+	if info.WebAddress != "" {
+		cmdPrintln(cmd, "juex serve listening on http://"+info.WebAddress)
+	}
 }
 
 // isLoopbackAddr returns true if addr's host portion is a loopback
