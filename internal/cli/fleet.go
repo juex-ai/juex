@@ -2,18 +2,23 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/fleetweb"
 )
 
 func newFleetCmd(flags *persistentFlags) *cobra.Command {
@@ -48,33 +53,88 @@ func newFleetManager() (*fleet.Manager, error) {
 }
 
 func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
-	return &cobra.Command{
+	var (
+		addr          string
+		unsafeBindAny bool
+	)
+	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the resident fleet supervisor",
+		Short: "Run the resident fleet supervisor and browser API",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !unsafeBindAny && !isLoopbackAddr(addr) {
+				return &usageError{msg: "juex fleet serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
+			}
+			if unsafeBindAny {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
+			}
 			manager, err := newFleetManager()
 			if err != nil {
 				return err
 			}
-			err = manager.Serve(cmd.Context(), func(action fleet.Action) {
-				prefix := "fleet"
-				if action.AgentID != "" {
-					prefix += " " + action.AgentID
-				}
-				detail := action.Detail
-				if action.Err != nil {
-					detail = action.Err.Error()
-				}
-				if detail == "" {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", prefix, action.Kind)
-					return
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s: %s: %s\n", prefix, action.Kind, detail)
+			ctx, stopSignals := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stopSignals()
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			ready := make(chan struct{})
+			supervisorErr := make(chan error, 1)
+			var readyOnce sync.Once
+			go func() {
+				supervisorErr <- manager.Serve(ctx, func(action fleet.Action) {
+					reportFleetAction(cmd, action)
+					if action.Kind == "ready" {
+						readyOnce.Do(func() { close(ready) })
+					}
+				})
+			}()
+			select {
+			case <-ready:
+			case err := <-supervisorErr:
+				return mapFleetError(err)
+			case <-ctx.Done():
+				cancel()
+				return mapFleetError(<-supervisorErr)
+			}
+
+			server, err := fleetweb.New(fleetweb.Options{
+				Manager:      manager,
+				Addr:         addr,
+				AllowAnyBind: unsafeBindAny,
+				OnReady: func(actual string) {
+					fmt.Fprintln(cmd.OutOrStdout(), "juex fleet listening on http://"+actual)
+				},
 			})
-			return mapFleetError(err)
+			if err != nil {
+				cancel()
+				<-supervisorErr
+				return err
+			}
+			webErr := server.Run(ctx)
+			cancel()
+			fleetErr := <-supervisorErr
+			return errors.Join(webErr, mapFleetError(fleetErr))
 		},
 	}
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
+	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
+	return cmd
+}
+
+func reportFleetAction(cmd *cobra.Command, action fleet.Action) {
+	prefix := "fleet"
+	if action.AgentID != "" {
+		prefix += " " + action.AgentID
+	}
+	detail := action.Detail
+	if action.Err != nil {
+		detail = action.Err.Error()
+	}
+	if detail == "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", prefix, action.Kind)
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s: %s: %s\n", prefix, action.Kind, detail)
 }
 
 func newFleetStatusCmd(_ *persistentFlags) *cobra.Command {

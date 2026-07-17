@@ -1,0 +1,545 @@
+package fleetweb
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/fleet"
+)
+
+type fakeBackend struct {
+	statuses     []fleet.AgentStatus
+	statusErr    error
+	actionStatus fleet.AgentStatus
+	actionErr    error
+	logs         []byte
+	logsErr      error
+	config       fleet.AgentConfig
+	configErr    error
+	updated      fleet.AgentConfig
+	updateStatus fleet.AgentStatus
+	updateErr    error
+	runtime      endpoint.Runtime
+	endpointErr  error
+
+	mu            sync.Mutex
+	action        string
+	selector      string
+	lines         int
+	updateContent []byte
+}
+
+func (f *fakeBackend) Status(context.Context) ([]fleet.AgentStatus, error) {
+	return f.statuses, f.statusErr
+}
+
+func (f *fakeBackend) Start(context.Context, string) (fleet.AgentStatus, error) {
+	f.recordAction("start")
+	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) Stop(context.Context, string) (fleet.AgentStatus, error) {
+	f.recordAction("stop")
+	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) Restart(context.Context, string) (fleet.AgentStatus, error) {
+	f.recordAction("restart")
+	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) Logs(selector string, lines int) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	f.lines = lines
+	return f.logs, f.logsErr
+}
+
+func (f *fakeBackend) Config(selector string) (fleet.AgentConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	return f.config, f.configErr
+}
+
+func (f *fakeBackend) UpdateConfig(
+	_ context.Context,
+	selector string,
+	content []byte,
+) (fleet.AgentConfig, fleet.AgentStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	f.updateContent = append([]byte(nil), content...)
+	return f.updated, f.updateStatus, f.updateErr
+}
+
+func (f *fakeBackend) Endpoint(context.Context, string) (endpoint.Runtime, error) {
+	return f.runtime, f.endpointErr
+}
+
+func (f *fakeBackend) recordAction(action string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.action = action
+}
+
+func TestFleetAPIResponseShapes(t *testing.T) {
+	status := fleet.AgentStatus{
+		ID:            "aaaaaaaa",
+		Name:          "alpha",
+		Binding:       fleet.BindingBound,
+		RuntimeHealth: fleet.RuntimeHealthy,
+	}
+	configState := fleet.AgentConfig{
+		Path:    "/workspace/.juex/juex.yaml",
+		Content: "model: local:test\n",
+		Exists:  true,
+	}
+	backend := &fakeBackend{
+		statuses:     []fleet.AgentStatus{status},
+		actionStatus: status,
+		logs:         []byte("one\ntwo\n"),
+		config:       configState,
+		updated:      configState,
+		updateStatus: status,
+	}
+	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		body       string
+		wantStatus int
+		assert     func(*testing.T, []byte)
+	}{
+		{
+			name:       "roster",
+			method:     http.MethodGet,
+			path:       "/api/agents",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got []fleet.AgentStatus
+				decodeJSON(t, body, &got)
+				if len(got) != 1 || got[0].ID != status.ID {
+					t.Fatalf("roster = %+v", got)
+				}
+			},
+		},
+		{
+			name:       "lifecycle",
+			method:     http.MethodPost,
+			path:       "/api/agents/aaaaaaaa/restart",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.AgentStatus
+				decodeJSON(t, body, &got)
+				if got.ID != status.ID || backend.action != "restart" {
+					t.Fatalf("status/action = %+v/%q", got, backend.action)
+				}
+			},
+		},
+		{
+			name:       "logs",
+			method:     http.MethodGet,
+			path:       "/api/agents/aaaaaaaa/logs?lines=12",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got struct {
+					Content string `json:"content"`
+				}
+				decodeJSON(t, body, &got)
+				if got.Content != "one\ntwo\n" || backend.lines != 12 {
+					t.Fatalf("logs = %q, lines = %d", got.Content, backend.lines)
+				}
+			},
+		},
+		{
+			name:       "config get",
+			method:     http.MethodGet,
+			path:       "/api/agents/aaaaaaaa/config",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.AgentConfig
+				decodeJSON(t, body, &got)
+				if got != configState {
+					t.Fatalf("config = %+v", got)
+				}
+			},
+		},
+		{
+			name:       "config put",
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaaaa/config",
+			body:       `{"content":"model: local:test\n"}`,
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got struct {
+					Config fleet.AgentConfig `json:"config"`
+					Agent  fleet.AgentStatus `json:"agent"`
+				}
+				decodeJSON(t, body, &got)
+				if got.Config != configState || got.Agent.ID != status.ID {
+					t.Fatalf("update response = %+v", got)
+				}
+				if string(backend.updateContent) != configState.Content {
+					t.Fatalf("updated content = %q", backend.updateContent)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, req)
+			response := recorder.Result()
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != test.wantStatus {
+				t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+			}
+			test.assert(t, body)
+		})
+	}
+}
+
+func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		backend    *fakeBackend
+		method     string
+		path       string
+		body       io.Reader
+		wantStatus int
+	}{
+		{
+			name: "missing agent",
+			backend: &fakeBackend{
+				actionErr: &fleet.NotFoundError{Selector: "missing"},
+			},
+			method:     http.MethodPost,
+			path:       "/api/agents/missing/start",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name: "conflict",
+			backend: &fakeBackend{
+				actionErr: &fleet.ConflictError{AgentID: "aaaaaaaa", Reason: "stopped"},
+			},
+			method:     http.MethodPost,
+			path:       "/api/agents/aaaaaaaa/restart",
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name: "invalid config",
+			backend: &fakeBackend{
+				updateErr: &fleet.ConfigValidationError{Err: errors.New("missing model")},
+			},
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaaaa/config",
+			body:       strings.NewReader(`{"content":"bad"}`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "bad log lines",
+			backend:    &fakeBackend{},
+			method:     http.MethodGet,
+			path:       "/api/agents/aaaaaaaa/logs?lines=0",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "malformed json",
+			backend:    &fakeBackend{},
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaaaa/config",
+			body:       strings.NewReader(`{"content":`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "oversize json",
+			backend:    &fakeBackend{},
+			method:     http.MethodPut,
+			path:       "/api/agents/aaaaaaaa/config",
+			body:       io.MultiReader(strings.NewReader(`{"content":"`), bytes.NewReader(bytes.Repeat([]byte("x"), maxConfigRequestBytes)), strings.NewReader(`"}`)),
+			wantStatus: http.StatusRequestEntityTooLarge,
+		},
+		{
+			name:       "wrong method",
+			backend:    &fakeBackend{},
+			method:     http.MethodDelete,
+			path:       "/api/agents/aaaaaaaa/config",
+			wantStatus: http.StatusMethodNotAllowed,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.body == nil {
+				test.body = http.NoBody
+			}
+			server := newServer(test.backend, Options{Addr: "127.0.0.1:0"})
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(
+				recorder,
+				httptest.NewRequest(test.method, test.path, test.body),
+			)
+			if recorder.Code != test.wantStatus {
+				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Header().Get("Content-Type"), "application/json") {
+				t.Fatalf("content type = %q", recorder.Header().Get("Content-Type"))
+			}
+		})
+	}
+}
+
+func TestAgentReverseProxyPreservesResponsePathAndQuery(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runtime" || r.URL.RawQuery != "detail=full" {
+			http.Error(w, fmt.Sprintf("target = %s?%s", r.URL.Path, r.URL.RawQuery), http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("X-Test") != "forwarded" {
+			http.Error(w, "missing header", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("X-Upstream", "agent")
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprint(w, "proxied")
+	}))
+	defer upstream.Close()
+
+	server := newServer(
+		&fakeBackend{runtime: tcpRuntime(t, upstream.URL)},
+		Options{Addr: "127.0.0.1:0"},
+	)
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/agents/aaaaaaaa/api/runtime?detail=full",
+		http.NoBody,
+	)
+	req.Header.Set("X-Test", "forwarded")
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusAccepted ||
+		recorder.Header().Get("X-Upstream") != "agent" ||
+		recorder.Body.String() != "proxied" {
+		t.Fatalf("proxy response = %d %v %q", recorder.Code, recorder.Header(), recorder.Body.String())
+	}
+}
+
+func TestAgentReverseProxyUsesUnixEndpoint(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix sockets are unavailable on Windows")
+	}
+	socketDir, err := os.MkdirTemp("", "jfx-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "agent.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runtime" || r.URL.RawQuery != "via=unix" {
+			http.Error(w, "unexpected target", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, "unix")
+	})}
+	go func() { _ = upstream.Serve(listener) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = upstream.Shutdown(ctx)
+	}()
+
+	server := newServer(
+		&fakeBackend{runtime: endpoint.Runtime{
+			AgentID:    "aaaaaaaa",
+			InstanceID: "instance-one",
+			PID:        42,
+			Endpoint:   (&url.URL{Scheme: "unix", Path: socketPath}).String(),
+			StartedAt:  time.Now().UTC(),
+		}},
+		Options{Addr: "127.0.0.1:0"},
+	)
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(
+		recorder,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/agents/aaaaaaaa/api/runtime?via=unix",
+			http.NoBody,
+		),
+	)
+	if recorder.Code != http.StatusCreated || recorder.Body.String() != "unix" {
+		t.Fatalf("Unix proxy response = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAgentReverseProxyFlushesSSEBeforeUpstreamCompletes(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: ready\ndata: first\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	defer upstream.Close()
+	defer close(release)
+
+	server := httptest.NewServer(newServer(
+		&fakeBackend{runtime: tcpRuntime(t, upstream.URL)},
+		Options{Addr: "127.0.0.1:0"},
+	).Handler())
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		server.URL+"/agents/aaaaaaaa/api/events",
+		http.NoBody,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if got := response.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("content type = %q", got)
+	}
+	reader := bufio.NewReader(response.Body)
+	frame, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frame != "event: ready\n" {
+		t.Fatalf("first SSE line = %q", frame)
+	}
+}
+
+func TestAgentReverseProxyFailureAndSPAFallback(t *testing.T) {
+	server := newServer(
+		&fakeBackend{
+			endpointErr: &fleet.ConflictError{
+				AgentID: "aaaaaaaa",
+				Reason:  "not healthy",
+			},
+		},
+		Options{Addr: "127.0.0.1:0"},
+	)
+
+	proxyRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(
+		proxyRecorder,
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaaaa/api/runtime", http.NoBody),
+	)
+	if proxyRecorder.Code != http.StatusConflict {
+		t.Fatalf("proxy status = %d, body = %s", proxyRecorder.Code, proxyRecorder.Body.String())
+	}
+
+	spaRecorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(
+		spaRecorder,
+		httptest.NewRequest(http.MethodGet, "/agents/aaaaaaaa/sessions/example", http.NoBody),
+	)
+	if spaRecorder.Code != http.StatusOK ||
+		!strings.Contains(spaRecorder.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(strings.ToLower(spaRecorder.Body.String()), "<!doctype html>") {
+		t.Fatalf("SPA response = %d %q", spaRecorder.Code, spaRecorder.Body.String())
+	}
+
+}
+
+func TestServerRunValidatesLoopbackAndShutsDown(t *testing.T) {
+	if _, err := New(Options{}); err == nil {
+		t.Fatal("New accepted a nil manager")
+	}
+
+	backend := &fakeBackend{}
+	server := newServer(backend, Options{Addr: "0.0.0.0:0"})
+	if err := server.Run(context.Background()); err == nil {
+		t.Fatal("Run accepted a non-loopback address")
+	}
+
+	ready := make(chan string, 1)
+	server = newServer(backend, Options{
+		Addr:    "127.0.0.1:0",
+		OnReady: func(addr string) { ready <- addr },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx) }()
+	select {
+	case addr := <-ready:
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+	case <-time.After(time.Second):
+		t.Fatal("server did not report ready")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not shut down")
+	}
+}
+
+func decodeJSON(t *testing.T, body []byte, target any) {
+	t.Helper()
+	if err := json.Unmarshal(body, target); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+}
+
+func tcpRuntime(t *testing.T, rawURL string) endpoint.Runtime {
+	t.Helper()
+	address := strings.TrimPrefix(rawURL, "http://")
+	if _, _, err := net.SplitHostPort(address); err != nil {
+		t.Fatal(err)
+	}
+	return endpoint.Runtime{
+		AgentID:    "aaaaaaaa",
+		InstanceID: "instance-one",
+		PID:        42,
+		Endpoint:   "tcp://" + address,
+		StartedAt:  time.Now().UTC(),
+	}
+}

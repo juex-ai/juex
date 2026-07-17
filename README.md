@@ -57,6 +57,7 @@ juex --debug run --json "summarize this repository"
 juex repl
 juex serve
 juex serve --headless
+juex fleet serve
 juex fleet status
 ```
 
@@ -82,8 +83,11 @@ listener or SPA.
 `JUEX_HOME`. `fleet start|stop|restart`, `fleet status`, and `fleet logs`
 operate on an exact agent id or unique name. `fleet serve` performs one
 startup reconciliation, starts enabled autostart agents, adopts verified
-running agents, and then remains resident without stopping agents when the
-supervisor exits.
+running agents, and then serves the fleet browser API on loopback
+`127.0.0.1:8080`. Agent API requests under `/agents/<id>/api/...` are forwarded
+only to a freshly verified runtime endpoint. The supervisor remains resident
+without stopping detached agents when it exits. Use `--addr` to choose another
+loopback address; binding beyond loopback requires `--unsafe-bind-any`.
 
 ## Common Commands
 
@@ -109,7 +113,7 @@ supervisor exits.
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 | `juex serve` | Start the React web UI and JSON/SSE API. |
 | `juex serve --headless` | Serve the JSON/SSE API only through the current agent endpoint. |
-| `juex fleet serve` | Reconcile autostart agents and run one resident supervisor for the effective home. |
+| `juex fleet serve [--addr 127.0.0.1:8080]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
 | `juex fleet status [--format table\|json]` | Show every registry entry with separate workspace binding and runtime health. |
 | `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity. |
 | `juex fleet logs <agent> [--lines 200]` | Print a line- and byte-bounded tail of the combined fleet log. |

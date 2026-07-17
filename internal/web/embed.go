@@ -47,6 +47,12 @@ func spaHandler() http.Handler {
 	})
 }
 
+// SPAHandler returns the embedded frontend with its client-side route
+// fallback. Fleet web reuses the same application shell under agent routes.
+func SPAHandler() http.Handler {
+	return spaHandler()
+}
+
 // hasEmbeddedFile checks whether path corresponds to a real file under
 // the embed root. Trims a leading slash so paths like "/assets/foo.js"
 // match the embed entries directly.

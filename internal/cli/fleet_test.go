@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,14 +134,43 @@ func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
 	root = newRootCmd()
 	output.Reset()
 	root.SetOut(&output)
+	root.SetArgs([]string{"fleet", "serve", "--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--addr", "--unsafe-bind-any"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("fleet serve help missing %q:\n%s", want, output.String())
+		}
+	}
+
+	root = newRootCmd()
+	output.Reset()
+	root.SetOut(&output)
 	root.SetArgs([]string{"schema"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"name": "fleet"`, `"name": "lines"`, `"name": "yes"`} {
+	for _, want := range []string{
+		`"name": "fleet"`,
+		`"name": "addr"`,
+		`"name": "unsafe-bind-any"`,
+		`"name": "lines"`,
+		`"name": "yes"`,
+	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("schema missing %q", want)
 		}
+	}
+}
+
+func TestFleetServeRejectsNonLoopbackWithoutEscapeHatch(t *testing.T) {
+	root := newRootCmd()
+	root.SetArgs([]string{"fleet", "serve", "--addr", "0.0.0.0:9000"})
+	err := root.Execute()
+	var usage *usageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "--unsafe-bind-any") {
+		t.Fatalf("error = %T %v, want loopback usage error", err, err)
 	}
 }
 
