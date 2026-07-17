@@ -615,7 +615,8 @@ def run_schedule_routing_case(
             report = contract_oracle.ContractReport(False, ["schedule routing turn missing session_id"])
             write_contract_report(attempt_artifacts, report)
             return report, ""
-        conversation = case_dir / ".juex" / "sessions" / session_id / "conversation.jsonl"
+        sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
+        conversation = sessions / session_id / "conversation.jsonl"
         observables = case_dir / ".juex" / "observables.json"
         report = schedule_routing.validate_contract(conversation, observables, expectation)
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
