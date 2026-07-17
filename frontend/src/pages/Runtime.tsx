@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronRightIcon } from "lucide-react";
+import { RuntimeDisclosureButton } from "@/components/RuntimeDisclosureButton";
 import { Badge } from "@/components/ui/badge";
 import {
   RuntimeToolGroups,
@@ -15,6 +15,7 @@ import type {
 import { useShellTitle } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
 import {
+  formatRuntimeTimestamp,
   formatRuntimeTokenCount,
   runtimeHookCommandLabel,
   runtimeHooksSummaryLabel,
@@ -117,6 +118,12 @@ export function Runtime() {
                 </div>
               </dd>
               <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                Started
+              </dt>
+              <dd className="border-t px-3 py-2 font-mono text-xs">
+                {formatRuntimeTimestamp(data.start_time)}
+              </dd>
+              <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 Last refresh
               </dt>
               <dd className="border-t px-3 py-2 font-mono text-xs">
@@ -145,18 +152,13 @@ export function Runtime() {
               {systemPrompt.count}
             </Badge>
           </div>
-          <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
             {systemPromptItems.length === 0 ? (
               <div className="text-muted-foreground px-3 py-3 text-sm">
                 No system prompt entries.
               </div>
             ) : (
-              systemPromptItems.map((entry, index) => (
-                <SystemPromptEntryRow
-                  key={`${entry.key}:${entry.path || index}`}
-                  entry={entry}
-                />
-              ))
+              <SystemPromptTable entries={systemPromptItems} />
             )}
           </div>
         </section>
@@ -252,10 +254,8 @@ export function Runtime() {
               No MCP servers configured.
             </div>
           ) : (
-            <div className="space-y-2">
-              {mcpServers.map((server) => (
-                <MCPServerCard key={server.name} server={server} />
-              ))}
+            <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+              <MCPServerTable servers={mcpServers} />
             </div>
           )}
         </section>
@@ -397,39 +397,201 @@ function BadgeList({ items, empty = "-" }: { items: string[]; empty?: string }) 
   );
 }
 
-function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
+function SystemPromptTable({ entries }: { entries: SystemPromptEntry[] }) {
   return (
-    <details className="group border-t first:border-t-0">
-      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 px-3 py-3 marker:hidden">
-        <div className="min-w-0 space-y-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="font-medium">{entry.label}</span>
-            <Badge variant="outline" className="font-mono text-[11px]">
-              {entry.source}
-            </Badge>
-          </div>
-          <div className="text-muted-foreground break-all font-mono text-xs">
+    <table className="w-full min-w-[52rem] text-left text-sm">
+      <caption className="sr-only">System prompt entries</caption>
+      <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+        <tr>
+          <th scope="col" className="w-10 px-2 py-2 font-medium">
+            <span className="sr-only">Toggle</span>
+          </th>
+          <th scope="col" className="px-3 py-2 font-medium">
+            Label
+          </th>
+          <th scope="col" className="w-32 px-3 py-2 font-medium">
+            Source
+          </th>
+          <th scope="col" className="px-3 py-2 font-medium">
+            Path
+          </th>
+          <th scope="col" className="w-32 px-3 py-2 font-medium">
+            Tokens
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {entries.map((entry, index) => (
+          <SystemPromptEntryRow
+            key={`${entry.key}:${entry.path || index}`}
+            entry={entry}
+          />
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
+  const [entryOpen, setEntryOpen] = useState(false);
+
+  return (
+    <>
+      <tr className="border-t align-top first:border-t-0">
+        <td className="px-2 py-2">
+          <RuntimeDisclosureButton
+            label={`${entry.label} system prompt`}
+            open={entryOpen}
+            onToggle={() => setEntryOpen((open) => !open)}
+          />
+        </td>
+        <th scope="row" className="px-3 py-2.5 font-medium">
+          {entry.label}
+        </th>
+        <td className="px-3 py-2">
+          <Badge variant="outline" className="font-mono text-[11px]">
+            {entry.source}
+          </Badge>
+        </td>
+        <td className="px-3 py-2.5">
+          <div className="text-muted-foreground max-w-[30rem] truncate font-mono text-xs">
             {entry.path || entry.key}
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
+        </td>
+        <td className="px-3 py-2">
           <Badge variant="secondary" className="font-mono text-[11px]">
             ~{formatRuntimeTokenCount(entry.tokens)} tokens
           </Badge>
-          <span
-            aria-hidden="true"
-            className="text-muted-foreground text-xs transition-transform group-open:rotate-90"
+        </td>
+      </tr>
+      {entryOpen && (
+        <tr className="border-t bg-muted/20">
+          <td colSpan={5} className="px-3 py-3">
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 font-mono text-xs leading-relaxed">
+              {entry.text}
+            </pre>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function MCPServerTable({ servers }: { servers: MCPServerInfo[] }) {
+  return (
+    <table className="w-full min-w-[72rem] text-left text-sm">
+      <caption className="sr-only">MCP servers</caption>
+      <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+        <tr>
+          <th scope="col" className="w-10 px-2 py-2 font-medium">
+            <span className="sr-only">Toggle</span>
+          </th>
+          <th scope="col" className="px-3 py-2 font-medium">
+            Name
+          </th>
+          <th scope="col" className="w-28 px-3 py-2 font-medium">
+            Source
+          </th>
+          <th scope="col" className="w-32 px-3 py-2 font-medium">
+            Status
+          </th>
+          <th scope="col" className="w-24 px-3 py-2 font-medium">
+            Tools
+          </th>
+          <th scope="col" className="px-3 py-2 font-medium">
+            Command
+          </th>
+          <th scope="col" className="px-3 py-2 font-medium">
+            Error
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {servers.map((server) => (
+          <MCPServerRow key={server.name} server={server} />
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function MCPServerRow({ server }: { server: MCPServerInfo }) {
+  const [serverOpen, setServerOpen] = useState(false);
+  const toolsAvailable = server.tools !== undefined;
+  const toolCount = server.tool_count ?? server.tools?.length ?? 0;
+
+  return (
+    <>
+      <tr className="border-t align-top first:border-t-0">
+        <td className="px-2 py-2">
+          <RuntimeDisclosureButton
+            label={`${server.name} MCP details`}
+            open={serverOpen}
+            onToggle={() => setServerOpen((open) => !open)}
+          />
+        </td>
+        <th scope="row" className="px-3 py-2.5 font-medium">
+          {server.name}
+        </th>
+        <td className="px-3 py-2">
+          <Badge variant="outline" className="font-mono text-[11px]">
+            {server.source}
+          </Badge>
+        </td>
+        <td className="px-3 py-2">
+          <Badge
+            variant={mcpStatusVariant(server.status)}
+            className="font-mono text-[11px]"
           >
-            &gt;
-          </span>
-        </div>
-      </summary>
-      <div className="border-t bg-muted/30 px-3 py-3">
-        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 font-mono text-xs leading-relaxed">
-          {entry.text}
-        </pre>
-      </div>
-    </details>
+            {mcpStatusLabel(server.status)}
+          </Badge>
+        </td>
+        <td className="px-3 py-2">
+          <Badge variant="secondary" className="font-mono text-[11px]">
+            {toolCount}
+          </Badge>
+        </td>
+        <td className="px-3 py-2.5">
+          <div className="max-w-[24rem] truncate font-mono text-xs">
+            {mcpServerCommand(server.command, server.args)}
+          </div>
+        </td>
+        <td
+          className="px-3 py-2.5"
+          title={server.error || undefined}
+        >
+          <div
+            className={
+              server.error
+                ? "max-w-[24rem] truncate font-mono text-xs text-destructive"
+                : "max-w-[24rem] truncate font-mono text-xs text-muted-foreground"
+            }
+          >
+            {server.error || "-"}
+          </div>
+        </td>
+      </tr>
+      {serverOpen && (
+        <tr className="border-t bg-muted/20">
+          <td colSpan={7} className="p-0 pl-4">
+            {server.error ? (
+              <div className="border-b bg-destructive/5 px-3 py-3">
+                <p className="text-muted-foreground text-[11px] font-semibold uppercase tracking-[0.14em]">
+                  Startup error
+                </p>
+                <pre className="text-destructive mt-1 whitespace-pre-wrap break-words font-mono text-xs">
+                  {server.error}
+                </pre>
+              </div>
+            ) : null}
+            <RuntimeToolList
+              tools={server.tools ?? []}
+              empty={mcpToolEmptyLabel(server.status, toolsAvailable)}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -437,72 +599,6 @@ function mcpStatusLabel(status: string): string {
   if (status === "connected") return "connected";
   if (status === "error") return "error";
   return "not started";
-}
-
-function MCPServerCard({ server }: { server: MCPServerInfo }) {
-  const [serverOpen, setServerOpen] = useState(false);
-  const toolsAvailable = server.tools !== undefined;
-
-  return (
-    <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
-      <div className="px-3 py-3">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="font-medium">{server.name}</span>
-          <Badge variant="outline" className="font-mono text-[11px]">
-            {server.source}
-          </Badge>
-          <Badge
-            variant={mcpStatusVariant(server.status)}
-            className="font-mono text-[11px]"
-          >
-            {mcpStatusLabel(server.status)}
-          </Badge>
-          <Badge variant="secondary" className="font-mono text-[11px]">
-            {server.tool_count ?? server.tools?.length ?? 0} tools
-          </Badge>
-        </div>
-        <dl className="mt-2 grid min-w-0 gap-x-3 gap-y-1 text-xs sm:grid-cols-[5rem_minmax(0,1fr)]">
-          <dt className="text-muted-foreground font-medium">Command</dt>
-          <dd className="min-w-0 break-all font-mono">
-            {mcpServerCommand(server.command, server.args)}
-          </dd>
-          <dt className="text-muted-foreground font-medium">Error</dt>
-          <dd
-            className={
-              server.error
-                ? "min-w-0 break-words font-mono text-destructive"
-                : "min-w-0 font-mono text-muted-foreground"
-            }
-          >
-            {server.error || "-"}
-          </dd>
-        </dl>
-      </div>
-      <details
-        className="group/runtime-mcp-server border-t"
-        onToggle={(event) => setServerOpen(event.currentTarget.open)}
-      >
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 outline-none marker:hidden hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/35">
-          <ChevronRightIcon
-            aria-hidden="true"
-            className="text-muted-foreground size-4 shrink-0 transition-transform group-open/runtime-mcp-server:rotate-90"
-          />
-          <span className="font-medium">Tool details</span>
-          <span className="text-muted-foreground min-w-0 flex-1 truncate font-mono text-xs">
-            {server.tools?.map((tool) => tool.name).join(", ") || "No tool preview"}
-          </span>
-        </summary>
-        {serverOpen && (
-          <div className="border-t bg-muted/20 pl-4">
-            <RuntimeToolList
-              tools={server.tools ?? []}
-              empty={mcpToolEmptyLabel(server.status, toolsAvailable)}
-            />
-          </div>
-        )}
-      </details>
-    </div>
-  );
 }
 
 function mcpServerCommand(command: string, args?: string[]): string {

@@ -52,6 +52,77 @@ test("Runtime page shares RuntimeToolList across builtin and MCP paths", () => {
   );
 });
 
+test("Runtime page renders service start time from the runtime API", () => {
+  assert.match(runtimePageSource, /formatRuntimeTimestamp\(data\.start_time\)/);
+});
+
+test("System Prompt and MCP use semantic tables with disclosure columns", () => {
+  const sourceFile = parseSource(runtimePageSource, "Runtime.tsx");
+  const systemPromptTable = requireFunction(sourceFile, "SystemPromptTable");
+  const mcpTable = requireFunction(sourceFile, "MCPServerTable");
+  const systemPromptRow = requireFunction(
+    sourceFile,
+    "SystemPromptEntryRow",
+  );
+  const mcpRow = requireFunction(sourceFile, "MCPServerRow");
+
+  for (const [name, fn] of [
+    ["SystemPromptTable", systemPromptTable],
+    ["MCPServerTable", mcpTable],
+  ] as const) {
+    assert.ok(
+      jsxElementNames(fn, "Runtime.tsx").includes("table"),
+      `${name} must render a semantic table`,
+    );
+    assert.ok(
+      jsxElementNames(fn, "Runtime.tsx").includes("thead"),
+      `${name} must render column headers`,
+    );
+    assert.ok(
+      jsxElementNames(fn, "Runtime.tsx").includes("tbody"),
+      `${name} must render a table body`,
+    );
+  }
+
+  for (const [name, fn] of [
+    ["SystemPromptEntryRow", systemPromptRow],
+    ["MCPServerRow", mcpRow],
+  ] as const) {
+    assert.ok(
+      jsxElementNames(fn, "Runtime.tsx").includes("RuntimeDisclosureButton"),
+      `${name} must use the shared disclosure control`,
+    );
+  }
+});
+
+test("Builtin tool groups and tool lists use semantic tables", () => {
+  const sourceFile = parseSource(
+    runtimeToolCatalogSource,
+    "RuntimeToolCatalog.tsx",
+  );
+
+  for (const name of ["RuntimeToolGroups", "RuntimeToolList"] as const) {
+    const fn = requireFunction(sourceFile, name);
+    const elements = jsxElementNames(fn, "RuntimeToolCatalog.tsx");
+    assert.ok(elements.includes("table"), `${name} must render a semantic table`);
+    assert.ok(elements.includes("thead"), `${name} must render column headers`);
+    assert.ok(elements.includes("tbody"), `${name} must render a table body`);
+  }
+});
+
+test("Runtime disclosures share one left-chevron button component", () => {
+  assert.match(
+    runtimePageSource,
+    /import\s+\{\s*RuntimeDisclosureButton\s*\}/,
+  );
+  assert.match(
+    runtimeToolCatalogSource,
+    /import\s+\{\s*RuntimeDisclosureButton\s*\}/,
+  );
+  assert.doesNotMatch(runtimePageSource, /&gt;/);
+  assert.doesNotMatch(runtimePageSource, />\s*&gt;\s*</);
+});
+
 test("Runtime tool disclosures lazily mount each nested body", () => {
   const sourceFile = parseSource(
     runtimeToolCatalogSource,
@@ -63,13 +134,25 @@ test("Runtime tool disclosures lazily mount each nested body", () => {
   const rawSchema = requireFunction(sourceFile, "RuntimeToolSchema");
   const rawSchemaBody = requireFunction(sourceFile, "RuntimeToolSchemaBody");
 
-  assert.match(groupRow.getText(), /onToggle=/);
+  assert.ok(
+    jsxElementNames(groupRow, "RuntimeToolCatalog.tsx").includes(
+      "RuntimeDisclosureButton",
+    ),
+  );
   assert.match(groupRow.getText(), /groupOpen\s*&&[\s\S]*<RuntimeToolList/);
-  assert.match(toolRow.getText(), /onToggle=/);
+  assert.ok(
+    jsxElementNames(toolRow, "RuntimeToolCatalog.tsx").includes(
+      "RuntimeDisclosureButton",
+    ),
+  );
   assert.match(toolRow.getText(), /toolOpen\s*&&[\s\S]*<RuntimeToolDetails/);
   assert.doesNotMatch(toolRow.getText(), /runtimeToolParameters/);
   assert.match(toolDetails.getText(), /runtimeToolParameters/);
-  assert.match(rawSchema.getText(), /onToggle=/);
+  assert.ok(
+    jsxElementNames(rawSchema, "RuntimeToolCatalog.tsx").includes(
+      "RuntimeDisclosureButton",
+    ),
+  );
   assert.match(
     rawSchema.getText(),
     /schemaOpen\s*&&[\s\S]*<RuntimeToolSchemaBody/,
@@ -79,33 +162,67 @@ test("Runtime tool disclosures lazily mount each nested body", () => {
 });
 
 test("Runtime parameter table exposes a caption and scoped column headers", () => {
-  assert.match(
+  const sourceFile = parseSource(
     runtimeToolCatalogSource,
+    "RuntimeToolCatalog.tsx",
+  );
+  const toolDetails = requireFunction(sourceFile, "RuntimeToolDetails");
+
+  assert.match(
+    toolDetails.getText(),
     /<caption className="sr-only">[\s\S]*Parameters for \{tool\.name\}/,
   );
-  assert.equal(
-    runtimeToolCatalogSource.match(/<th scope="col"/g)?.length,
-    4,
-  );
+  assert.equal(toolDetails.getText().match(/<th scope="col"/g)?.length, 4);
 });
 
-test("MCP card keeps selectable command and error metadata outside its summary", () => {
+test("MCP table row keeps command and error visible and lazily mounts tools", () => {
   const sourceFile = parseSource(runtimePageSource, "Runtime.tsx");
-  const card = requireFunction(sourceFile, "MCPServerCard");
-  const summaries = jsxElements(card, "summary");
+  const row = requireFunction(sourceFile, "MCPServerRow");
 
-  assert.equal(summaries.length, 1);
-  const summaryText = collectJsxText(summaries[0]).replace(/\s+/g, " ").trim();
-  assert.doesNotMatch(summaryText, /\b(?:Command|Error)\b/);
-  assert.match(card.getText(), />Command</);
-  assert.match(card.getText(), />Error</);
-  assert.match(card.getText(), /onToggle=/);
-  assert.match(card.getText(), /serverOpen\s*&&[\s\S]*<RuntimeToolList/);
-  assert.match(card.getText(), /server\.tools !== undefined/);
+  assert.match(row.getText(), /mcpServerCommand\(server\.command/);
+  assert.match(row.getText(), /server\.error/);
+  assert.ok(
+    jsxElementNames(row, "Runtime.tsx").includes("RuntimeDisclosureButton"),
+  );
+  assert.match(row.getText(), /serverOpen\s*&&[\s\S]*<RuntimeToolList/);
+  assert.match(row.getText(), /server\.tools !== undefined/);
+  assert.match(
+    row.getText(),
+    /serverOpen\s*&&[\s\S]*server\.error[\s\S]*Startup error/,
+    "expanded MCP details must expose the full startup error in-page",
+  );
   assert.match(
     runtimePageSource,
     /Tool details unavailable in this response/,
   );
+});
+
+test("Runtime table truncation is applied inside cells", () => {
+  const pageFile = parseSource(runtimePageSource, "Runtime.tsx");
+  const catalogFile = parseSource(
+    runtimeToolCatalogSource,
+    "RuntimeToolCatalog.tsx",
+  );
+  const functions = [
+    requireFunction(catalogFile, "RuntimeToolGroupRow"),
+    requireFunction(pageFile, "SystemPromptEntryRow"),
+    requireFunction(pageFile, "MCPServerRow"),
+  ];
+
+  for (const fn of functions) {
+    for (const attributes of jsxOpeningElementAttributes(fn, "td")) {
+      assert.doesNotMatch(
+        attributes,
+        /\btruncate\b/,
+        `${fn.name.text} must not apply truncate directly to a table cell`,
+      );
+    }
+    assert.match(
+      fn.getText(),
+      /<(?:div|span) className=(?:\{|"[\s\S]*?\btruncate\b)/,
+      `${fn.name.text} must truncate content inside the table cell`,
+    );
+  }
 });
 
 function runtimePageHeadings(source: string): string[] {
@@ -166,19 +283,19 @@ function requireFunction(sourceFile: any, name: string): any {
   return fn;
 }
 
-function jsxElements(rootNode: any, tagName: string): any[] {
-  const elements: any[] = [];
+function jsxOpeningElementAttributes(rootNode: any, tagName: string): string[] {
+  const attributes: string[] = [];
   const visit = (node: any) => {
     if (
       ts.isJsxElement(node) &&
       node.openingElement.tagName.getText(node.getSourceFile()) === tagName
     ) {
-      elements.push(node);
+      attributes.push(node.openingElement.attributes.getText(node.getSourceFile()));
     }
     ts.forEachChild(node, visit);
   };
   visit(rootNode);
-  return elements;
+  return attributes;
 }
 
 function collectJsxText(node: any): string {

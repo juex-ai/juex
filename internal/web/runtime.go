@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
@@ -15,6 +16,7 @@ import (
 )
 
 type runtimeStatusResponse struct {
+	StartTime    string              `json:"start_time"`
 	WorkDir      string              `json:"work_dir"`
 	Provider     providerStatus      `json:"provider"`
 	Shell        config.ShellProfile `json:"shell"`
@@ -168,7 +170,9 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	return runtimeStatusResponseFromApp(status), nil
+	response := runtimeStatusResponseFromApp(status)
+	response.StartTime = s.startedAt.Format(time.RFC3339Nano)
+	return response, nil
 }
 
 func (s *Server) runtimeScratchpadDir() (string, error) {
