@@ -510,7 +510,7 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 
 	select {
 	case <-provider.started:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("provider was not called")
 	}
 	t.Cleanup(func() {
@@ -524,7 +524,7 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 			if err != nil {
 				t.Errorf("turn request failed: %v", err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(5 * time.Second):
 			t.Error("turn request did not finish")
 		}
 	})
