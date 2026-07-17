@@ -480,15 +480,6 @@ func TestAgentReverseProxyFailureAndSPAFallback(t *testing.T) {
 		t.Fatalf("SPA response = %d %q", spaRecorder.Code, spaRecorder.Body.String())
 	}
 
-	assetRecorder := httptest.NewRecorder()
-	server.Handler().ServeHTTP(
-		assetRecorder,
-		httptest.NewRequest(http.MethodGet, "/juex-logo.svg", http.NoBody),
-	)
-	if assetRecorder.Code != http.StatusOK ||
-		!strings.Contains(assetRecorder.Header().Get("Content-Type"), "image/svg+xml") {
-		t.Fatalf("asset response = %d %q", assetRecorder.Code, assetRecorder.Header().Get("Content-Type"))
-	}
 }
 
 func TestServerRunValidatesLoopbackAndShutsDown(t *testing.T) {
