@@ -20,12 +20,13 @@ func newServeCmd(flags *persistentFlags) *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run a local HTTP server for the current WorkDir",
-		Long: `Starts a loopback-only HTTP server that lists, shows, and drives
-sessions through a browser. No authentication; bind only to 127.0.0.1.
+		Short: "Run the JSON/SSE API for the current WorkDir",
+		Long: `Starts the current workspace agent and exposes its JSON/SSE API.
+The canonical local agent endpoint is always published. Unless --headless is
+set, the same API also listens on the loopback --addr.
 
-Every serving process also exposes the same API through its agent endpoint.
-Use --headless to run only that endpoint without a browser listener or SPA.
+This command does not serve the React SPA. Use juex fleet serve for the fleet
+browser UI, agent switcher, and per-agent API proxy.
 
 Hit Ctrl-C to shut down. In-flight turns receive context cancellation
 and the server flushes session jsonl before exit.`,
@@ -72,7 +73,7 @@ and the server flushes session jsonl before exit.`,
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
-	cmd.Flags().BoolVar(&headless, "headless", false, "serve only the agent API endpoint without a browser listener or SPA")
+	cmd.Flags().BoolVar(&headless, "headless", false, "serve only the canonical agent endpoint without a TCP API listener")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
 	return cmd
 }
@@ -87,8 +88,8 @@ func reportServeReady(cmd *cobra.Command, info web.ReadyInfo) {
 		)
 	}
 	cmdPrintln(cmd, "juex serve agent endpoint listening on "+info.AgentEndpoint)
-	if info.WebAddress != "" {
-		cmdPrintln(cmd, "juex serve listening on http://"+info.WebAddress)
+	if info.TCPAddress != "" {
+		cmdPrintln(cmd, "juex serve API listening on http://"+info.TCPAddress)
 	}
 }
 

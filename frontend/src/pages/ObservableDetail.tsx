@@ -20,6 +20,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { ObservableDetailResponse, ObservationRecord } from "@/types";
 import { StateBadge } from "@/pages/Observables";
+import { agentPathFromLocation } from "@/lib/fleet-routes";
 
 export function ObservableDetail() {
   const { id = "" } = useParams<{ id: string }>();
@@ -80,7 +81,7 @@ export function ObservableDetail() {
         await stopObservable(id);
       } else {
         await deleteObservable(id);
-        navigate("/observables", { replace: true });
+        navigate(agentPathFromLocation("/observables"), { replace: true });
         return;
       }
       await refresh({ quiet: true });
@@ -107,7 +108,10 @@ export function ObservableDetail() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <Button asChild variant="ghost" size="icon-sm">
-              <Link to="/observables" aria-label="Back to observables">
+              <Link
+                to={agentPathFromLocation("/observables")}
+                aria-label="Back to observables"
+              >
                 <ArrowLeft className="size-3.5" />
               </Link>
             </Button>

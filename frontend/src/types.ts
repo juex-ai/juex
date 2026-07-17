@@ -903,3 +903,39 @@ export interface SkillPromptStatus {
   compacted: boolean;
   omitted?: SkillFilteredInfo[];
 }
+
+export type AgentBindingState = "bound" | "orphaned" | "invalid";
+export type AgentRuntimeHealth =
+  | "healthy"
+  | "stopped"
+  | "unhealthy"
+  | "ambiguous";
+
+export interface AgentStatus {
+  id: string;
+  name?: string;
+  workspace?: string;
+  enabled: boolean;
+  autostart: boolean;
+  binding: AgentBindingState;
+  runtime_health: AgentRuntimeHealth;
+  pid?: number;
+  endpoint?: string;
+  started_at?: string;
+  runtime_present: boolean;
+  process_alive: boolean;
+  endpoint_reachable: boolean;
+  endpoint_matched: boolean;
+  problem?: string;
+}
+
+export interface AgentConfig {
+  path: string;
+  content: string;
+  exists: boolean;
+}
+
+export interface AgentConfigUpdateResponse {
+  config: AgentConfig;
+  agent: AgentStatus;
+}

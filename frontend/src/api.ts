@@ -19,9 +19,16 @@ import type {
   ObservableStatus,
   ObservablesListResponse,
   RuntimeStatusResponse,
+  AgentConfig,
+  AgentConfigUpdateResponse,
+  AgentStatus,
 } from "./types";
+import { agentBasePath } from "./lib/fleet-routes.ts";
 
-const BASE = "";  // same-origin; Vite dev proxy handles /api → :8080
+function agentAPIPath(path: string): string {
+  const pathname = typeof window === "undefined" ? "" : window.location.pathname;
+  return `${agentBasePath(pathname)}${path}`;
+}
 
 class APIError extends Error {
   status: number;
@@ -36,7 +43,16 @@ async function jsonOrThrow<T>(r: Response): Promise<T> {
     let message = r.statusText || `HTTP ${r.status}`;
     try {
       const body = await r.json();
-      if (body && typeof body.message === "string") message = body.message;
+      if (body && typeof body.message === "string") {
+        message = body.message;
+      } else if (
+        body &&
+        typeof body.error === "object" &&
+        body.error !== null &&
+        typeof body.error.message === "string"
+      ) {
+        message = body.error.message;
+      }
     } catch {
       /* response wasn't JSON; keep statusText */
     }
@@ -46,12 +62,12 @@ async function jsonOrThrow<T>(r: Response): Promise<T> {
 }
 
 export async function listSessions(): Promise<SessionsListResponse> {
-  return jsonOrThrow(await fetch(`${BASE}/api/sessions`));
+  return jsonOrThrow(await fetch(agentAPIPath("/api/sessions")));
 }
 
 export async function createSession(): Promise<CreateSessionResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions`, { method: "POST" }),
+    await fetch(agentAPIPath("/api/sessions"), { method: "POST" }),
   );
 }
 
@@ -69,13 +85,13 @@ export async function getSession(
   if (opts.limit !== undefined) params.set("limit", String(opts.limit));
   const query = params.size ? `?${params.toString()}` : "";
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}${query}`),
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}${query}`)),
   );
 }
 
 export async function deleteSession(id: string): Promise<DeleteSessionResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}`, {
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}`), {
       method: "DELETE",
     }),
   );
@@ -87,7 +103,7 @@ export async function startTurn(
   attachments: MediaRef[] = [],
 ): Promise<StartTurnResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/turns`, {
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/turns`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt, attachments }),
@@ -102,7 +118,7 @@ export async function uploadSessionAttachment(
   const body = new FormData();
   body.append("file", file, file.name);
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/attachments`, {
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/attachments`), {
       method: "POST",
       body,
     }),
@@ -111,7 +127,7 @@ export async function uploadSessionAttachment(
 
 export async function interrupt(id: string): Promise<InterruptResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/interrupt`, {
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/interrupt`), {
       method: "POST",
     }),
   );
@@ -122,7 +138,7 @@ export async function compactSession(
   reason = "manual",
 ): Promise<CompactSessionResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/compact`, {
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/compact`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason }),
@@ -134,7 +150,7 @@ export async function getSessionContext(
   id: string,
 ): Promise<ActiveContextSnapshot> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/context`),
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/context`)),
   );
 }
 
@@ -144,7 +160,7 @@ export async function getTurnStatus(
 ): Promise<TurnStatusResponse> {
   return jsonOrThrow(
     await fetch(
-      `${BASE}/api/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnID)}`,
+      agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnID)}`),
     ),
   );
 }
@@ -164,7 +180,7 @@ export function subscribeEvents(
   opts: SubscribeOptions,
 ): () => void {
   const qs = opts.since ? `?since=${encodeURIComponent(opts.since)}` : "";
-  const url = `${BASE}/api/sessions/${encodeURIComponent(id)}/events${qs}`;
+  const url = agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/events${qs}`);
   const es = new EventSource(url);
   es.addEventListener("message", (ev) => {
     try {
@@ -181,7 +197,7 @@ export function subscribeEvents(
 }
 
 export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {
-  return jsonOrThrow(await fetch(`${BASE}/api/files/tree`, { signal }));
+  return jsonOrThrow(await fetch(agentAPIPath("/api/files/tree"), { signal }));
 }
 
 export async function getSessionScratchpad(
@@ -189,7 +205,7 @@ export async function getSessionScratchpad(
   signal?: AbortSignal,
 ): Promise<FileNode> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/scratchpad`, { signal }),
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/scratchpad`), { signal }),
   );
 }
 
@@ -198,31 +214,31 @@ export async function getFileContent(
   signal?: AbortSignal,
 ): Promise<FileContentResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/files/content?path=${encodeURIComponent(path)}`, { signal }),
+    await fetch(agentAPIPath(`/api/files/content?path=${encodeURIComponent(path)}`), { signal }),
   );
 }
 
 export function getFileRawURL(path: string): string {
-  return `${BASE}/api/files/raw?path=${encodeURIComponent(path)}`;
+  return agentAPIPath(`/api/files/raw?path=${encodeURIComponent(path)}`);
 }
 
 export function getMediaURL(path: string): string {
-  return `${BASE}/api/media?path=${encodeURIComponent(path)}`;
+  return agentAPIPath(`/api/media?path=${encodeURIComponent(path)}`);
 }
 
 export async function getRuntimeStatus(): Promise<RuntimeStatusResponse> {
-  return jsonOrThrow(await fetch(`${BASE}/api/runtime`));
+  return jsonOrThrow(await fetch(agentAPIPath("/api/runtime")));
 }
 
 export async function listObservables(): Promise<ObservablesListResponse> {
-  return jsonOrThrow(await fetch(`${BASE}/api/observables`));
+  return jsonOrThrow(await fetch(agentAPIPath("/api/observables")));
 }
 
 export async function createObservable(
   input: ObservableCreateRequest,
 ): Promise<ObservableStatus> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/observables`, {
+    await fetch(agentAPIPath("/api/observables"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
@@ -234,13 +250,13 @@ export async function getObservable(
   id: string,
 ): Promise<ObservableDetailResponse> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}`),
+    await fetch(agentAPIPath(`/api/observables/${encodeURIComponent(id)}`)),
   );
 }
 
 export async function startObservable(id: string): Promise<ObservableStatus> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}/start`, {
+    await fetch(agentAPIPath(`/api/observables/${encodeURIComponent(id)}/start`), {
       method: "POST",
     }),
   );
@@ -248,7 +264,7 @@ export async function startObservable(id: string): Promise<ObservableStatus> {
 
 export async function stopObservable(id: string): Promise<ObservableStatus> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}/stop`, {
+    await fetch(agentAPIPath(`/api/observables/${encodeURIComponent(id)}/stop`), {
       method: "POST",
     }),
   );
@@ -256,7 +272,7 @@ export async function stopObservable(id: string): Promise<ObservableStatus> {
 
 export async function runObservable(id: string): Promise<ObservationRecord> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}/run`, {
+    await fetch(agentAPIPath(`/api/observables/${encodeURIComponent(id)}/run`), {
       method: "POST",
     }),
   );
@@ -266,7 +282,7 @@ export async function deleteObservable(
   id: string,
 ): Promise<{ deleted: string }> {
   return jsonOrThrow(
-    await fetch(`${BASE}/api/observables/${encodeURIComponent(id)}`, {
+    await fetch(agentAPIPath(`/api/observables/${encodeURIComponent(id)}`), {
       method: "DELETE",
     }),
   );
@@ -278,8 +294,54 @@ export async function listObservableObservations(
 ): Promise<ObservableObservationsResponse> {
   return jsonOrThrow(
     await fetch(
-      `${BASE}/api/observables/${encodeURIComponent(id)}/observations?limit=${encodeURIComponent(String(limit))}`,
+      agentAPIPath(`/api/observables/${encodeURIComponent(id)}/observations?limit=${encodeURIComponent(String(limit))}`),
     ),
+  );
+}
+
+export async function listAgents(): Promise<AgentStatus[]> {
+  return jsonOrThrow(await fetch("/api/agents"));
+}
+
+export async function runAgentAction(
+  id: string,
+  action: "start" | "stop" | "restart",
+): Promise<AgentStatus> {
+  return jsonOrThrow(
+    await fetch(`/api/agents/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+    }),
+  );
+}
+
+export async function getAgentLogs(
+  id: string,
+  lines = 200,
+): Promise<string> {
+  const response = await jsonOrThrow<{ content: string }>(
+    await fetch(
+      `/api/agents/${encodeURIComponent(id)}/logs?lines=${encodeURIComponent(String(lines))}`,
+    ),
+  );
+  return response.content;
+}
+
+export async function getAgentConfig(id: string): Promise<AgentConfig> {
+  return jsonOrThrow(
+    await fetch(`/api/agents/${encodeURIComponent(id)}/config`),
+  );
+}
+
+export async function updateAgentConfig(
+  id: string,
+  content: string,
+): Promise<AgentConfigUpdateResponse> {
+  return jsonOrThrow(
+    await fetch(`/api/agents/${encodeURIComponent(id)}/config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    }),
   );
 }
 

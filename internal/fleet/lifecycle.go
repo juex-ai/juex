@@ -11,6 +11,8 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 )
 
+const runtimeReadRetryWindow = time.Second
+
 func (m *Manager) Start(ctx context.Context, selector string) (AgentStatus, error) {
 	entry, err := m.resolve(selector)
 	if err != nil {
@@ -58,6 +60,7 @@ func (m *Manager) startEntry(ctx context.Context, entry agentstate.RegistryEntry
 	defer deadline.Stop()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	var runtimeReadFailureSince time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -69,11 +72,20 @@ func (m *Manager) startEntry(ctx context.Context, entry agentstate.RegistryEntry
 		case <-ticker.C:
 			runtimeState, err := m.deps.readRuntime(entry.Dir)
 			if errors.Is(err, os.ErrNotExist) {
+				runtimeReadFailureSince = time.Time{}
 				continue
 			}
 			if err != nil {
+				now := time.Now()
+				if runtimeReadFailureSince.IsZero() {
+					runtimeReadFailureSince = now
+				}
+				if now.Sub(runtimeReadFailureSince) < runtimeReadRetryWindow {
+					continue
+				}
 				return status, fmt.Errorf("fleet: agent %q published invalid runtime metadata: %w", entry.ID, err)
 			}
+			runtimeReadFailureSince = time.Time{}
 			if runtimeState.PID != process.PID {
 				return status, &ConflictError{
 					AgentID: entry.ID,

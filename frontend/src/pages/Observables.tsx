@@ -20,6 +20,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { agentPathFromLocation } from "@/lib/fleet-routes";
 import type { ObservableStatus } from "@/types";
 
 const observableGridColumns =
@@ -87,7 +88,9 @@ export function Observables() {
         await deleteObservable(id);
       }
       await refresh({ quiet: true });
-      if (action === "delete") navigate("/observables", { replace: true });
+      if (action === "delete") {
+        navigate(agentPathFromLocation("/observables"), { replace: true });
+      }
     } catch (e) {
       console.error(`${action}Observable failed`, e);
       setError(e instanceof Error ? e.message : `Failed to ${action}.`);
@@ -195,7 +198,9 @@ function ObservableRow({
   ) => Promise<void>;
 }) {
   const last = item.last_observation?.id ? item.last_observation : null;
-  const detailHref = `/observables/${encodeURIComponent(item.id)}`;
+  const detailHref = agentPathFromLocation(
+    `/observables/${encodeURIComponent(item.id)}`,
+  );
   const detailLabel = `Open observable ${item.name || item.id}`;
   const tooltipContentRef = useRef<HTMLDivElement>(null);
 

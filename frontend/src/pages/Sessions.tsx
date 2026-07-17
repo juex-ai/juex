@@ -1,6 +1,6 @@
 import { LogoMark } from "@/components/LogoMark";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { createSession, listSessions, startTurn } from "@/api";
 import {
   PromptInput,
@@ -10,9 +10,11 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
 import { homeActiveSessionHref } from "@/lib/home-route";
+import { agentPathFromLocation } from "@/lib/fleet-routes";
 
 export function Sessions() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [checkingSession, setCheckingSession] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,14 +68,20 @@ export function Sessions() {
                   turn.command.status?.session_id
                     ? turn.command.status.session_id
                     : session.id;
-                navigate(`/sessions/${encodeURIComponent(targetSessionID)}`, {
-                  state:
-                    turn.command && !turn.turn_id
-                      ? { commandInput: text, command: turn.command }
-                      : turn.turn_id
-                        ? { activeTurnID: turn.turn_id }
-                        : undefined,
-                });
+                navigate(
+                  agentPathFromLocation(
+                    `/sessions/${encodeURIComponent(targetSessionID)}`,
+                    location.pathname,
+                  ),
+                  {
+                    state:
+                      turn.command && !turn.turn_id
+                        ? { commandInput: text, command: turn.command }
+                        : turn.turn_id
+                          ? { activeTurnID: turn.turn_id }
+                          : undefined,
+                  },
+                );
               } catch (e) {
                 const message =
                   e instanceof Error ? e.message : "Failed to start chat.";
