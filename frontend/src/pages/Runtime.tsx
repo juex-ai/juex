@@ -453,8 +453,10 @@ function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
             {entry.source}
           </Badge>
         </td>
-        <td className="text-muted-foreground max-w-[30rem] truncate px-3 py-2.5 font-mono text-xs">
-          {entry.path || entry.key}
+        <td className="px-3 py-2.5">
+          <div className="text-muted-foreground max-w-[30rem] truncate font-mono text-xs">
+            {entry.path || entry.key}
+          </div>
         </td>
         <td className="px-3 py-2">
           <Badge variant="secondary" className="font-mono text-[11px]">
@@ -549,18 +551,24 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
             {toolCount}
           </Badge>
         </td>
-        <td className="max-w-[24rem] truncate px-3 py-2.5 font-mono text-xs">
-          {mcpServerCommand(server.command, server.args)}
+        <td className="px-3 py-2.5">
+          <div className="max-w-[24rem] truncate font-mono text-xs">
+            {mcpServerCommand(server.command, server.args)}
+          </div>
         </td>
         <td
-          className={
-            server.error
-              ? "max-w-[24rem] truncate px-3 py-2.5 font-mono text-xs text-destructive"
-              : "max-w-[24rem] truncate px-3 py-2.5 font-mono text-xs text-muted-foreground"
-          }
+          className="px-3 py-2.5"
           title={server.error || undefined}
         >
-          {server.error || "-"}
+          <div
+            className={
+              server.error
+                ? "max-w-[24rem] truncate font-mono text-xs text-destructive"
+                : "max-w-[24rem] truncate font-mono text-xs text-muted-foreground"
+            }
+          >
+            {server.error || "-"}
+          </div>
         </td>
       </tr>
       {serverOpen && (

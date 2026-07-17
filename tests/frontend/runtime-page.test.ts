@@ -192,6 +192,34 @@ test("MCP table row keeps command and error visible and lazily mounts tools", ()
   );
 });
 
+test("Runtime table truncation is applied inside cells", () => {
+  const pageFile = parseSource(runtimePageSource, "Runtime.tsx");
+  const catalogFile = parseSource(
+    runtimeToolCatalogSource,
+    "RuntimeToolCatalog.tsx",
+  );
+  const functions = [
+    requireFunction(catalogFile, "RuntimeToolGroupRow"),
+    requireFunction(pageFile, "SystemPromptEntryRow"),
+    requireFunction(pageFile, "MCPServerRow"),
+  ];
+
+  for (const fn of functions) {
+    for (const attributes of jsxOpeningElementAttributes(fn, "td")) {
+      assert.doesNotMatch(
+        attributes,
+        /\btruncate\b/,
+        `${fn.name.text} must not apply truncate directly to a table cell`,
+      );
+    }
+    assert.match(
+      fn.getText(),
+      /<(?:div|span) className=(?:\{|"[\s\S]*?\btruncate\b)/,
+      `${fn.name.text} must truncate content inside the table cell`,
+    );
+  }
+});
+
 function runtimePageHeadings(source: string): string[] {
   const sourceFile = parseSource(source, "Runtime.tsx");
   const headings: string[] = [];
@@ -248,6 +276,21 @@ function requireFunction(sourceFile: any, name: string): any {
   const fn = findFunction(sourceFile, name);
   assert.ok(fn, `missing function: ${name}`);
   return fn;
+}
+
+function jsxOpeningElementAttributes(rootNode: any, tagName: string): string[] {
+  const attributes: string[] = [];
+  const visit = (node: any) => {
+    if (
+      ts.isJsxElement(node) &&
+      node.openingElement.tagName.getText(node.getSourceFile()) === tagName
+    ) {
+      attributes.push(node.openingElement.attributes.getText(node.getSourceFile()));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(rootNode);
+  return attributes;
 }
 
 function collectJsxText(node: any): string {

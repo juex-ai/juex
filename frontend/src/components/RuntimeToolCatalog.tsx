@@ -112,8 +112,11 @@ function RuntimeToolGroupRow({ group }: { group: RuntimeToolGroup }) {
             {group.tools?.length ?? 0}
           </Badge>
         </td>
-        <td className="text-muted-foreground max-w-[34rem] truncate px-3 py-2.5 font-mono text-xs">
-          {(group.tools ?? []).map((tool) => tool.name).join(", ") || "No tools"}
+        <td className="px-3 py-2.5">
+          <div className="text-muted-foreground max-w-[34rem] truncate font-mono text-xs">
+            {(group.tools ?? []).map((tool) => tool.name).join(", ") ||
+              "No tools"}
+          </div>
         </td>
       </tr>
       {groupOpen && (
