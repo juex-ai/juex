@@ -187,6 +187,11 @@ test("MCP table row keeps command and error visible and lazily mounts tools", ()
   assert.match(row.getText(), /serverOpen\s*&&[\s\S]*<RuntimeToolList/);
   assert.match(row.getText(), /server\.tools !== undefined/);
   assert.match(
+    row.getText(),
+    /serverOpen\s*&&[\s\S]*server\.error[\s\S]*Startup error/,
+    "expanded MCP details must expose the full startup error in-page",
+  );
+  assert.match(
     runtimePageSource,
     /Tool details unavailable in this response/,
   );

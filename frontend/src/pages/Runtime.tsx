@@ -525,7 +525,7 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
       <tr className="border-t align-top first:border-t-0">
         <td className="px-2 py-2">
           <RuntimeDisclosureButton
-            label={`${server.name} MCP tools`}
+            label={`${server.name} MCP details`}
             open={serverOpen}
             onToggle={() => setServerOpen((open) => !open)}
           />
@@ -574,6 +574,16 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
       {serverOpen && (
         <tr className="border-t bg-muted/20">
           <td colSpan={7} className="p-0 pl-4">
+            {server.error ? (
+              <div className="border-b bg-destructive/5 px-3 py-3">
+                <p className="text-muted-foreground text-[11px] font-semibold uppercase tracking-[0.14em]">
+                  Startup error
+                </p>
+                <pre className="text-destructive mt-1 whitespace-pre-wrap break-words font-mono text-xs">
+                  {server.error}
+                </pre>
+              </div>
+            ) : null}
             <RuntimeToolList
               tools={server.tools ?? []}
               empty={mcpToolEmptyLabel(server.status, toolsAvailable)}
