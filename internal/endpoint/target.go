@@ -79,7 +79,18 @@ func (t Target) URL(path string) string {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	return (&url.URL{Scheme: "http", Host: "juex", Path: path}).String()
+	requestTarget, err := url.ParseRequestURI(path)
+	if err != nil {
+		return (&url.URL{Scheme: "http", Host: "juex", Path: path}).String()
+	}
+	return (&url.URL{
+		Scheme:     "http",
+		Host:       "juex",
+		Path:       requestTarget.Path,
+		RawPath:    requestTarget.RawPath,
+		ForceQuery: requestTarget.ForceQuery,
+		RawQuery:   requestTarget.RawQuery,
+	}).String()
 }
 
 func (t Target) DialContext(ctx context.Context) (net.Conn, error) {

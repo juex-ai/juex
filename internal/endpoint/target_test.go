@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -89,5 +90,22 @@ func TestTargetHTTPClientDialsParsedEndpoint(t *testing.T) {
 	}
 	if string(body) != "endpoint-ok\n" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestTargetURLPreservesQuery(t *testing.T) {
+	target, err := Parse("tcp://127.0.0.1:43123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := url.Parse(target.URL("/api/files/content?path=README.md&line=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != "/api/files/content" {
+		t.Fatalf("path = %q, want /api/files/content", got.Path)
+	}
+	if got.Query().Get("path") != "README.md" || got.Query().Get("line") != "1" {
+		t.Fatalf("query = %q, want path and line parameters", got.RawQuery)
 	}
 }
