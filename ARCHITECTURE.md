@@ -1061,8 +1061,8 @@ bound healthy runtime immediately before forwarding. It then uses the parsed
 `endpoint.Target` transport for either Unix or numeric-loopback TCP endpoints.
 The proxy strips the fleet prefix, preserves query and upstream responses, does
 not retry requests, and flushes SSE immediately. Dial failures return 502.
-Other GET routes use the same exported embedded SPA handler as the single-agent
-web server.
+Other GET routes use the embedded SPA handler exported by `internal/web`;
+single-agent servers do not mount that handler.
 
 Config PUT validates the request as a replacement workspace layer over the
 effective user config before writing. `internal/config` publishes the candidate
@@ -1081,15 +1081,16 @@ func (s *Server) APIHandler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` defaults to `127.0.0.1:8080` (loopback only, no auth). Binding
-beyond loopback requires `--unsafe-bind-any`. Every serving process also starts
-the canonical agent endpoint and records it in the identity-owned
-`runtime.json`. The agent endpoint uses `APIHandler` and never serves the SPA;
-the browser listener continues to use `Handler` for API plus SPA routes.
-`--headless` skips the browser listener entirely. Startup ensures an active
-primary session record exists, starts the selected listeners, publishes the
-endpoint, and then warms the shared MCP manager plus the active primary
-session. The agent API also exposes exact runtime identity and instance-bound
+`juex serve` defaults its optional TCP API listener to `127.0.0.1:8080`
+(loopback only, no auth). Binding beyond loopback requires
+`--unsafe-bind-any`. Every serving process also starts the canonical agent
+endpoint and records it in the identity-owned `runtime.json`. Both listeners
+use the API-only `Handler`; neither serves the SPA. `--headless` skips the TCP
+API listener entirely. The fleet server is the only process that mounts the
+embedded SPA. Startup ensures an active primary session record exists, starts
+the selected listeners, publishes the endpoint, and then warms the shared MCP
+manager plus the active primary session. The agent API also exposes exact
+runtime identity and instance-bound
 self-shutdown routes used by fleet lifecycle operations. Each session gets its
 own `*app.App`; the web broadcaster is registered as a live delivery adapter on
 the app's durable event sink, so SSE clients only receive events after
@@ -1125,17 +1126,25 @@ input, compact markers, tool output deltas, usage snapshots, and turn-status
 reconciliation. `frontend/src/pages/Session.tsx` remains the route adapter for
 fetching, EventSource subscription, timers, navigation, and rendering.
 
-Routes:
+Agent API routes are available directly as `/api/...` and through the fleet
+proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/healthz` | readiness probe |
-| GET | `/` | React SPA entry |
-| GET | `/sessions/<id>` | React SPA session route |
-| GET | `/runtime` | React SPA runtime route |
-| GET | `/observables` | React SPA Observables route |
-| GET | `/observables/<id>` | React SPA Observable detail route |
+| GET | `/` | Fleet roster SPA entry |
+| GET | `/agents/<id>` | Selected agent sessions SPA route |
+| GET | `/agents/<id>/sessions/<session-id>` | Selected agent conversation SPA route |
+| GET | `/agents/<id>/history` | Selected agent history SPA route |
+| GET | `/agents/<id>/runtime` | Selected agent runtime SPA route |
+| GET | `/agents/<id>/observables[/<observable-id>]` | Selected agent Observables SPA routes |
+| GET | `/agents/<id>/logs` | Selected agent bounded logs SPA route |
+| GET | `/agents/<id>/config` | Selected agent config SPA route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
+| GET | `/api/agents` | Fleet roster JSON |
+| POST | `/api/agents/<id>/start\|stop\|restart` | Agent lifecycle action |
+| GET | `/api/agents/<id>/logs?lines=N` | Bounded combined log tail |
+| GET, PUT | `/api/agents/<id>/config` | Read or validate, write, and restart config |
 | GET | `/api/sessions` | JSON list |
 | POST | `/api/sessions` | create active primary session |
 | GET | `/api/sessions/<id>` | JSON transcript window (`?before=&limit=` for older pages) |

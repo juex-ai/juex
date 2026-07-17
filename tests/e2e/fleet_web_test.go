@@ -29,29 +29,49 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	workspace := t.TempDir()
 	agentID := "aaaaaaaa"
 	agentDir := writeFleetE2EAgent(t, home, workspace, agentID)
+	secondWorkspace := t.TempDir()
+	secondAgentID := "bbbbbbbb"
+	secondAgentDir := writeFleetE2EAgent(
+		t,
+		home,
+		secondWorkspace,
+		secondAgentID,
+	)
 	configPath := filepath.Join(workspace, ".juex", "juex.yaml")
 	initialConfig := fleetWebConfig("old-model")
 	if err := os.WriteFile(configPath, initialConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(
+		filepath.Join(secondWorkspace, ".juex", "juex.yaml"),
+		fleetWebConfig("second-model"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
 	environment := fleetWebEnvironment(home)
 
 	t.Cleanup(func() {
-		runtimeState, err := endpoint.ReadRuntime(agentDir)
-		if err == nil {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			_ = endpoint.RequestShutdown(ctx, runtimeState)
-			cancel()
-			process, _ := os.FindProcess(runtimeState.PID)
-			_ = process.Kill()
+		for _, dir := range []string{agentDir, secondAgentDir} {
+			runtimeState, err := endpoint.ReadRuntime(dir)
+			if err == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				_ = endpoint.RequestShutdown(ctx, runtimeState)
+				cancel()
+				process, _ := os.FindProcess(runtimeState.PID)
+				_ = process.Kill()
+			}
 		}
 	})
 
-	if stdout, stderr, err := runFleetE2E(binary, environment, "", "start", agentID); err != nil {
-		t.Fatalf("fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	for _, id := range []string{agentID, secondAgentID} {
+		if stdout, stderr, err := runFleetE2E(binary, environment, "", "start", id); err != nil {
+			t.Fatalf("fleet start %s: %v\nstdout:\n%s\nstderr:\n%s", id, err, stdout, stderr)
+		}
 	}
 	firstRuntime := waitFleetRuntime(t, agentDir)
 	probeFleetRuntime(t, firstRuntime)
+	probeFleetRuntime(t, waitFleetRuntime(t, secondAgentDir))
 	if runtime.GOOS != "windows" && !strings.HasPrefix(firstRuntime.Endpoint, "unix://") {
 		t.Fatalf("headless agent endpoint = %q, want Unix socket", firstRuntime.Endpoint)
 	}
@@ -68,10 +88,31 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 
 	var roster []fleet.AgentStatus
 	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
-	if len(roster) != 1 ||
-		roster[0].ID != agentID ||
-		roster[0].RuntimeHealth != fleet.RuntimeHealthy {
+	if len(roster) != 2 {
 		t.Fatalf("fleet roster = %+v", roster)
+	}
+	health := make(map[string]fleet.RuntimeHealth, len(roster))
+	for _, agent := range roster {
+		health[agent.ID] = agent.RuntimeHealth
+	}
+	for _, id := range []string{agentID, secondAgentID} {
+		if health[id] != fleet.RuntimeHealthy {
+			t.Fatalf("fleet roster health[%s] = %q, roster = %+v", id, health[id], roster)
+		}
+	}
+
+	for _, path := range []string{
+		"/",
+		"/agents/" + agentID,
+		"/agents/" + agentID + "/sessions/arbitrary-session",
+		"/agents/" + agentID + "/history",
+		"/agents/" + agentID + "/runtime",
+		"/agents/" + agentID + "/observables",
+		"/agents/" + agentID + "/logs",
+		"/agents/" + agentID + "/config",
+		"/agents/" + secondAgentID,
+	} {
+		assertFleetSPA(t, client, baseURL+path)
 	}
 
 	var runtimeStatus struct {
@@ -177,6 +218,26 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	)
 	if runtimeStatus.Provider.Model != "new-model" {
 		t.Fatalf("updated proxied model = %q", runtimeStatus.Provider.Model)
+	}
+}
+
+func assertFleetSPA(t *testing.T, client *http.Client, rawURL string) {
+	t.Helper()
+	response, err := client.Get(rawURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, body = %s", rawURL, response.StatusCode, body)
+	}
+	if !strings.Contains(response.Header.Get("Content-Type"), "text/html") ||
+		!strings.Contains(string(body), `<div id="root"></div>`) {
+		t.Fatalf("GET %s did not return fleet SPA: %s", rawURL, body)
 	}
 }
 

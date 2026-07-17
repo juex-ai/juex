@@ -22,7 +22,7 @@ test("Observables table uses an accessible full-row link target", () => {
   assert.match(observablesPageSource, /import \{ Link, useNavigate \}/);
   assert.match(
     observablesPageSource,
-    /const detailHref = `\/observables\/\$\{encodeURIComponent\(item\.id\)\}`;/,
+    /const detailHref = agentPathFromLocation\(\s*`\/observables\/\$\{encodeURIComponent\(item\.id\)\}`/,
   );
   assert.match(observablesPageSource, /<Link\s+to=\{detailHref\}/);
   assert.match(

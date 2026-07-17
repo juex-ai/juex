@@ -1,6 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getSession, startTurn, uploadSessionAttachment } from "../../frontend/src/api.ts";
+import {
+  APIError,
+  getAgentConfig,
+  getSession,
+  listSessions,
+  startTurn,
+  uploadSessionAttachment,
+} from "../../frontend/src/api.ts";
+
+test("fleet API errors expose nested validation messages", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({
+        error: {
+          code: "invalid_config",
+          message: "invalid workspace config: expected model",
+        },
+      }),
+      {
+        status: 400,
+        statusText: "Bad Request",
+        headers: { "Content-Type": "application/json" },
+      },
+    )) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => getAgentConfig("alpha"),
+      (error: unknown) =>
+        error instanceof APIError &&
+        error.message === "invalid workspace config: expected model",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("agent API calls use the selected fleet route prefix", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const calls: string[] = [];
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: { location: { pathname: "/agents/agent%20one/history" } },
+  });
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    return new Response(JSON.stringify({ sessions: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    await listSessions();
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow) {
+      Object.defineProperty(globalThis, "window", originalWindow);
+    } else {
+      delete (globalThis as { window?: unknown }).window;
+    }
+  }
+
+  assert.deepEqual(calls, ["/agents/agent%20one/api/sessions"]);
+});
 
 test("getSession encodes optional transcript pagination params", async () => {
   const originalFetch = globalThis.fetch;

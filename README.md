@@ -80,10 +80,10 @@ blocking responses.
 If you built from source without installing, use `./dist/juex` instead of
 `juex`.
 
-`juex serve` starts a loopback-only web UI on `127.0.0.1:8080` and always
-publishes the same JSON/SSE API through the current agent endpoint. Use
-`juex serve --headless` to run only the agent endpoint without a browser
-listener or SPA.
+`juex serve` publishes the current agent's JSON/SSE API through its canonical
+local endpoint and, unless `--headless` is set, on loopback
+`127.0.0.1:8080`. It does not serve the React SPA. Use `juex fleet serve` for
+the browser UI.
 
 `juex fleet` manages all resident agents registered under the effective
 `JUEX_HOME`. `fleet start|stop|restart`, `fleet status`, and `fleet logs`
@@ -117,7 +117,7 @@ loopback address; binding beyond loopback requires `--unsafe-bind-any`.
 | `juex sessions compact <id> --instructions "<focus>"` | Append a manual compact summary marker to a session. |
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
-| `juex serve` | Start the React web UI and JSON/SSE API. |
+| `juex serve` | Serve the current agent JSON/SSE API through its endpoint and loopback TCP. |
 | `juex serve --headless` | Serve the JSON/SSE API only through the current agent endpoint. |
 | `juex fleet serve [--addr 127.0.0.1:8080]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
 | `juex fleet status [--format table\|json]` | Show every registry entry with separate workspace binding and runtime health. |

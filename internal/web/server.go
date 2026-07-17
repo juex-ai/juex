@@ -29,7 +29,7 @@ type Options struct {
 	Addr         string
 	Provider     llm.Provider // optional; injected for tests
 	AllowAnyBind bool         // bypass the loopback bind check; CLI sets this for --unsafe-bind-any
-	Headless     bool         // skip the browser TCP listener and serve only the agent endpoint
+	Headless     bool         // skip the TCP API listener and serve only the agent endpoint
 	Verbose      bool
 	Debug        bool
 	LogLevel     string
@@ -39,7 +39,7 @@ type Options struct {
 
 type ReadyInfo struct {
 	AgentEndpoint  string
-	WebAddress     string
+	TCPAddress     string
 	FallbackReason string
 }
 
@@ -97,13 +97,9 @@ func NewServer(opts Options) *Server {
 	}
 }
 
-// Handler returns the http.Handler wired with every route. Exposed so
-// tests can mount it under httptest without spinning a real listener.
+// Handler returns the agent JSON/SSE API. The fleet owns the browser SPA.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	s.registerAPIRoutes(mux)
-	s.registerSPARoutes(mux)
-	return mux
+	return s.APIHandler()
 }
 
 // APIHandler returns the local agent API without the browser SPA fallback.
@@ -129,15 +125,6 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/observables", s.handleObservables)
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
-}
-
-func (s *Server) registerSPARoutes(mux *http.ServeMux) {
-	spa := spaHandler()
-	mux.Handle("/", spa)
-	mux.Handle("/sessions/", spa)
-	mux.Handle("/runtime", spa)
-	mux.Handle("/observables", spa)
-	mux.Handle("/observables/", spa)
 }
 
 // dispatchSession routes /api/sessions/<id>[/...] to the matching handler.
@@ -175,8 +162,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Run starts the canonical agent API endpoint and, unless headless, the browser
-// TCP listener. It blocks until cancellation or a listener/startup failure.
+// Run starts the canonical agent API endpoint and, unless headless, a TCP API
+// listener. It blocks until cancellation or a listener/startup failure.
 func (s *Server) Run(ctx context.Context) error {
 	if !s.opts.Headless && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex serve: --addr must bind to loopback (got %q)", s.opts.Addr)
@@ -201,16 +188,16 @@ func (s *Server) Run(ctx context.Context) error {
 		server:   newHTTPServer(s.APIHandler()),
 		listener: binding.Listener(),
 	}}
-	webAddress := ""
+	tcpAddress := ""
 	if !s.opts.Headless {
-		webListener, err := net.Listen("tcp", s.opts.Addr)
+		tcpListener, err := net.Listen("tcp", s.opts.Addr)
 		if err != nil {
 			return err
 		}
-		webAddress = webListener.Addr().String()
+		tcpAddress = tcpListener.Addr().String()
 		servers = append(servers, httpServerBinding{
 			server:   newHTTPServer(s.Handler()),
-			listener: webListener,
+			listener: tcpListener,
 		})
 	}
 
@@ -231,7 +218,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.opts.OnReady != nil {
 		info := ReadyInfo{
 			AgentEndpoint: binding.Runtime().Endpoint,
-			WebAddress:    webAddress,
+			TCPAddress:    tcpAddress,
 		}
 		if binding.FallbackReason() != nil {
 			info.FallbackReason = binding.FallbackReason().Error()

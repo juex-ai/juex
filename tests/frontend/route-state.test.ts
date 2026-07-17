@@ -8,4 +8,6 @@ test("isHistoryPath matches only the history list page", () => {
   assert.equal(isHistoryPath("/history/sessions/abc"), false);
   assert.equal(isHistoryPath("/history-settings"), false);
   assert.equal(isHistoryPath("/sessions/history"), false);
+  assert.equal(isHistoryPath("/agents/alpha/history"), true);
+  assert.equal(isHistoryPath("/agents/alpha/history/sessions/abc"), false);
 });

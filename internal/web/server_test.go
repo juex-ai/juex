@@ -154,9 +154,8 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	}
 }
 
-func TestRunHeadlessPublishesAPIOnlyAgentEndpoint(t *testing.T) {
+func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	srv := newTestServer(t)
-	srv.opts.Headless = true
 	srv.opts.Cfg.AgentStateDir = t.TempDir()
 	ready := make(chan ReadyInfo, 1)
 	srv.opts.OnReady = func(info ReadyInfo) { ready <- info }
@@ -172,7 +171,7 @@ func TestRunHeadlessPublishesAPIOnlyAgentEndpoint(t *testing.T) {
 		cancel()
 		t.Fatal("headless server did not become ready")
 	}
-	if info.AgentEndpoint == "" || info.WebAddress != "" {
+	if info.AgentEndpoint == "" {
 		t.Fatalf("ready info = %+v", info)
 	}
 	runtimeState, err := endpoint.ReadRuntime(srv.opts.Cfg.AgentStateDir)

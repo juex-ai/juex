@@ -11,6 +11,7 @@ import {
   historySessionTitle,
 } from "@/lib/history-sessions";
 import { cn } from "@/lib/utils";
+import { agentPathFromLocation } from "@/lib/fleet-routes";
 import type { SessionInfo } from "@/types";
 
 export function History() {
@@ -55,7 +56,9 @@ export function History() {
     try {
       const session = await createSession();
       window.dispatchEvent(new Event("juex:sessions-changed"));
-      navigate(`/sessions/${encodeURIComponent(session.id)}`);
+      navigate(
+        agentPathFromLocation(`/sessions/${encodeURIComponent(session.id)}`),
+      );
     } catch (e) {
       console.error("createSession failed", e);
       setError(e instanceof Error ? e.message : "Failed to create chat.");

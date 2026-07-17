@@ -1,4 +1,5 @@
 import { sessionPreviewTitle } from "./session-title.ts";
+import { agentPathFromLocation } from "./fleet-routes.ts";
 
 type HistorySessionSummary = {
   id: string;
@@ -8,8 +9,11 @@ type HistorySessionSummary = {
   turns: number;
 };
 
-export function historySessionHref(id: string): string {
-  return `/sessions/${encodeURIComponent(id)}`;
+export function historySessionHref(id: string, pathname?: string): string {
+  return agentPathFromLocation(
+    `/sessions/${encodeURIComponent(id)}`,
+    pathname,
+  );
 }
 
 export function historySessionTitle(

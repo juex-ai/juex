@@ -13,14 +13,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // The Go dev server runs on :8080. Proxy API + SSE during HMR.
+      // The fleet dev server runs on :8080. Proxy fleet and agent APIs.
       "/api": "http://127.0.0.1:8080",
-      "/sessions/.+/events": {
-        target: "http://127.0.0.1:8080",
-        changeOrigin: true,
-      },
-      // SPA-served paths like /sessions/:id are handled by the React
-      // router, NOT proxied.
+      "^/agents/[^/]+/api(?:/|$)": "http://127.0.0.1:8080",
     },
   },
   build: {

@@ -2273,7 +2273,7 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	t.Fatalf("did not receive turn.started; collected:\n%s", collected)
 }
 
-func TestSPAFallback_ServesIndexForUnknownRoute(t *testing.T) {
+func TestAgentHandlerDoesNotServeSPAFallback(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -2285,12 +2285,8 @@ func TestSPAFallback_ServesIndexForUnknownRoute(t *testing.T) {
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.StatusCode != 200 {
+		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("GET %s: status = %d, body=%s", path, resp.StatusCode, body)
-		}
-		if !strings.Contains(string(body), "<!doctype html") &&
-			!strings.Contains(string(body), "<!DOCTYPE html") {
-			t.Errorf("GET %s: body does not look like HTML:\n%s", path, body)
 		}
 	}
 }

@@ -13,6 +13,13 @@ test("historySessionHref routes sessions through the canonical session view", ()
     historySessionHref("primary/session 1"),
     "/sessions/primary%2Fsession%201",
   );
+  assert.equal(
+    historySessionHref(
+      "primary/session 1",
+      "/agents/agent%20one/history",
+    ),
+    "/agents/agent%20one/sessions/primary%2Fsession%201",
+  );
 });
 
 test("historySessionTitle falls back for empty previews", () => {

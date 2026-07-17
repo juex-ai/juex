@@ -6,6 +6,21 @@ import {
   useParams,
 } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
+import { agentPagePath } from "@/lib/fleet-routes";
+
+const Fleet = lazy(() =>
+  import("@/pages/Fleet").then((module) => ({ default: module.Fleet }))
+);
+const AgentLogs = lazy(() =>
+  import("@/pages/AgentLogs").then((module) => ({
+    default: module.AgentLogs,
+  }))
+);
+const AgentConfig = lazy(() =>
+  import("@/pages/AgentConfig").then((module) => ({
+    default: module.AgentConfig,
+  }))
+);
 
 const Sessions = lazy(() =>
   import("@/pages/Sessions").then((module) => ({ default: module.Sessions }))
@@ -47,64 +62,105 @@ function RouteSuspense({ children }: { children: ReactNode }) {
 const router = createBrowserRouter([
   {
     path: "/",
-    element: <AppShell />,
     children: [
       {
         index: true,
         element: (
           <RouteSuspense>
-            <Sessions />
+            <Fleet />
           </RouteSuspense>
         ),
       },
       {
-        path: "sessions/:id",
-        element: (
-          <RouteSuspense>
-            <Session />
-          </RouteSuspense>
-        ),
+        path: "agents/:agentId",
+        element: <AppShell />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RouteSuspense>
+                <Sessions />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "sessions/:id",
+            element: (
+              <RouteSuspense>
+                <Session />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "observables",
+            element: (
+              <RouteSuspense>
+                <Observables />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "observables/:id",
+            element: (
+              <RouteSuspense>
+                <ObservableDetail />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "history",
+            element: (
+              <RouteSuspense>
+                <History />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "history/sessions/:id",
+            element: <HistorySessionRedirect />,
+          },
+          {
+            path: "runtime",
+            element: (
+              <RouteSuspense>
+                <Runtime />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "logs",
+            element: (
+              <RouteSuspense>
+                <AgentLogs />
+              </RouteSuspense>
+            ),
+          },
+          {
+            path: "config",
+            element: (
+              <RouteSuspense>
+                <AgentConfig />
+              </RouteSuspense>
+            ),
+          },
+        ],
       },
-      {
-        path: "observables",
-        element: (
-          <RouteSuspense>
-            <Observables />
-          </RouteSuspense>
-        ),
-      },
-      {
-        path: "observables/:id",
-        element: (
-          <RouteSuspense>
-            <ObservableDetail />
-          </RouteSuspense>
-        ),
-      },
-      {
-        path: "history",
-        element: (
-          <RouteSuspense>
-            <History />
-          </RouteSuspense>
-        ),
-      },
-      { path: "history/sessions/:id", element: <HistorySessionRedirect /> },
-      {
-        path: "runtime",
-        element: (
-          <RouteSuspense>
-            <Runtime />
-          </RouteSuspense>
-        ),
-      },
+      { path: "*", element: <Navigate to="/" replace /> },
     ],
   },
 ]);
 
 function HistorySessionRedirect() {
-  const { id = "" } = useParams<{ id: string }>();
-  return <Navigate to={`/sessions/${encodeURIComponent(id)}`} replace />;
+  const { agentId = "", id = "" } = useParams<{
+    agentId: string;
+    id: string;
+  }>();
+  return (
+    <Navigate
+      to={agentPagePath(agentId, `/sessions/${encodeURIComponent(id)}`)}
+      replace
+    />
+  );
 }
 
 export default function App() {

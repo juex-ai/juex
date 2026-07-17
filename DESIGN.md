@@ -1,7 +1,7 @@
 # Juex Web UI — Design Guide
 
 > Purpose: define the visual language, layout, and component vocabulary for
-> the juex web viewer (`juex serve`). North-star is **直观清晰好用** —
+> the juex fleet web viewer (`juex fleet serve`). North-star is **直观清晰好用** —
 > direct, clear, usable. Anything that touches the web UI follows this guide;
 > design changes land here in the same PR as the code.
 
@@ -31,9 +31,10 @@
 
 ## 2. Tech stack
 
-The web UI is a **single-page React application** built with Vite. The Go
-server hosts the compiled bundle via `go:embed` and exposes only the JSON +
-SSE API; it does not render any HTML.
+The web UI is a **single-page React application** built with Vite. The fleet
+server hosts the compiled bundle via `go:embed`, owns fleet JSON routes, and
+proxies selected-agent JSON/SSE routes. Agent servers expose API only and do
+not serve HTML.
 
 | Layer | Choice | Why |
 |---|---|---|
@@ -98,10 +99,13 @@ juex/
 │   │   │   ├── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
 │   │   │   └── message-rendering.ts # message chrome and display-policy helpers
 │   │   ├── pages/
-│   │   │   ├── Sessions.tsx        # /
-│   │   │   ├── Session.tsx         # /sessions/:id; send access follows kind + active state
-│   │   │   ├── History.tsx         # /history
-│   │   │   └── Runtime.tsx         # /runtime
+│   │   │   ├── Fleet.tsx           # /
+│   │   │   ├── Sessions.tsx        # /agents/:agentId
+│   │   │   ├── Session.tsx         # /agents/:agentId/sessions/:id
+│   │   │   ├── History.tsx         # /agents/:agentId/history
+│   │   │   ├── Runtime.tsx         # /agents/:agentId/runtime
+│   │   │   ├── AgentLogs.tsx       # /agents/:agentId/logs
+│   │   │   └── AgentConfig.tsx     # /agents/:agentId/config
 │   │   └── components/
 │   │       ├── AppShell.tsx
 │   │       ├── ai-elements/        # AI Elements primitives (copied via shadcn CLI)
@@ -115,20 +119,22 @@ juex/
 │   │       │   └── shimmer.tsx
 │   │       └── ui/                 # shadcn primitives (added via shadcn CLI)
 │   └── dist/                       # build output; gitignored — produced by `make web`
-└── internal/web/
-    ├── server.go                   # Server, Run, Shutdown, sessions map
-    ├── handlers.go                 # JSON + SSE handlers (no HTML)
-    ├── sse.go
-    ├── replay.go
-    ├── broadcaster.go
-    ├── embed.go                    # //go:embed frontend/dist + serves SPA fallback
-    └── *_test.go
+├── internal/web/
+│   ├── server.go                   # Server, Run, Shutdown, sessions map
+│   ├── handlers.go                 # JSON + SSE handlers (no HTML)
+│   ├── sse.go
+│   ├── replay.go
+│   ├── broadcaster.go
+│   ├── embed.go                    # embedded frontend assets + SPA fallback
+│   └── *_test.go
+└── internal/fleetweb/               # fleet API, agent proxy, and SPA mount
 ```
 
 The `internal/web/templates/` and `internal/web/static/` directories from the
 old design are removed. `internal/web/embed.go` exposes
 `//go:embed all:../../frontend/dist` and a SPA-friendly handler that serves
 `index.html` for any non-asset path so React Router can take over routing.
+Only `internal/fleetweb` mounts this handler.
 
 `frontend/dist/` is **not committed**. Building `juex` requires Node + pnpm:
 `go build` will fail (empty embed) until `make web` has run. The contract is
@@ -157,9 +163,11 @@ intentional — building `juex` from source means running the full toolchain
 make web-dev      # cd frontend && pnpm dev (Vite on :5173)
 ```
 
-In another shell run `juex serve` on its default `:8080`. Vite's
-`server.proxy` config forwards `/api` and `/sessions/*/events` to the Go
-server. Edit React, see changes instantly.
+In another shell run `juex fleet serve` on its default `:8080`. Vite's
+`server.proxy` config forwards fleet `/api` requests and selected-agent
+`/agents/:id/api` requests to the fleet server. Selected-agent page routes stay
+inside Vite so direct navigation and refresh continue to use the HMR bundle.
+Edit React, see changes instantly.
 
 **CI** runs `make web && make test && make build`.
 
@@ -170,7 +178,7 @@ server. Edit React, see changes instantly.
 Every page renders a responsive shell: the main content column fills the center
 and a workspace browser docks on wide screens or becomes a right-side drawer on
 narrower screens. Session history is not a persistent navigation surface; it is
-opened from the global header as the `/history` page. Session metadata stays
+opened from the agent header as `/agents/<id>/history`. Session metadata stays
 in the global header, and the middle column owns the composer when applicable.
 
 ```
@@ -208,12 +216,12 @@ in the global header, and the middle column owns the composer when applicable.
   buttons do not overlap long titles.
 - Shell-aligned header strips use `--juex-header-height` so the app header and
   workspace header stay aligned.
-- The history icon opens `/history`; each row opens the canonical session route
-  under `/sessions/:id`. The session page decides whether the composer is
-  available from the session kind and active state.
-- The wrench icon opens `/runtime` for MCP server and skill details. On the
-  runtime page, the same slot becomes a back arrow that returns to the previous
-  non-runtime route.
+- The history icon opens `/agents/<id>/history`; each row opens the canonical
+  session route under `/agents/<id>/sessions/:id`. The session page decides
+  whether the composer is available from the session kind and active state.
+- The wrench icon opens `/agents/<id>/runtime` for MCP server and skill
+  details. On the runtime page, the same slot becomes a back arrow that returns
+  to the previous non-runtime route.
 - Center column max-width is 760px; the rest is gutter so reading lines do
   not get awkwardly wide. Gutters shrink from 24px to 16px below 768px.
 - Composer is sticky to the bottom of the center column.
@@ -227,13 +235,20 @@ in the global header, and the middle column owns the composer when applicable.
 
 ## 6. Pages
 
-### 6.1 Sessions list (`/`)
+### 6.1 Fleet roster (`/`)
+
+The fleet entry page is a dense operational roster. Each row shows agent
+identity, runtime health, workspace, process metadata, explicit lifecycle
+actions, and links to sessions, bounded logs, and config. Errors are shown in
+a page-level alert and never hidden behind optimistic status.
+
+### 6.2 Sessions list (`/agents/:agentId`)
 
 The center column shows a warm paper empty state with the logo mark, the line
 `Aware, action`, and the normal prompt input. Submitting creates a new active
-primary session and navigates to `/sessions/<new-id>`.
+primary session and navigates to `/agents/<id>/sessions/<new-id>`.
 
-### 6.2 Session detail (`/sessions/:id`)
+### 6.3 Session detail (`/agents/:agentId/sessions/:id`)
 
 Center column: compact header strip + scrollable message list + sticky
 composer. The composer is shown only for the active primary session. Inactive
@@ -297,20 +312,22 @@ surface so the transcript stays readable.
 Copy controls use the Clipboard API when available and fall back to a temporary
 textarea copy path so local HTTP access over LAN or NetBird still works.
 
-### 6.3 History (`/history`)
+### 6.4 History (`/agents/:agentId/history`)
 
-The global history button opens `/history`, a dense list of recorded sessions
+The agent history button opens `/agents/<id>/history`, a dense list of recorded sessions
 sorted by the server. Rows show the preview, relative last-active time, kind,
-active state, and turn count. Clicking a row opens `/sessions/<id>` so the
-session URL is the same regardless of entry point. Active primary sessions keep
-the composer; inactive primary and side sessions are read-only. The legacy
-`/history/sessions/:id` route redirects to `/sessions/:id`. The history page
-owns deletion and a compact `New chat` button.
+active state, and turn count. Clicking a row opens
+`/agents/<id>/sessions/<session-id>` so the session URL is the same regardless
+of entry point. Active primary sessions keep the composer; inactive primary
+and side sessions are read-only. The legacy
+`/agents/<id>/history/sessions/:id` route redirects to the canonical selected
+agent session route. The history page owns deletion and a compact `New chat`
+button.
 
-### 6.4 Runtime detail (`/runtime`)
+### 6.5 Runtime detail (`/agents/:agentId/runtime`)
 
 Shows service runtime metadata first, including the process start time and the
-absolute cwd used by the running `juex serve` process. The start time is stable
+absolute cwd used by the selected agent process. The start time is stable
 for the server lifetime rather than changing on each refresh. The effective
 system prompt uses a semantic table for label, source, path, and approximate
 token count; each row expands to the full text. The provider profile follows,
@@ -330,7 +347,7 @@ table used by builtin groups. Failed and not-started servers explain why no
 tools are available, while a connected zero-tool server states that it
 advertised none. MCP servers and skills list project-local sources before
 user-global sources.
-`juex serve` starts MCP at server startup, so this page reports live
+The selected agent starts MCP at server startup, so this page reports live
 process-level MCP state rather than waiting for a chat session to be opened.
 Tool group, tool, raw-schema, and MCP tool disclosure bodies mount only while
 open. Every expandable table row uses the same leftmost chevron button: right
@@ -339,7 +356,7 @@ on narrow screens, cells wrap or truncate previews without hiding their labels,
 and disclosure buttons expose expanded state with visible keyboard focus rings.
 This is operational metadata, not a conversational surface.
 
-### 6.5 Observables (`/observables`, `/observables/:id`)
+### 6.6 Observables (`/agents/:agentId/observables`, `/agents/:agentId/observables/:id`)
 
 The list uses a compact five-column grid that fits inside the standard
 `max-w-5xl` content width on tablet and desktop. Observable, Source, and Last
@@ -357,6 +374,13 @@ detail page repeats the labeled Run control beside its lifecycle actions.
 The detail action group wraps and stays right-aligned on narrow screens.
 Actions refresh the current view after success and surface API errors in the
 existing page-level error region.
+
+### 6.7 Agent logs and config
+
+`/agents/:agentId/logs` shows a refreshable bounded tail with an explicit line
+limit. `/agents/:agentId/config` edits the workspace `juex.yaml`; save validates
+before writing, restarts the selected agent, and renders validation or restart
+errors in a prominent alert.
 
 ---
 

@@ -1,4 +1,10 @@
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  Link,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import {
   createContext,
   useContext,
@@ -14,13 +20,16 @@ import { Badge } from "@/components/ui/badge";
 import {
   ArrowLeft,
   Activity,
+  FileCog,
   FolderIcon,
   FolderOpenIcon,
   HistoryIcon,
+  LayoutGrid,
+  ScrollText,
   Wrench,
 } from "lucide-react";
-import { getRuntimeStatus } from "@/api";
-import type { RuntimeStatusResponse } from "@/types";
+import { getRuntimeStatus, listAgents } from "@/api";
+import type { AgentStatus, RuntimeStatusResponse } from "@/types";
 import {
   Sheet,
   SheetContent,
@@ -42,6 +51,17 @@ import {
   type ShellMCPTone,
 } from "@/lib/shell-header";
 import { cn } from "@/lib/utils";
+import {
+  agentPagePath,
+  agentSwitchPath,
+} from "@/lib/fleet-routes";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
 
@@ -72,8 +92,11 @@ export function useShellTitle(
 }
 
 export function AppShell() {
+  const { agentId = "" } = useParams<{ agentId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  const agentBase = agentPagePath(agentId);
+  const storageKey = `juex:last-content-path:${agentId}`;
   const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
@@ -82,26 +105,75 @@ export function AppShell() {
     updatedAt: null,
   });
   const [lastContentPath, setLastContentPath] = useState(
-    () => window.sessionStorage.getItem("juex:last-content-path") || "/",
+    () => window.sessionStorage.getItem(storageKey) || agentBase,
   );
+  const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [runtimeStatus, setRuntimeStatus] =
     useState<RuntimeStatusResponse | null>(null);
+  const currentAgent = agents.find((agent) => agent.id === agentId);
+  const currentAgentHealth = currentAgent?.runtime_health;
+  const agentOptions = currentAgent
+    ? agents
+    : [
+        ...agents,
+        {
+          id: agentId,
+          name: agentId,
+        } as AgentStatus,
+      ];
 
   useEffect(() => {
-    if (location.pathname === "/runtime") return;
+    setLastContentPath(
+      window.sessionStorage.getItem(storageKey) || agentBase,
+    );
+  }, [agentBase, storageKey]);
+
+  useEffect(() => {
+    if (location.pathname === `${agentBase}/runtime`) return;
     const next = `${location.pathname}${location.search}${location.hash}`;
     setLastContentPath(next);
-    window.sessionStorage.setItem("juex:last-content-path", next);
-  }, [location.hash, location.pathname, location.search]);
+    window.sessionStorage.setItem(storageKey, next);
+  }, [
+    agentBase,
+    location.hash,
+    location.pathname,
+    location.search,
+    storageKey,
+  ]);
 
   useEffect(() => {
+    let live = true;
+    const refreshAgents = () => {
+      listAgents()
+        .then((next) => {
+          if (live) setAgents(next);
+        })
+        .catch(() => {
+          // The current route remains usable if a roster refresh is transiently unavailable.
+        });
+    };
+    refreshAgents();
+    const interval = window.setInterval(refreshAgents, 10_000);
+    return () => {
+      live = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentAgentHealth !== "healthy") {
+      setRuntimeStatus(null);
+      return;
+    }
     let live = true;
     const refreshRuntimeStatus = () => {
       getRuntimeStatus()
         .then((status) => {
           if (live) setRuntimeStatus(status);
         })
-        .catch((e) => console.error("getRuntimeStatus failed", e));
+        .catch(() => {
+          if (live) setRuntimeStatus(null);
+        });
     };
     refreshRuntimeStatus();
     const interval = window.setInterval(refreshRuntimeStatus, 30_000);
@@ -109,7 +181,7 @@ export function AppShell() {
       live = false;
       window.clearInterval(interval);
     };
-  }, []);
+  }, [agentId, currentAgentHealth]);
 
   const shellTitle = shellHeader.title;
   const shellUpdatedAt = formatShellUpdatedAt(shellHeader.updatedAt);
@@ -128,8 +200,12 @@ export function AppShell() {
     }
   };
   const shellContextValue = useMemo(() => ({ setShellHeader }), []);
-  const onRuntimePage = location.pathname === "/runtime";
-  const onObservablesPage = location.pathname.startsWith("/observables");
+  const onRuntimePage = location.pathname === `${agentBase}/runtime`;
+  const onObservablesPage = location.pathname.startsWith(
+    `${agentBase}/observables`,
+  );
+  const onLogsPage = location.pathname === `${agentBase}/logs`;
+  const onConfigPage = location.pathname === `${agentBase}/config`;
   const onHistoryPage = isHistoryPath(location.pathname);
 
   return (
@@ -138,7 +214,7 @@ export function AppShell() {
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <header className="flex h-[var(--juex-header-height)] shrink-0 items-center gap-2 border-b bg-card px-4 shadow-[var(--shadow-xs)]">
             <Link
-              to="/"
+              to={agentBase}
               className="flex shrink-0 items-center gap-2 text-primary transition-colors hover:text-primary/85"
               aria-label="New chat"
             >
@@ -147,6 +223,41 @@ export function AppShell() {
                 juex
               </span>
             </Link>
+            <Select
+              value={agentId}
+              onValueChange={(nextAgentID) =>
+                navigate(agentSwitchPath(nextAgentID, location.pathname))
+              }
+            >
+              <SelectTrigger
+                size="sm"
+                className="max-w-28 sm:max-w-44"
+                aria-label="Switch agent"
+              >
+                <SelectValue>
+                  {currentAgent?.name || currentAgent?.id || agentId}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent align="start">
+                {agentOptions.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id}>
+                    <span className="max-w-52 truncate">
+                      {agent.name || agent.id}
+                    </span>
+                    <span
+                      className={cn(
+                        "size-1.5 rounded-full bg-muted-foreground/45",
+                        agent.runtime_health === "healthy" && "bg-emerald-500",
+                        agent.runtime_health === "unhealthy" &&
+                          "bg-destructive",
+                        agent.runtime_health === "ambiguous" && "bg-amber-500",
+                      )}
+                      aria-hidden="true"
+                    />
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <div className="min-w-0 flex-1">
               {shellTitle ? (
                 <div className="min-w-0 border-l pl-3 text-primary">
@@ -158,7 +269,7 @@ export function AppShell() {
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
               {runtimeStatus && mcpBadge ? (
-                <div className="hidden shrink-0 items-center gap-1 sm:flex">
+                <div className="hidden shrink-0 items-center gap-1 xl:flex">
                   {shellUpdatedAt ? (
                     <span className={shellUpdatedAtClassName()}>
                       {shellUpdatedAt}
@@ -194,12 +305,66 @@ export function AppShell() {
                       asChild
                       variant="ghost"
                       size="icon"
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <Link to="/" aria-label="Fleet">
+                        <LayoutGrid className="size-4" />
+                      </Link>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Fleet</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "hidden text-muted-foreground hover:text-foreground md:inline-flex",
+                        onLogsPage && "bg-muted text-foreground",
+                      )}
+                    >
+                      <Link to={`${agentBase}/logs`} aria-label="Agent logs">
+                        <ScrollText className="size-4" />
+                      </Link>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Agent logs</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "hidden text-muted-foreground hover:text-foreground md:inline-flex",
+                        onConfigPage && "bg-muted text-foreground",
+                      )}
+                    >
+                      <Link to={`${agentBase}/config`} aria-label="Agent config">
+                        <FileCog className="size-4" />
+                      </Link>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Agent config</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      asChild
+                      variant="ghost"
+                      size="icon"
                       className={cn(
                         "text-muted-foreground hover:text-foreground",
                         onObservablesPage && "bg-muted text-foreground",
                       )}
                     >
-                      <Link to="/observables" aria-label="Observables">
+                      <Link
+                        to={`${agentBase}/observables`}
+                        aria-label="Observables"
+                      >
                         <Activity className="size-4" />
                       </Link>
                     </Button>
@@ -217,7 +382,7 @@ export function AppShell() {
                         onHistoryPage && "bg-muted text-foreground",
                       )}
                     >
-                      <Link to="/history" aria-label="History">
+                      <Link to={`${agentBase}/history`} aria-label="History">
                         <HistoryIcon className="size-4" />
                       </Link>
                     </Button>
@@ -232,7 +397,7 @@ export function AppShell() {
                         size="icon"
                         className="text-muted-foreground hover:text-foreground"
                         aria-label="Back"
-                        onClick={() => navigate(lastContentPath || "/")}
+                        onClick={() => navigate(lastContentPath || agentBase)}
                       >
                         <ArrowLeft className="size-4" />
                       </Button>
@@ -243,7 +408,10 @@ export function AppShell() {
                         size="icon"
                         className="text-muted-foreground hover:text-foreground"
                       >
-                        <Link to="/runtime" aria-label="Runtime details">
+                        <Link
+                          to={`${agentBase}/runtime`}
+                          aria-label="Runtime details"
+                        >
                           <Wrench className="size-4" />
                         </Link>
                       </Button>
@@ -275,12 +443,12 @@ export function AppShell() {
             </div>
           </header>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <Outlet />
+            <Outlet key={agentId} />
           </div>
         </div>
         {workspaceDockOpen && (
           <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] flex-shrink-0 flex-col overflow-hidden border-l bg-card transition-all xl:flex">
-            <FileTreePanel active={workspaceDocked} />
+            <FileTreePanel key={agentId} active={workspaceDocked} />
           </div>
         )}
         <Sheet
@@ -297,7 +465,10 @@ export function AppShell() {
                 Browse files in the current workspace.
               </SheetDescription>
             </SheetHeader>
-            <FileTreePanel active={!workspaceDocked && workspaceSheetOpen} />
+            <FileTreePanel
+              key={agentId}
+              active={!workspaceDocked && workspaceSheetOpen}
+            />
           </SheetContent>
         </Sheet>
       </div>

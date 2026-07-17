@@ -134,6 +134,7 @@ import {
   uploadSessionAttachment,
 } from "@/api";
 import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
+import { agentPathFromLocation } from "@/lib/fleet-routes";
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -201,7 +202,13 @@ export function Session() {
       dispatchSessionsChanged: () =>
         window.dispatchEvent(new Event("juex:sessions-changed")),
       navigateToSession: (sessionID, state) =>
-        navigate(`/sessions/${encodeURIComponent(sessionID)}`, { state }),
+        navigate(
+          agentPathFromLocation(
+            `/sessions/${encodeURIComponent(sessionID)}`,
+            location.pathname,
+          ),
+          { state },
+        ),
     });
   }, [controller, location.pathname, navigate]);
 
@@ -294,7 +301,9 @@ export function Session() {
       return (
         <SessionLoadErrorState
           detail={loadError}
-          onHistory={() => navigate("/history")}
+          onHistory={() =>
+            navigate(agentPathFromLocation("/history", location.pathname))
+          }
         />
       );
     }

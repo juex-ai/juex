@@ -1779,7 +1779,7 @@ func TestReportServeReadyIncludesEndpointSchemeAndFallback(t *testing.T) {
 
 	reportServeReady(cmd, web.ReadyInfo{
 		AgentEndpoint:  "tcp://127.0.0.1:43123",
-		WebAddress:     "127.0.0.1:8080",
+		TCPAddress:     "127.0.0.1:8080",
 		FallbackReason: "unix sockets unsupported",
 	})
 	for _, want := range []string{"tcp://127.0.0.1:43123", "http://127.0.0.1:8080"} {
