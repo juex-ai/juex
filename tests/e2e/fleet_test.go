@@ -121,7 +121,7 @@ type fleetSupervisor struct {
 
 func startFleetSupervisor(t *testing.T, binary string, environment []string) *fleetSupervisor {
 	t.Helper()
-	command := exec.Command(binary, "fleet", "serve")
+	command := exec.Command(binary, "fleet", "serve", "--addr", "127.0.0.1:0")
 	command.Env = environment
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -141,6 +141,27 @@ func startFleetSupervisor(t *testing.T, binary string, environment []string) *fl
 		}
 	}()
 	return &fleetSupervisor{cmd: command, lines: lines, stderr: &stderr}
+}
+
+func waitFleetWebReady(t *testing.T, supervisor *fleetSupervisor) string {
+	t.Helper()
+	deadline := time.NewTimer(15 * time.Second)
+	defer deadline.Stop()
+	const prefix = "juex fleet listening on http://"
+	for {
+		select {
+		case line, ok := <-supervisor.lines:
+			if !ok {
+				t.Fatalf("fleet web exited before ready; stderr:\n%s", supervisor.stderr.String())
+			}
+			if strings.HasPrefix(line, prefix) {
+				return strings.TrimPrefix(line, prefix)
+			}
+		case <-deadline.C:
+			_ = supervisor.cmd.Process.Kill()
+			t.Fatalf("fleet web did not become ready; stderr:\n%s", supervisor.stderr.String())
+		}
+	}
 }
 
 func waitSupervisorReady(t *testing.T, supervisor *fleetSupervisor, expectedAction string) {

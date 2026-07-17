@@ -348,6 +348,17 @@ func LoadForWorkDirWithModelOverride(workDir, modelRef string) (Config, error) {
 }
 
 func loadConfigFilesForWorkDir(workDir string) (Config, error) {
+	cfg, err := loadUserConfigForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true, "project", true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func loadUserConfigForWorkDir(workDir string) (Config, error) {
 	cfg := Config{
 		ContextWindow:             DefaultContextWindow,
 		Compaction:                DefaultCompactionConfig(),
@@ -381,10 +392,6 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	cfg.HomeJuexDir = juexHome
 
 	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true, "user", false); err != nil {
-		return cfg, err
-	}
-
-	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true, "project", true); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -593,11 +600,15 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, 
 		}
 		return err
 	}
+	return applyYAMLData(cfg, data, path, hookSource, requireHookTrust)
+}
+
+func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireHookTrust bool) error {
 	var fc fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&fc); err != nil {
-		return fmt.Errorf("config: parse %s: %w", path, err)
+		return fmt.Errorf("config: parse %s: %w", source, err)
 	}
 	if strings.TrimSpace(fc.Model) != "" {
 		cfg.modelRef = strings.TrimSpace(fc.Model)
@@ -606,18 +617,18 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, 
 		cfg.EnableUserGlobalResources = fc.EnableUserGlobalResources.Value
 	}
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
-		return fmt.Errorf("config: parse %s: %w", path, err)
+		return fmt.Errorf("config: parse %s: %w", source, err)
 	}
 	if err := applyHooksConfig(cfg, fc.Hooks, hookSource, requireHookTrust); err != nil {
-		return fmt.Errorf("config: parse %s: %w", path, err)
+		return fmt.Errorf("config: parse %s: %w", source, err)
 	}
 	applyCompactionConfig(cfg, fc.Compaction)
 	applyRuntimeConfig(cfg, fc.Runtime)
 	if err := applySkillsConfig(cfg, fc.Skills); err != nil {
-		return fmt.Errorf("config: parse %s: %w", path, err)
+		return fmt.Errorf("config: parse %s: %w", source, err)
 	}
 	if err := applySandboxConfig(cfg, fc.Sandbox); err != nil {
-		return fmt.Errorf("config: parse %s: %w", path, err)
+		return fmt.Errorf("config: parse %s: %w", source, err)
 	}
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell

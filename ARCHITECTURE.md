@@ -928,6 +928,12 @@ juex
 │   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
 ├── serve [--addr <host:port>] [--unsafe-bind-any] [--headless]
+├── fleet
+│   ├── serve [--addr <host:port>] [--unsafe-bind-any]
+│   ├── status [--format table|json]
+│   ├── start|stop|restart <agent>
+│   ├── logs <agent> [--lines N]
+│   └── gc [--yes]
 ├── bundle --session <id> --out <file.tar.gz> [--redact=true] [--force]
 ├── schema
 └── version [-v]
@@ -1015,10 +1021,11 @@ or orphaned agents remain visible even when running.
 
 `juex fleet serve` holds `$JUEX_HOME/fleet.lock`, reconciles the registry once,
 adopts only exact endpoint identities, removes only confirmed stale runtime
-records, starts enabled autostart agents, then waits. Detached children execute
-the current binary as `-C <workspace> serve --headless`, inherit the effective
-home, and append stdout and stderr to `logs/fleet.log`. Supervisor exit never
-stops them.
+records, and starts enabled autostart agents. After reconciliation it binds the
+fleet browser listener, then keeps both services resident. Detached children
+execute the current binary as `-C <workspace> serve --headless`, inherit the
+effective home, and append stdout and stderr to `logs/fleet.log`. Supervisor
+or browser-listener exit never stops them.
 
 Per-agent lifecycle operations hold
 `$JUEX_HOME/.locks/fleet/<agent-id>.lock`. Start waits for the spawned PID to
@@ -1028,6 +1035,28 @@ the endpoint maintenance guard, revalidates a definite orphan, atomically
 renames its registry directory to a hidden sibling, and only then removes it.
 Fleet commands resolve the effective home directly and do not load or mint a
 workspace identity for their current directory.
+
+### 3.8.2 Fleet Web Backend
+
+`internal/fleetweb` owns the loopback fleet HTTP listener, JSON routes, status
+mapping, embedded SPA fallback, and agent reverse proxy. Fleet roster,
+lifecycle, bounded logs, and workspace config routes delegate to
+`internal/fleet`; HTTP handlers do not inspect registry or process state
+directly.
+
+`/agents/<id>/api/...` asks `fleet.Manager.Endpoint` to re-read and probe a
+bound healthy runtime immediately before forwarding. It then uses the parsed
+`endpoint.Target` transport for either Unix or numeric-loopback TCP endpoints.
+The proxy strips the fleet prefix, preserves query and upstream responses, does
+not retry requests, and flushes SSE immediately. Dial failures return 502.
+Other GET routes use the same exported embedded SPA handler as the single-agent
+web server.
+
+Config PUT validates the request as a replacement workspace layer over the
+effective user config before writing. `internal/config` publishes the candidate
+with a sibling temporary file and rename. `internal/fleet` holds the per-agent
+lifecycle lock across preflight, write, stop, and start. A valid config remains
+written if the later restart fails.
 
 ### 3.9 Web Layer
 
