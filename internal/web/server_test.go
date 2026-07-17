@@ -182,8 +182,31 @@ func TestRunHeadlessPublishesAPIOnlyAgentEndpoint(t *testing.T) {
 			t.Fatalf("GET %s status = %d, want %d", path, response.StatusCode, want)
 		}
 	}
+	if err := endpoint.Probe(context.Background(), runtimeState); err != nil {
+		t.Fatalf("probe exact runtime identity: %v", err)
+	}
+	mismatch := runtimeState
+	mismatch.InstanceID = "different-instance"
+	if err := endpoint.RequestShutdown(context.Background(), mismatch); err == nil {
+		t.Fatal("shutdown accepted mismatched runtime identity")
+	}
+	if err := endpoint.Probe(context.Background(), runtimeState); err != nil {
+		t.Fatalf("server stopped after mismatched shutdown: %v", err)
+	}
+	if err := endpoint.RequestShutdown(context.Background(), runtimeState); err != nil {
+		t.Fatalf("request exact runtime shutdown: %v", err)
+	}
 
-	stopRunServer(t, cancel, errCh)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("headless Run after shutdown: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("headless server did not stop after exact shutdown")
+	}
+	cancel()
 	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.AgentStateDir, "runtime.json")); !os.IsNotExist(err) {
 		t.Fatalf("runtime.json remains after shutdown: %v", err)
 	}

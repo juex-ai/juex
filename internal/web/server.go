@@ -63,6 +63,10 @@ type Server struct {
 	mcpStarting chan struct{}
 	mcpStartErr error
 	mcpManager  *mcp.Manager
+
+	endpointMu       sync.RWMutex
+	endpointRuntime  endpoint.Runtime
+	endpointShutdown chan struct{}
 }
 
 // activeSession wraps an app.App with the bookkeeping the web server
@@ -112,6 +116,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
+	mux.HandleFunc("/api/identity", s.handleEndpointIdentity)
+	mux.HandleFunc("/api/control/shutdown", s.handleEndpointShutdown)
 	mux.HandleFunc("/api/sessions", s.handleListSessions)
 	mux.HandleFunc("/api/sessions/", s.dispatchSession)
 	mux.HandleFunc("/api/files/tree", s.handleFilesTree)
@@ -186,6 +192,8 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = binding.Close() }()
+	shutdownCh := s.setEndpointControl(binding.Runtime())
+	defer s.clearEndpointControl(binding.Runtime())
 
 	servers := []httpServerBinding{{
 		server:   newHTTPServer(s.APIHandler()),
@@ -247,6 +255,7 @@ func (s *Server) Run(ctx context.Context) error {
 	var runErr error
 	select {
 	case <-ctx.Done():
+	case <-shutdownCh:
 	case err := <-errCh:
 		runErr = err
 	case err := <-startupErrCh:

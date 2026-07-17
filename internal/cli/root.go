@@ -161,6 +161,14 @@ func newRootCmd() *cobra.Command {
 			return cmd.Help()
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if isFleetCommand(cmd) {
+				for _, name := range []string{"cwd", "config", "model"} {
+					flag := cmd.Root().PersistentFlags().Lookup(name)
+					if flag != nil && flag.Changed {
+						return &usageError{msg: "juex fleet: --" + name + " is not supported; fleet commands use the effective JUEX_HOME registry"}
+					}
+				}
+			}
 			if flag := cmd.Root().PersistentFlags().Lookup("model"); flag != nil && flag.Changed && strings.TrimSpace(flags.model) == "" {
 				_, err := config.ParseModelRef("")
 				return &usageError{msg: "--model: " + err.Error()}
@@ -193,7 +201,17 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newSessionsCmd(flags))
 	cmd.AddCommand(newBundleCmd(flags))
 	cmd.AddCommand(newServeCmd(flags))
+	cmd.AddCommand(newFleetCmd(flags))
 	return cmd
+}
+
+func isFleetCommand(cmd *cobra.Command) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current.Name() == "fleet" {
+			return true
+		}
+	}
+	return false
 }
 
 // loadConfig returns the resolved config, with --config and --cwd applied.
