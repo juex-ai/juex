@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -62,6 +63,9 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 		Short: "Run the resident fleet supervisor and browser API",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !isTCPListenAddr(addr) {
+				return &usageError{msg: "juex fleet serve: --addr must be a host:port TCP address (got " + addr + ")"}
+			}
 			if !unsafeBindAny && !isLoopbackAddr(addr) {
 				return &usageError{msg: "juex fleet serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
 			}
@@ -119,6 +123,15 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
 	return cmd
+}
+
+func isTCPListenAddr(addr string) bool {
+	_, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	port, err := strconv.Atoi(portText)
+	return err == nil && port >= 0 && port <= 65535
 }
 
 func reportFleetAction(cmd *cobra.Command, action fleet.Action) {
