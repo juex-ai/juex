@@ -2,11 +2,134 @@ package observable
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
 )
+
+type blockingRunOnceSource struct {
+	*fakeSourceRuntime
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockingRunOnceSource) runOnce(ctx context.Context) (ObservationRecord, error) {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return ObservationRecord{
+			ID:            "manual-record",
+			ObservableID:  "manual-delete-race",
+			SourceEventID: "schedule:manual-delete-race:manual:fixed",
+			State:         ObservationStateRecorded,
+			WindowStart:   time.Now().UTC(),
+			WindowEnd:     time.Now().UTC(),
+			Kind:          DefaultScheduleKind,
+			Severity:      DefaultSeverity,
+			Content:       "manual",
+			OriginalChars: len("manual"),
+		}, nil
+	case <-ctx.Done():
+		return ObservationRecord{}, ctx.Err()
+	}
+}
+
+func TestManagerRunOnceSerializesWithDelete(t *testing.T) {
+	spec := mustScheduleSpec("manual-delete-race", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 3600},
+		Observation: ScheduleObservationSpec{Content: "manual"},
+	})
+	deleteEntered := make(chan struct{})
+	source := &blockingRunOnceSource{
+		fakeSourceRuntime: &fakeSourceRuntime{deleteFn: func(context.Context, string) error {
+			close(deleteEntered)
+			return nil
+		}},
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	mgr := newSourceTestManager(t, spec, source)
+
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := mgr.RunOnce(context.Background(), spec.ID)
+		runDone <- err
+	}()
+	<-source.entered
+	if mgr.mu.TryLock() {
+		mgr.mu.Unlock()
+		t.Fatal("RunOnce released the manager lock before the source completed")
+	}
+
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		close(deleteStarted)
+		deleteDone <- mgr.Delete(context.Background(), spec.ID)
+	}()
+	<-deleteStarted
+	select {
+	case <-deleteEntered:
+		t.Fatal("Delete interleaved with RunOnce")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(source.release)
+	if err := <-runDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-deleteEntered:
+	case <-time.After(time.Second):
+		t.Fatal("Delete did not proceed after RunOnce released the lock")
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagerRunOnceRejectsDeletingSchedule(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".juex", "observables.json")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := mustScheduleSpec("manual-deleting", ScheduleSourceSpec{
+		Interval:    &IntervalSchedule{EverySeconds: 3600},
+		Observation: ScheduleObservationSpec{Content: "Run once."},
+	})
+	if err := SaveConfig(configPath, FileConfig{Observables: []Spec{spec}}); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := NewManager(ManagerOptions{
+		ConfigPath: configPath,
+		StateDir:   filepath.Join(dir, ".juex", "observables"),
+		WorkDir:    dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	mgr.deleting[spec.ID] = true
+	if _, err := mgr.RunOnce(context.Background(), spec.ID); !errors.Is(err, ErrObservableDeleting) {
+		t.Fatalf("deleting error = %v, want ErrObservableDeleting", err)
+	}
+}
+
+func TestScheduleManualSourceEventIDKeepsRecoveryPrefix(t *testing.T) {
+	sourceEventID, err := scheduleManualSourceEventID("daily-brief")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(sourceEventID, scheduleSourceEventPrefix("daily-brief")+"manual:") {
+		t.Fatalf("manual source event id = %q", sourceEventID)
+	}
+}
 
 func TestStopScheduleTimerDoesNotBlockWhenStopReturnsFalseWithoutValue(t *testing.T) {
 	timer := time.NewTimer(time.Hour)

@@ -1050,6 +1050,7 @@ Routes:
 | GET | `/api/observables` | list workspace Observables with runtime status |
 | POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |
+| POST | `/api/observables/<id>/run` | emit one durable Schedule Observation without changing lifecycle state |
 | POST | `/api/observables/<id>/start` | start a stopped or exited Observable |
 | POST | `/api/observables/<id>/stop` | stop a running Observable |
 | DELETE | `/api/observables/<id>` | delete an Observable spec and stop its source |
@@ -1082,6 +1083,15 @@ creates Command Observables and `schedule_create` creates Schedules. The
 remaining Observable tools and all Web lifecycle routes stay source-agnostic.
 The frontend mirrors the tagged Web DTO and does not duplicate source
 validation policy.
+
+Manual Schedule execution is the one source-specific Web control.
+`Manager.RunOnce` selects a private Schedule-only capability, persists a
+record with a unique `schedule:<id>:manual:<random>` source-event id, and
+submits it through the shared tracked delivery path. It does not create a run,
+write the Schedule cursor, or change paused/running state. The route returns
+`201 Created` with the Observation record; unsupported sources and unavailable
+manager states return `409`, and unknown ids return `404`. No agent-facing tool
+exposes this capability.
 
 ---
 

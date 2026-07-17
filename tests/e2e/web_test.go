@@ -651,6 +651,171 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 	}
 }
 
+func TestWeb_RunScheduleObservableOnce(t *testing.T) {
+	work := t.TempDir()
+	prov := &webProvider{steps: []llm.Response{
+		{Message: llm.TextMessage(llm.RoleAssistant, "manual schedule handled"), StopReason: llm.StopEndTurn},
+	}}
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(created.Body)
+		created.Body.Close()
+		t.Fatalf("create session status=%d body=%s", created.StatusCode, body)
+	}
+	created.Body.Close()
+
+	scheduledAt := time.Now().UTC().Add(time.Hour)
+	body, err := json.Marshal(map[string]any{
+		"id":   "manual-schedule-e2e",
+		"type": "schedule",
+		"schedule_config": map[string]any{
+			"once": map[string]any{
+				"at": scheduledAt.Format(time.RFC3339Nano),
+			},
+			"observation": map[string]any{
+				"kind":     "heartbeat",
+				"severity": "info",
+				"content":  "manual schedule e2e payload",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(ts.URL+"/api/observables", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("create schedule status=%d body=%s", resp.StatusCode, respBody)
+	}
+	resp.Body.Close()
+
+	resp, err = http.Post(ts.URL+"/api/observables/manual-schedule-e2e/stop", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("stop schedule status=%d body=%s", resp.StatusCode, respBody)
+	}
+	resp.Body.Close()
+
+	resp, err = http.Post(ts.URL+"/api/observables/manual-schedule-e2e/run", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record observable.ObservationRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("run schedule status=%d body=%+v", resp.StatusCode, record)
+	}
+	if !strings.HasPrefix(record.SourceEventID, "schedule:manual-schedule-e2e:manual:") {
+		t.Fatalf("manual source event id = %q", record.SourceEventID)
+	}
+	if record.RunID != "" {
+		t.Fatalf("manual run id = %q, want empty", record.RunID)
+	}
+
+	var delivered observable.ObservationRecord
+	waitForCondition(t, 5*time.Second, func() bool {
+		records, err := fetchObservableRecords(ts.URL, "manual-schedule-e2e")
+		if err != nil {
+			return false
+		}
+		for _, candidate := range records {
+			if candidate.SourceEventID == record.SourceEventID {
+				delivered = candidate
+				return candidate.State == observable.ObservationStateDelivered
+			}
+		}
+		return false
+	})
+	if delivered.Content != "manual schedule e2e payload" {
+		t.Fatalf("manual content = %q", delivered.Content)
+	}
+
+	resp, err = http.Get(ts.URL + "/api/observables")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Observables []observable.ObservableStatus `json:"observables"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		resp.Body.Close()
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	status := observableStatusByID(list.Observables, "manual-schedule-e2e")
+	if status == nil || status.State != observable.RunStateStopped {
+		t.Fatalf("schedule status after run = %+v, want stopped", status)
+	}
+	if status.LastObservation.SourceEventID != record.SourceEventID {
+		t.Fatalf("last observation = %+v, want %q", status.LastObservation, record.SourceEventID)
+	}
+
+	resp, err = http.Post(ts.URL+"/api/observables/missing/run", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("run missing status=%d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+
+	commandBody, err := json.Marshal(map[string]any{
+		"id":   "manual-command-e2e",
+		"type": "command",
+		"command_config": map[string]any{
+			"command": os.Args[0],
+			"args":    []string{"-test.run=TestE2EQuietObservableHelperProcess"},
+			"env":     map[string]string{"JUEX_E2E_QUIET_OBSERVABLE": "1"},
+			"streams": []string{"stdout"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Post(ts.URL+"/api/observables", "application/json", bytes.NewReader(commandBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("create command status=%d body=%s", resp.StatusCode, respBody)
+	}
+	resp.Body.Close()
+
+	resp, err = http.Post(ts.URL+"/api/observables/manual-command-e2e/run", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("run command status=%d, want %d", resp.StatusCode, http.StatusConflict)
+	}
+}
+
 func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
 	work := t.TempDir()
 	configBody := `{"observables":[` +
@@ -938,6 +1103,13 @@ func TestE2EObservableHelperProcess(t *testing.T) {
 	}
 	attachment := os.Getenv("JUEX_E2E_OBSERVABLE_ATTACHMENT")
 	_, _ = os.Stdout.WriteString(`{"type":"e2e_event","level":"info","content":"observable e2e payload","attachments":[{"path":"` + attachment + `","media_type":"image/png"}]}` + "\n")
+	os.Exit(0)
+}
+
+func TestE2EQuietObservableHelperProcess(t *testing.T) {
+	if os.Getenv("JUEX_E2E_QUIET_OBSERVABLE") != "1" {
+		return
+	}
 	os.Exit(0)
 }
 

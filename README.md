@@ -255,6 +255,10 @@ lifecycle, store state under `.juex/observables/`, deliver external pending
 input to the active primary session, emit `observable.*` and `observation.*`
 events, and appear in the Web UI.
 
+The Web UI also exposes `Run` for Schedules. It emits one durable configured
+Observation without changing whether the Schedule is running or stopped.
+`Run` is a Web/API control only; no agent-facing tool is registered for it.
+
 `.juex/observables.json` accepts only tagged entries: `type: "command"` with
 `command_config`, or `type: "schedule"` with `schedule_config`. Old top-level
 command fields and the earlier nested `source` shape are reported as config

@@ -49,7 +49,7 @@ into `internal/web/dist/` for Go embedding.
 
 | Path | Purpose |
 | --- | --- |
-| `src/api.ts` | typed fetch helpers, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
+| `src/api.ts` | typed fetch helpers, including Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
 | `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including the tagged Command Observable/Schedule create union, transcript paging metadata, and the browser event contract from `internal/web` |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
@@ -92,8 +92,8 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
 | `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
-| `src/pages/Observables.tsx` | workspace Observable list, status, and start/stop/delete controls |
-| `src/pages/ObservableDetail.tsx` | Observable source details and recent Observation history |
+| `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |
+| `src/pages/ObservableDetail.tsx` | Observable source details, recent Observation history, and Schedule Run plus lifecycle controls |
 | `src/pages/Runtime.tsx` | Provider, shell, sandbox, grouped builtin/MCP tool catalog, hooks, system prompt, and skills detail view for `/runtime` |
 | `src/components/ui/` | shadcn primitives |
 | `src/components/ai-elements/` | AI Elements primitives (Conversation, Message, Reasoning, Tool, CodeBlock, PromptInput) |

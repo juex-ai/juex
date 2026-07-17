@@ -334,6 +334,25 @@ on narrow screens, cells wrap or truncate previews without hiding their labels,
 and disclosure buttons expose expanded state with visible keyboard focus rings.
 This is operational metadata, not a conversational surface.
 
+### 6.5 Observables (`/observables`, `/observables/:id`)
+
+The list uses a compact five-column grid that fits inside the standard
+`max-w-5xl` content width on tablet and desktop. Observable, Source, and Last
+Observation values remain single-line and truncate with an ellipsis. Hovering
+or focusing the accessible full-row link opens a bounded, wrapping tooltip
+with the complete values. On narrower screens the data columns may scroll
+inside the card, while the opaque Actions header and cells stay pinned to the
+right. When a Tooltip exceeds its height bound, a focused row link scrolls it
+with Arrow Up/Down, Page Up/Down, Home, and End.
+
+Schedule rows show three distinct controls: `Run` uses a lightning icon to
+emit one configured Observation, Start/Stop controls the timetable lifecycle,
+and Delete removes the source. Command rows do not show Run. The Schedule
+detail page repeats the labeled Run control beside its lifecycle actions.
+The detail action group wraps and stays right-aligned on narrow screens.
+Actions refresh the current view after success and surface API errors in the
+existing page-level error region.
+
 ---
 
 ## 7. Components

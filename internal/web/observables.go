@@ -69,6 +69,13 @@ func (s *Server) dispatchObservable(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"observable": status, "observations": records})
+	case rest == "run" && r.Method == http.MethodPost:
+		record, err := mgr.RunOnce(r.Context(), id)
+		if err != nil {
+			writeRunOnceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, record)
 	case rest == "start" && r.Method == http.MethodPost:
 		if err := mgr.Start(r.Context(), id); err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -107,6 +114,19 @@ func (s *Server) dispatchObservable(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"observations": records})
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
+	}
+}
+
+func writeRunOnceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, observable.ErrObservableNotFound):
+		writeErr(w, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, observable.ErrManagerClosed),
+		errors.Is(err, observable.ErrObservableDeleting),
+		errors.Is(err, observable.ErrRunOnceUnsupported):
+		writeErr(w, http.StatusConflict, "conflict", err.Error())
+	default:
+		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 	}
 }
 
