@@ -14,7 +14,8 @@ The stable command entrypoints live next to the evaluation code:
 
 `tests/eval/eval_scripts_test.go` is a Go contract suite for this directory. It
 checks the Python module help surface, shell wrapper help, live-model rotation,
-development-step flags, and default report locations:
+development-step flags, default report locations, and the Schedule routing
+artifact contract:
 
 ```bash
 go test ./tests/eval -count=1
@@ -115,10 +116,12 @@ bash tests/eval/provider_model_smoke.sh --juex ./dist/juex
 This reads credentials from `~/.juex/juex.yaml`, picks the next
 `provider_smoke_models` ref from `live-models.yaml`, and records the last
 successful ref in `.juex/live-model-rotation.json`. It copies one provider:model
-at a time into an isolated temporary workdir, then runs a real compiled `juex`
-binary through one live agent workflow. The prompt requires the model to use
-`read`, `write`, `edit`, `grep`, `exec_command`, and `write_stdin` against
-case-local files and a deterministic interactive installer command.
+at a time into isolated temporary workdirs, then runs a real compiled `juex`
+binary through two live agent workflows. The capability workflow requires the
+model to use `read`, `write`, `edit`, `grep`, `exec_command`, and
+`write_stdin` against case-local files and a deterministic interactive
+installer command. The separate Schedule routing workflow asks for recurring
+six-hour timed work without naming a creation tool.
 
 The smoke is intentionally stricter than a simple provider connectivity check.
 It parses the persisted `conversation.jsonl`, checks filesystem side effects,
@@ -138,6 +141,20 @@ passing run requires:
 - successful command completion and verification output containing the run
   token;
 - expected `write`/`edit` file side effects on disk.
+
+The Schedule routing subscenario must also:
+
+- successfully load the `juex-observables` guide before Observable tool use;
+- complete `observable_list` successfully before issuing `schedule_create`;
+- avoid command Observables, shell execution, polling, and shell-session tools;
+- persist exactly one tagged `type: schedule` entry with `schedule_config`,
+  `interval.every_seconds: 21600`, and the requested observation content.
+
+Each Schedule retry uses a new workspace and session. Its transcript, events,
+stdout, stderr, prompt, `observables.json`, and contract report are retained under
+`cases/<provider_model>/schedule-routing/attempt-N/`. A Schedule contract
+failure fails the provider:model result rather than adding another result or
+rotation target.
 
 A failed provider:model is not a skip; keep the report and explain whether the
 problem is configuration, provider capability, prompt-following, or a JueX
@@ -176,5 +193,5 @@ bash tests/eval/development_eval.sh
 
 Use `--compaction-eval` for compaction, context projection, reasoning replay,
 or long-session changes. The record links command logs, provider:model smoke
-summary, and any scorecards so a later worker can tell whether behavior got
-better, stayed flat, or regressed.
+summary, Schedule routing coverage, and any scorecards so a later worker can
+tell whether behavior got better, stayed flat, or regressed.
