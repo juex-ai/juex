@@ -220,7 +220,7 @@ func TestPublishFilesRollsBackEarlierDefinitionOnFailure(t *testing.T) {
 	if statErr != nil {
 		t.Fatal(statErr)
 	}
-	if info.Mode().Perm() != 0o640 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 		t.Fatalf("first definition mode = %o after rollback", info.Mode().Perm())
 	}
 }
@@ -244,12 +244,15 @@ func TestSystemdInstallPublishesAndRestartsUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("unit mode = %o", info.Mode().Perm())
 	}
 }
 
 func TestTermuxInstallRequiresManagerAndEnablesService(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filesystems do not expose the executable mode bits required by Termux")
+	}
 	prefix := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(prefix, "var", "service"), 0o700); err != nil {
 		t.Fatal(err)
