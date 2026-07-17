@@ -17,6 +17,7 @@ import (
 
 const maxFilePreviewBytes = 256 * 1024
 const maxFileTreeDepth = 12
+const scratchpadLogicalRoot = ".juex/sessions"
 
 type FileNode struct {
 	Name              string      `json:"name"`
@@ -123,10 +124,7 @@ func (s *Server) handleSessionScratchpad(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	root := s.opts.Cfg.WorkDir
-	if root == "" {
-		root = "."
-	}
+	root := s.opts.Cfg.SessionsDir()
 	root, relPath, err := resolveScratchpadTreePath(root, dir)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
@@ -146,7 +144,18 @@ func (s *Server) handleSessionScratchpad(w http.ResponseWriter, r *http.Request,
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
+	prefixFileTreePaths(tree, scratchpadLogicalRoot)
 	writeJSON(w, http.StatusOK, tree)
+}
+
+func prefixFileTreePaths(node *FileNode, prefix string) {
+	if node == nil {
+		return
+	}
+	node.Path = filepath.ToSlash(filepath.Join(filepath.FromSlash(prefix), filepath.FromSlash(node.Path)))
+	for _, child := range node.Children {
+		prefixFileTreePaths(child, prefix)
+	}
 }
 
 func resolveScratchpadTreePath(root, dir string) (string, string, error) {
@@ -406,9 +415,20 @@ func (e fileRequestError) write(w http.ResponseWriter) {
 }
 
 func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *fileRequestError) {
+	reqPath := r.URL.Query().Get("path")
+	if reqPath == "" {
+		return resolvedFileRequest{}, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "missing path parameter"}
+	}
+
 	root := s.opts.Cfg.WorkDir
 	if root == "" {
 		root = "."
+	}
+	displayPath := ""
+	if scratchpadPath, logicalPath, ok := resolveScratchpadRequestPath(reqPath); ok {
+		root = s.opts.Cfg.SessionsDir()
+		reqPath = scratchpadPath
+		displayPath = logicalPath
 	}
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -416,11 +436,6 @@ func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *file
 	}
 	if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolvedRoot
-	}
-
-	reqPath := r.URL.Query().Get("path")
-	if reqPath == "" {
-		return resolvedFileRequest{}, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "missing path parameter"}
 	}
 
 	relPath, absPath, err := resolveWorkPath(root, reqPath)
@@ -449,8 +464,29 @@ func (s *Server) resolveFileRequest(r *http.Request) (resolvedFileRequest, *file
 	if info.IsDir() {
 		return resolvedFileRequest{}, &fileRequestError{status: http.StatusBadRequest, code: "bad_request", message: "path is a directory"}
 	}
+	if displayPath != "" {
+		relPath = displayPath
+	}
 
 	return resolvedFileRequest{relPath: relPath, resolvedPath: resolved, info: info}, nil
+}
+
+func resolveScratchpadRequestPath(reqPath string) (physicalPath, logicalPath string, ok bool) {
+	if strings.HasPrefix(reqPath, "/") {
+		return "", "", false
+	}
+	clean := filepath.Clean(filepath.FromSlash(reqPath))
+	parts := strings.Split(clean, string(filepath.Separator))
+	if len(parts) < 5 ||
+		parts[0] != ".juex" ||
+		parts[1] != "sessions" ||
+		parts[2] == "" ||
+		parts[2] == "." ||
+		parts[2] == ".." ||
+		parts[3] != "scratchpad" {
+		return "", "", false
+	}
+	return filepath.Join(parts[2:]...), filepath.ToSlash(clean), true
 }
 
 func resolveWorkPath(root, reqPath string) (string, string, error) {

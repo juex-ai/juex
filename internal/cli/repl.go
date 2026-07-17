@@ -14,7 +14,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 		Short: "Interactive REPL: read a prompt from stdin, print the answer, repeat",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}

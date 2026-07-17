@@ -24,6 +24,9 @@ When naming domain concepts in issues, refactor proposals, hypotheses, or tests,
 
 | Term | Meaning | Primary owner |
 | --- | --- | --- |
+| Resident Agent | Durable identity bound one-to-one to a workspace marker, with sessions, memory, history, and logs under `JUEX_HOME/agents/<id>` | `internal/agentstate` |
+| Workspace marker | `.juex/juex.local.json`, containing the resident agent id; missing registry entries fail rather than minting silently | `internal/agentstate` |
+| Agent home | Identity-owned state directory at `$JUEX_HOME/agents/<id>`; distinct from workspace-local config, artifacts, and observables | `internal/agentstate` |
 | Notes | Model-owned session working Markdown in `notes.md`; rewritten wholesale through `update_notes`, limited to 2048 characters, and recited after Goal on every provider request | `internal/runtime` |
 | Session scratchpad | Session-local temporary file space managed explicitly by the model, never automatically added to provider context, and removed with the session | `internal/session` |
 

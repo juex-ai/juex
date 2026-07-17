@@ -377,6 +377,7 @@ func newEngineWithToolTimeout(t *testing.T, prov llm.Provider, builtinTools bool
 		Bus:      bus,
 		Session:  sess,
 		Prompt:   pb,
+		WorkDir:  t.TempDir(),
 	}, bus
 }
 
@@ -476,6 +477,7 @@ func newEngineForSession(t *testing.T, sess *session.Session, prov llm.Provider)
 		PendingInputQueue: NewPendingInputQueue(sess.Dir, PendingInputQueueOptions{Now: func() time.Time { return time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC) }}),
 		PendingInputTTL:   time.Hour,
 		ExternalEventTTL:  24 * time.Hour,
+		WorkDir:           t.TempDir(),
 	}
 }
 
@@ -4694,17 +4696,13 @@ func TestToolFailureLedgerReopensStaleFingerprintOnNewFailure(t *testing.T) {
 	}
 }
 
-func TestToolFailureLedgerResolvesRelativePathsFromSessionDir(t *testing.T) {
+func TestToolFailureLedgerResolvesRelativePathsFromExplicitWorkDir(t *testing.T) {
 	workDir := t.TempDir()
-	sessionDir := filepath.Join(workDir, ".juex", "sessions", "session-1")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	target := filepath.Join(workDir, "artifact.txt")
 	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ledger := newToolFailureLedger(sessionDir)
+	ledger := newToolFailureLedger(workDir)
 	recorded := ledger.recordFailure(toolFailureObservation{
 		ToolName:  "check_ready",
 		ToolUseID: "check_1",

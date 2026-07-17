@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -263,6 +264,60 @@ providers:
 	}
 	if cfg.ProviderID != "anthropic" || cfg.BaseURL != "https://anthropic.example" || cfg.APIKey != "sk-anthropic" || cfg.Model != "claude-sonnet" {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	legacyMemory := filepath.Join(work, ".juex", "memory", "MEMORY.md")
+	if err := writeTextFile(legacyMemory, "# legacy\n"); err != nil {
+		t.Fatal(err)
+	}
+	root := newRootCmd()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+
+	cfg, err := loadConfigForCommand(root, &persistentFlags{cwd: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "juex: notice: migrated workspace runtime state") ||
+		!strings.Contains(stderr.String(), cfg.AgentStateDir) {
+		t.Fatalf("migration stderr = %q", stderr.String())
+	}
+	stderr.Reset()
+	if _, err := loadConfigForCommand(root, &persistentFlags{cwd: work}); err != nil {
+		t.Fatal(err)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("idempotent config load stderr = %q", stderr.String())
+	}
+}
+
+func TestDoctorPrintsAgentStateMigrationNotice(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".juex", "memory", "MEMORY.md"), "# legacy\n"); err != nil {
+		t.Fatal(err)
+	}
+	root := newRootCmd()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	root.SetOut(io.Discard)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "juex: notice: migrated workspace runtime state") {
+		t.Fatalf("doctor stderr = %q", stderr.String())
 	}
 }
 
@@ -853,6 +908,20 @@ func TestInitHelloCheckErrorIncludesSuggestion(t *testing.T) {
 	}
 }
 
+func TestInitTargetPathUsesJUEXHome(t *testing.T) {
+	home := setHomeForCLITest(t)
+	juexHome := filepath.Join(home, "alternate-home")
+	t.Setenv("JUEX_HOME", juexHome)
+
+	got, err := initTargetPath("user", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(juexHome, "juex.yaml"); got != want {
+		t.Fatalf("init target = %q, want %q", got, want)
+	}
+}
+
 func TestInitCmd_MergesExistingProviderWithoutOverwriting(t *testing.T) {
 	setHomeForCLITest(t)
 	root := newRootCmd()
@@ -1044,6 +1113,39 @@ hooks:
 	}
 	if len(cfg.Hooks.Commands) != 1 || cfg.Hooks.Commands[0].Name != "global-context" || cfg.Hooks.Commands[0].Source != "user" {
 		t.Fatalf("hooks = %+v", cfg.Hooks.Commands)
+	}
+}
+
+func TestValidateInitConfigTreatsJUEXHomeTargetAsUserConfig(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	juexHome := filepath.Join(home, "custom-juex")
+	t.Setenv("JUEX_HOME", juexHome)
+	target := filepath.Join(juexHome, "juex.yaml")
+	if err := writeTextFile(target, `model: openai:gpt-4.1
+providers:
+  - id: openai
+    base_url: https://example.invalid
+    api_key: sk-user
+    models:
+      - id: gpt-4.1
+hooks:
+  commands:
+    - name: global-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := initConfigTargetScope(target, work); got != "user" {
+		t.Fatalf("target scope = %q, want user", got)
+	}
+	if err := validateInitConfig(target, work); err != nil {
+		t.Fatalf("JUEX_HOME user config validation should trust user hooks: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(juexHome, "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("init validation created an agent registry: %v", err)
 	}
 }
 
@@ -1540,6 +1642,9 @@ func setHomeForCLITest(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
 	return home
 }

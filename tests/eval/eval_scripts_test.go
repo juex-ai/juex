@@ -229,6 +229,33 @@ func TestEvalDefaultReportDirsUseTmpRoot(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestEvalHelpersResolveAgentHomeSessions(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import compaction, helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp) / 'work'",
+		"    juex_home = work / 'home' / '.juex'",
+		"    marker = work / '.juex' / 'juex.local.json'",
+		"    marker.parent.mkdir(parents=True)",
+		"    marker.write_text(json.dumps({'agent_id': 'abcdefgh2345672a'}), encoding='utf-8')",
+		"    expected = juex_home / 'agents' / 'abcdefgh2345672a' / 'sessions'",
+		"    assert helper.agent_sessions_dir(work, juex_home) == expected",
+		"    assert compaction.session_root(work) == expected",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
@@ -245,7 +272,10 @@ func TestCompactionEvalScoresAuthoritativeGoalAndNotes(t *testing.T) {
 		"from tests.eval.juex_eval import compaction",
 		"with tempfile.TemporaryDirectory() as tmp:",
 		"    work = Path(tmp)",
-		"    session = work / '.juex' / 'sessions' / 'session-1'",
+		"    marker = work / '.juex' / 'juex.local.json'",
+		"    marker.parent.mkdir(parents=True)",
+		"    marker.write_text(json.dumps({'agent_id': 'abcdefgh2345672a'}), encoding='utf-8')",
+		"    session = work / 'home' / '.juex' / 'agents' / 'abcdefgh2345672a' / 'sessions' / 'session-1'",
 		"    session.mkdir(parents=True)",
 		"    (session / 'goal_state.json').write_text(json.dumps(compaction.AUTHORITATIVE_GOAL), encoding='utf-8')",
 		"    (session / 'notes.md').write_text(compaction.AUTHORITATIVE_NOTES, encoding='utf-8')",
@@ -592,7 +622,9 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"            return 124",
 		"        session_id = 'session-attempt-2'",
 		"        (case_dir / 'turn1.stdout.json').write_text(json.dumps({'session_id': session_id, 'blocks': [{'type': 'text', 'text': expect.completion_token}]}) + '\\n', encoding='utf-8')",
-		"        session = case_dir / '.juex' / 'sessions' / session_id",
+		"        agent_id = 'abcdefgh2345672a'",
+		"        (case_dir / '.juex' / 'juex.local.json').write_text(json.dumps({'agent_id': agent_id}), encoding='utf-8')",
+		"        session = case_dir / 'home' / '.juex' / 'agents' / agent_id / 'sessions' / session_id",
 		"        session.mkdir(parents=True)",
 		"        (session / 'conversation.jsonl').write_text('\\n'.join(json.dumps(row) for row in valid_rows()) + '\\n', encoding='utf-8')",
 		"        (session / 'events.jsonl').write_text(json.dumps({'type': 'session.completed'}) + '\\n', encoding='utf-8')",

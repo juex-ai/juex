@@ -129,11 +129,11 @@ func initWorkDir(flags *persistentFlags) (string, error) {
 func initTargetPath(scope, workDir string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "", "user", "global", "user-global":
-		home, err := os.UserHomeDir()
+		home, err := config.EffectiveHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("init: resolve home directory: %w", err)
+			return "", fmt.Errorf("init: resolve JueX home directory: %w", err)
 		}
-		return filepath.Join(home, ".juex", "juex.yaml"), nil
+		return filepath.Join(home, "juex.yaml"), nil
 	case "workspace", "project", "local":
 		paths := (config.Config{WorkDir: workDir}).RuntimePaths()
 		return paths.RuntimeConfigPath, nil
@@ -492,9 +492,9 @@ func loadInitConfigForCheck(path, workDir string) (config.Config, error) {
 	checkWorkDir, cleanup := initConfigCheckWorkDir(path, workDir)
 	defer cleanup()
 	if scope == "workspace" || scope == "user" {
-		return config.LoadForWorkDir(checkWorkDir)
+		return config.LoadForWorkDirForValidation(checkWorkDir)
 	}
-	return config.LoadFromFileForWorkDir(path, checkWorkDir)
+	return config.LoadFromFileForWorkDirForValidation(path, checkWorkDir)
 }
 
 func initConfigTargetScope(path, workDir string) string {
@@ -502,8 +502,8 @@ func initConfigTargetScope(path, workDir string) string {
 	if cleanPath(path) == cleanPath(workspaceConfig) {
 		return "workspace"
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		userConfig := filepath.Join(home, ".juex", "juex.yaml")
+	if home, err := config.EffectiveHomeDir(); err == nil {
+		userConfig := filepath.Join(home, "juex.yaml")
 		if cleanPath(path) == cleanPath(userConfig) {
 			return "user"
 		}
@@ -514,6 +514,9 @@ func initConfigTargetScope(path, workDir string) string {
 func cleanPath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
 	}
 	return filepath.Clean(path)
 }

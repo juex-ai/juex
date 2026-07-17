@@ -128,6 +128,54 @@ func TestSessionScratchpadTreeReturnsScopedFiles(t *testing.T) {
 	}
 }
 
+func TestSessionScratchpadTreeAndPreviewUseAgentStateDir(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Cfg.AgentStateDir = filepath.Join(t.TempDir(), "agent")
+	id := "20260717T131800-agenthome"
+	sessionDir := filepath.Join(srv.opts.Cfg.SessionsDir(), id)
+	mustWriteFile(t, filepath.Join(sessionDir, "conversation.jsonl"),
+		`{"role":"user","blocks":[{"type":"text","text":"hi"}]}`+"\n")
+	mustWriteFile(t, filepath.Join(sessionDir, "scratchpad", "draft.md"), "agent-home draft")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + id + "/scratchpad")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("tree status = %d body = %s", resp.StatusCode, body)
+	}
+	var tree FileNode
+	if err := json.NewDecoder(resp.Body).Decode(&tree); err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.ToSlash(filepath.Join(".juex", "sessions", id, "scratchpad"))
+	if tree.Path != wantPath || len(tree.Children) != 1 || tree.Children[0].Path != wantPath+"/draft.md" {
+		t.Fatalf("tree = %+v, want logical path %q with draft.md", tree, wantPath)
+	}
+
+	preview, err := http.Get(ts.URL + "/api/files/content?path=" + url.QueryEscape(tree.Children[0].Path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer preview.Body.Close()
+	if preview.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(preview.Body)
+		t.Fatalf("preview status = %d body = %s", preview.StatusCode, body)
+	}
+	var content FileContent
+	if err := json.NewDecoder(preview.Body).Decode(&content); err != nil {
+		t.Fatal(err)
+	}
+	if content.Path != wantPath+"/draft.md" || content.Content != "agent-home draft" {
+		t.Fatalf("preview = %+v", content)
+	}
+}
+
 func TestSessionScratchpadTreeDoesNotPersistLazySession(t *testing.T) {
 	srv := newTestServer(t)
 	as, err := srv.openSession(t.Context(), "", app.SessionModeNewPrimary)

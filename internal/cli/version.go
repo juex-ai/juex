@@ -32,7 +32,7 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 				// WorkDir / HomeAgentsDir come from Load() which only fails
 				// on os.Getwd, so they are usually populated even when the
 				// config override is missing.
-				cfg, _ := loadConfig(flags)
+				cfg, _ := loadConfigForCommand(cmd, flags)
 				info.WorkDir = cfg.WorkDir
 				info.ConfigFile = configFileForPlan(flags)
 				if cfg.ProviderID != "" || cfg.ProviderProtocol != "" {

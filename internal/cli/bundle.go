@@ -31,7 +31,7 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 			if outPath == "" {
 				return &usageError{msg: "juex bundle: --out required"}
 			}
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}

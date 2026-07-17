@@ -69,7 +69,7 @@ func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, err
 	}); err != nil {
 		return ProviderSelection{}, err
 	}
-	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+	if err := finalizeLoadedConfig(&cfg, true, false); err != nil {
 		return ProviderSelection{}, err
 	}
 	return cfg.ProviderSelection(), nil
@@ -106,11 +106,12 @@ func (s ProviderSelection) llmConfig() llm.Config {
 	}
 }
 
-// RuntimePaths contains work-local runtime storage paths plus the user-global
-// runtime config path used during config loading.
+// RuntimePaths separates workspace-local configuration from identity-owned
+// runtime state.
 type RuntimePaths struct {
 	WorkDir               string
 	JuexDir               string
+	StateDir              string
 	MemoryDir             string
 	SessionsDir           string
 	HistoryPath           string
@@ -122,9 +123,15 @@ func (c Config) RuntimePaths() RuntimePaths {
 	paths := RuntimePaths{WorkDir: c.WorkDir}
 	if c.WorkDir != "" {
 		paths.JuexDir = filepath.Join(c.WorkDir, ".juex")
-		paths.MemoryDir = filepath.Join(paths.JuexDir, "memory")
-		paths.SessionsDir = filepath.Join(paths.JuexDir, "sessions")
-		paths.HistoryPath = filepath.Join(paths.JuexDir, "history.json")
+		paths.StateDir = c.AgentStateDir
+		if paths.StateDir == "" {
+			// Keep manually constructed Config values useful to isolated
+			// package tests and embedding callers that do not load config.
+			paths.StateDir = paths.JuexDir
+		}
+		paths.MemoryDir = filepath.Join(paths.StateDir, "memory")
+		paths.SessionsDir = filepath.Join(paths.StateDir, "sessions")
+		paths.HistoryPath = filepath.Join(paths.StateDir, "history.json")
 		if filepath.Base(filepath.Clean(c.WorkDir)) == ".juex" {
 			paths.RuntimeConfigPath = filepath.Join(c.WorkDir, "juex.yaml")
 		} else {

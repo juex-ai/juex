@@ -35,8 +35,9 @@ func TestSessionsList_JSONShape(t *testing.T) {
 
 	root := newRootCmd()
 	var out bytes.Buffer
+	var stderr bytes.Buffer
 	root.SetOut(&out)
-	root.SetErr(&out)
+	root.SetErr(&stderr)
 	root.SetArgs([]string{"-C", work, "sessions", "list"})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
@@ -49,7 +50,7 @@ func TestSessionsList_JSONShape(t *testing.T) {
 		} `json:"sessions"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
-		t.Fatalf("not JSON: %v\n%s", err, out.String())
+		t.Fatalf("not JSON: %v\nstdout:\n%s\nstderr:\n%s", err, out.String(), stderr.String())
 	}
 	if len(parsed.Sessions) != 1 {
 		t.Fatalf("len = %d", len(parsed.Sessions))
@@ -398,10 +399,20 @@ func (p *sessionsCompactProvider) Complete(ctx context.Context, sys string, h []
 
 func TestSessionsDelete_RemovesSessionAndHistory(t *testing.T) {
 	work := t.TempDir()
+	cfg, err := config.LoadForWorkDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := "20260506T103500-delete01"
 	body := `{"role":"user","blocks":[{"type":"text","text":"bye"}]}` + "\n"
-	dir := seedSession(t, work, id, body)
-	historyPath := filepath.Join(work, ".juex", "history.json")
+	dir := filepath.Join(cfg.SessionsDir(), id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	historyPath := cfg.HistoryPath()
 	if err := os.MkdirAll(filepath.Dir(historyPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

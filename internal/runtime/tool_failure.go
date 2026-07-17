@@ -58,10 +58,10 @@ type toolFailureLedger struct {
 	workDir string
 }
 
-func newToolFailureLedger(sessionDir string) *toolFailureLedger {
+func newToolFailureLedger(workDir string) *toolFailureLedger {
 	return &toolFailureLedger{
 		records: map[string]*toolFailureRecord{},
-		workDir: workDirFromSessionDir(sessionDir),
+		workDir: workDir,
 	}
 }
 
@@ -375,19 +375,6 @@ func resolveRelatedPath(workDir string, path string) string {
 		cleaned = filepath.Join(workDir, cleaned)
 	}
 	return filepath.Clean(cleaned)
-}
-
-func workDirFromSessionDir(sessionDir string) string {
-	if sessionDir == "" {
-		return ""
-	}
-	cleaned := filepath.Clean(sessionDir)
-	sessionsDir := filepath.Dir(cleaned)
-	juexDir := filepath.Dir(sessionsDir)
-	if filepath.Base(sessionsDir) != "sessions" || filepath.Base(juexDir) != ".juex" {
-		return ""
-	}
-	return filepath.Dir(juexDir)
 }
 
 func mutatesRelatedPath(toolName string, successPaths []string, failurePaths []string) bool {

@@ -67,6 +67,10 @@ func repoRoot(t *testing.T) string {
 func loadLiveConfigs(t *testing.T) []liveConfig {
 	t.Helper()
 	root := repoRoot(t)
+	juexHome := t.TempDir()
+	t.Setenv("JUEX_HOME", juexHome)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(juexHome, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	var matches []string
 	for _, name := range defaultLiveConfigNames {
 		path := filepath.Join(root, ".juex", name)
@@ -87,7 +91,7 @@ func loadLiveConfigs(t *testing.T) []liveConfig {
 
 	var out []liveConfig
 	for _, path := range matches {
-		cfg, err := config.LoadFromFileForWorkDir(path, root)
+		cfg, err := config.LoadFromFileForWorkDir(path, t.TempDir())
 		if err != nil {
 			t.Fatalf("load live config %s: %v", path, err)
 		}

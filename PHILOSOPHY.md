@@ -21,11 +21,13 @@ stable, documented, testable, and simple enough for another agent to call
 without guessing. Avoid hidden magic when a small command or file makes the
 state visible.
 
-### Put State Near The Work
+### Bind State To The Agent
 
-Sessions, memory, and runtime config are work-local under `.juex/`. Agent
-configuration and skills live under `.agents/`. This split keeps generated
-state away from project guidance and makes cleanup or transfer obvious.
+Each workspace has one explicit marker under `.juex/`; its sessions, memory,
+history, and logs live together in the agent registry under `JUEX_HOME`.
+Workspace config, artifacts, and observable state remain near the work, while
+agent guidance and skills live under `.agents/`. This split lets identity-owned
+state survive a workspace move without hiding which workspace owns it.
 
 ### Use Providers Behind One Model
 
@@ -60,8 +62,9 @@ them and when the implementation can stay small enough to test and explain.
   mental model, at the cost of fewer deployment knobs.
 - Standard library first in Go: less dependency drift, at the cost of writing
   small protocol adapters ourselves.
-- Work-local `.juex/` state: easy inspection and deletion, at the cost of no
-  central session index across every project.
+- Marker-bound agent homes: state survives workspace moves and supports a
+  central fleet registry, at the cost of an explicit identity binding and
+  migration step.
 - Synchronous turn loop with parallel tool calls: simple ordering and tests,
   while still allowing independent tool calls inside one model response.
 - JSONL history: durable and append-friendly, with heavier reads when a full

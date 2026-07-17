@@ -20,7 +20,7 @@ user types a prompt in the CLI
   -> call the LLM (Anthropic or OpenAI-compatible)
   -> execute independent tool calls in parallel and model-owned state calls in provider order
   -> persist conversation + emit events
-  -> append jsonl into <WorkDir>/.juex/sessions/<id>/
+  -> append jsonl into $JUEX_HOME/agents/<agent-id>/sessions/<id>/
 ```
 
 ---
@@ -673,7 +673,7 @@ that ID.
 
 Layer 1 (AGENTS.md hierarchy: optional user-global + project + project subdir)
 is read directly by the prompt builder. Layer 2 (memory entries with
-frontmatter + `MEMORY.md` index) is owned by the work-local Store.
+frontmatter + `MEMORY.md` index) is owned by the resident agent's Store.
 
 ```go
 // internal/memory/memory.go
@@ -686,14 +686,15 @@ type Entry struct {
     UpdatedAt   time.Time
 }
 
-type Store struct { dir string; ... }   // dir = <WorkDir>/.juex/memory
+type Store struct { dir string; ... }   // dir = $JUEX_HOME/agents/<id>/memory
 func (s *Store) Write(e Entry) error
 func (s *Store) Load() ([]Entry, error)
 func (s *Store) Search(q string) []Entry
 func (s *Store) Delete(name string) error
 ```
 
-Sessions and memory are **work-local** runtime data under `<WorkDir>/.juex/`.
+Sessions and memory are identity-owned runtime data under
+`$JUEX_HOME/agents/<id>/`.
 Skills, mcp.json, and AGENTS.md still live under `.agents` and come from
 project-local scope. User-global `~/.agents` resources are also loaded by
 default unless `enable_user_global_resources` or
@@ -709,7 +710,7 @@ type Session struct {
     Alias   string
     Kind    string                // "primary" or "side"
     Active  bool
-    Dir     string                // <WorkDir>/.juex/sessions/<id>/
+    Dir     string                // $JUEX_HOME/agents/<id>/sessions/<id>/
     History []llm.Message
     TokenUsage llm.Usage
     ContextUsage *llm.ContextUsage
@@ -753,8 +754,8 @@ Timeout traces prefer structured event fields such as `error_kind`,
 `timed_out`, `timeout_seconds`, and `raw_cause`; string parsing is only a
 fallback for older events that predate those fields.
 
-Each work directory has one active primary session recorded in
-`<WorkDir>/.juex/history.json` as `{active, sessions}`. `run`, `repl`, and
+Each resident agent has one active primary session recorded in
+`$JUEX_HOME/agents/<id>/history.json` as `{active, sessions}`. `run`, `repl`, and
 `serve` attach to that active primary by default; `--new` and `/new` create a
 new primary and switch active. Side sessions are durable and listed, but never
 become active and are not valid Web turn targets.
@@ -767,11 +768,12 @@ returns the lock mode (`attach_active`, `new_primary`, `new_side`, or
 primary sessions before creating a new active primary. Web startup and MCP
 notification routing use exported app helpers for active-primary records and
 ids instead of duplicating those rules.
-App lifetimes acquire `.juex/sessions/<id>/session.lock` so two processes do
-not append to the same session concurrently. Startup serializes lock cleanup
-with a short-lived guard file. If a leftover lock names a PID that is no longer
-running, or an unreadable lock is old enough to rule out an in-progress write,
-startup removes that stale lock and retries the atomic acquire.
+App lifetimes acquire `sessions/<id>/session.lock` inside the agent home so two
+processes do not append to the same session concurrently. Startup serializes
+lock cleanup with a short-lived guard file. If a leftover lock names a PID that
+is no longer running, or an unreadable lock is old enough to rule out an
+in-progress write, startup removes that stale lock and retries the atomic
+acquire.
 
 New web sessions are lazy for transcript files: `POST /api/sessions` allocates
 an in-memory primary session, records it as active, and only creates
@@ -783,7 +785,7 @@ and `repl`.
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
 summary plus its full message slice. Both are read-only.
-`<WorkDir>/.juex/history.json` reads legacy `{sessions, last}` files by
+The agent-home `history.json` reads legacy `{sessions, last}` files by
 migrating `last` to `active`; subsequent writes omit `last`.
 
 ### 3.6 App + Runtime
@@ -1132,8 +1134,9 @@ exposes this capability.
 
 ## 5. Configuration
 
-Runtime config is resolved from user-global and work-local YAML files. The
-user-global fallback is `~/.juex/juex.yaml`; the work-local config is
+Runtime config is resolved from user-global and work-local YAML files.
+`JUEX_HOME` defaults to `~/.juex`; the user-global fallback is
+`$JUEX_HOME/juex.yaml`. The work-local config is
 `<WorkDir>/.juex/juex.yaml`, except when `WorkDir` itself is a `.juex`
 directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 `juex.yaml.example` as a copyable template:
@@ -1202,7 +1205,7 @@ compaction:
 | Field | Description |
 |---|---|
 | `model` | active model reference in `provider:model` form |
-| `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `~/.juex/extensions` |
+| `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `$JUEX_HOME/extensions` |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
@@ -1255,7 +1258,7 @@ compaction:
 | `compaction.tool_result_preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
 
-Resolution order (later wins): `defaults` < `~/.juex/juex.yaml` <
+Resolution order (later wins): `defaults` < `$JUEX_HOME/juex.yaml` <
 `<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
 `.juex` directory) < `--config <path>` (if supplied) < `os.Environ` <
 explicit CLI flags. `--model provider:model` selects a configured
@@ -1266,7 +1269,7 @@ and `PROVIDER_CONTEXT_WINDOW` still apply. `.env` is no longer read by default.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider:model` or override a few fields while inheriting missing values
-from `~/.juex/juex.yaml`. The legacy top-level `provider:` block is not
+from `$JUEX_HOME/juex.yaml`. The legacy top-level `provider:` block is not
 supported. `shell` is an object-level override rather than a deep merge:
 workspace `shell: {}` resets any user-global shell config back to auto.
 
@@ -1370,7 +1373,7 @@ goal fields are not migrated or normalized; unknown fields in an old
 
 Only command hooks are supported in the MVP. Hooks cannot mutate tool input,
 and `PermissionRequest` is intentionally deferred until the permission engine
-exists. User-global hooks in `~/.juex/juex.yaml` are trusted by location;
+exists. User-global hooks in `$JUEX_HOME/juex.yaml` are trusted by location;
 project-local and explicit config hooks require `hooks.trusted: true`.
 Codex auth is not configurable. When provider id `openai-codex` is selected and
 `providers[].api_key` is empty, Juex loads the Codex CLI/app auth cache from
@@ -1480,7 +1483,7 @@ ordinary user turns keep failing loudly on compaction errors.
 
 ## 6. Filesystem Conventions
 
-Resources split between user-global and work-local:
+Resources and state split between user-global, agent-home, and work-local:
 
 ```
 ~/.agents/                       # optional user-global resources
@@ -1488,47 +1491,42 @@ Resources split between user-global and work-local:
 ├── mcp.json                     # global MCP servers (project may override)
 └── skills/<name>/SKILL.md       # global skills (project may override)
 
-~/.juex/extensions/<name>/        # optional user-global extension bundle
-├── hooks.yaml                    # lifecycle command hooks, trusted by location
-├── mcp.json                      # extension MCP servers
-└── skills/<skill>/SKILL.md       # extension skills
+$JUEX_HOME/
+├── juex.yaml                     # user-global provider/runtime config
+├── extensions/<name>/            # optional user-global extension bundle
+│   ├── hooks.yaml                # lifecycle command hooks, trusted by location
+│   ├── mcp.json                  # extension MCP servers
+│   └── skills/<skill>/SKILL.md   # extension skills
+└── agents/<agent-id>/            # resident-agent registry entry and state
+    ├── agent.json                # identity + workspace reverse pointer
+    ├── history.json              # session index + active primary object
+    ├── logs/
+    ├── memory/
+    └── sessions/<id>/            # conversation history and session sidecars
 
-<WorkDir>/                       # the agent's working directory (--cwd or $PWD)
-├── AGENTS.md                    # project rules (concatenated, not overriding)
-├── juex.yaml.example            # template for .juex/juex.yaml
+<WorkDir>/                        # the agent's working directory (--cwd or $PWD)
+├── AGENTS.md                     # project rules (concatenated, not overriding)
+├── juex.yaml.example             # template for .juex/juex.yaml
 ├── .agents/
-│   ├── AGENTS.md                # subdir rules (also concatenated)
-│   ├── mcp.json                 # project MCP (project wins on duplicate names)
-│   └── skills/<name>/SKILL.md   # project skills (project overrides user)
+│   ├── AGENTS.md                 # subdir rules (also concatenated)
+│   ├── mcp.json                  # project MCP (project wins on duplicate names)
+│   └── skills/<name>/SKILL.md    # project skills (project overrides user)
 └── .juex/
+    ├── juex.local.json           # workspace-to-agent identity marker
     ├── artifacts/                # durable bytes managed by internal/artifact
-    │   ├── media/
-    │   ├── tool-results/<session-id>/
-    │   └── user-inputs/<session-id>/
-    ├── extensions/<name>/       # work-local extension bundle
-    │   ├── hooks.yaml           # must set trusted: true before execution
-    │   ├── mcp.json
-    │   └── skills/<skill>/SKILL.md
-    ├── juex.yaml                # local runtime provider config
-    ├── history.json             # session index + active primary object
-    ├── memory/                  # work-local memory entries
-    │   ├── MEMORY.md
-    │   └── *.md
-    └── sessions/<id>/           # work-local conversation history
-        ├── logs/
-        │   ├── juex.log         # human-readable session event summary
-        │   └── debug.log        # detailed event summary when --debug/log-level=debug
-        ├── session.json         # alias + kind metadata
-        ├── session.lock         # held while an app owns the session
-        ├── conversation.jsonl
-        ├── events.jsonl
-        ├── notes.md             # model-owned Markdown recited after Goal on every provider request
-        ├── scratchpad/          # model-managed long working files, read explicitly when needed
-        ├── goal_state.json      # model-owned goal description, verification, status, and continuation count
-        ├── trace.jsonl          # structured event trace derived from the bus
-        ├── spans.jsonl          # start/end/error/instant spans by turn
-        └── tools.jsonl          # sanitized tool input/output/error summaries
+    ├── extensions/<name>/        # work-local extension bundle
+    ├── juex.yaml                 # local runtime provider config
+    ├── observables.json          # workspace observable configuration
+    └── observables/              # workspace observable state
 ```
+
+The full session subtree beneath the agent home retains the existing
+`session.json`, transcript, event, lock, notes, scratchpad, goal, trace, span,
+tool, and per-session log files described in §3.5.
+
+`JUEX_HOME` scopes only JueX-owned config, extensions, and agent registry
+state. The existing `~/.agents` AGENTS.md, skill, and MCP resource tree remains
+at its current location.
 
 ### 6.1 Artifact Storage
 
@@ -1570,7 +1568,7 @@ presentation. `internal/llm` preserves the canonical media block in history but
 projects it to metadata plus an explicit cannot-view/do-not-guess instruction
 for that provider request. Vision-capable projection remains unchanged.
 
-The user-global `~/.agents` and `~/.juex/extensions` resources are read-only
+The user-global `~/.agents` and `$JUEX_HOME/extensions` resources are read-only
 from Juex's view and are loaded only when user-global resources are enabled.
 Work-local extension bundles are always discovered from
 `<WorkDir>/.juex/extensions`. Extension names are global within one run; a
@@ -1578,10 +1576,13 @@ duplicate extension name is a startup error. Extension-provided MCP server,
 skill, or hook names must not collide with existing resources or another
 extension. Runtime status reports extension resources as `ext:<name>`.
 
-**Migration from earlier prototype:** sessions and memory used to live under
-`.agents/` or `~/.agents/`. The runtime now reads / writes project-local
-runtime data under `.juex/`. Existing files under old session/memory locations
-are left untouched — move them by hand if you want them per-project.
+**Migration:** on first resolution, legacy workspace-local `.juex/sessions`,
+`.juex/memory`, `.juex/history.json`, and `.juex/logs` are copied into a staged
+agent directory, verified by manifest and SHA-256, atomically published, then
+removed from the workspace. Configuration, artifacts, extensions, and
+observable files remain workspace-local. The workspace marker is globally
+ignored through Git's user excludes file, never by editing project
+`.gitignore`.
 
 ---
 
@@ -1618,8 +1619,8 @@ attachments are called out in structured text instead of being silently
 dropped. `params.content` remains a
 display preview, while metadata under `params.meta` is visible to the Agent.
 For `run` and `repl`, notifications target the command's only primary app. For
-`serve`, notifications target `<WorkDir>/.juex/history.json.active`: the active
-primary session. Side sessions do not declare the
+`serve`, notifications target the resident agent's `history.json.active`: the
+active primary session. Side sessions do not declare the
 `experimental["claude/channel"]` initialize capability and do not become
 notification targets.
 
@@ -1782,7 +1783,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `runtime` | mock-provider script, parallel tool calls, long tool follow-up turn, ctx cancel, unknown-tool, provider error, multi-turn |
 | `observability` | log-level parsing, stable artifact creation, trace/span schema, parent-child spans, tool summaries, redaction, error-kind classification |
 | `netbootstrap` | resolv.conf parsing (IPv4/IPv6/comments/malformed), JUEX_DNS env var, Termux PREFIX auto-detect, applyResolver wiring, idempotent install |
-| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, session under .juex/sessions, observability artifact wiring, history update, missing-key fail, default-cwd |
+| `app` | stub-LLM run, REPL multi-line, REPL after error, verbose stderr, agent-home sessions, observability artifact wiring, history update, missing-key fail, default-cwd |
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |

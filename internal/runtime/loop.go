@@ -58,7 +58,10 @@ type Engine struct {
 	Bus             *events.Bus
 	Session         *session.Session
 	Prompt          *prompt.Builder
-	Hooks           HookRunner
+	// WorkDir is the workspace root. Runtime state may live outside it, so
+	// workspace-relative tools and artifacts must not infer it from Session.
+	WorkDir string
+	Hooks   HookRunner
 	// HookContext carries process/session metadata included in every hook
 	// command input. Event-specific fields are filled by the runtime.
 	HookContext hooks.Request
@@ -287,11 +290,7 @@ func (e *Engine) TurnMessageWithID(ctx context.Context, userMsg llm.Message, tur
 	}
 	turnID = e.beginActiveTurn(turnID)
 	previousFailures := e.toolFailures
-	var sessionDir string
-	if e.Session != nil {
-		sessionDir = e.Session.Dir
-	}
-	e.toolFailures = newToolFailureLedger(sessionDir)
+	e.toolFailures = newToolFailureLedger(e.WorkDir)
 	lifecycle := turnLifecycle{
 		engine:  e,
 		turnID:  turnID,

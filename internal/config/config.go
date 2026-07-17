@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
@@ -21,9 +22,9 @@ import (
 // Config holds runtime-wide settings.
 //
 // HomeAgentsDir hosts user-global resources (AGENTS.md, skills, mcp.json).
+// HomeJuexDir hosts JueX-owned user configuration and the agent registry.
 // WorkDir hosts work-local resources. Project AGENTS.md, skills, and mcp.json
-// live under .agents. Runtime data (memory, sessions, history) lives under
-// .juex so it does not overlap with project agent configuration.
+// live under .agents. Agent-owned runtime data lives under AgentStateDir.
 type Config struct {
 	ProviderID                string
 	ProviderProtocol          string
@@ -48,9 +49,13 @@ type Config struct {
 	Skills                    SkillsConfig
 	EnableUserGlobalResources bool
 
-	HomeAgentsDir string // ~/.agents (user-global)
-	HomeJuexDir   string // ~/.juex (user-global runtime config)
-	WorkDir       string // explicit; defaults to os.Getwd()
+	HomeAgentsDir     string // ~/.agents (user-global resources)
+	HomeJuexDir       string // $JUEX_HOME or ~/.juex
+	WorkDir           string // explicit; defaults to os.Getwd()
+	AgentID           string
+	AgentName         string
+	AgentStateDir     string
+	AgentStateNotices []string
 
 	modelRef        string
 	shellConfig     ShellConfig
@@ -316,6 +321,19 @@ func LoadForWorkDir(workDir string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadForWorkDirForValidation loads and validates runtime configuration
+// without resolving or creating a workspace agent identity.
+func LoadForWorkDirForValidation(workDir string) (Config, error) {
+	cfg, err := loadConfigFilesForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
 // LoadForWorkDirWithModelOverride is LoadForWorkDir with an explicit model
 // selector that wins over YAML and PROVIDER_API_MODEL.
 func LoadForWorkDirWithModelOverride(workDir, modelRef string) (Config, error) {
@@ -355,8 +373,12 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	cfg.WorkDir = workDir
 	if home, err := os.UserHomeDir(); err == nil {
 		cfg.HomeAgentsDir = filepath.Join(home, ".agents")
-		cfg.HomeJuexDir = filepath.Join(home, ".juex")
 	}
+	juexHome, err := agentstate.EffectiveHome()
+	if err != nil {
+		return cfg, err
+	}
+	cfg.HomeJuexDir = juexHome
 
 	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true, "user", false); err != nil {
 		return cfg, err
@@ -390,6 +412,22 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadFromFileForWorkDirForValidation is LoadFromFileForWorkDir without
+// resolving or creating a workspace agent identity.
+func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
+	cfg, err := loadConfigFilesForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	if err := applyYAMLFile(&cfg, path, false, "project", true); err != nil {
+		return cfg, err
+	}
+	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
 // LoadFromFileForWorkDirWithModelOverride is LoadFromFileForWorkDir with an
 // explicit model selector that wins over YAML and PROVIDER_API_MODEL.
 func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Config, error) {
@@ -408,6 +446,14 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 }
 
 func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
+	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, true)
+}
+
+func finalizeConfigLoadForValidation(cfg *Config, modelRef string, resolveAuth bool) error {
+	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, false)
+}
+
+func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth, resolveAgentState bool) error {
 	if strings.TrimSpace(modelRef) != "" {
 		if err := cfg.ApplyModelOverride(modelRef); err != nil {
 			return &ModelOverrideError{Err: err}
@@ -419,7 +465,7 @@ func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
 		}); err != nil {
 			return err
 		}
-		return finalizeLoadedConfig(cfg, resolveAuth)
+		return finalizeLoadedConfig(cfg, resolveAuth, resolveAgentState)
 	}
 	if err := resolveSelectedProvider(cfg); err != nil {
 		return err
@@ -427,10 +473,10 @@ func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
 	if err := applyOSEnv(cfg); err != nil {
 		return err
 	}
-	return finalizeLoadedConfig(cfg, resolveAuth)
+	return finalizeLoadedConfig(cfg, resolveAuth, resolveAgentState)
 }
 
-func finalizeLoadedConfig(cfg *Config, resolveAuth bool) error {
+func finalizeLoadedConfig(cfg *Config, resolveAuth, resolveAgentState bool) error {
 	if err := resolveShellProfileForConfig(cfg); err != nil {
 		return err
 	}
@@ -439,7 +485,26 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool) error {
 			return err
 		}
 	}
+	if !resolveAgentState {
+		return nil
+	}
+	resolution, err := agentstate.Resolve(agentstate.Options{
+		HomeDir: cfg.HomeJuexDir,
+		WorkDir: cfg.WorkDir,
+	})
+	if err != nil {
+		return err
+	}
+	cfg.AgentID = resolution.Agent.ID
+	cfg.AgentName = resolution.Agent.Name
+	cfg.AgentStateDir = resolution.AgentDir
+	cfg.AgentStateNotices = append([]string(nil), resolution.Notices...)
 	return nil
+}
+
+// EffectiveHomeDir returns JUEX_HOME when configured, otherwise ~/.juex.
+func EffectiveHomeDir() (string, error) {
+	return agentstate.EffectiveHome()
 }
 
 func (c Config) ProviderProfile() (llm.ProviderProfile, error) {
@@ -461,7 +526,7 @@ func (c Config) ProjectExtensionsDir() string {
 	return c.ResourcePaths().ProjectExtensionsDir
 }
 
-// JuexDir is <WorkDir>/.juex and stores runtime data.
+// JuexDir is <WorkDir>/.juex and stores workspace-local JueX configuration.
 func (c Config) JuexDir() string {
 	return c.RuntimePaths().JuexDir
 }
@@ -473,17 +538,17 @@ func (c Config) SkillDirs() []string {
 	return c.ResourcePaths().SkillDirs
 }
 
-// MemoryDir returns the work-local memory store path.
+// MemoryDir returns the resolved agent memory store path.
 func (c Config) MemoryDir() string {
 	return c.RuntimePaths().MemoryDir
 }
 
-// SessionsDir returns the work-local sessions root.
+// SessionsDir returns the resolved agent sessions root.
 func (c Config) SessionsDir() string {
 	return c.RuntimePaths().SessionsDir
 }
 
-// HistoryPath returns the work-local session history index path.
+// HistoryPath returns the resolved agent session history index path.
 func (c Config) HistoryPath() string {
 	return c.RuntimePaths().HistoryPath
 }

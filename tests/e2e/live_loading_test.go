@@ -368,6 +368,129 @@ func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
+	bin := buildJuex(t)
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	work := filepath.Join(root, "workspace")
+	sessionID := "20260717T120000-migrate1"
+	legacySession := filepath.Join(work, ".juex", "sessions", sessionID)
+	for path, body := range map[string]string{
+		filepath.Join(legacySession, "conversation.jsonl"):  `{"role":"user","blocks":[{"type":"text","text":"migrated"}]}` + "\n",
+		filepath.Join(work, ".juex", "memory", "MEMORY.md"): "# migrated memory\n",
+		filepath.Join(work, ".juex", "history.json"):        "{\"sessions\":[]}\n",
+		filepath.Join(work, ".juex", "juex.yaml"):           "{}\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stdout, stderr, err := runAgentStateCommand(bin, home, work, "sessions", "list")
+	if err != nil {
+		t.Fatalf("sessions list after migration: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, sessionID) || !strings.Contains(stderr, "migrated workspace runtime state") {
+		t.Fatalf("migration output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	var marker struct {
+		AgentID string `json:"agent_id"`
+	}
+	markerData, err := os.ReadFile(filepath.Join(work, ".juex", "juex.local.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(markerData, &marker); err != nil {
+		t.Fatal(err)
+	}
+	agentDir := filepath.Join(home, "agents", marker.AgentID)
+	for _, path := range []string{
+		filepath.Join(agentDir, "sessions", sessionID, "conversation.jsonl"),
+		filepath.Join(agentDir, "memory", "MEMORY.md"),
+		filepath.Join(agentDir, "history.json"),
+		filepath.Join(work, ".juex", "juex.yaml"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected migrated or retained path %s: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(work, ".juex", "sessions"),
+		filepath.Join(work, ".juex", "memory"),
+		filepath.Join(work, ".juex", "history.json"),
+	} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("legacy state remains at %s: %v", path, err)
+		}
+	}
+
+	moved := filepath.Join(root, "moved-workspace")
+	if err := os.Rename(work, moved); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "sessions", "list")
+	if err != nil {
+		t.Fatalf("sessions list after move: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, sessionID) || !strings.Contains(stderr, "workspace for agent") || !strings.Contains(stderr, "moved") {
+		t.Fatalf("move output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	copied := filepath.Join(root, "copied-workspace")
+	if err := os.MkdirAll(filepath.Join(copied, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copied, ".juex", "juex.local.json"), markerData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr, err = runAgentStateCommand(bin, home, copied, "sessions", "list")
+	if err == nil {
+		t.Fatal("copied workspace unexpectedly reused the original identity")
+	}
+	if !strings.Contains(stderr, "appears to be a copy") || !strings.Contains(stderr, "remove") {
+		t.Fatalf("copy error is not actionable:\n%s", stderr)
+	}
+}
+
+func runAgentStateCommand(bin, home, work string, args ...string) (string, string, error) {
+	commandArgs := append([]string{"-C", work}, args...)
+	cmd := exec.Command(bin, commandArgs...)
+	cmd.Env = filteredEnv(
+		"HOME", "USERPROFILE", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
+	)
+	cmd.Env = append(cmd.Env,
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"JUEX_HOME="+home,
+		"GIT_CONFIG_GLOBAL="+filepath.Join(home, "gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+func filteredEnv(remove ...string) []string {
+	removed := make(map[string]struct{}, len(remove))
+	for _, key := range remove {
+		removed[key] = struct{}{}
+	}
+	var env []string
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, skip := removed[key]; !skip {
+			env = append(env, entry)
+		}
+	}
+	return env
+}
+
 // buildJuex compiles the real juex binary into the test's tempdir.
 func buildJuex(t *testing.T) string {
 	t.Helper()

@@ -137,7 +137,11 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	sessionDir := filepath.Join(workDir, ".juex", "sessions", sessionID)
+	sessionsDir := opts.Config.SessionsDir()
+	if sessionsDir == "" {
+		sessionsDir = filepath.Join(workDir, ".juex", "sessions")
+	}
+	sessionDir := filepath.Join(sessionsDir, sessionID)
 	if st, err := os.Stat(sessionDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return Result{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)

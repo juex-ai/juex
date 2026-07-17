@@ -225,6 +225,17 @@ func loadConfig(flags *persistentFlags) (config.Config, error) {
 	return cfg, nil
 }
 
+func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Config, error) {
+	cfg, err := loadConfig(flags)
+	if err != nil {
+		return cfg, err
+	}
+	for _, notice := range cfg.AgentStateNotices {
+		fmt.Fprintf(cmd.ErrOrStderr(), "juex: notice: %s\n", notice)
+	}
+	return cfg, nil
+}
+
 func explicitConfigPath(flags *persistentFlags) string {
 	if flags == nil {
 		return ""
