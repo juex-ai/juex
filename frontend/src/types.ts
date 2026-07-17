@@ -238,6 +238,7 @@ export const BROWSER_EVENT_TYPES = [
   "llm.responded",
   "llm.output_delta",
   "llm.retry",
+  "llm.fallback",
   "tool.requested",
   "tool.completed",
   "tool.output_delta",
@@ -302,6 +303,7 @@ export interface LLMRequestedPayload {
   iter: number;
   history_len: number;
   tool_count: number;
+  model?: string;
 }
 
 export interface LLMOutputDeltaPayload {
@@ -329,6 +331,14 @@ export interface LLMRetryPayload {
   exhausted?: boolean;
 }
 
+export interface LLMFallbackPayload {
+  from: string;
+  to: string;
+  reason: string;
+  cooldown_ms?: number;
+  probe?: boolean;
+}
+
 export interface ToolCallPayload {
   tool_use_id: string;
   name: string;
@@ -346,6 +356,7 @@ export interface LLMRespondedPayload {
   tool_calls: ToolCallPayload[] | null;
   model: string;
   context_usage?: ContextUsage;
+  notice?: Message;
 }
 
 export interface ToolRequestedPayload {
@@ -617,6 +628,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"llm.responded"> & { payload: LLMRespondedPayload })
   | (BrowserEventBase<"llm.output_delta"> & { payload: LLMOutputDeltaPayload })
   | (BrowserEventBase<"llm.retry"> & { payload: LLMRetryPayload })
+  | (BrowserEventBase<"llm.fallback"> & { payload: LLMFallbackPayload })
   | (BrowserEventBase<"tool.requested"> & { payload: ToolRequestedPayload })
   | (BrowserEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
   | (BrowserEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })

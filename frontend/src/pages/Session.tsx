@@ -85,6 +85,7 @@ import {
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
 } from "@/lib/mcp-events";
+import { formatModelFallbackNotice } from "@/lib/model-fallback";
 import {
   externalEventBodyClassName,
   externalEventCopyClassName,
@@ -1010,6 +1011,8 @@ function MessageGroupView({
   const isObservationEvent =
     group.role === "user" && group.kind === "observation";
   const isHookEvent = group.kind === "hook_event";
+  const isModelFallback =
+    group.role === "user" && group.kind === "model_fallback";
   const isCompact = group.kind === "compact";
   const isPendingCompact = group.kind === LOCAL_COMPACT_PENDING_KIND;
   const copyText = messageGroupCopyText(group);
@@ -1026,6 +1029,10 @@ function MessageGroupView({
 
   if (isHookEvent) {
     return <HookEventGroup group={group} />;
+  }
+
+  if (isModelFallback) {
+    return <ModelFallbackGroup group={group} />;
   }
 
   if (isCompact) {
@@ -1368,6 +1375,30 @@ function HookEventGroup({ group }: { group: MessageGroup }) {
         title={text}
       >
         {text || "..."}
+      </div>
+    </div>
+  );
+}
+
+function ModelFallbackGroup({ group }: { group: MessageGroup }) {
+  const text = group.units
+    .filter((unit) => unit.kind === "text")
+    .map((unit) => (unit.kind === "text" ? unit.block.text : ""))
+    .filter(Boolean)
+    .join("\n");
+  if (!text && !group.pending) return null;
+  const display = formatModelFallbackNotice(text);
+  return (
+    <div
+      className="flex w-full justify-center px-2 py-0.5"
+      data-model-fallback-message
+    >
+      <div className="w-full max-w-[min(42rem,100%)]">
+        <ProcessDisclosure status="done" title={display.title}>
+          <MessageResponse className="break-words text-[13px] leading-6 text-muted-foreground">
+            {display.content || "..."}
+          </MessageResponse>
+        </ProcessDisclosure>
       </div>
     </div>
   );

@@ -64,6 +64,12 @@ juex fleet status
 `--model` uses the same `provider:model` format as config and can select
 any model declared in the merged provider config, including providers from
 `$JUEX_HOME/juex.yaml` when the current directory has no local config.
+Configure an ordered top-level `fallback_models` list to continue a provider
+request on another declared model after exhausted transient, authentication,
+permission, or model-not-found failures. Juex skips unhealthy models during a
+process-local cooldown and returns to higher-priority models through real
+request probes. Context overflow, cancellation, and failures after streamed
+output never trigger fallback.
 
 Anthropic, OpenAI, OpenAI-compatible Chat, DeepSeek, and Codex provider
 profiles stream assistant text and reasoning to verbose CLI and Web sessions
@@ -179,7 +185,7 @@ for a run. Project-local AGENTS.md, skills, and MCP servers still come from
 extension hooks are trusted by location. Extension MCP servers receive
 `JUEX_EXT_DIR` alongside `WORKDIR` and `JUEX_WORKDIR`. Identity-owned runtime
 state lives under `$JUEX_HOME/agents/<id>`; workspace artifacts and observable
-state remain under `.juex/`. User-global provider fallback configuration lives
+state remain under `.juex/`. User-global provider configuration lives
 at `$JUEX_HOME/juex.yaml`. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
 `tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.

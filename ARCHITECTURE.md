@@ -216,7 +216,7 @@ type Message struct {
     ID         string
     Role       Role
     Blocks     []Block
-    Kind       string // "" | "mcp_event" | "observation" | "compact"
+    Kind       string // "" | "mcp_event" | "observation" | "model_fallback" | "compact"
     Model      string
     Compaction *CompactionMetadata
 }
@@ -796,6 +796,8 @@ migrating `last` to `active`; subsequent writes omit `last`.
 type Options struct {
     Config              config.Config
     Provider            llm.Provider // optional; injectable for tests
+    ModelCandidates     []runtime.ModelCandidate
+    ModelHealth         *llm.ModelHealth
     Verbose             bool
     Stderr              io.Writer
     WorkDir             string       // overrides Config.WorkDir
@@ -839,6 +841,8 @@ pending-input, or slash-command policy.
 // internal/runtime/loop.go
 type Engine struct {
     Provider         llm.Provider
+    ModelCandidates  []ModelCandidate
+    ModelHealth      *llm.ModelHealth
     Tools            *tools.Registry
     Bus              *events.Bus
     Session          *session.Session
@@ -855,6 +859,14 @@ func (e *Engine) Turn(ctx, userInput) (string, error)
 provider iterations, tool batches, finish-policy gates, and active-turn
 closure so the public `Engine` interface stays small while the turn lifecycle
 remains named and testable inside `internal/runtime`.
+
+Normal provider requests use the ordered model candidates. `internal/llm`
+owns a mutex-guarded process-local circuit breaker with a 30s, 1m, 2m, and 5m
+cooldown ladder and single-request half-open reservations. `internal/runtime`
+owns request replay, candidate-specific context preflight, `llm.fallback`
+events, and `model_fallback` notices. A successful switch atomically appends
+the notice and assistant response; failed attempts never persist a notice.
+`juex serve` shares one health instance across all session Apps.
 
 Turns are Codex-aligned long-running loops: the runtime does not enforce a
 per-turn provider-request count or wall-clock duration cap. A turn stops when
@@ -1231,6 +1243,8 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 
 ```yaml
 model: openai:gpt-4.1
+fallback_models:
+  - anthropic:claude-sonnet-5
 enable_user_global_resources: true
 skills:
   prompt_budget_chars: 8000
@@ -1293,6 +1307,7 @@ compaction:
 | Field | Description |
 |---|---|
 | `model` | active model reference in `provider:model` form |
+| `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
 | `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `$JUEX_HOME/extensions` |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
@@ -1354,6 +1369,9 @@ provider:model after YAML merge and wins over `PROVIDER_API_ID`,
 `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`; non-conflicting env overrides
 such as `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_THINKING_EFFORT`,
 and `PROVIDER_CONTEXT_WINDOW` still apply. `.env` is no longer read by default.
+`PROVIDER_API_MODEL` remains a model-id-only override under the selected
+provider. Both primary override paths preserve `fallback_models`; an
+override-created duplicate is removed from the effective chain.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider:model` or override a few fields while inheriting missing values

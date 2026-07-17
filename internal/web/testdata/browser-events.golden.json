@@ -76,6 +76,18 @@
     }
   },
   {
+    "id": "evt-llm-fallback",
+    "type": "llm.fallback",
+    "ts": "2026-06-15T00:00:01.8Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "from": "openai:gpt-primary",
+      "to": "anthropic:claude-backup",
+      "reason": "transient",
+      "cooldown_ms": 30000
+    }
+  },
+  {
     "id": "evt-tool-requested",
     "type": "tool.requested",
     "ts": "2026-06-15T00:00:02Z",

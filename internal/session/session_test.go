@@ -64,6 +64,68 @@ func TestSession_AppendDoesNotMutateHistoryWhenPersistFails(t *testing.T) {
 	}
 }
 
+func TestSessionAppendBatchPersistsAdjacentMessages(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	notice := llm.TextMessage(llm.RoleUser, "model switched")
+	notice.Kind = llm.MessageKindModelFallback
+	assistant := llm.TextMessage(llm.RoleAssistant, "continuing")
+	assistant.Model = "fallback:model"
+	if err := s.AppendBatch([]llm.Message{notice, assistant}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(s.History) != 2 || s.History[0].Kind != llm.MessageKindModelFallback || s.History[1].Model != "fallback:model" {
+		t.Fatalf("history = %+v", s.History)
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(data); got != 2 {
+		t.Fatalf("conversation lines = %d, want 2: %s", got, data)
+	}
+	if s.transcript.turns != 0 {
+		t.Fatalf("fallback notice counted as user turn: %d", s.transcript.turns)
+	}
+}
+
+func TestSessionAppendBatchRollsBackWhenSecondMessageCannotMarshal(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Append(llm.TextMessage(llm.RoleUser, "existing")); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := llm.TextMessage(llm.RoleUser, "model switched")
+	notice.Kind = llm.MessageKindModelFallback
+	invalid := llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{{
+		Type:  llm.BlockToolUse,
+		Input: map[string]any{"not_json": func() {}},
+	}}}
+	if err := s.AppendBatch([]llm.Message{notice, invalid}); err == nil {
+		t.Fatal("AppendBatch err = nil, want marshal failure")
+	}
+
+	if len(s.History) != 1 || len(s.transcript.entries) != 1 {
+		t.Fatalf("batch mutated state: history=%d entries=%d", len(s.History), len(s.transcript.entries))
+	}
+	data, err := os.ReadFile(filepath.Join(s.Dir, conversationFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countLines(data); got != 1 {
+		t.Fatalf("conversation lines = %d, want existing line only: %s", got, data)
+	}
+}
+
 func TestSession_NewWithOptionsPersistsKind(t *testing.T) {
 	root := t.TempDir()
 	s, err := NewWithOptions(root, Options{Kind: KindSide})

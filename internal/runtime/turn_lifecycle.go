@@ -89,15 +89,24 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 	if err != nil {
 		return err
 	}
-	resp, err := l.engine.requestProviderTurnLocked(ctx, l.turnID, l.prepared, request)
+	result, err := l.engine.requestProviderTurnLocked(ctx, l.turnID, l.prepared, request)
+	hookContextCount := request.hookContextCount
+	if result.request.hookContextCount > hookContextCount {
+		hookContextCount = result.request.hookContextCount
+	}
 	if err != nil {
 		if contextErr := cancellation.ContextError(ctx); contextErr != nil && errors.Is(err, context.Canceled) {
-			l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
+			l.engine.consumePendingHookRuntimeContext(hookContextCount)
 			return contextErr
 		}
 		if llm.IsContextOverflowError(err) && !l.retriedOverflow {
-			if _, compactErr := l.engine.compactLocked(ctx, l.turnID, l.prepared.systemPrompt, l.prepared.tools, "overflow_retry", true, ""); compactErr != nil {
-				l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
+			contextWindow := l.engine.ContextWindow
+			var requestErr *modelRequestError
+			if errors.As(err, &requestErr) && requestErr.contextWindow > 0 {
+				contextWindow = requestErr.contextWindow
+			}
+			if _, compactErr := l.engine.compactLockedForContextWindow(ctx, l.turnID, l.prepared.systemPrompt, l.prepared.tools, "overflow_retry", true, "", contextWindow); compactErr != nil {
+				l.engine.consumePendingHookRuntimeContext(hookContextCount)
 				return fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr)
 			}
 			l.retriedOverflow = true
@@ -106,15 +115,15 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		if l.engine.continueAfterProviderFailure(ctx, l.turnID, iter, err) {
 			return nil
 		}
-		l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
+		l.engine.consumePendingHookRuntimeContext(hookContextCount)
 		return fmt.Errorf("llm: %w", err)
 	}
-	l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
+	l.engine.consumePendingHookRuntimeContext(hookContextCount)
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
 
-	recorded, err := l.engine.recordProviderResponseLocked(l.turnID, l.prepared, request, resp)
+	recorded, err := l.engine.recordProviderResponseLocked(l.turnID, l.prepared, result)
 	if err != nil {
 		return err
 	}

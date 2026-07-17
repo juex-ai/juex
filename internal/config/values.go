@@ -41,6 +41,16 @@ type ProviderSelection struct {
 	WorkDir        string
 }
 
+// ResolvedModel is one effective primary or fallback model after config and
+// environment resolution. Ref is the canonical provider:model identity used
+// for health and transcript attribution.
+type ResolvedModel struct {
+	Ref             string
+	Selection       ProviderSelection
+	ContextWindow   int
+	MaxOutputTokens int
+}
+
 func (c Config) ProviderSelection() ProviderSelection {
 	return ProviderSelection{
 		ID:             c.ProviderID,
@@ -58,21 +68,64 @@ func (c Config) ProviderSelection() ProviderSelection {
 }
 
 func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, error) {
+	cfg, err := c.configForModelRef(ref)
+	if err != nil {
+		return ProviderSelection{}, err
+	}
+	return cfg.ProviderSelection(), nil
+}
+
+func (c Config) configForModelRef(ref string) (Config, error) {
 	cfg := c
 	if err := cfg.ApplyModelOverride(ref); err != nil {
-		return ProviderSelection{}, err
+		return Config{}, err
 	}
 	if err := applyOSEnvExcept(&cfg, map[string]struct{}{
 		"PROVIDER_API_ID":       {},
 		"PROVIDER_API_PROTOCOL": {},
 		"PROVIDER_API_MODEL":    {},
 	}); err != nil {
-		return ProviderSelection{}, err
+		return Config{}, err
 	}
 	if err := finalizeLoadedConfig(&cfg, true, false); err != nil {
-		return ProviderSelection{}, err
+		return Config{}, err
 	}
-	return cfg.ProviderSelection(), nil
+	return cfg, nil
+}
+
+func (c Config) ModelChain() ([]ResolvedModel, error) {
+	primaryRef := ModelRef{ProviderID: c.ProviderID, ModelID: c.Model}.String()
+	if primaryRef == "" {
+		return nil, fmt.Errorf("config: effective primary model is empty")
+	}
+	chain := []ResolvedModel{{
+		Ref:             primaryRef,
+		Selection:       c.ProviderSelection(),
+		ContextWindow:   c.ContextWindow,
+		MaxOutputTokens: c.MaxOutputTokens,
+	}}
+	seen := map[string]struct{}{primaryRef: {}}
+	for _, ref := range c.FallbackModels {
+		canonical, err := ParseModelRef(ref)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seen[canonical.String()]; duplicate {
+			continue
+		}
+		resolved, err := c.configForModelRef(canonical.String())
+		if err != nil {
+			return nil, err
+		}
+		chain = append(chain, ResolvedModel{
+			Ref:             canonical.String(),
+			Selection:       resolved.ProviderSelection(),
+			ContextWindow:   resolved.ContextWindow,
+			MaxOutputTokens: resolved.MaxOutputTokens,
+		})
+		seen[canonical.String()] = struct{}{}
+	}
+	return chain, nil
 }
 
 func (c Config) ProviderProfileForModelRef(ref string) (llm.ProviderProfile, error) {

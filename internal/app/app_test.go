@@ -201,6 +201,50 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return a, prov
 }
 
+func TestAppNewModelCandidatePrecedenceAndHealthInjection(t *testing.T) {
+	dir := t.TempDir()
+	primary := &stubProvider{}
+	backup := &stubProvider{}
+	injectedSingle := &stubProvider{}
+	health := llm.NewModelHealth(llm.ModelHealthOptions{})
+	a, err := New(Options{
+		Config:   config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}},
+		Provider: injectedSingle,
+		ModelCandidates: []runtime.ModelCandidate{
+			{Ref: "primary:model", Provider: primary, ContextWindow: 128000},
+			{Ref: "backup:model", Provider: backup, ContextWindow: 64000},
+		},
+		ModelHealth: health,
+		WorkDir:     dir,
+		DisableMCP:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if len(a.Engine.ModelCandidates) != 2 || a.Engine.Provider != primary || a.Engine.ModelHealth != health {
+		t.Fatalf("engine wiring = provider:%T candidates:%+v health:%p", a.Engine.Provider, a.Engine.ModelCandidates, a.Engine.ModelHealth)
+	}
+}
+
+func TestAppNewInjectedSingleProviderDisablesConfigFallback(t *testing.T) {
+	dir := t.TempDir()
+	provider := &stubProvider{}
+	a, err := New(Options{
+		Config:     config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: dir, FallbackModels: []string{"missing:model"}},
+		Provider:   provider,
+		WorkDir:    dir,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if a.Engine.Provider != provider || len(a.Engine.ModelCandidates) != 0 {
+		t.Fatalf("injected provider wiring = provider:%T candidates:%+v", a.Engine.Provider, a.Engine.ModelCandidates)
+	}
+}
+
 func TestAppSystemPromptIncludesSessionScratchpad(t *testing.T) {
 	a, provider := newStubApp(t, llm.Response{
 		Message:    llm.TextMessage(llm.RoleAssistant, "done"),

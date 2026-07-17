@@ -54,6 +54,8 @@ const (
 type Engine struct {
 	Provider        llm.Provider
 	SummaryProvider llm.Provider
+	ModelCandidates []ModelCandidate
+	ModelHealth     *llm.ModelHealth
 	Tools           *tools.Registry
 	Bus             *events.Bus
 	Session         *session.Session
@@ -327,7 +329,22 @@ type providerTurnRequest struct {
 	iter                 int
 	history              []llm.Message
 	estimatedInputTokens int
+	hookContext          []llm.Message
 	hookContextCount     int
+}
+
+type ModelCandidate struct {
+	Ref             string
+	Provider        llm.Provider
+	ContextWindow   int
+	MaxOutputTokens int
+}
+
+type providerTurnResult struct {
+	response  llm.Response
+	request   providerTurnRequest
+	candidate ModelCandidate
+	notice    *llm.Message
 }
 
 type recordedProviderResponse struct {
@@ -398,50 +415,122 @@ func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
 }
 
 func (e *Engine) prepareProviderRequestLocked(turnID string, iter int, prepared preparedTurnContext) (providerTurnRequest, error) {
-	e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
-		Iter:       iter,
-		HistoryLen: len(e.Session.History),
-		ToolCount:  len(prepared.tools),
-	}})
-
 	hookContext := e.pendingHookRuntimeContextSnapshot()
 	requestHistory := e.activeContextLockedWithHookContext(hookContext).Messages
-	projectedHistory, projection, err := e.projectMessagesForProviderLocked(requestHistory, prepared.policy)
-	if err != nil {
-		return providerTurnRequest{}, err
-	}
-	e.emitProjectionApplied(turnID, projection)
-	projectedHistory, projection = stripRedactedReasoningForProviderBudget(prepared.systemPrompt, prepared.tools, projectedHistory, prepared.policy)
-	e.emitProjectionApplied(turnID, projection)
-	estimatedInputTokens := estimateContextTokens(prepared.systemPrompt, prepared.tools, projectedHistory)
 	return providerTurnRequest{
-		iter:                 iter,
-		history:              projectedHistory,
-		estimatedInputTokens: estimatedInputTokens,
-		hookContextCount:     len(hookContext),
+		iter:             iter,
+		history:          requestHistory,
+		hookContext:      hookContext,
+		hookContextCount: len(hookContext),
 	}, nil
 }
 
-func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, prepared preparedTurnContext, request providerTurnRequest) (llm.Response, error) {
-	model := ""
-	if e.Provider != nil {
-		model = e.Provider.Name()
+func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, prepared preparedTurnContext, base providerTurnRequest) (providerTurnResult, error) {
+	candidates := e.effectiveModelCandidatesLocked()
+	if len(candidates) == 0 {
+		return providerTurnResult{}, fmt.Errorf("llm: no model candidates configured")
 	}
-	return llm.CompleteWithOptions(ctx, e.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
-		Purpose:         "turn",
-		MaxOutputTokens: e.MaxOutputTokens,
-		CachePolicy:     e.cachePolicyLocked(),
-		RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
-		OnDelta: func(delta llm.StreamDelta) {
-			e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
-				Iter:  request.iter,
-				Model: model,
-				Kind:  delta.Kind,
-				Index: delta.Index,
-				Text:  delta.Text,
-			}})
-		},
-	})
+	health := e.ModelHealth
+	if health == nil {
+		health = llm.NewModelHealth(llm.ModelHealthOptions{})
+		e.ModelHealth = health
+	}
+	refs := make([]string, len(candidates))
+	for i := range candidates {
+		refs[i] = candidates[i].Ref
+	}
+	attempted := map[string]struct{}{}
+	previousModel := previousAssistantModel(e.Session.History)
+	var failures []modelAttemptFailure
+	var skipped []llm.ModelHealthSkip
+	var pending *modelFallbackTransition
+
+	for {
+		selection, ok := health.Acquire(refs, attempted)
+		skipped = append(skipped, selection.Skipped...)
+		for _, skip := range selection.Skipped {
+			attempted[skip.Ref] = struct{}{}
+		}
+		if !ok {
+			if pending != nil {
+				e.emitModelFallback(turnID, *pending, "")
+			}
+			for _, skipped := range selection.Skipped {
+				e.emitModelFallback(turnID, modelFallbackTransition{
+					from:     skipped.Ref,
+					reason:   skipped.Reason,
+					cooldown: skipped.CooldownRemaining,
+				}, "")
+			}
+			return providerTurnResult{request: base}, modelChainError(failures, skipped)
+		}
+		candidate := candidates[selection.Index]
+		attempted[candidate.Ref] = struct{}{}
+		notice := modelSwitchNotice(previousModel, candidate.Ref, refs, selection, pending, failures, skipped)
+		request, err := e.prepareCandidateRequestLocked(ctx, turnID, prepared, base, candidate, notice, selection.Index > 0)
+		if err != nil {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: request}, err
+		}
+		base.hookContext = request.hookContext
+		base.hookContextCount = request.hookContextCount
+		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
+		if pending != nil {
+			e.emitModelFallback(turnID, *pending, candidate.Ref)
+		}
+		for _, skipped := range selection.Skipped {
+			e.emitModelFallback(turnID, modelFallbackTransition{
+				from:     skipped.Ref,
+				reason:   skipped.Reason,
+				cooldown: skipped.CooldownRemaining,
+			}, candidate.Ref)
+		}
+		e.emit(events.Event{Type: "llm.requested", TurnID: turnID, Payload: LLMRequestedPayload{
+			Iter:       base.iter,
+			HistoryLen: len(request.history),
+			ToolCount:  len(prepared.tools),
+			Model:      candidate.Ref,
+		}})
+
+		sawDelta := false
+		resp, err := llm.CompleteWithOptions(ctx, candidate.Provider, prepared.systemPrompt, request.history, prepared.tools, llm.CompleteOptions{
+			Purpose:         "turn",
+			MaxOutputTokens: candidateMaxOutputTokens(candidate, e.MaxOutputTokens),
+			CachePolicy:     e.cachePolicyLocked(),
+			RetryObserver:   e.providerRetryObserverLocked(turnID, "turn", &request.iter),
+			OnDelta: func(delta llm.StreamDelta) {
+				sawDelta = true
+				e.emit(events.Event{Type: "llm.output_delta", TurnID: turnID, Transient: true, Payload: LLMOutputDeltaPayload{
+					Iter:  request.iter,
+					Model: candidate.Ref,
+					Kind:  delta.Kind,
+					Index: delta.Index,
+					Text:  delta.Text,
+				}})
+			},
+		})
+		if err == nil {
+			health.Complete(selection.Ticket, llm.ModelHealthSuccess, "")
+			return providerTurnResult{response: resp, request: request, candidate: candidate, notice: notice}, nil
+		}
+		reason, eligible := llm.ClassifyFallbackError(err)
+		if sawDelta || !eligible {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: request}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
+		}
+		if len(candidates) == 1 {
+			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
+			return providerTurnResult{request: request}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
+		}
+		transition := health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, string(reason))
+		failures = append(failures, modelAttemptFailure{ref: candidate.Ref, err: err})
+		pending = &modelFallbackTransition{
+			from:     candidate.Ref,
+			reason:   string(reason),
+			cooldown: transition.Cooldown,
+			probe:    selection.Ticket.Probe,
+		}
+	}
 }
 
 func (e *Engine) providerRetryObserverLocked(turnID, purpose string, iter *int) func(llm.ProviderRetryDiagnostic) {
@@ -490,18 +579,28 @@ func (e *Engine) continueAfterProviderFailure(ctx context.Context, turnID string
 	return true
 }
 
-func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTurnContext, request providerTurnRequest, resp llm.Response) (recordedProviderResponse, error) {
+func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTurnContext, result providerTurnResult) (recordedProviderResponse, error) {
+	request := result.request
+	resp := result.response
 	msg := resp.Message
-	if msg.Model == "" && e.Provider != nil {
-		msg.Model = e.Provider.Name()
+	if len(e.ModelCandidates) > 0 || msg.Model == "" {
+		msg.Model = result.candidate.Ref
 	}
 	msg.Blocks = prepareToolInputs(msg.Blocks, e.Tools)
-	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
 	var contextUsage *llm.ContextUsage
 	if !resp.Usage.IsZero() {
-		snapshot := e.contextUsageSnapshot(msg.Model, e.ContextWindow, resp.Usage, prepared.promptSections, prepared.tools, request.history)
+		snapshot := e.contextUsageSnapshot(msg.Model, candidateContextWindow(result.candidate, e.ContextWindow), resp.Usage, prepared.promptSections, prepared.tools, request.history)
 		contextUsage = &snapshot
 	}
+	messages := make([]llm.Message, 0, 2)
+	if result.notice != nil {
+		messages = append(messages, *result.notice)
+	}
+	messages = append(messages, msg)
+	if err := e.Session.AppendBatch(messages); err != nil {
+		return recordedProviderResponse{}, fmt.Errorf("session append provider response: %w", err)
+	}
+	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
 	totalUsage := e.Session.RecordResponseUsage(resp.Usage, contextUsage)
 
 	// Enrich the responded event with the assistant's text + thinking +
@@ -519,13 +618,11 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		ToolCalls:    responseToolCalls(msg),
 		Model:        msg.Model,
 		ContextUsage: contextUsage,
+		Notice:       result.notice,
 	}
 	e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload})
 
 	toolCalls := msg.ToolCalls()
-	if err := e.Session.Append(msg); err != nil {
-		return recordedProviderResponse{}, fmt.Errorf("session append assistant: %w", err)
-	}
 	return recordedProviderResponse{finalText: llm.FormatBlocksForTerminal(msg.Blocks), stopReason: resp.StopReason, toolCalls: toolCalls}, nil
 }
 

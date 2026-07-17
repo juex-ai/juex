@@ -270,6 +270,11 @@ point right; expanded chevrons point down. The copy icon belongs to the
 expanded body, sits in that body's top-right corner, and appears on hover/focus.
 External events use the gold ramp, not blue or teal.
 
+Model fallback notices render as centered compact process disclosures. The
+collapsed row says `Model switched` or `Model recovered`; expanding it shows
+the persisted explanation without the provider-only `system-reminder` wrapper.
+They are not user chat bubbles and do not expose a normal message copy action.
+
 Context compaction renders as a centered transcript divider: horizontal rules
 with a compact `Context compacted` button between them. Clicking the label
 copies the persisted compact summary to the clipboard and temporarily changes

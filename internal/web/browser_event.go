@@ -36,6 +36,7 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{"llm.responded", func() any { return &juexruntime.LLMRespondedPayload{} }},
 	{"llm.output_delta", func() any { return &juexruntime.LLMOutputDeltaPayload{} }},
 	{"llm.retry", func() any { return &juexruntime.LLMRetryPayload{} }},
+	{"llm.fallback", func() any { return &juexruntime.LLMFallbackPayload{} }},
 	{toolevents.RequestedType, func() any { return &toolevents.RequestedPayload{} }},
 	{toolevents.CompletedType, func() any { return &toolevents.CompletedPayload{} }},
 	{toolevents.OutputDeltaType, func() any { return &toolevents.OutputDeltaPayload{} }},

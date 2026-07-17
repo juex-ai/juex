@@ -1,12 +1,18 @@
 # Prefer `juex init` for first-run setup. Copy this template manually only when
 # you want full control over .juex/juex.yaml in a workspace or
-# ~/.juex/juex.yaml for user-global provider fallback settings.
+# ~/.juex/juex.yaml for user-global provider settings.
 # The workspace .juex directory is local runtime state and should not be
 # committed.
 
 # Active model, in provider:model form. Override per invocation with
 # `juex --model provider:model ...`.
 model: openai:gpt-4.1
+
+# Optional ordered provider:model fallbacks. Entries must be unique, resolve
+# to declared models, and differ from the configured primary model.
+# fallback_models:
+#   - anthropic:claude-sonnet-5
+#   - local:qwen3
 
 # User-global resources under ~/.agents and ~/.juex/extensions are enabled by
 # default. Set to false or 0 to ignore ~/.agents/AGENTS.md, ~/.agents/skills,
