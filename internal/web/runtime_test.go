@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
@@ -98,6 +99,32 @@ body`)
 	}
 	if got.WorkDir != work {
 		t.Fatalf("work_dir = %q, want %q", got.WorkDir, work)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, got.StartTime); err != nil {
+		t.Fatalf("start_time = %q, want RFC3339 timestamp: %v", got.StartTime, err)
+	}
+}
+
+func TestRuntimeStatusReportsStableServerStartTime(t *testing.T) {
+	srv := newTestServer(t)
+	want := time.Date(2026, time.July, 17, 2, 15, 30, 123456000, time.UTC)
+	srv.startedAt = want
+
+	first, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := srv.runtimeStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantText := want.Format(time.RFC3339Nano)
+	if first.StartTime != wantText {
+		t.Fatalf("first start_time = %q, want %q", first.StartTime, wantText)
+	}
+	if second.StartTime != wantText {
+		t.Fatalf("second start_time = %q, want %q", second.StartTime, wantText)
 	}
 }
 

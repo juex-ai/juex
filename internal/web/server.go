@@ -36,9 +36,10 @@ type Options struct {
 
 // Server is a long-running HTTP server for one WorkDir.
 type Server struct {
-	opts     Options
-	sessions sync.Map // session id (string) → *activeSession
-	nextTurn atomic.Uint64
+	opts      Options
+	sessions  sync.Map // session id (string) → *activeSession
+	nextTurn  atomic.Uint64
+	startedAt time.Time
 
 	createMu sync.Mutex // serialises POST /api/sessions
 	closeMu  sync.Mutex
@@ -75,6 +76,7 @@ func NewServer(opts Options) *Server {
 	}
 	return &Server{
 		opts:          opts,
+		startedAt:     time.Now().UTC(),
 		runtimeMCPErr: map[string]string{},
 		runtimeSkills: app.NewRuntimeStatusSkillCache(),
 	}

@@ -680,6 +680,7 @@ export interface ShellProfile {
 }
 
 export interface RuntimeStatusResponse {
+  start_time: string;
   work_dir: string;
   provider: {
     id?: string;
