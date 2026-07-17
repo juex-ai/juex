@@ -153,7 +153,7 @@ execution is printed and the process exits with code 10.`,
 					}, "pass an existing directory path", false)
 				}
 			}
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"set top-level model and providers[] entries in .juex/juex.yaml or "+initNoConfigSuggestion, false)

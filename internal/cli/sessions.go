@@ -49,7 +49,7 @@ func newSessionsListCmd(flags *persistentFlags) *cobra.Command {
   juex sessions list --format table
   juex sessions list --limit 5`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -117,7 +117,7 @@ func newSessionsShowCmd(flags *persistentFlags) *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -197,7 +197,7 @@ func newSessionsActivateCmd(flags *persistentFlags) *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -239,7 +239,7 @@ func newSessionsContextCmd(flags *persistentFlags) *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -317,7 +317,7 @@ func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}
@@ -388,7 +388,7 @@ func newSessionsDeleteCmd(flags *persistentFlags) *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}

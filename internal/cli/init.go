@@ -129,11 +129,11 @@ func initWorkDir(flags *persistentFlags) (string, error) {
 func initTargetPath(scope, workDir string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "", "user", "global", "user-global":
-		home, err := os.UserHomeDir()
+		home, err := config.EffectiveHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("init: resolve home directory: %w", err)
+			return "", fmt.Errorf("init: resolve JueX home directory: %w", err)
 		}
-		return filepath.Join(home, ".juex", "juex.yaml"), nil
+		return filepath.Join(home, "juex.yaml"), nil
 	case "workspace", "project", "local":
 		paths := (config.Config{WorkDir: workDir}).RuntimePaths()
 		return paths.RuntimeConfigPath, nil

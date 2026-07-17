@@ -436,14 +436,15 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     if not file_contains(case_dir / "turn1.stdout.json", f"EVAL_PASS {token}"):
         return fail_smoke_case(result, case_dir, artifact_dir, "turn1", "missing final EVAL_PASS token")
 
-    conversation = case_dir / ".juex" / "sessions" / session_id / "conversation.jsonl"
+    sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
+    conversation = sessions / session_id / "conversation.jsonl"
     if not conversation.is_file():
         return fail_smoke_case(result, case_dir, artifact_dir, "session", "missing conversation log")
     ok, detail = validate_agent_smoke_files(notes_file, case_dir / "tty-result.txt", token)
     if not ok:
         return fail_smoke_case(result, case_dir, artifact_dir, "filesystem", detail)
     result.filesystem_status = "yes"
-    events = case_dir / ".juex" / "sessions" / session_id / "events.jsonl"
+    events = sessions / session_id / "events.jsonl"
     contract_report = contract_oracle.validate_agent_smoke_contract(conversation, events, token)
     if not contract_report.passed:
         return fail_smoke_case(result, case_dir, artifact_dir, "session", contract_report.message())
@@ -634,6 +635,9 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
         {
             "HOME": str(case_home),
             "USERPROFILE": str(case_home),
+            "JUEX_HOME": str(case_home / ".juex"),
+            "GIT_CONFIG_GLOBAL": str(case_home / "gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1",
             "CODEX_HOME": ctx.codex_home,
             "PROVIDER_API_ID": "",
             "PROVIDER_API_PROTOCOL": "",
@@ -716,7 +720,10 @@ def copy_case_artifacts(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> N
     artifact_dir.mkdir(parents=True, exist_ok=True)
     for path in sorted(case_dir.glob("*.stdout.json")) + sorted(case_dir.glob("*.stderr.log")):
         shutil.copy2(path, artifact_dir / path.name)
-    sessions = case_dir / ".juex" / "sessions"
+    try:
+        sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return
     if sessions.is_dir():
         for path in sorted(sessions.rglob("*")):
             if path.is_file() and path.name in {"conversation.jsonl", "events.jsonl"}:
@@ -736,6 +743,15 @@ def write_contract_report(artifact_dir: pathlib.Path, report: contract_oracle.Co
         json.dumps({"passed": report.passed, "issues": report.issues}, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def agent_sessions_dir(work_dir: pathlib.Path, juex_home: pathlib.Path) -> pathlib.Path:
+    marker_path = work_dir / ".juex" / "juex.local.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    agent_id = marker.get("agent_id") if isinstance(marker, dict) else None
+    if not isinstance(agent_id, str) or re.fullmatch(r"[a-z2-7]{8,32}", agent_id) is None:
+        raise ValueError(f"invalid or missing agent_id in {marker_path}")
+    return juex_home / "agents" / agent_id / "sessions"
 
 
 def write_error_tail(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> None:

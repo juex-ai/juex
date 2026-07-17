@@ -1,12 +1,32 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/juex-ai/juex/internal/llm"
 )
+
+func TestProjectedArtifactStoreUsesExplicitWorkDir(t *testing.T) {
+	eng, _ := newEngine(t, &mockProvider{}, false)
+	workDir := t.TempDir()
+	eng.WorkDir = workDir
+
+	store, err := eng.projectedArtifactStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Put("tool-results/session/item.txt", []byte("result\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, filepath.FromSlash(ref.Path))); err != nil {
+		t.Fatalf("artifact was not stored in explicit workdir: %v", err)
+	}
+}
 
 func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	eng, _ := newEngine(t, &mockProvider{}, false)

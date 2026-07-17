@@ -286,6 +286,15 @@ def noise(label: str, count: int) -> str:
 
 def run_eval_turn(args: argparse.Namespace, work: pathlib.Path, prompt_file: pathlib.Path, output_file: pathlib.Path) -> int:
     env = os.environ.copy()
+    case_home = work / "home"
+    case_home.mkdir(parents=True, exist_ok=True)
+    codex_home = env.get("CODEX_HOME") or str(pathlib.Path.home() / ".codex")
+    env["HOME"] = str(case_home)
+    env["USERPROFILE"] = str(case_home)
+    env["JUEX_HOME"] = str(case_home / ".juex")
+    env["GIT_CONFIG_GLOBAL"] = str(case_home / "gitconfig")
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["CODEX_HOME"] = codex_home
     env["PROVIDER_CONTEXT_WINDOW"] = str(args.context_window)
     command = [
         args.juex,
@@ -409,8 +418,12 @@ def summary_section(summary: str, heading: str, next_heading: str) -> str:
 
 
 def session_files(work: pathlib.Path, name: str) -> list[pathlib.Path]:
-    sessions = work / ".juex" / "sessions"
+    sessions = session_root(work)
     return sorted(sessions.rglob(name)) if sessions.is_dir() else []
+
+
+def session_root(work: pathlib.Path) -> pathlib.Path:
+    return helper.agent_sessions_dir(work, work / "home" / ".juex")
 
 
 def has_compaction(work: pathlib.Path) -> bool:

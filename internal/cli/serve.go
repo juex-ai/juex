@@ -29,7 +29,7 @@ and the server flushes session jsonl before exit.`,
   juex serve --addr 127.0.0.1:9000`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig(flags)
+			cfg, err := loadConfigForCommand(cmd, flags)
 			if err != nil {
 				return err
 			}

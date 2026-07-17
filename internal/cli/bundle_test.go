@@ -21,8 +21,9 @@ func TestBundleCmdCreatesArchiveAndPrintsJSON(t *testing.T) {
 
 	root := newRootCmd()
 	var stdout bytes.Buffer
+	var stderr bytes.Buffer
 	root.SetOut(&stdout)
-	root.SetErr(&stdout)
+	root.SetErr(&stderr)
 	root.SetArgs([]string{"-C", work, "bundle", "--session", sessionID, "--out", out})
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
@@ -35,7 +36,7 @@ func TestBundleCmdCreatesArchiveAndPrintsJSON(t *testing.T) {
 		Redacted  bool   `json:"redacted"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
-		t.Fatalf("not JSON: %v\n%s", err, stdout.String())
+		t.Fatalf("not JSON: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
 	if parsed.Path != out || parsed.SessionID != sessionID || parsed.Files == 0 || parsed.Bytes == 0 || !parsed.Redacted {
 		t.Fatalf("output = %+v", parsed)

@@ -3,7 +3,7 @@
 Juex is a small Go agent runtime packaged as one binary. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
 tools, workspace Observables, MCP stdio tools, skills and hooks from local resource bundles,
-work-local memory, and resumable session history.
+agent-home memory, and resumable session history.
 
 The project is intentionally narrow: it is a runtime for experimenting with
 agent loops, not a hosted service or a framework with plugins for every
@@ -31,7 +31,8 @@ make build
 ```
 
 Create runtime config with the first-run wizard. By default it writes shared
-provider settings to `~/.juex/juex.yaml`; use `--scope workspace` when a
+provider settings to `$JUEX_HOME/juex.yaml` (`~/.juex/juex.yaml` by default);
+use `--scope workspace` when a
 repository needs its own `.juex/juex.yaml` override:
 
 ```bash
@@ -59,7 +60,7 @@ juex serve
 
 `--model` uses the same `provider:model` format as config and can select
 any model declared in the merged provider config, including providers from
-`~/.juex/juex.yaml` when the current directory has no local config.
+`$JUEX_HOME/juex.yaml` when the current directory has no local config.
 
 Anthropic, OpenAI, OpenAI-compatible Chat, DeepSeek, and Codex provider
 profiles stream assistant text and reasoning to verbose CLI and Web sessions
@@ -76,7 +77,7 @@ If you built from source without installing, use `./dist/juex` instead of
 
 | Command | Purpose |
 | --- | --- |
-| `juex init` | Create or merge a first-run runtime config in `~/.juex/juex.yaml` or the workspace. |
+| `juex init` | Create or merge a first-run runtime config in `$JUEX_HOME/juex.yaml` or the workspace. |
 | `juex doctor` | Run read-only checks for config, credentials, connectivity, shell, MCP, and skills. |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
 | `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
@@ -99,45 +100,47 @@ If you built from source without installing, use `./dist/juex` instead of
 
 ## Runtime Files
 
-Juex keeps runtime state in the current work directory:
+Each workspace has one resident-agent identity. The narrow workspace marker
+binds it to state under `JUEX_HOME`, which defaults to `~/.juex`:
 
 ```text
-.juex/
-├── artifacts/
-│   ├── media/
-│   ├── tool-results/<session-id>/
-│   └── user-inputs/<session-id>/
-├── extensions/<name>/
-│   ├── hooks.yaml
-│   ├── mcp.json
-│   └── skills/<skill>/SKILL.md
-├── juex.yaml
+<workspace>/.juex/
+├── juex.local.json              # {"agent_id":"..."}
+├── juex.yaml                    # workspace config
+├── artifacts/                   # workspace-relative durable artifacts
+├── extensions/
 ├── observables.json
-├── observables/
-│   └── observations.jsonl
-├── history.json
-├── memory/
-└── sessions/<id>/
+└── observables/
+
+$JUEX_HOME/
+├── juex.yaml                    # user-global config
+├── extensions/
+└── agents/<agent-id>/
+    ├── agent.json
+    ├── history.json
     ├── logs/
-    │   ├── juex.log
-    │   └── debug.log
-    ├── session.json
-    ├── conversation.jsonl
-    ├── events.jsonl
-    ├── pending_input.jsonl
-    ├── notes.md
-    ├── scratchpad/
-    ├── goal_state.json
-    ├── trace.jsonl
-    ├── spans.jsonl
-    └── tools.jsonl
+    ├── memory/
+    └── sessions/<id>/
+        ├── logs/
+        ├── session.json
+        ├── conversation.jsonl
+        ├── events.jsonl
+        ├── pending_input.jsonl
+        ├── notes.md
+        ├── scratchpad/
+        ├── goal_state.json
+        ├── trace.jsonl
+        ├── spans.jsonl
+        └── tools.jsonl
 ```
 
 User-global resources that can affect the agent live under `~/.agents/` and
-`~/.juex/extensions/`. By default, Juex loads `~/.agents/AGENTS.md` before
+`$JUEX_HOME/extensions/`. `JUEX_HOME` scopes JueX config, extensions, and the
+agent registry; it does not relocate the existing `~/.agents` resource tree.
+By default, Juex loads `~/.agents/AGENTS.md` before
 work-local AGENTS.md files, reads user-global skills and MCP servers from
 `~/.agents/skills` and `~/.agents/mcp.json`, and discovers user-global
-extension bundles under `~/.juex/extensions/<name>/`. Set
+extension bundles under `$JUEX_HOME/extensions/<name>/`. Set
 `enable_user_global_resources: false` in `juex.yaml`, or pass
 `--enable-user-global-resources=false`, to ignore those user-global resources
 for a run. Project-local AGENTS.md, skills, and MCP servers still come from
@@ -146,9 +149,10 @@ for a run. Project-local AGENTS.md, skills, and MCP servers still come from
 `mcp.json`, and `hooks.yaml`; runtime status reports them with source
 `ext:<name>`. Work-local extension hooks must set `trusted: true`; user-global
 extension hooks are trusted by location. Extension MCP servers receive
-`JUEX_EXT_DIR` alongside `WORKDIR` and `JUEX_WORKDIR`. Runtime state lives
-under `.juex/` so it can stay uncommitted. User-global provider fallback
-configuration lives at `~/.juex/juex.yaml`.
+`JUEX_EXT_DIR` alongside `WORKDIR` and `JUEX_WORKDIR`. Identity-owned runtime
+state lives under `$JUEX_HOME/agents/<id>`; workspace artifacts and observable
+state remain under `.juex/`. User-global provider fallback configuration lives
+at `$JUEX_HOME/juex.yaml`.
 
 Skills are exposed with progressive disclosure. The system prompt contains a
 compact, budgeted catalog of filesystem skills instead of every full

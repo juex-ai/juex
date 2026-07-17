@@ -79,7 +79,7 @@ func newDoctorCmd(flags *persistentFlags) *cobra.Command {
 			if format != "text" && format != "json" {
 				return &usageError{msg: "--format must be text, table, or json"}
 			}
-			result := runDoctor(cmd.Context(), flags, offline)
+			result := runDoctor(cmd, flags, offline)
 			renderDoctorResult(cmd, format, result)
 			if result.Status == doctorStatusOK {
 				return nil
@@ -92,7 +92,8 @@ func newDoctorCmd(flags *persistentFlags) *cobra.Command {
 	return cmd
 }
 
-func runDoctor(ctx context.Context, flags *persistentFlags, offline bool) doctorResult {
+func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorResult {
+	ctx := cmd.Context()
 	var checks []doctorCheck
 	workDir, workErr := initWorkDir(flags)
 	if workErr != nil {
@@ -104,7 +105,7 @@ func runDoctor(ctx context.Context, flags *persistentFlags, offline bool) doctor
 		})
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks}
 	}
-	cfg, err := loadConfig(flags)
+	cfg, err := loadConfigForCommand(cmd, flags)
 	if err != nil {
 		checks = append(checks, doctorCheck{
 			Name:       "config",

@@ -24,6 +24,9 @@ func TestMain(m *testing.M) {
 	_ = os.Setenv("HOME", home)
 	_ = os.Setenv("USERPROFILE", home)
 	_ = os.Setenv("CODEX_HOME", filepath.Join(home, "missing-codex-home"))
+	_ = os.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	_ = os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	_ = os.Unsetenv("JUEX_HOME")
 	for _, key := range []string{
 		"PROVIDER_API_ID",
 		"PROVIDER_API_PROTOCOL",

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -956,6 +957,62 @@ func TestLoadForWorkDirNormalizesRelativeWorkDir(t *testing.T) {
 	}
 }
 
+func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
+	home := prepareConfigTest(t)
+	juexHome := filepath.Join(home, "alternate-juex")
+	t.Setenv("JUEX_HOME", juexHome)
+	t.Setenv("PROVIDER_API_ID", "openai")
+	t.Setenv("PROVIDER_API_BASE", "https://x")
+	t.Setenv("PROVIDER_API_KEY", "k")
+	t.Setenv("PROVIDER_API_MODEL", "m")
+	workDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadForWorkDir(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HomeJuexDir != juexHome {
+		t.Fatalf("HomeJuexDir = %q, want %q", cfg.HomeJuexDir, juexHome)
+	}
+	if cfg.AgentID == "" || cfg.AgentStateDir != filepath.Join(juexHome, "agents", cfg.AgentID) {
+		t.Fatalf("agent identity paths = id %q state %q", cfg.AgentID, cfg.AgentStateDir)
+	}
+	if cfg.MemoryDir() != filepath.Join(cfg.AgentStateDir, "memory") ||
+		cfg.SessionsDir() != filepath.Join(cfg.AgentStateDir, "sessions") ||
+		cfg.HistoryPath() != filepath.Join(cfg.AgentStateDir, "history.json") {
+		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
+	}
+	if cfg.RuntimeConfigPath() != filepath.Join(workDir, ".juex", "juex.yaml") {
+		t.Fatalf("workspace config path = %q", cfg.RuntimeConfigPath())
+	}
+	if cfg.HomeRuntimeConfigPath() != filepath.Join(juexHome, "juex.yaml") ||
+		cfg.HomeExtensionsDir() != filepath.Join(juexHome, "extensions") {
+		t.Fatalf("home paths = config %q extensions %q", cfg.HomeRuntimeConfigPath(), cfg.HomeExtensionsDir())
+	}
+	if cfg.HomeAgentsDir != filepath.Join(home, ".agents") {
+		t.Fatalf("HomeAgentsDir = %q, want existing user resource home", cfg.HomeAgentsDir)
+	}
+}
+
+func TestLoadForWorkDirDoesNotCreateIdentityBeforeConfigValidation(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "unknown_field: true\n")
+
+	if _, err := LoadForWorkDir(workDir); err == nil {
+		t.Fatal("expected invalid config error")
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("marker exists before config validation: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("agent registry exists before config validation: %v", err)
+	}
+}
+
 func TestSkillDirs_AndPaths(t *testing.T) {
 	cfg := Config{
 		HomeAgentsDir:             filepath.Join("/u", ".agents"),
@@ -1845,8 +1902,12 @@ func TestLoadFromFile_CodexAuthMissingCredentialErrors(t *testing.T) {
 func prepareConfigTest(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
+	t.Chdir(home)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	for _, key := range providerEnvKeys {
 		t.Setenv(key, "")
 	}

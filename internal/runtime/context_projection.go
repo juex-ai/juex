@@ -3,7 +3,6 @@ package runtime
 import (
 	"fmt"
 	"path"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -189,15 +188,10 @@ func (e *Engine) writeProjectedArtifact(sourceKind, messageID string, block llm.
 }
 
 func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
-	if e == nil || e.Session == nil || e.Session.Dir == "" {
-		return artifact.Store{}, fmt.Errorf("context artifact: missing session directory")
+	if e == nil || e.WorkDir == "" {
+		return artifact.Store{}, fmt.Errorf("context artifact: missing workspace directory")
 	}
-	runtimeRoot := filepath.Dir(filepath.Dir(filepath.Clean(e.Session.Dir)))
-	workDir := runtimeRoot
-	if filepath.Base(runtimeRoot) == ".juex" {
-		workDir = filepath.Dir(runtimeRoot)
-	}
-	store, err := artifact.NewStore(workDir)
+	store, err := artifact.NewStore(e.WorkDir)
 	if err != nil {
 		return artifact.Store{}, fmt.Errorf("context artifact store: %w", err)
 	}

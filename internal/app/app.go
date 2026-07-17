@@ -331,6 +331,7 @@ func New(opts Options) (*App, error) {
 		Bus:             bus,
 		Session:         sess,
 		Prompt:          pb,
+		WorkDir:         runtimePaths.WorkDir,
 		Hooks:           hookRunner,
 		HookContext: hooks.Request{
 			CWD:              runtimePaths.WorkDir,
