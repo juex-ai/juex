@@ -67,9 +67,10 @@ type HookTracePayload struct {
 }
 
 type LLMRequestedPayload struct {
-	Iter       int `json:"iter"`
-	HistoryLen int `json:"history_len"`
-	ToolCount  int `json:"tool_count"`
+	Iter       int    `json:"iter"`
+	HistoryLen int    `json:"history_len"`
+	ToolCount  int    `json:"tool_count"`
+	Model      string `json:"model,omitempty"`
 }
 
 type LLMRespondedPayload struct {
@@ -83,6 +84,7 @@ type LLMRespondedPayload struct {
 	ToolCalls    []toolevents.ToolCallPayload `json:"tool_calls"`
 	Model        string                       `json:"model"`
 	ContextUsage *llm.ContextUsage            `json:"context_usage,omitempty"`
+	Notice       *llm.Message                 `json:"notice,omitempty"`
 }
 
 type LLMOutputDeltaPayload struct {
@@ -97,6 +99,14 @@ type LLMRetryPayload struct {
 	llm.ProviderRetryDiagnostic
 	Purpose string `json:"purpose,omitempty"`
 	Iter    *int   `json:"iter,omitempty"`
+}
+
+type LLMFallbackPayload struct {
+	From       string `json:"from"`
+	To         string `json:"to"`
+	Reason     string `json:"reason"`
+	CooldownMS int64  `json:"cooldown_ms,omitempty"`
+	Probe      bool   `json:"probe,omitempty"`
 }
 
 type FinishAttemptedPayload struct {

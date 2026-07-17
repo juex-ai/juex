@@ -202,6 +202,18 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
+			ID:        "evt-llm-fallback",
+			Type:      "llm.fallback",
+			Timestamp: ts.Add(1800 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.LLMFallbackPayload{
+				From:       "openai:gpt-primary",
+				To:         "anthropic:claude-backup",
+				Reason:     "transient",
+				CooldownMS: 30000,
+			},
+		},
+		{
 			ID:        "evt-tool-requested",
 			Type:      toolevents.RequestedType,
 			Timestamp: ts.Add(2 * time.Second),

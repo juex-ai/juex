@@ -671,23 +671,36 @@ function applyAssistantResponse(
   if (!event.turn_id) return state;
   const blocks = assistantBlocksFromEventPayload(event.payload);
   const model = event.payload.model;
-  let found = false;
-  const messages = state.messages.map((message) => {
-    if (
+  const pendingIndex = state.messages.findIndex(
+    (message) =>
       message.turn_id === event.turn_id &&
       message.role === "assistant" &&
-      message.pending
-    ) {
-      found = true;
-      return { ...message, pending: false, blocks, model };
+      message.pending,
+  );
+  if (pendingIndex >= 0) {
+    const messages = [...state.messages];
+    messages[pendingIndex] = {
+      ...messages[pendingIndex],
+      pending: false,
+      blocks,
+      model,
+    };
+    if (event.payload.notice) {
+      messages.splice(pendingIndex, 0, {
+        ...event.payload.notice,
+        turn_id: event.turn_id,
+      });
     }
-    return message;
-  });
-  if (found) return { ...state, messages };
+    return { ...state, messages };
+  }
+  const appended = event.payload.notice
+    ? [{ ...event.payload.notice, turn_id: event.turn_id }]
+    : [];
   return {
     ...state,
     messages: [
-      ...messages,
+      ...state.messages,
+      ...appended,
       { role: "assistant", turn_id: event.turn_id, pending: false, blocks, model },
     ],
   };

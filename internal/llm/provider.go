@@ -281,6 +281,7 @@ func IsRetryableProviderError(err error) bool {
 		"no route to host",
 		"server disconnected",
 		"unexpected eof",
+		"unexpected end of json input",
 		": eof",
 		"sse read",
 		"stream idle timeout",
@@ -296,6 +297,58 @@ func IsRetryableProviderError(err error) bool {
 		"deadline exceeded",
 		"timed out",
 		"timeout",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+type FallbackFailureReason string
+
+const (
+	FallbackFailureTransient     FallbackFailureReason = "transient"
+	FallbackFailureUnauthorized  FallbackFailureReason = "unauthorized"
+	FallbackFailureForbidden     FallbackFailureReason = "forbidden"
+	FallbackFailureModelNotFound FallbackFailureReason = "model_not_found"
+)
+
+// ClassifyFallbackError reports provider failures that are safe to resend to
+// a different configured model. Whether streamed output was already emitted
+// is request-local state and must be checked by the runtime before fallback.
+func ClassifyFallbackError(err error) (FallbackFailureReason, bool) {
+	if err == nil || errors.Is(err, context.Canceled) || IsContextOverflowError(err) {
+		return "", false
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "retry suppressed") {
+		return "", false
+	}
+	if IsRetryableProviderError(err) {
+		return FallbackFailureTransient, true
+	}
+	if status, ok := providerHTTPStatusCode(err); ok {
+		switch status {
+		case http.StatusUnauthorized:
+			return FallbackFailureUnauthorized, true
+		case http.StatusForbidden:
+			return FallbackFailureForbidden, true
+		}
+	}
+	if modelNotFoundError(lower) {
+		return FallbackFailureModelNotFound, true
+	}
+	return "", false
+}
+
+func modelNotFoundError(lower string) bool {
+	for _, marker := range []string{
+		"model_not_found",
+		"model not found",
+		"unknown model",
+		"model does not exist",
+		"model doesn't exist",
 	} {
 		if strings.Contains(lower, marker) {
 			return true

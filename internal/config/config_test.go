@@ -126,6 +126,147 @@ func TestParseModelRef(t *testing.T) {
 	}
 }
 
+func TestLoadFromFileFallbackModelsResolvesOrderedChain(t *testing.T) {
+	prepareConfigTest(t)
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, path, fallbackModelsTestConfig(`
+model: openai:gpt-primary
+fallback_models:
+  - anthropic:claude-backup
+  - local:qwen-backup
+`))
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chain) != 3 {
+		t.Fatalf("chain = %+v", chain)
+	}
+	wantRefs := []string{"openai:gpt-primary", "anthropic:claude-backup", "local:qwen-backup"}
+	wantWindows := []int{128000, 64000, 32000}
+	for i := range chain {
+		if chain[i].Ref != wantRefs[i] || chain[i].ContextWindow != wantWindows[i] {
+			t.Fatalf("chain[%d] = %+v, want ref=%q window=%d", i, chain[i], wantRefs[i], wantWindows[i])
+		}
+	}
+}
+
+func TestLoadFromFileFallbackModelsValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		fallbacks string
+		want      string
+	}{
+		{name: "duplicate", fallbacks: "  - anthropic:claude-backup\n  - anthropic:claude-backup", want: "duplicate fallback_models"},
+		{name: "primary", fallbacks: "  - openai:gpt-primary", want: "equals configured primary"},
+		{name: "unknown provider", fallbacks: "  - missing:model", want: "unknown provider"},
+		{name: "unknown model", fallbacks: "  - local:missing", want: "unknown model"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			path := filepath.Join(t.TempDir(), "juex.yaml")
+			writeTextFile(t, path, fallbackModelsTestConfig("\nmodel: openai:gpt-primary\nfallback_models:\n"+tt.fallbacks+"\n"))
+			_, err := LoadFromFile(path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestFallbackModelsPrimaryOverridesKeepConfiguredChain(t *testing.T) {
+	prepareConfigTest(t)
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, path, fallbackModelsTestConfig(`
+model: openai:gpt-primary
+fallback_models:
+  - anthropic:claude-backup
+  - local:qwen-backup
+`))
+
+	cfg, err := LoadFromFileForWorkDirWithModelOverride(path, t.TempDir(), "anthropic:claude-backup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modelChainRefs(chain); got != "anthropic:claude-backup,local:qwen-backup" {
+		t.Fatalf("CLI override chain = %q", got)
+	}
+
+	t.Setenv("PROVIDER_API_MODEL", "gpt-env")
+	cfg, err = LoadFromFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err = cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modelChainRefs(chain); got != "openai:gpt-env,anthropic:claude-backup,local:qwen-backup" {
+		t.Fatalf("env override chain = %q", got)
+	}
+}
+
+func TestFallbackModelsEmptyListClearsInheritedList(t *testing.T) {
+	home := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), fallbackModelsTestConfig(`
+model: openai:gpt-primary
+fallback_models:
+  - anthropic:claude-backup
+`))
+	override := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, override, "fallback_models: []\n")
+
+	cfg, err := LoadFromFile(override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.FallbackModels) != 0 {
+		t.Fatalf("fallback models = %v, want cleared", cfg.FallbackModels)
+	}
+}
+
+func fallbackModelsTestConfig(header string) string {
+	return strings.TrimSpace(header) + `
+providers:
+  - id: openai
+    api_key: sk-openai
+    models:
+      - id: gpt-primary
+        context_window: 128000
+      - id: gpt-env
+        context_window: 96000
+  - id: anthropic
+    api_key: sk-anthropic
+    models:
+      - id: claude-backup
+        context_window: 64000
+  - id: local
+    protocol: openai/chat
+    api_key: sk-local
+    models:
+      - id: qwen-backup
+        context_window: 32000
+` + "\n"
+}
+
+func modelChainRefs(chain []ResolvedModel) string {
+	refs := make([]string, len(chain))
+	for i := range chain {
+		refs[i] = chain[i].Ref
+	}
+	return strings.Join(refs, ",")
+}
+
 func TestLoadFromFileRejectsProviderIDWithModelSeparator(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

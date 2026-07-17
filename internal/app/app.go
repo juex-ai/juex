@@ -45,6 +45,10 @@ import (
 type Options struct {
 	Config   config.Config
 	Provider llm.Provider // optional; if nil, derived from Config
+	// ModelCandidates takes precedence over Provider and config-derived models.
+	// ModelHealth may be shared by multiple Apps, as juex serve does.
+	ModelCandidates []runtime.ModelCandidate
+	ModelHealth     *llm.ModelHealth
 	// SummaryProvider, when set, overrides compaction.summary_model provider
 	// construction. It is primarily useful for tests and embedded callers.
 	SummaryProvider llm.Provider
@@ -179,17 +183,41 @@ func New(opts Options) (*App, error) {
 	}
 
 	provider := opts.Provider
-	providerInjected := provider != nil
-	if provider == nil {
-		profile, err := cfg.ProviderSelection().ProviderProfile()
+	modelCandidates := append([]runtime.ModelCandidate(nil), opts.ModelCandidates...)
+	providerInjected := provider != nil || len(modelCandidates) > 0
+	switch {
+	case len(modelCandidates) > 0:
+		provider = modelCandidates[0].Provider
+	case provider != nil:
+		// A single injected provider is a compatibility/test seam and
+		// intentionally disables config-derived fallbacks.
+	default:
+		resolvedChain, err := cfg.ModelChain()
 		if err != nil {
 			return nil, err
 		}
-		p, err := llm.NewProvider(profile)
-		if err != nil {
-			return nil, err
+		modelCandidates = make([]runtime.ModelCandidate, 0, len(resolvedChain))
+		for _, resolved := range resolvedChain {
+			profile, err := resolved.Selection.ProviderProfile()
+			if err != nil {
+				return nil, err
+			}
+			candidateProvider, err := llm.NewProvider(profile)
+			if err != nil {
+				return nil, err
+			}
+			modelCandidates = append(modelCandidates, runtime.ModelCandidate{
+				Ref:             resolved.Ref,
+				Provider:        candidateProvider,
+				ContextWindow:   resolved.ContextWindow,
+				MaxOutputTokens: resolved.MaxOutputTokens,
+			})
 		}
-		provider = p
+		provider = modelCandidates[0].Provider
+	}
+	modelHealth := opts.ModelHealth
+	if modelHealth == nil {
+		modelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
 	}
 	summaryProvider := opts.SummaryProvider
 	if summaryProvider == nil && !providerInjected && strings.TrimSpace(runtimeLimits.Compaction.SummaryModel) != "" {
@@ -327,6 +355,8 @@ func New(opts Options) (*App, error) {
 	eng := &runtime.Engine{
 		Provider:        provider,
 		SummaryProvider: summaryProvider,
+		ModelCandidates: modelCandidates,
+		ModelHealth:     modelHealth,
 		Tools:           reg,
 		Bus:             bus,
 		Session:         sess,

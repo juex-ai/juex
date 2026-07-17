@@ -12,6 +12,7 @@ package session
 import (
 	cryptorand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -127,14 +128,30 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 
 // Append adds m to the in-memory history and writes it to conversation.jsonl.
 func (s *Session) Append(m llm.Message) error {
-	s.mu.Lock()
-	m = prepareNewMessage(m)
-	if err := s.ensureFilesLocked(); err != nil {
-		s.mu.Unlock()
-		return err
+	return s.AppendBatch([]llm.Message{m})
+}
+
+// AppendBatch atomically adds messages to the conversation transcript. A
+// failed encode or write leaves both the file and in-memory indexes unchanged.
+func (s *Session) AppendBatch(messages []llm.Message) error {
+	if len(messages) == 0 {
+		return nil
 	}
-	line, err := marshalJSONLine(m)
-	if err != nil {
+	s.mu.Lock()
+	prepared := make([]llm.Message, len(messages))
+	lines := make([][]byte, len(messages))
+	var data []byte
+	for i, message := range messages {
+		prepared[i] = prepareNewMessage(message)
+		line, err := marshalJSONLine(prepared[i])
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		lines[i] = line
+		data = append(data, line...)
+	}
+	if err := s.ensureFilesLocked(); err != nil {
 		s.mu.Unlock()
 		return err
 	}
@@ -143,12 +160,27 @@ func (s *Session) Append(m llm.Message) error {
 		s.mu.Unlock()
 		return err
 	}
-	if _, err := s.convFD.Write(line); err != nil {
-		s.mu.Unlock()
-		return err
+	written, writeErr := s.convFD.Write(data)
+	if writeErr == nil && written != len(data) {
+		writeErr = io.ErrShortWrite
 	}
-	s.History = append(s.History, m)
-	s.transcript.appendMessage(m, offset, len(line))
+	if writeErr != nil {
+		rollbackErr := s.convFD.Truncate(offset)
+		if _, err := s.convFD.Seek(offset, io.SeekStart); rollbackErr == nil {
+			rollbackErr = err
+		}
+		s.mu.Unlock()
+		if rollbackErr != nil {
+			return errors.Join(writeErr, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
+		}
+		return writeErr
+	}
+	entryOffset := offset
+	for i, message := range prepared {
+		s.History = append(s.History, message)
+		s.transcript.appendMessage(message, entryOffset, len(lines[i]))
+		entryOffset += int64(len(lines[i]))
+	}
 	info, ok := s.historyInfoLocked()
 	historyPath := s.historyPath
 	s.mu.Unlock()

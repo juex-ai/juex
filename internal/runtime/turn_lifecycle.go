@@ -89,14 +89,19 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 	if err != nil {
 		return err
 	}
-	resp, err := l.engine.requestProviderTurnLocked(ctx, l.turnID, l.prepared, request)
+	result, err := l.engine.requestProviderTurnLocked(ctx, l.turnID, l.prepared, request)
 	if err != nil {
 		if contextErr := cancellation.ContextError(ctx); contextErr != nil && errors.Is(err, context.Canceled) {
 			l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
 			return contextErr
 		}
 		if llm.IsContextOverflowError(err) && !l.retriedOverflow {
-			if _, compactErr := l.engine.compactLocked(ctx, l.turnID, l.prepared.systemPrompt, l.prepared.tools, "overflow_retry", true, ""); compactErr != nil {
+			contextWindow := l.engine.ContextWindow
+			var requestErr *modelRequestError
+			if errors.As(err, &requestErr) && requestErr.contextWindow > 0 {
+				contextWindow = requestErr.contextWindow
+			}
+			if _, compactErr := l.engine.compactLockedForContextWindow(ctx, l.turnID, l.prepared.systemPrompt, l.prepared.tools, "overflow_retry", true, "", contextWindow); compactErr != nil {
 				l.engine.consumePendingHookRuntimeContext(request.hookContextCount)
 				return fmt.Errorf("llm: %w; compact retry failed: %w", err, compactErr)
 			}
@@ -114,7 +119,7 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 		return err
 	}
 
-	recorded, err := l.engine.recordProviderResponseLocked(l.turnID, l.prepared, request, resp)
+	recorded, err := l.engine.recordProviderResponseLocked(l.turnID, l.prepared, result)
 	if err != nil {
 		return err
 	}

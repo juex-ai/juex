@@ -31,6 +31,7 @@ type Config struct {
 	BaseURL                   string
 	APIKey                    string
 	Model                     string
+	FallbackModels            []string
 	ThinkingEffort            string // "low", "medium", "high", "xhigh", "max", or "" (provider default)
 	ContextWindow             int    // provider context window in tokens; defaults to 256K
 	MaxOutputTokens           int    // optional provider-visible output cap for normal turns
@@ -64,6 +65,7 @@ type Config struct {
 
 type fileConfig struct {
 	Model                     string           `yaml:"model"`
+	FallbackModels            *[]string        `yaml:"fallback_models"`
 	EnableUserGlobalResources optionalBool     `yaml:"enable_user_global_resources"`
 	Providers                 []providerConfig `yaml:"providers"`
 	Compaction                compactionConfig `yaml:"compaction"`
@@ -143,7 +145,6 @@ func (c *Config) ApplyModelOverride(ref string) error {
 	if err != nil {
 		return err
 	}
-	c.modelRef = trimmed
 	return resolveSelectedProviderRef(c, modelRef)
 }
 
@@ -454,6 +455,9 @@ func finalizeConfigLoadForValidation(cfg *Config, modelRef string, resolveAuth b
 }
 
 func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth, resolveAgentState bool) error {
+	if err := validateConfiguredFallbackModels(cfg); err != nil {
+		return err
+	}
 	if strings.TrimSpace(modelRef) != "" {
 		if err := cfg.ApplyModelOverride(modelRef); err != nil {
 			return &ModelOverrideError{Err: err}
@@ -601,6 +605,9 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, 
 	}
 	if strings.TrimSpace(fc.Model) != "" {
 		cfg.modelRef = strings.TrimSpace(fc.Model)
+	}
+	if fc.FallbackModels != nil {
+		cfg.FallbackModels = append([]string(nil), (*fc.FallbackModels)...)
 	}
 	if fc.EnableUserGlobalResources.Set {
 		cfg.EnableUserGlobalResources = fc.EnableUserGlobalResources.Value
@@ -897,6 +904,48 @@ func resolveSelectedProvider(cfg *Config) error {
 		return err
 	}
 	return resolveSelectedProviderRef(cfg, ref)
+}
+
+func validateConfiguredFallbackModels(cfg *Config) error {
+	primary := strings.TrimSpace(cfg.modelRef)
+	if primary != "" {
+		ref, err := ParseModelRef(primary)
+		if err != nil {
+			return err
+		}
+		primary = ref.String()
+	}
+	seen := make(map[string]struct{}, len(cfg.FallbackModels))
+	for i, raw := range cfg.FallbackModels {
+		ref, err := ParseModelRef(raw)
+		if err != nil {
+			return fmt.Errorf("config: fallback_models[%d]: %w", i, err)
+		}
+		canonical := ref.String()
+		if _, ok := seen[canonical]; ok {
+			return fmt.Errorf("config: duplicate fallback_models entry %q", canonical)
+		}
+		if canonical == primary {
+			return fmt.Errorf("config: fallback_models entry %q equals configured primary", canonical)
+		}
+		if err := validateConfiguredModelRef(cfg, ref); err != nil {
+			return fmt.Errorf("config: fallback_models[%d]: %w", i, err)
+		}
+		seen[canonical] = struct{}{}
+		cfg.FallbackModels[i] = canonical
+	}
+	return nil
+}
+
+func validateConfiguredModelRef(cfg *Config, ref ModelRef) error {
+	provider, ok := cfg.providerConfigs[ref.ProviderID]
+	if !ok {
+		return fmt.Errorf("model %q references unknown provider %q", ref.String(), ref.ProviderID)
+	}
+	if _, ok := providerModelByID(provider.Models, ref.ModelID); !ok {
+		return fmt.Errorf("model %q references unknown model %q for provider %q", ref.String(), ref.ModelID, ref.ProviderID)
+	}
+	return nil
 }
 
 func resolveSelectedProviderRef(cfg *Config, ref ModelRef) error {

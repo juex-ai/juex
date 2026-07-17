@@ -6,6 +6,7 @@
   "llm.responded",
   "llm.output_delta",
   "llm.retry",
+  "llm.fallback",
   "tool.requested",
   "tool.completed",
   "tool.output_delta",

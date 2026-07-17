@@ -223,6 +223,43 @@ test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final re
   ]);
 });
 
+test("projectLiveSessionEvent inserts a fallback notice before its assistant", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "start-fallback",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-fallback",
+    payload: { input: "continue" },
+  });
+  state = apply(state, {
+    id: "respond-fallback",
+    type: "llm.responded",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-fallback",
+    payload: {
+      stop_reason: "end_turn",
+      usage: { input_tokens: 5, output_tokens: 2 },
+      token_usage: { input_tokens: 5, output_tokens: 2 },
+      blocks: [{ type: "text", text: "continued" }],
+      text: "continued",
+      thinking: "",
+      tool_calls: [],
+      model: "backup:model",
+      notice: {
+        role: "user",
+        kind: "model_fallback",
+        blocks: [{ type: "text", text: "model switched" }],
+      },
+    },
+  });
+
+  assert.equal(state.messages.length, 3);
+  assert.equal(state.messages[1].kind, "model_fallback");
+  assert.equal(state.messages[2].role, "assistant");
+  assert.equal(state.messages[2].model, "backup:model");
+});
+
 test("projectLiveSessionEvent starts a new streamed assistant for the next provider iteration", () => {
   let state: LiveSessionProjection = {
     ...createLiveSessionProjection(),

@@ -38,7 +38,8 @@ export function messageGroupCanCopy(group: MessageGroup): boolean {
   if (
     group.kind === "compact" ||
     group.kind === "mcp_event" ||
-    group.kind === "observation"
+    group.kind === "observation" ||
+    group.kind === "model_fallback"
   ) {
     return false;
   }

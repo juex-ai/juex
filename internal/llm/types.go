@@ -45,6 +45,9 @@ const (
 	// advisory context. It is assembled per request and should not be treated as
 	// durable user input for cache breakpoints or compaction turn boundaries.
 	MessageKindRuntimeContext = "runtime_context"
+	// MessageKindModelFallback marks a provider-visible notice that explains a
+	// circuit-breaker-driven serving model change.
+	MessageKindModelFallback = "model_fallback"
 )
 
 type Block struct {

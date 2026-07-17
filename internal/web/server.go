@@ -45,10 +45,11 @@ type ReadyInfo struct {
 
 // Server is a long-running HTTP server for one WorkDir.
 type Server struct {
-	opts      Options
-	sessions  sync.Map // session id (string) → *activeSession
-	nextTurn  atomic.Uint64
-	startedAt time.Time
+	opts        Options
+	modelHealth *llm.ModelHealth
+	sessions    sync.Map // session id (string) → *activeSession
+	nextTurn    atomic.Uint64
+	startedAt   time.Time
 
 	createMu sync.Mutex // serialises POST /api/sessions
 	closeMu  sync.Mutex
@@ -85,6 +86,7 @@ func NewServer(opts Options) *Server {
 	}
 	return &Server{
 		opts:          opts,
+		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
 		startedAt:     time.Now().UTC(),
 		runtimeMCPErr: map[string]string{},
 		runtimeSkills: app.NewRuntimeStatusSkillCache(),
@@ -429,6 +431,7 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	a, err := app.New(app.Options{
 		Config:      s.opts.Cfg,
 		Provider:    s.opts.Provider,
+		ModelHealth: s.modelHealth,
 		Verbose:     s.opts.Verbose,
 		Debug:       s.opts.Debug,
 		LogLevel:    s.opts.LogLevel,

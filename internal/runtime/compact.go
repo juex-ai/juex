@@ -69,7 +69,11 @@ func (e *Engine) CompactWithInstructions(ctx context.Context, turnID, systemProm
 }
 
 func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string) (CompactionResult, error) {
-	policy := effectiveCompactionPolicy(e.Compaction, e.ContextWindow)
+	return e.compactLockedForContextWindow(ctx, turnID, systemPrompt, tools, reason, auto, instructions, e.ContextWindow)
+}
+
+func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, systemPrompt string, tools []llm.ToolSpec, reason string, auto bool, instructions string, contextWindow int) (CompactionResult, error) {
+	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	if !policy.Enabled {
 		return CompactionResult{}, nil
 	}
@@ -103,7 +107,6 @@ func (e *Engine) compactLocked(ctx context.Context, turnID, systemPrompt string,
 	instructions = mergeCompactInstructions(policy.Instructions, instructions)
 	instructions = appendCompactHookInstructions(instructions, preResults)
 
-	contextWindow := e.ContextWindow
 	if contextWindow <= 0 {
 		contextWindow = DefaultContextWindowTokens
 	}

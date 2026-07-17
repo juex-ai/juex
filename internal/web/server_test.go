@@ -66,6 +66,21 @@ func TestServer_HealthzReturnsOK(t *testing.T) {
 	}
 }
 
+func TestServerSessionsShareProcessModelHealth(t *testing.T) {
+	srv := newTestServer(t)
+	first, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := srv.openSession(context.Background(), "", app.SessionModeNewSide)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.app.Engine.ModelHealth == nil || first.app.Engine.ModelHealth != second.app.Engine.ModelHealth || first.app.Engine.ModelHealth != srv.modelHealth {
+		t.Fatalf("model health is not process-shared: first=%p second=%p server=%p", first.app.Engine.ModelHealth, second.app.Engine.ModelHealth, srv.modelHealth)
+	}
+}
+
 func TestRunEnsuresActivePrimarySession(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Addr = "127.0.0.1:0"
