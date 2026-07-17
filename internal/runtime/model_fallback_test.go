@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/tools"
 )
@@ -416,6 +417,9 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 		{Ref: "backup:model", Provider: backup, ContextWindow: 120},
 	}
 	eng.ModelHealth = llm.NewModelHealth(llm.ModelHealthOptions{})
+	eng.Hooks = &fakeHookRunner{responses: map[hooks.EventName][]fakeHookResponse{
+		hooks.EventPostCompact: {{Stdout: "Use the refreshed fallback context now."}},
+	}}
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("large history ", 300))); err != nil {
 		t.Fatal(err)
 	}
@@ -442,6 +446,12 @@ func TestTurnSmallerWindowFallbackCompactsBeforeProviderCall(t *testing.T) {
 	}
 	if strings.Contains(messagesText(backup.histories[0]), strings.Repeat("large history ", 20)) {
 		t.Fatal("backup received unbounded pre-compaction history")
+	}
+	if got := messagesText(backup.histories[0]); !strings.Contains(got, "Use the refreshed fallback context now.") {
+		t.Fatalf("backup history missing post-compact hook context:\n%s", got)
+	}
+	if remaining := eng.pendingHookRuntimeContextSnapshot(); len(remaining) != 0 {
+		t.Fatalf("post-compact hook context leaked after fallback request: %+v", remaining)
 	}
 }
 

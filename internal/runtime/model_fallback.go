@@ -80,23 +80,29 @@ func candidateMaxOutputTokens(candidate ModelCandidate, fallback int) int {
 
 func (e *Engine) prepareCandidateRequestLocked(ctx context.Context, turnID string, prepared preparedTurnContext, base providerTurnRequest, candidate ModelCandidate, notice *llm.Message, allowPreflightCompaction bool) (providerTurnRequest, error) {
 	if err := cancellation.ContextError(ctx); err != nil {
-		return providerTurnRequest{}, err
+		return base, err
 	}
 	contextWindow := candidateContextWindow(candidate, e.ContextWindow)
 	policy := effectiveCompactionPolicy(e.Compaction, contextWindow)
 	request, err := e.projectCandidateHistoryLocked(turnID, prepared, base, policy, notice)
 	if err != nil {
-		return providerTurnRequest{}, err
+		return base, err
 	}
 	if allowPreflightCompaction && policy.Enabled && request.estimatedInputTokens >= policy.TriggerTokens {
 		if _, err := e.compactLockedForContextWindow(ctx, turnID, prepared.systemPrompt, prepared.tools, "model_fallback_preflight", true, "", contextWindow); err != nil {
-			return providerTurnRequest{}, err
+			return base, err
 		}
-		if err := cancellation.ContextError(ctx); err != nil {
-			return providerTurnRequest{}, err
-		}
+		base.hookContext = e.pendingHookRuntimeContextSnapshot()
+		base.hookContextCount = len(base.hookContext)
 		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
-		return e.projectCandidateHistoryLocked(turnID, prepared, base, policy, notice)
+		if err := cancellation.ContextError(ctx); err != nil {
+			return base, err
+		}
+		request, err := e.projectCandidateHistoryLocked(turnID, prepared, base, policy, notice)
+		if err != nil {
+			return base, err
+		}
+		return request, nil
 	}
 	return request, nil
 }

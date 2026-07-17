@@ -462,7 +462,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 					cooldown: skipped.CooldownRemaining,
 				}, "")
 			}
-			return providerTurnResult{}, modelChainError(failures, skipped)
+			return providerTurnResult{request: base}, modelChainError(failures, skipped)
 		}
 		candidate := candidates[selection.Index]
 		attempted[candidate.Ref] = struct{}{}
@@ -470,8 +470,11 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		request, err := e.prepareCandidateRequestLocked(ctx, turnID, prepared, base, candidate, notice, selection.Index > 0)
 		if err != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
-			return providerTurnResult{}, err
+			return providerTurnResult{request: request}, err
 		}
+		base.hookContext = request.hookContext
+		base.hookContextCount = request.hookContextCount
+		base.history = e.activeContextLockedWithHookContext(base.hookContext).Messages
 		if pending != nil {
 			e.emitModelFallback(turnID, *pending, candidate.Ref)
 		}
@@ -513,11 +516,11 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		reason, eligible := llm.ClassifyFallbackError(err)
 		if sawDelta || !eligible {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
-			return providerTurnResult{}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
+			return providerTurnResult{request: request}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
 		}
 		if len(candidates) == 1 {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")
-			return providerTurnResult{}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
+			return providerTurnResult{request: request}, &modelRequestError{err: err, contextWindow: candidateContextWindow(candidate, e.ContextWindow)}
 		}
 		transition := health.Complete(selection.Ticket, llm.ModelHealthEligibleFailure, string(reason))
 		failures = append(failures, modelAttemptFailure{ref: candidate.Ref, err: err})
