@@ -12,6 +12,8 @@ native service manager. It does not manage individual agents.
 
 Service identities include a normalized `JUEX_HOME` slug and hash so multiple
 homes can be registered independently. Definition publication is atomic per
-file and transactional across the two-file Termux definition. CLI flags and
-output remain in `internal/cli`; agent reconciliation and detached child
+file and transactional across the multi-file Termux definition. Termux writes
+the `down` sentinel before exposing `log/run` and `run`, then enables and
+restarts the service so reinstallations adopt the updated command. CLI flags
+and output remain in `internal/cli`; agent reconciliation and detached child
 lifecycle remain in `internal/fleet`.

@@ -245,7 +245,10 @@ func (m *Manager) validateTermuxInstall() error {
 }
 
 func (m *Manager) installTermux(ctx context.Context) error {
-	_, err := m.runTermux(ctx, "sv-enable", m.plan.registration.Name)
+	if _, err := m.runTermux(ctx, "sv-enable", m.plan.registration.Name); err != nil {
+		return err
+	}
+	_, err := m.runTermux(ctx, "sv", "-w", "15", "restart", m.plan.registration.Name)
 	return err
 }
 

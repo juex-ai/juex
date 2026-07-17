@@ -164,11 +164,21 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.registration.Platform != PlatformTermux || len(plan.files) != 2 {
+	if plan.registration.Platform != PlatformTermux || len(plan.files) != 3 {
 		t.Fatalf("plan = %+v files=%d", plan.registration, len(plan.files))
 	}
-	run := string(plan.files[0].data)
+	down := plan.files[0]
 	logRun := string(plan.files[1].data)
+	run := string(plan.files[2].data)
+	if filepath.Base(down.path) != "down" || len(down.data) != 0 || down.mode != 0o600 {
+		t.Fatalf("disabled sentinel = %+v", down)
+	}
+	if filepath.Base(plan.files[1].path) != "run" || filepath.Base(filepath.Dir(plan.files[1].path)) != "log" {
+		t.Fatalf("second file = %q, want log/run", plan.files[1].path)
+	}
+	if plan.files[2].path != plan.registration.DefinitionPath {
+		t.Fatalf("last file = %q, want service run %q", plan.files[2].path, plan.registration.DefinitionPath)
+	}
 	for _, want := range []string{
 		"#!" + filepath.Join(prefix, "bin", "sh"),
 		"export JUEX_HOME=",
@@ -189,7 +199,7 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 	if strings.Contains(logRun, filepath.Join(prefix, "bin", "svlogger")) {
 		t.Fatalf("log script used the wrong Termux svlogger path:\n%s", logRun)
 	}
-	for _, file := range plan.files {
+	for _, file := range plan.files[1:] {
 		if file.mode != 0o700 {
 			t.Fatalf("%s mode = %o", file.path, file.mode)
 		}
@@ -283,8 +293,11 @@ func TestTermuxInstallRequiresManagerAndEnablesService(t *testing.T) {
 	if _, err := manager.Install(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := runner.verbs(); !reflect.DeepEqual(got, []string{"sv-enable"}) {
+	if got := runner.verbs(); !reflect.DeepEqual(got, []string{"sv-enable", "sv"}) {
 		t.Fatalf("verbs = %v", got)
+	}
+	if got, want := runner.commands[1].args, []string{"-w", "15", "restart", manager.plan.registration.Name}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("restart args = %v, want %v", got, want)
 	}
 	if got := runner.commands[0].env["SVDIR"]; got != filepath.Join(prefix, "var", "service") {
 		t.Fatalf("SVDIR = %q", got)

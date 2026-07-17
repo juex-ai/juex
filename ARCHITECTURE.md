@@ -1063,13 +1063,16 @@ supervisor, and only then removes the definition.
 
 macOS uses a per-user LaunchAgent with `AbandonProcessGroup`; desktop Linux
 uses a systemd user unit with `KillMode=process`; Termux uses termux-services
-run and log scripts and confirms `sv status` reports `down`. These policies let
-the service manager restart or remove the supervisor without terminating
-detached agent processes. Registration paths live in the platform service
-manager's user directory rather than under `JUEX_HOME`; the home-derived name
-keeps multiple installations distinct. The package owns rendering, paths,
-manager commands, and strict state classification. `internal/cli` owns flags
-and presentation, while agent reconciliation remains in `internal/fleet`.
+run and log scripts, publishes a `down` sentinel before exposing `run`, and
+confirms `sv status` reports `down` on removal. Install explicitly restarts an
+existing Termux service after publishing so it uses the new command. These
+policies let the service manager restart or remove the supervisor without
+terminating detached agent processes. Registration paths live in the platform
+service manager's user directory rather than under `JUEX_HOME`; the
+home-derived name keeps multiple installations distinct. The package owns
+rendering, paths, manager commands, and strict state classification.
+`internal/cli` owns flags and presentation, while agent reconciliation remains
+in `internal/fleet`.
 
 ### 3.8.3 Fleet Web Backend
 

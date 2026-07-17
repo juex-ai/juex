@@ -356,6 +356,7 @@ func buildTermuxPlan(home, executable string, args []string, identity string, ho
 	}
 	name := "juex-fleet-" + identity
 	serviceDir := filepath.Join(prefix, "var", "service", name)
+	downPath := filepath.Join(serviceDir, "down")
 	runPath := filepath.Join(serviceDir, "run")
 	logRunPath := filepath.Join(serviceDir, "log", "run")
 	allArgs := append([]string{executable}, args...)
@@ -385,8 +386,9 @@ func buildTermuxPlan(home, executable string, args []string, identity string, ho
 			},
 		},
 		files: []definitionFile{
-			{path: runPath, data: []byte(run), mode: 0o700},
+			{path: downPath, data: nil, mode: 0o600},
 			{path: logRunPath, data: []byte(logRun), mode: 0o700},
+			{path: runPath, data: []byte(run), mode: 0o700},
 		},
 		termuxPrefix: prefix,
 		termuxDir:    serviceDir,
