@@ -502,8 +502,8 @@ func initConfigTargetScope(path, workDir string) string {
 	if cleanPath(path) == cleanPath(workspaceConfig) {
 		return "workspace"
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		userConfig := filepath.Join(home, ".juex", "juex.yaml")
+	if home, err := config.EffectiveHomeDir(); err == nil {
+		userConfig := filepath.Join(home, "juex.yaml")
 		if cleanPath(path) == cleanPath(userConfig) {
 			return "user"
 		}
@@ -514,6 +514,9 @@ func initConfigTargetScope(path, workDir string) string {
 func cleanPath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
 	}
 	return filepath.Clean(path)
 }

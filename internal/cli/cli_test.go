@@ -1116,6 +1116,36 @@ hooks:
 	}
 }
 
+func TestValidateInitConfigTreatsJUEXHomeTargetAsUserConfig(t *testing.T) {
+	home := setHomeForCLITest(t)
+	work := t.TempDir()
+	juexHome := filepath.Join(home, "custom-juex")
+	t.Setenv("JUEX_HOME", juexHome)
+	target := filepath.Join(juexHome, "juex.yaml")
+	if err := writeTextFile(target, `model: openai:gpt-4.1
+providers:
+  - id: openai
+    base_url: https://example.invalid
+    api_key: sk-user
+    models:
+      - id: gpt-4.1
+hooks:
+  commands:
+    - name: global-context
+      events: [UserPromptSubmit]
+      command: ["echo", "{}"]
+`); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := initConfigTargetScope(target, work); got != "user" {
+		t.Fatalf("target scope = %q, want user", got)
+	}
+	if err := validateInitConfig(target, work); err != nil {
+		t.Fatalf("JUEX_HOME user config validation should trust user hooks: %v", err)
+	}
+}
+
 func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	setHomeForCLITest(t)
 	root := newRootCmd()
