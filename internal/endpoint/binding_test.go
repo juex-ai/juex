@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -37,8 +38,11 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if info.Mode().Perm() != 0o600 {
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 			t.Fatalf("socket permissions = %o, want 600", info.Mode().Perm())
+		}
+		if runtime.GOOS == "windows" && info.Mode().Perm()&0o200 == 0 {
+			t.Fatalf("socket permissions = %o, want writable", info.Mode().Perm())
 		}
 	case "tcp":
 		if binding.FallbackReason() == nil {
