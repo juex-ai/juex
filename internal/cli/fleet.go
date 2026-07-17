@@ -19,6 +19,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/fleetservice"
 	"github.com/juex-ai/juex/internal/fleetweb"
 )
 
@@ -38,6 +39,8 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 	cmd.AddCommand(newFleetLifecycleCmd(flags, "restart"))
 	cmd.AddCommand(newFleetLogsCmd(flags))
 	cmd.AddCommand(newFleetGCCmd(flags))
+	cmd.AddCommand(newFleetInstallCmd(flags))
+	cmd.AddCommand(newFleetUninstallCmd(flags))
 	return cmd
 }
 
@@ -132,6 +135,105 @@ func isTCPListenAddr(addr string) bool {
 	}
 	port, err := strconv.Atoi(portText)
 	return err == nil && port >= 0 && port <= 65535
+}
+
+func isStableTCPListenAddr(addr string) bool {
+	_, portText, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	port, err := strconv.Atoi(portText)
+	return err == nil && port >= 1 && port <= 65535
+}
+
+func newFleetServiceManager(addr string, unsafeBindAny bool) (*fleetservice.Manager, error) {
+	homeDir, err := config.EffectiveHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("juex fleet: resolve executable: %w", err)
+	}
+	return fleetservice.New(fleetservice.Options{
+		HomeDir:       homeDir,
+		Executable:    executable,
+		Addr:          addr,
+		UnsafeBindAny: unsafeBindAny,
+	})
+}
+
+func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
+	var (
+		addr          string
+		unsafeBindAny bool
+	)
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install and start the fleet as a per-user system service",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !isTCPListenAddr(addr) {
+				return &usageError{msg: "juex fleet install: --addr must be a host:port TCP address (got " + addr + ")"}
+			}
+			if !isStableTCPListenAddr(addr) {
+				return &usageError{msg: "juex fleet install: --addr must use a stable port between 1 and 65535"}
+			}
+			if !unsafeBindAny && !isLoopbackAddr(addr) {
+				return &usageError{msg: "juex fleet install: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
+			}
+			if unsafeBindAny {
+				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
+			}
+			manager, err := newFleetServiceManager(addr, unsafeBindAny)
+			if err != nil {
+				return err
+			}
+			registration, err := manager.Install(cmd.Context())
+			if err != nil {
+				return err
+			}
+			renderFleetServiceResult(cmd, "Installed", registration)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "stable fleet browser address (host:port)")
+	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
+	return cmd
+}
+
+func newFleetUninstallCmd(_ *persistentFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall",
+		Short: "Stop and remove the fleet per-user system service",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			manager, err := newFleetServiceManager("127.0.0.1:8080", false)
+			if err != nil {
+				return err
+			}
+			registration, err := manager.Uninstall(cmd.Context())
+			if err != nil {
+				return err
+			}
+			renderFleetServiceResult(cmd, "Uninstalled", registration)
+			return nil
+		},
+	}
+}
+
+func renderFleetServiceResult(cmd *cobra.Command, action string, registration fleetservice.Registration) {
+	fmt.Fprintf(
+		cmd.OutOrStdout(),
+		"%s %s fleet service %s (%s).\n",
+		action,
+		registration.Platform,
+		registration.Name,
+		registration.DefinitionPath,
+	)
+	for _, note := range registration.Notes {
+		fmt.Fprintln(cmd.OutOrStdout(), "Note:", note)
+	}
 }
 
 func reportFleetAction(cmd *cobra.Command, action fleet.Action) {

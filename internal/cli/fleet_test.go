@@ -125,7 +125,7 @@ func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"serve", "status", "start", "stop", "restart", "logs", "gc"} {
+	for _, want := range []string{"serve", "status", "start", "stop", "restart", "logs", "gc", "install", "uninstall"} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("fleet help missing %q:\n%s", want, output.String())
 		}
@@ -161,6 +161,32 @@ func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("schema missing %q", want)
 		}
+	}
+}
+
+func TestFleetInstallRejectsUnstableOrMalformedAddressBeforeMutation(t *testing.T) {
+	for _, args := range [][]string{
+		{"fleet", "install", "--addr", "127.0.0.1"},
+		{"fleet", "install", "--addr", "127.0.0.1:0"},
+		{"fleet", "install", "--addr", "localhost:not-a-port"},
+	} {
+		root := newRootCmd()
+		root.SetArgs(args)
+		err := root.Execute()
+		var usage *usageError
+		if !errors.As(err, &usage) {
+			t.Fatalf("args %v error = %T %v, want usage error", args, err, err)
+		}
+	}
+}
+
+func TestFleetInstallRejectsNonLoopbackWithoutEscapeHatch(t *testing.T) {
+	root := newRootCmd()
+	root.SetArgs([]string{"fleet", "install", "--addr", "0.0.0.0:9000"})
+	err := root.Execute()
+	var usage *usageError
+	if !errors.As(err, &usage) || !strings.Contains(err.Error(), "--unsafe-bind-any") {
+		t.Fatalf("error = %T %v, want loopback usage error", err, err)
 	}
 }
 
