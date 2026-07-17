@@ -126,7 +126,7 @@ func previousAssistantModel(history []llm.Message) string {
 	return ""
 }
 
-func modelSwitchNotice(previous, selected string, chain []string, selection llm.ModelSelection, pending *modelFallbackTransition, failures []modelAttemptFailure) *llm.Message {
+func modelSwitchNotice(previous, selected string, chain []string, selection llm.ModelSelection, pending *modelFallbackTransition, failures []modelAttemptFailure, skipped []llm.ModelHealthSkip) *llm.Message {
 	previousIndex := modelRefIndex(chain, previous)
 	selectedIndex := modelRefIndex(chain, selected)
 	if previousIndex < 0 || selectedIndex < 0 || previousIndex == selectedIndex {
@@ -137,7 +137,7 @@ func modelSwitchNotice(previous, selected string, chain []string, selection llm.
 	case selectedIndex < previousIndex && selection.Ticket.Probe:
 		text = fmt.Sprintf("<system-reminder>A higher-priority model is healthy again. You are now serving this conversation as %s instead of %s. Briefly tell the user that the model recovered and was switched back.</system-reminder>", selected, previous)
 	case selectedIndex > previousIndex:
-		reason := failureReasonFor(previous, failures, selection.Skipped, pending)
+		reason := failureReasonFor(previous, failures, skipped, pending)
 		if reason == "" {
 			return nil
 		}

@@ -466,7 +466,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		}
 		candidate := candidates[selection.Index]
 		attempted[candidate.Ref] = struct{}{}
-		notice := modelSwitchNotice(previousModel, candidate.Ref, refs, selection, pending, failures)
+		notice := modelSwitchNotice(previousModel, candidate.Ref, refs, selection, pending, failures, skipped)
 		request, err := e.prepareCandidateRequestLocked(ctx, turnID, prepared, base, candidate, notice, selection.Index > 0)
 		if err != nil {
 			health.Complete(selection.Ticket, llm.ModelHealthNeutral, "")

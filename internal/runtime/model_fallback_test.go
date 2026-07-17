@@ -293,6 +293,11 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 		{Ref: "c:model", Provider: c, ContextWindow: 128000},
 	}
 	eng.ModelHealth = health
+	previous := llm.TextMessage(llm.RoleAssistant, "from a")
+	previous.Model = "a:model"
+	if err := eng.Session.Append(previous); err != nil {
+		t.Fatal(err)
+	}
 	var got []string
 	bus.Subscribe("llm.fallback", func(event events.Event) {
 		payload := event.Payload.(LLMFallbackPayload)
@@ -307,6 +312,15 @@ func TestTurnReportsBreakerSkipOnlyOnceWhileContinuingChain(t *testing.T) {
 	}
 	if a.calls != 0 || b.calls != 1 || c.calls != 1 {
 		t.Fatalf("calls a=%d b=%d c=%d", a.calls, b.calls, c.calls)
+	}
+	var notices []llm.Message
+	for _, message := range eng.Session.History {
+		if message.Kind == llm.MessageKindModelFallback {
+			notices = append(notices, message)
+		}
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0].FirstText(), "a:model") || strings.Contains(notices[0].FirstText(), "b:model") || !strings.Contains(notices[0].FirstText(), "c:model") {
+		t.Fatalf("persisted notices = %+v", notices)
 	}
 }
 
