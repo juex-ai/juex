@@ -293,9 +293,9 @@ func buildSystemdPlan(home, executable string, args []string, identity string, h
 	}
 	unit := "juex-fleet-" + identity + ".service"
 	definitionPath := filepath.Join(configHome, "systemd", "user", unit)
-	allArgs := append([]string{executable}, args...)
-	quoted := make([]string, 0, len(allArgs))
-	for _, arg := range allArgs {
+	quoted := make([]string, 0, len(args)+1)
+	quoted = append(quoted, systemdExecProgram(executable))
+	for _, arg := range args {
 		quoted = append(quoted, systemdExecArgument(arg))
 	}
 	body := strings.Join([]string{
@@ -326,6 +326,11 @@ func buildSystemdPlan(home, executable string, args []string, identity string, h
 		files:       []definitionFile{{path: definitionPath, data: []byte(body), mode: 0o600}},
 		systemdUnit: unit,
 	}, nil
+}
+
+func systemdExecProgram(value string) string {
+	value = strings.ReplaceAll(value, "%", "%%")
+	return systemdQuote(value)
 }
 
 func systemdExecArgument(value string) string {

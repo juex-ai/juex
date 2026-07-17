@@ -139,7 +139,7 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 		"Restart=on-failure",
 		"WantedBy=default.target",
 		`Environment="JUEX_HOME=`,
-		`$$bin`,
+		`$bin`,
 		`$HOME`,
 		`%%i`,
 		`ExecStart=`,
@@ -148,6 +148,12 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("unit missing %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, `$$bin`) {
+		t.Fatalf("systemd executable path must preserve literal dollars:\n%s", body)
+	}
+	if got := systemdExecArgument(`$FLEET_HOME`); got != `"$$FLEET_HOME"` {
+		t.Fatalf("systemd argument dollar escaping = %q", got)
 	}
 	if !strings.Contains(plan.registration.DefinitionPath, filepath.Join("xdg config", "systemd", "user")) {
 		t.Fatalf("definition path = %q", plan.registration.DefinitionPath)
