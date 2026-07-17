@@ -1711,7 +1711,7 @@ automatic activation; the model loads a selected guide explicitly.
 | `make snapshot` | `goreleaser release --snapshot --clean` (7 archives in `dist/`) |
 | `make release-dry` | `goreleaser release --skip=publish --clean` |
 | `make integration` | `go test -tags=integration ./tests/e2e/...` |
-| `make provider-smoke` | build-dependent rotating live smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
+| `make provider-smoke` | build-dependent rotating live capability and Schedule-routing smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
 | `make development-eval` | deterministic tests, build, rotating live provider:model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
 
@@ -1786,7 +1786,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `cli` | version short/verbose, help shape, run-without-prompt, unknown subcommand, persistent flags including model, debug, and log-level |
 | `cmd/juex` (smoke) | binary builds, version + help work, run rejects no-prompt, run errors with no env, --cwd accepted |
 | `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
-| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracle for conversation/event/tool artifacts; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
+| `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
 
 Run the deterministic suite with `go test ./... -count=1`.
 Provider-quality smoke tests remain explicit because they use credentials.
@@ -1796,17 +1796,21 @@ There are two live layers:
   uses selected repo-local configs for CI/manual integration.
 - `make provider-smoke` reads the provider:model refs from
   `tests/eval/live-models.yaml`, verifies the selected ref exists in
-  `~/.juex/juex.yaml`, then runs a three-turn real binary smoke and writes a
-  redacted report under `.tmp/reports/provider-model-smoke/`. By default it
-  rotates one model using `.juex/live-model-rotation.json`; pass `--all-models`
-  to `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
+  `~/.juex/juex.yaml`, then runs isolated real-binary capability and Schedule
+  routing workflows and writes a redacted report under
+  `.tmp/reports/provider-model-smoke/`. Schedule routing validates successful
+  guide loading, list-before-create tool results, forbidden command paths, and
+  the tagged `.juex/observables.json` shape. By default the command rotates one
+  model using `.juex/live-model-rotation.json`; pass `--all-models` to
+  `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.
 
 Every feature validation should leave a development record with
 `make development-eval` or `bash tests/eval/development_eval.sh`.
 The record captures the commit, command exits, provider:model smoke summary,
-and any quality evaluation results. The live compaction quality evaluation is
-documented in `docs/compaction/evaluation.md` and run with
+Schedule routing coverage, and any quality evaluation results. The live
+compaction quality evaluation is documented in
+`docs/compaction/evaluation.md` and run with
 `tests/eval/compaction_eval.sh`; use it when compaction, context projection,
 provider replay, or long-session behavior changes.
 

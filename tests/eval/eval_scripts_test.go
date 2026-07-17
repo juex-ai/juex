@@ -387,6 +387,245 @@ func TestEvalAgentSmokeToolEventContract(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestScheduleRoutingEvalContract(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import copy",
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import schedule_routing",
+		"expect = schedule_routing.ScheduleRoutingExpectation(",
+		"    schedule_id='schedule-routing-eval',",
+		"    every_seconds=21600,",
+		"    content='schedule routing token 6h',",
+		"    completion_token='SCHEDULE_ROUTING_PASS token-6h',",
+		")",
+		"prompt = schedule_routing.build_prompt(expect)",
+		"assert 'schedule_create' not in prompt, prompt",
+		"assert 'observable_create' not in prompt, prompt",
+		"assert 'juex-observables' in prompt, prompt",
+		"assert 'schedule-routing-eval' in prompt and 'schedule routing token 6h' in prompt, prompt",
+		"def rows():",
+		"    return [",
+		"        {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'skill-1', 'tool_name': 'skill_load', 'input': {'name': 'juex-observables'}}]},",
+		"        {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'skill-1', 'tool_name': 'skill_load', 'content': '# JueX Observables'}]},",
+		"        {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'list-1', 'tool_name': 'observable_list', 'input': {}}]},",
+		"        {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'list-1', 'tool_name': 'observable_list', 'content': '{\"observables\": []}'}]},",
+		"        {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'create-1', 'tool_name': 'schedule_create', 'input': {'id': expect.schedule_id, 'interval': {'every_seconds': expect.every_seconds}, 'observation': {'content': expect.content}}}]},",
+		"        {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'create-1', 'tool_name': 'schedule_create', 'content': '{\"id\": \"schedule-routing-eval\"}'}]},",
+		"        {'role': 'assistant', 'blocks': [{'type': 'text', 'text': expect.completion_token}]},",
+		"    ]",
+		"def config():",
+		"    return {'observables': [{'id': expect.schedule_id, 'type': 'schedule', 'schedule_config': {'interval': {'every_seconds': expect.every_seconds}, 'observation': {'content': expect.content}}}]}",
+		"def validate(work, conv_rows=None, cfg=None, raw_conversation=None, raw_config=None):",
+		"    conversation = work / 'conversation.jsonl'",
+		"    observables = work / 'observables.json'",
+		"    if raw_conversation is None:",
+		"        conversation.write_text('\\n'.join(json.dumps(row) for row in (rows() if conv_rows is None else conv_rows)) + '\\n', encoding='utf-8')",
+		"    else:",
+		"        conversation.write_text(raw_conversation, encoding='utf-8')",
+		"    if raw_config is None:",
+		"        observables.write_text(json.dumps(config() if cfg is None else cfg), encoding='utf-8')",
+		"    else:",
+		"        observables.write_text(raw_config, encoding='utf-8')",
+		"    return schedule_routing.validate_contract(conversation, observables, expect)",
+		"def reject(report, needle):",
+		"    assert not report.passed, report",
+		"    assert needle in report.message(), report.message()",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    report = validate(work)",
+		"    assert report.passed, report.message()",
+		"    broken = rows()",
+		"    broken[2], broken[4] = broken[4], broken[2]",
+		"    reject(validate(work, broken), 'before')",
+		"    broken = rows()",
+		"    broken[2] = {'role': 'assistant', 'blocks': [broken[2]['blocks'][0], broken[4]['blocks'][0]]}",
+		"    del broken[4]",
+		"    reject(validate(work, broken), 'same assistant message')",
+		"    broken = rows()",
+		"    broken[0]['blocks'].insert(0, {'type': 'text', 'text': expect.completion_token})",
+		"    del broken[-1]",
+		"    reject(validate(work, broken), 'after successful schedule_create')",
+		"    for index, label in [(1, 'skill_load'), (3, 'observable_list'), (5, 'schedule_create')]:",
+		"        broken = rows()",
+		"        broken[index]['blocks'][0]['is_error'] = True",
+		"        reject(validate(work, broken), label)",
+		"        broken = rows()",
+		"        del broken[index]",
+		"        reject(validate(work, broken), label)",
+		"    for forbidden in sorted(schedule_routing.FORBIDDEN_TOOLS):",
+		"        broken = rows()",
+		"        broken.insert(4, {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'bad-1', 'tool_name': forbidden, 'input': {}}]})",
+		"        reject(validate(work, broken), forbidden)",
+		"    broken = rows()",
+		"    broken.insert(5, copy.deepcopy(broken[4]))",
+		"    broken[5]['blocks'][0]['tool_use_id'] = 'create-2'",
+		"    reject(validate(work, broken), 'exactly one schedule_create')",
+		"    bad_config = config()",
+		"    bad_config['observables'][0]['schedule_config']['interval']['every_seconds'] = 60",
+		"    reject(validate(work, cfg=bad_config), 'every_seconds')",
+		"    bad_config = config()",
+		"    bad_config['observables'][0]['id'] = 'wrong-id'",
+		"    reject(validate(work, cfg=bad_config), 'persisted id')",
+		"    bad_config = config()",
+		"    bad_config['observables'][0]['type'] = 'command'",
+		"    reject(validate(work, cfg=bad_config), 'persisted type')",
+		"    bad_config = config()",
+		"    bad_config['observables'][0]['schedule_config']['observation']['content'] = 'wrong content'",
+		"    reject(validate(work, cfg=bad_config), 'observation.content')",
+		"    bad_config = config()",
+		"    del bad_config['observables'][0]['schedule_config']",
+		"    reject(validate(work, cfg=bad_config), 'schedule_config')",
+		"    bad_config = config()",
+		"    bad_config['observables'][0]['source'] = {'type': 'schedule'}",
+		"    reject(validate(work, cfg=bad_config), 'legacy or unknown fields')",
+		"    bad_config = config()",
+		"    bad_config['observables'][0]['command_config'] = {'command': 'sleep'}",
+		"    reject(validate(work, cfg=bad_config), 'legacy or unknown fields')",
+		"    bad_config = config()",
+		"    bad_config['observables'][0].update({'command': 'sleep', 'args': ['1'], 'observation': {'content': 'old'}})",
+		"    reject(validate(work, cfg=bad_config), 'command, observation')",
+		"    bad_config = config()",
+		"    bad_config['observables'].append(copy.deepcopy(bad_config['observables'][0]))",
+		"    reject(validate(work, cfg=bad_config), 'exactly one')",
+		"    reject(validate(work, raw_conversation='{bad json\\n'), 'invalid JSON')",
+		"    reject(validate(work, raw_config='{bad json\\n'), 'invalid JSON')",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestScheduleRoutingEvalReportingIsAdditive(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    result = helper.SmokeResult(",
+		"        run_id='unit', ref='provider:model', provider_id='provider', model_id='model',",
+		"        protocol='openai', reasoning_effort_capability='default', tools_capability='default', thinking_effort='unset',",
+		"        status='pass', schedule_routing_status='yes',",
+		"    )",
+		"    summary = {",
+		"        'run_id': 'unit', 'juex': './dist/juex', 'config': 'config.yaml', 'model_list': 'unit', 'work_root': 'cleaned',",
+		"        'total': 1, 'passed': 1, 'failed': 0, 'tool_use_recorded': 1, 'exec_command_tool_use_recorded': 1,",
+		"        'tty_recorded': 1, 'stdin_recorded': 1, 'filesystem_verified': 1, 'event_delta_recorded': 1,",
+		"        'thinking_observed': 0, 'schedule_routing_verified': 1, 'results_jsonl_path': 'results.jsonl',",
+		"    }",
+		"    summary_json = work / 'summary.json'",
+		"    summary_md = work / 'summary.md'",
+		"    helper.write_smoke_summary(summary_json, summary_md, summary, [result])",
+		"    parsed = json.loads(summary_json.read_text(encoding='utf-8'))",
+		"    assert parsed['total'] == 1 and parsed['schedule_routing_verified'] == 1, parsed",
+		"    markdown = summary_md.read_text(encoding='utf-8')",
+		"    assert 'Schedule routing verified: 1' in markdown, markdown",
+		"    assert '| not_observed | yes |  |' in markdown, markdown",
+		"    commands = work / 'commands.jsonl'",
+		"    commands.write_text(json.dumps({'label': 'provider-model-smoke', 'exit_status': 0, 'log': 'provider.log'}) + '\\n', encoding='utf-8')",
+		"    record_json = work / 'record.json'",
+		"    record_md = work / 'record.md'",
+		"    helper.write_development_record(work, 'unit', commands, summary_json, '', 0, record_json, record_md)",
+		"    record = record_md.read_text(encoding='utf-8')",
+		"    assert 'Schedule routing verified: 1' in record, record",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper, schedule_routing",
+		"expect = schedule_routing.ScheduleRoutingExpectation('schedule-routing-eval', 21600, 'retry token', 'SCHEDULE_ROUTING_PASS retry')",
+		"def valid_rows():",
+		"    return [",
+		"        {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'skill-1', 'tool_name': 'skill_load', 'input': {'name': 'juex-observables'}}]},",
+		"        {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'skill-1', 'content': 'loaded'}]},",
+		"        {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'list-1', 'tool_name': 'observable_list', 'input': {}}]},",
+		"        {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'list-1', 'content': '{}'}]},",
+		"        {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'create-1', 'tool_name': 'schedule_create', 'input': {'id': expect.schedule_id, 'interval': {'every_seconds': expect.every_seconds}, 'observation': {'content': expect.content}}}]},",
+		"        {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'create-1', 'content': '{}'}]},",
+		"        {'role': 'assistant', 'blocks': [{'type': 'text', 'text': expect.completion_token}]},",
+		"    ]",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    row = helper.MatrixRow('provider', 'model', 'openai', 'default', 'default', 'unset', 'provider:model')",
+		"    ctx = helper.ProviderSmokeContext(row, '/fake/juex', {'providers': []}, work / 'work', work / 'report', 'unit', 5, 1, str(work / 'codex'))",
+		"    attempts = []",
+		"    def fake_write_config(cfg, provider_id, model_id, output_path):",
+		"        output_path.parent.mkdir(parents=True, exist_ok=True)",
+		"        output_path.write_text('model: provider:model\\n', encoding='utf-8')",
+		"    def fake_run_turn(ctx, case_dir, case_config, label, args):",
+		"        attempts.append(case_dir)",
+		"        case_dir.mkdir(parents=True, exist_ok=True)",
+		"        (case_dir / 'turn1.stdout.json').write_text('{}\\n', encoding='utf-8')",
+		"        (case_dir / 'turn1.stderr.log').write_text('timeout\\n', encoding='utf-8')",
+		"        if len(attempts) == 1:",
+		"            (case_dir / '.juex' / 'observables.json').write_text(json.dumps({'observables': [{'id': 'dirty-attempt-1'}]}), encoding='utf-8')",
+		"            return 124",
+		"        session_id = 'session-attempt-2'",
+		"        (case_dir / 'turn1.stdout.json').write_text(json.dumps({'session_id': session_id, 'blocks': [{'type': 'text', 'text': expect.completion_token}]}) + '\\n', encoding='utf-8')",
+		"        session = case_dir / '.juex' / 'sessions' / session_id",
+		"        session.mkdir(parents=True)",
+		"        (session / 'conversation.jsonl').write_text('\\n'.join(json.dumps(row) for row in valid_rows()) + '\\n', encoding='utf-8')",
+		"        (session / 'events.jsonl').write_text(json.dumps({'type': 'session.completed'}) + '\\n', encoding='utf-8')",
+		"        observables = {'observables': [{'id': expect.schedule_id, 'type': 'schedule', 'schedule_config': {'interval': {'every_seconds': expect.every_seconds}, 'observation': {'content': expect.content}}}]}",
+		"        (case_dir / '.juex' / 'observables.json').write_text(json.dumps(observables), encoding='utf-8')",
+		"        return 0",
+		"    original_write_config = helper.write_selected_config",
+		"    original_run_turn = helper.run_turn",
+		"    helper.write_selected_config = fake_write_config",
+		"    helper.run_turn = fake_run_turn",
+		"    try:",
+		"        report, session_id = helper.run_schedule_routing_case(ctx, work / 'report' / 'cases' / 'provider_model', expect)",
+		"    finally:",
+		"        helper.write_selected_config = original_write_config",
+		"        helper.run_turn = original_run_turn",
+		"    assert report.passed, report.message()",
+		"    assert session_id == 'session-attempt-2', session_id",
+		"    assert len(attempts) == 2 and attempts[0] != attempts[1], attempts",
+		"    assert attempts[0].name == 'attempt-1' and attempts[1].name == 'attempt-2', attempts",
+		"    artifacts = work / 'report' / 'cases' / 'provider_model' / 'schedule-routing'",
+		"    assert (artifacts / 'attempt-1' / 'turn1.stderr.log').is_file(), artifacts",
+		"    dirty = json.loads((artifacts / 'attempt-1' / 'observables.json').read_text(encoding='utf-8'))",
+		"    assert dirty['observables'][0]['id'] == 'dirty-attempt-1', dirty",
+		"    assert (artifacts / 'attempt-2' / 'conversation.jsonl').is_file(), artifacts",
+		"    assert (artifacts / 'attempt-2' / 'events.jsonl').is_file(), artifacts",
+		"    assert (artifacts / 'attempt-2' / 'observables.json').is_file(), artifacts",
+		"    assert (artifacts / 'attempt-2' / 'prompt.txt').is_file(), artifacts",
+		"    contract = json.loads((artifacts / 'attempt-2' / 'contract.json').read_text(encoding='utf-8'))",
+		"    assert contract == {'passed': True, 'issues': []}, contract",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func runRotation(t *testing.T, root, modelList, state string, args ...string) string {
 	t.Helper()
 	baseArgs := []string{

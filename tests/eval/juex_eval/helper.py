@@ -28,9 +28,10 @@ from typing import Any
 import yaml
 
 try:
-    from . import contract_oracle
+    from . import contract_oracle, schedule_routing
 except ImportError:  # pragma: no cover - direct script fallback.
     import contract_oracle  # type: ignore[no-redef]
+    import schedule_routing  # type: ignore[no-redef]
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -265,6 +266,7 @@ def provider_smoke(argv: list[str]) -> int:
                 "filesystem_verified": sum(1 for result in results if result.filesystem_status == "yes"),
                 "event_delta_recorded": sum(1 for result in results if result.event_delta_status == "yes"),
                 "thinking_observed": sum(1 for result in results if result.thinking_status == "observed"),
+                "schedule_routing_verified": sum(1 for result in results if result.schedule_routing_status == "yes"),
                 "results_jsonl_path": str(results_file),
             },
             results,
@@ -306,6 +308,7 @@ class SmokeResult:
     filesystem_status: str = "no"
     event_delta_status: str = "no"
     thinking_status: str = "not_observed"
+    schedule_routing_status: str = "no"
     error_stage: str = ""
     error: str = ""
     artifacts: str = ""
@@ -451,12 +454,27 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     result.event_delta_status = "yes"
     result.thinking_status = "observed" if file_contains(conversation, '"type":"reasoning"') else "not_exposed"
     copy_case_artifacts(case_dir, artifact_dir)
+    schedule_key = f"{int(time.time())}-{random.randrange(0x1000000):06x}"
+    expectation = schedule_routing.ScheduleRoutingExpectation(
+        schedule_id=f"schedule-routing-eval-{schedule_key}",
+        every_seconds=21600,
+        content=f"schedule routing evaluation {row.ref} {schedule_key}",
+        completion_token=f"SCHEDULE_ROUTING_PASS {schedule_key}",
+    )
+    schedule_report, schedule_session_id = run_schedule_routing_case(ctx, artifact_dir, expectation)
+    if not schedule_report.passed:
+        result.error_stage = "schedule-routing"
+        result.error = schedule_report.message()
+        print(f"FAIL {result.ref}: {result.error}", file=sys.stderr)
+        return result
+    result.schedule_routing_status = "yes"
     result.status = "pass"
     print(
         f"ok  {row.ref} session={session_id} toolcall={result.tool_status} "
         f"exec_command={result.exec_command_status} tty={result.tty_status} "
         f"stdin={result.stdin_status} events={result.event_delta_status} "
-        f"thinking={result.thinking_status} artifacts={artifact_dir}"
+        f"thinking={result.thinking_status} schedule_routing={result.schedule_routing_status} "
+        f"schedule_session={schedule_session_id} artifacts={artifact_dir}"
     )
     return result
 
@@ -546,6 +564,63 @@ def run_turn_with_retries(ctx: ProviderSmokeContext, case_dir: pathlib.Path, cas
         print(f"retry {ctx.row.ref} {label} after retryable failure (attempt {attempt + 1}/{ctx.retries + 1})", file=sys.stderr)
         time.sleep(attempt + 1)
     return status
+
+
+def run_schedule_routing_case(
+    ctx: ProviderSmokeContext,
+    artifact_dir: pathlib.Path,
+    expectation: schedule_routing.ScheduleRoutingExpectation,
+) -> tuple[contract_oracle.ContractReport, str]:
+    work_root = ctx.work_root / safe_ref(ctx.row.ref) / "schedule-routing"
+    report_root = artifact_dir / "schedule-routing"
+    for attempt in range(1, ctx.retries + 2):
+        case_dir = work_root / f"attempt-{attempt}"
+        attempt_artifacts = report_root / f"attempt-{attempt}"
+        shutil.rmtree(case_dir, ignore_errors=True)
+        shutil.rmtree(attempt_artifacts, ignore_errors=True)
+        (case_dir / ".juex").mkdir(parents=True, exist_ok=True)
+        attempt_artifacts.mkdir(parents=True, exist_ok=True)
+        case_config = case_dir / "provider.juex.yaml"
+        prompt = schedule_routing.build_prompt(expectation)
+        try:
+            write_selected_config(ctx.config, ctx.row.provider_id, ctx.row.model_id, case_config)
+            (case_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
+            report = contract_oracle.ContractReport(False, [f"schedule routing config: {exc}"])
+            write_contract_report(attempt_artifacts, report)
+            return report, ""
+
+        status = run_turn(ctx, case_dir, case_config, "turn1", ["--new", prompt])
+        copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
+        if status != 0:
+            write_error_tail(case_dir, attempt_artifacts)
+            if attempt <= ctx.retries and turn_failure_retryable(case_dir, "turn1", status):
+                print(
+                    f"retry {ctx.row.ref} schedule-routing after retryable failure "
+                    f"(attempt {attempt}/{ctx.retries + 1})",
+                    file=sys.stderr,
+                )
+                time.sleep(attempt)
+                continue
+            provider_message = provider_error_message(attempt_artifacts)
+            detail = combine_error(f"schedule routing turn failed with status {status}", provider_message)
+            report = contract_oracle.ContractReport(False, [detail])
+            write_contract_report(attempt_artifacts, report)
+            return report, ""
+
+        session_id = json_file_value(case_dir / "turn1.stdout.json", "session_id")
+        if not session_id:
+            report = contract_oracle.ContractReport(False, ["schedule routing turn missing session_id"])
+            write_contract_report(attempt_artifacts, report)
+            return report, ""
+        conversation = case_dir / ".juex" / "sessions" / session_id / "conversation.jsonl"
+        observables = case_dir / ".juex" / "observables.json"
+        report = schedule_routing.validate_contract(conversation, observables, expectation)
+        copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
+        write_contract_report(attempt_artifacts, report)
+        return report, session_id
+    return contract_oracle.ContractReport(False, ["schedule routing retries exhausted"]), ""
 
 
 def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:
@@ -648,6 +723,21 @@ def copy_case_artifacts(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> N
                 shutil.copy2(path, artifact_dir / path.name)
 
 
+def copy_schedule_routing_artifacts(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> None:
+    copy_case_artifacts(case_dir, artifact_dir)
+    for relative in (pathlib.Path("prompt.txt"), pathlib.Path(".juex") / "observables.json"):
+        source = case_dir / relative
+        if source.is_file():
+            shutil.copy2(source, artifact_dir / source.name)
+
+
+def write_contract_report(artifact_dir: pathlib.Path, report: contract_oracle.ContractReport) -> None:
+    (artifact_dir / "contract.json").write_text(
+        json.dumps({"passed": report.passed, "issues": report.issues}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def write_error_tail(case_dir: pathlib.Path, artifact_dir: pathlib.Path) -> None:
     chunks: list[str] = []
     for path in sorted(case_dir.glob("*.stderr.log")) + sorted(case_dir.glob("*.stdout.json")):
@@ -725,16 +815,18 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Filesystem verified: {summary['filesystem_verified']}",
         f"- Event delta recorded: {summary['event_delta_recorded']}",
         f"- Thinking observed: {summary['thinking_observed']}",
+        f"- Schedule routing verified: {summary['schedule_routing_verified']}",
         "",
-        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Error stage |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Schedule routing | Error stage |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in results:
         lines.append(
             f"| `{result.ref}` | `{result.protocol}` | `{result.thinking_effort}` | "
             f"{result.status} | {result.tool_status} | {result.exec_command_status} | "
             f"{result.tty_status} | {result.stdin_status} | {result.filesystem_status} | "
-            f"{result.event_delta_status} | {result.thinking_status} | {result.error_stage} |"
+            f"{result.event_delta_status} | {result.thinking_status} | "
+            f"{result.schedule_routing_status} | {result.error_stage} |"
         )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -942,6 +1034,7 @@ def write_development_record(
             ("filesystem_verified", "Filesystem verified"),
             ("event_delta_recorded", "Event delta recorded"),
             ("thinking_observed", "Thinking observed"),
+            ("schedule_routing_verified", "Schedule routing verified"),
         ]:
             if key in provider:
                 lines.append(f"- {label}: {provider[key]}")
