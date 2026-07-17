@@ -7,6 +7,7 @@ import { useShellTitle } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { resolveConfigSaveFailure } from "@/lib/agent-config";
 import { cn } from "@/lib/utils";
 import type { AgentConfig as AgentConfigState } from "@/types";
 
@@ -44,20 +45,38 @@ export function AgentConfig() {
 
   async function save() {
     if (!agentId) return;
+    const submittedContent = content;
     setSaving(true);
     setError(null);
     setNotice(null);
     try {
-      const result = await updateAgentConfig(agentId, content);
+      const result = await updateAgentConfig(agentId, submittedContent);
       setConfig(result.config);
       setContent(result.config.content);
       setNotice(
         `Saved and restarted ${result.agent.name || result.agent.id}.`,
       );
     } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Failed to save agent config.",
+      const detail =
+        cause instanceof Error ? cause.message : "Unknown configuration error.";
+      let persistedConfig: AgentConfigState | null = null;
+      try {
+        persistedConfig = await getAgentConfig(agentId);
+      } catch {
+        // Keep the submitted content when persistence cannot be confirmed.
+      }
+      const failure = resolveConfigSaveFailure(
+        submittedContent,
+        persistedConfig,
+        detail,
       );
+      if (failure.config) {
+        setConfig(failure.config);
+      }
+      if (failure.saved && failure.config) {
+        setContent(failure.config.content);
+      }
+      setError(failure.message);
     } finally {
       setSaving(false);
     }
@@ -114,7 +133,7 @@ export function AgentConfig() {
             role="alert"
             className="rounded-md border border-destructive/45 bg-destructive/10 px-3 py-2 text-sm font-medium text-destructive"
           >
-            Config was not saved: {error}
+            {error}
           </div>
         ) : null}
         {notice ? (

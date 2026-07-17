@@ -61,8 +61,12 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
 
   assert.match(logsSource, /getAgentLogs\(agentId, lines\)/);
   assert.match(logsSource, /1000/);
-  assert.match(configSource, /updateAgentConfig\(agentId, content\)/);
-  assert.match(configSource, /Config was not saved:/);
+  assert.match(
+    configSource,
+    /updateAgentConfig\(agentId, submittedContent\)/,
+  );
+  assert.match(configSource, /persistedConfig = await getAgentConfig\(agentId\)/);
+  assert.match(configSource, /resolveConfigSaveFailure/);
   assert.match(configSource, /Save and restart/);
 });
 
