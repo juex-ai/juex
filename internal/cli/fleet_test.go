@@ -174,6 +174,23 @@ func TestFleetServeRejectsNonLoopbackWithoutEscapeHatch(t *testing.T) {
 	}
 }
 
+func TestFleetServeRejectsMalformedAddressBeforeReconciliation(t *testing.T) {
+	for _, args := range [][]string{
+		{"fleet", "serve", "--addr", "127.0.0.1"},
+		{"fleet", "serve", "--addr", "localhost:"},
+		{"fleet", "serve", "--addr", "localhost:not-a-port"},
+		{"fleet", "serve", "--addr", "127.0.0.1", "--unsafe-bind-any"},
+	} {
+		root := newRootCmd()
+		root.SetArgs(args)
+		err := root.Execute()
+		var usage *usageError
+		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "host:port") {
+			t.Fatalf("args %v error = %T %v, want host:port usage error", args, err, err)
+		}
+	}
+}
+
 func writeFleetAgentFixture(t *testing.T, home, workspace, id, name string) string {
 	t.Helper()
 	agentDir := filepath.Join(home, "agents", id)
