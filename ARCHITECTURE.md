@@ -982,11 +982,15 @@ Persistent flags inherited by all subcommands:
 ### 3.8 Agent Endpoint
 
 `internal/endpoint` is the single transport boundary for addressing a running
-agent. `Listen` holds an exclusive process-lifetime lock, prefers
-`<agent-state-dir>/api.sock`, removes only confirmed stale socket files, and
-falls back to an ephemeral `127.0.0.1` TCP port when AF_UNIX cannot be used.
-The resulting `Binding` publishes `runtime.json` explicitly after the HTTP
-server starts and conditionally removes only its own runtime record on close.
+agent. `Listen` holds the external
+`$JUEX_HOME/.locks/endpoints/<agent-id>.lock`, verifies the agent directory
+before and after lock acquisition, never recreates a missing registry entry,
+prefers `<agent-state-dir>/api.sock`, removes only confirmed stale socket
+files, and falls back to an ephemeral `127.0.0.1` TCP port when AF_UNIX cannot
+be used. The resulting `Binding` publishes `runtime.json` explicitly after the
+HTTP server starts and conditionally removes only its own runtime record on
+close. Runtime ownership includes agent id, a cryptographically random process
+instance id, PID, endpoint, and start time.
 
 Endpoint URIs are `unix:///absolute/path/api.sock` or
 `tcp://127.0.0.1:<port>`. `Parse` accepts only Unix paths and numeric loopback
@@ -994,6 +998,36 @@ TCP addresses. A parsed `Target` owns `DialContext` plus proxy-free
 `http.Transport` and `http.Client` constructors; the client has no global
 timeout so SSE callers can set request-scoped deadlines without truncating
 streams. The module owns no routes or HTTP serving.
+
+`Probe` verifies the complete runtime identity returned by
+`GET /api/identity`. `RequestShutdown` sends that same identity to
+`POST /api/control/shutdown`; the serving process rejects stale or mismatched
+requests and shuts itself down only after an exact match. `AcquireMaintenance`
+uses the process-lifetime guard for stale runtime cleanup and garbage
+collection. Fleet code never signals a recorded PID directly.
+
+### 3.8.1 Fleet Supervisor
+
+`internal/fleet` owns registry-wide health projection and lifecycle policy.
+Binding (`bound`, `orphaned`, `invalid`) and runtime health (`healthy`,
+`stopped`, `unhealthy`, `ambiguous`) are orthogonal so malformed, disabled,
+or orphaned agents remain visible even when running.
+
+`juex fleet serve` holds `$JUEX_HOME/fleet.lock`, reconciles the registry once,
+adopts only exact endpoint identities, removes only confirmed stale runtime
+records, starts enabled autostart agents, then waits. Detached children execute
+the current binary as `-C <workspace> serve --headless`, inherit the effective
+home, and append stdout and stderr to `logs/fleet.log`. Supervisor exit never
+stops them.
+
+Per-agent lifecycle operations hold
+`$JUEX_HOME/.locks/fleet/<agent-id>.lock`. Start waits for the spawned PID to
+publish and answer with an exact runtime identity. Stop requests instance-bound
+self-shutdown and never sends a process signal. Garbage collection also takes
+the endpoint maintenance guard, revalidates a definite orphan, atomically
+renames its registry directory to a hidden sibling, and only then removes it.
+Fleet commands resolve the effective home directly and do not load or mint a
+workspace identity for their current directory.
 
 ### 3.9 Web Layer
 
@@ -1014,9 +1048,11 @@ the browser listener continues to use `Handler` for API plus SPA routes.
 `--headless` skips the browser listener entirely. Startup ensures an active
 primary session record exists, starts the selected listeners, publishes the
 endpoint, and then warms the shared MCP manager plus the active primary
-session. Each session gets its own `*app.App`; the web
-broadcaster is registered as a live delivery adapter on the app's durable event
-sink, so SSE clients only receive events after `events.jsonl` append succeeds.
+session. The agent API also exposes exact runtime identity and instance-bound
+self-shutdown routes used by fleet lifecycle operations. Each session gets its
+own `*app.App`; the web broadcaster is registered as a live delivery adapter on
+the app's durable event sink, so SSE clients only receive events after
+`events.jsonl` append succeeds.
 Slow clients are dropped after a 5s buffer-full timeout.
 `make web` builds the React SPA in `frontend/`, copies the bundle to
 `internal/web/dist`, and the Go binary embeds that directory with `go:embed`.
@@ -1520,10 +1556,16 @@ $JUEX_HOME/
 │   ├── hooks.yaml                # lifecycle command hooks, trusted by location
 │   ├── mcp.json                  # extension MCP servers
 │   └── skills/<skill>/SKILL.md   # extension skills
+├── fleet.lock                    # one resident fleet supervisor
+├── .locks/
+│   ├── endpoints/<agent-id>.lock # serve lifetime and GC maintenance
+│   └── fleet/<agent-id>.lock     # per-agent lifecycle serialization
 └── agents/<agent-id>/            # resident-agent registry entry and state
     ├── agent.json                # identity + workspace reverse pointer
+    ├── runtime.json              # exact serving-process identity
+    ├── api.sock                  # preferred local endpoint while serving
     ├── history.json              # session index + active primary object
-    ├── logs/
+    ├── logs/fleet.log            # detached child stdout + stderr
     ├── memory/
     └── sessions/<id>/            # conversation history and session sidecars
 

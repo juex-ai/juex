@@ -57,6 +57,7 @@ juex --debug run --json "summarize this repository"
 juex repl
 juex serve
 juex serve --headless
+juex fleet status
 ```
 
 `--model` uses the same `provider:model` format as config and can select
@@ -76,6 +77,13 @@ If you built from source without installing, use `./dist/juex` instead of
 publishes the same JSON/SSE API through the current agent endpoint. Use
 `juex serve --headless` to run only the agent endpoint without a browser
 listener or SPA.
+
+`juex fleet` manages all resident agents registered under the effective
+`JUEX_HOME`. `fleet start|stop|restart`, `fleet status`, and `fleet logs`
+operate on an exact agent id or unique name. `fleet serve` performs one
+startup reconciliation, starts enabled autostart agents, adopts verified
+running agents, and then remains resident without stopping agents when the
+supervisor exits.
 
 ## Common Commands
 
@@ -101,6 +109,11 @@ listener or SPA.
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 | `juex serve` | Start the React web UI and JSON/SSE API. |
 | `juex serve --headless` | Serve the JSON/SSE API only through the current agent endpoint. |
+| `juex fleet serve` | Reconcile autostart agents and run one resident supervisor for the effective home. |
+| `juex fleet status [--format table\|json]` | Show every registry entry with separate workspace binding and runtime health. |
+| `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity. |
+| `juex fleet logs <agent> [--lines 200]` | Print a line- and byte-bounded tail of the combined fleet log. |
+| `juex fleet gc [--yes]` | Review and explicitly delete definitely orphaned agent state. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |
 
 ## Runtime Files
@@ -120,13 +133,16 @@ binds it to state under `JUEX_HOME`, which defaults to `~/.juex`:
 $JUEX_HOME/
 ├── juex.yaml                    # user-global config
 ├── extensions/
+├── .locks/
+│   ├── endpoints/<agent-id>.lock # serving-process and GC maintenance guard
+│   └── fleet/<agent-id>.lock     # fleet lifecycle serialization
+├── fleet.lock                   # one resident supervisor per effective home
 └── agents/<agent-id>/
     ├── agent.json
-    ├── runtime.json             # pid, endpoint URI, and start time while serving
+    ├── runtime.json             # agent/instance ids, pid, endpoint, and start time
     ├── api.sock                 # preferred local API endpoint while serving
-    ├── api.lock                 # single-serving-process lifetime lock
     ├── history.json
-    ├── logs/
+    ├── logs/fleet.log           # detached child stdout and stderr
     ├── memory/
     └── sessions/<id>/
         ├── logs/
