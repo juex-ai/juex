@@ -245,6 +245,29 @@ func TestPublishFilesRollsBackEarlierDefinitionOnFailure(t *testing.T) {
 	}
 }
 
+func TestPublishFilesRollsBackNewDefinitionDirectoriesOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	serviceDir := filepath.Join(dir, "var", "service", "juex-fleet-test")
+	blocker := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := publishFiles([]definitionFile{
+		{path: filepath.Join(serviceDir, "down"), mode: 0o600},
+		{path: filepath.Join(serviceDir, "log", "run"), data: []byte("logger"), mode: 0o700},
+		{path: filepath.Join(blocker, "run"), data: []byte("service"), mode: 0o700},
+	})
+	if err == nil {
+		t.Fatal("publishFiles succeeded despite invalid final definition path")
+	}
+	if _, statErr := os.Stat(serviceDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("new service directory remained after rollback: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "var")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("new definition parent remained after rollback: %v", statErr)
+	}
+}
+
 func TestSystemdInstallPublishesAndRestartsUnit(t *testing.T) {
 	host := hostInfo{goos: "linux", userHome: t.TempDir(), xdgConfigHome: t.TempDir()}
 	runner := &fakeRunner{}

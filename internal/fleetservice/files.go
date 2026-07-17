@@ -5,20 +5,29 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 )
 
 func publishFiles(files []definitionFile) error {
 	snapshots := make([]fileSnapshot, len(files))
+	missingDirs := make(map[string]struct{})
 	for i, file := range files {
 		snapshot, err := snapshotFile(file.path)
 		if err != nil {
 			return err
 		}
 		snapshots[i] = snapshot
+		dirs, err := missingParentDirectories(file.path)
+		if err != nil {
+			return err
+		}
+		for _, dir := range dirs {
+			missingDirs[dir] = struct{}{}
+		}
 	}
 	for i, file := range files {
 		if err := writeFileAtomic(file.path, file.data, file.mode); err != nil {
-			return errors.Join(err, rollbackFiles(snapshots[:i]))
+			return errors.Join(err, rollbackFiles(snapshots[:i]), rollbackDirectories(missingDirs))
 		}
 	}
 	return nil
@@ -59,6 +68,39 @@ func rollbackFiles(snapshots []fileSnapshot) error {
 		}
 		if err := os.Remove(snapshot.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("fleet service: roll back definition %s: %w", snapshot.path, err))
+		}
+	}
+	return rollbackErr
+}
+
+func missingParentDirectories(path string) ([]string, error) {
+	var missing []string
+	for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
+		_, err := os.Stat(dir)
+		if err == nil {
+			return missing, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("fleet service: inspect definition directory %s: %w", dir, err)
+		}
+		missing = append(missing, dir)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return missing, nil
+		}
+	}
+}
+
+func rollbackDirectories(missing map[string]struct{}) error {
+	dirs := make([]string, 0, len(missing))
+	for dir := range missing {
+		dirs = append(dirs, dir)
+	}
+	slices.SortFunc(dirs, func(a, b string) int { return len(b) - len(a) })
+	var rollbackErr error
+	for _, dir := range dirs {
+		if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("fleet service: roll back definition directory %s: %w", dir, err))
 		}
 	}
 	return rollbackErr
