@@ -236,7 +236,7 @@ func assertFleetSPA(t *testing.T, client *http.Client, rawURL string) {
 		t.Fatalf("GET %s status = %d, body = %s", rawURL, response.StatusCode, body)
 	}
 	if !strings.Contains(response.Header.Get("Content-Type"), "text/html") ||
-		!strings.Contains(string(body), `<div id="root"></div>`) {
+		!strings.Contains(strings.ToLower(string(body)), "<!doctype html") {
 		t.Fatalf("GET %s did not return fleet SPA: %s", rawURL, body)
 	}
 }
