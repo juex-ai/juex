@@ -233,6 +233,31 @@ func TestVerbose_LLMOutputDeltaStreamsWithoutDuplicatingFinalText(t *testing.T) 
 	}
 }
 
+func TestVerbose_LLMRetryPrintsRecoveredFinalResponse(t *testing.T) {
+	out := emitAll([]events.Event{
+		{Type: "turn.started", Payload: runtimeevents.TurnStartedPayload{Input: "stream"}},
+		{Type: "llm.requested", Payload: runtimeevents.LLMRequestedPayload{Iter: 0}},
+		{Type: "llm.output_delta", Payload: runtimeevents.LLMOutputDeltaPayload{Kind: "text", Index: 0, Text: "partial"}},
+		{Type: "llm.retry", Payload: runtimeevents.LLMRetryPayload{
+			ProviderRetryDiagnostic: llm.ProviderRetryDiagnostic{WillRetry: true},
+			Purpose:                 "turn",
+		}},
+		{Type: "llm.responded", Payload: runtimeevents.LLMRespondedPayload{
+			Blocks: []llm.Block{{Type: llm.BlockText, Text: "recovered final"}},
+			Text:   "recovered final",
+		}},
+	})
+
+	partial := strings.Index(out, "assistant: partial")
+	final := strings.Index(out, "assistant: recovered final")
+	if partial < 0 || final < 0 {
+		t.Fatalf("retry output omitted partial or recovered response:\n%s", out)
+	}
+	if partial >= final {
+		t.Fatalf("recovered response printed before abandoned partial output:\n%s", out)
+	}
+}
+
 func TestVerbose_PrintsResponseBlocksInOrder(t *testing.T) {
 	out := emitAll([]events.Event{
 		{Type: "llm.requested", Payload: map[string]any{}},

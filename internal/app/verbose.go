@@ -76,6 +76,15 @@ func (vp *verbosePrinter) handle(e events.Event) {
 	case "llm.output_delta":
 		payload, _ := payloadAs[runtimeevents.LLMOutputDeltaPayload](e.Payload)
 		vp.printLLMOutputDelta(payload)
+	case "llm.retry":
+		payload, _ := payloadAs[runtimeevents.LLMRetryPayload](e.Payload)
+		if payload.Purpose == "turn" {
+			vp.finishLLMOutputDeltaLine()
+			if payload.WillRetry {
+				vp.resetLLMOutputDelta()
+				vp.spin.start("thinking")
+			}
+		}
 	case "llm.responded":
 		vp.spin.halt()
 		payload, _ := payloadAs[runtimeevents.LLMRespondedPayload](e.Payload)
