@@ -321,6 +321,19 @@ func LoadForWorkDir(workDir string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadForWorkDirForValidation loads and validates runtime configuration
+// without resolving or creating a workspace agent identity.
+func LoadForWorkDirForValidation(workDir string) (Config, error) {
+	cfg, err := loadConfigFilesForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
 // LoadForWorkDirWithModelOverride is LoadForWorkDir with an explicit model
 // selector that wins over YAML and PROVIDER_API_MODEL.
 func LoadForWorkDirWithModelOverride(workDir, modelRef string) (Config, error) {
@@ -399,6 +412,22 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadFromFileForWorkDirForValidation is LoadFromFileForWorkDir without
+// resolving or creating a workspace agent identity.
+func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
+	cfg, err := loadConfigFilesForWorkDir(workDir)
+	if err != nil {
+		return cfg, err
+	}
+	if err := applyYAMLFile(&cfg, path, false, "project", true); err != nil {
+		return cfg, err
+	}
+	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
 // LoadFromFileForWorkDirWithModelOverride is LoadFromFileForWorkDir with an
 // explicit model selector that wins over YAML and PROVIDER_API_MODEL.
 func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Config, error) {
@@ -417,6 +446,14 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 }
 
 func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
+	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, true)
+}
+
+func finalizeConfigLoadForValidation(cfg *Config, modelRef string, resolveAuth bool) error {
+	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, false)
+}
+
+func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth, resolveAgentState bool) error {
 	if strings.TrimSpace(modelRef) != "" {
 		if err := cfg.ApplyModelOverride(modelRef); err != nil {
 			return &ModelOverrideError{Err: err}
@@ -428,7 +465,7 @@ func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
 		}); err != nil {
 			return err
 		}
-		return finalizeLoadedConfig(cfg, resolveAuth)
+		return finalizeLoadedConfig(cfg, resolveAuth, resolveAgentState)
 	}
 	if err := resolveSelectedProvider(cfg); err != nil {
 		return err
@@ -436,10 +473,10 @@ func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
 	if err := applyOSEnv(cfg); err != nil {
 		return err
 	}
-	return finalizeLoadedConfig(cfg, resolveAuth)
+	return finalizeLoadedConfig(cfg, resolveAuth, resolveAgentState)
 }
 
-func finalizeLoadedConfig(cfg *Config, resolveAuth bool) error {
+func finalizeLoadedConfig(cfg *Config, resolveAuth, resolveAgentState bool) error {
 	if err := resolveShellProfileForConfig(cfg); err != nil {
 		return err
 	}
@@ -447,6 +484,9 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool) error {
 		if err := resolveCodexAuth(cfg); err != nil {
 			return err
 		}
+	}
+	if !resolveAgentState {
+		return nil
 	}
 	resolution, err := agentstate.Resolve(agentstate.Options{
 		HomeDir: cfg.HomeJuexDir,

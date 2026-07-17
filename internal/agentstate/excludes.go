@@ -74,6 +74,9 @@ func globalExcludesPath() (string, error) {
 	if err != nil && !errors.As(err, &exitErr) {
 		return "", fmt.Errorf("agentstate: read git core.excludesFile: %w", err)
 	}
+	if configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); configHome != "" {
+		return filepath.Join(configHome, "git", "ignore"), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("agentstate: resolve home for default Git excludes: %w", err)

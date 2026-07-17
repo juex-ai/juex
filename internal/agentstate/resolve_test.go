@@ -373,6 +373,20 @@ func TestResolveUsesConfiguredGlobalExcludesFile(t *testing.T) {
 	}
 }
 
+func TestResolveUsesXDGDefaultGlobalExcludesFile(t *testing.T) {
+	home, workDir := prepareResolveTest(t)
+	xdgConfig := filepath.Join(home, "custom-config")
+	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
+
+	if _, err := Resolve(Options{HomeDir: home, WorkDir: workDir}); err != nil {
+		t.Fatal(err)
+	}
+	assertContainsOnce(t, filepath.Join(xdgConfig, "git", "ignore"), "**/juex.local.json")
+	if _, err := os.Stat(filepath.Join(home, ".config", "git", "ignore")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("HOME fallback excludes file unexpectedly exists: %v", err)
+	}
+}
+
 func prepareResolveTest(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

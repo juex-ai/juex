@@ -69,7 +69,7 @@ func (c Config) ProviderSelectionForModelRef(ref string) (ProviderSelection, err
 	}); err != nil {
 		return ProviderSelection{}, err
 	}
-	if err := finalizeLoadedConfig(&cfg, true); err != nil {
+	if err := finalizeLoadedConfig(&cfg, true, false); err != nil {
 		return ProviderSelection{}, err
 	}
 	return cfg.ProviderSelection(), nil

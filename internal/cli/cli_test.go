@@ -1144,6 +1144,9 @@ hooks:
 	if err := validateInitConfig(target, work); err != nil {
 		t.Fatalf("JUEX_HOME user config validation should trust user hooks: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(juexHome, "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("init validation created an agent registry: %v", err)
+	}
 }
 
 func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {

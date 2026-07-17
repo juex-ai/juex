@@ -492,9 +492,9 @@ func loadInitConfigForCheck(path, workDir string) (config.Config, error) {
 	checkWorkDir, cleanup := initConfigCheckWorkDir(path, workDir)
 	defer cleanup()
 	if scope == "workspace" || scope == "user" {
-		return config.LoadForWorkDir(checkWorkDir)
+		return config.LoadForWorkDirForValidation(checkWorkDir)
 	}
-	return config.LoadFromFileForWorkDir(path, checkWorkDir)
+	return config.LoadFromFileForWorkDirForValidation(path, checkWorkDir)
 }
 
 func initConfigTargetScope(path, workDir string) string {
