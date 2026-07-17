@@ -53,6 +53,11 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(fleetSource, /"start" \| "stop" \| "restart"/);
   assert.match(fleetSource, /View logs/);
   assert.match(fleetSource, /Edit config/);
+  assert.match(
+    fleetSource,
+    /await refresh\(\{ quiet: true \}\);\s+setError\(actionError\)/,
+    "roster recovery must not clear the lifecycle action error",
+  );
 
   assert.match(logsSource, /getAgentLogs\(agentId, lines\)/);
   assert.match(logsSource, /1000/);

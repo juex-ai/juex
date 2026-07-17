@@ -63,12 +63,12 @@ export function Fleet() {
         current.map((item) => (item.id === next.id ? next : item)),
       );
     } catch (cause) {
-      setError(
+      const actionError =
         cause instanceof Error
           ? cause.message
-          : `Failed to ${action} ${agent.name || agent.id}.`,
-      );
+          : `Failed to ${action} ${agent.name || agent.id}.`;
       await refresh({ quiet: true });
+      setError(actionError);
     } finally {
       setBusyAgent(null);
     }
