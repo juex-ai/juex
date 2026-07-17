@@ -283,6 +283,19 @@ func TestCloseDoesNotRemoveReplacedRuntime(t *testing.T) {
 	}
 }
 
+func TestRuntimeOwnershipIgnoresMonotonicClockRepresentation(t *testing.T) {
+	startedAt := time.Now()
+	serializedStartedAt := startedAt.Round(0)
+	if !startedAt.Equal(serializedStartedAt) {
+		t.Fatal("test setup changed wall-clock instant")
+	}
+	owner := Runtime{PID: 42, Endpoint: "tcp://127.0.0.1:43123", StartedAt: startedAt}
+	current := Runtime{PID: 42, Endpoint: "tcp://127.0.0.1:43123", StartedAt: serializedStartedAt}
+	if !sameRuntime(current, owner) {
+		t.Fatalf("same runtime instant was treated as a different owner: current=%+v owner=%+v", current, owner)
+	}
+}
+
 type stubListener struct {
 	addr   net.Addr
 	closed atomic.Bool

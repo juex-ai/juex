@@ -114,9 +114,13 @@ func listenWithDependencies(ctx context.Context, agentDir string, deps listenDep
 		return nil, err
 	}
 	return &Binding{
-		listener:       listener,
-		lock:           lock,
-		runtime:        Runtime{PID: deps.pid(), Endpoint: target.URI(), StartedAt: deps.now().UTC()},
+		listener: listener,
+		lock:     lock,
+		runtime: Runtime{
+			PID:       deps.pid(),
+			Endpoint:  target.URI(),
+			StartedAt: deps.now().UTC().Round(0),
+		},
 		agentDir:       absoluteDir,
 		socketPath:     socketPath,
 		fallbackReason: fallbackReason,
@@ -312,11 +316,17 @@ func removeOwnedRuntime(path string, owner Runtime) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	if err != nil || current != owner {
+	if err != nil || !sameRuntime(current, owner) {
 		return nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("endpoint: remove owned runtime %s: %w", path, err)
 	}
 	return syncDir(filepath.Dir(path))
+}
+
+func sameRuntime(left, right Runtime) bool {
+	return left.PID == right.PID &&
+		left.Endpoint == right.Endpoint &&
+		left.StartedAt.Equal(right.StartedAt)
 }
