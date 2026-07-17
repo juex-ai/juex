@@ -126,6 +126,64 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	}
 }
 
+func TestStartRetriesTransientRuntimeReadErrors(t *testing.T) {
+	entry := registryEntry("aaaaaaaa", "agent")
+	runtimeState := endpoint.Runtime{
+		AgentID:    entry.ID,
+		InstanceID: "instance-one",
+		PID:        42,
+		Endpoint:   "tcp://127.0.0.1:43123",
+		StartedAt:  time.Now().UTC(),
+	}
+	var reads atomic.Int32
+	deps := defaultDependencies()
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(string) (endpoint.Runtime, error) {
+		switch reads.Add(1) {
+		case 1:
+			return endpoint.Runtime{}, os.ErrNotExist
+		case 2:
+			return endpoint.Runtime{}, &os.PathError{
+				Op:   "open",
+				Path: "runtime.json",
+				Err:  errors.New("sharing violation"),
+			}
+		default:
+			return runtimeState, nil
+		}
+	}
+	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+		return noopGuard{}, nil
+	}
+	deps.processAlive = func(int) (bool, error) { return true, nil }
+	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
+	deps.spawn = func(string, string, agentstate.RegistryEntry) (spawnedProcess, error) {
+		return spawnedProcess{
+			PID:     runtimeState.PID,
+			Done:    make(chan error),
+			LogPath: "fleet.log",
+		}, nil
+	}
+	manager := &Manager{
+		startTimeout: time.Second,
+		probeTimeout: time.Second,
+		deps:         deps,
+	}
+
+	status, err := manager.startEntry(context.Background(), entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.RuntimeHealth != RuntimeHealthy {
+		t.Fatalf("status = %+v, want healthy", status)
+	}
+	if got := reads.Load(); got < 3 {
+		t.Fatalf("runtime reads = %d, want retry after transient error", got)
+	}
+}
+
 func TestStopNeverRequestsShutdownForMismatchedIdentity(t *testing.T) {
 	entry := registryEntry("aaaaaaaa", "agent")
 	runtimeState := endpoint.Runtime{

@@ -156,6 +156,7 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 
 func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	srv := newTestServer(t)
+	srv.opts.Addr = "127.0.0.1:0"
 	srv.opts.Cfg.AgentStateDir = t.TempDir()
 	ready := make(chan ReadyInfo, 1)
 	srv.opts.OnReady = func(info ReadyInfo) { ready <- info }
@@ -167,11 +168,13 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	var info ReadyInfo
 	select {
 	case info = <-ready:
+	case err := <-errCh:
+		t.Fatalf("server failed before ready: %v", err)
 	case <-time.After(3 * time.Second):
 		cancel()
-		t.Fatal("headless server did not become ready")
+		t.Fatal("server did not become ready")
 	}
-	if info.AgentEndpoint == "" {
+	if info.AgentEndpoint == "" || info.TCPAddress == "" {
 		t.Fatalf("ready info = %+v", info)
 	}
 	runtimeState, err := endpoint.ReadRuntime(srv.opts.Cfg.AgentStateDir)
@@ -199,6 +202,16 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	if err := endpoint.Probe(context.Background(), runtimeState); err != nil {
 		t.Fatalf("probe exact runtime identity: %v", err)
 	}
+	for path, want := range map[string]int{"/healthz": http.StatusOK, "/": http.StatusNotFound} {
+		response, err := http.Get("http://" + info.TCPAddress + path)
+		if err != nil {
+			t.Fatalf("GET TCP API %s: %v", path, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("GET TCP API %s status = %d, want %d", path, response.StatusCode, want)
+		}
+	}
 	mismatch := runtimeState
 	mismatch.InstanceID = "different-instance"
 	if err := endpoint.RequestShutdown(context.Background(), mismatch); err == nil {
@@ -214,11 +227,11 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if err != nil {
-			t.Fatalf("headless Run after shutdown: %v", err)
+			t.Fatalf("Run after shutdown: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		cancel()
-		t.Fatal("headless server did not stop after exact shutdown")
+		t.Fatal("server did not stop after exact shutdown")
 	}
 	cancel()
 	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.AgentStateDir, "runtime.json")); !os.IsNotExist(err) {
