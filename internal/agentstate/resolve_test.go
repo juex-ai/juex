@@ -352,7 +352,7 @@ func TestResolveUsesConfiguredGlobalExcludesFile(t *testing.T) {
 	home, workDir := prepareResolveTest(t)
 	customIgnore := filepath.Join(home, "git", "global-ignore")
 	globalConfig := filepath.Join(home, "gitconfig")
-	writeText(t, globalConfig, "[core]\n\texcludesFile = "+customIgnore+"\n")
+	writeText(t, globalConfig, "[core]\n\texcludesFile = "+filepath.ToSlash(customIgnore)+"\n")
 
 	if _, err := Resolve(Options{HomeDir: home, WorkDir: workDir}); err != nil {
 		t.Fatal(err)
