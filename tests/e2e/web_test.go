@@ -782,17 +782,20 @@ func TestWeb_RunScheduleObservableOnce(t *testing.T) {
 		t.Fatalf("run missing status=%d, want %d", resp.StatusCode, http.StatusNotFound)
 	}
 
-	commandBody := strings.NewReader(`{
-		"id":"manual-command-e2e",
-		"type":"command",
-		"command_config":{
-			"command":"` + os.Args[0] + `",
-			"args":["-test.run=TestE2EQuietObservableHelperProcess"],
-			"env":{"JUEX_E2E_QUIET_OBSERVABLE":"1"},
-			"streams":["stdout"]
-		}
-	}`)
-	resp, err = http.Post(ts.URL+"/api/observables", "application/json", commandBody)
+	commandBody, err := json.Marshal(map[string]any{
+		"id":   "manual-command-e2e",
+		"type": "command",
+		"command_config": map[string]any{
+			"command": os.Args[0],
+			"args":    []string{"-test.run=TestE2EQuietObservableHelperProcess"},
+			"env":     map[string]string{"JUEX_E2E_QUIET_OBSERVABLE": "1"},
+			"streams": []string{"stdout"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Post(ts.URL+"/api/observables", "application/json", bytes.NewReader(commandBody))
 	if err != nil {
 		t.Fatal(err)
 	}
