@@ -41,4 +41,3 @@ test("agent switcher preserves stable sections but not entity ids", () => {
   );
   assert.equal(agentSwitchPath("beta", "/"), "/agents/beta");
 });
-
