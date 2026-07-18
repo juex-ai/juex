@@ -36,12 +36,32 @@ ExecStart="/home/test/JueX Bin/juex" fleet serve --addr 127.0.0.1:8182
 			want: InstalledServeOptions{Addr: "127.0.0.1:8182"},
 		},
 		{
+			name:     "systemd continued arguments",
+			platform: PlatformSystemd,
+			body: `[Service]
+ExecStart=/home/test/juex fleet serve \
+  --addr 0.0.0.0:8184 \
+  --unsafe-bind-any
+`,
+			want: InstalledServeOptions{Addr: "0.0.0.0:8184", UnsafeBindAny: true},
+		},
+		{
 			name:     "Termux legacy address and unsafe flag",
 			platform: PlatformTermux,
 			body: `#!/data/data/com.termux/files/usr/bin/sh
 exec '/data/data/com.termux/files/home/JueX Bin/juex' 'fleet' 'serve' '--addr' '0.0.0.0:8183' '--unsafe-bind-any'
 `,
 			want: InstalledServeOptions{Addr: "0.0.0.0:8183", UnsafeBindAny: true},
+		},
+		{
+			name:     "Termux continued arguments",
+			platform: PlatformTermux,
+			body: `#!/data/data/com.termux/files/usr/bin/sh
+exec /data/data/com.termux/files/home/juex fleet serve \
+  --addr 0.0.0.0:8185 \
+  --unsafe-bind-any
+`,
+			want: InstalledServeOptions{Addr: "0.0.0.0:8185", UnsafeBindAny: true},
 		},
 		{
 			name:     "current definition retains unsafe flag without address",
@@ -76,6 +96,15 @@ func TestParseInstalledServeOptionsRejectsAmbiguousAddress(t *testing.T) {
 		if _, _, err := parseInstalledServeOptions(args); err == nil {
 			t.Fatalf("parseInstalledServeOptions(%v) succeeded", args)
 		}
+	}
+}
+
+func TestExistingDefinitionArgsRejectsUnterminatedContinuation(t *testing.T) {
+	if _, err := existingDefinitionArgs(
+		PlatformSystemd,
+		[]byte("[Service]\nExecStart=/home/test/juex fleet serve \\\n"),
+	); err == nil {
+		t.Fatal("unterminated systemd continuation was silently accepted")
 	}
 }
 

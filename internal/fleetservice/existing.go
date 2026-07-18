@@ -43,26 +43,51 @@ func existingDefinitionArgs(platform Platform, data []byte) ([]string, error) {
 	case PlatformLaunchd:
 		return launchdProgramArguments(data)
 	case PlatformSystemd:
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "ExecStart=") {
-				continue
-			}
-			return normalizeDefinitionFields(strings.Fields(strings.TrimPrefix(line, "ExecStart=")), true), nil
+		command, err := continuedDefinitionCommand(data, "ExecStart=")
+		if err != nil {
+			return nil, fmt.Errorf("systemd unit: %w", err)
 		}
-		return nil, fmt.Errorf("systemd unit has no ExecStart")
+		return normalizeDefinitionFields(strings.Fields(command), true), nil
 	case PlatformTermux:
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "exec ") {
-				continue
-			}
-			return normalizeDefinitionFields(strings.Fields(strings.TrimPrefix(line, "exec ")), false), nil
+		command, err := continuedDefinitionCommand(data, "exec ")
+		if err != nil {
+			return nil, fmt.Errorf("termux run script: %w", err)
 		}
-		return nil, fmt.Errorf("termux run script has no exec command")
+		return normalizeDefinitionFields(strings.Fields(command), false), nil
 	default:
 		return nil, fmt.Errorf("unsupported platform %q", platform)
 	}
+}
+
+func continuedDefinitionCommand(data []byte, prefix string) (string, error) {
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	for index, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		var command strings.Builder
+		line = strings.TrimPrefix(line, prefix)
+		for {
+			continued := strings.HasSuffix(line, `\`)
+			line = strings.TrimSpace(strings.TrimSuffix(line, `\`))
+			if line != "" {
+				if command.Len() > 0 {
+					command.WriteByte(' ')
+				}
+				command.WriteString(line)
+			}
+			if !continued {
+				return command.String(), nil
+			}
+			index++
+			if index >= len(lines) {
+				return "", fmt.Errorf("unterminated continued command")
+			}
+			line = strings.TrimSpace(lines[index])
+		}
+	}
+	return "", fmt.Errorf("no %s command", strings.TrimSpace(prefix))
 }
 
 func normalizeDefinitionFields(fields []string, systemd bool) []string {
