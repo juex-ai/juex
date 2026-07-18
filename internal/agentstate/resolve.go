@@ -42,6 +42,7 @@ type Resolution struct {
 	HomeDir    string
 	AgentDir   string
 	MarkerPath string
+	Created    bool
 	Notices    []string
 }
 
@@ -201,6 +202,7 @@ func createIdentity(homeDir, workDir, markerPath string) (Resolution, error) {
 		HomeDir:    homeDir,
 		AgentDir:   agentDir,
 		MarkerPath: markerPath,
+		Created:    true,
 	}
 	if migrated {
 		result.Notices = append(result.Notices,

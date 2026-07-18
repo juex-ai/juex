@@ -116,6 +116,110 @@ func TestFleetGCConfirmationControlsDeletion(t *testing.T) {
 	}
 }
 
+func TestFleetAddEnableDisableAndRemove(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+
+	root := newRootCmd()
+	var output bytes.Buffer
+	root.SetOut(&output)
+	root.SetErr(&output)
+	root.SetArgs([]string{
+		"fleet", "add", workspace,
+		"--name", "alpha",
+		"--autostart",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := agentstate.ListRegistry(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 ||
+		entries[0].Agent.Name != "alpha" ||
+		!entries[0].Agent.Enabled ||
+		!entries[0].Agent.Autostart {
+		t.Fatalf("registered agents = %+v", entries)
+	}
+	agentID := entries[0].ID
+	if !strings.Contains(output.String(), agentID) ||
+		!strings.Contains(output.String(), "alpha") {
+		t.Fatalf("add output = %q", output.String())
+	}
+
+	for _, action := range []struct {
+		name        string
+		wantEnabled bool
+	}{
+		{name: "disable", wantEnabled: false},
+		{name: "enable", wantEnabled: true},
+	} {
+		root = newRootCmd()
+		output.Reset()
+		root.SetOut(&output)
+		root.SetErr(&output)
+		root.SetArgs([]string{"fleet", action.name, agentID})
+		if err := root.Execute(); err != nil {
+			t.Fatalf("fleet %s: %v", action.name, err)
+		}
+		entries, err = agentstate.ListRegistry(home)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Agent.Enabled != action.wantEnabled {
+			t.Fatalf("after %s registry = %+v", action.name, entries)
+		}
+	}
+
+	agentDir := filepath.Join(home, "agents", agentID)
+	markerPath := filepath.Join(workspace, ".juex", "juex.local.json")
+	root = newRootCmd()
+	output.Reset()
+	root.SetOut(&output)
+	root.SetErr(&output)
+	root.SetIn(strings.NewReader("n\n"))
+	root.SetArgs([]string{"fleet", "remove", agentID})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{agentDir, markerPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("cancelled remove changed %s: %v", path, err)
+		}
+	}
+
+	root = newRootCmd()
+	output.Reset()
+	root.SetOut(&output)
+	root.SetErr(&output)
+	root.SetIn(strings.NewReader("y\n"))
+	root.SetArgs([]string{"fleet", "remove", agentID})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{agentDir, markerPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("confirmed remove preserved %s: %v", path, err)
+		}
+	}
+	if !strings.Contains(output.String(), "Removed") {
+		t.Fatalf("remove output = %q", output.String())
+	}
+}
+
+func TestFleetAddValidationMapsToUsageError(t *testing.T) {
+	t.Setenv("JUEX_HOME", t.TempDir())
+	root := newRootCmd()
+	root.SetArgs([]string{"fleet", "add", "relative"})
+	err := root.Execute()
+	var usage *usageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("error = %T %v, want usage error", err, err)
+	}
+}
+
 func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
 	root := newRootCmd()
 	var output bytes.Buffer
@@ -125,7 +229,21 @@ func TestFleetHelpAndSchemaExposeCommandsAndFlags(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"serve", "status", "start", "stop", "restart", "logs", "gc", "install", "uninstall"} {
+	for _, want := range []string{
+		"serve",
+		"status",
+		"add",
+		"enable",
+		"disable",
+		"remove",
+		"start",
+		"stop",
+		"restart",
+		"logs",
+		"gc",
+		"install",
+		"uninstall",
+	} {
 		if !strings.Contains(output.String(), want) {
 			t.Fatalf("fleet help missing %q:\n%s", want, output.String())
 		}

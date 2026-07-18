@@ -9,6 +9,8 @@ function source(path: string): string {
 const appSource = source("../../frontend/src/App.tsx");
 const shellSource = source("../../frontend/src/components/AppShell.tsx");
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
+const apiSource = source("../../frontend/src/api.ts");
+const typesSource = source("../../frontend/src/types.ts");
 const logsSource = source("../../frontend/src/pages/AgentLogs.tsx");
 const configSource = source("../../frontend/src/pages/AgentConfig.tsx");
 const viteSource = source("../../frontend/vite.config.ts");
@@ -53,6 +55,21 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(fleetSource, /"start" \| "stop" \| "restart"/);
   assert.match(fleetSource, /View logs/);
   assert.match(fleetSource, /Edit config/);
+  for (const operation of [
+    "addAgent",
+    "listDirectories",
+    "setAgentEnabled",
+    "removeAgent",
+  ]) {
+    assert.match(fleetSource, new RegExp(operation));
+    assert.match(apiSource, new RegExp(`function ${operation}`));
+  }
+  assert.match(fleetSource, /Add agent/);
+  assert.match(fleetSource, /Show hidden/);
+  assert.match(fleetSource, /confirmation === agent\.name/);
+  assert.match(fleetSource, /agent\.enabled/);
+  assert.match(typesSource, /export interface DirectoryListing/);
+  assert.match(typesSource, /export interface RemovedAgent/);
   assert.match(
     fleetSource,
     /await refresh\(\{ quiet: true \}\);\s+setError\(actionError\)/,

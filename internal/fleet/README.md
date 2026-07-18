@@ -3,6 +3,12 @@
 This package owns registry-wide resident-agent health and lifecycle policy.
 
 - `Status` preserves workspace binding and runtime health as separate axes.
+- `Add` registers an existing absolute workspace through the standard marker
+  rules, applies optional name/autostart metadata, and can start it immediately.
+- `SetEnabled` makes disable reversible: disable stops before persisting the
+  flag, while enable does not implicitly start.
+- `Remove` requires transport confirmation, stops and locks the endpoint, then
+  delegates intentional registry and matching-marker deletion to agentstate.
 - `Start` launches a detached `juex -C <workspace> serve --headless` child and
   waits for an exact PID and endpoint identity.
 - `Stop` requests instance-bound self-shutdown; it never signals or force-kills
@@ -16,7 +22,7 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   restarts under the same lifecycle lock.
 - `GCCandidates` lists only definite workspace orphans, while `DeleteOrphans`
   locks and revalidates each candidate before agentstate performs atomic
-  registry-boundary deletion.
+  registry-boundary deletion. GC remains separate from intentional `Remove`.
 
 The package composes `internal/agentstate` for registry identity,
 `internal/endpoint` for runtime identity and maintenance guards, and

@@ -1,6 +1,7 @@
 package agentstate
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,24 @@ func TestListRegistryReturnsEmptyWhenAgentsDirectoryIsMissing(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("ListRegistry() = %+v, want empty", entries)
+	}
+}
+
+func TestListRegistrySkipsPrivateDeletingTombstones(t *testing.T) {
+	home := t.TempDir()
+	agentsDir := filepath.Join(home, "agents")
+	writeRegistryAgent(t, home, "aaaaaaaa", filepath.Join(home, "workspace"))
+	tombstone := filepath.Join(agentsDir, ".bbbbbbbb.deleting-cccccccc")
+	if err := os.MkdirAll(tombstone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := ListRegistry(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].ID != "aaaaaaaa" {
+		t.Fatalf("registry entries = %+v, want only real agent", entries)
 	}
 }
 
@@ -283,6 +302,187 @@ func TestDeleteOrphanDeletesOnlySelectedDefiniteOrphan(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].ID != otherID {
 		t.Fatalf("registry after selected deletion = %+v, want only %q", entries, otherID)
+	}
+}
+
+func TestUpdateAgentAppliesOnlyDeclaredMetadata(t *testing.T) {
+	home, workspace := prepareResolveTest(t)
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "renamed"
+	enabled := false
+	autostart := true
+
+	updated, err := UpdateAgent(home, resolved.Agent.ID, AgentUpdate{
+		Name:      &name,
+		Enabled:   &enabled,
+		Autostart: &autostart,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != name || updated.Enabled || !updated.Autostart {
+		t.Fatalf("updated agent = %+v", updated)
+	}
+	if updated.ID != resolved.Agent.ID ||
+		updated.Workspace != resolved.Agent.Workspace ||
+		!updated.CreatedAt.Equal(resolved.Agent.CreatedAt) {
+		t.Fatalf("immutable metadata changed: before=%+v after=%+v", resolved.Agent, updated)
+	}
+
+	reloaded, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Agent != updated {
+		t.Fatalf("persisted agent = %+v, want %+v", reloaded.Agent, updated)
+	}
+}
+
+func TestUpdateAgentRejectsEmptyNameWithoutMutation(t *testing.T) {
+	home, workspace := prepareResolveTest(t)
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := "  "
+	if _, err := UpdateAgent(home, resolved.Agent.ID, AgentUpdate{Name: &empty}); err == nil {
+		t.Fatal("UpdateAgent accepted an empty name")
+	}
+	reloaded, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Agent != resolved.Agent {
+		t.Fatalf("rejected update changed agent: before=%+v after=%+v", resolved.Agent, reloaded.Agent)
+	}
+}
+
+func TestWorkspaceHasMarkerReportsAnyRegularMarker(t *testing.T) {
+	workspace := t.TempDir()
+	hasMarker, err := WorkspaceHasMarker(workspace)
+	if err != nil || hasMarker {
+		t.Fatalf("missing marker = %t, %v", hasMarker, err)
+	}
+	writeJSON(t, filepath.Join(workspace, ".juex", markerName), Marker{AgentID: "zzzzzzzz"})
+	hasMarker, err = WorkspaceHasMarker(workspace)
+	if err != nil || !hasMarker {
+		t.Fatalf("unknown regular marker = %t, %v", hasMarker, err)
+	}
+}
+
+func TestDeleteRegisteredRemovesStateAndMatchingMarker(t *testing.T) {
+	home, workspace := prepareResolveTest(t)
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(userFile, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := DeleteRegistered(home, resolved.Agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(resolved.AgentDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("agent directory still exists: %v", err)
+	}
+	if _, err := os.Lstat(resolved.MarkerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matching marker still exists: %v", err)
+	}
+	if body, err := os.ReadFile(userFile); err != nil || string(body) != "keep\n" {
+		t.Fatalf("workspace user file = %q, %v", body, err)
+	}
+
+	recreated, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recreated.Created || recreated.Agent.ID == resolved.Agent.ID {
+		t.Fatalf("recreated identity = %+v, removed = %q", recreated, resolved.Agent.ID)
+	}
+}
+
+func TestDeleteRegisteredPreservesMarkerForAnotherIdentity(t *testing.T) {
+	home, workspace := prepareResolveTest(t)
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const otherID = "bbbbbbbb"
+	writeJSON(t, resolved.MarkerPath, Marker{AgentID: otherID})
+
+	if err := DeleteRegistered(home, resolved.Agent.ID); err != nil {
+		t.Fatal(err)
+	}
+	var marker Marker
+	readJSONTest(t, resolved.MarkerPath, &marker)
+	if marker.AgentID != otherID {
+		t.Fatalf("marker = %+v, want preserved other identity", marker)
+	}
+}
+
+func TestDeleteRegisteredRejectsCorruptOrSymlinkedWorkspaceWithoutMutation(t *testing.T) {
+	t.Run("corrupt marker", func(t *testing.T) {
+		home, workspace := prepareResolveTest(t)
+		resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeText(t, resolved.MarkerPath, "{")
+		if err := DeleteRegistered(home, resolved.Agent.ID); err == nil {
+			t.Fatal("DeleteRegistered accepted a corrupt marker")
+		}
+		assertDir(t, resolved.AgentDir)
+		assertFile(t, resolved.MarkerPath)
+	})
+
+	t.Run("workspace symlink", func(t *testing.T) {
+		home, workspace := prepareResolveTest(t)
+		resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := workspace + "-target"
+		if err := os.Rename(workspace, target); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, workspace); err != nil {
+			t.Fatal(err)
+		}
+		if err := DeleteRegistered(home, resolved.Agent.ID); err == nil {
+			t.Fatal("DeleteRegistered followed a workspace symlink")
+		}
+		assertDir(t, resolved.AgentDir)
+		assertFile(t, filepath.Join(target, ".juex", markerName))
+	})
+}
+
+func TestDeleteRegisteredRestoresRegistryWhenMarkerRemovalFails(t *testing.T) {
+	home, workspace := prepareResolveTest(t)
+	resolved, err := Resolve(Options{HomeDir: home, WorkDir: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalRemove := removeWorkspaceMarker
+	removeWorkspaceMarker = func(string) error { return errors.New("injected marker removal failure") }
+	t.Cleanup(func() { removeWorkspaceMarker = originalRemove })
+
+	err = DeleteRegistered(home, resolved.Agent.ID)
+	if err == nil || !strings.Contains(err.Error(), "injected marker removal failure") {
+		t.Fatalf("DeleteRegistered error = %v", err)
+	}
+	assertDir(t, resolved.AgentDir)
+	assertFile(t, resolved.MarkerPath)
+	entries, listErr := ListRegistry(home)
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(entries) != 1 || entries[0].ID != resolved.Agent.ID {
+		t.Fatalf("restored registry = %+v", entries)
 	}
 }
 

@@ -22,6 +22,10 @@ import type {
   AgentConfig,
   AgentConfigUpdateResponse,
   AgentStatus,
+  AddAgentRequest,
+  AddAgentResponse,
+  DirectoryListing,
+  RemovedAgent,
 } from "./types";
 import { agentBasePath } from "./lib/fleet-routes.ts";
 
@@ -303,6 +307,31 @@ export async function listAgents(): Promise<AgentStatus[]> {
   return jsonOrThrow(await fetch("/api/agents"));
 }
 
+export async function addAgent(
+  input: AddAgentRequest,
+): Promise<AddAgentResponse> {
+  return jsonOrThrow(
+    await fetch("/api/agents", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+export async function listDirectories(
+  path?: string,
+  showHidden = false,
+): Promise<DirectoryListing> {
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (showHidden) params.set("show_hidden", "true");
+  const query = params.toString();
+  return jsonOrThrow(
+    await fetch(`/api/fs/dirs${query ? `?${query}` : ""}`),
+  );
+}
+
 export async function runAgentAction(
   id: string,
   action: "start" | "stop" | "restart",
@@ -310,6 +339,31 @@ export async function runAgentAction(
   return jsonOrThrow(
     await fetch(`/api/agents/${encodeURIComponent(id)}/${action}`, {
       method: "POST",
+    }),
+  );
+}
+
+export async function setAgentEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<AgentStatus> {
+  return jsonOrThrow(
+    await fetch(
+      `/api/agents/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function removeAgent(
+  id: string,
+  confirm: string,
+): Promise<RemovedAgent> {
+  return jsonOrThrow(
+    await fetch(`/api/agents/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm }),
     }),
   );
 }

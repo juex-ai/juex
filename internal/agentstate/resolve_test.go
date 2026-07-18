@@ -22,6 +22,9 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !first.Created {
+		t.Fatal("first resolution did not report a newly created identity")
+	}
 	if !regexp.MustCompile(`^[a-z2-7]{16}$`).MatchString(first.Agent.ID) {
 		t.Fatalf("agent id = %q, want 16-character lowercase base32", first.Agent.ID)
 	}
@@ -58,6 +61,9 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 	second, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if second.Created {
+		t.Fatal("idempotent resolution reported a newly created identity")
 	}
 	if second.Agent.ID != first.Agent.ID || !second.Agent.CreatedAt.Equal(first.Agent.CreatedAt) {
 		t.Fatalf("second resolution = %+v, first = %+v", second.Agent, first.Agent)

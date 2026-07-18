@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,7 +15,250 @@ import (
 
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/fleetweb"
 )
+
+func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary fleet registration lifecycle is slow")
+	}
+	binary := buildJuex(t)
+	home := t.TempDir()
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	unknownWorkspace := filepath.Join(root, "unknown-marker")
+	for _, path := range []string{workspace, unknownWorkspace} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(workspace, ".juex", "juex.yaml"),
+		fleetWebConfig("registration-model"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(unknownWorkspace, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFleetE2EJSON(
+		t,
+		filepath.Join(unknownWorkspace, ".juex", "juex.local.json"),
+		map[string]string{"agent_id": "aaaaaaaa"},
+	)
+	environment := fleetWebEnvironment(home)
+	supervisor := startFleetSupervisor(t, binary, environment)
+	t.Cleanup(func() {
+		if supervisor.cmd.ProcessState == nil {
+			_ = supervisor.cmd.Process.Kill()
+			_ = supervisor.cmd.Wait()
+		}
+	})
+	baseURL := "http://" + waitFleetWebReady(t, supervisor)
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	var listing fleetweb.DirectoryListing
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/api/fs/dirs?path="+url.QueryEscape(root),
+		"",
+		http.StatusOK,
+		&listing,
+	)
+	registered := make(map[string]bool, len(listing.Dirs))
+	for _, dir := range listing.Dirs {
+		registered[dir.Name] = dir.Registered
+	}
+	if registered["workspace"] || !registered["unknown-marker"] {
+		t.Fatalf("directory registration markers = %+v", registered)
+	}
+
+	createBody, err := json.Marshal(map[string]any{
+		"workspace": workspace,
+		"name":      "managed",
+		"autostart": true,
+		"start":     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var added fleet.AddResult
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents",
+		string(createBody),
+		http.StatusCreated,
+		&added,
+	)
+	if !added.Created ||
+		added.Agent.Name != "managed" ||
+		added.Agent.RuntimeHealth != fleet.RuntimeHealthy {
+		t.Fatalf("created agent = %+v", added)
+	}
+	agentDir := filepath.Join(home, "agents", added.Agent.ID)
+	runtimeState := waitFleetRuntime(t, agentDir)
+	removedSuccessfully := false
+	t.Cleanup(func() {
+		if removedSuccessfully {
+			return
+		}
+		process, _ := os.FindProcess(runtimeState.PID)
+		_ = process.Kill()
+	})
+
+	var repeated fleet.AddResult
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents",
+		string(createBody),
+		http.StatusOK,
+		&repeated,
+	)
+	if repeated.Created || repeated.Agent.ID != added.Agent.ID {
+		t.Fatalf("idempotent add = %+v, first = %+v", repeated, added)
+	}
+
+	unknownBody, err := json.Marshal(map[string]string{"workspace": unknownWorkspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents",
+		string(unknownBody),
+		http.StatusConflict,
+		nil,
+	)
+
+	var disabled fleet.AgentStatus
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents/"+added.Agent.ID+"/disable",
+		"",
+		http.StatusOK,
+		&disabled,
+	)
+	if disabled.Enabled || disabled.RuntimeHealth != fleet.RuntimeStopped {
+		t.Fatalf("disabled agent = %+v", disabled)
+	}
+	var enabled fleet.AgentStatus
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents/"+added.Agent.ID+"/enable",
+		"",
+		http.StatusOK,
+		&enabled,
+	)
+	if !enabled.Enabled || enabled.RuntimeHealth != fleet.RuntimeStopped {
+		t.Fatalf("enabled agent = %+v", enabled)
+	}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPost,
+		baseURL+"/api/agents/"+added.Agent.ID+"/start",
+		"",
+		http.StatusOK,
+		&enabled,
+	)
+	if enabled.RuntimeHealth != fleet.RuntimeHealthy {
+		t.Fatalf("restarted agent = %+v", enabled)
+	}
+
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodDelete,
+		baseURL+"/api/agents/"+added.Agent.ID,
+		`{"confirm":"wrong"}`,
+		http.StatusBadRequest,
+		nil,
+	)
+	for _, path := range []string{
+		agentDir,
+		filepath.Join(workspace, ".juex", "juex.local.json"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("rejected removal changed %s: %v", path, err)
+		}
+	}
+
+	var removed fleet.RemovedAgent
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodDelete,
+		baseURL+"/api/agents/"+added.Agent.ID,
+		`{"confirm":"managed"}`,
+		http.StatusOK,
+		&removed,
+	)
+	if removed.ID != added.Agent.ID {
+		t.Fatalf("removed agent = %+v", removed)
+	}
+	removedSuccessfully = true
+	for _, path := range []string{
+		agentDir,
+		filepath.Join(workspace, ".juex", "juex.local.json"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("removed path still exists %s: %v", path, err)
+		}
+	}
+	probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	probeErr := endpoint.Probe(probeCtx, runtimeState)
+	cancel()
+	if probeErr == nil {
+		t.Fatal("removed agent endpoint remains reachable")
+	}
+
+	stdout, stderr, err := runFleetE2E(
+		binary,
+		environment,
+		"",
+		"add",
+		workspace,
+		"--name",
+		"cli-managed",
+	)
+	if err != nil {
+		t.Fatalf("fleet add: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var roster []fleet.AgentStatus
+	fleetWebJSON(t, client, http.MethodGet, baseURL+"/api/agents", "", http.StatusOK, &roster)
+	if len(roster) != 1 ||
+		roster[0].ID == added.Agent.ID ||
+		roster[0].Name != "cli-managed" {
+		t.Fatalf("CLI-created roster = %+v, removed = %+v", roster, added)
+	}
+	stdout, stderr, err = runFleetE2E(
+		binary,
+		environment,
+		"",
+		"remove",
+		roster[0].ID,
+		"--yes",
+	)
+	if err != nil {
+		t.Fatalf("fleet remove: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+}
 
 func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	if testing.Short() {
