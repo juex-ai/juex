@@ -939,3 +939,33 @@ export interface AgentConfigUpdateResponse {
   config: AgentConfig;
   agent: AgentStatus;
 }
+
+export interface AddAgentRequest {
+  workspace: string;
+  name?: string;
+  autostart?: boolean;
+  start?: boolean;
+}
+
+export interface AddAgentResponse {
+  agent: AgentStatus;
+  created: boolean;
+}
+
+export interface RemovedAgent {
+  id: string;
+  name: string;
+  workspace: string;
+}
+
+export interface DirectoryEntry {
+  name: string;
+  path: string;
+  registered: boolean;
+}
+
+export interface DirectoryListing {
+  path: string;
+  parent: string;
+  dirs: DirectoryEntry[];
+}

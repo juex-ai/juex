@@ -239,8 +239,13 @@ in the global header, and the middle column owns the composer when applicable.
 
 The fleet entry page is a dense operational roster. Each row shows agent
 identity, runtime health, workspace, process metadata, explicit lifecycle
-actions, and links to sessions, bounded logs, and config. Errors are shown in
-a page-level alert and never hidden behind optimistic status.
+actions, enabled state, and links to sessions, bounded logs, and config. The
+header opens an Add agent dialog with an editable absolute path, server-side
+one-level directory browser, breadcrumbs, hidden-directory switch, optional
+name, autostart, and start-now controls. Disable is a reversible row action.
+Destructive removal uses a separate dialog and enables its command only after
+the persisted agent name is typed exactly. Errors are shown in the active
+dialog or page-level alert and never hidden behind optimistic status.
 
 ### 6.2 Sessions list (`/agents/:agentId`)
 

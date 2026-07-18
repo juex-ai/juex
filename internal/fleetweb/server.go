@@ -20,7 +20,10 @@ import (
 	"github.com/juex-ai/juex/internal/web"
 )
 
-const maxConfigRequestBytes = 1 << 20
+const (
+	maxConfigRequestBytes        = 1 << 20
+	maxAgentMutationRequestBytes = 64 << 10
+)
 
 type Options struct {
 	Manager      *fleet.Manager
@@ -31,9 +34,12 @@ type Options struct {
 
 type backend interface {
 	Status(context.Context) ([]fleet.AgentStatus, error)
+	Add(context.Context, fleet.AddOptions) (fleet.AddResult, error)
 	Start(context.Context, string) (fleet.AgentStatus, error)
 	Stop(context.Context, string) (fleet.AgentStatus, error)
 	Restart(context.Context, string) (fleet.AgentStatus, error)
+	SetEnabled(context.Context, string, bool) (fleet.AgentStatus, error)
+	Remove(context.Context, string, fleet.RemoveOptions) (fleet.RemovedAgent, error)
 	Logs(string, int) ([]byte, error)
 	Config(string) (fleet.AgentConfig, error)
 	UpdateConfig(context.Context, string, []byte) (fleet.AgentConfig, fleet.AgentStatus, error)
@@ -74,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/agents", s.handleAgents)
 	mux.HandleFunc("/api/agents/", s.dispatchAgentAPI)
+	mux.HandleFunc("/api/fs/dirs", s.handleDirectories)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API route not found")
 	})
@@ -135,16 +142,52 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
-		return
+	switch r.Method {
+	case http.MethodGet:
+		statuses, err := s.manager.Status(r.Context())
+		if err != nil {
+			writeFleetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, statuses)
+	case http.MethodPost:
+		var body struct {
+			Workspace *string `json:"workspace"`
+			Name      *string `json:"name"`
+			Autostart *bool   `json:"autostart"`
+			Start     bool    `json:"start"`
+		}
+		if !decodeJSONBody(
+			w,
+			r,
+			maxAgentMutationRequestBytes,
+			&body,
+			"request body must describe an agent workspace",
+		) {
+			return
+		}
+		if body.Workspace == nil {
+			writeError(w, http.StatusBadRequest, "bad_request", "workspace is required")
+			return
+		}
+		result, err := s.manager.Add(r.Context(), fleet.AddOptions{
+			Workspace: *body.Workspace,
+			Name:      body.Name,
+			Autostart: body.Autostart,
+			Start:     body.Start,
+		})
+		if err != nil {
+			writeFleetError(w, err)
+			return
+		}
+		status := http.StatusOK
+		if result.Created {
+			status = http.StatusCreated
+		}
+		writeJSON(w, status, result)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST required")
 	}
-	statuses, err := s.manager.Status(r.Context())
-	if err != nil {
-		writeFleetError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, statuses)
 }
 
 func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +197,8 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch action {
+	case "":
+		s.handleRemove(w, r, selector)
 	case "start", "stop", "restart":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
@@ -176,6 +221,17 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, status)
+	case "enable", "disable":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+			return
+		}
+		status, err := s.manager.SetEnabled(r.Context(), selector, action == "enable")
+		if err != nil {
+			writeFleetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, status)
 	case "logs":
 		s.handleLogs(w, r, selector)
 	case "config":
@@ -183,6 +239,37 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "fleet API route not found")
 	}
+}
+
+func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request, selector string) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "DELETE required")
+		return
+	}
+	var body struct {
+		Confirm *string `json:"confirm"`
+	}
+	if !decodeJSONBody(
+		w,
+		r,
+		maxAgentMutationRequestBytes,
+		&body,
+		"request body must contain an exact agent-name confirmation",
+	) {
+		return
+	}
+	if body.Confirm == nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "confirm is required")
+		return
+	}
+	removed, err := s.manager.Remove(r.Context(), selector, fleet.RemoveOptions{
+		ConfirmName: *body.Confirm,
+	})
+	if err != nil {
+		writeFleetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, removed)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request, selector string) {
@@ -309,14 +396,21 @@ func parseAgentAPIPath(path string) (string, string, bool) {
 		return "", "", false
 	}
 	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) < 1 || len(parts) > 2 || parts[0] == "" {
 		return "", "", false
+	}
+	action := ""
+	if len(parts) == 2 {
+		if parts[1] == "" {
+			return "", "", false
+		}
+		action = parts[1]
 	}
 	selector, err := url.PathUnescape(parts[0])
 	if err != nil || strings.Contains(selector, "/") {
 		return "", "", false
 	}
-	return selector, parts[1], true
+	return selector, action, true
 }
 
 func parseAgentProxyPath(path string) (string, string, bool) {
@@ -351,12 +445,39 @@ func requireJSONEOF(decoder *json.Decoder) error {
 	return err
 }
 
+func decodeJSONBody(
+	w http.ResponseWriter,
+	r *http.Request,
+	maxBytes int64,
+	target any,
+	message string,
+) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body is too large")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "bad_request", message)
+		return false
+	}
+	if err := requireJSONEOF(decoder); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "request body must contain one JSON object")
+		return false
+	}
+	return true
+}
+
 func writeFleetError(w http.ResponseWriter, err error) {
 	var (
-		notFound  *fleet.NotFoundError
-		ambiguous *fleet.AmbiguousSelectorError
-		conflict  *fleet.ConflictError
-		invalid   *fleet.ConfigValidationError
+		notFound   *fleet.NotFoundError
+		ambiguous  *fleet.AmbiguousSelectorError
+		conflict   *fleet.ConflictError
+		invalid    *fleet.ConfigValidationError
+		validation *fleet.ValidationError
 	)
 	switch {
 	case errors.As(err, &notFound):
@@ -365,6 +486,8 @@ func writeFleetError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "conflict", err.Error())
 	case errors.As(err, &invalid):
 		writeError(w, http.StatusBadRequest, "invalid_config", err.Error())
+	case errors.As(err, &validation):
+		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, "internal_error", "fleet operation failed")
 	}

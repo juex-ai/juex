@@ -27,8 +27,12 @@ import (
 type fakeBackend struct {
 	statuses     []fleet.AgentStatus
 	statusErr    error
+	added        fleet.AddResult
+	addErr       error
 	actionStatus fleet.AgentStatus
 	actionErr    error
+	removed      fleet.RemovedAgent
+	removeErr    error
 	logs         []byte
 	logsErr      error
 	config       fleet.AgentConfig
@@ -42,12 +46,22 @@ type fakeBackend struct {
 	mu            sync.Mutex
 	action        string
 	selector      string
+	addOptions    fleet.AddOptions
+	enabled       bool
+	removeOptions fleet.RemoveOptions
 	lines         int
 	updateContent []byte
 }
 
 func (f *fakeBackend) Status(context.Context) ([]fleet.AgentStatus, error) {
 	return f.statuses, f.statusErr
+}
+
+func (f *fakeBackend) Add(_ context.Context, opts fleet.AddOptions) (fleet.AddResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.addOptions = opts
+	return f.added, f.addErr
 }
 
 func (f *fakeBackend) Start(context.Context, string) (fleet.AgentStatus, error) {
@@ -63,6 +77,31 @@ func (f *fakeBackend) Stop(context.Context, string) (fleet.AgentStatus, error) {
 func (f *fakeBackend) Restart(context.Context, string) (fleet.AgentStatus, error) {
 	f.recordAction("restart")
 	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) SetEnabled(
+	_ context.Context,
+	selector string,
+	enabled bool,
+) (fleet.AgentStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.action = "set-enabled"
+	f.selector = selector
+	f.enabled = enabled
+	return f.actionStatus, f.actionErr
+}
+
+func (f *fakeBackend) Remove(
+	_ context.Context,
+	selector string,
+	opts fleet.RemoveOptions,
+) (fleet.RemovedAgent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selector = selector
+	f.removeOptions = opts
+	return f.removed, f.removeErr
 }
 
 func (f *fakeBackend) Logs(selector string, lines int) ([]byte, error) {
@@ -116,7 +155,13 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 	}
 	backend := &fakeBackend{
 		statuses:     []fleet.AgentStatus{status},
+		added:        fleet.AddResult{Agent: status, Created: true},
 		actionStatus: status,
+		removed: fleet.RemovedAgent{
+			ID:        status.ID,
+			Name:      status.Name,
+			Workspace: "/workspace",
+		},
 		logs:         []byte("one\ntwo\n"),
 		config:       configState,
 		updated:      configState,
@@ -146,6 +191,28 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			},
 		},
 		{
+			name:       "create",
+			method:     http.MethodPost,
+			path:       "/api/agents",
+			body:       `{"workspace":"/workspace","name":"alpha","autostart":true,"start":true}`,
+			wantStatus: http.StatusCreated,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.AddResult
+				decodeJSON(t, body, &got)
+				if got.Agent.ID != status.ID || !got.Created {
+					t.Fatalf("create response = %+v", got)
+				}
+				if backend.addOptions.Workspace != "/workspace" ||
+					backend.addOptions.Name == nil ||
+					*backend.addOptions.Name != "alpha" ||
+					backend.addOptions.Autostart == nil ||
+					!*backend.addOptions.Autostart ||
+					!backend.addOptions.Start {
+					t.Fatalf("add options = %+v", backend.addOptions)
+				}
+			},
+		},
+		{
 			name:       "lifecycle",
 			method:     http.MethodPost,
 			path:       "/api/agents/aaaaaaaa/restart",
@@ -155,6 +222,43 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 				decodeJSON(t, body, &got)
 				if got.ID != status.ID || backend.action != "restart" {
 					t.Fatalf("status/action = %+v/%q", got, backend.action)
+				}
+			},
+		},
+		{
+			name:       "disable",
+			method:     http.MethodPost,
+			path:       "/api/agents/aaaaaaaa/disable",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.AgentStatus
+				decodeJSON(t, body, &got)
+				if got.ID != status.ID ||
+					backend.action != "set-enabled" ||
+					backend.enabled {
+					t.Fatalf("disable response/action = %+v/%q/%t", got, backend.action, backend.enabled)
+				}
+			},
+		},
+		{
+			name:       "remove",
+			method:     http.MethodDelete,
+			path:       "/api/agents/aaaaaaaa",
+			body:       `{"confirm":"alpha"}`,
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got fleet.RemovedAgent
+				decodeJSON(t, body, &got)
+				if got.ID != status.ID ||
+					backend.selector != status.ID ||
+					backend.removeOptions.ConfirmName != status.Name ||
+					backend.removeOptions.SkipConfirmation {
+					t.Fatalf(
+						"remove response/args = %+v/%q/%+v",
+						got,
+						backend.selector,
+						backend.removeOptions,
+					)
 				}
 			},
 		},
@@ -236,6 +340,16 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 		wantStatus int
 	}{
 		{
+			name: "invalid registration",
+			backend: &fakeBackend{
+				addErr: &fleet.ValidationError{Reason: "workspace must be absolute"},
+			},
+			method:     http.MethodPost,
+			path:       "/api/agents",
+			body:       strings.NewReader(`{"workspace":"relative"}`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name: "missing agent",
 			backend: &fakeBackend{
 				actionErr: &fleet.NotFoundError{Selector: "missing"},
@@ -261,6 +375,14 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 			method:     http.MethodPut,
 			path:       "/api/agents/aaaaaaaa/config",
 			body:       strings.NewReader(`{"content":"bad"}`),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "missing remove confirmation",
+			backend:    &fakeBackend{},
+			method:     http.MethodDelete,
+			path:       "/api/agents/aaaaaaaa",
+			body:       strings.NewReader(`{}`),
 			wantStatus: http.StatusBadRequest,
 		},
 		{

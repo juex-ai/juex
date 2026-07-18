@@ -62,12 +62,43 @@ type GCCandidate struct {
 	Reason       string    `json:"reason"`
 }
 
+type AddOptions struct {
+	Workspace string
+	Name      *string
+	Autostart *bool
+	Start     bool
+}
+
+type AddResult struct {
+	Agent   AgentStatus `json:"agent"`
+	Created bool        `json:"created"`
+}
+
+type RemoveOptions struct {
+	ConfirmName      string
+	SkipConfirmation bool
+}
+
+type RemovedAgent struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Workspace string `json:"workspace"`
+}
+
 type Options struct {
 	HomeDir      string
 	Executable   string
 	StartTimeout time.Duration
 	StopTimeout  time.Duration
 	ProbeTimeout time.Duration
+}
+
+type ValidationError struct {
+	Reason string
+}
+
+func (e *ValidationError) Error() string {
+	return "fleet: " + e.Reason
 }
 
 type NotFoundError struct {
@@ -116,6 +147,9 @@ type spawnedProcess struct {
 type dependencies struct {
 	listRegistry       func(string) ([]agentstate.RegistryEntry, error)
 	inspectBinding     func(agentstate.RegistryEntry) agentstate.WorkspaceBinding
+	resolveAgent       func(agentstate.Options) (agentstate.Resolution, error)
+	updateAgent        func(string, string, agentstate.AgentUpdate) (agentstate.Agent, error)
+	deleteRegistered   func(string, string) error
 	readRuntime        func(string) (endpoint.Runtime, error)
 	removeRuntime      func(string, endpoint.Runtime) error
 	acquireMaintenance func(string) (maintenanceGuard, error)
@@ -127,10 +161,13 @@ type dependencies struct {
 
 func defaultDependencies() dependencies {
 	return dependencies{
-		listRegistry:   agentstate.ListRegistry,
-		inspectBinding: agentstate.InspectBinding,
-		readRuntime:    endpoint.ReadRuntime,
-		removeRuntime:  endpoint.RemoveRuntime,
+		listRegistry:     agentstate.ListRegistry,
+		inspectBinding:   agentstate.InspectBinding,
+		resolveAgent:     agentstate.Resolve,
+		updateAgent:      agentstate.UpdateAgent,
+		deleteRegistered: agentstate.DeleteRegistered,
+		readRuntime:      endpoint.ReadRuntime,
+		removeRuntime:    endpoint.RemoveRuntime,
 		acquireMaintenance: func(agentDir string) (maintenanceGuard, error) {
 			return endpoint.AcquireMaintenance(agentDir)
 		},

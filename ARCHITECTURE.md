@@ -1044,11 +1044,16 @@ or browser-listener exit never stops them.
 Per-agent lifecycle operations hold
 `$JUEX_HOME/.locks/fleet/<agent-id>.lock`. Start waits for the spawned PID to
 publish and answer with an exact runtime identity. Stop requests instance-bound
-self-shutdown and never sends a process signal. Garbage collection also takes
-the endpoint maintenance guard, revalidates a definite orphan, atomically
-renames its registry directory to a hidden sibling, and only then removes it.
-Fleet commands resolve the effective home directly and do not load or mint a
-workspace identity for their current directory.
+self-shutdown and never sends a process signal. Add resolves an explicitly
+supplied absolute workspace through the standard marker rules, then applies
+optional metadata and start-now under that same lifecycle lock. Disable stops
+before persisting `enabled=false`; enable does not implicitly start.
+Intentional remove verifies confirmation, stops the process, takes the endpoint
+maintenance guard, atomically renames the registry directory, and removes only
+a still-matching workspace marker. Garbage collection uses the same deletion
+boundary but remains limited to revalidated definite orphans. Fleet commands
+resolve the effective home directly and never load or mint an identity for
+their current directory implicitly.
 
 ### 3.8.2 Fleet Service Registration
 
@@ -1077,10 +1082,13 @@ in `internal/fleet`.
 ### 3.8.3 Fleet Web Backend
 
 `internal/fleetweb` owns the loopback fleet HTTP listener, JSON routes, status
-mapping, embedded SPA fallback, and agent reverse proxy. Fleet roster,
-lifecycle, bounded logs, and workspace config routes delegate to
+mapping, embedded SPA fallback, server-side one-level directory browsing, and
+agent reverse proxy. Fleet roster, registration, enable/disable, intentional
+removal, lifecycle, bounded logs, and workspace config routes delegate to
 `internal/fleet`; HTTP handlers do not inspect registry or process state
-directly.
+directly. Directory browsing rejects symlink targets and children, hides dot
+directories by default, and uses agentstate's marker probe without recursively
+walking the filesystem.
 
 `/agents/<id>/api/...` asks `fleet.Manager.Endpoint` to re-read and probe a
 bound healthy runtime immediately before forwarding. It then uses the parsed
@@ -1168,7 +1176,11 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/agents/<id>/config` | Selected agent config SPA route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/agents` | Fleet roster JSON |
+| POST | `/api/agents` | Register an absolute workspace, optionally set metadata and start |
+| GET | `/api/fs/dirs?path=&show_hidden=` | Browse one level of server-side directories |
 | POST | `/api/agents/<id>/start\|stop\|restart` | Agent lifecycle action |
+| POST | `/api/agents/<id>/enable\|disable` | Persist reversible enabled state; disable also stops |
+| DELETE | `/api/agents/<id>` | Confirm, stop, and intentionally remove registered agent state |
 | GET | `/api/agents/<id>/logs?lines=N` | Bounded combined log tail |
 | GET, PUT | `/api/agents/<id>/config` | Read or validate, write, and restart config |
 | GET | `/api/sessions` | JSON list |

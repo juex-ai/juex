@@ -9,6 +9,9 @@ function source(path: string): string {
 const appSource = source("../../frontend/src/App.tsx");
 const shellSource = source("../../frontend/src/components/AppShell.tsx");
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
+const switchSource = source("../../frontend/src/components/ui/switch.tsx");
+const apiSource = source("../../frontend/src/api.ts");
+const typesSource = source("../../frontend/src/types.ts");
 const logsSource = source("../../frontend/src/pages/AgentLogs.tsx");
 const configSource = source("../../frontend/src/pages/AgentConfig.tsx");
 const viteSource = source("../../frontend/vite.config.ts");
@@ -53,6 +56,34 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(fleetSource, /"start" \| "stop" \| "restart"/);
   assert.match(fleetSource, /View logs/);
   assert.match(fleetSource, /Edit config/);
+  for (const operation of [
+    "addAgent",
+    "listDirectories",
+    "setAgentEnabled",
+    "removeAgent",
+  ]) {
+    assert.match(fleetSource, new RegExp(operation));
+    assert.match(apiSource, new RegExp(`function ${operation}`));
+  }
+  assert.match(fleetSource, /Add agent/);
+  assert.match(fleetSource, /Show hidden/);
+  assert.match(
+    fleetSource,
+    /const confirmationTarget = agent\.name \|\| agent\.id/,
+  );
+  assert.match(
+    fleetSource,
+    /autostart: autostart \? true : undefined/,
+    "an untouched false toggle must preserve existing autostart metadata",
+  );
+  assert.match(fleetSource, /localeCompare\(b\.id\)/);
+  assert.match(fleetSource, /agent\.enabled/);
+  assert.match(typesSource, /export interface DirectoryListing/);
+  assert.match(typesSource, /export interface RemovedAgent/);
+  assert.match(switchSource, /data-\[state=checked\]:bg-primary/);
+  assert.match(switchSource, /data-\[state=checked\]:translate-x-4/);
+  assert.match(switchSource, /data-\[state=unchecked\]:translate-x-0/);
+  assert.doesNotMatch(switchSource, /data-(?:checked|unchecked):/);
   assert.match(
     fleetSource,
     /await refresh\(\{ quiet: true \}\);\s+setError\(actionError\)/,

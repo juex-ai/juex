@@ -148,14 +148,20 @@ address a running agent:
 - The fleet reverse-proxies `/agents/<id>/api/...` to the agent endpoint,
   streaming SSE through unchanged. Full interaction — view sessions, send
   messages, start turns, interrupt — reuses the existing per-agent API.
-- Fleet-owned API (sketch): `GET /api/agents` roster with health,
-  lifecycle actions per agent (start/stop/restart), bounded log tail, and
-  agent config get/update.
+- Fleet-owned API: `GET|POST /api/agents` for roster and registration,
+  `GET /api/fs/dirs` for one-level server-side directory selection,
+  per-agent start/stop/restart and enable/disable actions, confirmed
+  `DELETE /api/agents/<id>`, bounded log tail, and agent config get/update.
 
 ## Lifecycle And Operations (v1 Scope)
 
-- CLI: `juex fleet serve | status | start <agent> | stop <agent> |
-  restart <agent> | logs <agent> | gc | install | uninstall`.
+- CLI: `juex fleet serve | status | add <path> | enable <agent> |
+  disable <agent> | start <agent> | stop <agent> | restart <agent> |
+  remove <agent> | logs <agent> | gc | install | uninstall`.
+- Add uses the standard workspace marker rules. Disable is reversible and stops
+  before persisting. Remove is a distinct confirmed destructive operation that
+  deletes registered agent state and a still-matching marker, never workspace
+  files.
 - `juex fleet gc` removes orphaned agent state. Candidates are agents whose
   recorded workspace path is missing or whose workspace marker now holds a
   different id. The command lists candidates with workspace path, size, and

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 )
 
@@ -29,6 +30,14 @@ type WorkspaceBinding struct {
 	Reason string
 }
 
+type AgentUpdate struct {
+	Name      *string
+	Enabled   *bool
+	Autostart *bool
+}
+
+var removeWorkspaceMarker = os.Remove
+
 func ListRegistry(homeDir string) ([]RegistryEntry, error) {
 	agentsDir := filepath.Join(homeDir, "agents")
 	info, err := os.Lstat(agentsDir)
@@ -48,12 +57,64 @@ func ListRegistry(homeDir string) ([]RegistryEntry, error) {
 	}
 	entries := make([]RegistryEntry, 0, len(dirEntries))
 	for _, dirEntry := range dirEntries {
+		if isDeletingTombstone(dirEntry.Name()) {
+			continue
+		}
 		entries = append(entries, loadRegistryEntry(agentsDir, dirEntry.Name()))
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].ID < entries[j].ID
 	})
 	return entries, nil
+}
+
+func UpdateAgent(homeDir, agentID string, update AgentUpdate) (Agent, error) {
+	if !validAgentID.MatchString(agentID) {
+		return Agent{}, fmt.Errorf("agentstate: invalid agent id %q", agentID)
+	}
+	guard, err := acquireAgentLock(homeDir, agentID)
+	if err != nil {
+		return Agent{}, err
+	}
+	defer func() { _ = guard.Close() }()
+
+	entry, err := loadValidRegistryEntry(homeDir, agentID)
+	if err != nil {
+		return Agent{}, err
+	}
+	agent := entry.Agent
+	if update.Name != nil {
+		name := strings.TrimSpace(*update.Name)
+		if name == "" {
+			return Agent{}, errors.New("agentstate: agent name must not be empty")
+		}
+		agent.Name = name
+	}
+	if update.Enabled != nil {
+		agent.Enabled = *update.Enabled
+	}
+	if update.Autostart != nil {
+		agent.Autostart = *update.Autostart
+	}
+	if err := atomicWriteJSON(filepath.Join(entry.Dir, agentFileName), agent, 0o644); err != nil {
+		return Agent{}, fmt.Errorf("agentstate: update agent %q: %w", agentID, err)
+	}
+	return agent, nil
+}
+
+func WorkspaceHasMarker(workDir string) (bool, error) {
+	markerPath := filepath.Join(workDir, ".juex", markerName)
+	info, err := os.Lstat(markerPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("agentstate: inspect workspace marker %s: %w", markerPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, fmt.Errorf("agentstate: workspace marker %s is not a regular file", markerPath)
+	}
+	return true, nil
 }
 
 func InspectBinding(entry RegistryEntry) WorkspaceBinding {
@@ -193,6 +254,154 @@ func DeleteOrphan(homeDir, agentID string) error {
 		)
 	}
 	return nil
+}
+
+func DeleteRegistered(homeDir, agentID string) error {
+	if !validAgentID.MatchString(agentID) {
+		return fmt.Errorf("agentstate: invalid agent id %q", agentID)
+	}
+	preliminary, err := loadValidRegistryEntry(homeDir, agentID)
+	if err != nil {
+		return err
+	}
+
+	workspaceGuard, err := acquireLockGuard(workspaceLockPath(homeDir, preliminary.Agent.Workspace))
+	if err != nil {
+		return fmt.Errorf("agentstate: lock workspace %s: %w", preliminary.Agent.Workspace, err)
+	}
+	defer func() { _ = workspaceGuard.Close() }()
+
+	agentGuard, err := acquireAgentLock(homeDir, agentID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = agentGuard.Close() }()
+
+	entry, err := loadValidRegistryEntry(homeDir, agentID)
+	if err != nil {
+		return err
+	}
+	if entry.Agent.Workspace != preliminary.Agent.Workspace {
+		return fmt.Errorf(
+			"agentstate: refuse to delete agent %q because workspace changed from %s to %s",
+			agentID,
+			preliminary.Agent.Workspace,
+			entry.Agent.Workspace,
+		)
+	}
+
+	removeMarker, markerPath, err := registeredMarkerCleanup(entry)
+	if err != nil {
+		return err
+	}
+	agentsDir := filepath.Join(homeDir, "agents")
+	tombstone, err := renameOrphanToTombstone(agentsDir, entry.Dir, agentID)
+	if err != nil {
+		return err
+	}
+	if err := syncRegistryDir(agentsDir); err != nil {
+		restoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Dir)
+		return errors.Join(
+			fmt.Errorf(
+				"agentstate: agent %q was renamed to tombstone %s but registry sync failed: %w",
+				agentID,
+				tombstone,
+				err,
+			),
+			restoreErr,
+		)
+	}
+
+	if removeMarker {
+		if err := removeWorkspaceMarker(markerPath); err != nil {
+			restoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Dir)
+			return errors.Join(
+				fmt.Errorf("agentstate: remove workspace marker %s: %w", markerPath, err),
+				restoreErr,
+			)
+		}
+		if err := syncRegistryDir(filepath.Dir(markerPath)); err != nil {
+			markerRestoreErr := atomicWriteJSON(markerPath, Marker{AgentID: agentID}, 0o644)
+			registryRestoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Dir)
+			return errors.Join(
+				fmt.Errorf("agentstate: sync workspace marker directory %s: %w", filepath.Dir(markerPath), err),
+				markerRestoreErr,
+				registryRestoreErr,
+			)
+		}
+	}
+	if err := os.RemoveAll(tombstone); err != nil {
+		return fmt.Errorf("agentstate: remove agent %q tombstone %s: %w", agentID, tombstone, err)
+	}
+	return nil
+}
+
+func registeredMarkerCleanup(entry RegistryEntry) (bool, string, error) {
+	workspaceInfo, err := os.Lstat(entry.Agent.Workspace)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", fmt.Errorf("agentstate: inspect workspace %s: %w", entry.Agent.Workspace, err)
+	}
+	if workspaceInfo.Mode()&os.ModeSymlink != 0 || !workspaceInfo.IsDir() {
+		return false, "", fmt.Errorf(
+			"agentstate: refuse to delete agent %q because workspace %s is not a real directory",
+			entry.ID,
+			entry.Agent.Workspace,
+		)
+	}
+	markerPath := filepath.Join(entry.Agent.Workspace, ".juex", markerName)
+	marker, exists, err := loadMarker(markerPath)
+	if err != nil {
+		return false, "", err
+	}
+	if !exists {
+		return false, "", nil
+	}
+	if !validAgentID.MatchString(marker.AgentID) {
+		return false, "", fmt.Errorf(
+			"agentstate: marker %s contains invalid agent_id %q",
+			markerPath,
+			marker.AgentID,
+		)
+	}
+	return marker.AgentID == entry.ID, markerPath, nil
+}
+
+func restoreRegistryTombstone(agentsDir, tombstone, agentDir string) error {
+	if err := os.Rename(tombstone, agentDir); err != nil {
+		return fmt.Errorf("agentstate: restore registry tombstone %s to %s: %w", tombstone, agentDir, err)
+	}
+	if err := syncRegistryDir(agentsDir); err != nil {
+		return fmt.Errorf("agentstate: sync restored registry %s: %w", agentsDir, err)
+	}
+	return nil
+}
+
+func loadValidRegistryEntry(homeDir, agentID string) (RegistryEntry, error) {
+	agentsDir := filepath.Join(homeDir, "agents")
+	registryInfo, err := os.Lstat(agentsDir)
+	if err != nil {
+		return RegistryEntry{}, fmt.Errorf("agentstate: inspect registry %s: %w", agentsDir, err)
+	}
+	if registryInfo.Mode()&os.ModeSymlink != 0 || !registryInfo.IsDir() {
+		return RegistryEntry{}, fmt.Errorf("agentstate: registry %s is not a directory", agentsDir)
+	}
+	entry := loadRegistryEntry(agentsDir, agentID)
+	if entry.Problem != "" {
+		return RegistryEntry{}, fmt.Errorf("agentstate: invalid agent %q: %s", agentID, entry.Problem)
+	}
+	return entry, nil
+}
+
+func isDeletingTombstone(name string) bool {
+	rest := strings.TrimPrefix(name, ".")
+	if rest == name {
+		return false
+	}
+	agentID, suffix, ok := strings.Cut(rest, ".deleting-")
+	return ok && validAgentID.MatchString(agentID) && validAgentID.MatchString(suffix)
 }
 
 func renameOrphanToTombstone(agentsDir, agentDir, agentID string) (string, error) {

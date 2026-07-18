@@ -34,6 +34,10 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 	}
 	cmd.AddCommand(newFleetServeCmd(flags))
 	cmd.AddCommand(newFleetStatusCmd(flags))
+	cmd.AddCommand(newFleetAddCmd(flags))
+	cmd.AddCommand(newFleetEnabledCmd(flags, true))
+	cmd.AddCommand(newFleetEnabledCmd(flags, false))
+	cmd.AddCommand(newFleetRemoveCmd(flags))
 	cmd.AddCommand(newFleetLifecycleCmd(flags, "start"))
 	cmd.AddCommand(newFleetLifecycleCmd(flags, "stop"))
 	cmd.AddCommand(newFleetLifecycleCmd(flags, "restart"))
@@ -320,6 +324,137 @@ func optionalStartedAt(status fleet.AgentStatus) string {
 	return status.StartedAt.Format("2006-01-02T15:04:05Z07:00")
 }
 
+func newFleetAddCmd(_ *persistentFlags) *cobra.Command {
+	var (
+		name      string
+		autostart bool
+		start     bool
+	)
+	cmd := &cobra.Command{
+		Use:   "add <path>",
+		Short: "Register an existing workspace as a resident agent",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := newFleetManager()
+			if err != nil {
+				return err
+			}
+			var nameOption *string
+			if cmd.Flags().Changed("name") {
+				nameOption = &name
+			}
+			var autostartOption *bool
+			if cmd.Flags().Changed("autostart") {
+				autostartOption = &autostart
+			}
+			result, err := manager.Add(cmd.Context(), fleet.AddOptions{
+				Workspace: args[0],
+				Name:      nameOption,
+				Autostart: autostartOption,
+				Start:     start,
+			})
+			if err != nil {
+				return mapFleetError(err)
+			}
+			action := "Registered"
+			if result.Created {
+				action = "Added"
+			}
+			fmt.Fprintf(
+				cmd.OutOrStdout(),
+				"%s %s %s: %s\n",
+				action,
+				result.Agent.ID,
+				result.Agent.Name,
+				result.Agent.RuntimeHealth,
+			)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "agent display name")
+	cmd.Flags().BoolVar(&autostart, "autostart", false, "start the agent during fleet reconciliation")
+	cmd.Flags().BoolVar(&start, "start", false, "start the agent immediately after registration")
+	return cmd
+}
+
+func newFleetEnabledCmd(_ *persistentFlags, enabled bool) *cobra.Command {
+	action := "disable"
+	if enabled {
+		action = "enable"
+	}
+	return &cobra.Command{
+		Use:   action + " <agent>",
+		Short: strings.ToUpper(action[:1]) + action[1:] + " one resident agent",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			manager, err := newFleetManager()
+			if err != nil {
+				return err
+			}
+			status, err := manager.SetEnabled(cmd.Context(), args[0], enabled)
+			if err != nil {
+				return mapFleetError(err)
+			}
+			fmt.Fprintf(
+				cmd.OutOrStdout(),
+				"%s %s: enabled=%t runtime=%s\n",
+				status.ID,
+				status.Name,
+				status.Enabled,
+				status.RuntimeHealth,
+			)
+			return nil
+		},
+	}
+}
+
+func newFleetRemoveCmd(_ *persistentFlags) *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "remove <agent>",
+		Short: "Permanently delete one registered agent and its state",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes {
+				fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"Permanently remove agent %q and delete its sessions and memory? [y/N] ",
+					args[0],
+				)
+				line, readErr := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+				if readErr != nil && strings.TrimSpace(line) == "" {
+					return readErr
+				}
+				answer := strings.ToLower(strings.TrimSpace(line))
+				if answer != "y" && answer != "yes" {
+					fmt.Fprintln(cmd.OutOrStdout(), "Cancelled; no agent state was deleted.")
+					return nil
+				}
+			}
+			manager, err := newFleetManager()
+			if err != nil {
+				return err
+			}
+			removed, err := manager.Remove(cmd.Context(), args[0], fleet.RemoveOptions{
+				SkipConfirmation: true,
+			})
+			if err != nil {
+				return mapFleetError(err)
+			}
+			fmt.Fprintf(
+				cmd.OutOrStdout(),
+				"Removed %s %s from %s.\n",
+				removed.ID,
+				removed.Name,
+				removed.Workspace,
+			)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&yes, "yes", false, "remove the agent without prompting")
+	return cmd
+}
+
 func newFleetLifecycleCmd(_ *persistentFlags, action string) *cobra.Command {
 	return &cobra.Command{
 		Use:   action + " <agent>",
@@ -470,6 +605,10 @@ func mapFleetError(err error) error {
 	var conflict *fleet.ConflictError
 	if errors.As(err, &ambiguous) || errors.As(err, &conflict) {
 		return &conflictError{msg: err.Error()}
+	}
+	var invalid *fleet.ValidationError
+	if errors.As(err, &invalid) {
+		return &usageError{msg: err.Error()}
 	}
 	return err
 }
