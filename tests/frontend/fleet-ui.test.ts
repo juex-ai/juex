@@ -19,6 +19,7 @@ const stateBarSource = source(
 );
 const sessionSource = source("../../frontend/src/pages/Session.tsx");
 const sessionsSource = source("../../frontend/src/pages/Sessions.tsx");
+const historySource = source("../../frontend/src/pages/History.tsx");
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
 const switchSource = source("../../frontend/src/components/ui/switch.tsx");
 const apiSource = source("../../frontend/src/api.ts");
@@ -90,6 +91,32 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
   assert.match(sessionSource, /<AgentRuntimeStateBar \/>/);
   assert.match(sessionsSource, /<AgentRuntimeStateBar \/>/);
+  assert.match(historySource, /<AgentRuntimeStateBar \/>/);
+  assert.match(
+    historySource,
+    /const mutationsEnabled =\s+agentsLoaded && agent\?\.runtime_health === "healthy"/,
+    "history mutations require a loaded healthy agent",
+  );
+  assert.match(
+    historySource,
+    /disabled=\{creating \|\| !mutationsEnabled\}/,
+    "offline agents must not create sessions from history",
+  );
+  assert.match(
+    historySource,
+    /disabled=\{deleting \|\| !mutationsEnabled\}/,
+    "offline agents must not delete sessions from history",
+  );
+  assert.match(
+    historySource,
+    /!agentsLoaded\s+\? "Loading agent\.\.\."/,
+    "history actions must describe the agent loading state accurately",
+  );
+  assert.match(
+    historySource,
+    /<HistoryRow[\s\S]*agentsLoaded=\{agentsLoaded\}/,
+    "history rows must receive the already-resolved fleet loading state",
+  );
   assert.match(
     sessionSource,
     /routeActiveTurnIDRef\.current = activeTurnID;[\s\S]*\}, \[controller, id\]\);/,
