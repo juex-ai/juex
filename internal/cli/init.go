@@ -101,6 +101,7 @@ Use --scope workspace to write the current workspace .juex/juex.yaml.`,
 	cmd.Flags().StringVar(&opts.protocol, "protocol", "", "custom provider protocol: anthropic/messages, openai/responses, or openai/chat")
 	cmd.Flags().BoolVar(&opts.skipCheck, "skip-check", false, "skip the provider hello connectivity check")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "accept prompts and merge existing config without asking")
+	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
 

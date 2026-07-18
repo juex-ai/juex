@@ -58,10 +58,26 @@ type Config struct {
 	AgentName         string
 	AgentStateDir     string
 	AgentStateNotices []string
+	agentStateLoaded  bool
 
 	modelRef        string
 	shellConfig     ShellConfig
 	providerConfigs map[string]providerConfig
+}
+
+type AgentStateMode uint8
+
+const (
+	AgentStateMint AgentStateMode = iota
+	AgentStateExisting
+	AgentStateNone
+)
+
+type LoadOptions struct {
+	WorkDir    string
+	ConfigPath string
+	ModelRef   string
+	AgentState AgentStateMode
 }
 
 type fileConfig struct {
@@ -312,6 +328,24 @@ func Load() (Config, error) {
 	return LoadForWorkDir("")
 }
 
+// LoadWithOptions loads runtime configuration with an explicit workspace
+// identity policy. AgentStateMint preserves the historical loader behavior.
+func LoadWithOptions(opts LoadOptions) (Config, error) {
+	cfg, err := loadConfigFilesForWorkDir(opts.WorkDir)
+	if err != nil {
+		return cfg, err
+	}
+	if strings.TrimSpace(opts.ConfigPath) != "" {
+		if err := applyYAMLFile(&cfg, opts.ConfigPath, false, "project", true); err != nil {
+			return cfg, err
+		}
+	}
+	if err := finalizeConfigLoadWithAgentState(&cfg, opts.ModelRef, true, opts.AgentState); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
 // LoadForWorkDir is Load with an explicit working directory.
 func LoadForWorkDir(workDir string) (Config, error) {
 	cfg, err := loadConfigFilesForWorkDir(workDir)
@@ -457,14 +491,14 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 }
 
 func finalizeConfigLoad(cfg *Config, modelRef string, resolveAuth bool) error {
-	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, true)
+	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, AgentStateMint)
 }
 
 func finalizeConfigLoadForValidation(cfg *Config, modelRef string, resolveAuth bool) error {
-	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, false)
+	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, AgentStateNone)
 }
 
-func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth, resolveAgentState bool) error {
+func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth bool, agentStateMode AgentStateMode) error {
 	if err := validateConfiguredFallbackModels(cfg); err != nil {
 		return err
 	}
@@ -479,7 +513,7 @@ func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth,
 		}); err != nil {
 			return err
 		}
-		return finalizeLoadedConfig(cfg, resolveAuth, resolveAgentState)
+		return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
 	}
 	if err := resolveSelectedProvider(cfg); err != nil {
 		return err
@@ -487,10 +521,10 @@ func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth,
 	if err := applyOSEnv(cfg); err != nil {
 		return err
 	}
-	return finalizeLoadedConfig(cfg, resolveAuth, resolveAgentState)
+	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
 }
 
-func finalizeLoadedConfig(cfg *Config, resolveAuth, resolveAgentState bool) error {
+func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode) error {
 	if err := resolveShellProfileForConfig(cfg); err != nil {
 		return err
 	}
@@ -499,13 +533,28 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth, resolveAgentState bool) erro
 			return err
 		}
 	}
-	if !resolveAgentState {
+	cfg.agentStateLoaded = true
+	if agentStateMode == AgentStateNone {
 		return nil
 	}
-	resolution, err := agentstate.Resolve(agentstate.Options{
-		HomeDir: cfg.HomeJuexDir,
-		WorkDir: cfg.WorkDir,
-	})
+	var (
+		resolution agentstate.Resolution
+		err        error
+	)
+	switch agentStateMode {
+	case AgentStateMint:
+		resolution, err = agentstate.Resolve(agentstate.Options{
+			HomeDir: cfg.HomeJuexDir,
+			WorkDir: cfg.WorkDir,
+		})
+	case AgentStateExisting:
+		resolution, err = agentstate.ResolveExisting(agentstate.Options{
+			HomeDir: cfg.HomeJuexDir,
+			WorkDir: cfg.WorkDir,
+		})
+	default:
+		return fmt.Errorf("config: unsupported agent state mode %d", agentStateMode)
+	}
 	if err != nil {
 		return err
 	}

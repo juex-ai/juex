@@ -30,7 +30,7 @@ type schemaFlag struct {
 }
 
 func newSchemaCmd(_ *persistentFlags) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "schema",
 		Short: "Print the full command tree (cobra introspection) as JSON",
 		Long: `Output a structured JSON description of every juex subcommand and flag.
@@ -47,6 +47,8 @@ the contract — additive changes only between minor versions.`,
 			return nil
 		},
 	}
+	declareAgentStatePolicy(cmd, agentStateNone)
+	return cmd
 }
 
 func dumpFlag(f *pflag.Flag, persistent bool) schemaFlag {

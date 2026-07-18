@@ -18,6 +18,8 @@ func newServeCmd(flags *persistentFlags) *cobra.Command {
 		addr          string
 		headless      bool
 		unsafeBindAny bool
+		ephemeral     bool
+		keep          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -36,14 +38,22 @@ and the server flushes session jsonl before exit.`,
   juex serve --addr 127.0.0.1:9000
   juex serve --headless`,
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
+			if err := validateEphemeralFlags(ephemeral, keep, false); err != nil {
+				return err
+			}
 			addrChanged := cmd.Flags().Changed("addr")
 			if err := validateServeListenerOptions(addr, addrChanged, headless, unsafeBindAny); err != nil {
 				return err
 			}
-			cfg, err := loadConfigForCommand(cmd, flags)
+			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, keep)
 			if err != nil {
 				return err
+			}
+			if lifecycle != nil {
+				defer func() {
+					runErr = lifecycle.finish(cmd, runErr)
+				}()
 			}
 			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 				return err
@@ -74,6 +84,9 @@ and the server flushes session jsonl before exit.`,
 	cmd.Flags().StringVar(&addr, "addr", "", "loopback address (host:port); enables the TCP API listener")
 	cmd.Flags().BoolVar(&headless, "headless", false, "serve only the canonical agent endpoint (implied without --addr)")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
+	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "use isolated temporary agent state and remove it on exit")
+	cmd.Flags().BoolVar(&keep, "keep", false, "retain and print ephemeral agent state after exit (requires --ephemeral)")
+	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
 }
 

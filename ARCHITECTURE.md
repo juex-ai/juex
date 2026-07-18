@@ -996,6 +996,29 @@ Persistent flags inherited by all subcommands:
 | `--enable-user-global-resources` |  | config value (true/false or 1/0) |
 | `--verbose` |  | false (stream events to stderr) |
 
+Every executable Cobra command declares an agent-state policy through an
+annotation. Normal `run`, `repl`, and `serve` use `mint`; the `sessions` and
+`bundle` trees use `existing`; and state-independent commands use `none`.
+Classification fails when a new executable command has no declaration.
+`internal/config.LoadWithOptions` carries the corresponding
+`AgentStateMint`, `AgentStateExisting`, or `AgentStateNone` policy into final
+configuration loading.
+
+`agentstate.ResolveExisting` is the read-only identity boundary. It validates
+the marker, registry entry, and workspace binding without creating lock
+directories, updating global excludes, migrating state, or rebinding a moved
+workspace. A moved workspace must run a normal stateful command once before
+read-only commands can use it.
+
+Explicit `--ephemeral` on `run`, `repl`, and `serve`, plus the internal scratch
+mode used by `run --dry-run`, loads configuration with `AgentStateNone` and
+then binds a private `<temp-root>/agents/<random-id>` state directory. The
+temporary layout places endpoint locks under
+`<temp-root>/.locks/endpoints/`, leaves the real `HomeJuexDir` unchanged for
+configuration and extension discovery, and is never scanned by fleet.
+Cleanup runs after the app or server closes; `--keep` retains the temporary
+home and reports the state path on stderr.
+
 `cmd/juex/main.go` stays intentionally thin: startup bootstrap imports plus
 `os.Exit(cli.Execute())`.
 
@@ -1759,7 +1782,8 @@ duplicate extension name is a startup error. Extension-provided MCP server,
 skill, or hook names must not collide with existing resources or another
 extension. Runtime status reports extension resources as `ext:<name>`.
 
-**Migration:** on first resolution, legacy workspace-local `.juex/sessions`,
+**Migration:** on the first stateful `mint` resolution, legacy workspace-local
+`.juex/sessions`,
 `.juex/memory`, `.juex/history.json`, `.juex/logs`, and `.juex/observables`
 are copied into staged agent state, verified by manifest and SHA-256,
 atomically published, then removed from the workspace. Existing agent
@@ -1769,6 +1793,10 @@ verified and cleaned on the next resolution. Configuration,
 `.juex/observables.json`, artifacts, and extensions remain workspace-local.
 The workspace marker is globally ignored through Git's user excludes file,
 never by editing project `.gitignore`.
+
+Read-only `existing` resolution never runs this migration. It also never
+performs moved-workspace rebinding; a normal `run`, `repl`, or `serve` owns
+that write before read-only commands retry.
 
 ---
 

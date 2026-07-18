@@ -48,6 +48,7 @@ func TestBundleCmdCreatesArchiveAndPrintsJSON(t *testing.T) {
 
 func TestBundleCmdUnknownSessionReturnsNotFound(t *testing.T) {
 	work := t.TempDir()
+	ensureTestWorkspaceAgent(t, work)
 	root := newRootCmd()
 	var stdout bytes.Buffer
 	root.SetOut(&stdout)
@@ -91,7 +92,7 @@ func TestBundleCmdExistingOutPathRequiresForce(t *testing.T) {
 
 func seedBundleCLISession(t *testing.T, work, id string) {
 	t.Helper()
-	dir := filepath.Join(work, ".juex", "sessions", id)
+	dir := filepath.Join(ensureTestWorkspaceAgent(t, work).SessionsDir(), id)
 	for name, body := range map[string]string{
 		"session.json":       `{"kind":"primary"}`,
 		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"hi api_key=sk-cli-secret"}]}` + "\n",

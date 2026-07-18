@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/observable"
 )
@@ -321,7 +323,19 @@ func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 	work := t.TempDir()
 	home := t.TempDir()
 	sessionID := "20260614T120000-e2ebundle"
-	sessionDir := filepath.Join(work, ".juex", "sessions", sessionID)
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", filepath.Join(home, ".juex"))
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(home, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	resolution, err := agentstate.Resolve(agentstate.Options{
+		HomeDir: filepath.Join(home, ".juex"),
+		WorkDir: work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(resolution.AgentDir, "sessions", sessionID)
 	for name, body := range map[string]string{
 		"session.json":       `{"kind":"primary"}`,
 		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"api_key=sk-e2e-secret"}]}` + "\n",
@@ -338,10 +352,14 @@ func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 	}
 	outPath := filepath.Join(work, "debug.tar.gz")
 	cmd := exec.Command(bin, "-C", work, "bundle", "--session", sessionID, "--out", outPath)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = filteredEnv("HOME", "USERPROFILE", "CODEX_HOME", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "PROVIDER_API_KEY")
+	cmd.Env = append(cmd.Env,
 		"HOME="+home,
 		"USERPROFILE="+home,
 		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
+		"JUEX_HOME="+filepath.Join(home, ".juex"),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(home, "gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
 		"PROVIDER_API_KEY=sk-env-secret",
 	)
 	stdout, err := cmd.Output()
@@ -377,6 +395,11 @@ func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 
 func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 	bin := buildJuex(t)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(chatCompletionResponse("migration-ok")))
+	}))
+	defer provider.Close()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	work := filepath.Join(root, "workspace")
@@ -413,10 +436,20 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, body := range map[string]string{
-		filepath.Join(legacySession, "conversation.jsonl"):          `{"role":"user","blocks":[{"type":"text","text":"migrated"}]}` + "\n",
-		filepath.Join(work, ".juex", "memory", "MEMORY.md"):         "# migrated memory\n",
-		filepath.Join(work, ".juex", "history.json"):                "{\"sessions\":[]}\n",
-		filepath.Join(work, ".juex", "juex.yaml"):                   "{}\n",
+		filepath.Join(legacySession, "conversation.jsonl"):  `{"role":"user","blocks":[{"type":"text","text":"migrated"}]}` + "\n",
+		filepath.Join(work, ".juex", "memory", "MEMORY.md"): "# migrated memory\n",
+		filepath.Join(work, ".juex", "history.json"):        "{\"sessions\":[]}\n",
+		filepath.Join(work, ".juex", "juex.yaml"): strings.ReplaceAll(`model: local-chat:chat-test
+providers:
+  - id: local-chat
+    protocol: openai/chat
+    base_url: BASE_URL
+    api_key: k
+    capabilities:
+      streaming: false
+    models:
+      - id: chat-test
+`, "BASE_URL", provider.URL),
 		filepath.Join(work, ".juex", "observables.json"):            "{\"observables\":[]}\n",
 		filepath.Join(legacyObservableRoot, "observations.jsonl"):   string(observationData) + "\n",
 		filepath.Join(legacyObservableRoot, "schedule_state.jsonl"): string(scheduleStateData) + "\n",
@@ -429,12 +462,16 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 		}
 	}
 
-	stdout, stderr, err := runAgentStateCommand(bin, home, work, "sessions", "list")
+	stdout, stderr, err := runAgentStateCommand(bin, home, work, "run", "--json", "migrate legacy state")
 	if err != nil {
-		t.Fatalf("sessions list after migration: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+		t.Fatalf("stateful run after migration: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, sessionID) || !strings.Contains(stderr, "migrated workspace runtime state") {
+	if !strings.Contains(stderr, "migrated workspace runtime state") {
 		t.Fatalf("migration output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	stdout, stderr, err = runAgentStateCommand(bin, home, work, "sessions", "list")
+	if err != nil || !strings.Contains(stdout, sessionID) {
+		t.Fatalf("sessions list after migration: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	var marker struct {
 		AgentID string `json:"agent_id"`
@@ -514,11 +551,16 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 		t.Fatal(err)
 	}
 	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "sessions", "list")
-	if err != nil {
-		t.Fatalf("sessions list after move: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	if err == nil || !strings.Contains(stderr, "run, repl, or serve once to rebind") {
+		t.Fatalf("read-only command unexpectedly rebound moved workspace: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout, sessionID) || !strings.Contains(stderr, "workspace for agent") || !strings.Contains(stderr, "moved") {
+	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "run", "--json", "rebind moved workspace")
+	if err != nil || !strings.Contains(stderr, "workspace for agent") || !strings.Contains(stderr, "moved") {
 		t.Fatalf("move output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	stdout, stderr, err = runAgentStateCommand(bin, home, moved, "sessions", "list")
+	if err != nil || !strings.Contains(stdout, sessionID) {
+		t.Fatalf("sessions list after stateful rebind: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	if _, err := os.Stat(filepath.Join(moved, ".juex", "observables.json")); err != nil {
 		t.Fatalf("moved workspace observable config: %v", err)
