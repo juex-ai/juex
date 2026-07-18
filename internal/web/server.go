@@ -30,7 +30,6 @@ type Options struct {
 	Addr         string
 	Provider     llm.Provider // optional; injected for tests
 	AllowAnyBind bool         // bypass the loopback bind check; CLI sets this for --unsafe-bind-any
-	Headless     bool         // skip the TCP API listener and serve only the agent endpoint
 	Verbose      bool
 	Debug        bool
 	LogLevel     string
@@ -86,9 +85,6 @@ type activeSession struct {
 }
 
 func NewServer(opts Options) *Server {
-	if opts.Addr == "" {
-		opts.Addr = "127.0.0.1:8080"
-	}
 	return &Server{
 		opts:          opts,
 		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
@@ -98,12 +94,15 @@ func NewServer(opts Options) *Server {
 	}
 }
 
-// Handler returns the agent JSON/SSE API. The fleet owns the browser SPA.
+// Handler returns the TCP agent API with a pointer for non-API browser routes.
 func (s *Server) Handler() http.Handler {
-	return s.APIHandler()
+	mux := http.NewServeMux()
+	s.registerAPIRoutes(mux)
+	mux.HandleFunc("/", s.handleAgentAPIPointer)
+	return mux
 }
 
-// APIHandler returns the local agent API without the browser SPA fallback.
+// APIHandler returns the canonical local agent API without a browser fallback.
 func (s *Server) APIHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux)
@@ -126,6 +125,30 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/observables", s.handleObservables)
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
+}
+
+func (s *Server) handleAgentAPIPointer(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if r.Method == http.MethodHead {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	fmt.Fprintln(w, "Juex agent JSON/SSE API (no web UI).")
+	fmt.Fprintln(w, "API routes are available under /api/.")
+	fleetAddr := strings.TrimSpace(s.opts.Cfg.Fleet.Addr)
+	if fleetAddr == "" {
+		fleetAddr = config.DefaultFleetAddr
+	}
+	fmt.Fprintf(w, "For the browser UI, run `juex fleet serve` and open http://%s/.\n", fleetAddr)
 }
 
 // dispatchSession routes /api/sessions/<id>[/...] to the matching handler.
@@ -163,10 +186,10 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Run starts the canonical agent API endpoint and, unless headless, a TCP API
-// listener. It blocks until cancellation or a listener/startup failure.
+// Run starts the canonical agent API endpoint and an optional TCP API listener.
+// It blocks until cancellation or a listener/startup failure.
 func (s *Server) Run(ctx context.Context) error {
-	if !s.opts.Headless && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
+	if s.opts.Addr != "" && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
 		return fmt.Errorf("juex serve: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
 	if err := app.EnsureActivePrimarySessionRecord(s.opts.Cfg); err != nil {
@@ -190,7 +213,7 @@ func (s *Server) Run(ctx context.Context) error {
 		listener: binding.Listener(),
 	}}
 	tcpAddress := ""
-	if !s.opts.Headless {
+	if s.opts.Addr != "" {
 		tcpListener, err := net.Listen("tcp", s.opts.Addr)
 		if err != nil {
 			return err

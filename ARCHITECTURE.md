@@ -1128,16 +1128,22 @@ func (s *Server) APIHandler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` defaults its optional TCP API listener to `127.0.0.1:8080`
-(loopback only, no auth). Binding beyond loopback requires
-`--unsafe-bind-any`. Every serving process also starts the canonical agent
-endpoint and records it in the identity-owned `runtime.json`. Both listeners
-use the API-only `Handler`; neither serves the SPA. `--headless` skips the TCP
-API listener entirely. The fleet server is the only process that mounts the
-embedded SPA. Startup ensures an active primary session record exists, starts
-the selected listeners, publishes the endpoint, and then warms the shared MCP
-manager plus the active primary session. The agent API also exposes exact
-runtime identity and instance-bound
+`juex serve` always starts the canonical agent endpoint and records it in the
+identity-owned `runtime.json`. It opens no additional TCP listener by default.
+Passing `--addr` explicitly adds the loopback JSON/SSE API listener; binding
+beyond loopback also requires `--unsafe-bind-any`. The retained `--headless`
+flag is a compatibility form of the flagless endpoint-only command and cannot
+be combined with TCP listener flags.
+
+The canonical endpoint uses `APIHandler`, where unmatched routes keep ordinary
+404 semantics. The explicit TCP listener uses `Handler`, which serves the same
+API and returns a small plain-text fleet-browser pointer for otherwise
+unmatched non-API GET and HEAD routes. Unknown `/api` routes remain 404.
+Neither handler serves the SPA; the fleet server is the only process that
+mounts the embedded application. Startup ensures an active primary session
+record exists, starts the selected listeners, publishes the endpoint, and then
+warms the shared MCP manager plus the active primary session. The agent API
+also exposes exact runtime identity and instance-bound
 self-shutdown routes used by fleet lifecycle operations. Each session gets its
 own `*app.App`; the web broadcaster is registered as a live delivery adapter on
 the app's durable event sink, so SSE clients only receive events after

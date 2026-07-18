@@ -62,6 +62,7 @@ juex --model openai:gpt-4.1 run "summarize this repository"
 juex --debug run --json "summarize this repository"
 juex repl
 juex serve
+juex serve --addr 127.0.0.1:9000
 juex serve --headless
 juex fleet serve
 juex fleet status
@@ -87,9 +88,16 @@ If you built from source without installing, use `./dist/juex` instead of
 `juex`.
 
 `juex serve` publishes the current agent's JSON/SSE API through its canonical
-local endpoint and, unless `--headless` is set, on loopback
-`127.0.0.1:8080`. It does not serve the React SPA. Use `juex fleet serve` for
-the browser UI.
+local endpoint without opening a separate TCP port. Pass `--addr` explicitly
+to add a TCP API listener. That listener does not serve the React SPA; its
+non-API routes point users to `juex fleet serve` for the browser UI.
+`--headless` remains accepted for compatibility and is implied when `--addr`
+is omitted.
+
+Compatibility: scripts that used the old implicit
+`http://127.0.0.1:8080/api/...` listener must now pass an explicit address,
+for example `juex serve --addr 127.0.0.1:8080`. See the
+[release notes](docs/release-notes.md).
 
 `juex fleet` manages all resident agents registered under the effective
 `JUEX_HOME`. `fleet add` registers an explicit absolute workspace;
@@ -138,8 +146,9 @@ current CLI; detached agents are not restarted automatically.
 | `juex sessions compact <id> --instructions "<focus>"` | Append a manual compact summary marker to a session. |
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
-| `juex serve` | Serve the current agent JSON/SSE API through its endpoint and loopback TCP. |
-| `juex serve --headless` | Serve the JSON/SSE API only through the current agent endpoint. |
+| `juex serve` | Serve the current agent JSON/SSE API through its canonical endpoint only. |
+| `juex serve --addr 127.0.0.1:9000` | Add an explicit loopback TCP listener for the agent JSON/SSE API. |
+| `juex serve --headless` | Compatibility form of endpoint-only `juex serve`; implied without `--addr`. |
 | `juex fleet serve [--addr 127.0.0.1:5839]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
 | `juex fleet install [--addr 127.0.0.1:5839]` | Persist an explicit address when provided, then register and start the fleet supervisor. |
 | `juex fleet uninstall` | Stop and remove the supervisor service without stopping detached agents. |
