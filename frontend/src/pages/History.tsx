@@ -4,6 +4,8 @@ import { MessageSquareText, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { createSession, deleteSession, listSessions } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
+import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { Button } from "@/components/ui/button";
 import {
   historySessionBadges,
@@ -16,12 +18,15 @@ import type { SessionInfo } from "@/types";
 
 export function History() {
   const navigate = useNavigate();
+  const { agent, agentsLoaded } = useFleetAgent();
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deletingID, setDeletingID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const mutationsEnabled =
+    agentsLoaded && agent?.runtime_health === "healthy";
   useShellTitle("History");
 
   const refreshSessions = useCallback(async (
@@ -51,6 +56,7 @@ export function History() {
   }, [refreshSessions]);
 
   async function handleNewChat() {
+    if (!mutationsEnabled) return;
     setCreating(true);
     setError(null);
     try {
@@ -68,6 +74,7 @@ export function History() {
   }
 
   async function handleDelete(session: SessionInfo) {
+    if (!mutationsEnabled) return;
     const label = historySessionTitle(session);
     if (!window.confirm(`Delete "${label}"?`)) return;
     setDeletingID(session.id);
@@ -108,13 +115,19 @@ export function History() {
               type="button"
               size="sm"
               onClick={() => void handleNewChat()}
-              disabled={creating}
+              disabled={creating || !mutationsEnabled}
+              title={
+                mutationsEnabled ? undefined : "Start agent to create a chat"
+              }
             >
               <Plus className="size-3.5" />
               New chat
             </Button>
           </div>
         </div>
+        {agentsLoaded && agent && !mutationsEnabled ? (
+          <AgentRuntimeStateBar />
+        ) : null}
         {error ? (
           <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}
@@ -136,6 +149,7 @@ export function History() {
                   key={session.id}
                   session={session}
                   deleting={deletingID === session.id}
+                  mutationsEnabled={mutationsEnabled}
                   onDelete={() => void handleDelete(session)}
                 />
               ))}
@@ -150,10 +164,12 @@ export function History() {
 function HistoryRow({
   session,
   deleting,
+  mutationsEnabled,
   onDelete,
 }: {
   session: SessionInfo;
   deleting: boolean;
+  mutationsEnabled: boolean;
   onDelete: () => void;
 }) {
   return (
@@ -183,9 +199,11 @@ function HistoryRow({
         type="button"
         variant="ghost"
         size="icon-sm"
-        title="Delete session"
+        title={
+          mutationsEnabled ? "Delete session" : "Start agent to delete sessions"
+        }
         aria-label="Delete session"
-        disabled={deleting}
+        disabled={deleting || !mutationsEnabled}
         onClick={onDelete}
         className="text-muted-foreground opacity-100 hover:text-destructive sm:opacity-0 sm:group-hover/history-row:opacity-100 sm:focus-visible:opacity-100"
       >
