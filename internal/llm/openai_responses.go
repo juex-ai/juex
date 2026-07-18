@@ -95,11 +95,7 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 	stream := p.client.Responses.NewStreaming(streamCtx, params)
 	defer func() { _ = stream.Close() }()
 
-	var (
-		finalResp responses.Response
-		hasFinal  bool
-		items     []responses.ResponseOutputItemUnion
-	)
+	var items []responses.ResponseOutputItemUnion
 	for stream.Next() {
 		resetIdle()
 		event := stream.Current()
@@ -115,8 +111,11 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 		case "response.output_item.done":
 			items = append(items, event.Item)
 		case "response.done", "response.completed", "response.incomplete":
-			finalResp = event.Response
-			hasFinal = true
+			finalResp := event.Response
+			if len(finalResp.Output) == 0 && len(items) > 0 {
+				finalResp.Output = items
+			}
+			return p.responseFromResponses(&finalResp), nil
 		}
 	}
 	if err := stream.Err(); err != nil {
@@ -125,14 +124,10 @@ func (p *openAIResponsesProvider) completeStreaming(ctx context.Context, params 
 		}
 		return Response{}, fmt.Errorf("openai responses stream: %w", err)
 	}
-	if !hasFinal {
-		if len(items) == 0 {
-			return Response{}, fmt.Errorf("openai responses stream closed before response.completed")
-		}
-		finalResp = responses.Response{Status: responses.ResponseStatusCompleted, Output: items}
-	} else if len(finalResp.Output) == 0 && len(items) > 0 {
-		finalResp.Output = items
+	if len(items) == 0 {
+		return Response{}, fmt.Errorf("openai responses stream closed before response.completed")
 	}
+	finalResp := responses.Response{Status: responses.ResponseStatusCompleted, Output: items}
 	return p.responseFromResponses(&finalResp), nil
 }
 
