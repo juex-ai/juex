@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -17,13 +18,16 @@ func newServeCmd(flags *persistentFlags) *cobra.Command {
 		addr          string
 		headless      bool
 		unsafeBindAny bool
+		ephemeral     bool
+		keep          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the JSON/SSE API for the current WorkDir",
 		Long: `Starts the current workspace agent and exposes its JSON/SSE API.
-The canonical local agent endpoint is always published. Unless --headless is
-set, the same API also listens on the loopback --addr.
+The canonical local agent endpoint is always published. Pass --addr explicitly
+to also listen for the same API on TCP. --headless remains accepted for
+compatibility and is implied when --addr is omitted.
 
 This command does not serve the React SPA. Use juex fleet serve for the fleet
 browser UI, agent switcher, and per-agent API proxy.
@@ -34,21 +38,27 @@ and the server flushes session jsonl before exit.`,
   juex serve --addr 127.0.0.1:9000
   juex serve --headless`,
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if headless && cmd.Flags().Changed("addr") {
-				return &usageError{msg: "juex serve: --headless cannot be combined with --addr"}
+		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
+			if err := validateEphemeralFlags(ephemeral, keep, false); err != nil {
+				return err
 			}
-			if headless && unsafeBindAny {
-				return &usageError{msg: "juex serve: --headless cannot be combined with --unsafe-bind-any"}
+			addrChanged := cmd.Flags().Changed("addr")
+			if err := validateServeListenerOptions(addr, addrChanged, headless, unsafeBindAny); err != nil {
+				return err
 			}
-			cfg, err := loadConfigForCommand(cmd, flags)
+			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, keep)
 			if err != nil {
 				return err
+			}
+			if lifecycle != nil {
+				defer func() {
+					runErr = lifecycle.finish(cmd, runErr)
+				}()
 			}
 			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 				return err
 			}
-			if !headless && !unsafeBindAny && !isLoopbackAddr(addr) {
+			if addr != "" && !unsafeBindAny && !isLoopbackAddr(addr) {
 				return &usageError{msg: "juex serve: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
 			}
 			if unsafeBindAny {
@@ -58,7 +68,6 @@ and the server flushes session jsonl before exit.`,
 				Cfg:          cfg,
 				Addr:         addr,
 				AllowAnyBind: unsafeBindAny,
-				Headless:     headless,
 				Verbose:      flags.verbose,
 				Debug:        flags.debug,
 				LogLevel:     flags.logLevel,
@@ -72,10 +81,29 @@ and the server flushes session jsonl before exit.`,
 			return srv.Run(ctx)
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
-	cmd.Flags().BoolVar(&headless, "headless", false, "serve only the canonical agent endpoint without a TCP API listener")
+	cmd.Flags().StringVar(&addr, "addr", "", "loopback address (host:port); enables the TCP API listener")
+	cmd.Flags().BoolVar(&headless, "headless", false, "serve only the canonical agent endpoint (implied without --addr)")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
+	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "use isolated temporary agent state and remove it on exit")
+	cmd.Flags().BoolVar(&keep, "keep", false, "retain and print ephemeral agent state after exit (requires --ephemeral)")
+	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
+}
+
+func validateServeListenerOptions(addr string, addrChanged, headless, unsafeBindAny bool) error {
+	if headless && addrChanged {
+		return &usageError{msg: "juex serve: --headless cannot be combined with --addr"}
+	}
+	if headless && unsafeBindAny {
+		return &usageError{msg: "juex serve: --headless cannot be combined with --unsafe-bind-any"}
+	}
+	if unsafeBindAny && !addrChanged {
+		return &usageError{msg: "juex serve: --unsafe-bind-any requires --addr"}
+	}
+	if addrChanged && strings.TrimSpace(addr) == "" {
+		return &usageError{msg: "juex serve: --addr must not be empty"}
+	}
+	return nil
 }
 
 func reportServeReady(cmd *cobra.Command, info web.ReadyInfo) {
@@ -89,7 +117,7 @@ func reportServeReady(cmd *cobra.Command, info web.ReadyInfo) {
 	}
 	cmdPrintln(cmd, "juex serve agent endpoint listening on "+info.AgentEndpoint)
 	if info.TCPAddress != "" {
-		cmdPrintln(cmd, "juex serve API listening on http://"+info.TCPAddress)
+		cmdPrintln(cmd, "juex serve agent JSON/SSE API (no web UI) listening on http://"+info.TCPAddress)
 	}
 }
 

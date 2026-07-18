@@ -60,5 +60,6 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "include commit, build time, go version, runtime context")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "output as JSON (implies runtime context)")
+	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }

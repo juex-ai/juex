@@ -47,6 +47,7 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 	cmd.AddCommand(newFleetInstallCmd(flags))
 	cmd.AddCommand(newFleetUninstallCmd(flags))
 	cmd.AddCommand(newFleetServiceInstalledCmd())
+	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
 
@@ -148,15 +149,6 @@ func isTCPListenAddr(addr string) bool {
 	return err == nil && port >= 0 && port <= 65535
 }
 
-func isStableTCPListenAddr(addr string) bool {
-	_, portText, err := net.SplitHostPort(addr)
-	if err != nil {
-		return false
-	}
-	port, err := strconv.Atoi(portText)
-	return err == nil && port >= 1 && port <= 65535
-}
-
 func newFleetServiceManager(unsafeBindAny bool) (*fleetservice.Manager, error) {
 	homeDir, err := config.EffectiveHomeDir()
 	if err != nil {
@@ -193,6 +185,61 @@ func resolveFleetAddr(cmd *cobra.Command, flagAddr string, stable bool) (string,
 	return addr, explicit, nil
 }
 
+type fleetInstallSettings struct {
+	Addr                string
+	UnsafeBindAny       bool
+	ConfigPath          string
+	MigratedLegacyAddr  bool
+	PreservedLegacyBind bool
+}
+
+func resolveFleetInstallSettings(
+	cmd *cobra.Command,
+	flagAddr string,
+	unsafeBindAny bool,
+	fleetCfg config.FleetConfig,
+	existing fleetservice.InstalledServeOptions,
+	existingFound bool,
+) (fleetInstallSettings, error) {
+	explicitAddr := cmd.Flags().Changed("addr")
+	addr := strings.TrimSpace(flagAddr)
+	if !explicitAddr {
+		addr = fleetCfg.Addr
+	}
+	settings := fleetInstallSettings{Addr: addr, UnsafeBindAny: unsafeBindAny}
+	if !explicitAddr &&
+		!fleetCfg.AddrConfigured &&
+		existingFound &&
+		existing.Addr != "" &&
+		existing.Addr != config.LegacyDefaultFleetAddr {
+		settings.Addr = existing.Addr
+		settings.MigratedLegacyAddr = true
+	}
+	if !explicitAddr &&
+		!cmd.Flags().Changed("unsafe-bind-any") &&
+		existingFound &&
+		existing.UnsafeBindAny {
+		settings.UnsafeBindAny = true
+		settings.PreservedLegacyBind = true
+	}
+	if err := config.ValidateStableFleetAddr(settings.Addr); err != nil {
+		return fleetInstallSettings{}, &usageError{msg: "juex fleet: --addr " + err.Error()}
+	}
+	if !settings.UnsafeBindAny && !isLoopbackAddr(settings.Addr) {
+		return fleetInstallSettings{}, &usageError{
+			msg: "juex fleet install: --addr must bind to loopback (got " + settings.Addr + "). Pass --unsafe-bind-any if you have your own network protection.",
+		}
+	}
+	if explicitAddr || settings.MigratedLegacyAddr {
+		configPath, err := config.SetHomeFleetAddr(settings.Addr)
+		if err != nil {
+			return fleetInstallSettings{}, err
+		}
+		settings.ConfigPath = configPath
+	}
+	return settings, nil
+}
+
 func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
 	var (
 		addr          string
@@ -203,38 +250,64 @@ func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
 		Short: "Install and start the fleet as a per-user system service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			resolvedAddr, explicitAddr, err := resolveFleetAddr(cmd, addr, true)
+			explicitAddr := cmd.Flags().Changed("addr")
+			fleetCfg, err := config.LoadHomeFleetConfig()
 			if err != nil {
 				return err
 			}
-			addr = resolvedAddr
-			if !isTCPListenAddr(addr) {
-				return &usageError{msg: "juex fleet install: --addr must be a host:port TCP address (got " + addr + ")"}
+			selectedAddr := strings.TrimSpace(addr)
+			if !explicitAddr {
+				selectedAddr = fleetCfg.Addr
 			}
-			if !isStableTCPListenAddr(addr) {
-				return &usageError{msg: "juex fleet install: --addr must use a stable port between 1 and 65535"}
+			if err := config.ValidateStableFleetAddr(selectedAddr); err != nil {
+				return &usageError{msg: "juex fleet: --addr " + err.Error()}
 			}
-			if !unsafeBindAny && !isLoopbackAddr(addr) {
-				return &usageError{msg: "juex fleet install: --addr must bind to loopback (got " + addr + "). Pass --unsafe-bind-any if you have your own network protection."}
+			if explicitAddr && !unsafeBindAny && !isLoopbackAddr(selectedAddr) {
+				return &usageError{
+					msg: "juex fleet install: --addr must bind to loopback (got " + selectedAddr + "). Pass --unsafe-bind-any if you have your own network protection.",
+				}
 			}
-			if unsafeBindAny {
+			probeManager, err := newFleetServiceManager(false)
+			if err != nil {
+				return err
+			}
+			existing, existingFound, err := probeManager.ExistingServeOptions()
+			if err != nil {
+				return err
+			}
+			settings, err := resolveFleetInstallSettings(
+				cmd,
+				addr,
+				unsafeBindAny,
+				fleetCfg,
+				existing,
+				existingFound,
+			)
+			if err != nil {
+				return err
+			}
+			if settings.UnsafeBindAny {
 				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
 			}
-			manager, err := newFleetServiceManager(unsafeBindAny)
+			manager, err := newFleetServiceManager(settings.UnsafeBindAny)
 			if err != nil {
 				return err
 			}
-			configPath := ""
-			if explicitAddr {
-				configPath, err = config.SetHomeFleetAddr(addr)
-				if err != nil {
-					return err
-				}
+			if settings.MigratedLegacyAddr {
+				fmt.Fprintf(
+					cmd.OutOrStdout(),
+					"Migrated existing fleet address %s to %s.\n",
+					settings.Addr,
+					settings.ConfigPath,
+				)
+			}
+			if settings.PreservedLegacyBind {
+				fmt.Fprintln(cmd.OutOrStdout(), "Preserved existing fleet --unsafe-bind-any option.")
 			}
 			registration, err := manager.Install(cmd.Context())
 			if err != nil {
-				if configPath != "" {
-					return fmt.Errorf("%w; fleet.addr remains written to %s", err, configPath)
+				if settings.ConfigPath != "" {
+					return fmt.Errorf("%w; fleet.addr remains written to %s", err, settings.ConfigPath)
 				}
 				return err
 			}

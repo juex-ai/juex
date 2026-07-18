@@ -12,10 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultFleetAddr = "127.0.0.1:5839"
+const (
+	DefaultFleetAddr       = "127.0.0.1:5839"
+	LegacyDefaultFleetAddr = "127.0.0.1:8080"
+)
 
 type FleetConfig struct {
-	Addr string
+	Addr           string
+	AddrConfigured bool
 }
 
 type fleetFileConfig struct {
@@ -56,6 +60,7 @@ func LoadHomeFleetConfig() (FleetConfig, error) {
 			return cfg, fmt.Errorf("config: parse %s: fleet.addr must be a host:port string", path)
 		}
 		cfg.Addr = strings.TrimSpace(value.Value)
+		cfg.AddrConfigured = cfg.Addr != ""
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = DefaultFleetAddr

@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/errorclass"
@@ -150,6 +151,63 @@ type persistentFlags struct {
 	verbose                   bool
 }
 
+type agentStatePolicy uint8
+
+const (
+	agentStateNone agentStatePolicy = iota
+	agentStateExisting
+	agentStateMint
+	agentStateEphemeral
+)
+
+const agentStatePolicyAnnotation = "juex.ai/agent-state-policy"
+
+func declareAgentStatePolicy(cmd *cobra.Command, policy agentStatePolicy) {
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	switch policy {
+	case agentStateNone:
+		cmd.Annotations[agentStatePolicyAnnotation] = "none"
+	case agentStateExisting:
+		cmd.Annotations[agentStatePolicyAnnotation] = "existing"
+	case agentStateMint:
+		cmd.Annotations[agentStatePolicyAnnotation] = "mint"
+	default:
+		panic(fmt.Sprintf("unsupported declared agent-state policy %d", policy))
+	}
+}
+
+func commandAgentStatePolicy(cmd *cobra.Command) (agentStatePolicy, error) {
+	for current := cmd; current != nil && current != cmd.Root(); current = current.Parent() {
+		value, ok := current.Annotations[agentStatePolicyAnnotation]
+		if !ok {
+			continue
+		}
+		switch value {
+		case "none":
+			return agentStateNone, nil
+		case "existing":
+			return agentStateExisting, nil
+		case "mint":
+			ephemeral, err := current.Flags().GetBool("ephemeral")
+			if err == nil && ephemeral {
+				return agentStateEphemeral, nil
+			}
+			if current.Name() == "run" {
+				dryRun, dryRunErr := current.Flags().GetBool("dry-run")
+				if dryRunErr == nil && dryRun {
+					return agentStateEphemeral, nil
+				}
+			}
+			return agentStateMint, nil
+		default:
+			return agentStateNone, fmt.Errorf("juex: command %s declares unknown agent-state policy %q", cmd.CommandPath(), value)
+		}
+	}
+	return agentStateNone, fmt.Errorf("juex: command %s has no agent-state policy declaration", cmd.CommandPath())
+}
+
 func newRootCmd() *cobra.Command {
 	flags := &persistentFlags{}
 	cmd := &cobra.Command{
@@ -214,22 +272,43 @@ func isFleetCommand(cmd *cobra.Command) bool {
 	return false
 }
 
-// loadConfig returns the resolved config, with --config and --cwd applied.
+// loadConfig preserves the historical durable-mint behavior for internal
+// callers that are not tied to a Cobra command.
 func loadConfig(flags *persistentFlags) (config.Config, error) {
+	return loadConfigWithPolicy(flags, agentStateMint)
+}
+
+func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (config.Config, error) {
 	var (
 		cfg config.Config
 		err error
 	)
 	configPath := explicitConfigPath(flags)
-	if configPath != "" {
-		cfg, err = config.LoadFromFileForWorkDirWithModelOverride(configPath, flags.cwd, modelOverride(flags))
-	} else {
-		cfg, err = config.LoadForWorkDirWithModelOverride(flags.cwd, modelOverride(flags))
+	var mode config.AgentStateMode
+	switch policy {
+	case agentStateMint:
+		mode = config.AgentStateMint
+	case agentStateExisting:
+		mode = config.AgentStateExisting
+	case agentStateNone, agentStateEphemeral:
+		mode = config.AgentStateNone
+	default:
+		return cfg, fmt.Errorf("juex: unsupported agent-state policy %d", policy)
 	}
+	cfg, err = config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    flags.cwd,
+		ConfigPath: configPath,
+		ModelRef:   modelOverride(flags),
+		AgentState: mode,
+	})
 	if err != nil {
 		var modelErr *config.ModelOverrideError
 		if errors.As(err, &modelErr) {
 			return cfg, &usageError{msg: "--model: " + err.Error()}
+		}
+		var noAgent *agentstate.NoAgentError
+		if errors.As(err, &noAgent) {
+			return cfg, &notFoundError{msg: noAgent.Error()}
 		}
 		return cfg, err
 	}
@@ -244,7 +323,14 @@ func loadConfig(flags *persistentFlags) (config.Config, error) {
 }
 
 func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Config, error) {
-	cfg, err := loadConfig(flags)
+	policy, err := commandAgentStatePolicy(cmd)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if policy == agentStateEphemeral {
+		return config.Config{}, fmt.Errorf("juex: command %s requires the ephemeral runtime loader", cmd.CommandPath())
+	}
+	cfg, err := loadConfigWithPolicy(flags, policy)
 	if err != nil {
 		return cfg, err
 	}
@@ -252,6 +338,72 @@ func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Co
 		fmt.Fprintf(cmd.ErrOrStderr(), "juex: notice: %s\n", notice)
 	}
 	return cfg, nil
+}
+
+type runtimeConfigLifecycle struct {
+	state *agentstate.Ephemeral
+	keep  bool
+	path  string
+}
+
+func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, keep bool) (config.Config, *runtimeConfigLifecycle, error) {
+	policy, err := commandAgentStatePolicy(cmd)
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	cfg, err := loadConfigWithPolicy(flags, policy)
+	if err != nil {
+		return cfg, nil, err
+	}
+	for _, notice := range cfg.AgentStateNotices {
+		fmt.Fprintf(cmd.ErrOrStderr(), "juex: notice: %s\n", notice)
+	}
+	if policy != agentStateEphemeral {
+		return cfg, nil, nil
+	}
+	state, err := agentstate.CreateEphemeral(cfg.WorkDir)
+	if err != nil {
+		return cfg, nil, err
+	}
+	cfg.AgentID = state.Resolution.Agent.ID
+	cfg.AgentName = state.Resolution.Agent.Name
+	cfg.AgentStateDir = state.Resolution.AgentDir
+	return cfg, &runtimeConfigLifecycle{
+		state: state,
+		keep:  keep,
+		path:  state.Resolution.AgentDir,
+	}, nil
+}
+
+func (lifecycle *runtimeConfigLifecycle) finish(cmd *cobra.Command, primary error) error {
+	if lifecycle == nil || lifecycle.state == nil {
+		return primary
+	}
+	if lifecycle.keep {
+		fmt.Fprintln(cmd.ErrOrStderr(), "juex: kept ephemeral state at "+lifecycle.path)
+		return primary
+	}
+	if err := lifecycle.state.Remove(); err != nil {
+		if primary != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), "juex: warning: "+err.Error())
+			return primary
+		}
+		return err
+	}
+	return primary
+}
+
+func validateEphemeralFlags(ephemeral, keep, dryRun bool) error {
+	switch {
+	case dryRun && ephemeral:
+		return &usageError{msg: "juex run: --dry-run cannot be combined with --ephemeral; dry-run is already isolated"}
+	case dryRun && keep:
+		return &usageError{msg: "juex run: --dry-run cannot be combined with --keep"}
+	case keep && !ephemeral:
+		return &usageError{msg: "--keep requires --ephemeral"}
+	default:
+		return nil
+	}
 }
 
 func explicitConfigPath(flags *persistentFlags) string {

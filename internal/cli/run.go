@@ -112,6 +112,8 @@ func newRunCmd(flags *persistentFlags) *cobra.Command {
 		dryRun      bool
 		newSession  bool
 		sideSession bool
+		ephemeral   bool
+		keep        bool
 		attachPaths []string
 		rf          resumeFlags
 	)
@@ -135,7 +137,10 @@ execution is printed and the process exits with code 10.`,
 			}
 			return nil
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
+			if err := validateEphemeralFlags(ephemeral, keep, dryRun); err != nil {
+				return err
+			}
 			// Validate paths BEFORE calling loadConfig so we surface the
 			// right exit code (3 not found) instead of a generic error.
 			configPath := explicitConfigPath(flags)
@@ -153,10 +158,15 @@ execution is printed and the process exits with code 10.`,
 					}, "pass an existing directory path", false)
 				}
 			}
-			cfg, err := loadConfigForCommand(cmd, flags)
+			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, keep)
 			if err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
 					"set top-level model and providers[] entries in .juex/juex.yaml or "+initNoConfigSuggestion, false)
+			}
+			if lifecycle != nil {
+				defer func() {
+					runErr = lifecycle.finish(cmd, runErr)
+				}()
 			}
 			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 				return emit(jsonOut, cmd.ErrOrStderr(), err,
@@ -266,6 +276,8 @@ execution is printed and the process exits with code 10.`,
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a JSON result on stdout (and JSON errors on stderr)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview what would execute (provider, model, prompt size, tool list); skip the LLM call; exit 10")
+	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "use isolated temporary agent state and remove it on exit")
+	cmd.Flags().BoolVar(&keep, "keep", false, "retain and print ephemeral agent state after exit (requires --ephemeral)")
 	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
 	cmd.Flags().BoolVar(&sideSession, "side", false, "create a side session without changing the active primary")
 	cmd.Flags().StringArrayVar(&attachPaths, "attach", nil, "attach an image to this turn (repeatable; relative to workdir)")
@@ -273,6 +285,7 @@ execution is printed and the process exits with code 10.`,
 	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
 	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
+	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
 }
 

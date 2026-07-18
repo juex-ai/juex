@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/mcp"
@@ -89,6 +91,7 @@ func newDoctorCmd(flags *persistentFlags) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&format, "format", "text", "output format: text, table, or json")
 	cmd.Flags().BoolVar(&offline, "offline", false, "skip provider connectivity checks")
+	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
 
@@ -105,6 +108,7 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 		})
 		return doctorResult{Status: worstDoctorStatus(checks), Checks: checks}
 	}
+	checks = append(checks, doctorAgentCheck(workDir))
 	cfg, err := loadConfigForCommand(cmd, flags)
 	if err != nil {
 		checks = append(checks, doctorCheck{
@@ -136,6 +140,55 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 	checks = append(checks, doctorMCPCheck(cfg))
 	checks = append(checks, doctorSkillsCheck(cfg))
 	return doctorResult{Status: worstDoctorStatus(checks), Checks: checks}
+}
+
+func doctorAgentCheck(workDir string) doctorCheck {
+	resolution, err := agentstate.ResolveExisting(agentstate.Options{WorkDir: workDir})
+	if err == nil {
+		return doctorCheck{
+			Name:    "agent",
+			Status:  doctorStatusOK,
+			Message: fmt.Sprintf("workspace agent %s (%s)", resolution.Agent.Name, resolution.Agent.ID),
+			Details: map[string]any{
+				"id":        resolution.Agent.ID,
+				"name":      resolution.Agent.Name,
+				"state_dir": resolution.AgentDir,
+			},
+		}
+	}
+	var noAgent *agentstate.NoAgentError
+	if errors.As(err, &noAgent) {
+		return doctorCheck{
+			Name:       "agent",
+			Status:     doctorStatusWarn,
+			Message:    noAgent.Error(),
+			Suggestion: "run juex run, repl, or serve to create a durable workspace agent",
+		}
+	}
+	var rebind *agentstate.RebindRequiredError
+	if errors.As(err, &rebind) {
+		return doctorCheck{
+			Name:       "agent",
+			Status:     doctorStatusFail,
+			Message:    rebind.Error(),
+			Suggestion: "run juex run, repl, or serve once to automatically rebind the workspace agent",
+		}
+	}
+	var copied *agentstate.WorkspaceCopyError
+	if errors.As(err, &copied) {
+		return doctorCheck{
+			Name:       "agent",
+			Status:     doctorStatusFail,
+			Message:    copied.Error(),
+			Suggestion: "remove the copied workspace marker to mint a new identity",
+		}
+	}
+	return doctorCheck{
+		Name:       "agent",
+		Status:     doctorStatusFail,
+		Message:    err.Error(),
+		Suggestion: "repair the workspace marker or its matching JUEX_HOME registry entry",
+	}
 }
 
 func doctorConfigCheck(cfg config.Config) doctorCheck {

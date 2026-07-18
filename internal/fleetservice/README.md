@@ -5,6 +5,8 @@ native service manager. It does not manage individual agents.
 
 - `New` builds a platform-specific plan whose command is `juex fleet serve`;
   the definition never bakes in `fleet.addr`.
+- `ExistingServeOptions` reads the current launchd, systemd, or Termux
+  definition so the CLI can migrate legacy baked-in serve options safely.
 - `Install` publishes the definition before enabling and starting it.
 - `Installed` checks a valid definition first, then strict native-manager state
   where the platform can retain a loaded service without that file.

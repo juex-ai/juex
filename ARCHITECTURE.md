@@ -996,6 +996,29 @@ Persistent flags inherited by all subcommands:
 | `--enable-user-global-resources` |  | config value (true/false or 1/0) |
 | `--verbose` |  | false (stream events to stderr) |
 
+Every executable Cobra command declares an agent-state policy through an
+annotation. Normal `run`, `repl`, and `serve` use `mint`; the `sessions` and
+`bundle` trees use `existing`; and state-independent commands use `none`.
+Classification fails when a new executable command has no declaration.
+`internal/config.LoadWithOptions` carries the corresponding
+`AgentStateMint`, `AgentStateExisting`, or `AgentStateNone` policy into final
+configuration loading.
+
+`agentstate.ResolveExisting` is the read-only identity boundary. It validates
+the marker, registry entry, and workspace binding without creating lock
+directories, updating global excludes, migrating state, or rebinding a moved
+workspace. A moved workspace must run a normal stateful command once before
+read-only commands can use it.
+
+Explicit `--ephemeral` on `run`, `repl`, and `serve`, plus the internal scratch
+mode used by `run --dry-run`, loads configuration with `AgentStateNone` and
+then binds a private `<temp-root>/agents/<random-id>` state directory. The
+temporary layout places endpoint locks under
+`<temp-root>/.locks/endpoints/`, leaves the real `HomeJuexDir` unchanged for
+configuration and extension discovery, and is never scanned by fleet.
+Cleanup runs after the app or server closes; `--keep` retains the temporary
+home and reports the state path on stderr.
+
 `cmd/juex/main.go` stays intentionally thin: startup bootstrap imports plus
 `os.Exit(cli.Execute())`.
 
@@ -1068,7 +1091,12 @@ explicit `--addr`, then `fleet.addr` in `$JUEX_HOME/juex.yaml`, then
 workspace config resolution. `juex fleet install --addr ...` validates a
 stable non-zero loopback address and atomically merges it into the home YAML
 before installing. The service definition runs `juex fleet serve` without an
-address argument, so config edits take effect after a service restart.
+address argument, so config edits take effect after a service restart. Before
+replacing an existing launchd, systemd, or Termux definition, install reads its
+legacy `fleet serve` arguments. With no explicit replacement flags, a
+non-default baked-in address is migrated to home config and
+`--unsafe-bind-any` is retained. The legacy default `127.0.0.1:8080` follows
+the current default instead of being persisted.
 
 Installation resolves the current executable and effective `JUEX_HOME`, then
 derives a filesystem-safe service identity from that home. It writes
@@ -1140,16 +1168,22 @@ func (s *Server) APIHandler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` defaults its optional TCP API listener to `127.0.0.1:8080`
-(loopback only, no auth). Binding beyond loopback requires
-`--unsafe-bind-any`. Every serving process also starts the canonical agent
-endpoint and records it in the identity-owned `runtime.json`. Both listeners
-use the API-only `Handler`; neither serves the SPA. `--headless` skips the TCP
-API listener entirely. The fleet server is the only process that mounts the
-embedded SPA. Startup ensures an active primary session record exists, starts
-the selected listeners, publishes the endpoint, and then warms the shared MCP
-manager plus the active primary session. The agent API also exposes exact
-runtime identity and instance-bound
+`juex serve` always starts the canonical agent endpoint and records it in the
+identity-owned `runtime.json`. It opens no additional TCP listener by default.
+Passing `--addr` explicitly adds the loopback JSON/SSE API listener; binding
+beyond loopback also requires `--unsafe-bind-any`. The retained `--headless`
+flag is a compatibility form of the flagless endpoint-only command and cannot
+be combined with TCP listener flags.
+
+The canonical endpoint uses `APIHandler`, where unmatched routes keep ordinary
+404 semantics. The explicit TCP listener uses `Handler`, which serves the same
+API and returns a small plain-text fleet-browser pointer for otherwise
+unmatched non-API GET and HEAD routes. Unknown `/api` routes remain 404.
+Neither handler serves the SPA; the fleet server is the only process that
+mounts the embedded application. Startup ensures an active primary session
+record exists, starts the selected listeners, publishes the endpoint, and then
+warms the shared MCP manager plus the active primary session. The agent API
+also exposes exact runtime identity and instance-bound
 self-shutdown routes used by fleet lifecycle operations. Each session gets its
 own `*app.App`; the web broadcaster is registered as a live delivery adapter on
 the app's durable event sink, so SSE clients only receive events after
@@ -1762,7 +1796,8 @@ duplicate extension name is a startup error. Extension-provided MCP server,
 skill, or hook names must not collide with existing resources or another
 extension. Runtime status reports extension resources as `ext:<name>`.
 
-**Migration:** on first resolution, legacy workspace-local `.juex/sessions`,
+**Migration:** on the first stateful `mint` resolution, legacy workspace-local
+`.juex/sessions`,
 `.juex/memory`, `.juex/history.json`, `.juex/logs`, and `.juex/observables`
 are copied into staged agent state, verified by manifest and SHA-256,
 atomically published, then removed from the workspace. Existing agent
@@ -1772,6 +1807,10 @@ verified and cleaned on the next resolution. Configuration,
 `.juex/observables.json`, artifacts, and extensions remain workspace-local.
 The workspace marker is globally ignored through Git's user excludes file,
 never by editing project `.gitignore`.
+
+Read-only `existing` resolution never runs this migration. It also never
+performs moved-workspace rebinding; a normal `run`, `repl`, or `serve` owns
+that write before read-only commands retry.
 
 ---
 

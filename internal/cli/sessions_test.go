@@ -14,10 +14,27 @@ import (
 	"github.com/juex-ai/juex/internal/session"
 )
 
-// seedSession writes a session dir under <work>/.juex/sessions/<id>/.
+func ensureTestWorkspaceAgent(t *testing.T, work string) config.Config {
+	t.Helper()
+	testHome := filepath.Join(filepath.Dir(work), "juex-home")
+	t.Setenv("JUEX_HOME", testHome)
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(testHome, "gitconfig"))
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateMint,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// seedSession writes a session under the workspace's durable agent state.
 func seedSession(t *testing.T, work, id string, jsonlBody string) string {
 	t.Helper()
-	dir := filepath.Join(work, ".juex", "sessions", id)
+	cfg := ensureTestWorkspaceAgent(t, work)
+	dir := filepath.Join(cfg.SessionsDir(), id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +99,7 @@ func TestSessionsList_MarksActiveAndKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	historyPath := filepath.Join(work, ".juex", "history.json")
+	historyPath := ensureTestWorkspaceAgent(t, work).HistoryPath()
 	if err := session.SetActive(historyPath, primary); err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +129,7 @@ func TestSessionsList_MarksActiveAndKind(t *testing.T) {
 
 func TestSessionsList_EmptyReturnsEmptyArray(t *testing.T) {
 	work := t.TempDir()
+	ensureTestWorkspaceAgent(t, work)
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
@@ -138,7 +156,7 @@ func TestSessionsActivate_PrimaryOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.SetActive(filepath.Join(work, ".juex", "history.json"), first); err != nil {
+	if err := session.SetActive(ensureTestWorkspaceAgent(t, work).HistoryPath(), first); err != nil {
 		t.Fatal(err)
 	}
 
@@ -320,6 +338,7 @@ func TestSessionsShow_TextRendersImages(t *testing.T) {
 
 func TestSessionsShow_NotFound(t *testing.T) {
 	work := t.TempDir()
+	ensureTestWorkspaceAgent(t, work)
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
@@ -355,9 +374,10 @@ func TestSessionsCompact(t *testing.T) {
 	work := t.TempDir()
 	id := "20260515T010203-compact"
 	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"` + strings.Repeat("old ", 80) + `"}]}` + "\n"
-	seedSession(t, work, id, body)
+	sessionDir := seedSession(t, work, id, body)
 	cfg := config.Config{
 		WorkDir:       work,
+		AgentStateDir: filepath.Dir(filepath.Dir(sessionDir)),
 		ContextWindow: config.DefaultContextWindow,
 		Compaction:    config.DefaultCompactionConfig(),
 	}
@@ -373,7 +393,7 @@ func TestSessionsCompact(t *testing.T) {
 	if result.MessageID == "" || result.Reason != "manual" || result.SummaryChars != len("summary") {
 		t.Fatalf("result = %+v", result)
 	}
-	data, err := os.ReadFile(filepath.Join(work, ".juex", "sessions", id, "conversation.jsonl"))
+	data, err := os.ReadFile(filepath.Join(sessionDir, "conversation.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,10 +419,7 @@ func (p *sessionsCompactProvider) Complete(ctx context.Context, sys string, h []
 
 func TestSessionsDelete_RemovesSessionAndHistory(t *testing.T) {
 	work := t.TempDir()
-	cfg, err := config.LoadForWorkDir(work)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg := ensureTestWorkspaceAgent(t, work)
 	id := "20260506T103500-delete01"
 	body := `{"role":"user","blocks":[{"type":"text","text":"bye"}]}` + "\n"
 	dir := filepath.Join(cfg.SessionsDir(), id)
@@ -461,6 +478,7 @@ func TestSessionsDelete_RemovesSessionAndHistory(t *testing.T) {
 
 func TestSessionsDelete_NotFound(t *testing.T) {
 	work := t.TempDir()
+	ensureTestWorkspaceAgent(t, work)
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)

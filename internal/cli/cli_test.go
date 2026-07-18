@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
@@ -284,8 +284,12 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 	root := newRootCmd()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
+	runCmd, _, err := root.Find([]string{"run"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	cfg, err := loadConfigForCommand(root, &persistentFlags{cwd: work})
+	cfg, err := loadConfigForCommand(runCmd, &persistentFlags{cwd: work})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +298,7 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 		t.Fatalf("migration stderr = %q", stderr.String())
 	}
 	stderr.Reset()
-	if _, err := loadConfigForCommand(root, &persistentFlags{cwd: work}); err != nil {
+	if _, err := loadConfigForCommand(runCmd, &persistentFlags{cwd: work}); err != nil {
 		t.Fatal(err)
 	}
 	if stderr.Len() != 0 {
@@ -302,7 +306,7 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 	}
 }
 
-func TestDoctorPrintsAgentStateMigrationNotice(t *testing.T) {
+func TestDoctorDoesNotMigrateAgentState(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
@@ -314,14 +318,82 @@ func TestDoctorPrintsAgentStateMigrationNotice(t *testing.T) {
 	root := newRootCmd()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	root.SetOut(io.Discard)
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
 	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
 
-	if err := root.Execute(); err != nil {
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
+		t.Fatalf("doctor err = %T %v, want warning\n%s", err, err, stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("doctor emitted migration notice: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "no agent exists") {
+		t.Fatalf("doctor output missing no-agent warning:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("doctor created marker: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".juex", "memory", "MEMORY.md")); err != nil {
+		t.Fatalf("doctor migrated legacy memory: %v", err)
+	}
+}
+
+func TestDoctorAgentCheckExplainsStatefulRebind(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	resolution, err := agentstate.Resolve(agentstate.Options{WorkDir: work})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), "juex: notice: migrated workspace runtime state") {
-		t.Fatalf("doctor stderr = %q", stderr.String())
+	moved := filepath.Join(filepath.Dir(work), "moved-workspace")
+	if err := os.Rename(work, moved); err != nil {
+		t.Fatal(err)
+	}
+
+	check := doctorAgentCheck(moved)
+
+	if check.Status != doctorStatusFail {
+		t.Fatalf("status = %q, want %q", check.Status, doctorStatusFail)
+	}
+	if !strings.Contains(check.Message, resolution.Agent.ID) {
+		t.Fatalf("message = %q, want agent id %q", check.Message, resolution.Agent.ID)
+	}
+	const want = "run juex run, repl, or serve once to automatically rebind the workspace agent"
+	if check.Suggestion != want {
+		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
+	}
+}
+
+func TestDoctorAgentCheckExplainsCopiedWorkspaceMarker(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	resolution, err := agentstate.Resolve(agentstate.Options{WorkDir: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(filepath.Dir(work), "copied-workspace")
+	if err := os.MkdirAll(filepath.Join(copied, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(resolution.MarkerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copied, ".juex", "juex.local.json"), marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	check := doctorAgentCheck(copied)
+
+	if check.Status != doctorStatusFail {
+		t.Fatalf("status = %q, want %q", check.Status, doctorStatusFail)
+	}
+	const want = "remove the copied workspace marker to mint a new identity"
+	if check.Suggestion != want {
+		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
 	}
 }
 
@@ -1178,15 +1250,17 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("doctor execute: %v\n%s", err, out.String())
+	err = root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
+		t.Fatalf("doctor execute: %T %v, want warning\n%s", err, err, out.String())
 	}
 	var result map[string]any
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 		t.Fatalf("doctor json: %v\n%s", err, out.String())
 	}
-	if result["status"] != "ok" {
-		t.Fatalf("status = %#v, want ok:\n%s", result["status"], out.String())
+	if result["status"] != "warn" {
+		t.Fatalf("status = %#v, want warn:\n%s", result["status"], out.String())
 	}
 	checks, _ := result["checks"].([]any)
 	seen := map[string]bool{}
@@ -1748,19 +1822,64 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	}
 }
 
-func TestServeCmd_HeadlessRejectsBrowserFlags(t *testing.T) {
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
+func TestServeCmdAddrDefaultIsEndpointOnly(t *testing.T) {
+	cmd := newServeCmd(&persistentFlags{})
+	flag := cmd.Flags().Lookup("addr")
+	if flag == nil {
+		t.Fatal("serve command has no --addr flag")
 	}
+	if flag.DefValue != "" {
+		t.Fatalf("--addr default = %q, want empty endpoint-only default", flag.DefValue)
+	}
+	if !strings.Contains(flag.Usage, "enables") {
+		t.Fatalf("--addr help does not explain TCP opt-in: %q", flag.Usage)
+	}
+}
+
+func TestValidateServeListenerOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		addr        string
+		addrChanged bool
+		headless    bool
+		unsafe      bool
+		wantError   bool
+	}{
+		{name: "flagless"},
+		{name: "explicit headless", headless: true},
+		{name: "explicit TCP", addr: "127.0.0.1:9000", addrChanged: true},
+		{name: "headless with address", addr: "127.0.0.1:9000", addrChanged: true, headless: true, wantError: true},
+		{name: "headless with unsafe", headless: true, unsafe: true, wantError: true},
+		{name: "unsafe without address", unsafe: true, wantError: true},
+		{name: "explicit empty address", addrChanged: true, wantError: true},
+		{name: "explicit whitespace address", addr: " ", addrChanged: true, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateServeListenerOptions(test.addr, test.addrChanged, test.headless, test.unsafe)
+			if (err != nil) != test.wantError {
+				t.Fatalf("error = %v, wantError = %v", err, test.wantError)
+			}
+			if err != nil {
+				var usage *usageError
+				if !errors.As(err, &usage) {
+					t.Fatalf("error = %T %v, want usageError", err, err)
+				}
+			}
+		})
+	}
+}
+
+func TestServeCmdRejectsInvalidListenerFlagCombinationsBeforeConfig(t *testing.T) {
 	for _, args := range [][]string{
 		{"serve", "--headless", "--addr", "127.0.0.1:9000"},
 		{"serve", "--headless", "--unsafe-bind-any"},
+		{"serve", "--unsafe-bind-any"},
+		{"serve", "--addr="},
 	} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			root := newRootCmd()
-			root.SetArgs(append([]string{"-C", dir, "--config", configFile}, args...))
+			root.SetArgs(args)
 			err := root.Execute()
 			var usage *usageError
 			if !errors.As(err, &usage) {
@@ -1782,7 +1901,10 @@ func TestReportServeReadyIncludesEndpointSchemeAndFallback(t *testing.T) {
 		TCPAddress:     "127.0.0.1:8080",
 		FallbackReason: "unix sockets unsupported",
 	})
-	for _, want := range []string{"tcp://127.0.0.1:43123", "http://127.0.0.1:8080"} {
+	for _, want := range []string{
+		"tcp://127.0.0.1:43123",
+		"juex serve agent JSON/SSE API (no web UI) listening on http://127.0.0.1:8080",
+	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}

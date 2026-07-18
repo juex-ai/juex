@@ -9,14 +9,24 @@ import (
 func newREPLCmd(flags *persistentFlags) *cobra.Command {
 	var rf resumeFlags
 	var newSession bool
+	var ephemeral bool
+	var keep bool
 	cmd := &cobra.Command{
 		Use:   "repl",
 		Short: "Interactive REPL: read a prompt from stdin, print the answer, repeat",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfigForCommand(cmd, flags)
+		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
+			if err := validateEphemeralFlags(ephemeral, keep, false); err != nil {
+				return err
+			}
+			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, keep)
 			if err != nil {
 				return err
+			}
+			if lifecycle != nil {
+				defer func() {
+					runErr = lifecycle.finish(cmd, runErr)
+				}()
 			}
 			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 				return err
@@ -53,9 +63,12 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
+	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "use isolated temporary agent state and remove it on exit")
+	cmd.Flags().BoolVar(&keep, "keep", false, "retain and print ephemeral agent state after exit (requires --ephemeral)")
 	cmd.Flags().StringVar(&rf.Resume, "resume", "", "deprecated: resume a past session by id, alias, or 'last'; use sessions activate")
 	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
 	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
+	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
 }

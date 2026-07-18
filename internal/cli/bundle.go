@@ -74,5 +74,6 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing output path")
 	cmd.Flags().BoolVar(&includeArtifacts, "include-artifacts", false, "include .juex/artifacts files")
 	cmd.Flags().BoolVar(&includeWorktreeSummary, "include-worktree-summary", false, "include a worktree summary without file contents")
+	declareAgentStatePolicy(cmd, agentStateExisting)
 	return cmd
 }

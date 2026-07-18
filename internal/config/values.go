@@ -87,7 +87,7 @@ func (c Config) configForModelRef(ref string) (Config, error) {
 	}); err != nil {
 		return Config{}, err
 	}
-	if err := finalizeLoadedConfig(&cfg, true, false); err != nil {
+	if err := finalizeLoadedConfig(&cfg, true, AgentStateNone); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -177,7 +177,7 @@ func (c Config) RuntimePaths() RuntimePaths {
 	if c.WorkDir != "" {
 		paths.JuexDir = filepath.Join(c.WorkDir, ".juex")
 		paths.StateDir = c.AgentStateDir
-		if paths.StateDir == "" {
+		if paths.StateDir == "" && !c.agentStateLoaded {
 			// Keep manually constructed Config values useful to isolated
 			// package tests and embedding callers that do not load config.
 			paths.StateDir = paths.JuexDir
