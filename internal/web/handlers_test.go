@@ -2273,9 +2273,9 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	t.Fatalf("did not receive turn.started; collected:\n%s", collected)
 }
 
-func TestAgentHandlerDoesNotServeSPAFallback(t *testing.T) {
+func TestAgentAPIHandlerDoesNotServeBrowserFallback(t *testing.T) {
 	srv := newTestServer(t)
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewServer(srv.APIHandler())
 	defer ts.Close()
 
 	for _, path := range []string{"/", "/sessions/some-arbitrary-id", "/runtime", "/anything/at/all"} {

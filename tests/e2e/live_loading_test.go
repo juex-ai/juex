@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -543,8 +544,123 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 	}
 }
 
-func TestLiveBinary_HeadlessServeExposesAgentEndpoint(t *testing.T) {
+func TestLiveBinary_EndpointOnlyServeHasNoExtraTCPListener(t *testing.T) {
 	bin := buildJuex(t)
+	for _, test := range []struct {
+		name               string
+		args               []string
+		scannerUnavailable bool
+	}{
+		{name: "flagless"},
+		{name: "explicit headless", args: []string{"--headless"}},
+		{name: "listener scanner unavailable", scannerUnavailable: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			process := startLiveServe(t, bin, test.args...)
+			defer process.stop()
+
+			target, err := endpoint.Parse(process.runtime.Endpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.scannerUnavailable {
+				t.Setenv("PATH", t.TempDir())
+			}
+			assertProcessTCPListeners(t, process.cmd.Process.Pid, target)
+			waitForServeOutput(t, process.stdout, "juex serve agent endpoint listening on ")
+			if strings.Contains(process.stdout.String(), "agent JSON/SSE API (no web UI)") {
+				t.Fatalf("endpoint-only serve reported a TCP API:\n%s", process.stdout.String())
+			}
+
+			client := target.NewClient()
+			for path, want := range map[string]int{"/healthz": http.StatusOK, "/": http.StatusNotFound} {
+				request, err := http.NewRequest(http.MethodGet, target.URL(path), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				response, err := client.Do(request.WithContext(requestCtx))
+				cancel()
+				if err != nil {
+					t.Fatalf("GET %s through %s: %v", path, process.runtime.Endpoint, err)
+				}
+				_ = response.Body.Close()
+				if response.StatusCode != want {
+					t.Fatalf("GET %s status = %d, want %d", path, response.StatusCode, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLiveBinary_ExplicitServeTCPHasFriendlyPointer(t *testing.T) {
+	bin := buildJuex(t)
+	process := startLiveServe(t, bin, "--addr", "127.0.0.1:0")
+	defer process.stop()
+
+	target, err := endpoint.Parse(process.runtime.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcpAddress := waitForServeTCPAddress(t, process.stdout)
+	assertProcessTCPListeners(t, process.cmd.Process.Pid, target, tcpAddress)
+
+	for path, want := range map[string]int{
+		"/healthz":          http.StatusOK,
+		"/":                 http.StatusOK,
+		"/some-browser-url": http.StatusOK,
+		"/api/not-a-route":  http.StatusNotFound,
+	} {
+		response, err := http.Get("http://" + tcpAddress + path)
+		if err != nil {
+			t.Fatalf("GET TCP %s: %v", path, err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if response.StatusCode != want {
+			t.Fatalf("GET TCP %s status = %d, want %d: %s", path, response.StatusCode, want, body)
+		}
+		if want == http.StatusOK && path != "/healthz" {
+			for _, pointer := range []string{"agent JSON/SSE API", "no web UI", "juex fleet serve", "127.0.0.1:5839"} {
+				if !strings.Contains(string(body), pointer) {
+					t.Fatalf("GET TCP %s body missing %q:\n%s", path, pointer, body)
+				}
+			}
+		}
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(data)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+type liveServeProcess struct {
+	cmd     *exec.Cmd
+	done    chan error
+	stdout  *lockedBuffer
+	stderr  *lockedBuffer
+	runtime endpoint.Runtime
+	once    sync.Once
+}
+
+func startLiveServe(t *testing.T, bin string, serveArgs ...string) *liveServeProcess {
+	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	work := filepath.Join(root, "workspace")
@@ -563,7 +679,8 @@ func TestLiveBinary_HeadlessServeExposesAgentEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command(bin, "-C", work, "--config", configFile, "serve", "--headless")
+	commandArgs := append([]string{"-C", work, "--config", configFile, "serve"}, serveArgs...)
+	cmd := exec.Command(bin, commandArgs...)
 	cmd.Env = filteredEnv(
 		"HOME", "USERPROFILE", "JUEX_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM",
 	)
@@ -574,32 +691,23 @@ func TestLiveBinary_HeadlessServeExposesAgentEndpoint(t *testing.T) {
 		"GIT_CONFIG_GLOBAL="+filepath.Join(home, "gitconfig"),
 		"GIT_CONFIG_NOSYSTEM=1",
 	)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := &lockedBuffer{}
+	stderr := &lockedBuffer{}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	processDone := false
-	defer func() {
-		if processDone {
-			return
-		}
-		_ = cmd.Process.Kill()
-		<-done
-	}()
 
 	var runtimeState endpoint.Runtime
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-done:
-			processDone = true
 			t.Fatalf(
-				"headless serve exited before readiness: %v\nstdout:\n%s\nstderr:\n%s",
+				"serve exited before readiness: %v\nstdout:\n%s\nstderr:\n%s",
 				err,
 				stdout.String(),
 				stderr.String(),
@@ -621,36 +729,95 @@ func TestLiveBinary_HeadlessServeExposesAgentEndpoint(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if runtimeState.Endpoint == "" {
+		_ = cmd.Process.Kill()
+		<-done
 		t.Fatalf("runtime endpoint was not published\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
 	}
+	return &liveServeProcess{
+		cmd:     cmd,
+		done:    done,
+		stdout:  stdout,
+		stderr:  stderr,
+		runtime: runtimeState,
+	}
+}
 
-	target, err := endpoint.Parse(runtimeState.Endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := target.NewClient()
-	for path, want := range map[string]int{"/healthz": http.StatusOK, "/": http.StatusNotFound} {
-		request, err := http.NewRequest(http.MethodGet, target.URL(path), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		requestCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		response, err := client.Do(request.WithContext(requestCtx))
-		cancel()
-		if err != nil {
-			t.Fatalf("GET %s through %s: %v", path, runtimeState.Endpoint, err)
-		}
-		_ = response.Body.Close()
-		if response.StatusCode != want {
-			t.Fatalf("GET %s status = %d, want %d", path, response.StatusCode, want)
-		}
-	}
+func (p *liveServeProcess) stop() {
+	p.once.Do(func() {
+		_ = p.cmd.Process.Kill()
+		<-p.done
+	})
+}
 
-	if err := cmd.Process.Kill(); err != nil {
-		t.Fatal(err)
+func waitForServeOutput(t *testing.T, output *lockedBuffer, want string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		body := output.String()
+		if strings.Contains(body, want) {
+			return body
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	<-done
-	processDone = true
+	t.Fatalf("serve output missing %q:\n%s", want, output.String())
+	return ""
+}
+
+func waitForServeTCPAddress(t *testing.T, output *lockedBuffer) string {
+	t.Helper()
+	const prefix = "juex serve agent JSON/SSE API (no web UI) listening on http://"
+	body := waitForServeOutput(t, output, prefix)
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	t.Fatalf("serve output did not contain a parseable TCP address:\n%s", body)
+	return ""
+}
+
+var errProcessListenerScanUnavailable = errors.New("process TCP listener scan unavailable")
+
+func assertProcessTCPListeners(t *testing.T, pid int, endpointTarget endpoint.Target, additional ...string) {
+	t.Helper()
+	want := append([]string(nil), additional...)
+	if endpointTarget.Network() == "tcp" {
+		want = append(want, endpointTarget.Address())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var (
+		got     []string
+		scanErr error
+	)
+	for time.Now().Before(deadline) {
+		got, scanErr = processTCPListeners(pid)
+		if errors.Is(scanErr, errProcessListenerScanUnavailable) {
+			t.Logf("skipping process listener scan: %v", scanErr)
+			return
+		}
+		if scanErr == nil && sameStringSet(got, want) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("TCP listeners for pid %d = %v, want %v (scan error: %v)", pid, got, want, scanErr)
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := make(map[string]int, len(left))
+	for _, item := range left {
+		counts[item]++
+	}
+	for _, item := range right {
+		counts[item]--
+		if counts[item] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func runAgentStateCommand(bin, home, work string, args ...string) (string, string, error) {

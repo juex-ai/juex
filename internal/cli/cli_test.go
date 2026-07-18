@@ -1748,19 +1748,64 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	}
 }
 
-func TestServeCmd_HeadlessRejectsBrowserFlags(t *testing.T) {
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "juex.yaml")
-	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
+func TestServeCmdAddrDefaultIsEndpointOnly(t *testing.T) {
+	cmd := newServeCmd(&persistentFlags{})
+	flag := cmd.Flags().Lookup("addr")
+	if flag == nil {
+		t.Fatal("serve command has no --addr flag")
 	}
+	if flag.DefValue != "" {
+		t.Fatalf("--addr default = %q, want empty endpoint-only default", flag.DefValue)
+	}
+	if !strings.Contains(flag.Usage, "enables") {
+		t.Fatalf("--addr help does not explain TCP opt-in: %q", flag.Usage)
+	}
+}
+
+func TestValidateServeListenerOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		addr        string
+		addrChanged bool
+		headless    bool
+		unsafe      bool
+		wantError   bool
+	}{
+		{name: "flagless"},
+		{name: "explicit headless", headless: true},
+		{name: "explicit TCP", addr: "127.0.0.1:9000", addrChanged: true},
+		{name: "headless with address", addr: "127.0.0.1:9000", addrChanged: true, headless: true, wantError: true},
+		{name: "headless with unsafe", headless: true, unsafe: true, wantError: true},
+		{name: "unsafe without address", unsafe: true, wantError: true},
+		{name: "explicit empty address", addrChanged: true, wantError: true},
+		{name: "explicit whitespace address", addr: " ", addrChanged: true, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateServeListenerOptions(test.addr, test.addrChanged, test.headless, test.unsafe)
+			if (err != nil) != test.wantError {
+				t.Fatalf("error = %v, wantError = %v", err, test.wantError)
+			}
+			if err != nil {
+				var usage *usageError
+				if !errors.As(err, &usage) {
+					t.Fatalf("error = %T %v, want usageError", err, err)
+				}
+			}
+		})
+	}
+}
+
+func TestServeCmdRejectsInvalidListenerFlagCombinationsBeforeConfig(t *testing.T) {
 	for _, args := range [][]string{
 		{"serve", "--headless", "--addr", "127.0.0.1:9000"},
 		{"serve", "--headless", "--unsafe-bind-any"},
+		{"serve", "--unsafe-bind-any"},
+		{"serve", "--addr="},
 	} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			root := newRootCmd()
-			root.SetArgs(append([]string{"-C", dir, "--config", configFile}, args...))
+			root.SetArgs(args)
 			err := root.Execute()
 			var usage *usageError
 			if !errors.As(err, &usage) {
@@ -1782,7 +1827,10 @@ func TestReportServeReadyIncludesEndpointSchemeAndFallback(t *testing.T) {
 		TCPAddress:     "127.0.0.1:8080",
 		FallbackReason: "unix sockets unsupported",
 	})
-	for _, want := range []string{"tcp://127.0.0.1:43123", "http://127.0.0.1:8080"} {
+	for _, want := range []string{
+		"tcp://127.0.0.1:43123",
+		"juex serve agent JSON/SSE API (no web UI) listening on http://127.0.0.1:8080",
+	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}

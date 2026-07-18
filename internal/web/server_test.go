@@ -66,6 +66,112 @@ func TestServer_HealthzReturnsOK(t *testing.T) {
 	}
 }
 
+func TestServerHandlersSeparateAgentEndpointFromTCPPointer(t *testing.T) {
+	srv := newTestServer(t)
+	apiServer := httptest.NewServer(srv.APIHandler())
+	defer apiServer.Close()
+	tcpServer := httptest.NewServer(srv.Handler())
+	defer tcpServer.Close()
+
+	for _, path := range []string{"/", "/sessions/anything"} {
+		response, err := http.Get(apiServer.URL + path)
+		if err != nil {
+			t.Fatalf("GET endpoint %s: %v", path, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET endpoint %s status = %d, want %d", path, response.StatusCode, http.StatusNotFound)
+		}
+
+		response, err = http.Get(tcpServer.URL + path)
+		if err != nil {
+			t.Fatalf("GET TCP %s: %v", path, err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET TCP %s status = %d, want %d", path, response.StatusCode, http.StatusOK)
+		}
+		if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/plain") {
+			t.Fatalf("GET TCP %s content type = %q, want text/plain", path, contentType)
+		}
+		for _, want := range []string{
+			"agent JSON/SSE API",
+			"no web UI",
+			"juex fleet serve",
+			"http://127.0.0.1:5839",
+		} {
+			if !strings.Contains(string(body), want) {
+				t.Fatalf("GET TCP %s body missing %q:\n%s", path, want, body)
+			}
+		}
+	}
+
+	request, err := http.NewRequest(http.MethodHead, tcpServer.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || len(body) != 0 {
+		t.Fatalf("HEAD TCP root status = %d body = %q, want 200 with empty body", response.StatusCode, body)
+	}
+
+	request, err = http.NewRequest(http.MethodPost, tcpServer.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST TCP root status = %d, want %d", response.StatusCode, http.StatusMethodNotAllowed)
+	}
+
+	for _, baseURL := range []string{apiServer.URL, tcpServer.URL} {
+		response, err := http.Get(baseURL + "/api/not-a-route")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("GET %s/api/not-a-route status = %d, want %d", baseURL, response.StatusCode, http.StatusNotFound)
+		}
+	}
+}
+
+func TestServerTCPPointerUsesConfiguredFleetAddress(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Cfg.Fleet.Addr = "127.0.0.1:6843"
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	response, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(body), "http://127.0.0.1:6843/") {
+		t.Fatalf("pointer does not use configured fleet address:\n%s", body)
+	}
+}
+
 func TestServerSessionsShareProcessModelHealth(t *testing.T) {
 	srv := newTestServer(t)
 	first, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
@@ -156,7 +262,6 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 
 func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	srv := newTestServer(t)
-	srv.opts.Addr = "127.0.0.1:0"
 	srv.opts.Cfg.AgentStateDir = t.TempDir()
 	ready := make(chan ReadyInfo, 1)
 	srv.opts.OnReady = func(info ReadyInfo) { ready <- info }
@@ -174,8 +279,11 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 		cancel()
 		t.Fatal("server did not become ready")
 	}
-	if info.AgentEndpoint == "" || info.TCPAddress == "" {
-		t.Fatalf("ready info = %+v", info)
+	if info.AgentEndpoint == "" {
+		t.Fatalf("ready info missing agent endpoint: %+v", info)
+	}
+	if info.TCPAddress != "" {
+		t.Fatalf("default ready info has TCP address: %+v", info)
 	}
 	runtimeState, err := endpoint.ReadRuntime(srv.opts.Cfg.AgentStateDir)
 	if err != nil {
@@ -202,16 +310,6 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	if err := endpoint.Probe(context.Background(), runtimeState); err != nil {
 		t.Fatalf("probe exact runtime identity: %v", err)
 	}
-	for path, want := range map[string]int{"/healthz": http.StatusOK, "/": http.StatusNotFound} {
-		response, err := http.Get("http://" + info.TCPAddress + path)
-		if err != nil {
-			t.Fatalf("GET TCP API %s: %v", path, err)
-		}
-		_ = response.Body.Close()
-		if response.StatusCode != want {
-			t.Fatalf("GET TCP API %s status = %d, want %d", path, response.StatusCode, want)
-		}
-	}
 	mismatch := runtimeState
 	mismatch.InstanceID = "different-instance"
 	if err := endpoint.RequestShutdown(context.Background(), mismatch); err == nil {
@@ -236,6 +334,69 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	cancel()
 	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.AgentStateDir, "runtime.json")); !os.IsNotExist(err) {
 		t.Fatalf("runtime.json remains after shutdown: %v", err)
+	}
+}
+
+func TestRunPublishesExplicitTCPAPI(t *testing.T) {
+	srv := newTestServer(t)
+	srv.opts.Addr = "127.0.0.1:0"
+	srv.opts.Cfg.AgentStateDir = t.TempDir()
+	ready := make(chan ReadyInfo, 1)
+	srv.opts.OnReady = func(info ReadyInfo) { ready <- info }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+	defer stopRunServer(t, cancel, errCh)
+
+	var info ReadyInfo
+	select {
+	case info = <-ready:
+	case err := <-errCh:
+		t.Fatalf("server failed before ready: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not become ready")
+	}
+	if info.AgentEndpoint == "" || info.TCPAddress == "" {
+		t.Fatalf("ready info = %+v, want agent and TCP endpoints", info)
+	}
+	for path, want := range map[string]int{
+		"/healthz":         http.StatusOK,
+		"/":                http.StatusOK,
+		"/api/not-a-route": http.StatusNotFound,
+	} {
+		response, err := http.Get("http://" + info.TCPAddress + path)
+		if err != nil {
+			t.Fatalf("GET TCP API %s: %v", path, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("GET TCP API %s status = %d, want %d", path, response.StatusCode, want)
+		}
+	}
+}
+
+func TestValidLoopbackAcceptsTheFullLoopbackRange(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{addr: "127.0.0.1:8080", want: true},
+		{addr: "127.42.0.99:8080", want: true},
+		{addr: "[::1]:8080", want: true},
+		{addr: "localhost:8080", want: true},
+		{addr: "0.0.0.0:8080"},
+		{addr: "192.168.1.5:8080"},
+		{addr: "127.0.0.1"},
+		{addr: "localhost"},
+		{addr: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.addr, func(t *testing.T) {
+			if got := validLoopback(test.addr); got != test.want {
+				t.Fatalf("validLoopback(%q) = %v, want %v", test.addr, got, test.want)
+			}
+		})
 	}
 }
 
