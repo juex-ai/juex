@@ -1,8 +1,10 @@
 # Juex Frontend
 
-This directory contains the React + Vite web UI served by `juex serve`.
-The Go server owns the JSON/SSE API and embeds the production bundle from
-`internal/web/dist`.
+This directory contains the React + Vite fleet web UI served by
+`juex fleet serve`. The fleet server owns the fleet JSON API, proxies
+selected-agent JSON/SSE requests to verified resident agent endpoints, and
+embeds the production bundle from `internal/web/dist`. Resident agent servers
+expose their API only; they do not serve the SPA.
 
 ## Stack
 
@@ -18,11 +20,12 @@ The Go server owns the JSON/SSE API and embeds the production bundle from
 
 ## Development
 
-Build the embedded bundle at least once, then run the Go server in one shell:
+Build the embedded bundle at least once, then run the fleet server in one
+shell:
 
 ```bash
 make web
-go run ./cmd/juex serve
+go run ./cmd/juex fleet serve
 ```
 
 Run Vite in another shell:
@@ -31,7 +34,8 @@ Run Vite in another shell:
 pnpm --dir frontend dev
 ```
 
-Vite proxies `/api` and session event requests to the Go server.
+Vite proxies fleet `/api` requests and selected-agent `/agents/:agentId/api`
+requests to the fleet server.
 
 ## Build
 
@@ -49,8 +53,10 @@ into `internal/web/dist/` for Go embedding.
 
 | Path | Purpose |
 | --- | --- |
-| `src/api.ts` | typed fetch helpers, including Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
-| `src/types.ts` | TypeScript mirror of Go API/session/message shapes, including the tagged Command Observable/Schedule create union, transcript paging metadata, and the browser event contract from `internal/web` |
+| `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
+| `src/types.ts` | TypeScript mirror of fleet, agent, session, and message API shapes, including the tagged Command Observable/Schedule create union, transcript paging metadata, and the browser event contract from `internal/web` |
+| `src/lib/agent-config.ts` | pure config-save reconciliation for distinguishing persisted updates from restart failures |
+| `src/lib/fleet-routes.ts` | pure route helpers for fleet and selected-agent navigation |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
 | `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
@@ -92,6 +98,9 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
 | `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
+| `src/pages/Fleet.tsx` | fleet roster with resident agent lifecycle actions and links to selected-agent surfaces |
+| `src/pages/AgentConfig.tsx` | workspace config editor with validation and post-save restart reconciliation |
+| `src/pages/AgentLogs.tsx` | bounded resident agent log tail with explicit refresh and line-count controls |
 | `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |
 | `src/pages/ObservableDetail.tsx` | Observable source details, recent Observation history, and Schedule Run plus lifecycle controls |
 | `src/pages/Runtime.tsx` | Provider, shell, sandbox, grouped builtin/MCP tool catalog, hooks, system prompt, and skills detail view for `/runtime` |
