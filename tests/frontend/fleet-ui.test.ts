@@ -108,6 +108,16 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     "offline agents must not delete sessions from history",
   );
   assert.match(
+    historySource,
+    /!agentsLoaded\s+\? "Loading agent\.\.\."/,
+    "history actions must describe the agent loading state accurately",
+  );
+  assert.match(
+    historySource,
+    /<HistoryRow[\s\S]*agentsLoaded=\{agentsLoaded\}/,
+    "history rows must receive the already-resolved fleet loading state",
+  );
+  assert.match(
     sessionSource,
     /routeActiveTurnIDRef\.current = activeTurnID;[\s\S]*\}, \[controller, id\]\);/,
     "runtime health changes must not reset the loaded session route",

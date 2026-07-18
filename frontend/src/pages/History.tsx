@@ -117,7 +117,11 @@ export function History() {
               onClick={() => void handleNewChat()}
               disabled={creating || !mutationsEnabled}
               title={
-                mutationsEnabled ? undefined : "Start agent to create a chat"
+                !agentsLoaded
+                  ? "Loading agent..."
+                  : mutationsEnabled
+                    ? undefined
+                    : "Start agent to create a chat"
               }
             >
               <Plus className="size-3.5" />
@@ -149,6 +153,7 @@ export function History() {
                   key={session.id}
                   session={session}
                   deleting={deletingID === session.id}
+                  agentsLoaded={agentsLoaded}
                   mutationsEnabled={mutationsEnabled}
                   onDelete={() => void handleDelete(session)}
                 />
@@ -164,11 +169,13 @@ export function History() {
 function HistoryRow({
   session,
   deleting,
+  agentsLoaded,
   mutationsEnabled,
   onDelete,
 }: {
   session: SessionInfo;
   deleting: boolean;
+  agentsLoaded: boolean;
   mutationsEnabled: boolean;
   onDelete: () => void;
 }) {
@@ -200,7 +207,11 @@ function HistoryRow({
         variant="ghost"
         size="icon-sm"
         title={
-          mutationsEnabled ? "Delete session" : "Start agent to delete sessions"
+          !agentsLoaded
+            ? "Loading agent..."
+            : mutationsEnabled
+              ? "Delete session"
+              : "Start agent to delete sessions"
         }
         aria-label="Delete session"
         disabled={deleting || !mutationsEnabled}
