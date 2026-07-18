@@ -766,6 +766,10 @@ func mapFleetError(err error) error {
 	if errors.As(err, &missing) {
 		return &notFoundError{msg: err.Error()}
 	}
+	var unavailable *fleet.LogUnavailableError
+	if errors.As(err, &unavailable) {
+		return &notFoundError{msg: err.Error()}
+	}
 	var ambiguous *fleet.AmbiguousSelectorError
 	var conflict *fleet.ConflictError
 	if errors.As(err, &ambiguous) || errors.As(err, &conflict) {

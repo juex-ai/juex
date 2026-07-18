@@ -405,6 +405,94 @@ func TestTailLogEnforcesLineAndByteBounds(t *testing.T) {
 	}
 }
 
+func TestLogsExplainsUnavailableFleetOwnedLog(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		prepare func(*testing.T, string)
+	}{
+		{name: "never created"},
+		{
+			name: "removed after creation",
+			prepare: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entry := registryEntry("aaaaaaaa", "adopted")
+			entry.Dir = t.TempDir()
+			path := fleetLogPath(entry.Dir)
+			if test.prepare != nil {
+				test.prepare(t, path)
+			}
+			manager := &Manager{homeDir: t.TempDir(), deps: defaultDependencies()}
+			manager.deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+				return []agentstate.RegistryEntry{entry}, nil
+			}
+
+			_, err := manager.Logs("adopted", 20)
+
+			var unavailable *LogUnavailableError
+			if !errors.As(err, &unavailable) {
+				t.Fatalf("error = %T %v, want LogUnavailableError", err, err)
+			}
+			if unavailable.AgentID != entry.ID || unavailable.Path != path {
+				t.Fatalf("unavailable = %+v, want agent %q path %q", unavailable, entry.ID, path)
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("error = %v, want os.ErrNotExist semantics", err)
+			}
+			message := err.Error()
+			for _, want := range []string{
+				"no fleet-owned log is available",
+				"created only when fleet starts the agent",
+				"started externally",
+				"terminal",
+				"service logs",
+				"stdout/stderr redirection",
+				"may have been removed",
+			} {
+				if !strings.Contains(message, want) {
+					t.Fatalf("message = %q, want %q", message, want)
+				}
+			}
+			for _, unwanted := range []string{path, "open ", "no such file"} {
+				if strings.Contains(message, unwanted) {
+					t.Fatalf("message = %q, must not contain %q", message, unwanted)
+				}
+			}
+		})
+	}
+}
+
+func TestLogsPreservesNonMissingIOErrors(t *testing.T) {
+	entry := registryEntry("aaaaaaaa", "broken-log")
+	entry.Dir = "invalid\x00agent-dir"
+	manager := &Manager{homeDir: t.TempDir(), deps: defaultDependencies()}
+	manager.deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+
+	_, err := manager.Logs(entry.ID, 20)
+
+	if err == nil {
+		t.Fatal("Logs succeeded with a NUL byte in the log path")
+	}
+	var unavailable *LogUnavailableError
+	if errors.As(err, &unavailable) {
+		t.Fatalf("error = %v, must not classify non-missing I/O failure as unavailable", err)
+	}
+}
+
 func registryEntry(id, name string) agentstate.RegistryEntry {
 	workspace := filepath.Join(os.TempDir(), "fleet-test-"+id)
 	return agentstate.RegistryEntry{
