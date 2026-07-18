@@ -140,12 +140,13 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), `juex $bin %h "quoted"`)
 	opts := testOptions(home)
 	opts.Executable = executable
-	plan, err := buildPlan(opts, hostInfo{
+	host := hostInfo{
 		goos:          "linux",
 		userHome:      filepath.Join(t.TempDir(), "user"),
 		xdgConfigHome: filepath.Join(t.TempDir(), "xdg config"),
 		searchPath:    "/custom/bin:relative:/usr/bin:/custom/bin",
-	})
+	}
+	plan, err := buildPlan(opts, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,10 +157,7 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 		"Restart=on-failure",
 		"WantedBy=default.target",
 		`Environment="JUEX_HOME=`,
-		`Environment="PATH=`,
-		filepath.Dir(executable),
-		`/.local/bin`,
-		`/custom/bin`,
+		"Environment=" + systemdEnvironmentAssignment("PATH", serviceSearchPath(executable, host)),
 		`$bin`,
 		`$HOME`,
 		`%%i`,
@@ -249,15 +247,17 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 }
 
 func TestServiceSearchPathKeepsSafeAbsoluteEntriesInStableOrder(t *testing.T) {
+	userHome := t.TempDir()
+	executableDir := filepath.Join(t.TempDir(), "JueX", "bin")
 	host := hostInfo{
 		goos:       "darwin",
-		userHome:   "/Users/tester",
-		searchPath: "/custom/bin::relative:/Users/tester/.local/bin:/custom/bin:/usr/bin",
+		userHome:   userHome,
+		searchPath: "/custom/bin::relative:/custom/bin:/usr/bin",
 	}
-	got := serviceSearchPath("/Applications/JueX/bin/juex", host)
+	got := serviceSearchPath(filepath.Join(executableDir, "juex"), host)
 	want := strings.Join([]string{
-		"/Applications/JueX/bin",
-		"/Users/tester/.local/bin",
+		executableDir,
+		filepath.Join(userHome, ".local", "bin"),
 		"/custom/bin",
 		"/usr/bin",
 		"/opt/homebrew/bin",
