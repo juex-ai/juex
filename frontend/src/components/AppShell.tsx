@@ -90,6 +90,8 @@ export function AppShell() {
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
   const currentAgent =
     agents.find((candidate) => candidate.id === agentId) ?? null;
+  const invalidAgentRoute =
+    agentsLoaded && agentId !== "" && currentAgent === null;
 
   const refreshAgents = useCallback(async () => {
     try {
@@ -133,6 +135,19 @@ export function AppShell() {
       navigate(agentTabPath(selected, "chat"), { replace: true });
     }
   }, [agents, agentsLoaded, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!invalidAgentRoute) return;
+    const selected = resolveAgentSelection(
+      agents,
+      window.localStorage.getItem(LAST_AGENT_KEY),
+    );
+    if (selected) {
+      navigate(agentTabPath(selected, "chat"), { replace: true });
+    } else {
+      navigate("/", { replace: true });
+    }
+  }, [agents, invalidAgentRoute, navigate]);
 
   useEffect(() => {
     if (currentAgent) {
@@ -301,6 +316,10 @@ export function AppShell() {
                 ) : location.pathname === "/" ? (
                   <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
                     Loading fleet...
+                  </div>
+                ) : invalidAgentRoute ? (
+                  <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                    Loading agent...
                   </div>
                 ) : (
                   <Outlet key={agentId || "fleet-settings"} />

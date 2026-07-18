@@ -100,6 +100,21 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     /const activeTurnID = routeActiveTurnIDRef\.current;[\s\S]*!agentRuntimeHealthy[\s\S]*startTurnStatusPolling/,
     "initial turn polling must remain gated by runtime health",
   );
+  assert.match(
+    sessionSource,
+    /!agentsLoaded \|\| agent\?\.runtime_health === "healthy"/,
+    "a missing selected agent must not be treated as a healthy runtime",
+  );
+  assert.match(
+    sessionsSource,
+    /agentsLoaded && agent && agent\.runtime_health !== "healthy"/,
+    "the stopped state bar requires a real selected agent",
+  );
+  assert.match(
+    shellSource,
+    /invalidAgentRoute[\s\S]*Loading agent[\s\S]*<Outlet/,
+    "invalid agent routes must be redirected before child pages can compose",
+  );
   assert.doesNotMatch(
     shellSource,
     /setInterval\(\(\) => void refreshAgents/,

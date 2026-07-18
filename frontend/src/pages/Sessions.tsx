@@ -57,7 +57,7 @@ export function Sessions() {
           Aware, action
         </p>
         <div className="mt-6 w-full">
-          {agentsLoaded && agent?.runtime_health !== "healthy" ? (
+          {agentsLoaded && agent && agent.runtime_health !== "healthy" ? (
             <AgentRuntimeStateBar />
           ) : (
             <PromptInput

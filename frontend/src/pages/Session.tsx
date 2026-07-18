@@ -200,7 +200,7 @@ export function Session() {
     olderMessagesError,
   } = readState;
   const agentRuntimeHealthy =
-    !agentsLoaded || !agent || agent.runtime_health === "healthy";
+    !agentsLoaded || agent?.runtime_health === "healthy";
 
   useEffect(() => {
     controller.configureNavigation({

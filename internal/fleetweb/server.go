@@ -53,12 +53,13 @@ type readOnlyStateBackend interface {
 }
 
 type Server struct {
-	manager      backend
-	addr         string
-	allowAnyBind bool
-	onReady      func(string)
-	spa          http.Handler
-	readActivity func(context.Context, fleet.AgentStatus) (*agentActivity, error)
+	manager         backend
+	addr            string
+	allowAnyBind    bool
+	onReady         func(string)
+	spa             http.Handler
+	readActivity    func(context.Context, fleet.AgentStatus) (*agentActivity, error)
+	activityClients *activityClientPool
 }
 
 func New(opts Options) (*Server, error) {
@@ -73,13 +74,15 @@ func newServer(manager backend, opts Options) *Server {
 	if addr == "" {
 		addr = config.DefaultFleetAddr
 	}
+	activityClients := newActivityClientPool()
 	return &Server{
-		manager:      manager,
-		addr:         addr,
-		allowAnyBind: opts.AllowAnyBind,
-		onReady:      opts.OnReady,
-		spa:          web.SPAHandler(),
-		readActivity: fetchAgentActivity,
+		manager:         manager,
+		addr:            addr,
+		allowAnyBind:    opts.AllowAnyBind,
+		onReady:         opts.OnReady,
+		spa:             web.SPAHandler(),
+		readActivity:    activityClients.fetch,
+		activityClients: activityClients,
 	}
 }
 
@@ -98,6 +101,9 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	if s.activityClients != nil {
+		defer s.activityClients.close()
+	}
 	if !s.allowAnyBind && !validLoopback(s.addr) {
 		return fmt.Errorf("juex fleet serve: --addr must bind to loopback (got %q)", s.addr)
 	}

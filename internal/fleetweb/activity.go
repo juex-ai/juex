@@ -30,8 +30,67 @@ type agentRosterItem struct {
 	Activity *agentActivity `json:"activity,omitempty"`
 }
 
+type activityClientPool struct {
+	mu         sync.Mutex
+	clients    map[string]*http.Client
+	transports map[string]*http.Transport
+}
+
+func newActivityClientPool() *activityClientPool {
+	return &activityClientPool{
+		clients:    make(map[string]*http.Client),
+		transports: make(map[string]*http.Transport),
+	}
+}
+
+func (p *activityClientPool) client(rawEndpoint string) (*http.Client, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if client := p.clients[rawEndpoint]; client != nil {
+		return client, nil
+	}
+	target, err := endpoint.Parse(rawEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("parse agent activity endpoint: %w", err)
+	}
+	transport := target.NewTransport()
+	client := &http.Client{Transport: transport}
+	p.clients[rawEndpoint] = client
+	p.transports[rawEndpoint] = transport
+	return client, nil
+}
+
+func (p *activityClientPool) retain(activeEndpoints map[string]struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for rawEndpoint, transport := range p.transports {
+		if _, active := activeEndpoints[rawEndpoint]; active {
+			continue
+		}
+		transport.CloseIdleConnections()
+		delete(p.transports, rawEndpoint)
+		delete(p.clients, rawEndpoint)
+	}
+}
+
+func (p *activityClientPool) close() {
+	p.retain(map[string]struct{}{})
+}
+
 func (s *Server) roster(ctx context.Context, statuses []fleet.AgentStatus) []agentRosterItem {
 	items := make([]agentRosterItem, len(statuses))
+	activeEndpoints := make(map[string]struct{})
+	for _, status := range statuses {
+		if status.RuntimeHealth == fleet.RuntimeHealthy && status.Endpoint != "" {
+			activeEndpoints[status.Endpoint] = struct{}{}
+		}
+	}
+	if s.activityClients != nil {
+		s.activityClients.retain(activeEndpoints)
+	}
+
 	var wait sync.WaitGroup
 	for index, status := range statuses {
 		items[index].AgentStatus = status
@@ -51,16 +110,14 @@ func (s *Server) roster(ctx context.Context, statuses []fleet.AgentStatus) []age
 	return items
 }
 
-func fetchAgentActivity(
+func (p *activityClientPool) fetch(
 	ctx context.Context,
 	status fleet.AgentStatus,
 ) (*agentActivity, error) {
-	target, err := endpoint.Parse(status.Endpoint)
+	client, err := p.client(status.Endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("parse agent activity endpoint: %w", err)
+		return nil, err
 	}
-	transport := target.NewTransport()
-	defer transport.CloseIdleConnections()
 
 	requestCtx, cancel := context.WithTimeout(ctx, agentActivityTimeout)
 	defer cancel()
@@ -73,7 +130,7 @@ func fetchAgentActivity(
 	if err != nil {
 		return nil, err
 	}
-	response, err := (&http.Client{Transport: transport}).Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("read agent activity: %w", err)
 	}
