@@ -3,8 +3,11 @@
 This package registers the resident fleet supervisor with the current user's
 native service manager. It does not manage individual agents.
 
-- `New` validates a stable fleet address and builds a platform-specific plan.
+- `New` builds a platform-specific plan whose command is `juex fleet serve`;
+  the definition never bakes in `fleet.addr`.
 - `Install` publishes the definition before enabling and starting it.
+- `Installed` checks a valid definition first, then strict native-manager state
+  where the platform can retain a loaded service without that file.
 - `Uninstall` queries native manager state, confirms the supervisor is stopped,
   and then removes the definition.
 - launchd definitions use `AbandonProcessGroup`; systemd user units use
@@ -15,5 +18,6 @@ homes can be registered independently. Definition publication is atomic per
 file and transactional across the multi-file Termux definition. Termux writes
 the `down` sentinel before exposing `log/run` and `run`, then enables and
 restarts the service so reinstallations adopt the updated command. CLI flags
-and output remain in `internal/cli`; agent reconciliation and detached child
+and output, stable address validation, and home-config persistence remain in
+`internal/cli` and `internal/config`; agent reconciliation and detached child
 lifecycle remain in `internal/fleet`.

@@ -10,6 +10,7 @@
 #   JUEX_INSTALL_VERSION=0.0.1
 #   JUEX_INSTALL_OS=linux
 #   JUEX_INSTALL_ARCH=amd64
+#   INSTALL_FLEET_SERVICE=1
 
 set -euo pipefail
 
@@ -235,6 +236,31 @@ install_binary() {
   chmod +x "$target"
 }
 
+refresh_fleet_service() {
+  local binary="$1"
+  local installed
+  installed=$("$binary" fleet service-installed)
+  case "$installed" in
+    true)
+      "$binary" fleet install
+      printf 'Refreshed existing JueX fleet service.\n'
+      "$binary" fleet status --format json >/dev/null
+      ;;
+    false)
+      if [[ "${INSTALL_FLEET_SERVICE:-0}" == "1" ]]; then
+        "$binary" fleet install
+        printf 'Installed JueX fleet service by explicit request.\n'
+        "$binary" fleet status --format json >/dev/null
+      else
+        printf 'JueX fleet service is not installed; set INSTALL_FLEET_SERVICE=1 to install it during JueX installation.\n'
+      fi
+      ;;
+    *)
+      die "unexpected fleet service state from ${binary}: ${installed}"
+      ;;
+  esac
+}
+
 main() {
   local dry_run=0
   local requested_version="${JUEX_INSTALL_VERSION:-}"
@@ -320,6 +346,7 @@ EOF
   install_binary "$extracted" "$install_target"
 
   printf 'Installed juex to %s\n' "$install_target"
+  refresh_fleet_service "$install_target"
   if [[ ":$PATH:" != *":${install_dir}:"* ]]; then
     cat <<EOF
 

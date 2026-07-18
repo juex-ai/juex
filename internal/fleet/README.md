@@ -2,7 +2,8 @@
 
 This package owns registry-wide resident-agent health and lifecycle policy.
 
-- `Status` preserves workspace binding and runtime health as separate axes.
+- `Status` preserves workspace binding and runtime health as separate axes and
+  projects the serving binary version from runtime metadata.
 - `Add` registers an existing absolute workspace through the standard marker
   rules, applies optional name/autostart metadata, and can start it immediately.
 - `SetEnabled` makes disable reversible: disable stops before persisting the

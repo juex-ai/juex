@@ -21,6 +21,7 @@ import (
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleetservice"
 	"github.com/juex-ai/juex/internal/fleetweb"
+	"github.com/juex-ai/juex/internal/version"
 )
 
 func newFleetCmd(flags *persistentFlags) *cobra.Command {
@@ -45,6 +46,7 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 	cmd.AddCommand(newFleetGCCmd(flags))
 	cmd.AddCommand(newFleetInstallCmd(flags))
 	cmd.AddCommand(newFleetUninstallCmd(flags))
+	cmd.AddCommand(newFleetServiceInstalledCmd())
 	return cmd
 }
 
@@ -70,6 +72,11 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 		Short: "Run the resident fleet supervisor and browser API",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			resolvedAddr, _, err := resolveFleetAddr(cmd, addr, false)
+			if err != nil {
+				return err
+			}
+			addr = resolvedAddr
 			if !isTCPListenAddr(addr) {
 				return &usageError{msg: "juex fleet serve: --addr must be a host:port TCP address (got " + addr + ")"}
 			}
@@ -127,7 +134,7 @@ func newFleetServeCmd(_ *persistentFlags) *cobra.Command {
 			return errors.Join(webErr, mapFleetError(fleetErr))
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "loopback address (host:port)")
+	cmd.Flags().StringVar(&addr, "addr", config.DefaultFleetAddr, "loopback address (host:port)")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
 	return cmd
 }
@@ -150,7 +157,7 @@ func isStableTCPListenAddr(addr string) bool {
 	return err == nil && port >= 1 && port <= 65535
 }
 
-func newFleetServiceManager(addr string, unsafeBindAny bool) (*fleetservice.Manager, error) {
+func newFleetServiceManager(unsafeBindAny bool) (*fleetservice.Manager, error) {
 	homeDir, err := config.EffectiveHomeDir()
 	if err != nil {
 		return nil, err
@@ -162,9 +169,28 @@ func newFleetServiceManager(addr string, unsafeBindAny bool) (*fleetservice.Mana
 	return fleetservice.New(fleetservice.Options{
 		HomeDir:       homeDir,
 		Executable:    executable,
-		Addr:          addr,
 		UnsafeBindAny: unsafeBindAny,
 	})
+}
+
+func resolveFleetAddr(cmd *cobra.Command, flagAddr string, stable bool) (string, bool, error) {
+	explicit := cmd.Flags().Changed("addr")
+	addr := strings.TrimSpace(flagAddr)
+	if !explicit {
+		fleetCfg, err := config.LoadHomeFleetConfig()
+		if err != nil {
+			return "", false, err
+		}
+		addr = fleetCfg.Addr
+	}
+	if stable {
+		if err := config.ValidateStableFleetAddr(addr); err != nil {
+			return "", explicit, &usageError{msg: "juex fleet: --addr " + err.Error()}
+		}
+	} else if !isTCPListenAddr(addr) {
+		return "", explicit, &usageError{msg: "juex fleet: --addr must be a host:port TCP address (got " + addr + ")"}
+	}
+	return addr, explicit, nil
 }
 
 func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
@@ -177,6 +203,11 @@ func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
 		Short: "Install and start the fleet as a per-user system service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			resolvedAddr, explicitAddr, err := resolveFleetAddr(cmd, addr, true)
+			if err != nil {
+				return err
+			}
+			addr = resolvedAddr
 			if !isTCPListenAddr(addr) {
 				return &usageError{msg: "juex fleet install: --addr must be a host:port TCP address (got " + addr + ")"}
 			}
@@ -189,19 +220,29 @@ func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
 			if unsafeBindAny {
 				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
 			}
-			manager, err := newFleetServiceManager(addr, unsafeBindAny)
+			manager, err := newFleetServiceManager(unsafeBindAny)
 			if err != nil {
 				return err
 			}
+			configPath := ""
+			if explicitAddr {
+				configPath, err = config.SetHomeFleetAddr(addr)
+				if err != nil {
+					return err
+				}
+			}
 			registration, err := manager.Install(cmd.Context())
 			if err != nil {
+				if configPath != "" {
+					return fmt.Errorf("%w; fleet.addr remains written to %s", err, configPath)
+				}
 				return err
 			}
 			renderFleetServiceResult(cmd, "Installed", registration)
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8080", "stable fleet browser address (host:port)")
+	cmd.Flags().StringVar(&addr, "addr", config.DefaultFleetAddr, "stable fleet browser address (host:port)")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
 	return cmd
 }
@@ -212,7 +253,7 @@ func newFleetUninstallCmd(_ *persistentFlags) *cobra.Command {
 		Short: "Stop and remove the fleet per-user system service",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			manager, err := newFleetServiceManager("127.0.0.1:8080", false)
+			manager, err := newFleetServiceManager(false)
 			if err != nil {
 				return err
 			}
@@ -221,6 +262,26 @@ func newFleetUninstallCmd(_ *persistentFlags) *cobra.Command {
 				return err
 			}
 			renderFleetServiceResult(cmd, "Uninstalled", registration)
+			return nil
+		},
+	}
+}
+
+func newFleetServiceInstalledCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:    "service-installed",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			manager, err := newFleetServiceManager(false)
+			if err != nil {
+				return err
+			}
+			installed, err := manager.Installed(cmd.Context())
+			if err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), strconv.FormatBool(installed))
 			return nil
 		},
 	}
@@ -277,9 +338,13 @@ func newFleetStatusCmd(_ *persistentFlags) *cobra.Command {
 			if format == "json" {
 				encoder := json.NewEncoder(cmd.OutOrStdout())
 				encoder.SetIndent("", "  ")
-				return encoder.Encode(statuses)
+				if err := encoder.Encode(statuses); err != nil {
+					return err
+				}
+			} else {
+				renderFleetStatusTable(cmd, statuses)
 			}
-			renderFleetStatusTable(cmd, statuses)
+			reportFleetVersionSkew(cmd, statuses)
 			return nil
 		},
 	}
@@ -289,15 +354,16 @@ func newFleetStatusCmd(_ *persistentFlags) *cobra.Command {
 
 func renderFleetStatusTable(cmd *cobra.Command, statuses []fleet.AgentStatus) {
 	writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "ID\tNAME\tBINDING\tRUNTIME\tENABLED\tAUTOSTART\tPID\tSTARTED\tENDPOINT\tWORKSPACE\tPROBLEM")
+	fmt.Fprintln(writer, "ID\tNAME\tBINDING\tRUNTIME\tVERSION\tENABLED\tAUTOSTART\tPID\tSTARTED\tENDPOINT\tWORKSPACE\tPROBLEM")
 	for _, status := range statuses {
 		fmt.Fprintf(
 			writer,
-			"%s\t%s\t%s\t%s\t%t\t%t\t%s\t%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%s\t%s\t%s\t%t\t%t\t%s\t%s\t%s\t%s\t%s\n",
 			status.ID,
 			status.Name,
 			status.Binding,
 			status.RuntimeHealth,
+			optionalBinaryVersion(status.BinaryVersion),
 			status.Enabled,
 			status.Autostart,
 			optionalPID(status.PID),
@@ -308,6 +374,32 @@ func renderFleetStatusTable(cmd *cobra.Command, statuses []fleet.AgentStatus) {
 		)
 	}
 	_ = writer.Flush()
+}
+
+func optionalBinaryVersion(binaryVersion string) string {
+	if strings.TrimSpace(binaryVersion) == "" {
+		return "unknown"
+	}
+	return binaryVersion
+}
+
+func reportFleetVersionSkew(cmd *cobra.Command, statuses []fleet.AgentStatus) {
+	var skewed []string
+	for _, status := range statuses {
+		if !status.ProcessAlive || status.BinaryVersion == version.Version {
+			continue
+		}
+		skewed = append(skewed, fmt.Sprintf("%s(%s)", status.ID, optionalBinaryVersion(status.BinaryVersion)))
+	}
+	if len(skewed) == 0 {
+		return
+	}
+	fmt.Fprintf(
+		cmd.ErrOrStderr(),
+		"WARNING: running agents use a different JueX binary version than installed %s: %s. Restart them when safe; agents were not restarted automatically.\n",
+		version.Version,
+		strings.Join(skewed, ", "),
+	)
 }
 
 func optionalPID(pid int) string {

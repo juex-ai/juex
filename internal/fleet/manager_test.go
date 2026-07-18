@@ -38,11 +38,12 @@ func TestResolveSelectorUsesExactIDOrUniqueExactName(t *testing.T) {
 
 func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	runtimeState := endpoint.Runtime{
-		AgentID:    "aaaaaaaa",
-		InstanceID: "instance-one",
-		PID:        42,
-		Endpoint:   "tcp://127.0.0.1:43123",
-		StartedAt:  time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC),
+		AgentID:       "aaaaaaaa",
+		InstanceID:    "instance-one",
+		PID:           42,
+		Endpoint:      "tcp://127.0.0.1:43123",
+		StartedAt:     time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC),
+		BinaryVersion: "1.2.3",
 	}
 	tests := []struct {
 		name           string
@@ -51,6 +52,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 		probe          func(context.Context, endpoint.Runtime) error
 		maintenanceErr error
 		want           RuntimeHealth
+		wantVersion    string
 	}{
 		{
 			name:        "missing runtime and free endpoint guard",
@@ -69,8 +71,9 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			processAlive: func(int) (bool, error) {
 				return true, nil
 			},
-			probe: func(context.Context, endpoint.Runtime) error { return nil },
-			want:  RuntimeHealthy,
+			probe:       func(context.Context, endpoint.Runtime) error { return nil },
+			want:        RuntimeHealthy,
+			wantVersion: "1.2.3",
 		},
 		{
 			name:        "confirmed stale runtime",
@@ -78,8 +81,9 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			processAlive: func(int) (bool, error) {
 				return false, nil
 			},
-			probe: func(context.Context, endpoint.Runtime) error { return errors.New("connection refused") },
-			want:  RuntimeUnhealthy,
+			probe:       func(context.Context, endpoint.Runtime) error { return errors.New("connection refused") },
+			want:        RuntimeUnhealthy,
+			wantVersion: "1.2.3",
 		},
 		{
 			name:        "live pid with mismatched endpoint identity",
@@ -93,7 +97,8 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 					Actual:   endpoint.Runtime{AgentID: "aaaaaaaa", InstanceID: "other"},
 				}
 			},
-			want: RuntimeAmbiguous,
+			want:        RuntimeAmbiguous,
+			wantVersion: "1.2.3",
 		},
 		{
 			name:        "malformed runtime",
@@ -121,6 +126,9 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			status := manager.inspectStatus(context.Background(), registryEntry("aaaaaaaa", "agent"))
 			if status.RuntimeHealth != test.want {
 				t.Fatalf("runtime health = %s, want %s; status=%+v", status.RuntimeHealth, test.want, status)
+			}
+			if status.BinaryVersion != test.wantVersion {
+				t.Fatalf("binary version = %q, want %q", status.BinaryVersion, test.wantVersion)
 			}
 		})
 	}

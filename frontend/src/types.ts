@@ -922,6 +922,7 @@ export interface AgentStatus {
   pid?: number;
   endpoint?: string;
   started_at?: string;
+  binary_version?: string;
   runtime_present: boolean;
   process_alive: boolean;
   endpoint_reachable: boolean;

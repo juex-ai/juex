@@ -18,7 +18,7 @@ import (
 
 func TestListenPublishesReachableRuntime(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
-	binding, err := Listen(context.Background(), agentDir)
+	binding, err := Listen(context.Background(), agentDir, "1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +87,9 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 	if runtimeState.AgentID != filepath.Base(agentDir) || runtimeState.InstanceID == "" {
 		t.Fatalf("runtime identity = %+v", runtimeState)
 	}
+	if runtimeState.BinaryVersion != "1.2.3" {
+		t.Fatalf("binary version = %q", runtimeState.BinaryVersion)
+	}
 
 	if err := server.Close(); err != nil {
 		t.Fatal(err)
@@ -104,6 +107,28 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(agentDir, "runtime.json")); !os.IsNotExist(err) {
 		t.Fatalf("runtime.json remains after close: %v", err)
+	}
+}
+
+func TestRuntimeMatchesTreatsMissingVersionAsCompatible(t *testing.T) {
+	base := Runtime{
+		AgentID:    "aaaaaaaa",
+		InstanceID: "instance",
+		PID:        42,
+		Endpoint:   "tcp://127.0.0.1:1234",
+		StartedAt:  time.Date(2026, 7, 18, 4, 0, 0, 0, time.UTC),
+	}
+	old := base
+	current := base
+	current.BinaryVersion = "2.0.0"
+	other := base
+	other.BinaryVersion = "1.0.0"
+
+	if !old.Matches(current) || !current.Matches(old) {
+		t.Fatal("missing binary version must remain compatible")
+	}
+	if current.Matches(other) {
+		t.Fatal("different non-empty binary versions must not match")
 	}
 }
 
@@ -256,7 +281,7 @@ func TestFallbackBindingKeepsExclusiveAgentLock(t *testing.T) {
 		}
 	})
 
-	_, err = Listen(context.Background(), agentDir)
+	_, err = Listen(context.Background(), agentDir, "test")
 	var running *AgentAlreadyRunningError
 	if !errors.As(err, &running) {
 		t.Fatalf("second listen error = %T %v, want AgentAlreadyRunningError", err, err)
@@ -265,7 +290,7 @@ func TestFallbackBindingKeepsExclusiveAgentLock(t *testing.T) {
 
 func TestCloseDoesNotRemoveReplacedRuntime(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
-	binding, err := Listen(context.Background(), agentDir)
+	binding, err := Listen(context.Background(), agentDir, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +346,7 @@ func TestListenDoesNotRecreateMissingAgentDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Listen(context.Background(), agentDir); err == nil {
+	if _, err := Listen(context.Background(), agentDir, "test"); err == nil {
 		t.Fatal("Listen succeeded for a missing agent directory")
 	}
 	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
@@ -341,7 +366,7 @@ func TestMaintenanceAndListenShareExternalLock(t *testing.T) {
 		}
 	}()
 
-	_, err = Listen(context.Background(), agentDir)
+	_, err = Listen(context.Background(), agentDir, "test")
 	var running *AgentAlreadyRunningError
 	if !errors.As(err, &running) {
 		t.Fatalf("Listen error = %T %v, want AgentAlreadyRunningError", err, err)
@@ -357,7 +382,7 @@ func TestMaintenanceAndListenShareExternalLock(t *testing.T) {
 
 func TestActiveBindingBlocksMaintenance(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
-	binding, err := Listen(context.Background(), agentDir)
+	binding, err := Listen(context.Background(), agentDir, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

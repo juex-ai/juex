@@ -107,12 +107,13 @@ func TestLaunchdDefinitionPreservesDetachedAgents(t *testing.T) {
 		"<string>" + strings.ReplaceAll(home, "&", "&amp;") + "</string>",
 		"<string>fleet</string>",
 		"<string>serve</string>",
-		"<string>--addr</string>",
-		"<string>127.0.0.1:8181</string>",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("plist missing %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "--addr") || strings.Contains(body, "127.0.0.1:8181") {
+		t.Fatalf("plist bakes fleet address:\n%s", body)
 	}
 	if !strings.Contains(plan.registration.DefinitionPath, filepath.Join("Library", "LaunchAgents")) {
 		t.Fatalf("definition path = %q", plan.registration.DefinitionPath)
@@ -143,11 +144,14 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 		`$HOME`,
 		`%%i`,
 		`ExecStart=`,
-		`fleet serve --addr 127.0.0.1:8181`,
+		`fleet serve`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("unit missing %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "--addr") || strings.Contains(body, "127.0.0.1:8181") {
+		t.Fatalf("unit bakes fleet address:\n%s", body)
 	}
 	if strings.Contains(body, `$$bin`) {
 		t.Fatalf("systemd executable path must preserve literal dollars:\n%s", body)
@@ -165,7 +169,6 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "fleet home")
 	opts := testOptions(home)
 	opts.UnsafeBindAny = true
-	opts.Addr = "0.0.0.0:8182"
 	plan, err := buildPlan(opts, hostInfo{goos: "linux", userHome: t.TempDir(), termuxPrefix: prefix})
 	if err != nil {
 		t.Fatal(err)
@@ -189,11 +192,14 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 		"#!" + filepath.Join(prefix, "bin", "sh"),
 		"export JUEX_HOME=",
 		"exec ",
-		" 'fleet' 'serve' '--addr' '0.0.0.0:8182' '--unsafe-bind-any'",
+		" 'fleet' 'serve' '--unsafe-bind-any'",
 	} {
 		if !strings.Contains(run, want) {
 			t.Fatalf("run script missing %q:\n%s", want, run)
 		}
+	}
+	if strings.Contains(run, "--addr") || strings.Contains(run, "0.0.0.0:8182") {
+		t.Fatalf("Termux run script bakes fleet address:\n%s", run)
 	}
 	if strings.Contains(run, "kill") || strings.Contains(run, "pkill") {
 		t.Fatalf("run script group-kills descendants:\n%s", run)
@@ -292,6 +298,148 @@ func TestSystemdInstallPublishesAndRestartsUnit(t *testing.T) {
 	}
 }
 
+func TestInstalledUsesDefinitionBeforeNativeManager(t *testing.T) {
+	host := hostInfo{goos: "darwin", userHome: t.TempDir(), uid: 501}
+	runner := &fakeRunner{results: []fakeCommandResult{{
+		output: "not permitted",
+		err:    errors.New("exit status 1"),
+	}}}
+	manager, err := newManagerForHost(testOptions(t.TempDir()), host, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(manager.plan.registration.DefinitionPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manager.plan.registration.DefinitionPath, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := manager.Installed(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !installed || len(runner.commands) != 0 {
+		t.Fatalf("installed=%t commands=%v, want definition-only true", installed, runner.commands)
+	}
+}
+
+func TestInstalledUsesNativeStateAndFailsUnknownErrors(t *testing.T) {
+	host := hostInfo{goos: "darwin", userHome: t.TempDir(), uid: 501}
+	t.Run("loaded without definition", func(t *testing.T) {
+		manager, err := newManagerForHost(testOptions(t.TempDir()), host, &fakeRunner{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		installed, err := manager.Installed(context.Background())
+		if err != nil || !installed {
+			t.Fatalf("installed=%t error=%v", installed, err)
+		}
+	})
+	t.Run("absent", func(t *testing.T) {
+		runner := &fakeRunner{results: []fakeCommandResult{{
+			output: "service not found",
+			err:    errors.New("exit status 113"),
+		}}}
+		manager, err := newManagerForHost(testOptions(t.TempDir()), host, runner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		installed, err := manager.Installed(context.Background())
+		if err != nil || installed {
+			t.Fatalf("installed=%t error=%v", installed, err)
+		}
+	})
+	t.Run("unknown error", func(t *testing.T) {
+		runner := &fakeRunner{results: []fakeCommandResult{{
+			output: "not permitted",
+			err:    errors.New("exit status 1"),
+		}}}
+		manager, err := newManagerForHost(testOptions(t.TempDir()), host, runner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Installed(context.Background()); err == nil {
+			t.Fatal("Installed succeeded on unknown native-manager error")
+		}
+	})
+}
+
+func TestInstalledUsesSystemdStateWithoutDefinition(t *testing.T) {
+	host := hostInfo{goos: "linux", userHome: t.TempDir(), xdgConfigHome: t.TempDir()}
+	tests := []struct {
+		name          string
+		result        fakeCommandResult
+		wantInstalled bool
+		wantError     bool
+	}{
+		{
+			name:          "loaded",
+			result:        fakeCommandResult{output: "LoadState=loaded\nActiveState=active\n"},
+			wantInstalled: true,
+		},
+		{
+			name:   "absent",
+			result: fakeCommandResult{output: "LoadState=not-found\nActiveState=inactive\n"},
+		},
+		{
+			name:      "native manager failure",
+			result:    fakeCommandResult{output: "failed to connect", err: errors.New("exit status 1")},
+			wantError: true,
+		},
+		{
+			name:      "incomplete native state",
+			result:    fakeCommandResult{output: "LoadState=loaded\n"},
+			wantError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := &fakeRunner{results: []fakeCommandResult{tt.result}}
+			manager, err := newManagerForHost(testOptions(t.TempDir()), host, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			installed, err := manager.Installed(context.Background())
+			if tt.wantError {
+				if err == nil {
+					t.Fatalf("Installed() = %t, want error", installed)
+				}
+				return
+			}
+			if err != nil || installed != tt.wantInstalled {
+				t.Fatalf("Installed() = %t, %v; want %t, nil", installed, err, tt.wantInstalled)
+			}
+			if got := runner.verbs(); !reflect.DeepEqual(got, []string{"show"}) {
+				t.Fatalf("verbs = %v, want [show]", got)
+			}
+		})
+	}
+}
+
+func TestInstalledUsesTermuxServiceDirectory(t *testing.T) {
+	host := hostInfo{
+		goos:          "linux",
+		userHome:      t.TempDir(),
+		termuxPrefix:  filepath.Join(t.TempDir(), "usr"),
+		xdgConfigHome: t.TempDir(),
+	}
+	manager, err := newManagerForHost(testOptions(t.TempDir()), host, &fakeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed, err := manager.Installed(context.Background())
+	if err != nil || installed {
+		t.Fatalf("missing directory Installed() = %t, %v; want false, nil", installed, err)
+	}
+	if err := os.MkdirAll(manager.plan.termuxDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	installed, err = manager.Installed(context.Background())
+	if err != nil || !installed {
+		t.Fatalf("present directory Installed() = %t, %v; want true, nil", installed, err)
+	}
+}
+
 func TestTermuxInstallRequiresManagerAndEnablesService(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows filesystems do not expose the executable mode bits required by Termux")
@@ -345,17 +493,13 @@ func TestUnknownLaunchdStateErrorFailsLoudly(t *testing.T) {
 	}
 }
 
-func TestManagerValidatesInstalledAddressAndPlatform(t *testing.T) {
-	host := hostInfo{goos: "linux", userHome: t.TempDir(), xdgConfigHome: t.TempDir()}
+func TestManagerValidatesPlatform(t *testing.T) {
 	tests := []struct {
 		name string
 		opts Options
 		host hostInfo
 		want string
 	}{
-		{name: "zero port", opts: Options{HomeDir: t.TempDir(), Executable: "/bin/juex", Addr: "127.0.0.1:0"}, host: host, want: "non-zero"},
-		{name: "malformed", opts: Options{HomeDir: t.TempDir(), Executable: "/bin/juex", Addr: "127.0.0.1"}, host: host, want: "host:port"},
-		{name: "unsafe bind", opts: Options{HomeDir: t.TempDir(), Executable: "/bin/juex", Addr: "0.0.0.0:8080"}, host: host, want: "UnsafeBindAny"},
 		{name: "windows", opts: testOptions(t.TempDir()), host: hostInfo{goos: "windows", userHome: t.TempDir()}, want: "not supported"},
 	}
 	for _, tt := range tests {
@@ -474,7 +618,6 @@ func testOptions(home string) Options {
 	return Options{
 		HomeDir:    home,
 		Executable: filepath.Join(home, "bin", "juex"),
-		Addr:       "127.0.0.1:8181",
 	}
 }
 

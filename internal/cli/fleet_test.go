@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/version"
 )
 
 func TestFleetStatusDoesNotCreateWorkspaceIdentity(t *testing.T) {
@@ -331,6 +334,67 @@ func TestFleetServeRejectsMalformedAddressBeforeReconciliation(t *testing.T) {
 		var usage *usageError
 		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "host:port") {
 			t.Fatalf("args %v error = %T %v, want host:port usage error", args, err, err)
+		}
+	}
+}
+
+func TestFleetAddressPrecedenceUsesFlagThenHomeConfigThenDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+
+	cmd := newFleetServeCmd(nil)
+	addr, explicit, err := resolveFleetAddr(cmd, config.DefaultFleetAddr, false)
+	if err != nil || explicit || addr != config.DefaultFleetAddr {
+		t.Fatalf("default addr=%q explicit=%t error=%v", addr, explicit, err)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(home, "juex.yaml"),
+		[]byte("fleet:\n  addr: 127.0.0.1:6843\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	addr, explicit, err = resolveFleetAddr(cmd, config.DefaultFleetAddr, false)
+	if err != nil || explicit || addr != "127.0.0.1:6843" {
+		t.Fatalf("config addr=%q explicit=%t error=%v", addr, explicit, err)
+	}
+
+	if err := cmd.Flags().Set("addr", "127.0.0.1:6844"); err != nil {
+		t.Fatal(err)
+	}
+	addr, explicit, err = resolveFleetAddr(cmd, "127.0.0.1:6844", false)
+	if err != nil || !explicit || addr != "127.0.0.1:6844" {
+		t.Fatalf("flag addr=%q explicit=%t error=%v", addr, explicit, err)
+	}
+}
+
+func TestFleetStatusRendersBinaryVersionAndWarnsOnSkew(t *testing.T) {
+	previousVersion := version.Version
+	version.Version = "2.0.0"
+	t.Cleanup(func() { version.Version = previousVersion })
+
+	root := newRootCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	statuses := []fleet.AgentStatus{{
+		ID:            "aaaaaaaa",
+		Name:          "alpha",
+		RuntimeHealth: fleet.RuntimeHealthy,
+		BinaryVersion: "1.0.0",
+		ProcessAlive:  true,
+	}}
+	renderFleetStatusTable(root, statuses)
+	reportFleetVersionSkew(root, statuses)
+
+	if !strings.Contains(stdout.String(), "VERSION") || !strings.Contains(stdout.String(), "1.0.0") {
+		t.Fatalf("status table missing version:\n%s", stdout.String())
+	}
+	for _, want := range []string{"installed 2.0.0", "aaaaaaaa(1.0.0)", "not restarted automatically"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("skew warning missing %q:\n%s", want, stderr.String())
 		}
 	}
 }

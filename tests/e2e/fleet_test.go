@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,97 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 )
+
+func TestFleetStatusReportsRunningBinaryVersionSkew(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary fleet status is slow")
+	}
+	binary := buildJuex(t)
+	home := t.TempDir()
+	workspace := t.TempDir()
+	agentDir := writeFleetE2EAgent(t, home, workspace, "aaaaaaaa")
+	environment := fleetE2EEnvironment(home)
+
+	binding, err := endpoint.Listen(context.Background(), agentDir, "0.0.0-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/identity", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(binding.Runtime()); err != nil {
+			t.Errorf("encode endpoint identity: %v", err)
+		}
+	})
+	server := &http.Server{Handler: mux}
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(binding.Listener())
+	}()
+	if err := binding.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = binding.Close()
+		<-serveDone
+	})
+
+	stdout, stderr, err := runFleetE2E(binary, environment, "", "status", "--format", "json")
+	if err != nil {
+		t.Fatalf("fleet status: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	var statuses []fleet.AgentStatus
+	if err := json.Unmarshal([]byte(stdout), &statuses); err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 ||
+		statuses[0].RuntimeHealth != fleet.RuntimeHealthy ||
+		statuses[0].BinaryVersion != "0.0.0-old" {
+		t.Fatalf("statuses = %+v", statuses)
+	}
+	for _, want := range []string{"0.0.0-old", "not restarted automatically"} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("version skew warning missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
+func TestFleetServeUsesHomeAddressAndExplicitFlagWins(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary fleet serve is slow")
+	}
+	binary := buildJuex(t)
+	home := t.TempDir()
+	environment := fleetE2EEnvironment(home)
+
+	defaulted := startFleetSupervisorWithArgs(t, binary, environment)
+	if got := waitFleetWebReady(t, defaulted); got != "127.0.0.1:5839" {
+		t.Fatalf("default fleet address = %q, want 127.0.0.1:5839", got)
+	}
+	killSupervisor(t, defaulted)
+
+	configAddr := availableFleetAddress(t)
+	if err := os.WriteFile(
+		filepath.Join(home, "juex.yaml"),
+		[]byte("fleet:\n  addr: "+configAddr+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	configured := startFleetSupervisorWithArgs(t, binary, environment)
+	if got := waitFleetWebReady(t, configured); got != configAddr {
+		t.Fatalf("configured fleet address = %q, want %q", got, configAddr)
+	}
+	killSupervisor(t, configured)
+
+	explicit := startFleetSupervisorWithArgs(t, binary, environment, "--addr", "127.0.0.1:0")
+	if got := waitFleetWebReady(t, explicit); got == configAddr {
+		t.Fatalf("explicit --addr did not override configured address %q", configAddr)
+	}
+	killSupervisor(t, explicit)
+}
 
 func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	if testing.Short() {
@@ -121,7 +214,13 @@ type fleetSupervisor struct {
 
 func startFleetSupervisor(t *testing.T, binary string, environment []string) *fleetSupervisor {
 	t.Helper()
-	command := exec.Command(binary, "fleet", "serve", "--addr", "127.0.0.1:0")
+	return startFleetSupervisorWithArgs(t, binary, environment, "--addr", "127.0.0.1:0")
+}
+
+func startFleetSupervisorWithArgs(t *testing.T, binary string, environment []string, args ...string) *fleetSupervisor {
+	t.Helper()
+	commandArgs := append([]string{"fleet", "serve"}, args...)
+	command := exec.Command(binary, commandArgs...)
 	command.Env = environment
 	stdout, err := command.StdoutPipe()
 	if err != nil {
@@ -141,6 +240,19 @@ func startFleetSupervisor(t *testing.T, binary string, environment []string) *fl
 		}
 	}()
 	return &fleetSupervisor{cmd: command, lines: lines, stderr: &stderr}
+}
+
+func availableFleetAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
 }
 
 func waitFleetWebReady(t *testing.T, supervisor *fleetSupervisor) string {

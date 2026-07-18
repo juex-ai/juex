@@ -48,6 +48,7 @@ type Config struct {
 	Shell                     ShellProfile
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
+	Fleet                     FleetConfig
 	EnableUserGlobalResources bool
 
 	HomeAgentsDir     string // ~/.agents (user-global resources)
@@ -74,6 +75,7 @@ type fileConfig struct {
 	Shell                     *ShellConfig     `yaml:"shell"`
 	Sandbox                   sandboxConfig    `yaml:"sandbox"`
 	Skills                    skillsConfig     `yaml:"skills"`
+	Fleet                     *fleetFileConfig `yaml:"fleet"`
 }
 
 type providerConfig struct {
@@ -368,6 +370,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		ToolTimeout:               DefaultToolTimeout,
 		Sandbox:                   sandbox.DefaultPolicy(),
 		Skills:                    DefaultSkillsConfig(),
+		Fleet:                     FleetConfig{Addr: DefaultFleetAddr},
 		EnableUserGlobalResources: true,
 		providerConfigs:           map[string]providerConfig{},
 	}
@@ -639,6 +642,18 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 	}
 	if fc.Shell != nil {
 		cfg.shellConfig = *fc.Shell
+	}
+	if fc.Fleet != nil {
+		if hookSource != "user" {
+			return fmt.Errorf("config: parse %s: fleet is only supported in $JUEX_HOME/juex.yaml", source)
+		}
+		addr := strings.TrimSpace(fc.Fleet.Addr)
+		if addr != "" {
+			if err := ValidateStableFleetAddr(addr); err != nil {
+				return fmt.Errorf("config: parse %s: fleet.addr: %w", source, err)
+			}
+			cfg.Fleet.Addr = addr
+		}
 	}
 	return nil
 }

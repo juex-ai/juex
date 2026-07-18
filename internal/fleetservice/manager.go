@@ -65,6 +65,44 @@ func (m *Manager) Uninstall(ctx context.Context) (Registration, error) {
 	return m.plan.registration, nil
 }
 
+func (m *Manager) Installed(ctx context.Context) (bool, error) {
+	if m == nil {
+		return false, fmt.Errorf("fleet service: manager is nil")
+	}
+	path := m.plan.registration.DefinitionPath
+	if m.plan.registration.Platform == PlatformTermux {
+		path = m.plan.termuxDir
+	}
+	info, err := os.Stat(path)
+	if err == nil {
+		if m.plan.registration.Platform == PlatformTermux && !info.IsDir() {
+			return false, fmt.Errorf("fleet service: installed path %s is not a directory", path)
+		}
+		if m.plan.registration.Platform != PlatformTermux && !info.Mode().IsRegular() {
+			return false, fmt.Errorf("fleet service: installed definition %s is not a regular file", path)
+		}
+		return true, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("fleet service: inspect installed definition %s: %w", path, err)
+	}
+
+	switch m.plan.registration.Platform {
+	case PlatformLaunchd:
+		return m.launchdLoaded(ctx)
+	case PlatformSystemd:
+		state, err := m.systemdState(ctx)
+		if err != nil {
+			return false, err
+		}
+		return !state.absent(), nil
+	case PlatformTermux:
+		return false, nil
+	default:
+		return false, fmt.Errorf("fleet service: unsupported platform %q", m.plan.registration.Platform)
+	}
+}
+
 func (m *Manager) installLaunchd(ctx context.Context) error {
 	loaded, err := m.launchdLoaded(ctx)
 	if err != nil {

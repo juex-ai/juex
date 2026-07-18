@@ -271,7 +271,7 @@ func TestResolveBlocksExistingIdentityMigrationWhileAgentIsRunning(t *testing.T)
 	}
 	legacyPath := filepath.Join(workDir, ".juex", "observables", "observations.jsonl")
 	writeText(t, legacyPath, "{\"id\":\"legacy\"}\n")
-	binding, err := endpoint.Listen(context.Background(), first.AgentDir)
+	binding, err := endpoint.Listen(context.Background(), first.AgentDir, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,10 @@ Install from a published GitHub Release:
 curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.sh | bash
 ```
 
+The POSIX installer refreshes an existing per-user fleet service after replacing
+the binary. It does not install a new service unless
+`INSTALL_FLEET_SERVICE=1` is set, and it never restarts detached agents.
+
 On Windows PowerShell:
 
 ```powershell
@@ -93,15 +97,22 @@ reversible flag. Remove is a separate confirmed destructive operation and
 never deletes workspace files. `fleet serve` performs one startup
 reconciliation, starts enabled autostart agents, adopts verified running
 agents, and then serves the fleet browser API on loopback
-`127.0.0.1:8080`. Agent API requests under `/agents/<id>/api/...` are forwarded
+`127.0.0.1:5839`. Agent API requests under `/agents/<id>/api/...` are forwarded
 only to a freshly verified runtime endpoint. The supervisor remains resident
 without stopping detached agents when it exits. Use `--addr` to choose another
-loopback address; binding beyond loopback requires `--unsafe-bind-any`.
+loopback address; binding beyond loopback requires `--unsafe-bind-any`. A
+`fleet.addr` entry in `$JUEX_HOME/juex.yaml` overrides the default, while an
+explicit `--addr` overrides the home config. `fleet install --addr ...`
+persists that address in the home config. Installed service definitions read
+the address at startup, so editing the config and restarting the service is
+enough to move it.
 `fleet install` registers that supervisor with the current user's launchd,
 systemd, or termux-services manager. Registration names are derived from the
 effective `JUEX_HOME`, so independent homes can coexist. `fleet uninstall`
 removes only the supervisor registration; already detached agents keep running
-and remain manageable with the ordinary fleet lifecycle commands.
+and remain manageable with the ordinary fleet lifecycle commands. Fleet status
+includes each running agent's binary version and warns when it differs from the
+current CLI; detached agents are not restarted automatically.
 
 ## Common Commands
 
@@ -127,8 +138,8 @@ and remain manageable with the ordinary fleet lifecycle commands.
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 | `juex serve` | Serve the current agent JSON/SSE API through its endpoint and loopback TCP. |
 | `juex serve --headless` | Serve the JSON/SSE API only through the current agent endpoint. |
-| `juex fleet serve [--addr 127.0.0.1:8080]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
-| `juex fleet install [--addr 127.0.0.1:8080]` | Register and start the fleet supervisor with the current user's native service manager. |
+| `juex fleet serve [--addr 127.0.0.1:5839]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
+| `juex fleet install [--addr 127.0.0.1:5839]` | Persist an explicit address when provided, then register and start the fleet supervisor. |
 | `juex fleet uninstall` | Stop and remove the supervisor service without stopping detached agents. |
 | `juex fleet status [--format table\|json]` | Show every registry entry with separate workspace binding and runtime health. |
 | `juex fleet add <path> [--name N] [--autostart] [--start]` | Register an existing absolute workspace and optionally start it. |
@@ -169,7 +180,7 @@ $JUEX_HOME/
 ├── fleet.lock                   # one resident supervisor per effective home
 └── agents/<agent-id>/
     ├── agent.json
-    ├── runtime.json             # agent/instance ids, pid, endpoint, and start time
+    ├── runtime.json             # agent/instance ids, pid, endpoint, start time, and binary version
     ├── api.sock                 # preferred local API endpoint while serving
     ├── history.json
     ├── logs/fleet.log           # detached child stdout and stderr

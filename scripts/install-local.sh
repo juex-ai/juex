@@ -5,10 +5,37 @@
 # Usage:
 #   scripts/install-local.sh
 #   PREFIX=$HOME/somewhere-else scripts/install-local.sh
+#   INSTALL_FLEET_SERVICE=1 scripts/install-local.sh
 #
 # After install the script reminds you to add the prefix to PATH if missing.
 
 set -euo pipefail
+
+refresh_fleet_service() {
+  local binary="$1"
+  local installed
+  installed=$("$binary" fleet service-installed)
+  case "$installed" in
+    true)
+      "$binary" fleet install
+      printf 'Refreshed existing JueX fleet service.\n'
+      "$binary" fleet status --format json >/dev/null
+      ;;
+    false)
+      if [[ "${INSTALL_FLEET_SERVICE:-0}" == "1" ]]; then
+        "$binary" fleet install
+        printf 'Installed JueX fleet service by explicit request.\n'
+        "$binary" fleet status --format json >/dev/null
+      else
+        printf 'JueX fleet service is not installed; set INSTALL_FLEET_SERVICE=1 to install it during JueX installation.\n'
+      fi
+      ;;
+    *)
+      printf 'error: unexpected fleet service state from %s: %s\n' "$binary" "$installed" >&2
+      return 1
+      ;;
+  esac
+}
 
 cd "$(dirname "$0")/.."
 
@@ -42,6 +69,7 @@ cp "$BUILD_TARGET" "$INSTALL_TARGET"
 chmod +x "$INSTALL_TARGET"
 
 "$INSTALL_TARGET" version
+refresh_fleet_service "$INSTALL_TARGET"
 
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*)

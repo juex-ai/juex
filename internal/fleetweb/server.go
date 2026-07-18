@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/web"
@@ -64,7 +65,7 @@ func New(opts Options) (*Server, error) {
 func newServer(manager backend, opts Options) *Server {
 	addr := strings.TrimSpace(opts.Addr)
 	if addr == "" {
-		addr = "127.0.0.1:8080"
+		addr = config.DefaultFleetAddr
 	}
 	return &Server{
 		manager:      manager,
@@ -95,7 +96,11 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	listener, err := net.Listen("tcp", s.addr)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"juex fleet serve: listen on %s: %w; change fleet.addr in $JUEX_HOME/juex.yaml or free the port",
+			s.addr,
+			err,
+		)
 	}
 	server := &http.Server{
 		Handler:           s.Handler(),

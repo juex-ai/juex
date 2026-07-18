@@ -1010,7 +1010,9 @@ files, and falls back to an ephemeral `127.0.0.1` TCP port when AF_UNIX cannot
 be used. The resulting `Binding` publishes `runtime.json` explicitly after the
 HTTP server starts and conditionally removes only its own runtime record on
 close. Runtime ownership includes agent id, a cryptographically random process
-instance id, PID, endpoint, and start time.
+instance id, PID, endpoint, start time, and the serving binary version. Version
+is diagnostic metadata: it participates in identity comparison only when both
+sides provide it, preserving interoperability with older runtime records.
 
 Endpoint URIs are `unix:///absolute/path/api.sock` or
 `tcp://127.0.0.1:<port>`. `Parse` accepts only Unix paths and numeric loopback
@@ -1053,18 +1055,29 @@ maintenance guard, atomically renames the registry directory, and removes only
 a still-matching workspace marker. Garbage collection uses the same deletion
 boundary but remains limited to revalidated definite orphans. Fleet commands
 resolve the effective home directly and never load or mint an identity for
-their current directory implicitly.
+their current directory implicitly. Status projects the recorded
+binary version and warns when a live agent differs from the current CLI without
+restarting that detached process.
 
 ### 3.8.2 Fleet Service Registration
 
 `internal/fleetservice` owns user-service definitions and service-manager
-transactions for the resident fleet supervisor. `juex fleet install` validates
-a stable non-zero loopback address, resolves the current executable and
-effective `JUEX_HOME`, and derives a filesystem-safe service identity from that
-home. It writes definitions atomically and rolls back earlier definition files
-if a later file cannot be published. `juex fleet uninstall` queries the native
-manager even when its definition is already missing, stops and confirms the
-supervisor, and only then removes the definition.
+transactions for the resident fleet supervisor. Fleet address precedence is
+explicit `--addr`, then `fleet.addr` in `$JUEX_HOME/juex.yaml`, then
+`127.0.0.1:5839`. Home fleet config is loaded independently of provider and
+workspace config resolution. `juex fleet install --addr ...` validates a
+stable non-zero loopback address and atomically merges it into the home YAML
+before installing. The service definition runs `juex fleet serve` without an
+address argument, so config edits take effect after a service restart.
+
+Installation resolves the current executable and effective `JUEX_HOME`, then
+derives a filesystem-safe service identity from that home. It writes
+definitions atomically and rolls back earlier definition files if a later file
+cannot be published. `Installed` recognizes either a published definition or
+a loaded native service and fails on unknown native-manager errors.
+`juex fleet uninstall` queries the native manager even when its definition is
+already missing, stops and confirms the supervisor, and only then removes the
+definition. It does not depend on fleet address config.
 
 macOS uses a per-user LaunchAgent with `AbandonProcessGroup`; desktop Linux
 uses a systemd user unit with `KillMode=process`; Termux uses termux-services
@@ -1897,7 +1910,11 @@ workflow; runs entirely on GitHub Actions.
 
 `scripts/install.sh` is the POSIX released-binary installer for macOS/Linux. It
 detects platform archives, works when piped into `bash`, verifies the archive
-against `checksums.txt`, and installs into a user-writable bin directory.
+against `checksums.txt`, and installs into a user-writable bin directory. Both
+POSIX installers use the newly installed binary to detect and refresh an
+existing per-user fleet service. A missing service is only installed when
+`INSTALL_FLEET_SERVICE=1`; detached agents are never restarted, and status
+reports any remaining agent-version skew.
 `scripts/install.ps1` is the Windows PowerShell installer for released `zip`
 archives. `scripts/install-local.sh` remains the source-build installer for
 this checkout.
