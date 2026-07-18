@@ -33,6 +33,7 @@ func newSessionsCmd(flags *persistentFlags) *cobra.Command {
 	cmd.AddCommand(newSessionsCompactCmd(flags))
 	cmd.AddCommand(newSessionsActivateCmd(flags))
 	cmd.AddCommand(newSessionsDeleteCmd(flags))
+	declareAgentStatePolicy(cmd, agentStateExisting)
 	return cmd
 }
 

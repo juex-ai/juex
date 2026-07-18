@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -284,8 +283,12 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 	root := newRootCmd()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
+	runCmd, _, err := root.Find([]string{"run"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	cfg, err := loadConfigForCommand(root, &persistentFlags{cwd: work})
+	cfg, err := loadConfigForCommand(runCmd, &persistentFlags{cwd: work})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +297,7 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 		t.Fatalf("migration stderr = %q", stderr.String())
 	}
 	stderr.Reset()
-	if _, err := loadConfigForCommand(root, &persistentFlags{cwd: work}); err != nil {
+	if _, err := loadConfigForCommand(runCmd, &persistentFlags{cwd: work}); err != nil {
 		t.Fatal(err)
 	}
 	if stderr.Len() != 0 {
@@ -302,7 +305,7 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 	}
 }
 
-func TestDoctorPrintsAgentStateMigrationNotice(t *testing.T) {
+func TestDoctorDoesNotMigrateAgentState(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
@@ -314,14 +317,26 @@ func TestDoctorPrintsAgentStateMigrationNotice(t *testing.T) {
 	root := newRootCmd()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	root.SetOut(io.Discard)
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
 	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
 
-	if err := root.Execute(); err != nil {
-		t.Fatal(err)
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
+		t.Fatalf("doctor err = %T %v, want warning\n%s", err, err, stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "juex: notice: migrated workspace runtime state") {
-		t.Fatalf("doctor stderr = %q", stderr.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("doctor emitted migration notice: %q", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "no agent exists") {
+		t.Fatalf("doctor output missing no-agent warning:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("doctor created marker: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".juex", "memory", "MEMORY.md")); err != nil {
+		t.Fatalf("doctor migrated legacy memory: %v", err)
 	}
 }
 
@@ -1178,15 +1193,17 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	root.SetOut(&out)
 	root.SetErr(&out)
 	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("doctor execute: %v\n%s", err, out.String())
+	err = root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusWarn {
+		t.Fatalf("doctor execute: %T %v, want warning\n%s", err, err, out.String())
 	}
 	var result map[string]any
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 		t.Fatalf("doctor json: %v\n%s", err, out.String())
 	}
-	if result["status"] != "ok" {
-		t.Fatalf("status = %#v, want ok:\n%s", result["status"], out.String())
+	if result["status"] != "warn" {
+		t.Fatalf("status = %#v, want warn:\n%s", result["status"], out.String())
 	}
 	checks, _ := result["checks"].([]any)
 	seen := map[string]bool{}

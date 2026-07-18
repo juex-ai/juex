@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -1155,6 +1156,54 @@ func TestLoadForWorkDirDoesNotCreateIdentityBeforeConfigValidation(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("agent registry exists before config validation: %v", err)
+	}
+}
+
+func TestLoadWithOptionsAgentStateNoneDoesNotUseWorkspaceFallback(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentID != "" || cfg.AgentStateDir != "" || cfg.RuntimePaths().StateDir != "" {
+		t.Fatalf("state-free config resolved runtime state: id=%q dir=%q paths=%+v", cfg.AgentID, cfg.AgentStateDir, cfg.RuntimePaths())
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state-free load wrote workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state-free load wrote registry: %v", err)
+	}
+}
+
+func TestLoadWithOptionsExistingRequiresMarker(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := filepath.Join(home, "workspace")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		AgentState: AgentStateExisting,
+	})
+	var noAgent *agentstate.NoAgentError
+	if !errors.As(err, &noAgent) {
+		t.Fatalf("err = %v, want NoAgentError", err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".juex")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("existing-only load wrote workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".juex", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("existing-only load wrote registry: %v", err)
 	}
 }
 

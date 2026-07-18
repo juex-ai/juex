@@ -47,6 +47,7 @@ func newFleetCmd(flags *persistentFlags) *cobra.Command {
 	cmd.AddCommand(newFleetInstallCmd(flags))
 	cmd.AddCommand(newFleetUninstallCmd(flags))
 	cmd.AddCommand(newFleetServiceInstalledCmd())
+	declareAgentStatePolicy(cmd, agentStateNone)
 	return cmd
 }
 

@@ -133,14 +133,16 @@ current CLI; detached agents are not restarted automatically.
 | Command | Purpose |
 | --- | --- |
 | `juex init` | Create or merge a first-run runtime config in `$JUEX_HOME/juex.yaml` or the workspace. |
-| `juex doctor` | Run read-only checks for config, credentials, connectivity, shell, MCP, and skills. |
+| `juex doctor` | Run read-only checks for workspace identity, config, credentials, connectivity, shell, MCP, and skills. |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
+| `juex run --ephemeral "<prompt>"` | Run with isolated temporary agent state; add `--keep` to retain and print the state path. |
 | `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
 | `juex --model <provider>:<model> run "<prompt>"` | Override the configured model for this invocation. |
 | `juex --debug run --json "<prompt>"` | Write detailed session logs, trace, span, and tool summary JSONL while emitting the normal run result. |
 | `juex run --new "<prompt>"` | Create a new active primary session for the prompt. |
 | `juex run --side "<prompt>"` | Create a side session without changing the active primary session. |
 | `juex repl` | Start an interactive CLI session attached to the active primary session. |
+| `juex repl --ephemeral` | Start an isolated temporary REPL; add `--keep` to retain its state. |
 | `/attach <path>` in `juex repl` | Stage a local image for the next ordinary user turn. |
 | `/new`, `/status`, `/compact [instructions]` | Local slash commands accepted by `run`, `repl`, and the web composer. |
 | `juex sessions list` | List recorded sessions. |
@@ -151,6 +153,7 @@ current CLI; detached agents are not restarted automatically.
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
 | `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 | `juex serve` | Serve the current agent JSON/SSE API through its canonical endpoint only. |
+| `juex serve --ephemeral` | Serve from isolated temporary state without fleet registration; add `--keep` to retain the state after shutdown. |
 | `juex serve --addr 127.0.0.1:9000` | Add an explicit loopback TCP listener for the agent JSON/SSE API. |
 | `juex serve --headless` | Compatibility form of endpoint-only `juex serve`; implied without `--addr`. |
 | `juex fleet serve [--addr 127.0.0.1:5839]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
@@ -177,6 +180,20 @@ reboot is required.
 
 Each workspace has one resident-agent identity. The narrow workspace marker
 binds it to state under `JUEX_HOME`, which defaults to `~/.juex`:
+
+Only a normal `run`, `repl`, or `serve` may create this durable identity.
+Session and bundle commands require an existing marker and never create,
+migrate, or rebind one. `doctor` reports a missing marker as a warning, while
+`version`, `schema`, `init`, and fleet registry commands do not require a
+workspace identity.
+
+`run`, `repl`, and `serve` accept `--ephemeral` for one-off work. Ephemeral
+mode keeps normal workspace and user configuration/resource loading, but
+replaces identity-owned state with a private temporary home that is deleted on
+exit. It ignores an existing marker, never changes the durable agent state or
+global Git excludes, and is invisible to the fleet registry. `--keep` retains
+the temporary state and prints its absolute path to stderr. `run --dry-run`
+uses the same isolated scratch-state behavior automatically.
 
 ```text
 <workspace>/.juex/
