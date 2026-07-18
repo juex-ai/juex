@@ -401,7 +401,7 @@ function AddAgentDialog({
       const result = await addAgent({
         workspace,
         name: name.trim() || undefined,
-        autostart,
+        autostart: autostart ? true : undefined,
         start: startNow,
       });
       onAdded(result.agent);

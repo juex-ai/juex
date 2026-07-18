@@ -70,6 +70,11 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
     fleetSource,
     /const confirmationTarget = agent\.name \|\| agent\.id/,
   );
+  assert.match(
+    fleetSource,
+    /autostart: autostart \? true : undefined/,
+    "an untouched false toggle must preserve existing autostart metadata",
+  );
   assert.match(fleetSource, /localeCompare\(b\.id\)/);
   assert.match(fleetSource, /agent\.enabled/);
   assert.match(typesSource, /export interface DirectoryListing/);
