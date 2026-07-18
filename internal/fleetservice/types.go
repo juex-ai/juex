@@ -50,6 +50,7 @@ type hostInfo struct {
 	uid           int
 	xdgConfigHome string
 	termuxPrefix  string
+	searchPath    string
 }
 
 type definitionFile struct {
@@ -108,6 +109,7 @@ func currentHostInfo() (hostInfo, error) {
 		goos:          runtime.GOOS,
 		userHome:      home,
 		xdgConfigHome: strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")),
+		searchPath:    os.Getenv("PATH"),
 	}
 	if runtime.GOOS == "darwin" {
 		current, err := user.Current()

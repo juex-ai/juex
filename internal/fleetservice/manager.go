@@ -112,6 +112,9 @@ func (m *Manager) installLaunchd(ctx context.Context) error {
 		if _, err := m.run(ctx, command{name: "launchctl", args: []string{"bootout", m.plan.launchdTarget}}); err != nil {
 			return err
 		}
+		if err := m.waitLaunchdUnloaded(ctx); err != nil {
+			return err
+		}
 	}
 	if _, err := m.run(ctx, command{name: "launchctl", args: []string{"bootstrap", m.plan.launchdDomain, m.plan.registration.DefinitionPath}}); err != nil {
 		return err
@@ -140,7 +143,7 @@ func (m *Manager) uninstallLaunchd(ctx context.Context) error {
 }
 
 func (m *Manager) waitLaunchdUnloaded(ctx context.Context) error {
-	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()

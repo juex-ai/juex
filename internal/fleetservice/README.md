@@ -14,6 +14,11 @@ native service manager. It does not manage individual agents.
   and then removes the definition.
 - launchd definitions use `AbandonProcessGroup`; systemd user units use
   `KillMode=process`; Termux services require an explicit confirmed `down`.
+- Definitions persist an explicit executable search path for resident
+  agents and their child processes. The JueX executable directory and
+  `~/.local/bin` come first, safe absolute entries from the installer's `PATH`
+  retain their order, relative entries are discarded, and platform defaults
+  are appended.
 
 Service identities include a normalized `JUEX_HOME` slug and hash so multiple
 homes can be registered independently. Definition publication is atomic per

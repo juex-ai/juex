@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -28,20 +29,75 @@ func buildPlan(opts Options, host hostInfo) (registrationPlan, error) {
 	if opts.UnsafeBindAny {
 		args = append(args, "--unsafe-bind-any")
 	}
+	searchPath := serviceSearchPath(executable, host)
 
 	switch host.goos {
 	case "darwin":
-		return buildLaunchdPlan(home, executable, args, identity, host)
+		return buildLaunchdPlan(home, executable, args, searchPath, identity, host)
 	case "linux":
 		if host.termuxPrefix != "" {
-			return buildTermuxPlan(home, executable, args, identity, host)
+			return buildTermuxPlan(home, executable, args, searchPath, identity, host)
 		}
-		return buildSystemdPlan(home, executable, args, identity, host)
+		return buildSystemdPlan(home, executable, args, searchPath, identity, host)
 	case "windows":
 		return registrationPlan{}, fmt.Errorf("fleet service: automatic service registration is not supported on Windows")
 	default:
 		return registrationPlan{}, fmt.Errorf("fleet service: automatic service registration is not supported on %s", host.goos)
 	}
+}
+
+func serviceSearchPath(executable string, host hostInfo) string {
+	entries := make([]string, 0, 16)
+	seen := make(map[string]struct{}, 16)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || strings.ContainsAny(value, "\x00\n\r") {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		entries = append(entries, value)
+	}
+
+	add(filepath.Dir(executable))
+	add(filepath.Join(host.userHome, ".local", "bin"))
+	for _, value := range strings.Split(host.searchPath, ":") {
+		value = strings.TrimSpace(value)
+		if !strings.HasPrefix(value, "/") {
+			continue
+		}
+		add(path.Clean(value))
+	}
+
+	switch {
+	case host.goos == "darwin":
+		for _, value := range []string{
+			"/opt/homebrew/bin",
+			"/usr/local/bin",
+			"/usr/bin",
+			"/bin",
+			"/usr/sbin",
+			"/sbin",
+		} {
+			add(value)
+		}
+	case host.goos == "linux" && host.termuxPrefix != "":
+		add(filepath.Join(host.termuxPrefix, "bin"))
+	case host.goos == "linux":
+		for _, value := range []string{
+			"/usr/local/bin",
+			"/usr/bin",
+			"/bin",
+			"/usr/local/sbin",
+			"/usr/sbin",
+			"/sbin",
+		} {
+			add(value)
+		}
+	}
+	return strings.Join(entries, ":")
 }
 
 func absolutePath(label, value string) (string, error) {
@@ -92,7 +148,7 @@ func serviceIdentity(home string) string {
 	return name + "-" + hex.EncodeToString(digest[:6])
 }
 
-func buildLaunchdPlan(home, executable string, args []string, identity string, host hostInfo) (registrationPlan, error) {
+func buildLaunchdPlan(home, executable string, args []string, searchPath, identity string, host hostInfo) (registrationPlan, error) {
 	if host.uid < 0 {
 		return registrationPlan{}, fmt.Errorf("fleet service: invalid launchd uid %d", host.uid)
 	}
@@ -104,7 +160,7 @@ func buildLaunchdPlan(home, executable string, args []string, identity string, h
 	definitionPath := filepath.Join(userHome, "Library", "LaunchAgents", label+".plist")
 	logPath := filepath.Join(home, "logs", "fleet-service.log")
 	programArguments := append([]string{executable}, args...)
-	body, err := renderLaunchd(label, programArguments, home, logPath)
+	body, err := renderLaunchd(label, programArguments, home, searchPath, logPath)
 	if err != nil {
 		return registrationPlan{}, err
 	}
@@ -118,7 +174,7 @@ func buildLaunchdPlan(home, executable string, args []string, identity string, h
 	}, nil
 }
 
-func renderLaunchd(label string, args []string, home, logPath string) ([]byte, error) {
+func renderLaunchd(label string, args []string, home, searchPath, logPath string) ([]byte, error) {
 	var body bytes.Buffer
 	body.WriteString(xml.Header)
 	body.WriteString("<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n")
@@ -198,6 +254,12 @@ func renderLaunchd(label string, args []string, home, logPath string) ([]byte, e
 	if err := textElement("string", home); err != nil {
 		return nil, err
 	}
+	if err := key("PATH"); err != nil {
+		return nil, err
+	}
+	if err := textElement("string", searchPath); err != nil {
+		return nil, err
+	}
 	if err := end("dict"); err != nil {
 		return nil, err
 	}
@@ -235,7 +297,7 @@ func renderLaunchd(label string, args []string, home, logPath string) ([]byte, e
 	return data, nil
 }
 
-func buildSystemdPlan(home, executable string, args []string, identity string, host hostInfo) (registrationPlan, error) {
+func buildSystemdPlan(home, executable string, args []string, searchPath, identity string, host hostInfo) (registrationPlan, error) {
 	userHome, err := absolutePath("user home", host.userHome)
 	if err != nil {
 		return registrationPlan{}, err
@@ -264,6 +326,7 @@ func buildSystemdPlan(home, executable string, args []string, identity string, h
 		"Type=exec",
 		"ExecStart=" + strings.Join(quoted, " "),
 		"Environment=" + systemdEnvironmentAssignment("JUEX_HOME", home),
+		"Environment=" + systemdEnvironmentAssignment("PATH", searchPath),
 		"Restart=on-failure",
 		"RestartSec=5",
 		"KillMode=process",
@@ -312,7 +375,7 @@ func systemdQuote(value string) string {
 	return `"` + value + `"`
 }
 
-func buildTermuxPlan(home, executable string, args []string, identity string, host hostInfo) (registrationPlan, error) {
+func buildTermuxPlan(home, executable string, args []string, searchPath, identity string, host hostInfo) (registrationPlan, error) {
 	prefix, err := absolutePath("Termux prefix", host.termuxPrefix)
 	if err != nil {
 		return registrationPlan{}, err
@@ -330,6 +393,7 @@ func buildTermuxPlan(home, executable string, args []string, identity string, ho
 	run := strings.Join([]string{
 		"#!" + filepath.Join(prefix, "bin", "sh"),
 		"export JUEX_HOME=" + shellQuote(home),
+		"export PATH=" + shellQuote(searchPath),
 		"exec " + strings.Join(quoted, " "),
 		"",
 	}, "\n")
