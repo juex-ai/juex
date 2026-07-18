@@ -34,6 +34,11 @@ type Registration struct {
 	Notes          []string `json:"notes,omitempty"`
 }
 
+type InstalledServeOptions struct {
+	Addr          string
+	UnsafeBindAny bool
+}
+
 type Manager struct {
 	plan   registrationPlan
 	runner commandRunner

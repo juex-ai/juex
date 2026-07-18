@@ -107,7 +107,11 @@ loopback address; binding beyond loopback requires `--unsafe-bind-any`. A
 explicit `--addr` overrides the home config. `fleet install --addr ...`
 persists that address in the home config. Installed service definitions read
 the address at startup, so editing the config and restarting the service is
-enough to move it.
+enough to move it. When refreshing a legacy service, `fleet install` migrates
+its non-default baked-in address to the home config and preserves
+`--unsafe-bind-any` unless either option is explicitly overridden. The legacy
+default `127.0.0.1:8080` adopts the current default instead of becoming an
+explicit config value.
 `fleet install` registers that supervisor with the current user's launchd,
 systemd, or termux-services manager. Registration names are derived from the
 effective `JUEX_HOME`, so independent homes can coexist. `fleet uninstall`
