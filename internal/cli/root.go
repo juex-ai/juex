@@ -352,13 +352,17 @@ func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Co
 	if err != nil {
 		return cfg, err
 	}
+	writeConfigMessages(cmd, cfg)
+	return cfg, nil
+}
+
+func writeConfigMessages(cmd *cobra.Command, cfg config.Config) {
 	for _, warning := range cfg.DeprecationWarnings {
 		fmt.Fprintf(cmd.ErrOrStderr(), "juex: warning: %s\n", warning)
 	}
 	for _, notice := range cfg.AgentStateNotices {
 		fmt.Fprintf(cmd.ErrOrStderr(), "juex: notice: %s\n", notice)
 	}
-	return cfg, nil
 }
 
 type runtimeConfigLifecycle struct {
@@ -376,9 +380,7 @@ func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, kee
 	if err != nil {
 		return cfg, nil, err
 	}
-	for _, notice := range cfg.AgentStateNotices {
-		fmt.Fprintf(cmd.ErrOrStderr(), "juex: notice: %s\n", notice)
-	}
+	writeConfigMessages(cmd, cfg)
 	if policy != agentStateEphemeral {
 		return cfg, nil, nil
 	}

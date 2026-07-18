@@ -575,7 +575,7 @@ func TestRoot_DeprecatedUserGlobalResourcesFlagWarns(t *testing.T) {
 	}
 }
 
-func TestLoadConfigForCommand_DeprecatedUserGlobalResourcesKeyWarns(t *testing.T) {
+func TestLoadRuntimeConfigForCommand_DeprecatedUserGlobalResourcesKeyWarns(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	path := filepath.Join(work, ".juex", "juex.yaml")
@@ -589,9 +589,16 @@ func TestLoadConfigForCommand_DeprecatedUserGlobalResourcesKeyWarns(t *testing.T
 	root := newRootCmd()
 	var stderr bytes.Buffer
 	root.SetErr(&stderr)
-	cfg, err := loadConfigForCommand(root, &persistentFlags{cwd: work})
+	runCmd, _, err := root.Find([]string{"run"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	cfg, lifecycle, err := loadRuntimeConfigForCommand(runCmd, &persistentFlags{cwd: work}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle != nil {
+		t.Fatal("durable run config unexpectedly created an ephemeral lifecycle")
 	}
 	if cfg.EnableUserAgentsResources {
 		t.Fatal("deprecated resource key did not set the resolved value")
