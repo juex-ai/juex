@@ -223,21 +223,21 @@ type ResourcePaths struct {
 	SkillDirs            []string
 	AgentsMDDirs         []string
 	MCPConfigPaths       []string
-	UserGlobalResources  bool
+	UserAgentsResources  bool
 }
 
 func (c Config) ResourcePaths() ResourcePaths {
 	paths := ResourcePaths{
 		WorkDir:             c.WorkDir,
 		HomeAgentsDir:       c.HomeAgentsDir,
-		UserGlobalResources: c.EnableUserGlobalResources,
+		UserAgentsResources: c.EnableUserAgentsResources,
 	}
-	if c.EnableUserGlobalResources && c.HomeAgentsDir != "" {
+	if c.EnableUserAgentsResources && c.HomeAgentsDir != "" {
 		paths.GlobalAgentsMDPath = filepath.Join(c.HomeAgentsDir, "AGENTS.md")
 		paths.SkillDirs = append(paths.SkillDirs, filepath.Join(c.HomeAgentsDir, "skills"))
 		paths.MCPConfigPaths = append(paths.MCPConfigPaths, filepath.Join(c.HomeAgentsDir, "mcp.json"))
 	}
-	if c.EnableUserGlobalResources && c.HomeJuexDir != "" {
+	if c.HomeJuexDir != "" {
 		paths.HomeExtensionsDir = filepath.Join(c.HomeJuexDir, "extensions")
 	}
 	if c.WorkDir != "" {

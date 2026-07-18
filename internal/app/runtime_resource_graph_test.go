@@ -24,7 +24,7 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
 		HomeJuexDir:               homeJuex,
-		EnableUserGlobalResources: true,
+		EnableUserAgentsResources: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -52,19 +52,22 @@ func TestResolveRuntimeResourceGraphSourceNodes(t *testing.T) {
 func TestResolveRuntimeResourceGraphExcludesUserResourcesWhenDisabled(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()
+	homeJuex := t.TempDir()
 	mustWriteRuntimeStatusFile(t, filepath.Join(homeAgents, "skills", "user", "SKILL.md"), "---\nname: user\n---\n")
+	mustWriteRuntimeStatusFile(t, filepath.Join(homeJuex, "extensions", "home", "skills", "ext", "SKILL.md"), "---\nname: ext\n---\n")
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "skills", "project", "SKILL.md"), "---\nname: project\n---\n")
 
 	graph, err := ResolveRuntimeResourceGraph(config.Config{
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
-		EnableUserGlobalResources: false,
+		HomeJuexDir:               homeJuex,
+		EnableUserAgentsResources: false,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got, want := skillDirSources(graph.SkillDirs()), []string{"project"}; !reflect.DeepEqual(got, want) {
+	if got, want := skillDirSources(graph.SkillDirs()), []string{"ext:home", "project"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("skill dir sources = %v, want %v", got, want)
 	}
 }

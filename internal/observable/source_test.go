@@ -1113,13 +1113,30 @@ func TestCloseTriggeredByExitedEventDrainsPostFinishWorkerDelivery(t *testing.T)
 	if !<-submitAccepted {
 		t.Fatal("post-finish worker delivery was rejected")
 	}
+	var deferred *CloseDeferredError
 	select {
 	case err := <-closeResult:
-		t.Fatalf("Close returned before tracked delivery drained: %v", err)
+		if !errors.As(err, &deferred) {
+			t.Fatalf("Close returned before tracked delivery drained: %v", err)
+		}
 	default:
 	}
+	var waitResult chan error
+	if deferred != nil {
+		waitResult = make(chan error, 1)
+		go func() { waitResult <- deferred.Wait() }()
+		select {
+		case err := <-waitResult:
+			t.Fatalf("deferred Close completed before tracked delivery drained: %v", err)
+		default:
+		}
+	}
 	close(releaseDelivery)
-	if err := <-closeResult; err != nil {
+	if waitResult != nil {
+		if err := <-waitResult; err != nil {
+			t.Fatal(err)
+		}
+	} else if err := <-closeResult; err != nil {
 		t.Fatal(err)
 	}
 	if terminalEvents.Load() != 1 {

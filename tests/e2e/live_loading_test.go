@@ -241,6 +241,75 @@ func TestLiveBinary_LoadsExtensionSkillsAndMCP(t *testing.T) {
 	}
 }
 
+func TestLiveBinary_UserAgentsGateDoesNotDisableHomeExtensions(t *testing.T) {
+	bin := buildJuex(t)
+	home := t.TempDir()
+	work := t.TempDir()
+	if err := writeSkillFile(home, "personal-only", "personal agents skill"); err != nil {
+		t.Fatal(err)
+	}
+	extDir := filepath.Join(home, "extensions", "home-bundle")
+	if err := writeExtensionSkillFile(extDir, "home-extension", "home extension skill"); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(work, ".juex", "juex.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configBody := `model: openai:m
+enable_user_agents_resources: false
+providers:
+  - id: openai
+    base_url: https://example
+    api_key: k
+    models:
+      - id: m
+`
+	if err := os.WriteFile(configPath, []byte(configBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "-C", work, "run", "--dry-run", "--json", "x")
+	cmd.Env = filteredEnv("HOME", "USERPROFILE", "JUEX_HOME", "CODEX_HOME")
+	cmd.Env = append(cmd.Env,
+		"HOME="+home,
+		"USERPROFILE="+home,
+		"JUEX_HOME="+home,
+		"CODEX_HOME="+filepath.Join(home, "missing-codex-home"),
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 10 {
+		t.Fatalf("juex exit: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	var plan struct {
+		Skills []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+		} `json:"skills"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatalf("parse plan: %v\noutput:\n%s", err, stdout.String())
+	}
+	found := map[string]string{}
+	for _, skill := range plan.Skills {
+		found[skill.Name] = skill.Path
+	}
+	if _, ok := found["personal-only"]; ok {
+		t.Fatalf("personal ~/.agents skill loaded with gate disabled: %+v", plan.Skills)
+	}
+	resolvedHome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := found["home-extension"], filepath.Join(resolvedHome, "extensions", "home-bundle", "skills", "home-extension", "SKILL.md"); got != want {
+		t.Fatalf("home extension skill path = %q, want %q; skills=%+v", got, want, plan.Skills)
+	}
+}
+
 func TestLiveBinary_ModelFlagUsesUserGlobalProvider(t *testing.T) {
 	bin := buildJuex(t)
 	work := t.TempDir()

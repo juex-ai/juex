@@ -15,9 +15,8 @@ func TestDiscoverFindsUserAndProjectExtensions(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "project-ext", "hooks.yaml"), "trusted: true\n")
 
 	resources, err := Discover(DiscoverOptions{
-		HomeJuexDir:               home,
-		WorkDir:                   work,
-		EnableUserGlobalResources: true,
+		HomeJuexDir: home,
+		WorkDir:     work,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -42,22 +41,68 @@ func TestDiscoverFindsUserAndProjectExtensions(t *testing.T) {
 	}
 }
 
-func TestDiscoverSkipsUserExtensionsWhenGlobalResourcesDisabled(t *testing.T) {
+func TestDiscoverAlwaysLoadsHomeExtensions(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
 	writeExtensionFile(t, filepath.Join(home, "extensions", "user-ext", "mcp.json"), "{}")
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "project-ext", "mcp.json"), "{}")
 
 	resources, err := Discover(DiscoverOptions{
-		HomeJuexDir:               home,
-		WorkDir:                   work,
-		EnableUserGlobalResources: false,
+		HomeJuexDir: home,
+		WorkDir:     work,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resources.Extensions) != 1 || resources.Extensions[0].Name != "project-ext" {
+	if len(resources.Extensions) != 2 ||
+		resources.Extensions[0].Name != "user-ext" ||
+		resources.Extensions[1].Name != "project-ext" {
 		t.Fatalf("extensions = %+v", resources.Extensions)
+	}
+}
+
+func TestDiscoverDeduplicatesOverlappingHomeAndProjectRoots(t *testing.T) {
+	work := t.TempDir()
+	homeJuex := filepath.Join(work, ".juex")
+	writeExtensionFile(t, filepath.Join(homeJuex, "extensions", "shared", "hooks.yaml"), "commands: {}\n")
+
+	resources, err := Discover(DiscoverOptions{
+		HomeJuexDir: homeJuex,
+		WorkDir:     work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Extensions) != 1 ||
+		resources.Extensions[0].Name != "shared" ||
+		resources.Extensions[0].Scope != ScopeUser {
+		t.Fatalf("extensions = %+v, want one home-scoped extension", resources.Extensions)
+	}
+	if len(resources.HookFiles) != 1 || resources.HookFiles[0].RequireTrust {
+		t.Fatalf("hook refs = %+v, want trusted-by-home-location hook", resources.HookFiles)
+	}
+}
+
+func TestDiscoverDeduplicatesSymlinkedRoots(t *testing.T) {
+	work := t.TempDir()
+	homeJuex := filepath.Join(work, ".juex")
+	writeExtensionFile(t, filepath.Join(homeJuex, "extensions", "shared", "mcp.json"), "{}")
+	alias := filepath.Join(t.TempDir(), "home-juex")
+	if err := os.Symlink(homeJuex, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	resources, err := Discover(DiscoverOptions{
+		HomeJuexDir: alias,
+		WorkDir:     work,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resources.Extensions) != 1 ||
+		resources.Extensions[0].Name != "shared" ||
+		resources.Extensions[0].Scope != ScopeUser {
+		t.Fatalf("extensions = %+v, want one home-scoped extension", resources.Extensions)
 	}
 }
 
@@ -68,9 +113,8 @@ func TestDiscoverRejectsDuplicateExtensionNames(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "shared", "mcp.json"), "{}")
 
 	_, err := Discover(DiscoverOptions{
-		HomeJuexDir:               home,
-		WorkDir:                   work,
-		EnableUserGlobalResources: true,
+		HomeJuexDir: home,
+		WorkDir:     work,
 	})
 	if err == nil || !strings.Contains(err.Error(), `duplicate extension "shared"`) {
 		t.Fatalf("err = %v, want duplicate extension error", err)

@@ -283,7 +283,7 @@ body`)
 		ProviderCapabilities:      llm.CapabilityOverrides{Tools: &tools},
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
-		EnableUserGlobalResources: true,
+		EnableUserAgentsResources: true,
 	}
 
 	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
@@ -378,7 +378,7 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	cfg := config.Config{
 		WorkDir:                   work,
 		HomeAgentsDir:             homeAgents,
-		EnableUserGlobalResources: true,
+		EnableUserAgentsResources: true,
 	}
 
 	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{

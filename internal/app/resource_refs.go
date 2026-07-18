@@ -49,9 +49,8 @@ type RuntimeResourceGraph struct {
 func ResolveRuntimeResourceGraph(cfg config.Config) (RuntimeResourceGraph, error) {
 	paths := cfg.ResourcePaths()
 	extResources, err := extensions.Discover(extensions.DiscoverOptions{
-		HomeJuexDir:               cfg.HomeJuexDir,
-		WorkDir:                   cfg.WorkDir,
-		EnableUserGlobalResources: cfg.EnableUserGlobalResources,
+		HomeJuexDir: cfg.HomeJuexDir,
+		WorkDir:     cfg.WorkDir,
 	})
 	if err != nil {
 		return RuntimeResourceGraph{}, err
@@ -90,7 +89,7 @@ func (g RuntimeResourceGraph) Nodes() []RuntimeResourceNode {
 
 func runtimeResourceNodes(paths config.ResourcePaths, extResources extensions.Resources) []RuntimeResourceNode {
 	var nodes []RuntimeResourceNode
-	if paths.UserGlobalResources && paths.HomeAgentsDir != "" {
+	if paths.UserAgentsResources && paths.HomeAgentsDir != "" {
 		nodes = append(nodes,
 			runtimeResourceNode(RuntimeResourceSkillDir, "user", filepath.Join(paths.HomeAgentsDir, "skills"), false, false),
 			runtimeResourceNode(RuntimeResourceMCPConfig, "user", filepath.Join(paths.HomeAgentsDir, "mcp.json"), false, false),
@@ -193,7 +192,7 @@ func runtimeSourceRank(source string) int {
 
 func skillDirRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef) []skills.Dir {
 	var refs []skills.Dir
-	if paths.UserGlobalResources && paths.HomeAgentsDir != "" {
+	if paths.UserAgentsResources && paths.HomeAgentsDir != "" {
 		refs = append(refs, skills.Dir{
 			Path:   filepath.Join(paths.HomeAgentsDir, "skills"),
 			Source: "user",
@@ -217,7 +216,7 @@ func skillDirRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef) 
 
 func mcpConfigRefs(paths config.ResourcePaths, extRefs []extensions.ResourceRef) []mcpConfigRef {
 	var refs []mcpConfigRef
-	if paths.UserGlobalResources && paths.HomeAgentsDir != "" {
+	if paths.UserAgentsResources && paths.HomeAgentsDir != "" {
 		refs = append(refs, mcpConfigRef{
 			Path:   filepath.Join(paths.HomeAgentsDir, "mcp.json"),
 			Source: "user",

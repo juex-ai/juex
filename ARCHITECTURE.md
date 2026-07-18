@@ -698,9 +698,11 @@ Sessions and memory are identity-owned runtime data under
 `$JUEX_HOME/agents/<id>/`.
 Skills, mcp.json, and AGENTS.md still live under `.agents` and come from
 project-local scope. User-global `~/.agents` resources are also loaded by
-default unless `enable_user_global_resources` or
-`--enable-user-global-resources` disables them. Project MCP servers and skills
+default unless `enable_user_agents_resources` or
+`--enable-user-agents-resources` disables them. Project MCP servers and skills
 override user entries by name; AGENTS.md files are concatenated in load order.
+This switch does not gate `$JUEX_HOME/extensions`, which belongs to the
+selected JueX home.
 
 ### 3.5 Session
 
@@ -993,7 +995,8 @@ Persistent flags inherited by all subcommands:
 |---|---|---|
 | `--config` |  | unset (path to `juex.yaml` override) |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
-| `--enable-user-global-resources` |  | config value (true/false or 1/0) |
+| `--enable-user-agents-resources` |  | config value (true/false or 1/0) |
+| `--enable-user-global-resources` |  | deprecated alias; warns and defers to the new spelling when both are present |
 | `--verbose` |  | false (stream events to stderr) |
 
 Every executable Cobra command declares an agent-state policy through an
@@ -1339,7 +1342,7 @@ directory, where Juex reads `<WorkDir>/juex.yaml`. The repository root ships
 model: openai:gpt-4.1
 fallback_models:
   - anthropic:claude-sonnet-5
-enable_user_global_resources: true
+enable_user_agents_resources: true
 skills:
   prompt_budget_chars: 8000
   include: []
@@ -1402,7 +1405,8 @@ compaction:
 |---|---|
 | `model` | active model reference in `provider:model` form |
 | `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
-| `enable_user_global_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores `~/.agents/AGENTS.md`, `~/.agents/skills`, `~/.agents/mcp.json`, and `$JUEX_HOME/extensions` |
+| `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; `$JUEX_HOME/extensions` remains enabled |
+| `enable_user_global_resources` | deprecated one-release alias for `enable_user_agents_resources`; emits a warning, and the new spelling wins when both appear in one file |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
@@ -1683,7 +1687,8 @@ ordinary user turns keep failing loudly on compaction errors.
 
 ## 6. Filesystem Conventions
 
-Resources and state split between user-global, agent-home, and work-local:
+Resources and state split between personal, JueX-home, agent-home, and
+work-local:
 
 ```
 ~/.agents/                       # optional user-global resources
@@ -1693,7 +1698,7 @@ Resources and state split between user-global, agent-home, and work-local:
 
 $JUEX_HOME/
 ├── juex.yaml                     # user-global provider/runtime config
-├── extensions/<name>/            # optional user-global extension bundle
+├── extensions/<name>/            # optional JueX-home extension bundle
 │   ├── hooks.yaml                # lifecycle command hooks, trusted by location
 │   ├── mcp.json                  # extension MCP servers
 │   └── skills/<skill>/SKILL.md   # extension skills
@@ -1774,13 +1779,13 @@ presentation. `internal/llm` preserves the canonical media block in history but
 projects it to metadata plus an explicit cannot-view/do-not-guess instruction
 for that provider request. Vision-capable projection remains unchanged.
 
-The user-global `~/.agents` and `$JUEX_HOME/extensions` resources are read-only
-from Juex's view and are loaded only when user-global resources are enabled.
-Work-local extension bundles are always discovered from
-`<WorkDir>/.juex/extensions`. Extension names are global within one run; a
-duplicate extension name is a startup error. Extension-provided MCP server,
-skill, or hook names must not collide with existing resources or another
-extension. Runtime status reports extension resources as `ext:<name>`.
+The personal `~/.agents` resources are read-only from Juex's view and are
+loaded only when user-agent resources are enabled. Extension bundles under
+both `$JUEX_HOME/extensions` and `<WorkDir>/.juex/extensions` are always
+discovered. Extension names are global within one run; a duplicate extension
+name is a startup error. Extension-provided MCP server, skill, or hook names
+must not collide with existing resources or another extension. Runtime status
+reports extension resources as `ext:<name>`.
 
 **Migration:** on the first stateful `mint` resolution, legacy workspace-local
 `.juex/sessions`,

@@ -23,9 +23,8 @@ const (
 )
 
 type DiscoverOptions struct {
-	HomeJuexDir               string
-	WorkDir                   string
-	EnableUserGlobalResources bool
+	HomeJuexDir string
+	WorkDir     string
 }
 
 type Extension struct {
@@ -52,15 +51,15 @@ type Resources struct {
 
 func Discover(opts DiscoverOptions) (Resources, error) {
 	var roots []extensionRoot
-	if opts.EnableUserGlobalResources && opts.HomeJuexDir != "" {
-		roots = append(roots, extensionRoot{
+	if opts.HomeJuexDir != "" {
+		roots = appendDistinctExtensionRoot(roots, extensionRoot{
 			Path:         filepath.Join(opts.HomeJuexDir, "extensions"),
 			Scope:        ScopeUser,
 			RequireTrust: false,
 		})
 	}
 	if opts.WorkDir != "" {
-		roots = append(roots, extensionRoot{
+		roots = appendDistinctExtensionRoot(roots, extensionRoot{
 			Path:         filepath.Join(opts.WorkDir, ".juex", "extensions"),
 			Scope:        ScopeProject,
 			RequireTrust: true,
@@ -124,6 +123,34 @@ type extensionRoot struct {
 	Path         string
 	Scope        Scope
 	RequireTrust bool
+}
+
+func appendDistinctExtensionRoot(roots []extensionRoot, candidate extensionRoot) []extensionRoot {
+	for _, root := range roots {
+		if sameExtensionRoot(root.Path, candidate.Path) {
+			return roots
+		}
+	}
+	return append(roots, candidate)
+}
+
+func sameExtensionRoot(left, right string) bool {
+	left = absoluteCleanPath(left)
+	right = absoluteCleanPath(right)
+	if left == right {
+		return true
+	}
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && os.SameFile(leftInfo, rightInfo)
+}
+
+func absoluteCleanPath(path string) string {
+	path = filepath.Clean(path)
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(abs)
+	}
+	return path
 }
 
 func discoverRoot(root extensionRoot) ([]Extension, error) {

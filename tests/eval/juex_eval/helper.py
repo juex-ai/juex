@@ -655,7 +655,7 @@ def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pat
         str(case_dir),
         "--config",
         str(case_config),
-        "--enable-user-global-resources=false",
+        "--enable-user-agents-resources=false",
         "run",
         "--json",
         *args,
@@ -868,7 +868,7 @@ def write_selected_config(
         provider["capabilities"] = capabilities
     out: dict[str, Any] = {
         "model": f"{provider_id}:{model_id}",
-        "enable_user_global_resources": False,
+        "enable_user_agents_resources": False,
         "providers": [provider],
     }
     if compaction:
