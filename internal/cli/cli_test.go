@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
@@ -337,6 +338,62 @@ func TestDoctorDoesNotMigrateAgentState(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(work, ".juex", "memory", "MEMORY.md")); err != nil {
 		t.Fatalf("doctor migrated legacy memory: %v", err)
+	}
+}
+
+func TestDoctorAgentCheckExplainsStatefulRebind(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	resolution, err := agentstate.Resolve(agentstate.Options{WorkDir: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(filepath.Dir(work), "moved-workspace")
+	if err := os.Rename(work, moved); err != nil {
+		t.Fatal(err)
+	}
+
+	check := doctorAgentCheck(moved)
+
+	if check.Status != doctorStatusFail {
+		t.Fatalf("status = %q, want %q", check.Status, doctorStatusFail)
+	}
+	if !strings.Contains(check.Message, resolution.Agent.ID) {
+		t.Fatalf("message = %q, want agent id %q", check.Message, resolution.Agent.ID)
+	}
+	const want = "run juex run, repl, or serve once to automatically rebind the workspace agent"
+	if check.Suggestion != want {
+		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
+	}
+}
+
+func TestDoctorAgentCheckExplainsCopiedWorkspaceMarker(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	resolution, err := agentstate.Resolve(agentstate.Options{WorkDir: work})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(filepath.Dir(work), "copied-workspace")
+	if err := os.MkdirAll(filepath.Join(copied, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.ReadFile(resolution.MarkerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copied, ".juex", "juex.local.json"), marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	check := doctorAgentCheck(copied)
+
+	if check.Status != doctorStatusFail {
+		t.Fatalf("status = %q, want %q", check.Status, doctorStatusFail)
+	}
+	const want = "remove the copied workspace marker to mint a new identity"
+	if check.Suggestion != want {
+		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
 	}
 }
 

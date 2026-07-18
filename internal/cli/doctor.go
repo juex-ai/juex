@@ -165,6 +165,24 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Suggestion: "run juex run, repl, or serve to create a durable workspace agent",
 		}
 	}
+	var rebind *agentstate.RebindRequiredError
+	if errors.As(err, &rebind) {
+		return doctorCheck{
+			Name:       "agent",
+			Status:     doctorStatusFail,
+			Message:    rebind.Error(),
+			Suggestion: "run juex run, repl, or serve once to automatically rebind the workspace agent",
+		}
+	}
+	var copied *agentstate.WorkspaceCopyError
+	if errors.As(err, &copied) {
+		return doctorCheck{
+			Name:       "agent",
+			Status:     doctorStatusFail,
+			Message:    copied.Error(),
+			Suggestion: "remove the copied workspace marker to mint a new identity",
+		}
+	}
 	return doctorCheck{
 		Name:       "agent",
 		Status:     doctorStatusFail,
