@@ -1687,7 +1687,8 @@ ordinary user turns keep failing loudly on compaction errors.
 
 ## 6. Filesystem Conventions
 
-Resources and state split between user-global, agent-home, and work-local:
+Resources and state split between personal, JueX-home, agent-home, and
+work-local:
 
 ```
 ~/.agents/                       # optional user-global resources
@@ -1697,7 +1698,7 @@ Resources and state split between user-global, agent-home, and work-local:
 
 $JUEX_HOME/
 ├── juex.yaml                     # user-global provider/runtime config
-├── extensions/<name>/            # optional user-global extension bundle
+├── extensions/<name>/            # optional JueX-home extension bundle
 │   ├── hooks.yaml                # lifecycle command hooks, trusted by location
 │   ├── mcp.json                  # extension MCP servers
 │   └── skills/<skill>/SKILL.md   # extension skills
