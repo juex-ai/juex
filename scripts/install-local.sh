@@ -14,25 +14,37 @@ set -euo pipefail
 refresh_fleet_service() {
   local binary="$1"
   local installed
-  installed=$("$binary" fleet service-installed)
+  if ! installed=$("$binary" fleet service-installed); then
+    printf 'warning: JueX binary installed successfully, but could not check fleet service status.\n' >&2
+    return 0
+  fi
   case "$installed" in
     true)
-      "$binary" fleet install
-      printf 'Refreshed existing JueX fleet service.\n'
-      "$binary" fleet status --format json >/dev/null
+      if "$binary" fleet install; then
+        printf 'Refreshed existing JueX fleet service.\n'
+        if ! "$binary" fleet status --format json >/dev/null; then
+          printf 'warning: refreshed JueX fleet service, but could not check running agent versions.\n' >&2
+        fi
+      else
+        printf 'warning: JueX binary installed successfully, but failed to refresh existing fleet service.\n' >&2
+      fi
       ;;
     false)
       if [[ "${INSTALL_FLEET_SERVICE:-0}" == "1" ]]; then
-        "$binary" fleet install
-        printf 'Installed JueX fleet service by explicit request.\n'
-        "$binary" fleet status --format json >/dev/null
+        if "$binary" fleet install; then
+          printf 'Installed JueX fleet service by explicit request.\n'
+          if ! "$binary" fleet status --format json >/dev/null; then
+            printf 'warning: installed JueX fleet service, but could not check running agent versions.\n' >&2
+          fi
+        else
+          printf 'warning: JueX binary installed successfully, but failed to install the requested fleet service.\n' >&2
+        fi
       else
         printf 'JueX fleet service is not installed; set INSTALL_FLEET_SERVICE=1 to install it during JueX installation.\n'
       fi
       ;;
     *)
-      printf 'error: unexpected fleet service state from %s: %s\n' "$binary" "$installed" >&2
-      return 1
+      printf 'warning: unexpected fleet service state from %s: %s\n' "$binary" "$installed" >&2
       ;;
   esac
 }

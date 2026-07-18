@@ -428,6 +428,9 @@ func TestReleaseInstallScriptFleetServiceLifecycle(t *testing.T) {
 		name        string
 		installed   string
 		optIn       string
+		probeFail   string
+		installFail string
+		statusFail  string
 		wantOutput  string
 		wantCalls   []string
 		forbidCalls []string
@@ -452,6 +455,37 @@ func TestReleaseInstallScriptFleetServiceLifecycle(t *testing.T) {
 			wantOutput: "Refreshed existing JueX fleet service.",
 			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
 		},
+		{
+			name:        "service probe failure is a post-install warning",
+			probeFail:   "1",
+			wantOutput:  "could not check fleet service status",
+			wantCalls:   []string{"fleet service-installed"},
+			forbidCalls: []string{"fleet install", "fleet status --format json"},
+		},
+		{
+			name:        "existing service refresh failure is a warning",
+			installed:   "true",
+			installFail: "1",
+			wantOutput:  "failed to refresh existing fleet service",
+			wantCalls:   []string{"fleet service-installed", "fleet install"},
+			forbidCalls: []string{"fleet status --format json"},
+		},
+		{
+			name:        "explicit service install failure is a warning",
+			installed:   "false",
+			optIn:       "1",
+			installFail: "1",
+			wantOutput:  "failed to install the requested fleet service",
+			wantCalls:   []string{"fleet service-installed", "fleet install"},
+			forbidCalls: []string{"fleet status --format json"},
+		},
+		{
+			name:       "version check failure is a warning",
+			installed:  "true",
+			statusFail: "1",
+			wantOutput: "could not check running agent versions",
+			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -466,11 +500,20 @@ func TestReleaseInstallScriptFleetServiceLifecycle(t *testing.T) {
 printf '%s\n' "$*" >> "$FLEET_CALL_LOG"
 case "${1:-} ${2:-}" in
   "fleet service-installed")
+    if [ "${FAKE_FLEET_PROBE_FAIL:-0}" = "1" ]; then
+      exit 17
+    fi
     printf '%s\n' "$FAKE_FLEET_INSTALLED"
     ;;
   "fleet install")
+    if [ "${FAKE_FLEET_INSTALL_FAIL:-0}" = "1" ]; then
+      exit 18
+    fi
     ;;
   "fleet status")
+    if [ "${FAKE_FLEET_STATUS_FAIL:-0}" = "1" ]; then
+      exit 19
+    fi
     printf '[]\n'
     ;;
   *)
@@ -498,6 +541,9 @@ esac
 				"HOME="+filepath.Join(work, "home"),
 				"FLEET_CALL_LOG="+callLog,
 				"FAKE_FLEET_INSTALLED="+tc.installed,
+				"FAKE_FLEET_PROBE_FAIL="+tc.probeFail,
+				"FAKE_FLEET_INSTALL_FAIL="+tc.installFail,
+				"FAKE_FLEET_STATUS_FAIL="+tc.statusFail,
 				"INSTALL_FLEET_SERVICE="+tc.optIn,
 			)
 			out, err := cmd.CombinedOutput()
@@ -544,6 +590,8 @@ func TestPOSIXInstallersShareFleetRefreshContract(t *testing.T) {
 			"fleet status --format json",
 			"Refreshed existing JueX fleet service.",
 			"set INSTALL_FLEET_SERVICE=1",
+			"could not check fleet service status",
+			"failed to refresh existing fleet service",
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing fleet refresh contract %q", rel, want)

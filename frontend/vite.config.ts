@@ -13,9 +13,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // The fleet dev server runs on :8080. Proxy fleet and agent APIs.
-      "/api": "http://127.0.0.1:8080",
-      "^/agents/[^/]+/api(?:/|$)": "http://127.0.0.1:8080",
+      // The fleet dev server runs on :5839. Proxy fleet and agent APIs.
+      "/api": "http://127.0.0.1:5839",
+      "^/agents/[^/]+/api(?:/|$)": "http://127.0.0.1:5839",
     },
   },
   build: {

@@ -18,8 +18,10 @@ curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.s
 ```
 
 The POSIX installer refreshes an existing per-user fleet service after replacing
-the binary. It does not install a new service unless
-`INSTALL_FLEET_SERVICE=1` is set, and it never restarts detached agents.
+the binary. Post-install service-manager failures are reported as warnings
+without invalidating the binary installation. The installer does not install a
+new service unless `INSTALL_FLEET_SERVICE=1` is set, and it never restarts
+detached agents.
 
 On Windows PowerShell:
 

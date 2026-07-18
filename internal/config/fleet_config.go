@@ -153,7 +153,12 @@ func yamlMappingValue(node *yaml.Node, key string) *yaml.Node {
 func setYAMLMappingScalar(node *yaml.Node, key, value string) {
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		if node.Content[i].Value == key {
-			node.Content[i+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+			valueNode := node.Content[i+1]
+			valueNode.Kind = yaml.ScalarNode
+			valueNode.Tag = "!!str"
+			valueNode.Value = value
+			valueNode.Content = nil
+			valueNode.Alias = nil
 			return
 		}
 	}

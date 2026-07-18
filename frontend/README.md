@@ -35,7 +35,7 @@ pnpm --dir frontend dev
 ```
 
 Vite proxies fleet `/api` requests and selected-agent `/agents/:agentId/api`
-requests to the fleet server.
+requests to the default fleet server at `127.0.0.1:5839`.
 
 ## Build
 

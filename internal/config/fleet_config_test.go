@@ -40,7 +40,7 @@ func TestSetHomeFleetAddrMergesYAMLAtomically(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 	path := filepath.Join(home, "juex.yaml")
-	const original = "# keep this comment\nmodel: openai:test\nproviders:\n  - id: openai\n    protocol: openai/chat\n"
+	const original = "# keep this comment\nmodel: openai:test\nproviders:\n  - id: openai\n    protocol: openai/chat\nfleet:\n  addr: 127.0.0.1:6840 # keep addr comment\n"
 	if err := os.WriteFile(path, []byte(original), 0o640); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +67,7 @@ func TestSetHomeFleetAddrMergesYAMLAtomically(t *testing.T) {
 		"id: openai",
 		"fleet:",
 		"addr: 127.0.0.1:6841",
+		"# keep addr comment",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("merged config missing %q:\n%s", want, body)

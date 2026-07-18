@@ -1914,7 +1914,9 @@ against `checksums.txt`, and installs into a user-writable bin directory. Both
 POSIX installers use the newly installed binary to detect and refresh an
 existing per-user fleet service. A missing service is only installed when
 `INSTALL_FLEET_SERVICE=1`; detached agents are never restarted, and status
-reports any remaining agent-version skew.
+reports any remaining agent-version skew. Service-manager probe, refresh, or
+status failures are post-install warnings and do not invalidate a successfully
+installed binary.
 `scripts/install.ps1` is the Windows PowerShell installer for released `zip`
 archives. `scripts/install-local.sh` remains the source-build installer for
 this checkout.
