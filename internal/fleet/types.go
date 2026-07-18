@@ -47,6 +47,15 @@ type AgentStatus struct {
 	Problem           string        `json:"problem,omitempty"`
 }
 
+// ReadOnlyAgentState identifies the durable workspace and identity-owned state
+// roots that remain safe to inspect while the runtime process is stopped.
+type ReadOnlyAgentState struct {
+	ID        string
+	Name      string
+	Workspace string
+	StateDir  string
+}
+
 type Action struct {
 	AgentID string `json:"agent_id,omitempty"`
 	Kind    string `json:"kind"`

@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/web"
 )
 
@@ -47,12 +48,18 @@ type backend interface {
 	Endpoint(context.Context, string) (endpoint.Runtime, error)
 }
 
+type readOnlyStateBackend interface {
+	ReadOnlyState(string) (fleet.ReadOnlyAgentState, error)
+}
+
 type Server struct {
-	manager      backend
-	addr         string
-	allowAnyBind bool
-	onReady      func(string)
-	spa          http.Handler
+	manager         backend
+	addr            string
+	allowAnyBind    bool
+	onReady         func(string)
+	spa             http.Handler
+	readActivity    func(context.Context, fleet.AgentStatus) (*agentActivity, error)
+	activityClients *activityClientPool
 }
 
 func New(opts Options) (*Server, error) {
@@ -67,12 +74,15 @@ func newServer(manager backend, opts Options) *Server {
 	if addr == "" {
 		addr = config.DefaultFleetAddr
 	}
+	activityClients := newActivityClientPool()
 	return &Server{
-		manager:      manager,
-		addr:         addr,
-		allowAnyBind: opts.AllowAnyBind,
-		onReady:      opts.OnReady,
-		spa:          web.SPAHandler(),
+		manager:         manager,
+		addr:            addr,
+		allowAnyBind:    opts.AllowAnyBind,
+		onReady:         opts.OnReady,
+		spa:             web.SPAHandler(),
+		readActivity:    activityClients.fetch,
+		activityClients: activityClients,
 	}
 }
 
@@ -91,6 +101,9 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	if s.activityClients != nil {
+		defer s.activityClients.close()
+	}
 	if !s.allowAnyBind && !validLoopback(s.addr) {
 		return fmt.Errorf("juex fleet serve: --addr must bind to loopback (got %q)", s.addr)
 	}
@@ -154,7 +167,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			writeFleetError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, statuses)
+		writeJSON(w, http.StatusOK, s.roster(r.Context(), statuses))
 	case http.MethodPost:
 		var body struct {
 			Workspace *string `json:"workspace"`
@@ -368,6 +381,9 @@ func (s *Server) dispatchAgentRoute(w http.ResponseWriter, r *http.Request) {
 func (s *Server) proxyAgent(w http.ResponseWriter, r *http.Request, selector, upstreamPath string) {
 	runtimeState, err := s.manager.Endpoint(r.Context(), selector)
 	if err != nil {
+		if s.serveReadOnlyAgent(w, r, selector, upstreamPath) {
+			return
+		}
 		writeFleetError(w, err)
 		return
 	}
@@ -393,6 +409,52 @@ func (s *Server) proxyAgent(w http.ResponseWriter, r *http.Request, selector, up
 		},
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+func (s *Server) serveReadOnlyAgent(
+	w http.ResponseWriter,
+	r *http.Request,
+	selector string,
+	upstreamPath string,
+) bool {
+	if r.Method != http.MethodGet || !isReadOnlyAgentPath(upstreamPath) {
+		return false
+	}
+	stateBackend, ok := s.manager.(readOnlyStateBackend)
+	if !ok {
+		return false
+	}
+	state, err := stateBackend.ReadOnlyState(selector)
+	if err != nil {
+		return false
+	}
+	request := r.Clone(r.Context())
+	request.URL.Path = upstreamPath
+	request.URL.RawPath = ""
+	web.NewReadOnlyAPIHandler(config.Config{
+		WorkDir:       state.Workspace,
+		AgentID:       state.ID,
+		AgentName:     state.Name,
+		AgentStateDir: state.StateDir,
+	}).ServeHTTP(w, request)
+	return true
+}
+
+func isReadOnlyAgentPath(path string) bool {
+	if path == "/api/sessions" || path == "/api/media" {
+		return true
+	}
+	const prefix = "/api/sessions/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	if len(parts) == 1 {
+		return session.ValidID(parts[0])
+	}
+	return len(parts) == 2 &&
+		session.ValidID(parts[0]) &&
+		(parts[1] == "context" || parts[1] == "scratchpad")
 }
 
 func parseAgentAPIPath(path string) (string, string, bool) {

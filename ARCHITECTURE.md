@@ -1134,11 +1134,23 @@ directly. Directory browsing rejects symlink targets and children, hides dot
 directories by default, and uses agentstate's marker probe without recursively
 walking the filesystem.
 
+The fleet roster enriches healthy agents with the selected runtime's
+`GET /api/activity` presentation read model. Activity is fetched concurrently
+with a short bound and reports only idle/working state, active session identity,
+and pending input count. Process health remains owned by `internal/fleet`;
+runtime turn state remains owned by `internal/web`; enrichment failure leaves
+the process-health roster usable.
+
 `/agents/<id>/api/...` asks `fleet.Manager.Endpoint` to re-read and probe a
 bound healthy runtime immediately before forwarding. It then uses the parsed
 `endpoint.Target` transport for either Unix or numeric-loopback TCP endpoints.
 The proxy strips the fleet prefix, preserves query and upstream responses, does
 not retry requests, and flushes SSE immediately. Dial failures return 502.
+When no healthy endpoint exists, `internal/fleetweb` may instead obtain a
+workspace-bound `ReadOnlyAgentState` from `internal/fleet` and serve only
+persisted session list/detail, context, scratchpad, and media GET requests
+through `internal/web`'s read-only handler. Turn, event-stream, runtime,
+workspace, and mutation routes never use this fallback.
 Other GET routes use the embedded SPA handler exported by `internal/web`;
 single-agent servers do not mount that handler.
 
@@ -1224,8 +1236,9 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/agents/<id>/observables[/<observable-id>]` | Selected agent Observables SPA routes |
 | GET | `/agents/<id>/logs` | Selected agent bounded logs SPA route |
 | GET | `/agents/<id>/config` | Selected agent config SPA route |
+| GET | `/settings` | Fleet settings SPA route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
-| GET | `/api/agents` | Fleet roster JSON |
+| GET | `/api/agents` | Fleet roster JSON with best-effort live activity for healthy agents |
 | POST | `/api/agents` | Register an absolute workspace, optionally set metadata and start |
 | GET | `/api/fs/dirs?path=&show_hidden=` | Browse one level of server-side directories |
 | POST | `/api/agents/<id>/start\|stop\|restart` | Agent lifecycle action |
@@ -1234,6 +1247,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/api/agents/<id>/logs?lines=N` | Bounded combined log tail |
 | GET, PUT | `/api/agents/<id>/config` | Read or validate, write, and restart config |
 | GET | `/api/sessions` | JSON list |
+| GET | `/api/activity` | Lightweight selected-agent idle/working and pending-input read model |
 | POST | `/api/sessions` | create active primary session |
 | GET | `/api/sessions/<id>` | JSON transcript window (`?before=&limit=` for older pages) |
 | DELETE | `/api/sessions/<id>` | delete session and remove it from history |

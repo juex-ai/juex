@@ -9,12 +9,15 @@ import {
   PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
+import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { homeActiveSessionHref } from "@/lib/home-route";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
 
 export function Sessions() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { agent, agentsLoaded } = useFleetAgent();
   const [checkingSession, setCheckingSession] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +28,7 @@ export function Sessions() {
     listSessions()
       .then(({ sessions }) => {
         if (!live) return;
-        const href = homeActiveSessionHref(sessions);
+        const href = homeActiveSessionHref(sessions, location.pathname);
         if (href) {
           navigate(href, { replace: true });
         } else {
@@ -40,7 +43,7 @@ export function Sessions() {
     return () => {
       live = false;
     };
-  }, [navigate]);
+  }, [location.pathname, navigate]);
 
   if (checkingSession) {
     return null;
@@ -54,49 +57,53 @@ export function Sessions() {
           Aware, action
         </p>
         <div className="mt-6 w-full">
-          <PromptInput
-            onSubmit={async (msg) => {
-              const text = msg.text?.trim();
-              if (!text) return;
-              setSending(true);
-              setError(null);
-              try {
-                const session = await createSession();
-                const turn = await startTurn(session.id, text);
-                const targetSessionID =
-                  turn.command?.name === "/new" &&
-                  turn.command.status?.session_id
-                    ? turn.command.status.session_id
-                    : session.id;
-                navigate(
-                  agentPathFromLocation(
-                    `/sessions/${encodeURIComponent(targetSessionID)}`,
-                    location.pathname,
-                  ),
-                  {
-                    state:
-                      turn.command && !turn.turn_id
-                        ? { commandInput: text, command: turn.command }
-                        : turn.turn_id
-                          ? { activeTurnID: turn.turn_id }
-                          : undefined,
-                  },
-                );
-              } catch (e) {
-                const message =
-                  e instanceof Error ? e.message : "Failed to start chat.";
-                setError(message);
-                throw e;
-              } finally {
-                setSending(false);
-              }
-            }}
-          >
-            <PromptInputTextarea placeholder="Ask juex anything..." />
-            <PromptInputFooter className="justify-end">
-              <PromptInputSubmit disabled={sending} status={sending ? "submitted" : undefined} />
-            </PromptInputFooter>
-          </PromptInput>
+          {agentsLoaded && agent && agent.runtime_health !== "healthy" ? (
+            <AgentRuntimeStateBar />
+          ) : (
+            <PromptInput
+              onSubmit={async (msg) => {
+                const text = msg.text?.trim();
+                if (!text) return;
+                setSending(true);
+                setError(null);
+                try {
+                  const session = await createSession();
+                  const turn = await startTurn(session.id, text);
+                  const targetSessionID =
+                    turn.command?.name === "/new" &&
+                    turn.command.status?.session_id
+                      ? turn.command.status.session_id
+                      : session.id;
+                  navigate(
+                    agentPathFromLocation(
+                      `/sessions/${encodeURIComponent(targetSessionID)}`,
+                      location.pathname,
+                    ),
+                    {
+                      state:
+                        turn.command && !turn.turn_id
+                          ? { commandInput: text, command: turn.command }
+                          : turn.turn_id
+                            ? { activeTurnID: turn.turn_id }
+                            : undefined,
+                    },
+                  );
+                } catch (e) {
+                  const message =
+                    e instanceof Error ? e.message : "Failed to start chat.";
+                  setError(message);
+                  throw e;
+                } finally {
+                  setSending(false);
+                }
+              }}
+            >
+              <PromptInputTextarea placeholder="Ask juex anything..." />
+              <PromptInputFooter className="justify-end">
+                <PromptInputSubmit disabled={sending} status={sending ? "submitted" : undefined} />
+              </PromptInputFooter>
+            </PromptInput>
+          )}
           {error ? (
             <div className="mt-2 text-left text-xs text-destructive">{error}</div>
           ) : null}

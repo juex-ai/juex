@@ -83,6 +83,45 @@ func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
 	}
 }
 
+func TestReadOnlyStateRequiresBoundWorkspace(t *testing.T) {
+	entry := registryEntry("aaaaaaaa", "agent")
+	tests := []struct {
+		name    string
+		binding agentstate.BindingKind
+		wantOK  bool
+	}{
+		{name: "bound", binding: agentstate.WorkspaceBound, wantOK: true},
+		{name: "orphaned", binding: agentstate.WorkspaceOrphaned},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deps := defaultDependencies()
+			deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+				return []agentstate.RegistryEntry{entry}, nil
+			}
+			deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+				return agentstate.WorkspaceBinding{Kind: test.binding, Reason: "test binding"}
+			}
+			manager := &Manager{homeDir: t.TempDir(), deps: deps}
+
+			got, err := manager.ReadOnlyState(entry.ID)
+			if test.wantOK {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.ID != entry.ID || got.Workspace != entry.Agent.Workspace || got.StateDir != entry.Dir {
+					t.Fatalf("ReadOnlyState = %+v", got)
+				}
+				return
+			}
+			var conflict *ConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("ReadOnlyState error = %T %v, want ConflictError", err, err)
+			}
+		})
+	}
+}
+
 func TestUpdateConfigPreflightsBeforeWriting(t *testing.T) {
 	home, workspace, entry := prepareFleetConfigTest(t)
 	entry.Agent.Enabled = false

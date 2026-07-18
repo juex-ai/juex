@@ -501,6 +501,23 @@ func newID() string {
 	return time.Now().UTC().Format(idTimeLayout) + "-" + hex.EncodeToString(b[:])
 }
 
+// ValidID reports whether id has the canonical shape produced by newID.
+func ValidID(id string) bool {
+	const suffixBytes = 4
+	timestampLength := len(idTimeLayout)
+	if len(id) != timestampLength+1+hex.EncodedLen(suffixBytes) ||
+		id[timestampLength] != '-' {
+		return false
+	}
+	timestamp := id[:timestampLength]
+	if _, err := time.Parse(idTimeLayout, timestamp); err != nil {
+		return false
+	}
+	suffix := id[timestampLength+1:]
+	decoded, err := hex.DecodeString(suffix)
+	return err == nil && hex.EncodeToString(decoded) == suffix
+}
+
 func newMessageID() string {
 	return "msg-" + newID()
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   Check,
@@ -25,7 +25,6 @@ import {
   runAgentAction,
   setAgentEnabled,
 } from "@/api";
-import { LogoMark } from "@/components/LogoMark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -56,6 +55,7 @@ import type {
 type LifecycleAction = "start" | "stop" | "restart";
 
 export function Fleet() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -84,6 +84,21 @@ export function Fleet() {
     const timer = window.setInterval(() => void refresh({ quiet: true }), 10_000);
     return () => window.clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    if (searchParams.get("add") === "1") {
+      setAddOpen(true);
+    }
+  }, [searchParams]);
+
+  function setAddDialogOpen(open: boolean) {
+    setAddOpen(open);
+    if (!open && searchParams.has("add")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("add");
+      setSearchParams(next, { replace: true });
+    }
+  }
 
   async function runAction(agent: AgentStatus, action: LifecycleAction) {
     setBusyAgent(agent.id);
@@ -131,41 +146,36 @@ export function Fleet() {
   }
 
   return (
-    <div className="flex h-svh min-h-0 flex-col overflow-hidden bg-background">
-      <header className="flex h-[var(--juex-header-height)] shrink-0 items-center gap-3 border-b bg-card px-4 shadow-[var(--shadow-xs)]">
-        <div className="flex items-center gap-2 text-primary">
-          <LogoMark className="size-6" />
-          <span className="font-serif text-2xl italic leading-tight">juex</span>
-        </div>
-        <span className="h-5 border-l" aria-hidden="true" />
-        <span className="text-sm font-medium text-foreground">Fleet</span>
-        <div className="ml-auto flex items-center gap-1">
-          <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
-            <Plus className="size-3.5" />
-            Add agent
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="text-muted-foreground hover:text-foreground"
-            onClick={() => void refresh()}
-            disabled={refreshing}
-            aria-label="Refresh fleet"
-            title="Refresh fleet"
-          >
-            <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
-          </Button>
-        </div>
-      </header>
-
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-6 md:px-6">
-          <div>
-            <h1 className="text-xl font-semibold text-foreground">Agents</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Registered workspaces and their current runtime state.
-            </p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-xl font-semibold text-foreground">
+                Fleet settings
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Fleet service details and registered agent workspaces.
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button type="button" size="sm" onClick={() => setAddDialogOpen(true)}>
+                <Plus className="size-3.5" />
+                Add agent
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => void refresh()}
+                disabled={refreshing}
+                aria-label="Refresh fleet"
+                title="Refresh fleet"
+              >
+                <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+              </Button>
+            </div>
           </div>
 
           {error ? (
@@ -176,6 +186,36 @@ export function Fleet() {
               {error}
             </div>
           ) : null}
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <FleetSettingCard
+              label="Fleet server"
+              value={window.location.host}
+              detail="Reachable from this browser"
+            />
+            <FleetSettingCard
+              label="System service"
+              value="Not reported"
+              detail={`${agents.filter((agent) => agent.runtime_health === "healthy").length} agent runtimes connected; service-manager state is unavailable`}
+            />
+            <FleetSettingCard
+              label="Models & providers"
+              value="Per agent"
+              detail="Open an agent Runtime tab for resolved details"
+            />
+            <FleetSettingCard
+              label="Extensions"
+              value="Per workspace"
+              detail="Loaded by each registered agent runtime"
+            />
+          </div>
+
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">Agents</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Lifecycle, registration, logs, and workspace configuration.
+            </p>
+          </div>
 
           <div className="overflow-x-auto rounded-md border bg-card shadow-[var(--shadow-xs)]">
             <div className="min-w-[64rem]">
@@ -216,7 +256,7 @@ export function Fleet() {
 
       <AddAgentDialog
         open={addOpen}
-        onOpenChange={setAddOpen}
+        onOpenChange={setAddDialogOpen}
         onAdded={(agent) => replaceAgent(agent)}
         onPartialFailure={() => refresh({ quiet: true })}
       />
@@ -231,6 +271,28 @@ export function Fleet() {
         }}
         onPartialFailure={() => refresh({ quiet: true })}
       />
+    </div>
+  );
+}
+
+function FleetSettingCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-md border bg-card px-3 py-3 shadow-[var(--shadow-xs)]">
+      <div className="text-[11px] font-medium uppercase text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 truncate font-mono text-sm text-foreground" title={value}>
+        {value}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">{detail}</div>
     </div>
   );
 }

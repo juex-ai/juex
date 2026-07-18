@@ -8,6 +8,17 @@ function source(path: string): string {
 
 const appSource = source("../../frontend/src/App.tsx");
 const shellSource = source("../../frontend/src/components/AppShell.tsx");
+const sidebarSource = source(
+  "../../frontend/src/components/fleet/FleetSidebar.tsx",
+);
+const stageHeaderSource = source(
+  "../../frontend/src/components/fleet/FleetStageHeader.tsx",
+);
+const stateBarSource = source(
+  "../../frontend/src/components/fleet/AgentRuntimeStateBar.tsx",
+);
+const sessionSource = source("../../frontend/src/pages/Session.tsx");
+const sessionsSource = source("../../frontend/src/pages/Sessions.tsx");
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
 const switchSource = source("../../frontend/src/components/ui/switch.tsx");
 const apiSource = source("../../frontend/src/api.ts");
@@ -26,27 +37,88 @@ test("router exposes fleet and selected-agent pages", () => {
     'path: "observables/:id"',
     'path: "logs"',
     'path: "config"',
+    'path: "settings"',
   ]) {
     assert.match(appSource, new RegExp(route.replace(/[/:]/g, "\\$&")));
   }
 });
 
-test("agent shell includes fleet navigation and agent switching", () => {
-  assert.match(shellSource, /aria-label="Switch agent"/);
-  assert.match(shellSource, /agentSwitchPath/);
-  assert.match(shellSource, /aria-label="Fleet"/);
-  assert.match(shellSource, /`\$\{agentBase\}\/observables`/);
-  assert.match(shellSource, /`\$\{agentBase\}\/history`/);
-  assert.match(shellSource, /`\$\{agentBase\}\/runtime`/);
+test("agent shell keeps the fleet rail mounted around selected-agent pages", () => {
+  assert.match(appSource, /path: "\/"[\s\S]*element: <AppShell \/>/);
+  assert.match(shellSource, /<FleetSidebar/);
+  assert.match(shellSource, /<FleetStageHeader/);
+  assert.match(shellSource, /resolveAgentSelection/);
+  assert.match(shellSource, /juex:fleet:last-agent/);
+  assert.match(shellSource, /juex:fleet:sidebar-collapsed/);
+  assert.match(shellSource, /MOBILE_SIDEBAR_QUERY = "\(max-width: 759px\)"/);
   assert.match(
     shellSource,
-    /<Outlet key=\{agentId\} \/>/,
+    /<Outlet key=\{agentId \|\| "fleet-settings"\} \/>/,
     "agent switches must remount the selected-agent page",
   );
   assert.equal(
     shellSource.match(/<FileTreePanel\s+key=\{agentId\}/g)?.length,
     2,
     "agent switches must remount both workspace panel variants",
+  );
+  assert.match(shellSource, /<FleetEmptyState \/>/);
+  assert.match(shellSource, /View logs/);
+});
+
+test("fleet rail exposes compact status and exactly two hover actions", () => {
+  assert.match(sidebarSource, /data-collapsed=\{compact \? "true" : "false"\}/);
+  assert.match(sidebarSource, /aria-label="Expand fleet sidebar"/);
+  assert.match(sidebarSource, /aria-label="Collapse fleet sidebar"/);
+  assert.match(sidebarSource, /group-hover:opacity-100/);
+  assert.match(sidebarSource, /nextAgentLifecycleAction/);
+  assert.match(sidebarSource, /Open \$\{name\} runtime/);
+  assert.match(sidebarSource, /pending inputs/);
+  assert.match(sidebarSource, /motion-reduce:animate-none/);
+  assert.equal(
+    sidebarSource.match(/className="size-8 bg-card\/90"/g)?.length,
+    2,
+    "expanded agent rows should reveal one lifecycle action and one runtime action",
+  );
+});
+
+test("stage remounts existing pages through tabs and gates offline composers", () => {
+  for (const label of ["Chat", "Runtime", "Observables", "Logs", "Config"]) {
+    assert.match(stageHeaderSource, new RegExp(`label: "${label}"`));
+  }
+  assert.match(stageHeaderSource, /agentTabPath\(agent\.id, tab\.id\)/);
+  assert.match(stateBarSource, /Start agent/);
+  assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
+  assert.match(sessionSource, /<AgentRuntimeStateBar \/>/);
+  assert.match(sessionsSource, /<AgentRuntimeStateBar \/>/);
+  assert.match(
+    sessionSource,
+    /routeActiveTurnIDRef\.current = activeTurnID;[\s\S]*\}, \[controller, id\]\);/,
+    "runtime health changes must not reset the loaded session route",
+  );
+  assert.match(
+    sessionSource,
+    /const activeTurnID = routeActiveTurnIDRef\.current;[\s\S]*!agentRuntimeHealthy[\s\S]*startTurnStatusPolling/,
+    "initial turn polling must remain gated by runtime health",
+  );
+  assert.match(
+    sessionSource,
+    /!agentsLoaded \|\| agent\?\.runtime_health === "healthy"/,
+    "a missing selected agent must not be treated as a healthy runtime",
+  );
+  assert.match(
+    sessionsSource,
+    /agentsLoaded && agent && agent\.runtime_health !== "healthy"/,
+    "the stopped state bar requires a real selected agent",
+  );
+  assert.match(
+    shellSource,
+    /invalidAgentRoute[\s\S]*Loading agent[\s\S]*<Outlet/,
+    "invalid agent routes must be redirected before child pages can compose",
+  );
+  assert.doesNotMatch(
+    shellSource,
+    /setInterval\(\(\) => void refreshAgents/,
+    "roster polling must not overlap slow refresh requests",
   );
 });
 

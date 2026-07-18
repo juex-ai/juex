@@ -70,6 +70,28 @@ func (m *Manager) Endpoint(ctx context.Context, selector string) (endpoint.Runti
 	return runtimeState, nil
 }
 
+// ReadOnlyState resolves durable agent paths without requiring a running
+// endpoint. Orphaned and invalid bindings are rejected before exposing paths.
+func (m *Manager) ReadOnlyState(selector string) (ReadOnlyAgentState, error) {
+	entry, err := m.resolve(selector)
+	if err != nil {
+		return ReadOnlyAgentState{}, err
+	}
+	binding := m.deps.inspectBinding(entry)
+	if binding.Kind != agentstate.WorkspaceBound {
+		return ReadOnlyAgentState{}, &ConflictError{
+			AgentID: entry.ID,
+			Reason:  "cannot read sessions for an unbound workspace: " + binding.Reason,
+		}
+	}
+	return ReadOnlyAgentState{
+		ID:        entry.ID,
+		Name:      entry.Agent.Name,
+		Workspace: entry.Agent.Workspace,
+		StateDir:  entry.Dir,
+	}, nil
+}
+
 func (m *Manager) Config(selector string) (AgentConfig, error) {
 	entry, err := m.resolve(selector)
 	if err != nil {

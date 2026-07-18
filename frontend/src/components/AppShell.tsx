@@ -1,35 +1,24 @@
 import {
-  Link,
-  Outlet,
-  useLocation,
-  useNavigate,
-  useParams,
-} from "react-router-dom";
-import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
 } from "react";
-import { FileTreePanel } from "@/components/FileTreePanel";
-import { LogoMark } from "@/components/LogoMark";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
-  ArrowLeft,
-  Activity,
-  FileCog,
-  FolderIcon,
-  FolderOpenIcon,
-  HistoryIcon,
-  LayoutGrid,
-  ScrollText,
-  Wrench,
-} from "lucide-react";
-import { getRuntimeStatus, listAgents } from "@/api";
-import type { AgentStatus, RuntimeStatusResponse } from "@/types";
+  Link,
+  Outlet,
+  useLocation,
+  useMatch,
+  useNavigate,
+} from "react-router-dom";
+import { AlertTriangle, Plus } from "lucide-react";
+
+import { listAgents, runAgentAction } from "@/api";
+import { FileTreePanel } from "@/components/FileTreePanel";
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -37,33 +26,22 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { FleetAgentProvider } from "@/components/fleet/FleetAgentContext";
+import { FleetSidebar } from "@/components/fleet/FleetSidebar";
+import { FleetStageHeader } from "@/components/fleet/FleetStageHeader";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { isHistoryPath } from "@/lib/route-state";
-import {
-  formatShellUpdatedAt,
-  shellMCPBadge,
-  shellUpdatedAtClassName,
-  type ShellMCPTone,
-} from "@/lib/shell-header";
-import { cn } from "@/lib/utils";
-import {
-  agentPagePath,
-  agentSwitchPath,
-} from "@/lib/fleet-routes";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  agentTabFromPath,
+  agentTabPath,
+  agentVisualState,
+  nextAgentLifecycleAction,
+  resolveAgentSelection,
+} from "@/lib/fleet-shell";
+import type { AgentStatus } from "@/types";
 
 const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
+const MOBILE_SIDEBAR_QUERY = "(max-width: 759px)";
+const LAST_AGENT_KEY = "juex:fleet:last-agent";
+const SIDEBAR_COLLAPSED_KEY = "juex:fleet:sidebar-collapsed";
 
 type ShellTitleContextValue = {
   setShellHeader: (header: ShellHeaderState) => void;
@@ -92,394 +70,317 @@ export function useShellTitle(
 }
 
 export function AppShell() {
-  const { agentId = "" } = useParams<{ agentId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const agentBase = agentPagePath(agentId);
-  const storageKey = `juex:last-content-path:${agentId}`;
+  const agentMatch = useMatch("/agents/:agentId/*");
+  const agentId = agentMatch?.params.agentId ?? "";
+  const settings = location.pathname === "/settings";
+  const activeTab = agentTabFromPath(location.pathname);
   const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
+  const mobileSidebar = useMediaQuery(MOBILE_SIDEBAR_QUERY);
+  const [agents, setAgents] = useState<AgentStatus[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const [busyAgentID, setBusyAgentID] = useState<string | null>(null);
+  const [fleetError, setFleetError] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true",
+  );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
-  const [shellHeader, setShellHeader] = useState<ShellHeaderState>({
-    title: null,
-    updatedAt: null,
-  });
-  const [lastContentPath, setLastContentPath] = useState(
-    () => window.sessionStorage.getItem(storageKey) || agentBase,
-  );
-  const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [runtimeStatus, setRuntimeStatus] =
-    useState<RuntimeStatusResponse | null>(null);
-  const currentAgent = agents.find((agent) => agent.id === agentId);
-  const currentAgentHealth = currentAgent?.runtime_health;
-  const agentOptions = currentAgent
-    ? agents
-    : [
-        ...agents,
-        {
-          id: agentId,
-          name: agentId,
-        } as AgentStatus,
-      ];
+  const currentAgent =
+    agents.find((candidate) => candidate.id === agentId) ?? null;
+  const invalidAgentRoute =
+    agentsLoaded && agentId !== "" && currentAgent === null;
 
-  useEffect(() => {
-    setLastContentPath(
-      window.sessionStorage.getItem(storageKey) || agentBase,
-    );
-  }, [agentBase, storageKey]);
-
-  useEffect(() => {
-    if (location.pathname === `${agentBase}/runtime`) return;
-    const next = `${location.pathname}${location.search}${location.hash}`;
-    setLastContentPath(next);
-    window.sessionStorage.setItem(storageKey, next);
-  }, [
-    agentBase,
-    location.hash,
-    location.pathname,
-    location.search,
-    storageKey,
-  ]);
-
-  useEffect(() => {
-    let live = true;
-    const refreshAgents = () => {
-      listAgents()
-        .then((next) => {
-          if (live) setAgents(next);
-        })
-        .catch(() => {
-          // The current route remains usable if a roster refresh is transiently unavailable.
-        });
-    };
-    refreshAgents();
-    const interval = window.setInterval(refreshAgents, 10_000);
-    return () => {
-      live = false;
-      window.clearInterval(interval);
-    };
+  const refreshAgents = useCallback(async () => {
+    try {
+      const next = await listAgents();
+      setAgents(next);
+      setFleetError(null);
+    } catch (cause) {
+      setFleetError(
+        cause instanceof Error ? cause.message : "Failed to load fleet agents.",
+      );
+    } finally {
+      setAgentsLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
-    if (currentAgentHealth !== "healthy") {
-      setRuntimeStatus(null);
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      await refreshAgents();
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), 3_000);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [refreshAgents]);
+
+  useEffect(() => {
+    if (!agentsLoaded || location.pathname !== "/" || agents.length === 0) {
       return;
     }
-    let live = true;
-    const refreshRuntimeStatus = () => {
-      getRuntimeStatus()
-        .then((status) => {
-          if (live) setRuntimeStatus(status);
-        })
-        .catch(() => {
-          if (live) setRuntimeStatus(null);
-        });
-    };
-    refreshRuntimeStatus();
-    const interval = window.setInterval(refreshRuntimeStatus, 30_000);
-    return () => {
-      live = false;
-      window.clearInterval(interval);
-    };
-  }, [agentId, currentAgentHealth]);
-
-  const shellTitle = shellHeader.title;
-  const shellUpdatedAt = formatShellUpdatedAt(shellHeader.updatedAt);
-  const mcpBadge = shellMCPBadge(runtimeStatus?.mcp);
-  const workspaceOpen = workspaceDocked ? workspaceDockOpen : workspaceSheetOpen;
-  const workspaceLabel = workspaceDocked
-    ? workspaceOpen
-      ? "Hide workspace"
-      : "Show workspace"
-    : "Open workspace";
-  const toggleWorkspace = () => {
-    if (workspaceDocked) {
-      setWorkspaceDockOpen((open) => !open);
-    } else {
-      setWorkspaceSheetOpen(true);
+    const selected = resolveAgentSelection(
+      agents,
+      window.localStorage.getItem(LAST_AGENT_KEY),
+    );
+    if (selected) {
+      navigate(agentTabPath(selected, "chat"), { replace: true });
     }
-  };
-  const shellContextValue = useMemo(() => ({ setShellHeader }), []);
-  const onRuntimePage = location.pathname === `${agentBase}/runtime`;
-  const onObservablesPage = location.pathname.startsWith(
-    `${agentBase}/observables`,
+  }, [agents, agentsLoaded, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!invalidAgentRoute) return;
+    const selected = resolveAgentSelection(
+      agents,
+      window.localStorage.getItem(LAST_AGENT_KEY),
+    );
+    if (selected) {
+      navigate(agentTabPath(selected, "chat"), { replace: true });
+    } else {
+      navigate("/", { replace: true });
+    }
+  }, [agents, invalidAgentRoute, navigate]);
+
+  useEffect(() => {
+    if (currentAgent) {
+      window.localStorage.setItem(LAST_AGENT_KEY, currentAgent.id);
+    }
+  }, [currentAgent]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      SIDEBAR_COLLAPSED_KEY,
+      String(sidebarCollapsed),
+    );
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!mobileSidebar) setMobileSidebarOpen(false);
+  }, [mobileSidebar]);
+
+  useEffect(() => {
+    if (activeTab !== "chat") {
+      setWorkspaceSheetOpen(false);
+    }
+  }, [activeTab]);
+
+  const runLifecycle = useCallback(
+    async (agent: AgentStatus) => {
+      const action = nextAgentLifecycleAction(agent);
+      setBusyAgentID(agent.id);
+      setFleetError(null);
+      try {
+        await runAgentAction(agent.id, action);
+        await refreshAgents();
+      } catch (cause) {
+        const actionError =
+          cause instanceof Error
+            ? cause.message
+            : `Failed to ${action} ${agent.name || agent.id}.`;
+        await refreshAgents();
+        setFleetError(actionError);
+      } finally {
+        setBusyAgentID(null);
+      }
+    },
+    [refreshAgents],
   );
-  const onLogsPage = location.pathname === `${agentBase}/logs`;
-  const onConfigPage = location.pathname === `${agentBase}/config`;
-  const onHistoryPage = isHistoryPath(location.pathname);
+
+  const startCurrentAgent = useCallback(async () => {
+    if (!currentAgent) return;
+    await runLifecycle(currentAgent);
+  }, [currentAgent, runLifecycle]);
+
+  const runtimeContext = useMemo(
+    () => ({
+      agent: currentAgent,
+      agents,
+      agentsLoaded,
+      lifecycleBusy: busyAgentID === currentAgent?.id,
+      startAgent: startCurrentAgent,
+    }),
+    [
+      agents,
+      agentsLoaded,
+      busyAgentID,
+      currentAgent,
+      startCurrentAgent,
+    ],
+  );
+  const shellTitleContext = useMemo<ShellTitleContextValue>(
+    () => ({ setShellHeader: () => {} }),
+    [],
+  );
+
+  const workspaceAvailable =
+    currentAgent?.runtime_health === "healthy" &&
+    activeTab === "chat" &&
+    !settings;
+  const workspaceOpen = workspaceDocked
+    ? workspaceDockOpen && workspaceAvailable
+    : workspaceSheetOpen && workspaceAvailable;
+
+  const sidebar = (
+    <FleetSidebar
+      agents={agents}
+      selectedAgentID={agentId}
+      busyAgentID={busyAgentID}
+      collapsed={sidebarCollapsed}
+      mobile={mobileSidebar}
+      onCollapse={() => setSidebarCollapsed(true)}
+      onExpand={() => setSidebarCollapsed(false)}
+      onNavigate={() => setMobileSidebarOpen(false)}
+      onToggleLifecycle={(agent) => void runLifecycle(agent)}
+    />
+  );
+  const emptyFleet =
+    agentsLoaded && agents.length === 0 && location.pathname === "/";
+  const failedAgent =
+    currentAgent && agentVisualState(currentAgent) === "failed"
+      ? currentAgent
+      : null;
 
   return (
-    <ShellTitleContext.Provider value={shellContextValue}>
-      <div className="flex h-svh min-h-0 overflow-hidden bg-background">
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <header className="flex h-[var(--juex-header-height)] shrink-0 items-center gap-2 border-b bg-card px-4 shadow-[var(--shadow-xs)]">
-            <Link
-              to={agentBase}
-              className="flex shrink-0 items-center gap-2 text-primary transition-colors hover:text-primary/85"
-              aria-label="New chat"
+    <ShellTitleContext.Provider value={shellTitleContext}>
+      <FleetAgentProvider value={runtimeContext}>
+        <div className="flex h-svh min-h-0 overflow-hidden bg-background">
+          <div className="hidden min-[760px]:flex">{sidebar}</div>
+          <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+            <SheetContent
+              side="left"
+              className="w-[min(84vw,268px)] max-w-none gap-0 border-r p-0 min-[760px]:hidden"
             >
-              <LogoMark className="size-6" />
-              <span className="hidden font-serif text-2xl italic leading-tight sm:inline">
-                juex
-              </span>
-            </Link>
-            <Select
-              value={agentId}
-              onValueChange={(nextAgentID) =>
-                navigate(agentSwitchPath(nextAgentID, location.pathname))
-              }
-            >
-              <SelectTrigger
-                size="sm"
-                className="max-w-28 sm:max-w-44"
-                aria-label="Switch agent"
-              >
-                <SelectValue>
-                  {currentAgent?.name || currentAgent?.id || agentId}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent align="start">
-                {agentOptions.map((agent) => (
-                  <SelectItem key={agent.id} value={agent.id}>
-                    <span className="max-w-52 truncate">
-                      {agent.name || agent.id}
-                    </span>
-                    <span
-                      className={cn(
-                        "size-1.5 rounded-full bg-muted-foreground/45",
-                        agent.runtime_health === "healthy" && "bg-emerald-500",
-                        agent.runtime_health === "unhealthy" &&
-                          "bg-destructive",
-                        agent.runtime_health === "ambiguous" && "bg-amber-500",
-                      )}
-                      aria-hidden="true"
-                    />
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="min-w-0 flex-1">
-              {shellTitle ? (
-                <div className="min-w-0 border-l pl-3 text-primary">
-                  <span className="block truncate pb-0.5 font-serif text-xl italic leading-tight">
-                    {shellTitle}
-                  </span>
-                </div>
-              ) : null}
-            </div>
-            <div className="ml-auto flex shrink-0 items-center gap-1">
-              {runtimeStatus && mcpBadge ? (
-                <div className="hidden shrink-0 items-center gap-1 xl:flex">
-                  {shellUpdatedAt ? (
-                    <span className={shellUpdatedAtClassName()}>
-                      {shellUpdatedAt}
-                    </span>
-                  ) : null}
-                  <Badge
-                    variant="outline"
-                    className="font-mono text-[11px]"
-                  >
-                    skills {runtimeStatus.skills?.count ?? 0}
-                  </Badge>
-                  <Badge
-                    variant="outline"
-                    className="gap-1.5 font-mono text-[11px]"
-                    title={mcpBadge.title}
-                    aria-label={mcpBadge.title}
-                  >
-                    {mcpBadge.label}
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        "size-1.5 rounded-full",
-                        mcpToneDotClassName(mcpBadge.tone),
-                      )}
-                    />
-                  </Badge>
-                </div>
-              ) : null}
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      <Link to="/" aria-label="Fleet">
-                        <LayoutGrid className="size-4" />
-                      </Link>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Fleet</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className={cn(
-                        "hidden text-muted-foreground hover:text-foreground md:inline-flex",
-                        onLogsPage && "bg-muted text-foreground",
-                      )}
-                    >
-                      <Link to={`${agentBase}/logs`} aria-label="Agent logs">
-                        <ScrollText className="size-4" />
-                      </Link>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Agent logs</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className={cn(
-                        "hidden text-muted-foreground hover:text-foreground md:inline-flex",
-                        onConfigPage && "bg-muted text-foreground",
-                      )}
-                    >
-                      <Link to={`${agentBase}/config`} aria-label="Agent config">
-                        <FileCog className="size-4" />
-                      </Link>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Agent config</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className={cn(
-                        "text-muted-foreground hover:text-foreground",
-                        onObservablesPage && "bg-muted text-foreground",
-                      )}
-                    >
-                      <Link
-                        to={`${agentBase}/observables`}
-                        aria-label="Observables"
-                      >
-                        <Activity className="size-4" />
-                      </Link>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Observables</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      asChild
-                      variant="ghost"
-                      size="icon"
-                      className={cn(
-                        "text-muted-foreground hover:text-foreground",
-                        onHistoryPage && "bg-muted text-foreground",
-                      )}
-                    >
-                      <Link to={`${agentBase}/history`} aria-label="History">
-                        <HistoryIcon className="size-4" />
-                      </Link>
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>History</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {onRuntimePage ? (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="text-muted-foreground hover:text-foreground"
-                        aria-label="Back"
-                        onClick={() => navigate(lastContentPath || agentBase)}
-                      >
-                        <ArrowLeft className="size-4" />
-                      </Button>
-                    ) : (
-                      <Button
-                        asChild
-                        variant="ghost"
-                        size="icon"
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <Link
-                          to={`${agentBase}/runtime`}
-                          aria-label="Runtime details"
-                        >
-                          <Wrench className="size-4" />
-                        </Link>
-                      </Button>
-                    )}
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {onRuntimePage ? "Back" : "Runtime details"}
-                  </TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-muted-foreground hover:text-foreground"
-                      onClick={toggleWorkspace}
-                      aria-label={workspaceLabel}
-                    >
-                      {workspaceOpen ? (
-                        <FolderOpenIcon className="size-4" />
-                      ) : (
-                        <FolderIcon className="size-4" />
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{workspaceLabel}</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            </div>
-          </header>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <Outlet key={agentId} />
-          </div>
-        </div>
-        {workspaceDockOpen && (
-          <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] flex-shrink-0 flex-col overflow-hidden border-l bg-card transition-all xl:flex">
-            <FileTreePanel key={agentId} active={workspaceDocked} />
-          </div>
-        )}
-        <Sheet
-          open={!workspaceDocked && workspaceSheetOpen}
-          onOpenChange={setWorkspaceSheetOpen}
-        >
-          <SheetContent
-            className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 sm:!max-w-md xl:hidden"
-            side="right"
-          >
-            <SheetHeader className="sr-only">
-              <SheetTitle>Workspace</SheetTitle>
-              <SheetDescription>
-                Browse files in the current workspace.
-              </SheetDescription>
-            </SheetHeader>
-            <FileTreePanel
-              key={agentId}
-              active={!workspaceDocked && workspaceSheetOpen}
+              <SheetHeader className="sr-only">
+                <SheetTitle>Fleet agents</SheetTitle>
+                <SheetDescription>
+                  Switch agents and control their runtime.
+                </SheetDescription>
+              </SheetHeader>
+              {sidebar}
+            </SheetContent>
+          </Sheet>
+
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <FleetStageHeader
+              agent={currentAgent}
+              activeTab={activeTab}
+              settings={settings}
+              workspaceOpen={workspaceOpen}
+              onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
+              onToggleWorkspace={() => {
+                if (!workspaceAvailable) return;
+                if (workspaceDocked) {
+                  setWorkspaceDockOpen((open) => !open);
+                } else {
+                  setWorkspaceSheetOpen(true);
+                }
+              }}
             />
-          </SheetContent>
-        </Sheet>
-      </div>
+            {failedAgent ? (
+              <div
+                className="flex shrink-0 items-center gap-2 border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+                role="alert"
+              >
+                <AlertTriangle className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">
+                  {failedAgent.problem || "Agent runtime needs attention."}
+                </span>
+                <Button asChild variant="outline" size="sm">
+                  <Link to={agentTabPath(failedAgent.id, "logs")}>
+                    View logs
+                  </Link>
+                </Button>
+              </div>
+            ) : null}
+            {fleetError ? (
+              <div
+                className="shrink-0 border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+                role="alert"
+              >
+                {fleetError}
+              </div>
+            ) : null}
+
+            <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                {emptyFleet ? (
+                  <FleetEmptyState />
+                ) : location.pathname === "/" ? (
+                  <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                    Loading fleet...
+                  </div>
+                ) : invalidAgentRoute ? (
+                  <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                    Loading agent...
+                  </div>
+                ) : (
+                  <Outlet key={agentId || "fleet-settings"} />
+                )}
+              </div>
+              {workspaceDockOpen && workspaceAvailable ? (
+                <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] shrink-0 flex-col overflow-hidden border-l bg-card xl:flex">
+                  <FileTreePanel key={agentId} active={workspaceDocked} />
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <Sheet
+            open={!workspaceDocked && workspaceSheetOpen && workspaceAvailable}
+            onOpenChange={setWorkspaceSheetOpen}
+          >
+            <SheetContent
+              className="flex !w-[min(100vw,22rem)] !max-w-none flex-col gap-0 bg-card p-0 sm:!max-w-md xl:hidden"
+              side="right"
+            >
+              <SheetHeader className="sr-only">
+                <SheetTitle>Workspace</SheetTitle>
+                <SheetDescription>
+                  Browse files in the current workspace.
+                </SheetDescription>
+              </SheetHeader>
+              <FileTreePanel
+                key={agentId}
+                active={!workspaceDocked && workspaceSheetOpen}
+              />
+            </SheetContent>
+          </Sheet>
+        </div>
+      </FleetAgentProvider>
     </ShellTitleContext.Provider>
   );
 }
 
-function mcpToneDotClassName(tone: ShellMCPTone) {
-  if (tone === "ok") return "bg-emerald-500";
-  if (tone === "error") return "bg-destructive";
-  return "bg-muted-foreground/45";
+function FleetEmptyState() {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-8">
+      <div className="w-full max-w-lg rounded-md border bg-card px-6 py-8 text-center shadow-[var(--shadow-sm)]">
+        <h1 className="text-xl font-semibold text-foreground">
+          Add your first agent
+        </h1>
+        <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
+          Register a workspace to open its conversations and runtime controls.
+        </p>
+        <Button asChild className="mt-5">
+          <Link to="/settings?add=1">
+            <Plus className="size-4" />
+            Add agent
+          </Link>
+        </Button>
+        <div className="mt-4 font-mono text-xs text-muted-foreground">
+          juex fleet add /absolute/workspace
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function useMediaQuery(query: string): boolean {
