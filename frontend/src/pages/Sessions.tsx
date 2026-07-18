@@ -24,15 +24,11 @@ export function Sessions() {
   useShellTitle(null);
 
   useEffect(() => {
-    if (agentsLoaded && agent?.runtime_health !== "healthy") {
-      setCheckingSession(false);
-      return;
-    }
     let live = true;
     listSessions()
       .then(({ sessions }) => {
         if (!live) return;
-        const href = homeActiveSessionHref(sessions);
+        const href = homeActiveSessionHref(sessions, location.pathname);
         if (href) {
           navigate(href, { replace: true });
         } else {
@@ -47,7 +43,7 @@ export function Sessions() {
     return () => {
       live = false;
     };
-  }, [agent?.runtime_health, agentsLoaded, navigate]);
+  }, [location.pathname, navigate]);
 
   if (checkingSession) {
     return null;
@@ -65,42 +61,42 @@ export function Sessions() {
             <AgentRuntimeStateBar />
           ) : (
             <PromptInput
-            onSubmit={async (msg) => {
-              const text = msg.text?.trim();
-              if (!text) return;
-              setSending(true);
-              setError(null);
-              try {
-                const session = await createSession();
-                const turn = await startTurn(session.id, text);
-                const targetSessionID =
-                  turn.command?.name === "/new" &&
-                  turn.command.status?.session_id
-                    ? turn.command.status.session_id
-                    : session.id;
-                navigate(
-                  agentPathFromLocation(
-                    `/sessions/${encodeURIComponent(targetSessionID)}`,
-                    location.pathname,
-                  ),
-                  {
-                    state:
-                      turn.command && !turn.turn_id
-                        ? { commandInput: text, command: turn.command }
-                        : turn.turn_id
-                          ? { activeTurnID: turn.turn_id }
-                          : undefined,
-                  },
-                );
-              } catch (e) {
-                const message =
-                  e instanceof Error ? e.message : "Failed to start chat.";
-                setError(message);
-                throw e;
-              } finally {
-                setSending(false);
-              }
-            }}
+              onSubmit={async (msg) => {
+                const text = msg.text?.trim();
+                if (!text) return;
+                setSending(true);
+                setError(null);
+                try {
+                  const session = await createSession();
+                  const turn = await startTurn(session.id, text);
+                  const targetSessionID =
+                    turn.command?.name === "/new" &&
+                    turn.command.status?.session_id
+                      ? turn.command.status.session_id
+                      : session.id;
+                  navigate(
+                    agentPathFromLocation(
+                      `/sessions/${encodeURIComponent(targetSessionID)}`,
+                      location.pathname,
+                    ),
+                    {
+                      state:
+                        turn.command && !turn.turn_id
+                          ? { commandInput: text, command: turn.command }
+                          : turn.turn_id
+                            ? { activeTurnID: turn.turn_id }
+                            : undefined,
+                    },
+                  );
+                } catch (e) {
+                  const message =
+                    e instanceof Error ? e.message : "Failed to start chat.";
+                  setError(message);
+                  throw e;
+                } finally {
+                  setSending(false);
+                }
+              }}
             >
               <PromptInputTextarea placeholder="Ask juex anything..." />
               <PromptInputFooter className="justify-end">

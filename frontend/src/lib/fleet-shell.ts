@@ -33,6 +33,11 @@ export function agentStatusText(agent: AgentStatus): string {
   return workspaceName ? `Idle · ${workspaceName}` : "Idle";
 }
 
+export function agentStateLabel(agent: AgentStatus): string {
+  const state = agentVisualState(agent);
+  return state[0].toUpperCase() + state.slice(1);
+}
+
 export function resolveAgentSelection(
   agents: readonly AgentStatus[],
   storedAgentID: string | null | undefined,

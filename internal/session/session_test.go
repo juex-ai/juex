@@ -36,6 +36,30 @@ func TestSession_AppendsToConversationJSONL(t *testing.T) {
 	}
 }
 
+func TestValidIDRequiresCanonicalGeneratedShape(t *testing.T) {
+	valid := "20260718T065604-8f0582f4"
+	if !ValidID(valid) {
+		t.Fatalf("ValidID(%q) = false", valid)
+	}
+	for _, id := range []string{
+		"",
+		".",
+		"..",
+		"s1",
+		"20260718T065604",
+		"20260718T065604-8f0582fg",
+		"20260718T065604-8f0582f4\\..\\other",
+		"20260718T065604-8f0582f4/other",
+		"20261318T065604-8f0582f4",
+	} {
+		t.Run(id, func(t *testing.T) {
+			if ValidID(id) {
+				t.Fatalf("ValidID(%q) = true", id)
+			}
+		})
+	}
+}
+
 func TestSession_AppendDoesNotMutateHistoryWhenPersistFails(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)

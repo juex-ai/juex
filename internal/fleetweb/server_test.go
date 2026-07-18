@@ -22,6 +22,8 @@ import (
 
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/session"
 )
 
 type fakeBackend struct {
@@ -42,6 +44,8 @@ type fakeBackend struct {
 	updateErr    error
 	runtime      endpoint.Runtime
 	endpointErr  error
+	readOnly     fleet.ReadOnlyAgentState
+	readOnlyErr  error
 
 	mu            sync.Mutex
 	action        string
@@ -135,10 +139,97 @@ func (f *fakeBackend) Endpoint(context.Context, string) (endpoint.Runtime, error
 	return f.runtime, f.endpointErr
 }
 
+func (f *fakeBackend) ReadOnlyState(string) (fleet.ReadOnlyAgentState, error) {
+	return f.readOnly, f.readOnlyErr
+}
+
 func (f *fakeBackend) recordAction(action string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.action = action
+}
+
+func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
+	stateDir := t.TempDir()
+	sessionsDir := filepath.Join(stateDir, "sessions")
+	historyPath := filepath.Join(stateDir, "history.json")
+	persisted, err := session.NewWithOptions(sessionsDir, session.Options{
+		Alias:       "offline-session",
+		Active:      true,
+		HistoryPath: historyPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := persisted.Append(llm.TextMessage(llm.RoleUser, "persisted while offline")); err != nil {
+		t.Fatal(err)
+	}
+	sessionID := persisted.ID
+	if err := persisted.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &fakeBackend{
+		endpointErr: errors.New("agent is stopped"),
+		readOnly: fleet.ReadOnlyAgentState{
+			ID:        "aaaaaaaa",
+			Name:      "alpha",
+			Workspace: t.TempDir(),
+			StateDir:  stateDir,
+		},
+	}
+	handler := newServer(backend, Options{Addr: "127.0.0.1:0"}).Handler()
+
+	for _, path := range []string{
+		"/agents/aaaaaaaa/api/sessions",
+		"/agents/aaaaaaaa/api/sessions/" + sessionID,
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body=%s", path, response.Code, response.Body.String())
+		}
+	}
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/agents/aaaaaaaa/api/sessions/"+sessionID,
+		nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if !strings.Contains(response.Body.String(), "persisted while offline") {
+		t.Fatalf("offline transcript = %s", response.Body.String())
+	}
+}
+
+func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
+	const sessionID = "20260718T065604-8f0582f4"
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "/api/sessions", want: true},
+		{path: "/api/sessions/" + sessionID, want: true},
+		{path: "/api/sessions/" + sessionID + "/context", want: true},
+		{path: "/api/sessions/" + sessionID + "/scratchpad", want: true},
+		{path: "/api/media", want: true},
+		{path: "/api/runtime", want: false},
+		{path: "/api/sessions/" + sessionID + "/events", want: false},
+		{path: "/api/sessions/" + sessionID + "/turns", want: false},
+		{path: "/api/sessions/" + sessionID + "/context/extra", want: false},
+		{path: "/api/sessions/", want: false},
+		{path: "/api/sessions/..", want: false},
+		{path: `/api/sessions/20260718T065604-8f0582f4\..\other`, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			if got := isReadOnlyAgentPath(test.path); got != test.want {
+				t.Fatalf("isReadOnlyAgentPath(%q) = %v, want %v", test.path, got, test.want)
+			}
+		})
+	}
 }
 
 func TestFleetAPIResponseShapes(t *testing.T) {

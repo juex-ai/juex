@@ -224,7 +224,9 @@ narrower screens. Session history is opened from the stage header as
 - Composer is sticky to the bottom of the center column.
 - Stopped and failed agents keep persisted conversations readable. Their
   composer is replaced by a runtime state bar with a Start agent action;
-  failures also show the reason and a Logs shortcut.
+  failures also show the reason and a Logs shortcut. The stage does not poll
+  turns or open an event stream while the runtime is unavailable; session
+  history reloads from the fleet's persisted read-only path.
 - Desktop columns are dense: workspace `18rem`, center content padded `24px`.
   The app is a product surface, not a marketing page.
 - Headers and metadata wrap or hide low-priority labels instead of forcing

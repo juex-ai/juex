@@ -110,6 +110,30 @@ func (s *Server) APIHandler() http.Handler {
 	return mux
 }
 
+// NewReadOnlyAPIHandler serves persisted session data without starting an agent
+// runtime. It intentionally exposes only the durable GET endpoints needed to
+// inspect stopped agents through the fleet UI.
+func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
+	server := NewServer(Options{Cfg: cfg})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+			return
+		}
+		server.listSessions(w, r)
+	})
+	mux.HandleFunc("/api/sessions/", server.dispatchReadOnlySession)
+	mux.HandleFunc("/api/media", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+			return
+		}
+		server.handleMedia(w, r)
+	})
+	return mux
+}
+
 func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -127,6 +151,28 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/observables", s.handleObservables)
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
+}
+
+func (s *Server) dispatchReadOnlySession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+	id, rest := sessionPathID(r.URL.Path)
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "missing session id")
+		return
+	}
+	switch rest {
+	case "":
+		s.handleSessionShow(w, r, id)
+	case "context":
+		s.handleSessionContext(w, r, id)
+	case "scratchpad":
+		s.handleSessionScratchpad(w, r, id)
+	default:
+		writeErr(w, http.StatusNotFound, "not_found", "read-only API route not found")
+	}
 }
 
 // dispatchSession routes /api/sessions/<id>[/...] to the matching handler.

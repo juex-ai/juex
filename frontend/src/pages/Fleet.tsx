@@ -195,8 +195,8 @@ export function Fleet() {
             />
             <FleetSettingCard
               label="System service"
-              value="Online"
-              detail={`${agents.filter((agent) => agent.runtime_health === "healthy").length} agent runtimes connected`}
+              value="Not reported"
+              detail={`${agents.filter((agent) => agent.runtime_health === "healthy").length} agent runtimes connected; service-manager state is unavailable`}
             />
             <FleetSettingCard
               label="Models & providers"

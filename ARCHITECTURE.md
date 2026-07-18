@@ -1115,6 +1115,11 @@ bound healthy runtime immediately before forwarding. It then uses the parsed
 `endpoint.Target` transport for either Unix or numeric-loopback TCP endpoints.
 The proxy strips the fleet prefix, preserves query and upstream responses, does
 not retry requests, and flushes SSE immediately. Dial failures return 502.
+When no healthy endpoint exists, `internal/fleetweb` may instead obtain a
+workspace-bound `ReadOnlyAgentState` from `internal/fleet` and serve only
+persisted session list/detail, context, scratchpad, and media GET requests
+through `internal/web`'s read-only handler. Turn, event-stream, runtime,
+workspace, and mutation routes never use this fallback.
 Other GET routes use the embedded SPA handler exported by `internal/web`;
 single-agent servers do not mount that handler.
 

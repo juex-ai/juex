@@ -90,6 +90,21 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
   assert.match(sessionSource, /<AgentRuntimeStateBar \/>/);
   assert.match(sessionsSource, /<AgentRuntimeStateBar \/>/);
+  assert.match(
+    sessionSource,
+    /routeActiveTurnIDRef\.current = activeTurnID;[\s\S]*\}, \[controller, id\]\);/,
+    "runtime health changes must not reset the loaded session route",
+  );
+  assert.match(
+    sessionSource,
+    /const activeTurnID = routeActiveTurnIDRef\.current;[\s\S]*!agentRuntimeHealthy[\s\S]*startTurnStatusPolling/,
+    "initial turn polling must remain gated by runtime health",
+  );
+  assert.doesNotMatch(
+    shellSource,
+    /setInterval\(\(\) => void refreshAgents/,
+    "roster polling must not overlap slow refresh requests",
+  );
 });
 
 test("fleet operations expose roster lifecycle logs and config workflows", () => {

@@ -8,8 +8,8 @@ test("homeActiveSessionHref routes to the active primary session", () => {
     homeActiveSessionHref([
       { id: "side", kind: "side", active: false },
       { id: "primary/session 1", kind: "primary", active: true },
-    ]),
-    "/sessions/primary%2Fsession%201",
+    ], "/agents/agent%201"),
+    "/agents/agent%201/sessions/primary%2Fsession%201",
   );
 });
 

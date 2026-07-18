@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   agentStatusText,
+  agentStateLabel,
   agentTabFromPath,
   agentTabPath,
   agentVisualState,
@@ -67,6 +68,28 @@ test("agent status text uses concise operational context", () => {
   assert.equal(
     agentStatusText(agent("idle", "healthy", { workspace: "/work/juex" })),
     "Idle · juex",
+  );
+});
+
+test("agent state labels stay compact when failure details are long", () => {
+  assert.equal(agentStateLabel(agent("stopped", "stopped")), "Stopped");
+  assert.equal(
+    agentStateLabel(
+      agent("failed", "unhealthy", {
+        runtime_health: "unhealthy",
+        problem: "a very long diagnostic that belongs in the failure banner",
+      }),
+    ),
+    "Failed",
+  );
+  assert.equal(
+    agentStateLabel(
+      agent("working", "healthy", {
+        runtime_health: "healthy",
+        activity: { state: "working", pending_count: 0 },
+      }),
+    ),
+    "Working",
   );
 });
 

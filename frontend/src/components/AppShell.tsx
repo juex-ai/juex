@@ -106,9 +106,19 @@ export function AppShell() {
   }, []);
 
   useEffect(() => {
-    void refreshAgents();
-    const timer = window.setInterval(() => void refreshAgents(), 3_000);
-    return () => window.clearInterval(timer);
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      await refreshAgents();
+      if (!cancelled) {
+        timer = window.setTimeout(() => void poll(), 3_000);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [refreshAgents]);
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -188,6 +189,7 @@ export function Session() {
   );
   const [draft, setDraft] = useState("");
   const [attachmentCount, setAttachmentCount] = useState(0);
+  const routeActiveTurnIDRef = useRef<string | undefined>(undefined);
   const {
     data,
     loadError,
@@ -197,6 +199,8 @@ export function Session() {
     loadingOlderMessages,
     olderMessagesError,
   } = readState;
+  const agentRuntimeHealthy =
+    !agentsLoaded || !agent || agent.runtime_health === "healthy";
 
   useEffect(() => {
     controller.configureNavigation({
@@ -222,31 +226,36 @@ export function Session() {
   useEffect(() => {
     const state = location.state as InitialCommandState;
     const activeTurnID = state?.activeTurnID;
+    routeActiveTurnIDRef.current = activeTurnID;
     controller.setRoute(id);
     controller.resetForRoute({ activeTurnID });
     setDraft("");
-    if (!activeTurnID) return;
-    return controller.startTurnStatusPolling({
-      sessionID: id,
-      turnID: activeTurnID,
-      retryOnError: true,
-    });
     // location.state is read only on session entry; clearing it later must not
     // reset live projection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controller, id]);
 
+  useEffect(() => {
+    const activeTurnID = routeActiveTurnIDRef.current;
+    if (!activeTurnID || !agentRuntimeHealthy) return;
+    return controller.startTurnStatusPolling({
+      sessionID: id,
+      turnID: activeTurnID,
+      retryOnError: true,
+    });
+  }, [agentRuntimeHealthy, controller, id]);
+
   const loadedTurnID =
     data?.turn?.state === "running" ? data.turn.turn_id : undefined;
 
   useEffect(() => {
-    if (!id || !loadedTurnID) return;
+    if (!id || !loadedTurnID || !agentRuntimeHealthy) return;
     return controller.startTurnStatusPolling({
       sessionID: id,
       turnID: loadedTurnID,
       retryOnError: false,
     });
-  }, [controller, id, loadedTurnID]);
+  }, [agentRuntimeHealthy, controller, id, loadedTurnID]);
 
   useEffect(() => {
     if (!id) return;
@@ -265,12 +274,12 @@ export function Session() {
 
   // SSE subscription.
   useEffect(() => {
-    if (!id || !data || !sessionCanSend(data)) return;
+    if (!id || !data || !sessionCanSend(data) || !agentRuntimeHealthy) return;
     return controller.subscribeLiveEvents(id);
     // Keep this tied to send-access fields so projection-only data changes do
     // not reopen the EventSource during active turns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [controller, data?.kind, data?.active, id]);
+  }, [agentRuntimeHealthy, controller, data?.kind, data?.active, id]);
 
   async function handleSend(
     prompt: string,
@@ -315,9 +324,7 @@ export function Session() {
 
   const tokenUsage = projection.tokenUsage ?? data.token_usage;
   const contextUsage = projection.contextUsage ?? data.context_usage;
-  const agentCanCompose =
-    !agentsLoaded || !agent || agent.runtime_health === "healthy";
-  const canSend = sessionCanSend(data) && agentCanCompose;
+  const canSend = sessionCanSend(data) && agentRuntimeHealthy;
   const submitAction = composerSubmitAction({
     turnActive: projection.turnActive,
     compactActive: projection.compactActive,
@@ -423,7 +430,7 @@ export function Session() {
                 </TooltipProvider>
               </PromptInputFooter>
             </PromptInput>
-          ) : !agentCanCompose ? (
+          ) : !agentRuntimeHealthy ? (
             <AgentRuntimeStateBar />
           ) : (
             <ReadOnlySessionBar data={data} />

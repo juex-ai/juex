@@ -14,6 +14,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  agentStateLabel,
   agentStatusText,
   agentTabPath,
   agentVisualState,
@@ -74,7 +75,7 @@ export function FleetStageHeader({
             )}
             title={agentStatusText(agent)}
           >
-            {agentStatusText(agent)}
+            {agentStateLabel(agent)}
           </span>
         ) : null}
       </div>
