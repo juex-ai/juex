@@ -78,10 +78,13 @@ func TestPlansDeriveStableDistinctServiceNamesAndPaths(t *testing.T) {
 
 func TestLaunchdDefinitionPreservesDetachedAgents(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "fleet & home")
+	userHome := filepath.Join(t.TempDir(), "user home")
+	executableDir := filepath.Join(home, "bin")
 	plan, err := buildPlan(testOptions(home), hostInfo{
-		goos:     "darwin",
-		userHome: filepath.Join(t.TempDir(), "user home"),
-		uid:      502,
+		goos:       "darwin",
+		userHome:   userHome,
+		uid:        502,
+		searchPath: "/custom/bin:relative:/usr/bin:/custom/bin",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +108,18 @@ func TestLaunchdDefinitionPreservesDetachedAgents(t *testing.T) {
 		"<string>Background</string>",
 		"<key>JUEX_HOME</key>",
 		"<string>" + strings.ReplaceAll(home, "&", "&amp;") + "</string>",
+		"<key>PATH</key>",
+		"<string>" + strings.ReplaceAll(strings.Join([]string{
+			executableDir,
+			filepath.Join(userHome, ".local", "bin"),
+			"/custom/bin",
+			"/usr/bin",
+			"/opt/homebrew/bin",
+			"/usr/local/bin",
+			"/bin",
+			"/usr/sbin",
+			"/sbin",
+		}, ":"), "&", "&amp;") + "</string>",
 		"<string>fleet</string>",
 		"<string>serve</string>",
 	} {
@@ -125,11 +140,13 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), `juex $bin %h "quoted"`)
 	opts := testOptions(home)
 	opts.Executable = executable
-	plan, err := buildPlan(opts, hostInfo{
+	host := hostInfo{
 		goos:          "linux",
 		userHome:      filepath.Join(t.TempDir(), "user"),
 		xdgConfigHome: filepath.Join(t.TempDir(), "xdg config"),
-	})
+		searchPath:    "/custom/bin:relative:/usr/bin:/custom/bin",
+	}
+	plan, err := buildPlan(opts, host)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +157,7 @@ func TestSystemdDefinitionEscapesPathsAndUsesProcessKillMode(t *testing.T) {
 		"Restart=on-failure",
 		"WantedBy=default.target",
 		`Environment="JUEX_HOME=`,
+		"Environment=" + systemdEnvironmentAssignment("PATH", serviceSearchPath(executable, host)),
 		`$bin`,
 		`$HOME`,
 		`%%i`,
@@ -169,7 +187,13 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "fleet home")
 	opts := testOptions(home)
 	opts.UnsafeBindAny = true
-	plan, err := buildPlan(opts, hostInfo{goos: "linux", userHome: t.TempDir(), termuxPrefix: prefix})
+	userHome := t.TempDir()
+	plan, err := buildPlan(opts, hostInfo{
+		goos:         "linux",
+		userHome:     userHome,
+		termuxPrefix: prefix,
+		searchPath:   "/custom/bin:relative:/usr/bin:/custom/bin",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,6 +215,10 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 	for _, want := range []string{
 		"#!" + filepath.Join(prefix, "bin", "sh"),
 		"export JUEX_HOME=",
+		"export PATH=",
+		filepath.Dir(opts.Executable),
+		filepath.Join(userHome, ".local", "bin"),
+		"/custom/bin",
 		"exec ",
 		" 'fleet' 'serve' '--unsafe-bind-any'",
 	} {
@@ -215,6 +243,31 @@ func TestTermuxDefinitionUsesDirectExecAndStandardLogging(t *testing.T) {
 		if file.mode != 0o700 {
 			t.Fatalf("%s mode = %o", file.path, file.mode)
 		}
+	}
+}
+
+func TestServiceSearchPathKeepsSafeAbsoluteEntriesInStableOrder(t *testing.T) {
+	userHome := t.TempDir()
+	executableDir := filepath.Join(t.TempDir(), "JueX", "bin")
+	host := hostInfo{
+		goos:       "darwin",
+		userHome:   userHome,
+		searchPath: "/custom/bin::relative:/custom/bin:/usr/bin",
+	}
+	got := serviceSearchPath(filepath.Join(executableDir, "juex"), host)
+	want := strings.Join([]string{
+		executableDir,
+		filepath.Join(userHome, ".local", "bin"),
+		"/custom/bin",
+		"/usr/bin",
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+	}, ":")
+	if got != want {
+		t.Fatalf("service search path = %q, want %q", got, want)
 	}
 }
 
@@ -538,6 +591,29 @@ func TestLaunchdInstallAndUninstallQueryManagerState(t *testing.T) {
 	}
 	if _, err := os.Stat(manager.plan.registration.DefinitionPath); !os.IsNotExist(err) {
 		t.Fatalf("plist still exists: %v", err)
+	}
+}
+
+func TestLaunchdReinstallWaitsForManagerStateToDisappear(t *testing.T) {
+	host := hostInfo{goos: "darwin", userHome: t.TempDir(), uid: 501}
+	runner := &fakeRunner{results: []fakeCommandResult{
+		{},
+		{},
+		{},
+		{output: "service not found", err: errors.New("exit status 113")},
+		{},
+		{},
+	}}
+	manager, err := newManagerForHost(testOptions(t.TempDir()), host, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wantVerbs := []string{"print", "bootout", "print", "print", "bootstrap", "kickstart"}
+	if got := runner.verbs(); !reflect.DeepEqual(got, wantVerbs) {
+		t.Fatalf("verbs = %v, want %v\ncommands=%v", got, wantVerbs, runner.commands)
 	}
 }
 

@@ -174,7 +174,10 @@ On macOS, `fleet install` writes a LaunchAgent under
 `loginctl enable-linger "$USER"` when the user manager must start before login.
 On Termux it writes a runit service under `$PREFIX/var/service`; install and
 initialize `termux-services`, and use Termux:Boot when startup after device
-reboot is required.
+reboot is required. Installed services persist the absolute entries from the
+installer's `PATH`, prepend the JueX executable directory and `~/.local/bin`,
+and add platform defaults. Resident agents and their MCP servers therefore do
+not depend on an interactive shell profile such as `.zshrc`.
 
 ## Runtime Files
 
