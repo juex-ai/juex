@@ -9,18 +9,25 @@ import {
   PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
+import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { homeActiveSessionHref } from "@/lib/home-route";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
 
 export function Sessions() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { agent, agentsLoaded } = useFleetAgent();
   const [checkingSession, setCheckingSession] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useShellTitle(null);
 
   useEffect(() => {
+    if (agentsLoaded && agent?.runtime_health !== "healthy") {
+      setCheckingSession(false);
+      return;
+    }
     let live = true;
     listSessions()
       .then(({ sessions }) => {
@@ -40,7 +47,7 @@ export function Sessions() {
     return () => {
       live = false;
     };
-  }, [navigate]);
+  }, [agent?.runtime_health, agentsLoaded, navigate]);
 
   if (checkingSession) {
     return null;
@@ -54,7 +61,10 @@ export function Sessions() {
           Aware, action
         </p>
         <div className="mt-6 w-full">
-          <PromptInput
+          {agentsLoaded && agent?.runtime_health !== "healthy" ? (
+            <AgentRuntimeStateBar />
+          ) : (
+            <PromptInput
             onSubmit={async (msg) => {
               const text = msg.text?.trim();
               if (!text) return;
@@ -91,12 +101,13 @@ export function Sessions() {
                 setSending(false);
               }
             }}
-          >
-            <PromptInputTextarea placeholder="Ask juex anything..." />
-            <PromptInputFooter className="justify-end">
-              <PromptInputSubmit disabled={sending} status={sending ? "submitted" : undefined} />
-            </PromptInputFooter>
-          </PromptInput>
+            >
+              <PromptInputTextarea placeholder="Ask juex anything..." />
+              <PromptInputFooter className="justify-end">
+                <PromptInputSubmit disabled={sending} status={sending ? "submitted" : undefined} />
+              </PromptInputFooter>
+            </PromptInput>
+          )}
           {error ? (
             <div className="mt-2 text-left text-xs text-destructive">{error}</div>
           ) : null}

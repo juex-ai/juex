@@ -330,6 +330,58 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 	}
 }
 
+func TestFleetRosterIncludesLiveActivityForHealthyAgents(t *testing.T) {
+	backend := &fakeBackend{statuses: []fleet.AgentStatus{
+		{
+			ID:            "healthy",
+			RuntimeHealth: fleet.RuntimeHealthy,
+			Endpoint:      "unix:///tmp/healthy.sock",
+		},
+		{
+			ID:            "stopped",
+			RuntimeHealth: fleet.RuntimeStopped,
+		},
+	}}
+	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+	var activityReads int
+	server.readActivity = func(
+		_ context.Context,
+		status fleet.AgentStatus,
+	) (*agentActivity, error) {
+		activityReads++
+		if status.ID != "healthy" {
+			t.Fatalf("activity requested for %q", status.ID)
+		}
+		return &agentActivity{
+			State:        "working",
+			SessionID:    "session-1",
+			SessionAlias: "Release prep",
+			PendingCount: 2,
+		}, nil
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var got []agentRosterItem
+	decodeJSON(t, response.Body.Bytes(), &got)
+	if activityReads != 1 {
+		t.Fatalf("activity reads = %d, want 1", activityReads)
+	}
+	if len(got) != 2 || got[0].Activity == nil {
+		t.Fatalf("roster = %+v", got)
+	}
+	if got[0].Activity.State != "working" ||
+		got[0].Activity.PendingCount != 2 ||
+		got[1].Activity != nil {
+		t.Fatalf("roster activities = %+v", got)
+	}
+}
+
 func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 	tests := []struct {
 		name       string

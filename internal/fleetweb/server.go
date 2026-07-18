@@ -53,6 +53,7 @@ type Server struct {
 	allowAnyBind bool
 	onReady      func(string)
 	spa          http.Handler
+	readActivity func(context.Context, fleet.AgentStatus) (*agentActivity, error)
 }
 
 func New(opts Options) (*Server, error) {
@@ -73,6 +74,7 @@ func newServer(manager backend, opts Options) *Server {
 		allowAnyBind: opts.AllowAnyBind,
 		onReady:      opts.OnReady,
 		spa:          web.SPAHandler(),
+		readActivity: fetchAgentActivity,
 	}
 }
 
@@ -154,7 +156,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 			writeFleetError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, statuses)
+		writeJSON(w, http.StatusOK, s.roster(r.Context(), statuses))
 	case http.MethodPost:
 		var body struct {
 			Workspace *string `json:"workspace"`

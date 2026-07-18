@@ -911,6 +911,13 @@ export type AgentRuntimeHealth =
   | "unhealthy"
   | "ambiguous";
 
+export interface AgentActivity {
+  state: "idle" | "working";
+  session_id?: string;
+  session_alias?: string;
+  pending_count: number;
+}
+
 export interface AgentStatus {
   id: string;
   name?: string;
@@ -928,6 +935,7 @@ export interface AgentStatus {
   endpoint_reachable: boolean;
   endpoint_matched: boolean;
   problem?: string;
+  activity?: AgentActivity;
 }
 
 export interface AgentConfig {

@@ -62,9 +62,14 @@ function RouteSuspense({ children }: { children: ReactNode }) {
 const router = createBrowserRouter([
   {
     path: "/",
+    element: <AppShell />,
     children: [
       {
         index: true,
+        element: null,
+      },
+      {
+        path: "settings",
         element: (
           <RouteSuspense>
             <Fleet />
@@ -73,7 +78,6 @@ const router = createBrowserRouter([
       },
       {
         path: "agents/:agentId",
-        element: <AppShell />,
         children: [
           {
             index: true,

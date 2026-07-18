@@ -35,6 +35,8 @@ import {
   usePromptInputAttachments,
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
+import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
+import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
 import { FileTreePanel } from "@/components/FileTreePanel";
@@ -166,6 +168,7 @@ export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  const { agent, agentsLoaded } = useFleetAgent();
   const [readState, setReadState] = useState<SessionReadState>(() =>
     createSessionReadState(),
   );
@@ -312,7 +315,9 @@ export function Session() {
 
   const tokenUsage = projection.tokenUsage ?? data.token_usage;
   const contextUsage = projection.contextUsage ?? data.context_usage;
-  const canSend = sessionCanSend(data);
+  const agentCanCompose =
+    !agentsLoaded || !agent || agent.runtime_health === "healthy";
+  const canSend = sessionCanSend(data) && agentCanCompose;
   const submitAction = composerSubmitAction({
     turnActive: projection.turnActive,
     compactActive: projection.compactActive,
@@ -418,6 +423,8 @@ export function Session() {
                 </TooltipProvider>
               </PromptInputFooter>
             </PromptInput>
+          ) : !agentCanCompose ? (
+            <AgentRuntimeStateBar />
           ) : (
             <ReadOnlySessionBar data={data} />
           )}

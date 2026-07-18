@@ -64,6 +64,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/code-theme.ts` | shared light/dark syntax themes for markdown and reasoning code blocks |
 | `src/lib/compact-ui.ts` | optimistic `/compact` UI labels and local message helpers |
 | `src/lib/display-units.ts` | folds `Block[]` into `DisplayUnit[]` for Tool pairing |
+| `src/lib/fleet-shell.ts` | pure fleet selection, visual state, lifecycle, and stage-route helpers |
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
 | `src/lib/home-route.ts` | pure helper for choosing the web root redirect target |
 | `src/lib/light-code-highlight.ts` | lightweight synchronous JSON/log highlighting for tool payloads |
@@ -93,12 +94,13 @@ into `internal/web/dist/` for Go embedding.
 | `src/pages/` | route-level views |
 | `src/components/` | app components |
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
+| `src/components/fleet/` | persistent agent rail, tabbed stage header, runtime state bar, and selected-agent context |
 | `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
 | `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
-| `src/pages/Fleet.tsx` | fleet roster with resident agent lifecycle actions and links to selected-agent surfaces |
+| `src/pages/Fleet.tsx` | fleet settings stage with service summaries, registration, lifecycle, and removal controls |
 | `src/pages/AgentConfig.tsx` | workspace config editor with validation and post-save restart reconciliation |
 | `src/pages/AgentLogs.tsx` | bounded resident agent log tail with explicit refresh and line-count controls |
 | `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |

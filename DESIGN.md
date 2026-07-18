@@ -175,56 +175,56 @@ Edit React, see changes instantly.
 
 ## 5. Page layout
 
-Every page renders a responsive shell: the main content column fills the center
-and a workspace browser docks on wide screens or becomes a right-side drawer on
-narrower screens. Session history is not a persistent navigation surface; it is
-opened from the agent header as `/agents/<id>/history`. Session metadata stays
-in the global header, and the middle column owns the composer when applicable.
+Every page renders inside a fleet-first shell. A persistent agent sidebar owns
+fleet selection and lifecycle actions, while a tabbed stage remounts the
+selected agent's existing Chat, Runtime, Observables, Logs, and Config routes.
+The workspace browser docks on wide screens or becomes a right-side drawer on
+narrower screens. Session history is opened from the stage header as
+`/agents/<id>/history`; session titles are not repeated in the shell.
 
 ```
-┌──────────────────────────────────────┬──────────────┐
-│ global header: title, runtime, tools │ workspace    │
-├──────────────────────────────────────┼──────────────┤
-│                                      │ file tree    │
-│                                      │              │
-│ message list                         │              │
-│ (scrollable)                         │              │
-│                                      │              │
-├──────────────────────────────────────┤              │
-│ ┌──────────────────────────────────┐ │              │
-│ │ textarea                         │ │              │
-│ └──────────────────────────────────┘ │              │
-│ context 61.5k  tokens 42       send │              │
-└──────────────────────────────────────┴──────────────┘
+┌──────────────┬──────────────────────────────────┬──────────────┐
+│ fleet agents │ agent + status + stage tabs      │ workspace    │
+│              ├──────────────────────────────────┤ file tree    │
+│ selected     │ message list / selected page     │              │
+│ status       │ (scrollable)                     │              │
+│ lifecycle    │                                  │              │
+│              ├──────────────────────────────────┤              │
+│              │ composer or runtime state bar    │              │
+└──────────────┴──────────────────────────────────┴──────────────┘
 ```
 
+- The fleet sidebar is 268px wide and collapses to a stable 64px avatar rail.
+  The collapsed brand mark becomes the expand control on hover without moving
+  other controls. Below 760px the sidebar becomes an overlay drawer opened from
+  the stage header.
+- Agent rows show stopped, idle, working, and failed states; selected rows use a
+  gold left rule and tinted background. Expanded rows reveal exactly one
+  lifecycle toggle and one Runtime shortcut on hover. Pending input counts stay
+  visible as compact gold badges.
+- Agent selection restores the last valid agent from local storage, then falls
+  back to the first registered agent. Empty fleets show an Add agent action and
+  the CLI registration hint.
+- The stage header contains the agent name, a compact status pill, and the
+  Chat/Runtime/Observables/Logs/Config tab strip. Existing route components and
+  canonical deep links remain the source of page behavior.
 - Workspace docks as a right column at 1280px and wider. Below 1280px, the
   same header button opens the workspace as a right-side `Sheet` so the
   conversation column keeps its readable width.
 - File previews always open in a right-side sheet. On narrow screens the
   preview sheet uses the viewport width. Text previews wrap long paths/content;
   image previews fit inside the sheet without cropping.
-- Runtime status badges live on the right side of the shell header when there
-  is room. Session pages add the most recent activity timestamp beside the
-  skills badge, formatted in the browser time zone with 24-hour time and no
-  label; the timestamp hides on narrower screens.
-- The MCP badge is compact: `MCP <count>` plus a status dot. No configured
-  servers uses a muted dot, all configured servers connected uses green, and
-  any startup/connection problem uses red.
-- The shell title is the current page or session preview, truncated with
-  ellipsis. It owns the remaining header space so runtime badges and action
-  buttons do not overlap long titles.
 - Shell-aligned header strips use `--juex-header-height` so the app header and
   workspace header stay aligned.
 - The history icon opens `/agents/<id>/history`; each row opens the canonical
   session route under `/agents/<id>/sessions/:id`. The session page decides
   whether the composer is available from the session kind and active state.
-- The wrench icon opens `/agents/<id>/runtime` for MCP server and skill
-  details. On the runtime page, the same slot becomes a back arrow that returns
-  to the previous non-runtime route.
 - Center column max-width is 760px; the rest is gutter so reading lines do
   not get awkwardly wide. Gutters shrink from 24px to 16px below 768px.
 - Composer is sticky to the bottom of the center column.
+- Stopped and failed agents keep persisted conversations readable. Their
+  composer is replaced by a runtime state bar with a Start agent action;
+  failures also show the reason and a Logs shortcut.
 - Desktop columns are dense: workspace `18rem`, center content padded `24px`.
   The app is a product surface, not a marketing page.
 - Headers and metadata wrap or hide low-priority labels instead of forcing
@@ -235,17 +235,20 @@ in the global header, and the middle column owns the composer when applicable.
 
 ## 6. Pages
 
-### 6.1 Fleet roster (`/`)
+### 6.1 Fleet settings (`/settings`)
 
-The fleet entry page is a dense operational roster. Each row shows agent
-identity, runtime health, workspace, process metadata, explicit lifecycle
-actions, enabled state, and links to sessions, bounded logs, and config. The
-header opens an Add agent dialog with an editable absolute path, server-side
-one-level directory browser, breadcrumbs, hidden-directory switch, optional
-name, autostart, and start-now controls. Disable is a reversible row action.
-Destructive removal uses a separate dialog and enables its command only after
-the persisted agent name is typed exactly. Errors are shown in the active
-dialog or page-level alert and never hidden behind optimistic status.
+Fleet settings is a stage view reached from the sidebar footer. It presents
+fleet listener and version details, system-service state, model/provider and
+extension ownership, followed by the dense operational roster. Each roster row
+shows agent identity, runtime health, workspace, process metadata, explicit
+lifecycle actions, enabled state, and links to bounded logs and config.
+
+The Add agent action uses an editable absolute path, server-side one-level
+directory browser, breadcrumbs, hidden-directory switch, optional name,
+autostart, and start-now controls. Disable is reversible. Destructive removal
+uses a separate dialog and enables its command only after the persisted agent
+name is typed exactly. Errors are shown in the active dialog or page-level
+alert and never hidden behind optimistic status.
 
 ### 6.2 Sessions list (`/agents/:agentId`)
 
