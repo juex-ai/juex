@@ -476,11 +476,7 @@ func TestLogsExplainsUnavailableFleetOwnedLog(t *testing.T) {
 
 func TestLogsPreservesNonMissingIOErrors(t *testing.T) {
 	entry := registryEntry("aaaaaaaa", "broken-log")
-	entry.Dir = t.TempDir()
-	path := fleetLogPath(entry.Dir)
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		t.Fatal(err)
-	}
+	entry.Dir = "invalid\x00agent-dir"
 	manager := &Manager{homeDir: t.TempDir(), deps: defaultDependencies()}
 	manager.deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
 		return []agentstate.RegistryEntry{entry}, nil
@@ -489,7 +485,7 @@ func TestLogsPreservesNonMissingIOErrors(t *testing.T) {
 	_, err := manager.Logs(entry.ID, 20)
 
 	if err == nil {
-		t.Fatal("Logs succeeded with a directory in place of fleet.log")
+		t.Fatal("Logs succeeded with a NUL byte in the log path")
 	}
 	var unavailable *LogUnavailableError
 	if errors.As(err, &unavailable) {
