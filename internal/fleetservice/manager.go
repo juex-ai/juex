@@ -147,9 +147,12 @@ func (m *Manager) waitLaunchdUnloaded(ctx context.Context) error {
 	defer cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
-	for {
+	for waitCtx.Err() == nil {
 		loaded, err := m.launchdLoaded(waitCtx)
 		if err != nil {
+			if waitCtx.Err() != nil {
+				break
+			}
 			return err
 		}
 		if !loaded {
@@ -157,10 +160,10 @@ func (m *Manager) waitLaunchdUnloaded(ctx context.Context) error {
 		}
 		select {
 		case <-waitCtx.Done():
-			return fmt.Errorf("fleet service: wait for launchd service %s to unload: %w", m.plan.registration.Name, waitCtx.Err())
 		case <-ticker.C:
 		}
 	}
+	return fmt.Errorf("fleet service: wait for launchd service %s to unload: %w", m.plan.registration.Name, waitCtx.Err())
 }
 
 func (m *Manager) launchdLoaded(ctx context.Context) (bool, error) {
