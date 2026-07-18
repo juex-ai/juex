@@ -15,9 +15,8 @@ func TestDiscoverFindsUserAndProjectExtensions(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "project-ext", "hooks.yaml"), "trusted: true\n")
 
 	resources, err := Discover(DiscoverOptions{
-		HomeJuexDir:               home,
-		WorkDir:                   work,
-		EnableUserGlobalResources: true,
+		HomeJuexDir: home,
+		WorkDir:     work,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -42,21 +41,22 @@ func TestDiscoverFindsUserAndProjectExtensions(t *testing.T) {
 	}
 }
 
-func TestDiscoverSkipsUserExtensionsWhenGlobalResourcesDisabled(t *testing.T) {
+func TestDiscoverAlwaysLoadsHomeExtensions(t *testing.T) {
 	home := t.TempDir()
 	work := t.TempDir()
 	writeExtensionFile(t, filepath.Join(home, "extensions", "user-ext", "mcp.json"), "{}")
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "project-ext", "mcp.json"), "{}")
 
 	resources, err := Discover(DiscoverOptions{
-		HomeJuexDir:               home,
-		WorkDir:                   work,
-		EnableUserGlobalResources: false,
+		HomeJuexDir: home,
+		WorkDir:     work,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resources.Extensions) != 1 || resources.Extensions[0].Name != "project-ext" {
+	if len(resources.Extensions) != 2 ||
+		resources.Extensions[0].Name != "user-ext" ||
+		resources.Extensions[1].Name != "project-ext" {
 		t.Fatalf("extensions = %+v", resources.Extensions)
 	}
 }
@@ -68,9 +68,8 @@ func TestDiscoverRejectsDuplicateExtensionNames(t *testing.T) {
 	writeExtensionFile(t, filepath.Join(work, ".juex", "extensions", "shared", "mcp.json"), "{}")
 
 	_, err := Discover(DiscoverOptions{
-		HomeJuexDir:               home,
-		WorkDir:                   work,
-		EnableUserGlobalResources: true,
+		HomeJuexDir: home,
+		WorkDir:     work,
 	})
 	if err == nil || !strings.Contains(err.Error(), `duplicate extension "shared"`) {
 		t.Fatalf("err = %v, want duplicate extension error", err)

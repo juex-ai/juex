@@ -300,7 +300,7 @@ def run_eval_turn(args: argparse.Namespace, work: pathlib.Path, prompt_file: pat
         args.juex,
         "-C",
         str(work),
-        "--enable-user-global-resources=false",
+        "--enable-user-agents-resources=false",
         "run",
         prompt_file.read_text(encoding="utf-8"),
     ]

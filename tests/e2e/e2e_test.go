@@ -789,7 +789,7 @@ func toolResultsFromConversation(t *testing.T, convText string) string {
 	return out.String()
 }
 
-func TestEndToEnd_ToolFailureLedgerWithUserGlobalDisabledDoesNotHardBlock(t *testing.T) {
+func TestEndToEnd_ToolFailureLedgerWithUserAgentsDisabledDoesNotHardBlock(t *testing.T) {
 	work := t.TempDir()
 	prov := &recordingProvider{
 		steps: []llm.Response{
@@ -809,7 +809,7 @@ func TestEndToEnd_ToolFailureLedgerWithUserGlobalDisabledDoesNotHardBlock(t *tes
 		Config: config.Config{
 			ProviderProtocol:          "openai/chat",
 			WorkDir:                   work,
-			EnableUserGlobalResources: false,
+			EnableUserAgentsResources: false,
 		},
 		Provider:   prov,
 		WorkDir:    work,

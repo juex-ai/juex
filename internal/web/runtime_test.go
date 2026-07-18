@@ -382,7 +382,7 @@ func TestRuntimeStatusIncludesSystemPromptEntries(t *testing.T) {
 	work := srv.opts.Cfg.WorkDir
 	homeAgents := t.TempDir()
 	srv.opts.Cfg.HomeAgentsDir = homeAgents
-	srv.opts.Cfg.EnableUserGlobalResources = true
+	srv.opts.Cfg.EnableUserAgentsResources = true
 	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "AGENTS.md"), "global runtime rule")
 	mustWriteRuntimeFile(t, filepath.Join(work, "AGENTS.md"), "workspace root rule")
 	mustWriteRuntimeFile(t, filepath.Join(work, ".agents", "AGENTS.md"), "workspace agents rule")
@@ -417,7 +417,7 @@ func TestRuntimeStatusOrdersProjectBeforeUserSources(t *testing.T) {
 	srv := newTestServer(t)
 	homeAgents := t.TempDir()
 	srv.opts.Cfg.HomeAgentsDir = homeAgents
-	srv.opts.Cfg.EnableUserGlobalResources = true
+	srv.opts.Cfg.EnableUserAgentsResources = true
 	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "mcp.json"), `{
   "mcpServers": {
     "shared": { "command": "user-shared" },
@@ -540,11 +540,11 @@ commands:
 	}
 }
 
-func TestRuntimeStatusSkipsUserGlobalResourcesWhenDisabled(t *testing.T) {
+func TestRuntimeStatusSkipsUserAgentsResourcesWhenDisabled(t *testing.T) {
 	srv := newTestServer(t)
 	homeAgents := t.TempDir()
 	srv.opts.Cfg.HomeAgentsDir = homeAgents
-	srv.opts.Cfg.EnableUserGlobalResources = false
+	srv.opts.Cfg.EnableUserAgentsResources = false
 	work := srv.opts.Cfg.WorkDir
 
 	mustWriteRuntimeFile(t, filepath.Join(homeAgents, "AGENTS.md"), "global runtime rule")

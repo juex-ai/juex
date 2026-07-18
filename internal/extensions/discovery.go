@@ -23,9 +23,8 @@ const (
 )
 
 type DiscoverOptions struct {
-	HomeJuexDir               string
-	WorkDir                   string
-	EnableUserGlobalResources bool
+	HomeJuexDir string
+	WorkDir     string
 }
 
 type Extension struct {
@@ -52,7 +51,7 @@ type Resources struct {
 
 func Discover(opts DiscoverOptions) (Resources, error) {
 	var roots []extensionRoot
-	if opts.EnableUserGlobalResources && opts.HomeJuexDir != "" {
+	if opts.HomeJuexDir != "" {
 		roots = append(roots, extensionRoot{
 			Path:         filepath.Join(opts.HomeJuexDir, "extensions"),
 			Scope:        ScopeUser,

@@ -988,7 +988,7 @@ func TestResolveShellProfile_CustomPathWithSeparatorBecomesAbsolute(t *testing.T
 	}
 }
 
-func TestLoad_EnableUserGlobalResourcesDefaultsAndOverrides(t *testing.T) {
+func TestLoad_EnableUserAgentsResourcesDefaultsAndOverrides(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
 
@@ -996,23 +996,23 @@ func TestLoad_EnableUserGlobalResourcesDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.EnableUserGlobalResources {
-		t.Fatal("EnableUserGlobalResources should default to true")
+	if !cfg.EnableUserAgentsResources {
+		t.Fatal("EnableUserAgentsResources should default to true")
 	}
 
-	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "enable_user_global_resources: 0\n")
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "enable_user_agents_resources: 0\n")
 	cfg, err = LoadForWorkDir(work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.EnableUserGlobalResources {
-		t.Fatal("global enable_user_global_resources: 0 should disable user-global resources")
+	if cfg.EnableUserAgentsResources {
+		t.Fatal("home enable_user_agents_resources: 0 should disable personal ~/.agents resources")
 	}
 	if cfg.GlobalAgentsMDPath() != "" {
 		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
 	}
-	if cfg.HomeExtensionsDir() != "" {
-		t.Fatalf("HomeExtensionsDir = %q, want empty", cfg.HomeExtensionsDir())
+	if cfg.HomeExtensionsDir() != filepath.Join(cfg.HomeJuexDir, "extensions") {
+		t.Fatalf("HomeExtensionsDir = %q, want home extensions", cfg.HomeExtensionsDir())
 	}
 	if got := cfg.SkillDirs(); len(got) != 1 || got[0] != filepath.Join(work, ".agents", "skills") {
 		t.Fatalf("SkillDirs = %v", got)
@@ -1021,27 +1021,27 @@ func TestLoad_EnableUserGlobalResourcesDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("MCPConfigPaths = %v", got)
 	}
 
-	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), "enable_user_global_resources: 1\n")
+	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), "enable_user_agents_resources: 1\n")
 	cfg, err = LoadForWorkDir(work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.EnableUserGlobalResources {
-		t.Fatal("work-local enable_user_global_resources: 1 should override global false")
+	if !cfg.EnableUserAgentsResources {
+		t.Fatal("work-local enable_user_agents_resources: 1 should override global false")
 	}
 
 	override := filepath.Join(work, "override.yaml")
-	writeTextFile(t, override, "enable_user_global_resources: false\n")
+	writeTextFile(t, override, "enable_user_agents_resources: false\n")
 	cfg, err = LoadFromFileForWorkDir(override, work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.EnableUserGlobalResources {
+	if cfg.EnableUserAgentsResources {
 		t.Fatal("--config override false should win over work-local true")
 	}
 }
 
-func TestLoadFromFile_EnableUserGlobalResourcesBoolValues(t *testing.T) {
+func TestLoadFromFile_EnableUserAgentsResourcesBoolValues(t *testing.T) {
 	cases := map[string]bool{
 		"true":  true,
 		"false": false,
@@ -1053,27 +1053,81 @@ func TestLoadFromFile_EnableUserGlobalResourcesBoolValues(t *testing.T) {
 			prepareConfigTest(t)
 			dir := t.TempDir()
 			path := filepath.Join(dir, "juex.yaml")
-			writeTextFile(t, path, "enable_user_global_resources: "+value+"\n")
+			writeTextFile(t, path, "enable_user_agents_resources: "+value+"\n")
 			cfg, err := LoadFromFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.EnableUserGlobalResources != want {
-				t.Fatalf("EnableUserGlobalResources = %v, want %v", cfg.EnableUserGlobalResources, want)
+			if cfg.EnableUserAgentsResources != want {
+				t.Fatalf("EnableUserAgentsResources = %v, want %v", cfg.EnableUserAgentsResources, want)
 			}
 		})
 	}
 }
 
-func TestLoadFromFile_EnableUserGlobalResourcesRejectsInvalidBool(t *testing.T) {
+func TestLoadFromFile_EnableUserAgentsResourcesRejectsInvalidBool(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "juex.yaml")
-	writeTextFile(t, path, "enable_user_global_resources: maybe\n")
+	writeTextFile(t, path, "enable_user_agents_resources: maybe\n")
 
 	_, err := LoadFromFile(path)
 	if err == nil || !strings.Contains(err.Error(), "expected boolean value") {
 		t.Fatalf("err = %v, want boolean parse error", err)
+	}
+}
+
+func TestLoadFromFile_DeprecatedUserGlobalResourcesAliasWorksAndWarns(t *testing.T) {
+	prepareConfigTest(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "juex.yaml")
+	writeTextFile(t, path, "enable_user_global_resources: false\n")
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableUserAgentsResources {
+		t.Fatal("deprecated resource key did not set the resolved value")
+	}
+	if len(cfg.DeprecationWarnings) != 1 ||
+		!strings.Contains(cfg.DeprecationWarnings[0], "enable_user_global_resources is deprecated") ||
+		!strings.Contains(cfg.DeprecationWarnings[0], "enable_user_agents_resources") {
+		t.Fatalf("deprecation warnings = %v", cfg.DeprecationWarnings)
+	}
+}
+
+func TestLoadFromFile_CanonicalUserAgentsResourcesKeyWinsOverDeprecatedAlias(t *testing.T) {
+	prepareConfigTest(t)
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, path, strings.Join([]string{
+		"enable_user_global_resources: false",
+		"enable_user_agents_resources: true",
+		"",
+	}, "\n"))
+
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserAgentsResources {
+		t.Fatal("canonical resource key did not win over deprecated alias")
+	}
+	if len(cfg.DeprecationWarnings) != 1 {
+		t.Fatalf("deprecation warnings = %v", cfg.DeprecationWarnings)
+	}
+}
+
+func TestLoadFromFile_DeprecatedUserGlobalResourcesAliasRejectsInvalidBool(t *testing.T) {
+	prepareConfigTest(t)
+	path := filepath.Join(t.TempDir(), "juex.yaml")
+	writeTextFile(t, path, "enable_user_global_resources: maybe\n")
+
+	_, err := LoadFromFile(path)
+	if err == nil ||
+		!strings.Contains(err.Error(), "enable_user_global_resources") ||
+		!strings.Contains(err.Error(), "expected boolean value") {
+		t.Fatalf("err = %v, want deprecated alias boolean parse error", err)
 	}
 }
 
@@ -1212,7 +1266,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 		HomeAgentsDir:             filepath.Join("/u", ".agents"),
 		HomeJuexDir:               filepath.Join("/u", ".juex"),
 		WorkDir:                   filepath.Join("/proj"),
-		EnableUserGlobalResources: true,
+		EnableUserAgentsResources: true,
 	}
 	wantUserSkills := filepath.Join("/u", ".agents", "skills")
 	wantProjSkills := filepath.Join("/proj", ".agents", "skills")
@@ -1265,7 +1319,7 @@ func TestSkillDirs_AndPaths(t *testing.T) {
 }
 
 func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
-	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserGlobalResources: true}
+	cfg := Config{HomeAgentsDir: filepath.Join("/u", ".agents"), HomeJuexDir: filepath.Join("/u", ".juex"), EnableUserAgentsResources: true}
 	if cfg.MemoryDir() != "" || cfg.SessionsDir() != "" || cfg.HistoryPath() != "" || cfg.RuntimeConfigPath() != "" || cfg.ProjectAgentsDir() != "" {
 		t.Fatalf("empty WorkDir should yield empty work-local paths: %+v", cfg)
 	}
@@ -1293,18 +1347,18 @@ func TestPaths_EmptyWorkDirReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestPaths_DisabledUserGlobalResourcesOmitsHomeResources(t *testing.T) {
+func TestPaths_DisabledUserAgentsResourcesOmitsHomeResources(t *testing.T) {
 	cfg := Config{
 		HomeAgentsDir:             filepath.Join("/u", ".agents"),
 		HomeJuexDir:               filepath.Join("/u", ".juex"),
 		WorkDir:                   filepath.Join("/proj"),
-		EnableUserGlobalResources: false,
+		EnableUserAgentsResources: false,
 	}
 	if cfg.GlobalAgentsMDPath() != "" {
 		t.Fatalf("GlobalAgentsMDPath = %q, want empty", cfg.GlobalAgentsMDPath())
 	}
-	if cfg.HomeExtensionsDir() != "" {
-		t.Fatalf("HomeExtensionsDir = %q, want empty", cfg.HomeExtensionsDir())
+	if cfg.HomeExtensionsDir() != filepath.Join("/u", ".juex", "extensions") {
+		t.Fatalf("HomeExtensionsDir = %q, want home extensions", cfg.HomeExtensionsDir())
 	}
 	if cfg.ProjectExtensionsDir() != filepath.Join("/proj", ".juex", "extensions") {
 		t.Fatalf("ProjectExtensionsDir = %q", cfg.ProjectExtensionsDir())

@@ -276,7 +276,7 @@ func TestAppResumeRestoresActiveChunkedWriteLifecycle(t *testing.T) {
 	cfg := config.Config{
 		WorkDir:                   work,
 		ProviderProtocol:          "openai/chat",
-		EnableUserGlobalResources: false,
+		EnableUserAgentsResources: false,
 	}
 	firstProvider := &chunkedWriteResumeProvider{t: t, phase: "start"}
 	first, err := New(Options{
@@ -1998,7 +1998,7 @@ func TestAppPromptLoadsGlobalAgentsBeforeWorkspaceAgents(t *testing.T) {
 			Model:                     "m",
 			HomeAgentsDir:             homeAgents,
 			WorkDir:                   work,
-			EnableUserGlobalResources: true,
+			EnableUserAgentsResources: true,
 		},
 		Provider: &stubProvider{},
 		WorkDir:  work,
@@ -2019,7 +2019,7 @@ func TestAppPromptLoadsGlobalAgentsBeforeWorkspaceAgents(t *testing.T) {
 	}
 }
 
-func TestAppPromptSkipsGlobalAgentsWhenUserGlobalResourcesDisabled(t *testing.T) {
+func TestAppPromptSkipsGlobalAgentsWhenUserAgentsResourcesDisabled(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()
 	projectAgents := filepath.Join(work, ".agents")
@@ -2040,7 +2040,7 @@ func TestAppPromptSkipsGlobalAgentsWhenUserGlobalResourcesDisabled(t *testing.T)
 			Model:                     "m",
 			HomeAgentsDir:             homeAgents,
 			WorkDir:                   work,
-			EnableUserGlobalResources: false,
+			EnableUserAgentsResources: false,
 		},
 		Provider: &stubProvider{},
 		WorkDir:  work,
@@ -2052,10 +2052,10 @@ func TestAppPromptSkipsGlobalAgentsWhenUserGlobalResourcesDisabled(t *testing.T)
 
 	got := a.Engine.Prompt.Build()
 	if strings.Contains(got, "global agent rule") {
-		t.Fatalf("prompt should skip global AGENTS.md when user-global resources are disabled:\n%s", got)
+		t.Fatalf("prompt should skip global AGENTS.md when user-agent resources are disabled:\n%s", got)
 	}
 	if !strings.Contains(got, "workspace agent rule") {
-		t.Fatalf("prompt should keep workspace AGENTS.md when user-global resources are disabled:\n%s", got)
+		t.Fatalf("prompt should keep workspace AGENTS.md when user-agent resources are disabled:\n%s", got)
 	}
 }
 

@@ -229,6 +229,7 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "config"`,  // persistent flag
 		`"name": "cwd"`,     // persistent flag dumped on subcommands
 		`"name": "model"`,
+		`"name": "enable-user-agents-resources"`,
 		`"name": "enable-user-global-resources"`,
 		`"name": "debug"`,
 		`"name": "log-level"`,
@@ -476,7 +477,105 @@ func TestRoot_LogLevelRejectsInvalidValue(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_EnableUserGlobalResourcesFlagOverridesConfig(t *testing.T) {
+func TestLoadConfig_EnableUserAgentsResourcesFlagOverridesConfig(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	path := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(path, "enable_user_agents_resources: false\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadConfig(&persistentFlags{cwd: work, enableUserAgentsResources: "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserAgentsResources {
+		t.Fatal("--enable-user-agents-resources=1 should override config false")
+	}
+
+	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(path, "enable_user_agents_resources: true\n"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = loadConfig(&persistentFlags{cwd: work, enableUserAgentsResources: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EnableUserAgentsResources {
+		t.Fatal("--enable-user-agents-resources=0 should override config true")
+	}
+}
+
+func TestLoadConfig_EnableUserAgentsResourcesFlagRejectsInvalidBool(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadConfig(&persistentFlags{cwd: work, enableUserAgentsResources: "maybe"})
+	var usageErr *usageError
+	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--enable-user-agents-resources") {
+		t.Fatalf("err = %T %v, want usage error for enable-user-agents-resources", err, err)
+	}
+}
+
+func TestLoadConfig_DeprecatedUserGlobalResourcesFlagWorksAndNewWins(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+
+	legacyCfg, err := loadConfig(&persistentFlags{
+		cwd:                       work,
+		enableUserGlobalResources: "false",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyCfg.EnableUserAgentsResources {
+		t.Fatal("deprecated resource flag did not set the resolved value")
+	}
+
+	cfg, err := loadConfig(&persistentFlags{
+		cwd:                       work,
+		enableUserGlobalResources: "false",
+		enableUserAgentsResources: "true",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EnableUserAgentsResources {
+		t.Fatal("canonical resource flag did not win over deprecated alias")
+	}
+}
+
+func TestRoot_DeprecatedUserGlobalResourcesFlagWarns(t *testing.T) {
+	root := newRootCmd()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"--enable-user-global-resources=false", "version"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"juex: warning:",
+		"--enable-user-global-resources is deprecated",
+		"--enable-user-agents-resources",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
+		}
+	}
+}
+
+func TestLoadConfigForCommand_DeprecatedUserGlobalResourcesKeyWarns(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	path := filepath.Join(work, ".juex", "juex.yaml")
@@ -487,51 +586,53 @@ func TestLoadConfig_EnableUserGlobalResourcesFlagOverridesConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := loadConfig(&persistentFlags{cwd: work, enableUserGlobalResources: "1"})
+	root := newRootCmd()
+	var stderr bytes.Buffer
+	root.SetErr(&stderr)
+	cfg, err := loadConfigForCommand(root, &persistentFlags{cwd: work})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.EnableUserGlobalResources {
-		t.Fatal("--enable-user-global-resources=1 should override config false")
+	if cfg.EnableUserAgentsResources {
+		t.Fatal("deprecated resource key did not set the resolved value")
 	}
-
-	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
-		t.Fatal(err)
-	}
-	if err := appendTextFile(path, "enable_user_global_resources: true\n"); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err = loadConfig(&persistentFlags{cwd: work, enableUserGlobalResources: "0"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.EnableUserGlobalResources {
-		t.Fatal("--enable-user-global-resources=0 should override config true")
+	for _, want := range []string{
+		"juex: warning:",
+		"enable_user_global_resources is deprecated",
+		"enable_user_agents_resources",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Fatalf("stderr missing %q:\n%s", want, stderr.String())
+		}
 	}
 }
 
-func TestLoadConfig_EnableUserGlobalResourcesFlagRejectsInvalidBool(t *testing.T) {
+func TestLoadConfig_DeprecatedUserGlobalResourcesFlagRejectsInvalidBool(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := loadConfig(&persistentFlags{cwd: work, enableUserGlobalResources: "maybe"})
+	_, err := loadConfig(&persistentFlags{
+		cwd:                       work,
+		enableUserGlobalResources: "maybe",
+		enableUserAgentsResources: "true",
+	})
 	var usageErr *usageError
 	if !errors.As(err, &usageErr) || !strings.Contains(err.Error(), "--enable-user-global-resources") {
-		t.Fatalf("err = %T %v, want usage error for enable-user-global-resources", err, err)
+		t.Fatalf("err = %T %v, want deprecated flag usage error", err, err)
 	}
 }
 
-func TestRunCmd_EnableUserGlobalResourcesBareFlagMeansTrue(t *testing.T) {
+func TestRunCmd_EnableUserAgentsResourcesBareFlagMeansTrue(t *testing.T) {
 	home := setHomeForCLITest(t)
 	work := t.TempDir()
 	configPath := filepath.Join(work, ".juex", "juex.yaml")
 	if err := writeJuexConfigFile(configPath, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	if err := appendTextFile(configPath, "enable_user_global_resources: false\n"); err != nil {
+	if err := appendTextFile(configPath, "enable_user_agents_resources: false\n"); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeTextFile(filepath.Join(home, ".agents", "skills", "global", "SKILL.md"), `---
@@ -546,7 +647,7 @@ body`); err != nil {
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", work, "--enable-user-global-resources", "run", "--dry-run", "--json", "hello"})
+	root.SetArgs([]string{"-C", work, "--enable-user-agents-resources", "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
 	if _, ok := err.(*dryRunOK); !ok {
 		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)

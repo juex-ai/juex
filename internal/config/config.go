@@ -49,16 +49,17 @@ type Config struct {
 	Sandbox                   sandbox.Policy
 	Skills                    SkillsConfig
 	Fleet                     FleetConfig
-	EnableUserGlobalResources bool
+	EnableUserAgentsResources bool
 
-	HomeAgentsDir     string // ~/.agents (user-global resources)
-	HomeJuexDir       string // $JUEX_HOME or ~/.juex
-	WorkDir           string // explicit; defaults to os.Getwd()
-	AgentID           string
-	AgentName         string
-	AgentStateDir     string
-	AgentStateNotices []string
-	agentStateLoaded  bool
+	HomeAgentsDir       string // ~/.agents (user-global resources)
+	HomeJuexDir         string // $JUEX_HOME or ~/.juex
+	WorkDir             string // explicit; defaults to os.Getwd()
+	AgentID             string
+	AgentName           string
+	AgentStateDir       string
+	AgentStateNotices   []string
+	DeprecationWarnings []string
+	agentStateLoaded    bool
 
 	modelRef        string
 	shellConfig     ShellConfig
@@ -81,17 +82,18 @@ type LoadOptions struct {
 }
 
 type fileConfig struct {
-	Model                     string           `yaml:"model"`
-	FallbackModels            *[]string        `yaml:"fallback_models"`
-	EnableUserGlobalResources optionalBool     `yaml:"enable_user_global_resources"`
-	Providers                 []providerConfig `yaml:"providers"`
-	Compaction                compactionConfig `yaml:"compaction"`
-	Hooks                     hooks.FileConfig `yaml:"hooks"`
-	Runtime                   runtimeConfig    `yaml:"runtime"`
-	Shell                     *ShellConfig     `yaml:"shell"`
-	Sandbox                   sandboxConfig    `yaml:"sandbox"`
-	Skills                    skillsConfig     `yaml:"skills"`
-	Fleet                     *fleetFileConfig `yaml:"fleet"`
+	Model                     string                            `yaml:"model"`
+	FallbackModels            *[]string                         `yaml:"fallback_models"`
+	EnableUserAgentsResources optionalBool                      `yaml:"enable_user_agents_resources"`
+	EnableUserGlobalResources deprecatedUserGlobalResourcesBool `yaml:"enable_user_global_resources"`
+	Providers                 []providerConfig                  `yaml:"providers"`
+	Compaction                compactionConfig                  `yaml:"compaction"`
+	Hooks                     hooks.FileConfig                  `yaml:"hooks"`
+	Runtime                   runtimeConfig                     `yaml:"runtime"`
+	Shell                     *ShellConfig                      `yaml:"shell"`
+	Sandbox                   sandboxConfig                     `yaml:"sandbox"`
+	Skills                    skillsConfig                      `yaml:"skills"`
+	Fleet                     *fleetFileConfig                  `yaml:"fleet"`
 }
 
 type providerConfig struct {
@@ -405,7 +407,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		Sandbox:                   sandbox.DefaultPolicy(),
 		Skills:                    DefaultSkillsConfig(),
 		Fleet:                     FleetConfig{Addr: DefaultFleetAddr},
-		EnableUserGlobalResources: true,
+		EnableUserAgentsResources: true,
 		providerConfigs:           map[string]providerConfig{},
 	}
 
@@ -579,7 +581,7 @@ func (c Config) ProjectAgentsDir() string {
 	return c.ResourcePaths().ProjectAgentsDir
 }
 
-// HomeExtensionsDir is ~/.juex/extensions when user-global resources are enabled.
+// HomeExtensionsDir is $JUEX_HOME/extensions.
 func (c Config) HomeExtensionsDir() string {
 	return c.ResourcePaths().HomeExtensionsDir
 }
@@ -673,7 +675,17 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 		cfg.FallbackModels = append([]string(nil), (*fc.FallbackModels)...)
 	}
 	if fc.EnableUserGlobalResources.Set {
-		cfg.EnableUserGlobalResources = fc.EnableUserGlobalResources.Value
+		cfg.EnableUserAgentsResources = fc.EnableUserGlobalResources.Value
+		appendDeprecationWarning(
+			cfg,
+			fmt.Sprintf(
+				"%s: enable_user_global_resources is deprecated; use enable_user_agents_resources",
+				source,
+			),
+		)
+	}
+	if fc.EnableUserAgentsResources.Set {
+		cfg.EnableUserAgentsResources = fc.EnableUserAgentsResources.Value
 	}
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source, err)
@@ -708,6 +720,15 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 	return nil
 }
 
+func appendDeprecationWarning(cfg *Config, warning string) {
+	for _, existing := range cfg.DeprecationWarnings {
+		if existing == warning {
+			return
+		}
+	}
+	cfg.DeprecationWarnings = append(cfg.DeprecationWarnings, warning)
+}
+
 func applyHooksConfig(cfg *Config, fileHooks hooks.FileConfig, source string, requireTrust bool) error {
 	resolved, err := hooks.ResolveFileConfig(fileHooks, source, requireTrust)
 	if err != nil {
@@ -720,6 +741,17 @@ func applyHooksConfig(cfg *Config, fileHooks hooks.FileConfig, source string, re
 type optionalBool struct {
 	Set   bool
 	Value bool
+}
+
+type deprecatedUserGlobalResourcesBool struct {
+	optionalBool
+}
+
+func (b *deprecatedUserGlobalResourcesBool) UnmarshalYAML(node *yaml.Node) error {
+	if err := b.optionalBool.UnmarshalYAML(node); err != nil {
+		return fmt.Errorf("enable_user_global_resources: %w", err)
+	}
+	return nil
 }
 
 func (b *optionalBool) UnmarshalYAML(node *yaml.Node) error {
