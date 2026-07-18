@@ -9,6 +9,7 @@ function source(path: string): string {
 const appSource = source("../../frontend/src/App.tsx");
 const shellSource = source("../../frontend/src/components/AppShell.tsx");
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
+const switchSource = source("../../frontend/src/components/ui/switch.tsx");
 const apiSource = source("../../frontend/src/api.ts");
 const typesSource = source("../../frontend/src/types.ts");
 const logsSource = source("../../frontend/src/pages/AgentLogs.tsx");
@@ -79,6 +80,10 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(fleetSource, /agent\.enabled/);
   assert.match(typesSource, /export interface DirectoryListing/);
   assert.match(typesSource, /export interface RemovedAgent/);
+  assert.match(switchSource, /data-\[state=checked\]:bg-primary/);
+  assert.match(switchSource, /data-\[state=checked\]:translate-x-4/);
+  assert.match(switchSource, /data-\[state=unchecked\]:translate-x-0/);
+  assert.doesNotMatch(switchSource, /data-(?:checked|unchecked):/);
   assert.match(
     fleetSource,
     /await refresh\(\{ quiet: true \}\);\s+setError\(actionError\)/,
