@@ -1057,7 +1057,13 @@ func TestManager_ObservationCallbacksReceiveDeferredClose(t *testing.T) {
 				return err == nil && len(records) == 1 && records[0].State == observable.ObservationStateDelivered
 			})
 			if err := mgr.Close(); err != nil {
-				t.Fatalf("Close after callback = %v", err)
+				var deferred *observable.CloseDeferredError
+				if !errors.As(err, &deferred) {
+					t.Fatalf("Close after callback = %v", err)
+				}
+				if err := deferred.Wait(); err != nil {
+					t.Fatalf("deferred Close after callback = %v", err)
+				}
 			}
 		})
 	}
