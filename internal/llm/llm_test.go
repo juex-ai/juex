@@ -2188,6 +2188,64 @@ func TestOpenAIResponses_StreamsReasoningAndTextDeltas(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponses_StopsAtCompletedEventAndBackfillsDoneItems(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}}`+"\n\n")
+		fmt.Fprint(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-test","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.Message.FirstText() != "ok" {
+		t.Fatalf("text = %q, want ok", resp.Message.FirstText())
+	}
+}
+
+func TestOpenAIResponses_StopsAtIncompleteEvent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, `data: {"type":"response.incomplete","response":{"id":"resp_1","model":"gpt-test","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","id":"msg_1","role":"assistant","status":"incomplete","content":[{"type":"output_text","text":"partial","annotations":[]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`+"\n\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if resp.StopReason != StopMaxTokens || resp.Message.FirstText() != "partial" {
+		t.Fatalf("response = %+v, want max_tokens with partial text", resp)
+	}
+}
+
+func TestOpenAIResponses_TruncatedEventBeforeTerminalFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\n\n")
+	}))
+	defer srv.Close()
+
+	p, err := New(Config{ID: "openai", BaseURL: srv.URL, APIKey: "k", Model: "gpt-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Complete(context.Background(), "", []Message{TextMessage(RoleUser, "hi")}, nil)
+	if err == nil || !strings.Contains(err.Error(), "unexpected end of JSON input") {
+		t.Fatalf("err = %v, want truncated JSON error", err)
+	}
+}
+
 func TestOpenAIResponses_StreamIdleTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
