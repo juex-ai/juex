@@ -205,10 +205,11 @@ func (c Config) ObservablesConfigPath() string {
 }
 
 func (c Config) ObservablesStateDir() string {
-	if c.WorkDir == "" {
+	stateDir := c.RuntimePaths().StateDir
+	if stateDir == "" {
 		return ""
 	}
-	return filepath.Join(c.WorkDir, ".juex", "observables")
+	return filepath.Join(stateDir, "observables")
 }
 
 // ResourcePaths contains AGENTS, skill, MCP, and extension resource locations.

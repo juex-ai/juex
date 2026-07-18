@@ -322,7 +322,7 @@ func (s *Store) RecordObservationOnce(record ObservationRecord) (ObservationReco
 	if record.OriginalChars == 0 {
 		record.OriginalChars = len([]rune(record.Content))
 	}
-	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	records, err := s.loadObservations()
 	if err != nil {
 		return ObservationRecord{}, false, err
 	}
@@ -349,7 +349,7 @@ func (s *Store) UpdateObservation(id string, update func(ObservationRecord) Obse
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := filepath.Join(s.root, "observations.jsonl")
-	records, err := loadObservations(path)
+	records, err := s.loadObservations()
 	if err != nil {
 		return err
 	}
@@ -370,7 +370,7 @@ func (s *Store) ListObservations(filter ObservationFilter) ([]ObservationRecord,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	records, err := s.loadObservations()
 	if err != nil {
 		return nil, err
 	}
@@ -402,7 +402,7 @@ func (s *Store) RecordedObservationsBySourceEvent(observableID, sourceEventPrefi
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	records, err := s.loadObservations()
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +431,7 @@ func (s *Store) Observation(id string) (ObservationRecord, bool, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	records, err := s.loadObservations()
 	if err != nil {
 		return ObservationRecord{}, false, err
 	}
@@ -445,7 +445,7 @@ func (s *Store) FindObservationBySourceEventID(sourceEventID string) (Observatio
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	records, err := s.loadObservations()
 	if err != nil {
 		return ObservationRecord{}, false, err
 	}
@@ -468,7 +468,7 @@ func (s *Store) DropRecordedScheduleObservations(observableID string, reason str
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	path := filepath.Join(s.root, "observations.jsonl")
-	records, err := loadObservations(path)
+	records, err := s.loadObservations()
 	if err != nil {
 		return err
 	}
@@ -608,6 +608,21 @@ func loadObservations(path string) (map[string]ObservationRecord, error) {
 		}
 	})
 	return records, err
+}
+
+func (s *Store) loadObservations() (map[string]ObservationRecord, error) {
+	records, err := loadObservations(filepath.Join(s.root, "observations.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+	for id, record := range records {
+		if record.ArtifactPath == "" || record.ID == "" || record.ObservableID == "" {
+			continue
+		}
+		record.ArtifactPath = s.ArtifactPath(record.ObservableID, record.ID)
+		records[id] = record
+	}
+	return records, nil
 }
 
 func readJSONL[T any](path string, accept func(T)) error {

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/observable"
 )
 
 // TestLiveBinary_LoadsSkillsAndMCP builds the real `juex` binary, points
@@ -380,11 +381,44 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 	work := filepath.Join(root, "workspace")
 	sessionID := "20260717T120000-migrate1"
 	legacySession := filepath.Join(work, ".juex", "sessions", sessionID)
+	observationTime := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
+	legacyObservableRoot := filepath.Join(work, ".juex", "observables")
+	observation := observable.ObservationRecord{
+		ID:            "obs-live-migration",
+		ObservableID:  "daily-brief",
+		SourceEventID: "schedule:daily-brief:2026-07-18T08:00:00Z",
+		Kind:          "reminder",
+		Severity:      "info",
+		WindowStart:   observationTime,
+		WindowEnd:     observationTime,
+		Content:       "migrated daily brief",
+		OriginalChars: 20,
+		State:         observable.ObservationStateDelivered,
+		TargetSession: sessionID,
+		CreatedAt:     observationTime,
+		DeliveredAt:   observationTime.Add(time.Second),
+	}
+	observationData, err := json.Marshal(observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduleStateData, err := json.Marshal(observable.ScheduleStateRecord{
+		ObservableID:           observation.ObservableID,
+		LastEvaluatedAt:        observationTime,
+		LastEmittedScheduledAt: observationTime,
+		UpdatedAt:              observationTime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for path, body := range map[string]string{
-		filepath.Join(legacySession, "conversation.jsonl"):  `{"role":"user","blocks":[{"type":"text","text":"migrated"}]}` + "\n",
-		filepath.Join(work, ".juex", "memory", "MEMORY.md"): "# migrated memory\n",
-		filepath.Join(work, ".juex", "history.json"):        "{\"sessions\":[]}\n",
-		filepath.Join(work, ".juex", "juex.yaml"):           "{}\n",
+		filepath.Join(legacySession, "conversation.jsonl"):          `{"role":"user","blocks":[{"type":"text","text":"migrated"}]}` + "\n",
+		filepath.Join(work, ".juex", "memory", "MEMORY.md"):         "# migrated memory\n",
+		filepath.Join(work, ".juex", "history.json"):                "{\"sessions\":[]}\n",
+		filepath.Join(work, ".juex", "juex.yaml"):                   "{}\n",
+		filepath.Join(work, ".juex", "observables.json"):            "{\"observables\":[]}\n",
+		filepath.Join(legacyObservableRoot, "observations.jsonl"):   string(observationData) + "\n",
+		filepath.Join(legacyObservableRoot, "schedule_state.jsonl"): string(scheduleStateData) + "\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -416,7 +450,10 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 		filepath.Join(agentDir, "sessions", sessionID, "conversation.jsonl"),
 		filepath.Join(agentDir, "memory", "MEMORY.md"),
 		filepath.Join(agentDir, "history.json"),
+		filepath.Join(agentDir, "observables", "observations.jsonl"),
+		filepath.Join(agentDir, "observables", "schedule_state.jsonl"),
 		filepath.Join(work, ".juex", "juex.yaml"),
+		filepath.Join(work, ".juex", "observables.json"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected migrated or retained path %s: %v", path, err)
@@ -426,10 +463,49 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 		filepath.Join(work, ".juex", "sessions"),
 		filepath.Join(work, ".juex", "memory"),
 		filepath.Join(work, ".juex", "history.json"),
+		filepath.Join(work, ".juex", "observables"),
 	} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("legacy state remains at %s: %v", path, err)
 		}
+	}
+	observationStore := observable.NewStore(filepath.Join(agentDir, "observables"), observable.StoreOptions{})
+	migratedObservation, ok, err := observationStore.Observation(observation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || migratedObservation.State != observable.ObservationStateDelivered ||
+		migratedObservation.SourceEventID != observation.SourceEventID ||
+		migratedObservation.TargetSession != sessionID {
+		t.Fatalf("migrated observation = %+v ok=%v", migratedObservation, ok)
+	}
+	existing, created, err := observationStore.RecordObservationOnce(observable.ObservationRecord{
+		ID:            "duplicate-live-migration",
+		ObservableID:  observation.ObservableID,
+		SourceEventID: observation.SourceEventID,
+		Content:       "must not be appended",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || existing.ID != observation.ID || existing.State != observable.ObservationStateDelivered {
+		t.Fatalf("migrated dedupe = %+v created=%v", existing, created)
+	}
+	observations, err := observationStore.ListObservations(observable.ObservationFilter{ObservableID: observation.ObservableID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 1 {
+		t.Fatalf("observations after migrated dedupe = %+v", observations)
+	}
+	scheduleStates, err := observationStore.LatestScheduleStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduleState, ok := scheduleStates[observation.ObservableID]
+	if !ok || !scheduleState.LastEvaluatedAt.Equal(observationTime) ||
+		!scheduleState.LastEmittedScheduledAt.Equal(observationTime) {
+		t.Fatalf("migrated schedule state = %+v ok=%v", scheduleState, ok)
 	}
 
 	moved := filepath.Join(root, "moved-workspace")
@@ -442,6 +518,13 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 	}
 	if !strings.Contains(stdout, sessionID) || !strings.Contains(stderr, "workspace for agent") || !strings.Contains(stderr, "moved") {
 		t.Fatalf("move output missing evidence\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(moved, ".juex", "observables.json")); err != nil {
+		t.Fatalf("moved workspace observable config: %v", err)
+	}
+	movedObservation, ok, err := observationStore.Observation(observation.ID)
+	if err != nil || !ok || movedObservation.SourceEventID != observation.SourceEventID {
+		t.Fatalf("observation after move = %+v ok=%v err=%v", movedObservation, ok, err)
 	}
 
 	copied := filepath.Join(root, "copied-workspace")

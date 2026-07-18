@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/juex-ai/juex/internal/endpoint"
 )
 
-var legacyStateEntries = []string{"sessions", "memory", "history.json", "logs"}
+var legacyStateEntries = []string{"sessions", "memory", "history.json", "logs", "observables"}
 
 var verifyCopiedTree = compareTree
 
@@ -85,9 +87,9 @@ func publishNewAgent(homeDir, workDir string, agent Agent) (agentDir string, mig
 	return agentDir, migrated, nil
 }
 
-func cleanupPublishedLegacyState(workDir, agentDir string) (bool, error) {
+func migratePublishedLegacyState(workDir, agentDir string) (bool, error) {
 	legacyDir := filepath.Join(workDir, ".juex")
-	found := false
+	var entries []string
 	for _, name := range legacyStateEntries {
 		source := filepath.Join(legacyDir, name)
 		if _, err := os.Lstat(source); err != nil {
@@ -96,19 +98,75 @@ func cleanupPublishedLegacyState(workDir, agentDir string) (bool, error) {
 			}
 			return false, fmt.Errorf("agentstate: inspect legacy state %s: %w", source, err)
 		}
-		found = true
+		entries = append(entries, name)
+	}
+	if len(entries) == 0 {
+		return false, nil
+	}
+
+	maintenance, err := endpoint.AcquireMaintenance(agentDir)
+	if err != nil {
+		return false, fmt.Errorf("agentstate: acquire maintenance guard before migrating workspace runtime state: %w", err)
+	}
+	defer func() { _ = maintenance.Close() }()
+
+	for _, name := range entries {
+		source := filepath.Join(legacyDir, name)
 		destination := filepath.Join(agentDir, name)
+		if _, err := os.Lstat(destination); errors.Is(err, os.ErrNotExist) {
+			if err := publishLegacyEntry(source, destination); err != nil {
+				return false, err
+			}
+		} else if err != nil {
+			return false, fmt.Errorf("agentstate: inspect migrated state %s: %w", destination, err)
+		}
 		if err := verifyCopiedTree(source, destination); err != nil {
 			return false, fmt.Errorf("agentstate: legacy state still exists at %s but differs from %s: %w", source, destination, err)
 		}
-	}
-	if !found {
-		return false, nil
 	}
 	if err := removeLegacyState(workDir); err != nil {
 		return false, fmt.Errorf("agentstate: remove verified legacy state: %w", err)
 	}
 	return true, nil
+}
+
+func publishLegacyEntry(source, destination string) (err error) {
+	parent := filepath.Dir(destination)
+	stageDir, err := os.MkdirTemp(parent, "."+filepath.Base(destination)+".migrating-")
+	if err != nil {
+		return fmt.Errorf("agentstate: create migration stage for %s: %w", destination, err)
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(stageDir); err == nil && cleanupErr != nil {
+			err = cleanupErr
+		}
+	}()
+
+	staged := filepath.Join(stageDir, filepath.Base(destination))
+	if err := copyTree(source, staged); err != nil {
+		return fmt.Errorf("agentstate: copy legacy state %s: %w", source, err)
+	}
+	if err := verifyCopiedTree(source, staged); err != nil {
+		return fmt.Errorf("agentstate: verify legacy state %s: %w", source, err)
+	}
+	if err := syncDir(stageDir); err != nil {
+		return fmt.Errorf("agentstate: sync migration stage for %s: %w", destination, err)
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		if err := verifyCopiedTree(source, destination); err != nil {
+			return fmt.Errorf("agentstate: migration destination %s appeared with conflicting state: %w", destination, err)
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("agentstate: inspect migration destination %s: %w", destination, err)
+	}
+	if err := os.Rename(staged, destination); err != nil {
+		return fmt.Errorf("agentstate: publish migrated state %s: %w", destination, err)
+	}
+	if err := syncDir(parent); err != nil {
+		return fmt.Errorf("agentstate: sync migrated state directory %s: %w", parent, err)
+	}
+	return nil
 }
 
 func removeLegacyState(workDir string) error {

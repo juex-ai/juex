@@ -1123,8 +1123,12 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 	}
 	if cfg.MemoryDir() != filepath.Join(cfg.AgentStateDir, "memory") ||
 		cfg.SessionsDir() != filepath.Join(cfg.AgentStateDir, "sessions") ||
-		cfg.HistoryPath() != filepath.Join(cfg.AgentStateDir, "history.json") {
+		cfg.HistoryPath() != filepath.Join(cfg.AgentStateDir, "history.json") ||
+		cfg.ObservablesStateDir() != filepath.Join(cfg.AgentStateDir, "observables") {
 		t.Fatalf("runtime paths = %+v", cfg.RuntimePaths())
+	}
+	if cfg.ObservablesConfigPath() != filepath.Join(workDir, ".juex", "observables.json") {
+		t.Fatalf("observable config path = %q", cfg.ObservablesConfigPath())
 	}
 	if cfg.RuntimeConfigPath() != filepath.Join(workDir, ".juex", "juex.yaml") {
 		t.Fatalf("workspace config path = %q", cfg.RuntimeConfigPath())
