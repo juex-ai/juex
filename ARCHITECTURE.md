@@ -1649,6 +1649,7 @@ $JUEX_HOME/
     ├── history.json              # session index + active primary object
     ├── logs/fleet.log            # detached child stdout + stderr
     ├── memory/
+    ├── observables/              # generated runs, observations, artifacts, and schedule state
     └── sessions/<id>/            # conversation history and session sidecars
 
 <WorkDir>/                        # the agent's working directory (--cwd or $PWD)
@@ -1663,8 +1664,7 @@ $JUEX_HOME/
     ├── artifacts/                # durable bytes managed by internal/artifact
     ├── extensions/<name>/        # work-local extension bundle
     ├── juex.yaml                 # local runtime provider config
-    ├── observables.json          # workspace observable configuration
-    └── observables/              # workspace observable state
+    └── observables.json          # workspace observable configuration
 ```
 
 The full session subtree beneath the agent home retains the existing
@@ -1724,12 +1724,15 @@ skill, or hook names must not collide with existing resources or another
 extension. Runtime status reports extension resources as `ext:<name>`.
 
 **Migration:** on first resolution, legacy workspace-local `.juex/sessions`,
-`.juex/memory`, `.juex/history.json`, and `.juex/logs` are copied into a staged
-agent directory, verified by manifest and SHA-256, atomically published, then
-removed from the workspace. Configuration, artifacts, extensions, and
-observable files remain workspace-local. The workspace marker is globally
-ignored through Git's user excludes file, never by editing project
-`.gitignore`.
+`.juex/memory`, `.juex/history.json`, `.juex/logs`, and `.juex/observables`
+are copied into staged agent state, verified by manifest and SHA-256,
+atomically published, then removed from the workspace. Existing agent
+identities perform the same migration per missing state entry while holding
+the endpoint maintenance guard; a published entry with failed cleanup is
+verified and cleaned on the next resolution. Configuration,
+`.juex/observables.json`, artifacts, and extensions remain workspace-local.
+The workspace marker is globally ignored through Git's user excludes file,
+never by editing project `.gitignore`.
 
 ---
 

@@ -152,8 +152,7 @@ binds it to state under `JUEX_HOME`, which defaults to `~/.juex`:
 ├── juex.yaml                    # workspace config
 ├── artifacts/                   # workspace-relative durable artifacts
 ├── extensions/
-├── observables.json
-└── observables/
+└── observables.json             # workspace-authored observable config
 
 $JUEX_HOME/
 ├── juex.yaml                    # user-global config
@@ -169,6 +168,7 @@ $JUEX_HOME/
     ├── history.json
     ├── logs/fleet.log           # detached child stdout and stderr
     ├── memory/
+    ├── observables/             # generated runs, observations, and schedule state
     └── sessions/<id>/
         ├── logs/
         ├── session.json
@@ -306,9 +306,10 @@ Workspace Observables are configured sources that emit durable Observations.
 A Command Observable captures bounded stdout/stderr batches from a managed
 command; a Schedule emits a pre-authored Observation from a one-shot, daily,
 or interval timetable. Both use the shared list/start/stop/delete/history
-lifecycle, store state under `.juex/observables/`, deliver external pending
-input to the active primary session, emit `observable.*` and `observation.*`
-events, and appear in the Web UI.
+lifecycle, store generated state under the resident agent's
+`$JUEX_HOME/agents/<id>/observables/`, deliver external pending input to the
+active primary session, emit `observable.*` and `observation.*` events, and
+appear in the Web UI.
 
 The Web UI also exposes `Run` for Schedules. It emits one durable configured
 Observation without changing whether the Schedule is running or stopped.
@@ -329,9 +330,10 @@ attachments are copied into content-addressed
 batching or asynchronous delivery, and then become provider image blocks.
 Validation failures are emitted as `observation.errored` and still leave
 structured text in context.
-Observables are workspace-local in the first version. Creation requests may
-omit `id` when `name` can be slugged into a stable lower-case id; persisted
-entries include the resolved id.
+Observable definitions are workspace-local. Generated run, Observation,
+delivery, idempotency, and schedule state follow the resident agent in its
+agent home. Creation requests may omit `id` when `name` can be slugged into a
+stable lower-case id; persisted entries include the resolved id.
 
 During a turn, Juex records failed tool results in a runtime-visible failure
 ledger. The ledger classifies failures, records bounded previews and related

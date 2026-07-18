@@ -461,6 +461,48 @@ func TestStore_ArtifactPath(t *testing.T) {
 	}
 }
 
+func TestStore_RebasesPersistedArtifactPathToCurrentRoot(t *testing.T) {
+	root := t.TempDir()
+	oldRoot := filepath.Join(root, "workspace", ".juex", "observables")
+	currentRoot := filepath.Join(root, "home", "agents", "agent-1", "observables")
+	record := observable.ObservationRecord{
+		ID:            "obs-migrated",
+		ObservableID:  "logs",
+		SourceEventID: "event-1",
+		Kind:          "log_batch",
+		Severity:      "info",
+		WindowStart:   fixedTime,
+		WindowEnd:     fixedTime,
+		Content:       "preview",
+		OriginalChars: 100,
+		Truncated:     true,
+		ArtifactPath:  filepath.Join(oldRoot, "artifacts", "logs", "obs-migrated.txt"),
+		State:         observable.ObservationStateDelivered,
+		CreatedAt:     fixedTime,
+		DeliveredAt:   fixedTime,
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(currentRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(currentRoot, "observations.jsonl"), append(data, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := observable.NewStore(currentRoot, observable.StoreOptions{Now: fixedNow})
+	got, ok, err := store.Observation(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(currentRoot, "artifacts", "logs", "obs-migrated.txt")
+	if !ok || got.ArtifactPath != want {
+		t.Fatalf("Observation() = %+v ok=%v, want artifact %q", got, ok, want)
+	}
+}
+
 func observation(id, content string, ts time.Time) observable.ObservationRecord {
 	return observable.ObservationRecord{
 		ObservableID: id,

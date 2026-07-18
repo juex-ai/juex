@@ -24,10 +24,12 @@ state visible.
 ### Bind State To The Agent
 
 Each workspace has one explicit marker under `.juex/`; its sessions, memory,
-history, and logs live together in the agent registry under `JUEX_HOME`.
-Workspace config, artifacts, and observable state remain near the work, while
-agent guidance and skills live under `.agents/`. This split lets identity-owned
-state survive a workspace move without hiding which workspace owns it.
+history, logs, and generated Observable state live together in the agent
+registry under `JUEX_HOME`. User-authored workspace config, Observable
+definitions, and agent guidance stay near the work. Workspace-rooted artifacts
+are the deliberate state exception because their references are relative to
+the work. This split lets identity-owned state survive a workspace move without
+hiding which workspace owns it.
 
 ### Use Providers Behind One Model
 

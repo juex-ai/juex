@@ -273,13 +273,13 @@ func resolveExistingIdentity(homeDir, workDir, markerPath string, marker Marker)
 		result.Notices = append(result.Notices,
 			fmt.Sprintf("workspace for agent %q moved from %s to %s", agent.ID, old, workDir))
 	}
-	cleaned, err := cleanupPublishedLegacyState(workDir, agentDir)
+	cleaned, err := migratePublishedLegacyState(workDir, agentDir)
 	if err != nil {
 		return Resolution{}, err
 	}
 	if cleaned {
 		result.Notices = append(result.Notices,
-			fmt.Sprintf("completed migrated runtime state cleanup from %s", filepath.Join(workDir, ".juex")))
+			fmt.Sprintf("migrated remaining workspace runtime state from %s to %s", filepath.Join(workDir, ".juex"), agentDir))
 	}
 	return result, nil
 }
