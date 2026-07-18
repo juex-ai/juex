@@ -1068,7 +1068,12 @@ explicit `--addr`, then `fleet.addr` in `$JUEX_HOME/juex.yaml`, then
 workspace config resolution. `juex fleet install --addr ...` validates a
 stable non-zero loopback address and atomically merges it into the home YAML
 before installing. The service definition runs `juex fleet serve` without an
-address argument, so config edits take effect after a service restart.
+address argument, so config edits take effect after a service restart. Before
+replacing an existing launchd, systemd, or Termux definition, install reads its
+legacy `fleet serve` arguments. With no explicit replacement flags, a
+non-default baked-in address is migrated to home config and
+`--unsafe-bind-any` is retained. The legacy default `127.0.0.1:8080` follows
+the current default instead of being persisted.
 
 Installation resolves the current executable and effective `JUEX_HOME`, then
 derives a filesystem-safe service identity from that home. It writes

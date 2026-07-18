@@ -19,6 +19,9 @@ func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
 	if got.Addr != DefaultFleetAddr {
 		t.Fatalf("default addr = %q, want %q", got.Addr, DefaultFleetAddr)
 	}
+	if got.AddrConfigured {
+		t.Fatal("default fleet address reported as explicitly configured")
+	}
 
 	if err := os.WriteFile(
 		filepath.Join(home, "juex.yaml"),
@@ -33,6 +36,9 @@ func TestLoadHomeFleetConfigDefaultsAndLoadsAddress(t *testing.T) {
 	}
 	if got.Addr != "127.0.0.1:6840" {
 		t.Fatalf("configured addr = %q", got.Addr)
+	}
+	if !got.AddrConfigured {
+		t.Fatal("configured fleet address was not marked explicit")
 	}
 }
 

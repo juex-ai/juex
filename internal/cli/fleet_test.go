@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/fleetservice"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -366,6 +367,138 @@ func TestFleetAddressPrecedenceUsesFlagThenHomeConfigThenDefault(t *testing.T) {
 	addr, explicit, err = resolveFleetAddr(cmd, "127.0.0.1:6844", false)
 	if err != nil || !explicit || addr != "127.0.0.1:6844" {
 		t.Fatalf("flag addr=%q explicit=%t error=%v", addr, explicit, err)
+	}
+}
+
+func TestFleetInstallMigratesLegacyCustomServiceOptions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	fleetCfg, err := config.LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := newFleetInstallCmd(nil)
+	settings, err := resolveFleetInstallSettings(
+		cmd,
+		config.DefaultFleetAddr,
+		false,
+		fleetCfg,
+		fleetservice.InstalledServeOptions{
+			Addr:          "0.0.0.0:8181",
+			UnsafeBindAny: true,
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Addr != "0.0.0.0:8181" ||
+		!settings.UnsafeBindAny ||
+		!settings.MigratedLegacyAddr ||
+		!settings.PreservedLegacyBind ||
+		settings.ConfigPath == "" {
+		t.Fatalf("settings = %+v", settings)
+	}
+	loaded, err := config.LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Addr != "0.0.0.0:8181" || !loaded.AddrConfigured {
+		t.Fatalf("migrated config = %+v", loaded)
+	}
+}
+
+func TestFleetInstallMovesLegacyDefaultButPreservesHomeConfig(t *testing.T) {
+	t.Run("legacy default adopts new default", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("JUEX_HOME", home)
+		fleetCfg, err := config.LoadHomeFleetConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings, err := resolveFleetInstallSettings(
+			newFleetInstallCmd(nil),
+			config.DefaultFleetAddr,
+			false,
+			fleetCfg,
+			fleetservice.InstalledServeOptions{Addr: config.LegacyDefaultFleetAddr},
+			true,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settings.Addr != config.DefaultFleetAddr ||
+			settings.MigratedLegacyAddr ||
+			settings.ConfigPath != "" {
+			t.Fatalf("settings = %+v", settings)
+		}
+	})
+
+	t.Run("explicit home config wins and unsafe is retained", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("JUEX_HOME", home)
+		if _, err := config.SetHomeFleetAddr("0.0.0.0:6843"); err != nil {
+			t.Fatal(err)
+		}
+		fleetCfg, err := config.LoadHomeFleetConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings, err := resolveFleetInstallSettings(
+			newFleetInstallCmd(nil),
+			config.DefaultFleetAddr,
+			false,
+			fleetCfg,
+			fleetservice.InstalledServeOptions{
+				Addr:          "0.0.0.0:8181",
+				UnsafeBindAny: true,
+			},
+			true,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if settings.Addr != "0.0.0.0:6843" ||
+			!settings.UnsafeBindAny ||
+			settings.MigratedLegacyAddr ||
+			!settings.PreservedLegacyBind ||
+			settings.ConfigPath != "" {
+			t.Fatalf("settings = %+v", settings)
+		}
+	})
+}
+
+func TestFleetInstallExplicitFlagsOverrideExistingServiceOptions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	fleetCfg, err := config.LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := newFleetInstallCmd(nil)
+	if err := cmd.Flags().Set("addr", "127.0.0.1:6844"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := resolveFleetInstallSettings(
+		cmd,
+		"127.0.0.1:6844",
+		false,
+		fleetCfg,
+		fleetservice.InstalledServeOptions{
+			Addr:          "0.0.0.0:8181",
+			UnsafeBindAny: true,
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Addr != "127.0.0.1:6844" ||
+		settings.UnsafeBindAny ||
+		settings.MigratedLegacyAddr ||
+		settings.PreservedLegacyBind ||
+		settings.ConfigPath == "" {
+		t.Fatalf("settings = %+v", settings)
 	}
 }
 

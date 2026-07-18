@@ -653,6 +653,7 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 				return fmt.Errorf("config: parse %s: fleet.addr: %w", source, err)
 			}
 			cfg.Fleet.Addr = addr
+			cfg.Fleet.AddrConfigured = true
 		}
 	}
 	return nil
