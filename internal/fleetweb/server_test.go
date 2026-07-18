@@ -615,6 +615,23 @@ func TestServerRunValidatesLoopbackAndShutsDown(t *testing.T) {
 		t.Fatal("Run accepted a non-loopback address")
 	}
 
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := occupied.Close(); err != nil {
+			t.Errorf("close occupied listener: %v", err)
+		}
+	}()
+	server = newServer(backend, Options{Addr: occupied.Addr().String()})
+	err = server.Run(context.Background())
+	if err == nil ||
+		!strings.Contains(err.Error(), "change fleet.addr in $JUEX_HOME/juex.yaml") ||
+		!strings.Contains(err.Error(), "free the port") {
+		t.Fatalf("occupied address error = %v", err)
+	}
+
 	ready := make(chan string, 1)
 	server = newServer(backend, Options{
 		Addr:    "127.0.0.1:0",

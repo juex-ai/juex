@@ -6,25 +6,15 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
-	"net"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"unicode"
 )
 
-const defaultFleetAddr = "127.0.0.1:8080"
-
 var systemdBareArgument = regexp.MustCompile(`^[A-Za-z0-9_./:@-]+$`)
 
 func buildPlan(opts Options, host hostInfo) (registrationPlan, error) {
-	if opts.Addr == "" {
-		opts.Addr = defaultFleetAddr
-	}
-	if err := validateInstalledAddress(opts.Addr, opts.UnsafeBindAny); err != nil {
-		return registrationPlan{}, err
-	}
 	home, err := absolutePath("fleet home", opts.HomeDir)
 	if err != nil {
 		return registrationPlan{}, err
@@ -33,11 +23,8 @@ func buildPlan(opts Options, host hostInfo) (registrationPlan, error) {
 	if err != nil {
 		return registrationPlan{}, err
 	}
-	if err := validateRenderedValue("address", opts.Addr); err != nil {
-		return registrationPlan{}, err
-	}
 	identity := serviceIdentity(home)
-	args := []string{"fleet", "serve", "--addr", opts.Addr}
+	args := []string{"fleet", "serve"}
 	if opts.UnsafeBindAny {
 		args = append(args, "--unsafe-bind-any")
 	}
@@ -55,35 +42,6 @@ func buildPlan(opts Options, host hostInfo) (registrationPlan, error) {
 	default:
 		return registrationPlan{}, fmt.Errorf("fleet service: automatic service registration is not supported on %s", host.goos)
 	}
-}
-
-func validateInstalledAddress(addr string, unsafeBindAny bool) error {
-	host, portText, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("fleet service: address must be a host:port TCP address (got %q)", addr)
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		if port == 0 && err == nil {
-			return fmt.Errorf("fleet service: installed address must use a non-zero port")
-		}
-		return fmt.Errorf("fleet service: address port must be between 1 and 65535")
-	}
-	if host == "" {
-		return fmt.Errorf("fleet service: address host is required")
-	}
-	if !unsafeBindAny && !isLoopbackHost(host) {
-		return fmt.Errorf("fleet service: non-loopback address %q requires UnsafeBindAny", addr)
-	}
-	return nil
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func absolutePath(label, value string) (string, error) {

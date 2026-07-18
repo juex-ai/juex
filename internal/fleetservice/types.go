@@ -24,7 +24,6 @@ const (
 type Options struct {
 	HomeDir       string
 	Executable    string
-	Addr          string
 	UnsafeBindAny bool
 }
 

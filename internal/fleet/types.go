@@ -39,6 +39,7 @@ type AgentStatus struct {
 	PID               int           `json:"pid,omitempty"`
 	Endpoint          string        `json:"endpoint,omitempty"`
 	StartedAt         time.Time     `json:"started_at,omitempty"`
+	BinaryVersion     string        `json:"binary_version,omitempty"`
 	RuntimePresent    bool          `json:"runtime_present"`
 	ProcessAlive      bool          `json:"process_alive"`
 	EndpointReachable bool          `json:"endpoint_reachable"`

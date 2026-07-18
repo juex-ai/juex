@@ -20,6 +20,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/version"
 )
 
 // Options configures a Server. Provider is optional; if unset, each session
@@ -176,7 +177,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if agentDir == "" {
 		return errors.New("juex serve: agent state directory is empty")
 	}
-	binding, err := endpoint.Listen(ctx, agentDir)
+	binding, err := endpoint.Listen(ctx, agentDir, version.Version)
 	if err != nil {
 		return err
 	}

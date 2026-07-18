@@ -78,6 +78,7 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 	status.PID = runtimeState.PID
 	status.Endpoint = runtimeState.Endpoint
 	status.StartedAt = runtimeState.StartedAt
+	status.BinaryVersion = runtimeState.BinaryVersion
 	alive, aliveErr := m.deps.processAlive(runtimeState.PID)
 	if aliveErr != nil {
 		status.RuntimeHealth = RuntimeAmbiguous

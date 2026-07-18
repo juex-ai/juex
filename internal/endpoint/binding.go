@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -23,11 +24,12 @@ const (
 var errLockBusy = errors.New("endpoint lock is already held")
 
 type Runtime struct {
-	AgentID    string    `json:"agent_id"`
-	InstanceID string    `json:"instance_id"`
-	PID        int       `json:"pid"`
-	Endpoint   string    `json:"endpoint"`
-	StartedAt  time.Time `json:"started_at"`
+	AgentID       string    `json:"agent_id"`
+	InstanceID    string    `json:"instance_id"`
+	PID           int       `json:"pid"`
+	Endpoint      string    `json:"endpoint"`
+	StartedAt     time.Time `json:"started_at"`
+	BinaryVersion string    `json:"binary_version,omitempty"`
 }
 
 func (r Runtime) Matches(other Runtime) bool {
@@ -97,8 +99,13 @@ func defaultListenDependencies() listenDependencies {
 	}
 }
 
-func Listen(ctx context.Context, agentDir string) (*Binding, error) {
-	return listenWithDependencies(ctx, agentDir, defaultListenDependencies())
+func Listen(ctx context.Context, agentDir, binaryVersion string) (*Binding, error) {
+	binding, err := listenWithDependencies(ctx, agentDir, defaultListenDependencies())
+	if err != nil {
+		return nil, err
+	}
+	binding.runtime.BinaryVersion = strings.TrimSpace(binaryVersion)
+	return binding, nil
 }
 
 func listenWithDependencies(ctx context.Context, agentDir string, deps listenDependencies) (*Binding, error) {
@@ -430,5 +437,8 @@ func sameRuntime(left, right Runtime) bool {
 		left.InstanceID == right.InstanceID &&
 		left.PID == right.PID &&
 		left.Endpoint == right.Endpoint &&
-		left.StartedAt.Equal(right.StartedAt)
+		left.StartedAt.Equal(right.StartedAt) &&
+		(left.BinaryVersion == "" ||
+			right.BinaryVersion == "" ||
+			left.BinaryVersion == right.BinaryVersion)
 }

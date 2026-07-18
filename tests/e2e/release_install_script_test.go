@@ -375,7 +375,13 @@ func TestReleaseInstallScriptInstallsFromReleaseDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	archive := filepath.Join(releaseDir, "juex_0.0.1_linux_amd64.tar.gz")
-	binary := []byte("#!/bin/sh\necho juex fixture\n")
+	binary := []byte(`#!/bin/sh
+if [ "${1:-} ${2:-}" = "fleet service-installed" ]; then
+  echo false
+  exit 0
+fi
+echo juex fixture
+`)
 	writeTarGz(t, archive, "juex_0.0.1_linux_amd64/juex", binary)
 	sum := sha256File(t, archive)
 	if err := os.WriteFile(filepath.Join(releaseDir, "checksums.txt"), []byte(fmt.Sprintf("%s  %s\n", sum, filepath.Base(archive))), 0o644); err != nil {
@@ -412,6 +418,185 @@ func TestReleaseInstallScriptInstallsFromReleaseDirectory(t *testing.T) {
 	}
 	if info.Mode()&0o111 == 0 {
 		t.Fatalf("installed binary mode = %v, want executable bit", info.Mode())
+	}
+}
+
+func TestReleaseInstallScriptFleetServiceLifecycle(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	cases := []struct {
+		name        string
+		installed   string
+		optIn       string
+		probeFail   string
+		installFail string
+		statusFail  string
+		wantOutput  string
+		wantCalls   []string
+		forbidCalls []string
+	}{
+		{
+			name:        "missing service prints hint",
+			installed:   "false",
+			wantOutput:  "set INSTALL_FLEET_SERVICE=1",
+			wantCalls:   []string{"fleet service-installed"},
+			forbidCalls: []string{"fleet install", "fleet status --format json"},
+		},
+		{
+			name:       "explicit opt-in installs service",
+			installed:  "false",
+			optIn:      "1",
+			wantOutput: "Installed JueX fleet service by explicit request.",
+			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
+		},
+		{
+			name:       "existing service is refreshed",
+			installed:  "true",
+			wantOutput: "Refreshed existing JueX fleet service.",
+			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
+		},
+		{
+			name:        "service probe failure is a post-install warning",
+			probeFail:   "1",
+			wantOutput:  "could not check fleet service status",
+			wantCalls:   []string{"fleet service-installed"},
+			forbidCalls: []string{"fleet install", "fleet status --format json"},
+		},
+		{
+			name:        "existing service refresh failure is a warning",
+			installed:   "true",
+			installFail: "1",
+			wantOutput:  "failed to refresh existing fleet service",
+			wantCalls:   []string{"fleet service-installed", "fleet install"},
+			forbidCalls: []string{"fleet status --format json"},
+		},
+		{
+			name:        "explicit service install failure is a warning",
+			installed:   "false",
+			optIn:       "1",
+			installFail: "1",
+			wantOutput:  "failed to install the requested fleet service",
+			wantCalls:   []string{"fleet service-installed", "fleet install"},
+			forbidCalls: []string{"fleet status --format json"},
+		},
+		{
+			name:       "version check failure is a warning",
+			installed:  "true",
+			statusFail: "1",
+			wantOutput: "could not check running agent versions",
+			wantCalls:  []string{"fleet service-installed", "fleet install", "fleet status --format json"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			work := t.TempDir()
+			releaseDir := filepath.Join(work, "release")
+			if err := os.MkdirAll(releaseDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			archive := filepath.Join(releaseDir, "juex_0.0.1_linux_amd64.tar.gz")
+			fixture := []byte(`#!/bin/sh
+printf '%s\n' "$*" >> "$FLEET_CALL_LOG"
+case "${1:-} ${2:-}" in
+  "fleet service-installed")
+    if [ "${FAKE_FLEET_PROBE_FAIL:-0}" = "1" ]; then
+      exit 17
+    fi
+    printf '%s\n' "$FAKE_FLEET_INSTALLED"
+    ;;
+  "fleet install")
+    if [ "${FAKE_FLEET_INSTALL_FAIL:-0}" = "1" ]; then
+      exit 18
+    fi
+    ;;
+  "fleet status")
+    if [ "${FAKE_FLEET_STATUS_FAIL:-0}" = "1" ]; then
+      exit 19
+    fi
+    printf '[]\n'
+    ;;
+  *)
+    printf 'juex fixture\n'
+    ;;
+esac
+`)
+			writeTarGz(t, archive, "juex_0.0.1_linux_amd64/juex", fixture)
+			sum := sha256File(t, archive)
+			if err := os.WriteFile(
+				filepath.Join(releaseDir, "checksums.txt"),
+				[]byte(fmt.Sprintf("%s  %s\n", sum, filepath.Base(archive))),
+				0o644,
+			); err != nil {
+				t.Fatal(err)
+			}
+
+			callLog := filepath.Join(work, "fleet-calls.log")
+			cmd := exec.Command("bash", script, "--version", "0.0.1", "--bin-dir", filepath.Join(work, "bin"))
+			cmd.Dir = work
+			cmd.Env = append(os.Environ(),
+				"JUEX_INSTALL_OS=linux",
+				"JUEX_INSTALL_ARCH=amd64",
+				"JUEX_INSTALL_RELEASE_BASE_URL=release",
+				"HOME="+filepath.Join(work, "home"),
+				"FLEET_CALL_LOG="+callLog,
+				"FAKE_FLEET_INSTALLED="+tc.installed,
+				"FAKE_FLEET_PROBE_FAIL="+tc.probeFail,
+				"FAKE_FLEET_INSTALL_FAIL="+tc.installFail,
+				"FAKE_FLEET_STATUS_FAIL="+tc.statusFail,
+				"INSTALL_FLEET_SERVICE="+tc.optIn,
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("install failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), tc.wantOutput) {
+				t.Fatalf("output missing %q:\n%s", tc.wantOutput, out)
+			}
+			calls, err := os.ReadFile(callLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range tc.wantCalls {
+				if !strings.Contains(string(calls), want+"\n") {
+					t.Fatalf("calls missing %q:\n%s", want, calls)
+				}
+			}
+			for _, forbidden := range tc.forbidCalls {
+				if strings.Contains(string(calls), forbidden+"\n") {
+					t.Fatalf("calls unexpectedly contain %q:\n%s", forbidden, calls)
+				}
+			}
+		})
+	}
+}
+
+func TestPOSIXInstallersShareFleetRefreshContract(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"scripts/install.sh", "scripts/install-local.sh"} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		for _, want := range []string{
+			"refresh_fleet_service()",
+			"fleet service-installed",
+			`INSTALL_FLEET_SERVICE:-0`,
+			"fleet install",
+			"fleet status --format json",
+			"Refreshed existing JueX fleet service.",
+			"set INSTALL_FLEET_SERVICE=1",
+			"could not check fleet service status",
+			"failed to refresh existing fleet service",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing fleet refresh contract %q", rel, want)
+			}
+		}
 	}
 }
 

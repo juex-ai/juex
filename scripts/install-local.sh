@@ -5,10 +5,49 @@
 # Usage:
 #   scripts/install-local.sh
 #   PREFIX=$HOME/somewhere-else scripts/install-local.sh
+#   INSTALL_FLEET_SERVICE=1 scripts/install-local.sh
 #
 # After install the script reminds you to add the prefix to PATH if missing.
 
 set -euo pipefail
+
+refresh_fleet_service() {
+  local binary="$1"
+  local installed
+  if ! installed=$("$binary" fleet service-installed); then
+    printf 'warning: JueX binary installed successfully, but could not check fleet service status.\n' >&2
+    return 0
+  fi
+  case "$installed" in
+    true)
+      if "$binary" fleet install; then
+        printf 'Refreshed existing JueX fleet service.\n'
+        if ! "$binary" fleet status --format json >/dev/null; then
+          printf 'warning: refreshed JueX fleet service, but could not check running agent versions.\n' >&2
+        fi
+      else
+        printf 'warning: JueX binary installed successfully, but failed to refresh existing fleet service.\n' >&2
+      fi
+      ;;
+    false)
+      if [[ "${INSTALL_FLEET_SERVICE:-0}" == "1" ]]; then
+        if "$binary" fleet install; then
+          printf 'Installed JueX fleet service by explicit request.\n'
+          if ! "$binary" fleet status --format json >/dev/null; then
+            printf 'warning: installed JueX fleet service, but could not check running agent versions.\n' >&2
+          fi
+        else
+          printf 'warning: JueX binary installed successfully, but failed to install the requested fleet service.\n' >&2
+        fi
+      else
+        printf 'JueX fleet service is not installed; set INSTALL_FLEET_SERVICE=1 to install it during JueX installation.\n'
+      fi
+      ;;
+    *)
+      printf 'warning: unexpected fleet service state from %s: %s\n' "$binary" "$installed" >&2
+      ;;
+  esac
+}
 
 cd "$(dirname "$0")/.."
 
@@ -42,6 +81,7 @@ cp "$BUILD_TARGET" "$INSTALL_TARGET"
 chmod +x "$INSTALL_TARGET"
 
 "$INSTALL_TARGET" version
+refresh_fleet_service "$INSTALL_TARGET"
 
 case ":${PATH}:" in
   *":${INSTALL_DIR}:"*)

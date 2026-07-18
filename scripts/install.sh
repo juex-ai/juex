@@ -10,6 +10,7 @@
 #   JUEX_INSTALL_VERSION=0.0.1
 #   JUEX_INSTALL_OS=linux
 #   JUEX_INSTALL_ARCH=amd64
+#   INSTALL_FLEET_SERVICE=1
 
 set -euo pipefail
 
@@ -235,6 +236,44 @@ install_binary() {
   chmod +x "$target"
 }
 
+refresh_fleet_service() {
+  local binary="$1"
+  local installed
+  if ! installed=$("$binary" fleet service-installed); then
+    printf 'warning: JueX binary installed successfully, but could not check fleet service status.\n' >&2
+    return 0
+  fi
+  case "$installed" in
+    true)
+      if "$binary" fleet install; then
+        printf 'Refreshed existing JueX fleet service.\n'
+        if ! "$binary" fleet status --format json >/dev/null; then
+          printf 'warning: refreshed JueX fleet service, but could not check running agent versions.\n' >&2
+        fi
+      else
+        printf 'warning: JueX binary installed successfully, but failed to refresh existing fleet service.\n' >&2
+      fi
+      ;;
+    false)
+      if [[ "${INSTALL_FLEET_SERVICE:-0}" == "1" ]]; then
+        if "$binary" fleet install; then
+          printf 'Installed JueX fleet service by explicit request.\n'
+          if ! "$binary" fleet status --format json >/dev/null; then
+            printf 'warning: installed JueX fleet service, but could not check running agent versions.\n' >&2
+          fi
+        else
+          printf 'warning: JueX binary installed successfully, but failed to install the requested fleet service.\n' >&2
+        fi
+      else
+        printf 'JueX fleet service is not installed; set INSTALL_FLEET_SERVICE=1 to install it during JueX installation.\n'
+      fi
+      ;;
+    *)
+      printf 'warning: unexpected fleet service state from %s: %s\n' "$binary" "$installed" >&2
+      ;;
+  esac
+}
+
 main() {
   local dry_run=0
   local requested_version="${JUEX_INSTALL_VERSION:-}"
@@ -320,6 +359,7 @@ EOF
   install_binary "$extracted" "$install_target"
 
   printf 'Installed juex to %s\n' "$install_target"
+  refresh_fleet_service "$install_target"
   if [[ ":$PATH:" != *":${install_dir}:"* ]]; then
     cat <<EOF
 
