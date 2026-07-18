@@ -3,7 +3,9 @@
 package e2e
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -13,6 +15,9 @@ import (
 func processTCPListeners(pid int) ([]string, error) {
 	output, err := exec.Command("netstat", "-ano", "-p", "tcp").Output()
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("%w: netstat is not installed", errProcessListenerScanUnavailable)
+		}
 		return nil, fmt.Errorf("scan TCP listeners with netstat: %w", err)
 	}
 	return parseNetstatTCPListeners(string(output), pid), nil
@@ -45,5 +50,13 @@ func TestParseNetstatTCPListeners(t *testing.T) {
 	want := []string{"127.0.0.1:58391"}
 	if !sameStringSet(got, want) {
 		t.Fatalf("listeners = %v, want %v", got, want)
+	}
+}
+
+func TestProcessTCPListenersReportsUnavailableNetstat(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := processTCPListeners(os.Getpid())
+	if !errors.Is(err, errProcessListenerScanUnavailable) {
+		t.Fatalf("error = %v, want errProcessListenerScanUnavailable", err)
 	}
 }

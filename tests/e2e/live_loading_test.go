@@ -547,11 +547,13 @@ func TestLiveBinary_MigratesAndRebindsAgentState(t *testing.T) {
 func TestLiveBinary_EndpointOnlyServeHasNoExtraTCPListener(t *testing.T) {
 	bin := buildJuex(t)
 	for _, test := range []struct {
-		name string
-		args []string
+		name               string
+		args               []string
+		scannerUnavailable bool
 	}{
 		{name: "flagless"},
 		{name: "explicit headless", args: []string{"--headless"}},
+		{name: "listener scanner unavailable", scannerUnavailable: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			process := startLiveServe(t, bin, test.args...)
@@ -560,6 +562,9 @@ func TestLiveBinary_EndpointOnlyServeHasNoExtraTCPListener(t *testing.T) {
 			target, err := endpoint.Parse(process.runtime.Endpoint)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if test.scannerUnavailable {
+				t.Setenv("PATH", t.TempDir())
 			}
 			assertProcessTCPListeners(t, process.cmd.Process.Pid, target)
 			waitForServeOutput(t, process.stdout, "juex serve agent endpoint listening on ")
@@ -771,6 +776,8 @@ func waitForServeTCPAddress(t *testing.T, output *lockedBuffer) string {
 	return ""
 }
 
+var errProcessListenerScanUnavailable = errors.New("process TCP listener scan unavailable")
+
 func assertProcessTCPListeners(t *testing.T, pid int, endpointTarget endpoint.Target, additional ...string) {
 	t.Helper()
 	want := append([]string(nil), additional...)
@@ -784,6 +791,10 @@ func assertProcessTCPListeners(t *testing.T, pid int, endpointTarget endpoint.Ta
 	)
 	for time.Now().Before(deadline) {
 		got, scanErr = processTCPListeners(pid)
+		if errors.Is(scanErr, errProcessListenerScanUnavailable) {
+			t.Logf("skipping process listener scan: %v", scanErr)
+			return
+		}
 		if scanErr == nil && sameStringSet(got, want) {
 			return
 		}

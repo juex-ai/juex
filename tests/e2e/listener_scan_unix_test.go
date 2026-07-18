@@ -5,6 +5,7 @@ package e2e
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -22,6 +23,9 @@ func processTCPListeners(pid int) ([]string, error) {
 		"-sTCP:LISTEN",
 	).Output()
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, fmt.Errorf("%w: lsof is not installed", errProcessListenerScanUnavailable)
+		}
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && len(output) == 0 {
 			return nil, nil
@@ -54,5 +58,13 @@ juex    43123 user   10u  IPv6  0xdef      0t0  TCP [::1]:58392 (LISTEN)
 	want := []string{"127.0.0.1:58391", "[::1]:58392"}
 	if !sameStringSet(got, want) {
 		t.Fatalf("listeners = %v, want %v", got, want)
+	}
+}
+
+func TestProcessTCPListenersReportsUnavailableLsof(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := processTCPListeners(os.Getpid())
+	if !errors.Is(err, errProcessListenerScanUnavailable) {
+		t.Fatalf("error = %v, want errProcessListenerScanUnavailable", err)
 	}
 }
