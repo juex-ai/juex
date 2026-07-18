@@ -58,6 +58,35 @@ func TestAddCreatesAndIdempotentlyUpdatesAgent(t *testing.T) {
 	}
 }
 
+func TestAddCanonicalizesSymlinkWorkspace(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Skipf("symlink workspace unavailable: %v", err)
+	}
+	manager := newRegistrationTestManager(t, home)
+	canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := manager.Add(context.Background(), AddOptions{Workspace: alias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Agent.Workspace != canonicalWorkspace {
+		t.Fatalf("workspace = %q, want canonical %q", first.Agent.Workspace, canonicalWorkspace)
+	}
+	second, err := manager.Add(context.Background(), AddOptions{Workspace: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Created || second.Agent.ID != first.Agent.ID {
+		t.Fatalf("canonical add = %+v, first = %+v", second, first)
+	}
+}
+
 func TestAddRejectsRelativePathAndUnknownMarker(t *testing.T) {
 	home := t.TempDir()
 	manager := newRegistrationTestManager(t, home)
@@ -197,6 +226,52 @@ func TestRemoveRequiresConfirmationAndCleansMatchingMarker(t *testing.T) {
 		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("removed path still exists %s: %v", path, statErr)
 		}
+	}
+}
+
+func TestRemoveUnnamedAgentRequiresIDConfirmation(t *testing.T) {
+	entry := registryEntry("aaaaaaaa", "")
+	deps := defaultDependencies()
+	deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
+		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
+	}
+	deps.readRuntime = func(string) (endpoint.Runtime, error) {
+		return endpoint.Runtime{}, os.ErrNotExist
+	}
+	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+		return noopGuard{}, nil
+	}
+	deleteCalls := 0
+	deps.deleteRegistered = func(string, string) error {
+		deleteCalls++
+		return nil
+	}
+	manager := &Manager{
+		homeDir:      t.TempDir(),
+		probeTimeout: time.Second,
+		stopTimeout:  time.Second,
+		deps:         deps,
+	}
+
+	if _, err := manager.Remove(
+		context.Background(),
+		entry.ID,
+		RemoveOptions{ConfirmName: ""},
+	); err == nil {
+		t.Fatal("Remove accepted an empty confirmation for an unnamed agent")
+	}
+	if _, err := manager.Remove(
+		context.Background(),
+		entry.ID,
+		RemoveOptions{ConfirmName: entry.ID},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("delete calls = %d, want 1", deleteCalls)
 	}
 }
 

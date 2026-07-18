@@ -66,7 +66,11 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   }
   assert.match(fleetSource, /Add agent/);
   assert.match(fleetSource, /Show hidden/);
-  assert.match(fleetSource, /confirmation === agent\.name/);
+  assert.match(
+    fleetSource,
+    /const confirmationTarget = agent\.name \|\| agent\.id/,
+  );
+  assert.match(fleetSource, /localeCompare\(b\.id\)/);
   assert.match(fleetSource, /agent\.enabled/);
   assert.match(typesSource, /export interface DirectoryListing/);
   assert.match(typesSource, /export interface RemovedAgent/);

@@ -18,13 +18,20 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (AddResult, error) {
 	if !filepath.IsAbs(opts.Workspace) {
 		return AddResult{}, &ValidationError{Reason: "workspace must be an absolute path"}
 	}
-	info, err := os.Stat(opts.Workspace)
+	canonicalWorkspace, err := filepath.EvalSymlinks(opts.Workspace)
+	if err != nil {
+		return AddResult{}, &ValidationError{
+			Reason: fmt.Sprintf("workspace path is invalid: %v", err),
+		}
+	}
+	info, err := os.Stat(canonicalWorkspace)
 	if err != nil {
 		return AddResult{}, &ValidationError{Reason: fmt.Sprintf("workspace must be an existing directory: %v", err)}
 	}
 	if !info.IsDir() {
 		return AddResult{}, &ValidationError{Reason: "workspace must be an existing directory"}
 	}
+	opts.Workspace = canonicalWorkspace
 
 	var name *string
 	if opts.Name != nil {
@@ -129,9 +136,13 @@ func (m *Manager) Remove(
 	if err != nil {
 		return RemovedAgent{}, err
 	}
-	if !opts.SkipConfirmation && opts.ConfirmName != entry.Agent.Name {
+	confirmationTarget := entry.Agent.Name
+	if strings.TrimSpace(confirmationTarget) == "" {
+		confirmationTarget = entry.ID
+	}
+	if !opts.SkipConfirmation && opts.ConfirmName != confirmationTarget {
 		return RemovedAgent{}, &ValidationError{
-			Reason: fmt.Sprintf("confirmation must exactly match agent name %q", entry.Agent.Name),
+			Reason: fmt.Sprintf("confirmation must exactly match %q", confirmationTarget),
 		}
 	}
 	if _, err := m.stopEntry(ctx, entry); err != nil {

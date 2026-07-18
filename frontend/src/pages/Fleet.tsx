@@ -123,8 +123,10 @@ export function Fleet() {
   function replaceAgent(next: AgentStatus) {
     setAgents((current) => {
       const exists = current.some((item) => item.id === next.id);
-      if (!exists) return [...current, next];
-      return current.map((item) => (item.id === next.id ? next : item));
+      const nextList = exists
+        ? current.map((item) => (item.id === next.id ? next : item))
+        : [...current, next];
+      return nextList.sort((a, b) => a.id.localeCompare(b.id));
     });
   }
 
@@ -608,7 +610,8 @@ function RemoveAgentDialog({
   }, [agent]);
 
   if (!agent) return null;
-  const confirmed = confirmation === agent.name;
+  const confirmationTarget = agent.name || agent.id;
+  const confirmed = confirmation === confirmationTarget;
   const selectedAgent = agent;
 
   async function submit(event: React.FormEvent) {
@@ -642,7 +645,7 @@ function RemoveAgentDialog({
         <form className="space-y-4" onSubmit={(event) => void submit(event)}>
           <div className="space-y-1.5">
             <label htmlFor="remove-agent-confirmation" className="text-xs font-medium">
-              Type <span className="font-mono">{agent.name}</span> to confirm
+              Type <span className="font-mono">{confirmationTarget}</span> to confirm
             </label>
             <Input
               id="remove-agent-confirmation"
