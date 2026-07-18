@@ -437,6 +437,41 @@ func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 	}
 }
 
+func TestFleetAPIMissingFleetLogIsNotFound(t *testing.T) {
+	const logPath = "/private/fleet.log"
+	backend := &fakeBackend{
+		logsErr: &fleet.LogUnavailableError{
+			AgentID: "aaaaaaaa",
+			Path:    logPath,
+		},
+	}
+	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+	recorder := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/api/agents/aaaaaaaa/logs", http.NoBody),
+	)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decodeJSON(t, recorder.Body.Bytes(), &body)
+	if body.Error.Code != "not_found" ||
+		!strings.Contains(body.Error.Message, "no fleet-owned log is available") {
+		t.Fatalf("error body = %+v", body.Error)
+	}
+	if strings.Contains(body.Error.Message, logPath) {
+		t.Fatalf("error message exposed absolute path: %q", body.Error.Message)
+	}
+}
+
 func TestAgentReverseProxyPreservesResponsePathAndQuery(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/runtime" || r.URL.RawQuery != "detail=full" {

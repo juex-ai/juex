@@ -110,6 +110,22 @@ func (e *NotFoundError) Error() string {
 	return fmt.Sprintf("fleet: agent %q not found", e.Selector)
 }
 
+type LogUnavailableError struct {
+	AgentID string
+	Path    string
+}
+
+func (e *LogUnavailableError) Error() string {
+	return fmt.Sprintf(
+		"fleet: no fleet-owned log is available for agent %q; logs/fleet.log is created only when fleet starts the agent. If it was started externally, inspect its terminal, service logs, or stdout/stderr redirection. If fleet started it, the log may have been removed.",
+		e.AgentID,
+	)
+}
+
+func (e *LogUnavailableError) Unwrap() error {
+	return os.ErrNotExist
+}
+
 type AmbiguousSelectorError struct {
 	Selector string
 	IDs      []string

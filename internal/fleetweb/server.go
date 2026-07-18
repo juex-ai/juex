@@ -478,14 +478,15 @@ func decodeJSONBody(
 
 func writeFleetError(w http.ResponseWriter, err error) {
 	var (
-		notFound   *fleet.NotFoundError
-		ambiguous  *fleet.AmbiguousSelectorError
-		conflict   *fleet.ConflictError
-		invalid    *fleet.ConfigValidationError
-		validation *fleet.ValidationError
+		notFound       *fleet.NotFoundError
+		logUnavailable *fleet.LogUnavailableError
+		ambiguous      *fleet.AmbiguousSelectorError
+		conflict       *fleet.ConflictError
+		invalid        *fleet.ConfigValidationError
+		validation     *fleet.ValidationError
 	)
 	switch {
-	case errors.As(err, &notFound):
+	case errors.As(err, &notFound), errors.As(err, &logUnavailable):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.As(err, &ambiguous), errors.As(err, &conflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error())

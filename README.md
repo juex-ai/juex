@@ -164,7 +164,7 @@ current CLI; detached agents are not restarted automatically.
 | `juex fleet enable\|disable <agent>` | Persist reversible enabled state; disable also stops the agent. |
 | `juex fleet remove <agent> [--yes]` | Confirm and permanently remove registered agent state without deleting workspace files. |
 | `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity. |
-| `juex fleet logs <agent> [--lines 200]` | Print a line- and byte-bounded tail of the combined fleet log. |
+| `juex fleet logs <agent> [--lines 200]` | Tail bounded output for fleet-started agents; adopted external processes retain their original logging destination. |
 | `juex fleet gc [--yes]` | Review and explicitly delete definitely orphaned agent state. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |
 

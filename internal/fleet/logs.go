@@ -35,7 +35,12 @@ func (m *Manager) Logs(selector string, lines int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tailLog(fleetLogPath(entry.Dir), lines)
+	path := fleetLogPath(entry.Dir)
+	body, err := tailLog(path, lines)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, &LogUnavailableError{AgentID: entry.ID, Path: path}
+	}
+	return body, err
 }
 
 func tailLog(path string, lines int) ([]byte, error) {

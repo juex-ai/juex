@@ -39,6 +39,23 @@ func TestFleetStatusDoesNotCreateWorkspaceIdentity(t *testing.T) {
 	}
 }
 
+func TestMapFleetErrorTreatsUnavailableLogAsNotFound(t *testing.T) {
+	source := &fleet.LogUnavailableError{
+		AgentID: "aaaaaaaa",
+		Path:    "/private/fleet.log",
+	}
+
+	err := mapFleetError(source)
+
+	var missing *notFoundError
+	if !errors.As(err, &missing) {
+		t.Fatalf("error = %T %v, want notFoundError", err, err)
+	}
+	if err.Error() != source.Error() {
+		t.Fatalf("error = %q, want %q", err, source)
+	}
+}
+
 func TestFleetStatusPreservesOrthogonalState(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

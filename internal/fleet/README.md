@@ -16,6 +16,9 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   a recorded PID.
 - `Serve` reconciles once, adopts verified runtimes, starts enabled autostart
   agents, and remains resident without owning child lifetime.
+- `Logs` tails only the fleet-owned output created by `Start`; adopted
+  externally started processes retain their original terminal, service, or
+  redirection destination.
 - `Endpoint` exposes runtime metadata only after rechecking a bound, healthy
   process and exact endpoint identity for an immediate proxy request.
 - `Config` reads the bound workspace config without creating identity.

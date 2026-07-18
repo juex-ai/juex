@@ -110,6 +110,93 @@ func TestFleetServeUsesHomeAddressAndExplicitFlagWins(t *testing.T) {
 	killSupervisor(t, explicit)
 }
 
+func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary fleet adoption is slow")
+	}
+	binary := buildJuex(t)
+	home := t.TempDir()
+	workspace := t.TempDir()
+	agentID := "aaaaaaaa"
+	agentDir := writeFleetE2EAgent(t, home, workspace, agentID)
+	environment := fleetE2EEnvironment(home)
+
+	standaloneOutput, err := os.Create(filepath.Join(t.TempDir(), "standalone.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	standalone := exec.Command(binary, "-C", workspace, "serve", "--headless")
+	standalone.Env = environment
+	standalone.Stdout = standaloneOutput
+	standalone.Stderr = standaloneOutput
+	if err := standalone.Start(); err != nil {
+		_ = standaloneOutput.Close()
+		t.Fatal(err)
+	}
+	if err := standaloneOutput.Close(); err != nil {
+		t.Fatal(err)
+	}
+	standaloneDone := make(chan error, 1)
+	go func() { standaloneDone <- standalone.Wait() }()
+	t.Cleanup(func() {
+		runtimeState, readErr := endpoint.ReadRuntime(agentDir)
+		if readErr == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			_ = endpoint.RequestShutdown(ctx, runtimeState)
+			cancel()
+		}
+		select {
+		case <-standaloneDone:
+		case <-time.After(3 * time.Second):
+			_ = standalone.Process.Kill()
+			<-standaloneDone
+		}
+	})
+
+	runtimeState := waitFleetRuntime(t, agentDir)
+	probeFleetRuntime(t, runtimeState)
+	supervisor := startFleetSupervisor(t, binary, environment)
+	t.Cleanup(func() {
+		if supervisor.cmd.ProcessState == nil {
+			_ = supervisor.cmd.Process.Kill()
+			_ = supervisor.cmd.Wait()
+		}
+	})
+	waitSupervisorReady(t, supervisor, "adopted")
+	killSupervisor(t, supervisor)
+	if _, err := os.Stat(filepath.Join(agentDir, "logs", "fleet.log")); !os.IsNotExist(err) {
+		t.Fatalf("standalone serve unexpectedly created fleet.log: %v", err)
+	}
+
+	stdout, stderr, err := runFleetE2E(binary, environment, "", "logs", agentID)
+
+	if exitCode(err) != 3 {
+		t.Fatalf("fleet logs exit = %d, want 3\nstdout:\n%s\nstderr:\n%s", exitCode(err), stdout, stderr)
+	}
+	for _, want := range []string{
+		"no fleet-owned log is available",
+		"started externally",
+		"terminal",
+		"service logs",
+		"stdout/stderr redirection",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("fleet logs stderr missing %q:\n%s", want, stderr)
+		}
+	}
+	for _, unwanted := range []string{"open ", "no such file"} {
+		if strings.Contains(stderr, unwanted) {
+			t.Fatalf("fleet logs stderr contains raw filesystem error %q:\n%s", unwanted, stderr)
+		}
+	}
+	if stdout != "" {
+		t.Fatalf("fleet logs stdout = %q, want empty", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(agentDir, "logs", "fleet.log")); !os.IsNotExist(err) {
+		t.Fatalf("fleet logs command created fleet.log: %v", err)
+	}
+}
+
 func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiled-binary fleet lifecycle is slow")
