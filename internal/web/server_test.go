@@ -376,6 +376,30 @@ func TestRunPublishesExplicitTCPAPI(t *testing.T) {
 	}
 }
 
+func TestValidLoopbackAcceptsTheFullLoopbackRange(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{addr: "127.0.0.1:8080", want: true},
+		{addr: "127.42.0.99:8080", want: true},
+		{addr: "[::1]:8080", want: true},
+		{addr: "localhost:8080", want: true},
+		{addr: "0.0.0.0:8080"},
+		{addr: "192.168.1.5:8080"},
+		{addr: "127.0.0.1"},
+		{addr: "localhost"},
+		{addr: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.addr, func(t *testing.T) {
+			if got := validLoopback(test.addr); got != test.want {
+				t.Fatalf("validLoopback(%q) = %v, want %v", test.addr, got, test.want)
+			}
+		})
+	}
+}
+
 func TestWebEventsDeliveryFollowsJournalCommit(t *testing.T) {
 	srv := newTestServer(t)
 	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)

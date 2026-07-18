@@ -413,16 +413,19 @@ func (s *Server) closeOtherPrimarySessions(activeID string) {
 	}
 }
 
-// validLoopback enforces "127.0.0.1" / "::1" / "localhost" hosts. The
-// CLI surfaces a usage error before Run is called, but defending in
-// depth here protects programmatic callers.
+// validLoopback accepts localhost or any loopback IP with an explicit port.
+// The CLI surfaces a usage error before Run is called, but defending in depth
+// here protects programmatic callers.
 func validLoopback(addr string) bool {
-	for _, prefix := range []string{"127.0.0.1:", "[::1]:", "localhost:"} {
-		if len(addr) >= len(prefix) && addr[:len(prefix)] == prefix {
-			return true
-		}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
 	}
-	return false
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // openSession constructs an *app.App for resumeDir (or a fresh session
