@@ -153,6 +153,8 @@ The Schedule routing subscenario must also:
 whether the guide is omitted, loaded in parallel with listing, or loaded later.
 Incidental inspection commands also do not fail an otherwise correct result;
 the exact persisted Schedule shape is the authoritative routing outcome.
+Shell loops, detached interval sleeps, `watch`, `crontab`, and `systemd-run`
+remain rejected because they create a competing recurring side effect.
 Additional `observable_list` calls, including post-create verification, are
 allowed as long as at least one successful list result preceded creation.
 Failed `schedule_create` attempts are also allowed when the model uses the

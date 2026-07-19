@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,8 @@ except ImportError:  # pragma: no cover - direct script fallback.
 FORBIDDEN_TOOLS = {
     "observable_create",
 }
+
+SHELL_TOOLS = {"exec_command", "shell"}
 
 @dataclass(frozen=True)
 class ScheduleRoutingExpectation:
@@ -138,6 +141,8 @@ def _validate_tool_contract(
     for use in uses:
         if use.name in FORBIDDEN_TOOLS:
             issues.append(f"forbidden tool_use: {use.name}")
+        if _is_shell_scheduling_command(use):
+            issues.append(f"forbidden shell scheduling command: {use.name}")
 
     list_uses = [use for use in uses if use.name == "observable_list"]
     create_uses = [use for use in uses if use.name == "schedule_create"]
@@ -197,6 +202,25 @@ def _successful_result_after(use: _ToolUse, results: list[_ToolResult]) -> _Tool
         ):
             return None if result.is_error else result
     return None
+
+
+def _is_shell_scheduling_command(use: _ToolUse) -> bool:
+    if use.name not in SHELL_TOOLS or not isinstance(use.input, dict):
+        return False
+    command = use.input.get("cmd") or use.input.get("command")
+    if not isinstance(command, str):
+        return False
+    normalized = " ".join(command.lower().split())
+    if re.search(r"\b(?:while|until|for)\b.*\bsleep\b", normalized):
+        return True
+    if re.search(r"\b(?:crontab|systemd-run)\b", normalized):
+        return True
+    if re.search(r"\bwatch\s+-n\b", normalized):
+        return True
+    return bool(
+        re.search(r"\bsleep\s+(?:21600|6h)\b", normalized)
+        and ("&" in command or re.search(r"\b(?:nohup|setsid)\b", normalized))
+    )
 
 
 def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, issues: list[str]) -> None:

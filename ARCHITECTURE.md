@@ -2046,8 +2046,9 @@ There are two live layers:
   `.tmp/reports/provider-model-smoke/`. Schedule routing validates successful
   list-before-create tool results, rejects the command-Observable route, and
   validates the tagged `.juex/observables.json` shape. Guide loading and
-  incidental inspection commands do not affect the outcome. By default the
-  command rotates one
+  incidental inspection commands do not affect the outcome; shell loops and
+  scheduler commands remain rejected as competing recurring side effects. By
+  default the command rotates one
   model using `.juex/live-model-rotation.json`; pass `--all-models` to
   `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.

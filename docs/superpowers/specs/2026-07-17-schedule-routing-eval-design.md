@@ -36,6 +36,8 @@ guide result cannot fail an otherwise correct Schedule outcome.
 Incidental inspection commands are likewise ignored: the exact persisted
 Schedule shape is the authoritative route. The prompt still rejects shell
 polling, background loops, and managed command sources as implementations.
+The oracle distinguishes those from inspection by rejecting loop-plus-sleep,
+detached interval sleep, `watch`, `crontab`, and `systemd-run` command shapes.
 
 The six-hour interval is deliberate: it is stable across timezones and test
 run times, cannot fire during an ordinary evaluation, and exercises the same
@@ -238,6 +240,7 @@ and cover:
 - duplicate successful `schedule_create`;
 - the command-Observable route;
 - incidental read-only command inspection remains non-failing;
+- shell polling and scheduler commands remain rejected;
 - malformed transcript/config JSON;
 - wrong id, recurrence, observation, type, or config branch;
 - old `source`, `command_config`, and extra persisted entries;
