@@ -2269,6 +2269,46 @@ func TestTurn_OneToolCallThenEnd(t *testing.T) {
 	}
 }
 
+func TestTurn_GuidedToolErrorAddsRecoveryHintAfterDiagnosticEvent(t *testing.T) {
+	prov := &mockProvider{script: []llm.Response{
+		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
+			{Type: llm.BlockToolUse, ToolUseID: "guided-1", ToolName: "guided_test"},
+		}}, StopReason: llm.StopToolUse},
+		{Message: llm.TextMessage(llm.RoleAssistant, "recovered"), StopReason: llm.StopEndTurn},
+	}}
+	eng, bus := newEngine(t, prov, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name:  "guided_test",
+		Group: tools.ToolGroupObservable,
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "partial output", errors.New("guided failure")
+		},
+	})
+	var errored toolevents.ErroredPayload
+	bus.Subscribe(toolevents.ErroredType, func(event events.Event) {
+		errored, _ = event.Payload.(toolevents.ErroredPayload)
+	})
+
+	out, err := eng.Turn(context.Background(), "try guided tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "recovered" {
+		t.Fatalf("out = %q, want recovered", out)
+	}
+	const hint = `skill_load("juex-observables")`
+	result := eng.Session.History[2].Blocks[0]
+	if !result.IsError || !strings.Contains(result.Content, hint) {
+		t.Fatalf("persisted tool result = %+v, want guided failure hint", result)
+	}
+	if !strings.Contains(messagesText(prov.histories[1]), hint) {
+		t.Fatalf("next provider history missing guided failure hint: %+v", prov.histories[1])
+	}
+	if errored.Error != "guided failure" || strings.Contains(errored.Preview, "skill_load") {
+		t.Fatalf("tool.errored = %+v, want original diagnostic without remediation", errored)
+	}
+}
+
 func TestTurn_ToolStructuredMediaBecomesToolResultMedia(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.Message{Role: llm.RoleAssistant, Blocks: []llm.Block{
@@ -3473,6 +3513,116 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	waitSignal(t, rejected, "pending_input.rejected")
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNormalizeGuidedToolFailureResults(t *testing.T) {
+	reg := tools.NewRegistry()
+	for name, group := range map[string]tools.ToolGroup{
+		"observe": tools.ToolGroupObservable,
+		"chunk":   tools.ToolGroupChunkedWrite,
+		"goal":    tools.ToolGroupSessionState,
+		"read":    tools.ToolGroupFile,
+	} {
+		reg.MustRegister(tools.Tool{
+			Name:    name,
+			Group:   group,
+			Handler: func(context.Context, map[string]any) (string, error) { return "", nil },
+		})
+	}
+	eng := &Engine{Tools: reg}
+	hint := func(skill string) string {
+		return `For workflows, constraints, and examples, load the full guide with skill_load("` + skill + `").`
+	}
+	tests := []struct {
+		name        string
+		toolName    string
+		isError     bool
+		content     string
+		wantContent string
+	}{
+		{
+			name:        "observable error",
+			toolName:    "observe",
+			isError:     true,
+			content:     "boom",
+			wantContent: "boom\n\n" + hint("juex-observables"),
+		},
+		{
+			name:        "chunked write error",
+			toolName:    "chunk",
+			isError:     true,
+			content:     "boom",
+			wantContent: "boom\n\n" + hint("juex-chunked-write"),
+		},
+		{
+			name:        "session state error",
+			toolName:    "goal",
+			isError:     true,
+			content:     "boom",
+			wantContent: "boom\n\n" + hint("juex-session-state"),
+		},
+		{name: "guided success", toolName: "observe", content: "ok", wantContent: "ok"},
+		{name: "unguided error", toolName: "read", isError: true, content: "boom", wantContent: "boom"},
+		{name: "unknown tool error", toolName: "missing", isError: true, content: "boom", wantContent: "boom"},
+		{
+			name:        "existing hint is not duplicated",
+			toolName:    "observe",
+			isError:     true,
+			content:     "boom\n\n" + hint("juex-observables"),
+			wantContent: "boom\n\n" + hint("juex-observables"),
+		},
+		{
+			name:        "trailing whitespace is normalized",
+			toolName:    "observe",
+			isError:     true,
+			content:     "boom \n\n",
+			wantContent: "boom\n\n" + hint("juex-observables"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const (
+				errorText = "original error"
+				errorKind = "test"
+				rawCause  = "original cause"
+			)
+			got := eng.normalizeGuidedToolFailureResults([]toolCallResult{{
+				Block: llm.Block{
+					Type:     llm.BlockToolResult,
+					ToolName: tt.toolName,
+					Content:  tt.content,
+					IsError:  tt.isError,
+				},
+				Observation: tools.Observation{
+					ToolName:  tt.toolName,
+					Content:   tt.content,
+					Error:     errorText,
+					ErrorKind: errorKind,
+					RawCause:  rawCause,
+				},
+			}})
+			if got[0].Block.Content != tt.wantContent {
+				t.Fatalf("block content = %q, want %q", got[0].Block.Content, tt.wantContent)
+			}
+			if got[0].Observation.Content != tt.wantContent {
+				t.Fatalf("observation content = %q, want %q", got[0].Observation.Content, tt.wantContent)
+			}
+			if got[0].Observation.Error != errorText ||
+				got[0].Observation.ErrorKind != errorKind ||
+				got[0].Observation.RawCause != rawCause {
+				t.Fatalf("error metadata changed: %+v", got[0].Observation)
+			}
+		})
+	}
+
+	input := []toolCallResult{{
+		Block:       llm.Block{Type: llm.BlockToolResult, ToolName: "observe", Content: "boom", IsError: true},
+		Observation: tools.Observation{ToolName: "observe", Content: "boom"},
+	}}
+	got := (&Engine{}).normalizeGuidedToolFailureResults(input)
+	if !reflect.DeepEqual(got, input) {
+		t.Fatalf("nil registry changed results: got %+v want %+v", got, input)
 	}
 }
 

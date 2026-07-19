@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
+import shlex
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,22 +14,53 @@ except ImportError:  # pragma: no cover - direct script fallback.
 
 
 FORBIDDEN_TOOLS = {
-    "exec_command",
-    "list_shell_sessions",
     "observable_create",
-    "shell",
-    "shell_input",
-    "write_stdin",
 }
 
-OBSERVABLE_TOOLS = {
-    "observable_create",
-    "observable_delete",
-    "observable_list",
-    "observable_observations",
-    "observable_start",
-    "observable_stop",
-    "schedule_create",
+SHELL_COMMAND_FIELDS = {
+    "exec_command": ("cmd", "command"),
+    "shell": ("cmd", "command"),
+    "write_stdin": ("chars",),
+}
+
+SHELL_INTERPRETERS = {"bash", "dash", "ksh", "sh", "zsh"}
+
+SHELL_OPTIONS_WITH_VALUE = {"-o", "+o", "-O", "+O", "--init-file", "--rcfile"}
+
+SHELL_COMMAND_PREFIXES = {"!", "(", "{"}
+
+SHELL_CONTROL_PREFIXES = {"do", "elif", "else", "if", "then", "until", "while"}
+
+WRAPPER_OPTIONS_WITH_VALUE = {
+    "builtin": set(),
+    "command": set(),
+    "env": {"-a", "--argv0", "-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
+    "exec": {"-a"},
+    "nohup": set(),
+    "setsid": set(),
+    "sudo": {
+        "-C",
+        "--close-from",
+        "-D",
+        "--chdir",
+        "-g",
+        "--group",
+        "-h",
+        "--host",
+        "-p",
+        "--prompt",
+        "-R",
+        "--chroot",
+        "-r",
+        "--role",
+        "-t",
+        "--type",
+        "-T",
+        "--command-timeout",
+        "-u",
+        "--user",
+    },
+    "time": {"-f", "--format", "-o", "--output"},
 }
 
 
@@ -64,9 +97,8 @@ def build_prompt(expectation: ScheduleRoutingExpectation) -> str:
             "Create recurring timed work using JueX native scheduling.",
             f"Use the fixed id {expectation.schedule_id} and run it every {hours_text} hours.",
             f"Each activation must emit observation content exactly: {expectation.content}",
-            "Load the built-in juex-observables guide before using any Observable capability.",
             "Inspect all currently configured timed sources first, then create this one only if it is absent.",
-            "Do not run commands, use shell polling or background loops, or create a managed command source.",
+            "Use native scheduling for recurrence; do not implement it with shell polling, background loops, or a managed command source.",
             f"After the timed work is created successfully, answer exactly: {expectation.completion_token}",
         ]
     )
@@ -155,48 +187,44 @@ def _validate_tool_contract(
     for use in uses:
         if use.name in FORBIDDEN_TOOLS:
             issues.append(f"forbidden tool_use: {use.name}")
+        if _is_shell_scheduling_command(use):
+            issues.append(f"forbidden shell scheduling command: {use.name}")
 
     list_uses = [use for use in uses if use.name == "observable_list"]
     create_uses = [use for use in uses if use.name == "schedule_create"]
-    if len(list_uses) != 1:
-        issues.append(f"expected exactly one observable_list tool_use, saw {len(list_uses)}")
-    if len(create_uses) != 1:
-        issues.append(f"expected exactly one schedule_create tool_use, saw {len(create_uses)}")
+    if not list_uses:
+        issues.append("expected at least one observable_list tool_use, saw 0")
+    if not create_uses:
+        issues.append("expected at least one schedule_create tool_use, saw 0")
 
-    first_observable = next((use for use in uses if use.name in OBSERVABLE_TOOLS), None)
-    guide_uses = [
-        use
-        for use in uses
-        if use.name == "skill_load"
-        and isinstance(use.input, dict)
-        and use.input.get("name") == "juex-observables"
+    successful_creates = [
+        (create_use, result)
+        for create_use in create_uses
+        if (result := _successful_result_after(create_use, results)) is not None
     ]
-    guide_loaded = False
-    for use in guide_uses:
-        result = _successful_result_after(use, results)
-        if result and (first_observable is None or _position(result) < _position(first_observable)):
-            guide_loaded = True
-            break
-    if not guide_loaded:
-        issues.append("juex-observables skill_load must succeed before first Observable tool_use")
+    if len(successful_creates) != 1:
+        issues.append(
+            f"expected exactly one successful schedule_create tool_use, saw {len(successful_creates)}"
+        )
 
-    if len(list_uses) == 1 and len(create_uses) == 1:
-        list_use = list_uses[0]
-        create_use = create_uses[0]
-        if _position(create_use) < _position(list_use):
-            issues.append("observable_list must run before schedule_create")
-        if list_use.message_index == create_use.message_index:
-            issues.append("observable_list and schedule_create cannot be in the same assistant message")
-        list_result = _successful_result_after(list_use, results)
-        if list_result is None:
-            issues.append("observable_list must have a successful tool_result")
-        elif _position(list_result) >= _position(create_use):
-            issues.append("observable_list successful tool_result must occur before schedule_create")
-        create_result = _successful_result_after(create_use, results)
-        if create_result is None:
-            issues.append("schedule_create must have a successful tool_result")
-        else:
-            completion_after = _position(create_result)
+    if list_uses:
+        for create_use in create_uses:
+            if _has_successful_list_before(create_use, list_uses, results):
+                continue
+            if any(list_use.message_index == create_use.message_index for list_use in list_uses):
+                issues.append(
+                    "observable_list and schedule_create cannot be in the same assistant message "
+                    "without an earlier successful observable_list result"
+                )
+            else:
+                issues.append(
+                    "at least one observable_list successful tool_result must occur "
+                    "before every schedule_create"
+                )
+
+    if len(successful_creates) == 1:
+        create_use, create_result = successful_creates[0]
+        completion_after = _position(create_result)
         _validate_create_input(create_use.input, expectation, issues)
 
     if completion_after is None or not _has_exact_completion_after(
@@ -220,6 +248,558 @@ def _successful_result_after(use: _ToolUse, results: list[_ToolResult]) -> _Tool
         ):
             return None if result.is_error else result
     return None
+
+
+def _has_successful_list_before(
+    create_use: _ToolUse,
+    list_uses: list[_ToolUse],
+    results: list[_ToolResult],
+) -> bool:
+    return any(
+        (result := _successful_result_after(list_use, results)) is not None
+        and _position(result) < _position(create_use)
+        for list_use in list_uses
+    )
+
+
+def _is_shell_scheduling_command(use: _ToolUse) -> bool:
+    fields = SHELL_COMMAND_FIELDS.get(use.name)
+    if fields is None or not isinstance(use.input, dict):
+        return False
+    command = next(
+        (
+            value
+            for field in fields
+            if isinstance(value := use.input.get(field), str)
+        ),
+        None,
+    )
+    if not isinstance(command, str):
+        return False
+    segments = _recursive_shell_segments(command)
+    programs = [
+        _program_name(segment[program_index])
+        for segment in segments
+        if (program_index := _command_program_index(segment)) is not None
+    ]
+    if any(program in {"while", "until", "for", "select"} for program in programs) and "sleep" in programs:
+        return True
+    if _contains_systemd_run_command(segments):
+        return True
+    if _contains_mutating_crontab(segments):
+        return True
+    if _contains_watch_command(segments):
+        return True
+    return _contains_detached_interval_sleep(command, segments)
+
+
+def _contains_mutating_crontab(segments: list[list[str]]) -> bool:
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if (
+            program_index is not None
+            and _program_name(segment[program_index]) == "crontab"
+            and not _is_crontab_list(segment, program_index)
+        ):
+            return True
+    return False
+
+
+def _is_crontab_list(tokens: list[str], program_index: int) -> bool:
+    saw_list = False
+    index = program_index + 1
+    while index < len(tokens):
+        raw_option = tokens[index]
+        if raw_option in {")", "}"}:
+            index += 1
+            continue
+        option = raw_option.rstrip(")")
+        if option in {"-l", "--list"}:
+            saw_list = True
+            index += 1
+            continue
+        if option in {"-u", "--user"}:
+            if index + 1 >= len(tokens):
+                return False
+            index += 2
+            continue
+        if option.startswith("--user="):
+            index += 1
+            continue
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        return False
+    return saw_list
+
+
+def _shell_redirection_end(tokens: list[str], index: int) -> int | None:
+    if index >= len(tokens):
+        return None
+    if tokens[index].isdigit():
+        index += 1
+    if index >= len(tokens) or tokens[index] not in {
+        "<",
+        ">",
+        ">>",
+        ">|",
+        "<>",
+        "<&",
+        ">&",
+        "<<",
+        "<<-",
+        "<<<",
+        "&>",
+        "&>>",
+    }:
+        return None
+    return index + 2 if index + 1 < len(tokens) else None
+
+
+def _contains_watch_command(segments: list[list[str]]) -> bool:
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if program_index is not None and _program_name(segment[program_index]) == "watch":
+            return True
+    return False
+
+
+def _contains_systemd_run_command(segments: list[list[str]]) -> bool:
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if (
+            program_index is not None
+            and _program_name(segment[program_index]) == "systemd-run"
+            and not _is_systemd_run_inspection(segment, program_index)
+        ):
+            return True
+    return False
+
+
+def _is_systemd_run_inspection(tokens: list[str], program_index: int) -> bool:
+    index = program_index + 1
+    while index < len(tokens):
+        option = tokens[index].rstrip(")")
+        if option in {"-h", "--help", "--version"}:
+            return True
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        if option == "--" or not option.startswith("-"):
+            return False
+        index += 1
+    return False
+
+
+def _contains_detached_interval_sleep(command: str, segments: list[list[str]]) -> bool:
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if program_index is None or _program_name(segment[program_index]) != "sleep":
+            continue
+        if _sleep_duration_seconds(segment[program_index + 1 :]) != 21600:
+            continue
+        wrappers = {_program_name(token) for token in segment[:program_index]}
+        if "&" in command or wrappers.intersection({"nohup", "setsid"}):
+            return True
+    return False
+
+
+def _sleep_duration_seconds(arguments: list[str]) -> float | None:
+    total = 0.0
+    saw_duration = False
+    index = 0
+    while index < len(arguments):
+        redirection_end = _shell_redirection_end(arguments, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        argument = arguments[index]
+        if argument == "--":
+            index += 1
+            continue
+        match = re.fullmatch(r"(\d+(?:\.\d*)?|\.\d+)([smhd]?)", argument.lower())
+        if match is None:
+            return None
+        value = float(match.group(1))
+        multiplier = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+        total += value * multiplier
+        saw_duration = True
+        index += 1
+    return total if saw_duration else None
+
+
+def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
+    segments = _shell_command_segments(command)
+    if depth >= 3:
+        return segments
+    expanded = list(segments)
+    for payload in _shell_substitution_payloads(command):
+        expanded.extend(_recursive_shell_segments(payload, depth + 1))
+    nested_commands = list(segments)
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if program_index is None:
+            continue
+        nested_start = _shell_control_command_start(segment, program_index)
+        if nested_start is not None:
+            nested_command = segment[nested_start:]
+            expanded.append(nested_command)
+            nested_commands.append(nested_command)
+    for name, payload in _shell_function_bodies(segments).items():
+        if _shell_function_is_invoked(name, expanded):
+            expanded.extend(_recursive_shell_segments(payload, depth + 1))
+    for segment in nested_commands:
+        env_payload = _env_split_string_payload(segment)
+        if env_payload is not None:
+            expanded.extend(_recursive_shell_segments(env_payload, depth + 1))
+        program_index = _command_program_index(segment)
+        if program_index is None:
+            continue
+        program = _program_name(segment[program_index])
+        if program == "eval":
+            eval_payload = _eval_command_payload(segment, program_index)
+            if eval_payload is not None:
+                expanded.extend(_recursive_shell_segments(eval_payload, depth + 1))
+        if program not in SHELL_INTERPRETERS:
+            continue
+        shell_payload = _shell_command_payload(segment, program_index)
+        if shell_payload is not None:
+            expanded.extend(_recursive_shell_segments(shell_payload, depth + 1))
+    return expanded
+
+
+def _shell_function_bodies(segments: list[list[str]]) -> dict[str, str]:
+    bodies: dict[str, str] = {}
+    segment_index = 0
+    while segment_index < len(segments):
+        definition = _shell_function_definition(segments[segment_index])
+        if definition is None:
+            segment_index += 1
+            continue
+        name, body_start = definition
+        depth = 1
+        body_segments: list[list[str]] = []
+        while segment_index < len(segments) and depth > 0:
+            segment = segments[segment_index]
+            start = body_start if not body_segments else 0
+            body_segment: list[str] = []
+            for token in segment[start:]:
+                if token == "{":
+                    depth += 1
+                elif token == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                body_segment.append(token)
+            if body_segment:
+                body_segments.append(body_segment)
+            segment_index += 1
+            body_start = 0
+        if body_segments:
+            bodies[name] = "; ".join(shlex.join(segment) for segment in body_segments)
+    return bodies
+
+
+def _shell_function_definition(tokens: list[str]) -> tuple[str, int] | None:
+    if not tokens:
+        return None
+    compact = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\(\)\{", tokens[0])
+    if compact is not None:
+        return compact.group(1), 1
+    if tokens[0] == "function" and len(tokens) >= 3:
+        name = tokens[1].removesuffix("()")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) and tokens[2] == "{":
+            return name, 3
+    if (
+        len(tokens) >= 3
+        and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tokens[0])
+        and tokens[1] == "()"
+        and tokens[2] == "{"
+    ):
+        return tokens[0], 3
+    return None
+
+
+def _shell_function_is_invoked(name: str, segments: list[list[str]]) -> bool:
+    for segment in segments:
+        if _shell_function_definition(segment) is not None:
+            continue
+        program_index = _command_program_index(segment)
+        if program_index is not None and _program_name(segment[program_index]) == name.lower():
+            return True
+    return False
+
+
+def _shell_control_command_start(tokens: list[str], program_index: int) -> int | None:
+    program = _program_name(tokens[program_index])
+    if program in SHELL_CONTROL_PREFIXES and program_index + 1 < len(tokens):
+        return program_index + 1
+    if program == "case":
+        for index in range(program_index + 1, len(tokens)):
+            if tokens[index].endswith(")") and index + 1 < len(tokens):
+                return index + 1
+        return None
+    if tokens[program_index].endswith(")") and program_index + 1 < len(tokens):
+        return program_index + 1
+    return None
+
+
+def _shell_substitution_payloads(command: str) -> list[str]:
+    payloads: list[str] = []
+    index = 0
+    quote: str | None = None
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if command.startswith("$(", index) or (
+            quote is None and char in {"<", ">"} and index + 1 < len(command) and command[index + 1] == "("
+        ):
+            parsed = _parenthesized_substitution(command, index + 2)
+            if parsed is not None:
+                payload, end = parsed
+                payloads.append(payload)
+                index = end + 1
+                continue
+        if char == "`":
+            parsed = _backtick_substitution(command, index + 1)
+            if parsed is not None:
+                payload, end = parsed
+                payloads.append(payload)
+                index = end + 1
+                continue
+        index += 1
+    return payloads
+
+
+def _parenthesized_substitution(command: str, start: int) -> tuple[str, int] | None:
+    depth = 1
+    index = start
+    quote: str | None = None
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if command.startswith("$(", index):
+            nested = _parenthesized_substitution(command, index + 2)
+            if nested is None:
+                return None
+            _, end = nested
+            index = end + 1
+            continue
+        if quote is None and char == "(":
+            depth += 1
+        elif quote is None and char == ")":
+            depth -= 1
+            if depth == 0:
+                return command[start:index], index
+        index += 1
+    return None
+
+
+def _backtick_substitution(command: str, start: int) -> tuple[str, int] | None:
+    index = start
+    while index < len(command):
+        if command[index] == "\\":
+            index += 2
+            continue
+        if command[index] == "`":
+            return command[start:index], index
+        index += 1
+    return None
+
+
+def _eval_command_payload(tokens: list[str], program_index: int) -> str | None:
+    arguments: list[str] = []
+    index = program_index + 1
+    while index < len(tokens):
+        if tokens[index] == "--" and not arguments:
+            index += 1
+            continue
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        arguments.append(tokens[index])
+        index += 1
+    return " ".join(arguments) if arguments else None
+
+
+def _env_split_string_payload(tokens: list[str]) -> str | None:
+    index = 0
+    while index < len(tokens):
+        while index < len(tokens) and _is_assignment(tokens[index]):
+            index += 1
+        if index >= len(tokens):
+            return None
+        program = _program_name(tokens[index])
+        if program == "env":
+            return _env_split_option_payload(tokens, index + 1)
+        if program == "command" and _is_command_inspection(tokens, index + 1):
+            return None
+        options_with_value = WRAPPER_OPTIONS_WITH_VALUE.get(program)
+        if options_with_value is None:
+            return None
+        index = _skip_wrapper_arguments(tokens, index + 1, options_with_value)
+    return None
+
+
+def _env_split_option_payload(tokens: list[str], index: int) -> str | None:
+    env_options_with_value = WRAPPER_OPTIONS_WITH_VALUE["env"]
+    while index < len(tokens):
+        option = tokens[index]
+        if _is_assignment(option):
+            index += 1
+            continue
+        if option == "--" or not option.startswith("-"):
+            return None
+        option_name, separator, value = option.partition("=")
+        if option_name in {"-S", "--split-string"}:
+            if separator:
+                return value
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        if option.startswith("-S") and len(option) > 2:
+            return option[2:]
+        if option_name in env_options_with_value and not separator:
+            index += 2
+        else:
+            index += 1
+    return None
+
+
+def _shell_command_segments(command: str) -> list[list[str]]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>\n")
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    segments: list[list[str]] = []
+    segment: list[str] = []
+    for token in tokens:
+        if token and all(char in ";&|\n" for char in token):
+            if segment:
+                segments.append(segment)
+                segment = []
+            continue
+        segment.append(token)
+    if segment:
+        segments.append(segment)
+    return segments
+
+
+def _command_program_index(tokens: list[str]) -> int | None:
+    index = 0
+    while index < len(tokens):
+        if _is_assignment(tokens[index]) or tokens[index] in SHELL_COMMAND_PREFIXES:
+            index += 1
+            continue
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        if index >= len(tokens):
+            return None
+        program = _program_name(tokens[index])
+        if program == "command" and _is_command_inspection(tokens, index + 1):
+            return index
+        options_with_value = WRAPPER_OPTIONS_WITH_VALUE.get(program)
+        if options_with_value is None:
+            return index
+        index = _skip_wrapper_arguments(tokens, index + 1, options_with_value)
+    return None
+
+
+def _shell_command_payload(tokens: list[str], program_index: int) -> str | None:
+    index = program_index + 1
+    while index < len(tokens):
+        option = tokens[index]
+        if option == "--" or not option.startswith(("-", "+")):
+            return None
+        if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        option_name, separator, _ = option.partition("=")
+        if option_name in SHELL_OPTIONS_WITH_VALUE and not separator:
+            index += 2
+        else:
+            index += 1
+    return None
+
+
+def _is_command_inspection(tokens: list[str], index: int) -> bool:
+    while index < len(tokens):
+        option = tokens[index]
+        if option == "--" or not option.startswith("-"):
+            return False
+        if "v" in option[1:] or "V" in option[1:]:
+            return True
+        index += 1
+    return False
+
+
+def _skip_wrapper_arguments(
+    tokens: list[str],
+    index: int,
+    options_with_value: set[str],
+) -> int:
+    while index < len(tokens):
+        token = tokens[index]
+        if _is_assignment(token):
+            index += 1
+            continue
+        if token == "--":
+            return index + 1
+        if not token.startswith("-") or token == "-":
+            return index
+        option_name, separator, _ = token.partition("=")
+        if option_name in options_with_value and not separator:
+            index += 2
+        else:
+            index += 1
+    return index
+
+
+def _is_assignment(token: str) -> bool:
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+
+def _program_name(token: str) -> str:
+    name = token.rsplit("/", 1)[-1].lower()
+    if name.startswith("(") and not name.startswith("(("):
+        name = name.lstrip("(").rstrip(")")
+    return name
 
 
 def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, issues: list[str]) -> None:

@@ -19,8 +19,7 @@ Each low-frequency tool keeps a short resident description containing:
 
 1. one sentence stating the tool's purpose;
 2. the routing distinction needed before choosing it; and
-3. a mandatory pointer to the exact guide skill name that must be loaded
-   before the group's first use.
+3. an availability pointer to the exact guide skill name.
 
 The builtin skills are:
 
@@ -33,8 +32,10 @@ The builtin skills are:
 The model discovers and loads these guides through the existing
 `skill_search` and `skill_load` tools. There is no new tool, automatic skill
 activation, deferred tool registration, or model-specific guidance depth.
-Corrective instructions appended after tool misuse remain out of scope until
-runtime evidence justifies them.
+Guide loading is advisory and never a success condition. When a guided-group
+tool result is an error, the runtime appends one remediation sentence naming
+the group's guide before recording and persisting the result. Successful
+results and unguided failures are unchanged.
 
 ## Builtin skill loading
 
@@ -88,6 +89,9 @@ and filter branches needed to express the input shape.
 `internal/skills` owns embedding, reserved-name loading, prompt visibility,
 and raw builtin content. `internal/app/skill_tools.go` owns the source-aware
 read path because it already binds `skill_load` to the sandbox policy.
+`internal/tools.ToolGroup` owns the guided-group-to-skill mapping.
+`internal/runtime` appends remediation hints at the post-execution result seam,
+covering handler and hook errors without duplicating policy in each tool.
 
 The existing tool registration owners keep their metadata:
 
@@ -96,15 +100,19 @@ The existing tool registration owners keep their metadata:
 - `internal/runtime/notes_tools.go`
 - `internal/tools/builtin_chunked_write.go`
 
-No parallel metadata registry is introduced. Runtime status continues to
-project definitions from the live registry and skills from the loader.
+No parallel tool registry is introduced. Runtime status continues to project
+definitions from the live registry and skills from the loader. `tool.errored`
+events retain the original diagnostic; persisted tool-result content and the
+failure ledger receive the remediation hint without changing error kind, raw
+cause, or fingerprint inputs.
 
 ## Budget and verification contract
 
 Tests use `contextbudget.EstimateToolTokens`, the same estimator used by
 runtime context reporting. The measured pre-change Tier 2 catalog is 2433
 estimated tokens. The contract is at most 1700 tokens, a reduction of at least
-30%, while all 15 tool descriptions retain the exact hard guide pointers.
+30%, while all 15 tool descriptions retain the exact guide availability
+pointers.
 The earlier 800-token target was rejected after measurement because the two
 Observable creation schemas plus required structure already make it
 unattainable. Structural tests assert that schemas retain types, required

@@ -60,7 +60,7 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 		t.Fatal("observable_create missing")
 	}
 	if !strings.Contains(create.Description, "schedule_create") ||
-		!strings.Contains(create.Description, "MUST load the `juex-observables` skill before first use.") {
+		!strings.Contains(create.Description, `Guide available via skill_load("juex-observables").`) {
 		t.Fatalf("description = %q", create.Description)
 	}
 	schedule, ok := reg.Get("schedule_create")
@@ -68,7 +68,7 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 		t.Fatal("schedule_create missing")
 	}
 	if !strings.Contains(schedule.Description, "command polling") ||
-		!strings.Contains(schedule.Description, "MUST load the `juex-observables` skill before first use.") {
+		!strings.Contains(schedule.Description, `Guide available via skill_load("juex-observables").`) {
 		t.Fatalf("schedule description = %q", schedule.Description)
 	}
 	var providerScheduleDescription string
@@ -77,7 +77,7 @@ func TestRegisterToolsAndDescriptions(t *testing.T) {
 			providerScheduleDescription = spec.Description
 		}
 	}
-	if !strings.Contains(providerScheduleDescription, "MUST load the `juex-observables` skill before first use.") {
+	if !strings.Contains(providerScheduleDescription, `Guide available via skill_load("juex-observables").`) {
 		t.Fatalf("provider-visible schedule_create description = %q", providerScheduleDescription)
 	}
 }

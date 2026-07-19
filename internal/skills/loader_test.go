@@ -437,6 +437,17 @@ func TestLoader_LoadsBuiltinGuidesOutsidePromptCatalog(t *testing.T) {
 		if !strings.Contains(skill.raw, "name: "+name) || !strings.Contains(skill.Body, "# ") {
 			t.Fatalf("%s embedded content incomplete: %+v", name, skill)
 		}
+		lowerRaw := strings.ToLower(skill.raw)
+		for _, forbidden := range []string{"required guide", "load this guide before"} {
+			if strings.Contains(lowerRaw, forbidden) {
+				t.Fatalf("%s embedded guide retains mandatory loading text %q", name, forbidden)
+			}
+		}
+		for _, want := range []string{"load this guide when", "do not require a prior guide load"} {
+			if !strings.Contains(lowerRaw, want) {
+				t.Fatalf("%s embedded guide missing advisory loading text %q", name, want)
+			}
+		}
 		if results := l.Search(name, 10); len(results) != 1 || results[0].Name != name {
 			t.Fatalf("search %s = %+v", name, results)
 		}

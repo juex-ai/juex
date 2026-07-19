@@ -1,12 +1,12 @@
 ---
 name: juex-session-state
-description: Required guide for JueX session goals and working notes.
+description: Guide for JueX session goals and working notes.
 type: builtin-guide
 ---
 # JueX Session State
 
-Load this guide before the first use of `get_goal`, `create_goal`,
-`update_goal`, or `update_notes` in a turn.
+Load this guide when you need detailed goal or working-note workflows,
+constraints, or examples. Correct tool calls do not require a prior guide load.
 
 ## Goals
 

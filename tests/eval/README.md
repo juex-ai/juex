@@ -144,11 +144,21 @@ passing run requires:
 
 The Schedule routing subscenario must also:
 
-- successfully load the `juex-observables` guide before Observable tool use;
 - complete `observable_list` successfully before issuing `schedule_create`;
-- avoid command Observables, shell execution, polling, and shell-session tools;
+- avoid the command-Observable route;
 - persist exactly one tagged `type: schedule` entry with `schedule_config`,
   `interval.every_seconds: 21600`, and the requested observation content.
+
+`skill_load` is advisory and is not part of this outcome contract. A run passes
+whether the guide is omitted, loaded in parallel with listing, or loaded later.
+Incidental inspection commands also do not fail an otherwise correct result;
+the exact persisted Schedule shape is the authoritative routing outcome.
+Shell loops, detached interval sleeps, `watch`, `crontab`, and `systemd-run`
+remain rejected because they create a competing recurring side effect.
+Additional `observable_list` calls, including post-create verification, are
+allowed as long as at least one successful list result preceded creation.
+Failed `schedule_create` attempts are also allowed when the model uses the
+failure hint to recover; exactly one create call must ultimately succeed.
 
 Each Schedule retry uses a new workspace and session. Its transcript, events,
 stdout, stderr, prompt, `observables.json`, and contract report are retained under

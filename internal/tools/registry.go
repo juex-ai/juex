@@ -46,6 +46,21 @@ const (
 	ToolGroupMCP          ToolGroup = "mcp"
 )
 
+// GuideSkill returns the builtin guide associated with a compact guided tool
+// group. Unguided groups deliberately return no skill.
+func (g ToolGroup) GuideSkill() (string, bool) {
+	switch g {
+	case ToolGroupChunkedWrite:
+		return "juex-chunked-write", true
+	case ToolGroupSessionState:
+		return "juex-session-state", true
+	case ToolGroupObservable:
+		return "juex-observables", true
+	default:
+		return "", false
+	}
+}
+
 type ToolTimeoutPolicy int
 
 const (

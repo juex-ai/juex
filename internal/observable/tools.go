@@ -15,7 +15,7 @@ import (
 const (
 	defaultObservationToolLimit = 20
 	maxObservationToolLimit     = 100
-	observableGuidePointer      = "MUST load the `juex-observables` skill before first use."
+	observableGuidePointer      = `Guide available via skill_load("juex-observables").`
 )
 
 func ToolDefinitions() []tools.ToolDefinition {

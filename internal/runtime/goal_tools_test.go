@@ -67,7 +67,7 @@ func TestGoalToolsCreateUpdateGetAndStaySessionScoped(t *testing.T) {
 		t.Fatalf("update_goal properties = %#v", updateProperties)
 	}
 	if !strings.Contains(strings.ToLower(updateTool.Description), "success requires acceptance") ||
-		!strings.Contains(updateTool.Description, "MUST load the `juex-session-state` skill before first use.") {
+		!strings.Contains(updateTool.Description, `Guide available via skill_load("juex-session-state").`) {
 		t.Fatalf("update_goal description should retain routing and guide pointer: %q", updateTool.Description)
 	}
 

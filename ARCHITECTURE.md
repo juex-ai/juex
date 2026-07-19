@@ -486,9 +486,14 @@ tool definitions: the prompt exposes a compact catalog, `skill_search`
 discovers loaded entries, and `skill_load` returns one selected SKILL.md body.
 Core tool groups keep complete provider-resident guidance. Low-frequency
 `chunked_write`, `session_state`, and `observable` definitions keep a compact
-purpose/routing sentence plus a hard pointer to a binary-embedded builtin
+purpose/routing sentence plus an availability pointer to a binary-embedded builtin
 guide. Their detailed workflows, constraints, defaults, and examples are
-loaded on demand through the existing skill tools.
+loaded on demand through the existing skill tools. Guide loading is advisory:
+correct tool calls succeed without it. After a guided-group tool result is
+known to be an error, the runtime appends a guide-specific remediation sentence
+before failure-ledger recording and session persistence. The already-emitted
+`tool.errored` event and structured error classification retain the original
+error rather than mixing guidance into diagnostics.
 
 | Name | Purpose |
 |---|---|
@@ -2039,8 +2044,11 @@ There are two live layers:
   `~/.juex/juex.yaml`, then runs isolated real-binary capability and Schedule
   routing workflows and writes a redacted report under
   `.tmp/reports/provider-model-smoke/`. Schedule routing validates successful
-  guide loading, list-before-create tool results, forbidden command paths, and
-  the tagged `.juex/observables.json` shape. By default the command rotates one
+  list-before-create tool results, rejects the command-Observable route, and
+  validates the tagged `.juex/observables.json` shape. Guide loading and
+  incidental inspection commands do not affect the outcome; shell loops and
+  scheduler commands remain rejected as competing recurring side effects. By
+  default the command rotates one
   model using `.juex/live-model-rotation.json`; pass `--all-models` to
   `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.

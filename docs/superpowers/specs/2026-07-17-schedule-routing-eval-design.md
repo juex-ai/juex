@@ -23,15 +23,21 @@ ban on commands and polling. It deliberately does not name either creation
 tool, so the evaluation measures routing rather than prompt copying. The model
 must:
 
-- successfully load the required `juex-observables` guide before its first
-  Observable tool use;
 - successfully complete `observable_list` before issuing `schedule_create`;
-- call `schedule_create` exactly once;
-- not call `observable_create`, `exec_command`, `write_stdin`, or
-  `list_shell_sessions`, including the legacy `shell` and `shell_input` names;
+- produce exactly one successful `schedule_create` result;
+- not use the command-Observable route;
 - persist the requested interval and observation under a tagged
   `type: schedule` entry with `schedule_config`;
 - finish with the expected evaluation token.
+
+Guide loading is advisory and is not evaluated. Omitting `skill_load`, loading
+the guide in parallel with listing, loading it later, or receiving a failed
+guide result cannot fail an otherwise correct Schedule outcome.
+Incidental inspection commands are likewise ignored: the exact persisted
+Schedule shape is the authoritative route. The prompt still rejects shell
+polling, background loops, and managed command sources as implementations.
+The oracle distinguishes those from inspection by rejecting loop-plus-sleep,
+detached interval sleep, `watch`, `crontab`, and `systemd-run` command shapes.
 
 The six-hour interval is deliberate: it is stable across timezones and test
 run times, cannot fire during an ordinary evaluation, and exercises the same
@@ -135,10 +141,10 @@ No production package imports evaluation code.
 
 ## Artifact contract
 
-Before the first Observable tool use, the transcript must contain a successful
-`skill_load` of `juex-observables`; `skill_search` may precede it. It must then
-contain exactly one `observable_list` and exactly one `schedule_create`.
-Ordering is result-aware:
+The transcript must contain one or more `observable_list` and
+`schedule_create` calls. Exactly one create call must succeed, while failed
+attempts may precede it. At least one list must succeed before the successful
+creation. Ordering is result-aware:
 
 ```text
 observable_list tool use
@@ -148,18 +154,17 @@ observable_list tool use
 ```
 
 Putting list and create in the same assistant tool batch therefore fails, even
-if their blocks appear in that textual order. Missing or error tool results
-also fail.
+if their blocks appear in that textual order and no earlier list already
+succeeded. Additional list calls, including post-create verification, are
+allowed. Missing or error tool results still fail when no successful list
+preceded creation.
+Failed create attempts do not fail the outcome when a later corrected attempt
+succeeds; more than one successful create still fails.
 
 Forbidden tool names are:
 
 ```text
 observable_create
-exec_command
-write_stdin
-list_shell_sessions
-shell
-shell_input
 ```
 
 The `schedule_create` input must contain:
@@ -226,11 +231,16 @@ second rotation or matrix dimension.
 Deterministic contract tests create temporary transcript and config artifacts
 and cover:
 
-- passing guide load, ordered list result, create result, and tagged config;
+- passing zero-guide-load, parallel/late/failed guide-load, ordered list result,
+  create result, and tagged config cases;
+- post-create `observable_list` verification remains non-failing;
+- an invalid failed create followed by one corrected successful retry passes;
 - create-before-list and list/create in the same assistant tool batch;
-- missing or error tool results for guide, list, and create;
-- duplicate `schedule_create`;
-- every forbidden tool;
+- missing list results or no successful create result;
+- duplicate successful `schedule_create`;
+- the command-Observable route;
+- incidental read-only command inspection remains non-failing;
+- shell polling and scheduler commands remain rejected;
 - malformed transcript/config JSON;
 - wrong id, recurrence, observation, type, or config branch;
 - old `source`, `command_config`, and extra persisted entries;

@@ -1,12 +1,12 @@
 ---
 name: juex-observables
-description: Required guide for JueX Observable and Schedule tools, routing, lifecycle, and schemas.
+description: Guide for JueX Observable and Schedule tools, routing, lifecycle, and schemas.
 type: builtin-guide
 ---
 # JueX Observables
 
-Load this guide before the first use of any `observable_*` or
-`schedule_create` tool in a turn.
+Load this guide when you need detailed Observable or Schedule workflows,
+constraints, or examples. Correct tool calls do not require a prior guide load.
 
 ## Routing
 

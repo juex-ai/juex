@@ -628,6 +628,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
 	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
+	toolResults = e.normalizeGuidedToolFailureResults(toolResults)
 	results := toolResultBlocks(toolResults)
 	e.recordToolFailureBatch(turnID, toolCalls, toolResults)
 	toolResultMsg := llm.Message{Role: llm.RoleUser, Blocks: results}
@@ -706,6 +707,49 @@ func toolResultBlocks(results []toolCallResult) []llm.Block {
 		blocks[i] = result.Block
 	}
 	return blocks
+}
+
+func (e *Engine) normalizeGuidedToolFailureResults(results []toolCallResult) []toolCallResult {
+	if e == nil || e.Tools == nil {
+		return results
+	}
+	for i := range results {
+		if !results[i].Block.IsError {
+			continue
+		}
+		toolName := firstNonEmptyString(results[i].Block.ToolName, results[i].Observation.ToolName)
+		tool, ok := e.Tools.Get(toolName)
+		if !ok {
+			continue
+		}
+		guideSkill, ok := tool.Group.GuideSkill()
+		if !ok {
+			continue
+		}
+		hint := fmt.Sprintf(
+			`For workflows, constraints, and examples, load the full guide with skill_load("%s").`,
+			guideSkill,
+		)
+		originalBlockContent := results[i].Block.Content
+		results[i].Block.Content = appendGuidedToolFailureHint(originalBlockContent, hint)
+		observationContent := results[i].Observation.Content
+		if observationContent == "" {
+			observationContent = originalBlockContent
+		}
+		results[i].Observation.Content = appendGuidedToolFailureHint(observationContent, hint)
+	}
+	return results
+}
+
+func appendGuidedToolFailureHint(content, hint string) string {
+	if strings.Contains(content, hint) {
+		return content
+	}
+	trimmed := strings.TrimRight(content, " \t\r\n")
+	if trimmed == "" {
+		return hint
+	}
+	return trimmed + "\n\n" + hint
 }
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) toolCallResult {
