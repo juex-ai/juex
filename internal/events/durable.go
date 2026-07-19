@@ -30,10 +30,11 @@ type DurableSink struct {
 	cond     *sync.Cond
 	journal  Journal
 
-	deliveries map[uint64]Delivery
-	nextID     uint64
-	closed     bool
-	queue      []deliveryBatch
+	projections map[uint64]Delivery
+	deliveries  map[uint64]Delivery
+	nextID      uint64
+	closed      bool
+	queue       []deliveryBatch
 }
 
 type deliveryBatch struct {
@@ -43,8 +44,9 @@ type deliveryBatch struct {
 
 func NewDurableSink(journal Journal) *DurableSink {
 	s := &DurableSink{
-		journal:    journal,
-		deliveries: map[uint64]Delivery{},
+		journal:     journal,
+		projections: map[uint64]Delivery{},
+		deliveries:  map[uint64]Delivery{},
 	}
 	s.cond = sync.NewCond(&s.mu)
 	go s.runDeliveries()
@@ -85,6 +87,28 @@ func (s *DurableSink) SetJournal(journal Journal) {
 		return
 	}
 	s.journal = journal
+}
+
+// AddProjection registers a synchronous post-commit projection. Projections
+// run only after a durable event is appended successfully and before
+// asynchronous live deliveries are queued.
+func (s *DurableSink) AddProjection(projection Delivery) func() {
+	if s == nil || projection == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return func() {}
+	}
+	s.nextID++
+	id := s.nextID
+	s.projections[id] = projection
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.projections, id)
+	}
 }
 
 func (s *DurableSink) AddDelivery(delivery Delivery) func() {
@@ -141,10 +165,21 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 	}
 
 	s.mu.Lock()
+	projections := make([]Delivery, 0, len(s.projections))
+	for _, projection := range s.projections {
+		projections = append(projections, projection)
+	}
 	deliveries := make([]Delivery, 0, len(s.deliveries))
 	for _, delivery := range s.deliveries {
 		deliveries = append(deliveries, delivery)
 	}
+	s.mu.Unlock()
+
+	for _, projection := range projections {
+		projection.Publish(e)
+	}
+
+	s.mu.Lock()
 	if len(deliveries) > 0 {
 		s.queue = append(s.queue, deliveryBatch{event: e, deliveries: deliveries})
 		s.cond.Signal()
@@ -166,6 +201,7 @@ func (s *DurableSink) Close() {
 		return
 	}
 	s.closed = true
+	s.projections = map[uint64]Delivery{}
 	s.deliveries = map[uint64]Delivery{}
 	s.cond.Signal()
 }

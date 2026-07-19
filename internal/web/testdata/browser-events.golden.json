@@ -1,5 +1,12 @@
 [
   {
+    "id": "evt-turn-admitted",
+    "type": "turn.admitted",
+    "ts": "2026-06-14T23:59:59Z",
+    "turn_id": "turn-1",
+    "payload": {}
+  },
+  {
     "id": "evt-turn-started",
     "type": "turn.started",
     "ts": "2026-06-15T00:00:00Z",
@@ -7,6 +14,16 @@
     "payload": {
       "input": "run command",
       "kind": "user"
+    }
+  },
+  {
+    "id": "evt-turn-provider-phase",
+    "type": "turn.phase",
+    "ts": "2026-06-15T00:00:00.5Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "phase": "provider_iteration",
+      "iter": 0
     }
   },
   {
@@ -39,6 +56,17 @@
         "output_tokens": 5,
         "total_tokens": 15
       }
+    }
+  },
+  {
+    "id": "evt-tool-running",
+    "type": "tool.running",
+    "ts": "2026-06-15T00:00:02.5Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "name": "exec_command",
+      "tool_use_id": "tool-1",
+      "timeout_seconds": 30
     }
   },
   {
@@ -150,6 +178,17 @@
       "input": "queued follow-up",
       "kind": "user",
       "pending_count": 1,
+      "max_pending_inputs": 4
+    }
+  },
+  {
+    "id": "evt-pending-draining",
+    "type": "pending_input.draining",
+    "ts": "2026-06-15T00:00:06.5Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "count": 1,
+      "pending_count": 0,
       "max_pending_inputs": 4
     }
   },
@@ -308,7 +347,14 @@
       "tail_start_message_id": "m-tail",
       "context_window": 1000,
       "reserve_tokens": 100,
-      "keep_recent_tokens": 100
+      "keep_recent_tokens": 100,
+      "context_usage": {
+        "model": "gpt-test",
+        "context_window": 1000,
+        "input_tokens": 40,
+        "output_tokens": 0,
+        "total_tokens": 40
+      }
     }
   },
   {

@@ -4,6 +4,7 @@ import "github.com/juex-ai/juex/internal/llm"
 
 const (
 	RequestedType   = "tool.requested"
+	RunningType     = "tool.running"
 	OutputDeltaType = "tool.output_delta"
 	CompletedType   = "tool.completed"
 	ErroredType     = "tool.errored"
@@ -21,6 +22,12 @@ type RequestedPayload struct {
 	Input          map[string]any `json:"input"`
 	ToolUseID      string         `json:"tool_use_id"`
 	TimeoutSeconds int            `json:"timeout_seconds"`
+}
+
+type RunningPayload struct {
+	Name           string `json:"name"`
+	ToolUseID      string `json:"tool_use_id"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 type OutputDelta struct {
@@ -93,6 +100,14 @@ func Requested(call ToolCallPayload) RequestedPayload {
 	return RequestedPayload{
 		Name:           call.Name,
 		Input:          call.Input,
+		ToolUseID:      call.ToolUseID,
+		TimeoutSeconds: call.TimeoutSeconds,
+	}
+}
+
+func Running(call ToolCallPayload) RunningPayload {
+	return RunningPayload{
+		Name:           call.Name,
 		ToolUseID:      call.ToolUseID,
 		TimeoutSeconds: call.TimeoutSeconds,
 	}

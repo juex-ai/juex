@@ -50,6 +50,7 @@ type Server struct {
 	sessions    sync.Map // session id (string) → *activeSession
 	nextTurn    atomic.Uint64
 	startedAt   time.Time
+	statusHub   *agentStatusHub
 
 	createMu sync.Mutex // serialises POST /api/sessions
 	closeMu  sync.Mutex
@@ -77,11 +78,12 @@ type activeSession struct {
 	bcast     *broadcaster
 	StartedAt time.Time
 
-	turns      *webTurnTransport
-	workCtx    context.Context
-	workCancel context.CancelFunc
-	workWG     sync.WaitGroup
-	closeOnce  sync.Once
+	turns             *webTurnTransport
+	statusUnsubscribe func()
+	workCtx           context.Context
+	workCancel        context.CancelFunc
+	workWG            sync.WaitGroup
+	closeOnce         sync.Once
 }
 
 func NewServer(opts Options) *Server {
@@ -89,6 +91,7 @@ func NewServer(opts Options) *Server {
 		opts:          opts,
 		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
 		startedAt:     time.Now().UTC(),
+		statusHub:     newAgentStatusHub(),
 		runtimeMCPErr: map[string]string{},
 		runtimeSkills: app.NewRuntimeStatusSkillCache(),
 	}
@@ -147,6 +150,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/raw", s.handleFilesRaw)
 	mux.HandleFunc("/api/media", s.handleMedia)
 	mux.HandleFunc("/api/activity", s.handleAgentActivity)
+	mux.HandleFunc("/api/status", s.handleAgentStatus)
+	mux.HandleFunc("/api/status/events", s.handleAgentStatusEvents)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
 	mux.HandleFunc("/api/observables", s.handleObservables)
 	mux.HandleFunc("/api/observables/", s.dispatchObservable)
@@ -222,6 +227,10 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleInterrupt(w, r, id)
 	case rest == "events" && r.Method == http.MethodGet:
 		s.handleEventsSSE(w, r, id)
+	case rest == "status" && r.Method == http.MethodGet:
+		s.handleSessionStatus(w, r, id)
+	case rest == "status/events" && r.Method == http.MethodGet:
+		s.handleSessionStatusEvents(w, r, id)
 	case rest == "compact" && r.Method == http.MethodPost:
 		s.handleCompactSession(w, r, id)
 	case rest == "context" && r.Method == http.MethodGet:
@@ -376,6 +385,10 @@ func (as *activeSession) close() {
 	}
 	as.closeOnce.Do(func() {
 		as.cancelWork()
+		if as.statusUnsubscribe != nil {
+			as.statusUnsubscribe()
+			as.statusUnsubscribe = nil
+		}
 		if as.turns != nil {
 			as.turns.close()
 		}
@@ -439,6 +452,7 @@ func (s *Server) closeActiveSession(id string) bool {
 		return false
 	}
 	v.(*activeSession).close()
+	s.statusHub.publish(s.agentActivity())
 	return true
 }
 
@@ -531,6 +545,27 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	as.turns = newWebTurnTransport(a)
 	a.AddEventDelivery(as.bcast)
 	s.sessions.Store(a.Session.ID, as)
+	if a.Status != nil {
+		snapshot := a.Status.Snapshot()
+		subscription := a.Status.SubscribeFrom(snapshot.Cursor)
+		as.statusUnsubscribe = subscription.Unsubscribe
+		as.workWG.Add(1)
+		go func() {
+			defer as.workWG.Done()
+			for {
+				select {
+				case _, ok := <-subscription.Updates:
+					if !ok {
+						return
+					}
+					s.statusHub.publish(s.agentActivity())
+				case <-as.workCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+	s.statusHub.publish(s.agentActivity())
 	if session.NormalizeKind(a.Session.Kind) == session.KindPrimary {
 		s.closeOtherPrimarySessions(a.Session.ID)
 	}

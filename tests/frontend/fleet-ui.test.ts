@@ -119,14 +119,15 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
-    /routeActiveTurnIDRef\.current = activeTurnID;[\s\S]*\}, \[controller, id\]\);/,
-    "runtime health changes must not reset the loaded session route",
+    /getSessionStatus\(id\)[\s\S]*subscribeSessionStatus\(id,[\s\S]*statusStore\.setStatus/,
+    "session runtime state must restore from a snapshot before subscribing",
   );
   assert.match(
     sessionSource,
-    /const activeTurnID = routeActiveTurnIDRef\.current;[\s\S]*!agentRuntimeHealthy[\s\S]*startTurnStatusPolling/,
-    "initial turn polling must remain gated by runtime health",
+    /composerSubmitAction\(\{[\s\S]*status: runtimeStatus/,
+    "the composer must derive admission state from the shared runtime status",
   );
+  assert.doesNotMatch(sessionSource, /startTurnStatusPolling\(/);
   assert.match(
     sessionSource,
     /!agentsLoaded \|\| agent\?\.runtime_health === "healthy"/,

@@ -3,9 +3,27 @@ package runtime
 import (
 	"time"
 
+	"github.com/juex-ai/juex/internal/cancellation"
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
+
+const (
+	TurnAdmittedType         = "turn.admitted"
+	TurnPhaseType            = "turn.phase"
+	PendingInputDrainingType = "pending_input.draining"
+	PendingInputPromotedType = "pending_input.promoted"
+)
+
+type TurnAdmittedPayload struct {
+	NonInterruptible bool `json:"non_interruptible,omitempty"`
+}
+
+type TurnPhasePayload struct {
+	Phase TurnPhase `json:"phase"`
+	Iter  *int      `json:"iter,omitempty"`
+}
 
 type TurnStartedPayload struct {
 	Input string `json:"input"`
@@ -26,6 +44,23 @@ type TurnErroredPayload struct {
 	Signal       string `json:"signal,omitempty"`
 	SignalNumber int    `json:"signal_number,omitempty"`
 	Interrupted  bool   `json:"interrupted,omitempty"`
+}
+
+func NewTurnErroredPayload(err error) TurnErroredPayload {
+	classification := errorclass.Classify(err)
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	payload := TurnErroredPayload{
+		Error:     publicErr,
+		ErrorKind: string(classification.Kind),
+		TimedOut:  classification.TimedOut,
+		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
+	}
+	if signalErr, ok := cancellation.AsSignalError(err); ok {
+		payload.Signal = signalErr.Signal
+		payload.SignalNumber = signalErr.SignalNumber
+		payload.Interrupted = true
+	}
+	return payload
 }
 
 type HookStartedPayload struct {
@@ -204,6 +239,17 @@ type PendingInputQueuedPayload struct {
 	MaxPendingInputs int    `json:"max_pending_inputs"`
 }
 
+type PendingInputDrainingPayload struct {
+	Count            int `json:"count"`
+	PendingCount     int `json:"pending_count"`
+	MaxPendingInputs int `json:"max_pending_inputs"`
+}
+
+type PendingInputPromotedPayload struct {
+	PendingCount     int `json:"pending_count"`
+	MaxPendingInputs int `json:"max_pending_inputs"`
+}
+
 type PendingInputDrainedPayload struct {
 	Count            int `json:"count"`
 	PendingCount     int `json:"pending_count"`
@@ -265,16 +311,17 @@ type ContextCompactSummaryRetryPayload struct {
 }
 
 type ContextCompactCompletedPayload struct {
-	MessageID          string `json:"message_id"`
-	Reason             string `json:"reason"`
-	Auto               bool   `json:"auto"`
-	EstimatedTokens    int    `json:"estimated_tokens"`
-	TokensBefore       int    `json:"tokens_before"`
-	TokensAfter        int    `json:"tokens_after"`
-	SummaryChars       int    `json:"summary_chars"`
-	SummaryModel       string `json:"summary_model"`
-	TailStartMessageID string `json:"tail_start_message_id"`
-	ContextWindow      int    `json:"context_window"`
-	ReserveTokens      int    `json:"reserve_tokens"`
-	KeepRecentTokens   int    `json:"keep_recent_tokens"`
+	MessageID          string            `json:"message_id"`
+	Reason             string            `json:"reason"`
+	Auto               bool              `json:"auto"`
+	EstimatedTokens    int               `json:"estimated_tokens"`
+	TokensBefore       int               `json:"tokens_before"`
+	TokensAfter        int               `json:"tokens_after"`
+	SummaryChars       int               `json:"summary_chars"`
+	SummaryModel       string            `json:"summary_model"`
+	TailStartMessageID string            `json:"tail_start_message_id"`
+	ContextWindow      int               `json:"context_window"`
+	ReserveTokens      int               `json:"reserve_tokens"`
+	KeepRecentTokens   int               `json:"keep_recent_tokens"`
+	ContextUsage       *llm.ContextUsage `json:"context_usage,omitempty"`
 }

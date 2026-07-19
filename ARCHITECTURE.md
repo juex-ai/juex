@@ -12,6 +12,9 @@
 
 ## 1. End-to-End Goal
 
+The layered runtime-status state machines and snapshot-plus-cursor boundary
+are specified in [`docs/runtime-status.md`](docs/runtime-status.md).
+
 `juex` is a single binary that completes the following loop:
 
 ```
@@ -1141,10 +1144,13 @@ walking the filesystem.
 
 The fleet roster enriches healthy agents with the selected runtime's
 `GET /api/activity` presentation read model. Activity is fetched concurrently
-with a short bound and reports only idle/working state, active session identity,
-and pending input count. Process health remains owned by `internal/fleet`;
-runtime turn state remains owned by `internal/web`; enrichment failure leaves
-the process-health roster usable.
+with a short bound and reports the authoritative runtime-status snapshot while
+retaining idle/working compatibility fields. Process health remains owned by
+`internal/fleet`; runtime turn state remains owned by `internal/runtime`;
+enrichment failure leaves the process-health roster usable. The aggregate
+`GET /api/fleet/events` SSE stream pushes `agent.status` changes from healthy
+agent status streams. Browser subscribers share one upstream stream per healthy
+agent; periodic roster reconciliation only discovers process lifecycle changes.
 
 `/agents/<id>/api/...` asks `fleet.Manager.Endpoint` to re-read and probe a
 bound healthy runtime immediately before forwarding. It then uses the parsed
@@ -1221,6 +1227,15 @@ handling, turn goroutine cleanup, and reset after `/new` changes the in-memory
 session id. This keeps HTTP handlers focused on parse/render work while app
 turn admission and runtime turn execution remain outside the web layer.
 
+`internal/runtime.StatusStore` projects committed runtime facts into the
+layered tool, turn, and session state machines documented in
+`docs/runtime-status.md`. `GET /api/sessions/<id>/status` returns a snapshot
+with the durable event cursor, and `GET /api/sessions/<id>/status/events`
+resumes full status snapshots after that cursor. The existing session event
+stream remains the conversation-content transport. `GET /api/status/events`
+exposes agent-level status snapshots for Fleet aggregation. Projection runs
+after durable journal append and before asynchronous live delivery.
+
 On the browser side, `frontend/src/lib/live-session-projection.ts` owns the
 live-session read model for SSE `BusEvent` facts, optimistic turns, pending
 input, compact markers, tool output deltas, usage snapshots, and turn-status
@@ -1264,6 +1279,8 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/sessions/<id>/turns` | start a text, image, or mixed-content turn |
 | GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
+| GET | `/api/sessions/<id>/status` | authoritative layered runtime-status snapshot with event cursor |
+| GET | `/api/sessions/<id>/status/events` | resumable full runtime-status snapshot SSE stream after a cursor |
 | GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
 | GET | `/api/observables` | list workspace Observables with runtime status |
 | POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
@@ -1278,6 +1295,9 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/api/files/raw?path=<path>` | bounded-to-workdir image bytes for preview rendering |
 | GET | `/api/media?path=<path>` | image bytes with immutable caching for content-addressed artifacts and revalidation for mutable workdir paths |
 | GET | `/api/runtime` | app-assembled provider, grouped builtin/MCP tool catalog, shell, hooks, system prompt, and skills status translated to the web DTO |
+| GET | `/api/status` | selected-agent runtime-status snapshot with idle/working compatibility fields |
+| GET | `/api/status/events` | selected-agent runtime-status SSE stream |
+| GET | `/api/fleet/events` | Fleet aggregate `agent.status` SSE stream |
 
 ### 3.10 Observables
 

@@ -29,7 +29,9 @@ type browserPayloadFactory struct {
 }
 
 var browserPayloadFactories = []browserPayloadFactory{
+	{juexruntime.TurnAdmittedType, func() any { return &juexruntime.TurnAdmittedPayload{} }},
 	{"turn.started", func() any { return &juexruntime.TurnStartedPayload{} }},
+	{juexruntime.TurnPhaseType, func() any { return &juexruntime.TurnPhasePayload{} }},
 	{"turn.completed", func() any { return &juexruntime.TurnCompletedPayload{} }},
 	{"turn.errored", func() any { return &juexruntime.TurnErroredPayload{} }},
 	{"llm.requested", func() any { return &juexruntime.LLMRequestedPayload{} }},
@@ -38,6 +40,7 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{"llm.retry", func() any { return &juexruntime.LLMRetryPayload{} }},
 	{"llm.fallback", func() any { return &juexruntime.LLMFallbackPayload{} }},
 	{toolevents.RequestedType, func() any { return &toolevents.RequestedPayload{} }},
+	{toolevents.RunningType, func() any { return &toolevents.RunningPayload{} }},
 	{toolevents.CompletedType, func() any { return &toolevents.CompletedPayload{} }},
 	{toolevents.OutputDeltaType, func() any { return &toolevents.OutputDeltaPayload{} }},
 	{toolevents.ErroredType, func() any { return &toolevents.ErroredPayload{} }},
@@ -46,6 +49,8 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{"hook.errored", func() any { return &juexruntime.HookErroredPayload{} }},
 	{"hook.trace", func() any { return &juexruntime.HookTracePayload{} }},
 	{"pending_input.queued", func() any { return &juexruntime.PendingInputQueuedPayload{} }},
+	{juexruntime.PendingInputDrainingType, func() any { return &juexruntime.PendingInputDrainingPayload{} }},
+	{juexruntime.PendingInputPromotedType, func() any { return &juexruntime.PendingInputPromotedPayload{} }},
 	{"pending_input.drained", func() any { return &juexruntime.PendingInputDrainedPayload{} }},
 	{"pending_input.dropped", func() any { return &juexruntime.PendingInputDroppedPayload{} }},
 	{"pending_input.rejected", func() any { return &juexruntime.PendingInputRejectedPayload{} }},

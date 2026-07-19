@@ -418,6 +418,115 @@ test("projectLiveSessionEvent promotes image-only queued turns with attachments"
   assert.equal(state.messages[1]?.pending, true);
 });
 
+test("projectLiveSessionEvent preserves queued attachments across compact terminal events", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "e0",
+    type: "turn.admitted",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "compact-1",
+    payload: { non_interruptible: true },
+  });
+  state = apply(state, {
+    id: "e1",
+    type: "context.compact.started",
+    ts: "2026-06-15T00:00:00.1Z",
+    turn_id: "compact-1",
+    payload: {
+      reason: "manual",
+      auto: false,
+      estimated_tokens: 100,
+      tokens_before: 100,
+      context_window: 1000,
+      reserve_tokens: 100,
+      keep_recent_tokens: 100,
+      tail_turns: 2,
+    },
+  });
+  state = projectQueuedInput(state, "", "user", 1, [imageMedia]);
+  state = apply(state, {
+    id: "e2",
+    type: "pending_input.queued",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "compact-1",
+    payload: {
+      input: "",
+      kind: "user",
+      pending_count: 1,
+      max_pending_inputs: 4,
+    },
+  });
+  state = apply(state, {
+    id: "e3",
+    type: "context.compact.completed",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "compact-1",
+    payload: {
+      reason: "manual",
+      auto: false,
+      estimated_tokens: 100,
+      tokens_before: 100,
+      tokens_after: 40,
+      summary_chars: 20,
+      summary_model: "gpt-test",
+      tail_start_message_id: "m-tail",
+      context_window: 1000,
+      reserve_tokens: 100,
+      keep_recent_tokens: 100,
+    },
+  });
+  state = apply(state, {
+    id: "e4",
+    type: "turn.completed",
+    ts: "2026-06-15T00:00:03Z",
+    turn_id: "compact-1",
+    payload: {
+      duration_ms: 1,
+      output_len: 0,
+      token_usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  });
+  state = apply(state, {
+    id: "e5",
+    type: "pending_input.promoted",
+    ts: "2026-06-15T00:00:04Z",
+    turn_id: "turn-2",
+    payload: { pending_count: 0, max_pending_inputs: 4 },
+  });
+  state = apply(state, {
+    id: "e6",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:05Z",
+    turn_id: "turn-2",
+    payload: { input: "", kind: "user" },
+  });
+
+  assert.deepEqual(state.messages[0]?.blocks, [
+    { type: "image", media: imageMedia },
+  ]);
+  assert.equal(state.messages[0]?.turn_id, "turn-2");
+  assert.equal(state.messages[1]?.role, "assistant");
+  assert.equal(state.messages[1]?.pending, true);
+});
+
+test("projectSessionTurnStatus preserves a compact admission queue before promotion", () => {
+  let state = apply(createLiveSessionProjection(), {
+    id: "e1",
+    type: "turn.admitted",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "compact-1",
+    payload: { non_interruptible: true },
+  });
+  state = projectQueuedInput(state, "", "user", 1, [imageMedia]);
+
+  state = projectSessionTurnStatus(state, {
+    turn_id: "compact-1",
+    state: "done",
+  });
+
+  assert.deepEqual(state.queuedInput.items[0]?.attachments, [imageMedia]);
+});
+
 test("projectSessionTurnStatus does not duplicate an existing assistant turn", () => {
   const state = projectSessionTurnStatus(
     {
@@ -476,6 +585,70 @@ test("projectLiveSessionEvent drains queued input before the pending assistant p
       { role: "user", text: "queued follow-up", pending: undefined },
       { role: "assistant", text: undefined, pending: true },
     ],
+  );
+});
+
+test("projectLiveSessionEvent keeps newly queued input out of an announced drain", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(
+    state,
+    "draining follow-up",
+    undefined,
+    1,
+    [imageMedia],
+  );
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-1",
+    payload: { input: "active prompt" },
+  });
+  state = apply(state, {
+    id: "e2",
+    type: "pending_input.draining",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-1",
+    payload: { count: 1, pending_count: 0, max_pending_inputs: 4 },
+  });
+  state = apply(state, {
+    id: "e3",
+    type: "pending_input.queued",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "new queued follow-up",
+      kind: "",
+      pending_count: 1,
+      max_pending_inputs: 4,
+    },
+  });
+  state = apply(state, {
+    id: "e4",
+    type: "pending_input.drained",
+    ts: "2026-06-15T00:00:03Z",
+    turn_id: "turn-1",
+    payload: { count: 1, pending_count: 1, max_pending_inputs: 4 },
+  });
+
+  assert.deepEqual(
+    state.queuedInput.items.map((item) => item.input),
+    ["new queued follow-up"],
+  );
+  const drained = state.messages.find(
+    (message) => message.kind === "pending_input",
+  );
+  assert.deepEqual(drained?.blocks, [
+    { type: "text", text: "draining follow-up" },
+    { type: "image", media: imageMedia },
+  ]);
+  assert.equal(
+    state.messages.some(
+      (message) =>
+        message.blocks?.[0]?.type === "text" &&
+        message.blocks[0].text === "new queued follow-up",
+    ),
+    false,
   );
 });
 

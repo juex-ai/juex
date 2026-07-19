@@ -1215,6 +1215,22 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	}()
 	waitPendingProviderStarted(t, prov, "provider did not start compaction")
 
+	statusResponse, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compactStatus juexruntime.StatusSnapshot
+	if err := json.NewDecoder(statusResponse.Body).Decode(&compactStatus); err != nil {
+		statusResponse.Body.Close()
+		t.Fatal(err)
+	}
+	statusResponse.Body.Close()
+	if compactStatus.Turn == nil ||
+		compactStatus.Turn.Phase != juexruntime.TurnPhaseCompacting ||
+		!compactStatus.Session.CanAcceptInput {
+		t.Fatalf("compacting status = %+v", compactStatus)
+	}
+
 	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"after please"}`))
 	if err != nil {
@@ -1258,6 +1274,93 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	secondHistory := prov.history(1)
 	if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "after please" {
 		t.Fatalf("second provider history = %+v", secondHistory)
+	}
+	waitForHTTPRuntimeStatus(t, ts.URL, c.ID, 5*time.Second, "queued turn completion", func(status juexruntime.StatusSnapshot) bool {
+		return status.Session.State == juexruntime.SessionRuntimeIdle &&
+			status.Session.PendingCount == 0 &&
+			status.Session.CanAcceptInput &&
+			status.Turn != nil &&
+			status.Turn.State == juexruntime.TurnLifecycleCompleted
+	})
+}
+
+func TestCompactWithoutEligibleContextLeavesSessionIdle(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(string) string
+		body string
+	}{
+		{
+			name: "slash command",
+			path: func(id string) string { return "/api/sessions/" + id + "/turns" },
+			body: `{"prompt":"/compact"}`,
+		},
+		{
+			name: "compact endpoint",
+			path: func(id string) string { return "/api/sessions/" + id + "/compact" },
+			body: `{}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			work := t.TempDir()
+			srv := NewServer(Options{
+				Cfg: config.Config{
+					ProviderID: "openai",
+					APIKey:     "x",
+					Model:      "m",
+					WorkDir:    work,
+					Compaction: config.DefaultCompactionConfig(),
+				},
+				Provider: newPendingProvider(),
+			})
+			t.Cleanup(srv.Close)
+			ts := httptest.NewServer(srv.Handler())
+			defer ts.Close()
+
+			created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var session struct{ ID string }
+			if err := json.NewDecoder(created.Body).Decode(&session); err != nil {
+				created.Body.Close()
+				t.Fatal(err)
+			}
+			created.Body.Close()
+
+			response, err := http.Post(
+				ts.URL+tt.path(session.ID),
+				"application/json",
+				strings.NewReader(tt.body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(response.Body)
+				response.Body.Close()
+				t.Fatalf("compact status = %d body = %s", response.StatusCode, body)
+			}
+			response.Body.Close()
+
+			statusResponse, err := http.Get(ts.URL + "/api/sessions/" + session.ID + "/status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status juexruntime.StatusSnapshot
+			if err := json.NewDecoder(statusResponse.Body).Decode(&status); err != nil {
+				statusResponse.Body.Close()
+				t.Fatal(err)
+			}
+			statusResponse.Body.Close()
+			if status.Session.State != juexruntime.SessionRuntimeIdle ||
+				status.Turn == nil ||
+				status.Turn.State != juexruntime.TurnLifecycleCompleted ||
+				!strings.HasPrefix(status.Turn.ID, "compact-") {
+				t.Fatalf("runtime status = %+v", status)
+			}
+		})
 	}
 }
 
@@ -1546,6 +1649,34 @@ func waitForHTTPTranscript(t *testing.T, baseURL, sessionID, turnID string, time
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s; last_state=%q last_error=%q last_messages=%+v", label, lastState, lastErr, lastMessages)
+}
+
+func waitForHTTPRuntimeStatus(t *testing.T, baseURL, sessionID string, timeout time.Duration, label string, match func(juexruntime.StatusSnapshot) bool) juexruntime.StatusSnapshot {
+	t.Helper()
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+	var last juexruntime.StatusSnapshot
+	var lastErr string
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/status")
+		if err != nil {
+			lastErr = err.Error()
+		} else {
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				lastErr = fmt.Sprintf("status=%d body=%s", resp.StatusCode, body)
+			} else if err := json.NewDecoder(resp.Body).Decode(&last); err != nil {
+				lastErr = err.Error()
+			} else if match(last) {
+				resp.Body.Close()
+				return last
+			}
+			resp.Body.Close()
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s; last_error=%q last_status=%+v", label, lastErr, last)
+	return juexruntime.StatusSnapshot{}
 }
 
 func fetchHTTPTranscript(client *http.Client, baseURL, sessionID string) ([]testTranscriptMessage, error) {
@@ -1894,6 +2025,7 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	var lastErr, lastState string
 	var lastMessages any
+poll:
 	for time.Now().Before(deadline) {
 		show, err := client.Get(ts.URL + "/api/sessions/" + c.ID)
 		if err == nil {
@@ -1938,25 +2070,6 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 					if m.Role == "assistant" {
 						for _, b := range m.Blocks {
 							if b.Type == "text" && b.Text == "ack" {
-								if parsed.TokenUsage.InputTokens != 4 || parsed.TokenUsage.OutputTokens != 2 {
-									t.Fatalf("token_usage = %+v", parsed.TokenUsage)
-								}
-								if m.Usage != nil {
-									t.Fatalf("message usage should be omitted: %+v", m.Usage)
-								}
-								if m.ContextUsage != nil {
-									t.Fatalf("message context_usage should be omitted: %+v", m.ContextUsage)
-								}
-								if parsed.ContextUsage.Model != "stub" ||
-									parsed.ContextUsage.ContextWindow != 256000 ||
-									parsed.ContextUsage.InputTokens != 4 ||
-									parsed.ContextUsage.OutputTokens != 2 ||
-									parsed.ContextUsage.TotalTokens != 6 {
-									t.Fatalf("context_usage = %+v", parsed.ContextUsage)
-								}
-								if len(parsed.ContextUsage.Breakdown) == 0 {
-									t.Fatal("context_usage missing breakdown")
-								}
 								var hasResponse bool
 								for _, part := range parsed.ContextUsage.Breakdown {
 									if part.Key == "response" && part.Tokens == 2 {
@@ -1964,8 +2077,26 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 										break
 									}
 								}
-								if !hasResponse {
-									t.Fatalf("context_usage missing response breakdown: %+v", parsed.ContextUsage.Breakdown)
+								if parsed.TokenUsage.InputTokens != 4 ||
+									parsed.TokenUsage.OutputTokens != 2 ||
+									parsed.ContextUsage.Model != "stub" ||
+									parsed.ContextUsage.ContextWindow != 256000 ||
+									parsed.ContextUsage.InputTokens != 4 ||
+									parsed.ContextUsage.OutputTokens != 2 ||
+									parsed.ContextUsage.TotalTokens != 6 ||
+									!hasResponse {
+									lastErr = fmt.Sprintf(
+										"assistant persisted before usage metadata: token=%+v context=%+v",
+										parsed.TokenUsage,
+										parsed.ContextUsage,
+									)
+									continue poll
+								}
+								if m.Usage != nil {
+									t.Fatalf("message usage should be omitted: %+v", m.Usage)
+								}
+								if m.ContextUsage != nil {
+									t.Fatalf("message context_usage should be omitted: %+v", m.ContextUsage)
 								}
 								if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); err != nil {
 									t.Fatalf("conversation stat after turn err = %v", err)

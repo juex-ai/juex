@@ -78,7 +78,9 @@ func (q turnAdmissionQueue) beginCompact(turnID string) error {
 	if q.state.phase != turnAdmissionIdle {
 		return errTurnAdmissionBusy
 	}
-	if err := q.engine.ReserveTurnID(turnID); err != nil {
+	if err := q.engine.ReserveTurnIDWithOptions(turnID, runtime.TurnReservationOptions{
+		NonInterruptible: true,
+	}); err != nil {
 		return err
 	}
 	q.state.phase = turnAdmissionCompacting

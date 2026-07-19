@@ -3,7 +3,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
@@ -54,7 +53,8 @@ import {
   type ToolDisplayUnit,
 } from "@/lib/display-units";
 import {
-  COMPACTING_SUBMIT_HINT,
+  QUEUE_FULL_SUBMIT_HINT,
+  composerErrorMessage,
   composerSubmitAction,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
@@ -130,10 +130,12 @@ import {
   getSession,
   getSessionContext,
   getSessionScratchpad,
+  getSessionStatus,
   getTurnStatus,
   interrupt,
   startTurn,
   subscribeEvents,
+  subscribeSessionStatus,
   uploadSessionAttachment,
 } from "@/api";
 import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
@@ -169,7 +171,7 @@ export function Session() {
   const { id = "" } = useParams<{ id: string }>();
   const location = useLocation();
   const navigate = useNavigate();
-  const { agent, agentsLoaded } = useFleetAgent();
+  const { agent, agentsLoaded, statusStore } = useFleetAgent();
   const [readState, setReadState] = useState<SessionReadState>(() =>
     createSessionReadState(),
   );
@@ -189,7 +191,6 @@ export function Session() {
   );
   const [draft, setDraft] = useState("");
   const [attachmentCount, setAttachmentCount] = useState(0);
-  const routeActiveTurnIDRef = useRef<string | undefined>(undefined);
   const {
     data,
     loadError,
@@ -226,7 +227,6 @@ export function Session() {
   useEffect(() => {
     const state = location.state as InitialCommandState;
     const activeTurnID = state?.activeTurnID;
-    routeActiveTurnIDRef.current = activeTurnID;
     controller.setRoute(id);
     controller.resetForRoute({ activeTurnID });
     setDraft("");
@@ -236,34 +236,56 @@ export function Session() {
   }, [controller, id]);
 
   useEffect(() => {
-    const activeTurnID = routeActiveTurnIDRef.current;
-    if (!activeTurnID || !agentRuntimeHealthy) return;
-    return controller.startTurnStatusPolling({
-      sessionID: id,
-      turnID: activeTurnID,
-      retryOnError: true,
-    });
-  }, [agentRuntimeHealthy, controller, id]);
-
-  const loadedTurnID =
-    data?.turn?.state === "running" ? data.turn.turn_id : undefined;
-
-  useEffect(() => {
-    if (!id || !loadedTurnID || !agentRuntimeHealthy) return;
-    return controller.startTurnStatusPolling({
-      sessionID: id,
-      turnID: loadedTurnID,
-      retryOnError: false,
-    });
-  }, [agentRuntimeHealthy, controller, id, loadedTurnID]);
-
-  useEffect(() => {
     if (!id) return;
     void controller.refresh(id, {
       preserveLiveMessages: true,
       recordLoadFailure: true,
     });
   }, [controller, id]);
+
+  const canSubscribeSessionStatus = data ? sessionCanSend(data) : false;
+
+  useEffect(() => {
+    if (
+      !id ||
+      !agent?.id ||
+      !statusStore ||
+      !agentRuntimeHealthy ||
+      !canSubscribeSessionStatus
+    ) {
+      return;
+    }
+    let disposed = false;
+    let unsubscribe = () => {};
+    void getSessionStatus(id)
+      .then((snapshot) => {
+        if (disposed) return;
+        statusStore.setStatus(agent.id, snapshot);
+        unsubscribe = subscribeSessionStatus(id, {
+          since: snapshot.cursor,
+          onStatus: (next) => statusStore.setStatus(agent.id, next),
+          onError: (event) => {
+            statusStore.clearStatus(agent.id, id);
+            console.error("session status stream failed", event);
+          },
+        });
+      })
+      .catch((error) => {
+        statusStore.clearStatus(agent.id, id);
+        console.error("getSessionStatus failed", error);
+      });
+    return () => {
+      disposed = true;
+      unsubscribe();
+      statusStore.clearStatus(agent.id, id);
+    };
+  }, [
+    agent?.id,
+    agentRuntimeHealthy,
+    canSubscribeSessionStatus,
+    id,
+    statusStore,
+  ]);
 
   useEffect(() => {
     if (!data) return;
@@ -322,14 +344,30 @@ export function Session() {
     return <LoadingState label="Loading conversation" />;
   }
 
-  const tokenUsage = projection.tokenUsage ?? data.token_usage;
-  const contextUsage = projection.contextUsage ?? data.context_usage;
+  const runtimeStatus =
+    agent && statusStore
+      ? statusStore.status(agent.id, id) ??
+        (agent.activity?.status?.session.id === id
+          ? agent.activity.status
+          : undefined)
+      : undefined;
+  const tokenUsage =
+    runtimeStatus?.token_usage ?? projection.tokenUsage ?? data.token_usage;
+  const contextUsage =
+    runtimeStatus?.context_usage ?? projection.contextUsage ?? data.context_usage;
   const canSend = sessionCanSend(data) && agentRuntimeHealthy;
   const submitAction = composerSubmitAction({
-    turnActive: projection.turnActive,
-    compactActive: projection.compactActive,
+    status: runtimeStatus,
+    turnActiveFallback: projection.turnActive || projection.compactActive,
     text: draft,
     attachmentCount,
+  });
+  const composerError = composerErrorMessage({
+    status: runtimeStatus,
+    localError:
+      projection.status.kind === "error"
+        ? projection.status.detail
+        : undefined,
   });
 
   return (
@@ -402,9 +440,9 @@ export function Session() {
                         {composerHint}
                       </ComposerFeedback>
                     ) : null}
-                    {projection.status.kind === "error" ? (
+                    {composerError ? (
                       <ComposerFeedback tone="error">
-                        {projection.status.detail ?? "Something went wrong"}
+                        {composerError}
                       </ComposerFeedback>
                     ) : null}
                     <ContextUsageLabel
@@ -418,11 +456,11 @@ export function Session() {
                   <div className="flex shrink-0 items-center gap-1">
                     <ComposerSubmitButton
                       action={submitAction}
-                      onCompacting={() =>
-                        showComposerHint(COMPACTING_SUBMIT_HINT)
-                      }
                       onEmpty={() =>
                         showComposerHint("Enter a message or attach an image")
+                      }
+                      onQueueFull={() =>
+                        showComposerHint(QUEUE_FULL_SUBMIT_HINT)
                       }
                       onStop={() => void handleInterrupt()}
                     />
@@ -827,23 +865,23 @@ function ComposerAttachmentStrip({
 
 function ComposerSubmitButton({
   action,
-  onCompacting,
   onEmpty,
+  onQueueFull,
   onStop,
 }: {
   action: ComposerSubmitAction;
-  onCompacting: () => void;
   onEmpty: () => void;
+  onQueueFull: () => void;
   onStop: () => void;
 }) {
   const isEmpty = action === "empty";
-  const isCompacting = action === "compacting";
+  const isQueueFull = action === "queue-full";
   const isStop = action === "stop";
   const tooltip =
     action === "empty"
       ? "Enter a message or attach an image"
-      : action === "compacting"
-        ? COMPACTING_SUBMIT_HINT
+      : action === "queue-full"
+        ? QUEUE_FULL_SUBMIT_HINT
       : action === "stop"
         ? "Stop current turn"
         : action === "queue"
@@ -852,8 +890,8 @@ function ComposerSubmitButton({
   const ariaLabel =
     action === "empty"
       ? "Enter a message or attach an image before sending"
-      : action === "compacting"
-        ? COMPACTING_SUBMIT_HINT
+      : action === "queue-full"
+        ? QUEUE_FULL_SUBMIT_HINT
       : action === "stop"
         ? "Stop current turn"
         : action === "queue"
@@ -864,10 +902,10 @@ function ComposerSubmitButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <PromptInputSubmit
-          aria-disabled={isEmpty || isCompacting}
+          aria-disabled={isEmpty || isQueueFull}
           aria-label={ariaLabel}
           className={cn(
-            (isEmpty || isCompacting) && "cursor-not-allowed opacity-50",
+            (isEmpty || isQueueFull) && "cursor-not-allowed opacity-50",
           )}
           onClick={(event) => {
             if (isEmpty) {
@@ -875,9 +913,9 @@ function ComposerSubmitButton({
               onEmpty();
               return;
             }
-            if (isCompacting) {
+            if (isQueueFull) {
               event.preventDefault();
-              onCompacting();
+              onQueueFull();
               return;
             }
             if (isStop) {
@@ -885,7 +923,7 @@ function ComposerSubmitButton({
               onStop();
             }
           }}
-          type={isEmpty || isCompacting || isStop ? "button" : "submit"}
+          type={isEmpty || isQueueFull || isStop ? "button" : "submit"}
           variant={isStop ? "outline" : "default"}
         >
           {isStop ? (

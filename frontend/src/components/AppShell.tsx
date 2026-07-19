@@ -16,7 +16,7 @@ import {
 } from "react-router-dom";
 import { AlertTriangle, Plus } from "lucide-react";
 
-import { listAgents, runAgentAction } from "@/api";
+import { listAgents, runAgentAction, subscribeFleetEvents } from "@/api";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +36,7 @@ import {
   nextAgentLifecycleAction,
   resolveAgentSelection,
 } from "@/lib/fleet-shell";
+import { AgentViewModelStore } from "@/lib/agent-view-model-store";
 import type { AgentStatus } from "@/types";
 
 const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
@@ -78,7 +79,17 @@ export function AppShell() {
   const activeTab = agentTabFromPath(location.pathname);
   const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
   const mobileSidebar = useMediaQuery(MOBILE_SIDEBAR_QUERY);
-  const [agents, setAgents] = useState<AgentStatus[]>([]);
+  const [rosterAgents, setAgents] = useState<AgentStatus[]>([]);
+  const [statusStore] = useState(() => new AgentViewModelStore());
+  const statusRevision = useSyncExternalStore(
+    statusStore.subscribe,
+    statusStore.getRevision,
+    statusStore.getRevision,
+  );
+  const agents = useMemo(() => {
+    void statusRevision;
+    return statusStore.projectAgents(rosterAgents);
+  }, [rosterAgents, statusRevision, statusStore]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [busyAgentID, setBusyAgentID] = useState<string | null>(null);
   const [fleetError, setFleetError] = useState<string | null>(null);
@@ -96,6 +107,7 @@ export function AppShell() {
   const refreshAgents = useCallback(async () => {
     try {
       const next = await listAgents();
+      statusStore.seedAgents(next);
       setAgents(next);
       setFleetError(null);
     } catch (cause) {
@@ -105,7 +117,7 @@ export function AppShell() {
     } finally {
       setAgentsLoaded(true);
     }
-  }, []);
+  }, [statusStore]);
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +134,15 @@ export function AppShell() {
       if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [refreshAgents]);
+
+  useEffect(
+    () =>
+      subscribeFleetEvents({
+        onEvent: (event) => statusStore.applyFleetEvent(event),
+        onError: (event) => console.error("fleet status stream failed", event),
+      }),
+    [statusStore],
+  );
 
   useEffect(() => {
     if (!agentsLoaded || location.pathname !== "/" || agents.length === 0) {
@@ -204,6 +225,7 @@ export function AppShell() {
       agent: currentAgent,
       agents,
       agentsLoaded,
+      statusStore,
       lifecycleBusy: busyAgentID === currentAgent?.id,
       startAgent: startCurrentAgent,
     }),
@@ -213,6 +235,7 @@ export function AppShell() {
       busyAgentID,
       currentAgent,
       startCurrentAgent,
+      statusStore,
     ],
   );
   const shellTitleContext = useMemo<ShellTitleContextValue>(

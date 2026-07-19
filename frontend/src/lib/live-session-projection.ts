@@ -43,6 +43,9 @@ export type LiveSessionProjection = {
   tokenUsage: TokenUsage | null;
   contextUsage: ContextUsage | null;
   queuedInput: QueuedInputState;
+  // Empty slots reserve announced drain positions missing from local queue state.
+  drainingQueuedInputs: Array<QueuedInput | undefined>;
+  compactAdmissionTurnID: string | null;
   turnActive: boolean;
   compactActive: boolean;
   compactCommandInputs: Record<string, string>;
@@ -64,6 +67,8 @@ export function createLiveSessionProjection(): LiveSessionProjection {
     tokenUsage: null,
     contextUsage: null,
     queuedInput: createQueuedInputState(),
+    drainingQueuedInputs: [],
+    compactAdmissionTurnID: null,
     turnActive: false,
     compactActive: false,
     compactCommandInputs: {},
@@ -90,8 +95,19 @@ export function clearLiveSessionTranscript(
 export function clearQueuedInputs(
   state: LiveSessionProjection,
 ): LiveSessionProjection {
-  if (state.queuedInput.items.length === 0) return state;
-  return { ...state, queuedInput: createQueuedInputState() };
+  if (
+    state.queuedInput.items.length === 0 &&
+    state.drainingQueuedInputs.length === 0 &&
+    state.compactAdmissionTurnID === null
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    queuedInput: createQueuedInputState(),
+    drainingQueuedInputs: [],
+    compactAdmissionTurnID: null,
+  };
 }
 
 export function clearLocalCompactMessages(
@@ -247,12 +263,22 @@ export function projectLiveSessionEvent(
   const effects: LiveSessionProjectionEffect[] = [];
 
   switch (event.type) {
+    case "turn.admitted":
+      if (event.turn_id && event.payload.non_interruptible) {
+        next = { ...next, compactAdmissionTurnID: event.turn_id };
+      }
+      break;
     case "turn.started": {
-      const consumed = consumeQueuedInput(
-        next,
-        event.payload.input,
-        event.payload.kind,
+      const alreadyProjected = Boolean(
+        event.turn_id &&
+          next.messages.some(
+            (message) =>
+              message.role === "user" && message.turn_id === event.turn_id,
+          ),
       );
+      const consumed = alreadyProjected
+        ? { state: next }
+        : consumeQueuedInput(next, event.payload.input, event.payload.kind);
       next = consumed.state;
       next = {
         ...next,
@@ -363,6 +389,35 @@ export function projectLiveSessionEvent(
         event.payload.pending_count,
       );
       break;
+    case "pending_input.draining":
+      next = reserveDrainingQueuedInputs(next, event.payload.count);
+      next = {
+        ...next,
+        turnActive: true,
+        status: { kind: "pending", count: event.payload.pending_count },
+      };
+      break;
+    case "pending_input.promoted": {
+      const promoted = drainQueuedInputState(next.queuedInput, 1);
+      const item = promoted.drained[0];
+      next = {
+        ...next,
+        queuedInput: promoted.state,
+        messages: item
+          ? appendLiveTurnToMessages(
+              next.messages,
+              event.turn_id,
+              item.input,
+              item.kind,
+              "event",
+              item.attachments,
+            )
+          : next.messages,
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
+    }
     case "pending_input.drained":
       next = drainQueuedInputs(next, event.payload.count, event.turn_id);
       next = { ...next, turnActive: true, status: { kind: "running" } };
@@ -384,15 +439,17 @@ export function projectLiveSessionEvent(
       };
       break;
     case "turn.completed":
+      next = settleTerminalQueuedInputs(next, event.turn_id);
       next = {
-        ...markProjectionDone(clearQueuedInputs(next)),
+        ...markProjectionDone(next),
         turnActive: false,
       };
       effects.push({ type: "refresh" }, { type: "scheduleIdleStatus" });
       break;
     case "turn.errored":
+      next = settleTerminalQueuedInputs(next, event.turn_id);
       next = {
-        ...markProjectionError(clearQueuedInputs(next), event.payload.error),
+        ...markProjectionError(next, event.payload.error),
         turnActive: false,
       };
       effects.push({ type: "refresh" });
@@ -403,6 +460,7 @@ export function projectLiveSessionEvent(
     case "context.compact.completed":
       next = {
         ...clearLocalCompactMessages(next),
+        contextUsage: event.payload.context_usage ?? next.contextUsage,
         compactActive: false,
       };
       effects.push({ type: "refresh", preserveLiveMessages: true });
@@ -448,10 +506,14 @@ export function projectTurnStatusReconcile(
       effects: [],
     };
   }
+  const turnID = "turn_id" in turn && typeof turn.turn_id === "string"
+    ? turn.turn_id
+    : undefined;
+  const settled = settleTerminalQueuedInputs(state, turnID);
   if (turn.state === "errored") {
     return {
       state: {
-        ...markProjectionError(clearQueuedInputs(state), turn.error),
+        ...markProjectionError(settled, turn.error),
         turnActive: false,
       },
       effects: [{ type: "refresh" }],
@@ -459,7 +521,7 @@ export function projectTurnStatusReconcile(
   }
   return {
     state: {
-      ...markProjectionDone(clearQueuedInputs(state)),
+      ...markProjectionDone(settled),
       turnActive: false,
     },
     effects: [{ type: "refresh" }, { type: "scheduleIdleStatus" }],
@@ -518,11 +580,37 @@ function drainQueuedInputs(
   count: number,
   turnID: string | undefined,
 ): LiveSessionProjection {
-  const result = drainQueuedInputState(state.queuedInput, count);
+  const reservedCount = Math.min(count, state.drainingQueuedInputs.length);
+  const reserved = state.drainingQueuedInputs
+    .slice(0, reservedCount)
+    .filter((item): item is QueuedInput => item !== undefined);
+  const result = drainQueuedInputState(state.queuedInput, count - reservedCount);
   return {
     ...state,
     queuedInput: result.state,
-    messages: appendDrainedInputs(state.messages, result.drained, turnID),
+    drainingQueuedInputs: state.drainingQueuedInputs.slice(reservedCount),
+    messages: appendDrainedInputs(
+      state.messages,
+      [...reserved, ...result.drained],
+      turnID,
+    ),
+  };
+}
+
+function reserveDrainingQueuedInputs(
+  state: LiveSessionProjection,
+  count: number,
+): LiveSessionProjection {
+  if (count <= 0) return state;
+  const result = drainQueuedInputState(state.queuedInput, count);
+  const reserved: Array<QueuedInput | undefined> = [];
+  for (let index = 0; index < count; index++) {
+    reserved.push(result.drained[index]);
+  }
+  return {
+    ...state,
+    queuedInput: result.state,
+    drainingQueuedInputs: [...state.drainingQueuedInputs, ...reserved],
   };
 }
 
@@ -534,6 +622,16 @@ function dropQueuedInputs(
     ...state,
     queuedInput: dropQueuedInputState(state.queuedInput, count),
   };
+}
+
+function settleTerminalQueuedInputs(
+  state: LiveSessionProjection,
+  turnID: string | undefined,
+): LiveSessionProjection {
+  if (turnID && state.compactAdmissionTurnID === turnID) {
+    return { ...state, compactAdmissionTurnID: null };
+  }
+  return clearQueuedInputs(state);
 }
 
 function appendDrainedInputs(

@@ -201,6 +201,25 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return a, prov
 }
 
+func TestCompactWithInstructionsWithoutEligibleContextLeavesRuntimeIdle(t *testing.T) {
+	a, _ := newStubApp(t)
+
+	result, err := a.CompactWithInstructions(context.Background(), "manual", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != "" {
+		t.Fatalf("compact result = %+v, want no eligible context", result)
+	}
+	snapshot := a.Status.Snapshot()
+	if snapshot.Session.State != runtime.SessionRuntimeIdle ||
+		snapshot.Turn == nil ||
+		snapshot.Turn.State != runtime.TurnLifecycleCompleted ||
+		!strings.HasPrefix(snapshot.Turn.ID, "compact-") {
+		t.Fatalf("runtime status = %+v", snapshot)
+	}
+}
+
 func TestAppNewModelCandidatePrecedenceAndHealthInjection(t *testing.T) {
 	dir := t.TempDir()
 	primary := &stubProvider{}
@@ -595,6 +614,59 @@ func TestApp_DefaultAttachesActivePrimary(t *testing.T) {
 	}
 	if len(second.Session.History) != 2 {
 		t.Fatalf("history len = %d, want resumed user+assistant", len(second.Session.History))
+	}
+}
+
+func TestAppResumeContinuesWithPartialRuntimeStatusJournal(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{
+		ProviderID:                "openai",
+		APIKey:                    "x",
+		Model:                     "m",
+		WorkDir:                   work,
+		EnableUserAgentsResources: false,
+	}
+	first, err := New(Options{
+		Config:     cfg,
+		Provider:   &stubProvider{replies: []llm.Response{}},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := first.Session.Dir
+	sessionID := first.Session.ID
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(
+		"{\"id\":\"1\",\"type\":\"turn.admitted\",\"turn_id\":\"turn-1\"}\nnot-json\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	resumed, err := New(Options{
+		Config:     cfg,
+		Provider:   &stubProvider{replies: []llm.Response{}},
+		WorkDir:    work,
+		ResumeDir:  sessionDir,
+		DisableMCP: true,
+		Stderr:     &stderr,
+	})
+	if err != nil {
+		t.Fatalf("resume with partial status journal: %v", err)
+	}
+	defer resumed.Close()
+	if resumed.Session.ID != sessionID || resumed.Status == nil {
+		t.Fatalf("resumed session/status = %q/%v, want %q/non-nil", resumed.Session.ID, resumed.Status, sessionID)
+	}
+	if snapshot := resumed.Status.Snapshot(); snapshot.Cursor != "1" {
+		t.Fatalf("status cursor = %q, want recovered cursor 1", snapshot.Cursor)
+	}
+	if !strings.Contains(stderr.String(), "juex: warning: restore runtime status:") {
+		t.Fatalf("stderr missing runtime status warning:\n%s", stderr.String())
 	}
 }
 
