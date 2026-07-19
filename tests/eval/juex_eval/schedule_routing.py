@@ -417,12 +417,35 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
         if env_payload is not None:
             expanded.extend(_recursive_shell_segments(env_payload, depth + 1))
         program_index = _command_program_index(segment)
-        if program_index is None or _program_name(segment[program_index]) not in SHELL_INTERPRETERS:
+        if program_index is None:
+            continue
+        program = _program_name(segment[program_index])
+        if program == "eval":
+            eval_payload = _eval_command_payload(segment, program_index)
+            if eval_payload is not None:
+                expanded.extend(_recursive_shell_segments(eval_payload, depth + 1))
+        if program not in SHELL_INTERPRETERS:
             continue
         shell_payload = _shell_command_payload(segment, program_index)
         if shell_payload is not None:
             expanded.extend(_recursive_shell_segments(shell_payload, depth + 1))
     return expanded
+
+
+def _eval_command_payload(tokens: list[str], program_index: int) -> str | None:
+    arguments: list[str] = []
+    index = program_index + 1
+    while index < len(tokens):
+        if tokens[index] == "--" and not arguments:
+            index += 1
+            continue
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        arguments.append(tokens[index])
+        index += 1
+    return " ".join(arguments) if arguments else None
 
 
 def _env_split_string_payload(tokens: list[str]) -> str | None:
