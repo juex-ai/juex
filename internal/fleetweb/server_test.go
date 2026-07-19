@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +47,7 @@ type fakeBackend struct {
 	endpointErr  error
 	readOnly     fleet.ReadOnlyAgentState
 	readOnlyErr  error
+	statusFn     func(context.Context) ([]fleet.AgentStatus, error)
 
 	mu            sync.Mutex
 	action        string
@@ -57,7 +59,10 @@ type fakeBackend struct {
 	updateContent []byte
 }
 
-func (f *fakeBackend) Status(context.Context) ([]fleet.AgentStatus, error) {
+func (f *fakeBackend) Status(ctx context.Context) ([]fleet.AgentStatus, error) {
+	if f.statusFn != nil {
+		return f.statusFn(ctx)
+	}
 	return f.statuses, f.statusErr
 }
 
@@ -473,6 +478,76 @@ func TestFleetRosterIncludesLiveActivityForHealthyAgents(t *testing.T) {
 	}
 }
 
+func TestFleetRosterPollingKeepsAgentConnectionsBounded(t *testing.T) {
+	var expected endpoint.Runtime
+	var connections fleetConnectionCounter
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/identity":
+			if err := json.NewEncoder(w).Encode(expected); err != nil {
+				t.Errorf("encode identity: %v", err)
+			}
+		case "/api/status":
+			if err := json.NewEncoder(w).Encode(agentActivity{State: "idle"}); err != nil {
+				t.Errorf("encode activity: %v", err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	upstream.Config.ConnState = connections.track
+	upstream.Start()
+	t.Cleanup(upstream.Close)
+	expected = tcpRuntime(t, upstream.URL)
+
+	backend := &fakeBackend{
+		statusFn: func(ctx context.Context) ([]fleet.AgentStatus, error) {
+			if err := endpoint.Probe(ctx, expected); err != nil {
+				return nil, err
+			}
+			return []fleet.AgentStatus{{
+				ID:            expected.AgentID,
+				RuntimeHealth: fleet.RuntimeHealthy,
+				Endpoint:      expected.Endpoint,
+			}}, nil
+		},
+	}
+	server := newServer(backend, Options{})
+	t.Cleanup(server.activityClients.close)
+	fleetAPI := httptest.NewServer(server.Handler())
+	t.Cleanup(fleetAPI.Close)
+
+	for range 64 {
+		response, err := fleetAPI.Client().Get(fleetAPI.URL + "/api/agents")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", response.StatusCode, body)
+		}
+		var roster []agentRosterItem
+		decodeJSON(t, body, &roster)
+		if len(roster) != 1 || roster[0].Activity == nil || roster[0].Activity.State != "idle" {
+			t.Fatalf("roster = %+v", roster)
+		}
+	}
+
+	waitForFleetConnectionCount(t, &connections.open, 1)
+	if got := connections.maxOpen.Load(); got > 2 {
+		t.Fatalf("peak open agent connections = %d, want at most 2", got)
+	}
+	server.activityClients.close()
+	waitForFleetConnectionCount(t, &connections.open, 0)
+}
+
 func TestFleetAPIErrorMappingAndInputBounds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -858,5 +933,35 @@ func tcpRuntime(t *testing.T, rawURL string) endpoint.Runtime {
 		PID:        42,
 		Endpoint:   "tcp://" + address,
 		StartedAt:  time.Now().UTC(),
+	}
+}
+
+type fleetConnectionCounter struct {
+	open    atomic.Int32
+	maxOpen atomic.Int32
+}
+
+func (c *fleetConnectionCounter) track(_ net.Conn, state http.ConnState) {
+	switch state {
+	case http.StateNew:
+		current := c.open.Add(1)
+		for maximum := c.maxOpen.Load(); current > maximum; maximum = c.maxOpen.Load() {
+			if c.maxOpen.CompareAndSwap(maximum, current) {
+				break
+			}
+		}
+	case http.StateHijacked, http.StateClosed:
+		c.open.Add(-1)
+	}
+}
+
+func waitForFleetConnectionCount(t *testing.T, count *atomic.Int32, want int32) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for count.Load() != want && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := count.Load(); got != want {
+		t.Fatalf("open agent connections = %d, want %d", got, want)
 	}
 }

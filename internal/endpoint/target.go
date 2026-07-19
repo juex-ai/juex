@@ -106,8 +106,12 @@ func (t Target) NewTransport() *http.Transport {
 	}
 }
 
+// NewClient returns a transient client for one-shot endpoint control requests.
+// Reusable callers must own a transport from NewTransport and close it.
 func (t Target) NewClient() *http.Client {
-	return &http.Client{Transport: t.NewTransport()}
+	transport := t.NewTransport()
+	transport.DisableKeepAlives = true
+	return &http.Client{Transport: transport}
 }
 
 func unixURI(path string) string {
