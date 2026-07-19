@@ -725,10 +725,7 @@ func (s *Server) statusStoreForSession(id string) (*runtime.StatusStore, bool, e
 	if err != nil {
 		return nil, false, err
 	}
-	journal, err := session.ReadEvents(dir)
-	if err != nil {
-		return nil, false, err
-	}
+	journal, _ := session.ReadEvents(dir)
 	seed := runtime.StatusSeed{
 		SessionID:        info.ID,
 		SessionAlias:     info.Alias,

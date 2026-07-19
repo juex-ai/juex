@@ -103,6 +103,7 @@ type App struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	cfg            config.Config
+	stderr         io.Writer
 	skills         []skills.Skill
 	mcp            MCPStatus
 	obsv           *observable.Manager
@@ -323,10 +324,9 @@ func New(opts Options) (*App, error) {
 	}
 	eventSink = events.NewDurableSink(sess)
 	eventUnsubscribe = bus.Subscribe("*", eventSink.Handle)
-	journalEvents, err := session.ReadEvents(sess.Dir)
-	if err != nil {
-		closeSessionResources()
-		return nil, fmt.Errorf("app: restore runtime status: %w", err)
+	journalEvents, statusReplayErr := session.ReadEvents(sess.Dir)
+	if statusReplayErr != nil {
+		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
 	}
 	status := runtime.NewStatusStore(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput))
 	status.Reset(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput), journalEvents)
@@ -406,6 +406,7 @@ func New(opts Options) (*App, error) {
 		ctx:               appCtx,
 		cancel:            appCancel,
 		cfg:               cfg,
+		stderr:            stderr,
 		skills:            skillLoader.All(),
 		chunkedWrites:     chunkedWrites,
 		sessionLock:       sessLock,
@@ -585,7 +586,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 		a.Status.Reset(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput), journalEvents)
 		a.Status.RecoverAfterRestart()
 		if err != nil {
-			a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
+			fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", err)
 		}
 	}
 	if a.Engine != nil {

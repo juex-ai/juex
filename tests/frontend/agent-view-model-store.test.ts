@@ -66,6 +66,37 @@ test("one store projects roster and fleet updates", () => {
   assert.equal(projected.activity?.status?.turn?.streaming, true);
 });
 
+test("roster polling corrects stale fleet stream activity", () => {
+  const store = new AgentViewModelStore();
+  const base: AgentStatus = {
+    id: "agent-1",
+    enabled: true,
+    autostart: true,
+    binding: "bound",
+    runtime_health: "healthy",
+    runtime_present: true,
+    process_alive: true,
+    endpoint_reachable: true,
+    endpoint_matched: true,
+  };
+  store.applyFleetEvent({
+    type: "agent.status",
+    agent_id: "agent-1",
+    activity: activityFromStatus(runtimeStatus("stream-1", "turn_active")),
+  });
+  assert.equal(store.projectAgents([base])[0].activity?.state, "working");
+
+  const polled = {
+    ...base,
+    activity: activityFromStatus(runtimeStatus("poll-2", "idle")),
+  };
+  store.seedAgents([polled]);
+
+  const projected = store.projectAgents([polled])[0];
+  assert.equal(projected.activity?.state, "idle");
+  assert.equal(projected.activity?.status?.cursor, "poll-2");
+});
+
 test("session streams do not replace the fleet-selected session", () => {
   const store = new AgentViewModelStore();
   const selected = runtimeStatus("fleet-1", "turn_active", "session-1");

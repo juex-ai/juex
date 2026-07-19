@@ -47,10 +47,16 @@ func TestReadEventsMissingJournal(t *testing.T) {
 
 func TestReadEventsRejectsMalformedJournal(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte("{}\nnot-json\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(
+		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\nnot-json\n",
+	), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadEvents(dir); err == nil {
+	got, err := ReadEvents(dir)
+	if err == nil {
 		t.Fatal("ReadEvents() error = nil")
+	}
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("partial events = %+v, want first valid event", got)
 	}
 }

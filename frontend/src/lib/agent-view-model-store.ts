@@ -28,10 +28,7 @@ export class AgentViewModelStore {
         changed = this.activities.delete(agent.id) || changed;
         continue;
       }
-      if (!this.activities.has(agent.id)) {
-        changed =
-          this.setActivityInternal(agent.id, agent.activity) || changed;
-      }
+      changed = this.setActivityInternal(agent.id, agent.activity) || changed;
     }
     if (changed) this.emit();
   }

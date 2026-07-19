@@ -30,12 +30,12 @@ func ReadEvents(dir string) ([]events.Event, error) {
 	for line := 1; scanner.Scan(); line++ {
 		var event events.Event
 		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, fmt.Errorf("session: decode events.jsonl line %d: %w", line, err)
+			return result, fmt.Errorf("session: decode events.jsonl line %d: %w", line, err)
 		}
 		result = append(result, event)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("session: read events.jsonl: %w", err)
+		return result, fmt.Errorf("session: read events.jsonl: %w", err)
 	}
 	return result, nil
 }

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +152,7 @@ func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	historicalID := historical.app.Session.ID
+	historicalDir := historical.app.Session.Dir
 
 	current, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
 	if err != nil {
@@ -161,6 +164,11 @@ func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
 	currentID := current.app.Session.ID
 	if _, loaded := srv.sessions.Load(historicalID); loaded {
 		t.Fatal("historical primary remained active in memory")
+	}
+	if err := os.WriteFile(filepath.Join(historicalDir, "events.jsonl"), []byte(
+		"{\"id\":\"status-1\",\"type\":\"turn.admitted\",\"turn_id\":\"turn-1\"}\nnot-json\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	ts := httptest.NewServer(srv.Handler())
@@ -176,6 +184,9 @@ func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
 	}
 	if snapshot.Session.ID != historicalID {
 		t.Fatalf("status session = %q, want %q", snapshot.Session.ID, historicalID)
+	}
+	if snapshot.Cursor != "status-1" {
+		t.Fatalf("status cursor = %q, want recovered cursor status-1", snapshot.Cursor)
 	}
 	if _, loaded := srv.sessions.Load(historicalID); loaded {
 		t.Fatal("status read activated historical primary")

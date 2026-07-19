@@ -617,6 +617,59 @@ func TestApp_DefaultAttachesActivePrimary(t *testing.T) {
 	}
 }
 
+func TestAppResumeContinuesWithPartialRuntimeStatusJournal(t *testing.T) {
+	work := t.TempDir()
+	cfg := config.Config{
+		ProviderID:                "openai",
+		APIKey:                    "x",
+		Model:                     "m",
+		WorkDir:                   work,
+		EnableUserAgentsResources: false,
+	}
+	first, err := New(Options{
+		Config:     cfg,
+		Provider:   &stubProvider{replies: []llm.Response{}},
+		WorkDir:    work,
+		DisableMCP: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := first.Session.Dir
+	sessionID := first.Session.ID
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "events.jsonl"), []byte(
+		"{\"id\":\"1\",\"type\":\"turn.admitted\",\"turn_id\":\"turn-1\"}\nnot-json\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stderr bytes.Buffer
+	resumed, err := New(Options{
+		Config:     cfg,
+		Provider:   &stubProvider{replies: []llm.Response{}},
+		WorkDir:    work,
+		ResumeDir:  sessionDir,
+		DisableMCP: true,
+		Stderr:     &stderr,
+	})
+	if err != nil {
+		t.Fatalf("resume with partial status journal: %v", err)
+	}
+	defer resumed.Close()
+	if resumed.Session.ID != sessionID || resumed.Status == nil {
+		t.Fatalf("resumed session/status = %q/%v, want %q/non-nil", resumed.Session.ID, resumed.Status, sessionID)
+	}
+	if snapshot := resumed.Status.Snapshot(); snapshot.Cursor != "1" {
+		t.Fatalf("status cursor = %q, want recovered cursor 1", snapshot.Cursor)
+	}
+	if !strings.Contains(stderr.String(), "juex: warning: restore runtime status:") {
+		t.Fatalf("stderr missing runtime status warning:\n%s", stderr.String())
+	}
+}
+
 func TestApp_DefaultCreatesActivePrimaryWhenHistoryIsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	a, err := New(Options{
