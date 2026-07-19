@@ -104,14 +104,19 @@ active(*) -- turn.errored(other cause) --> errored
 ```
 
 The snapshot records turn id, lifecycle state, active phase, timestamps,
-streaming flag, and error details. `llm.requested` drives provider streaming;
-`llm.responded` clears the streaming flag. While compacting, `resume_phase`
-and `resume_state` record the preceding lifecycle position so
+streaming flag, interruption capability, and error details. `can_interrupt`
+is false for standalone manual compaction because that synchronous command is
+not owned by the normal cancellable turn runner. `llm.requested` drives provider
+streaming; `llm.responded` clears the streaming flag. While compacting,
+`resume_phase` and `resume_state` record the preceding lifecycle position so
 `context.compact.completed` restores it. Standalone compaction still terminates
 through an explicit `turn.completed` or `turn.errored` event; the compact event
 never invents a terminal turn outcome.
 The most recent terminal turn remains in the snapshot while the session returns
 to `idle` or `failed`; consumers therefore do not lose the completion cause.
+Tool status events update only the current admitted or active turn. Late output
+from a completed or superseded yielded shell session remains in the event
+journal but cannot reactivate the authoritative turn or Fleet activity.
 
 ### Additive Delta
 

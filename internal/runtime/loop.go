@@ -143,6 +143,10 @@ type queuedPendingInput struct {
 	Message  llm.Message
 }
 
+type TurnReservationOptions struct {
+	NonInterruptible bool
+}
+
 // Turn drives one user input to completion. The returned string is the final
 // assistant text response (concatenated text blocks). Returns an error when
 // cancellation or provider/tool/context failure stops the turn.
@@ -151,6 +155,10 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 }
 
 func (e *Engine) ReserveTurnID(turnID string) error {
+	return e.ReserveTurnIDWithOptions(turnID, TurnReservationOptions{})
+}
+
+func (e *Engine) ReserveTurnIDWithOptions(turnID string, opts TurnReservationOptions) error {
 	if e == nil {
 		return ErrNoActiveTurn
 	}
@@ -166,7 +174,7 @@ func (e *Engine) ReserveTurnID(turnID string) error {
 	e.activeTurnID = turnID
 	e.pendingMu.Unlock()
 	if admitted {
-		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}})
+		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload(opts)})
 	}
 	return nil
 }

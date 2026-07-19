@@ -78,15 +78,16 @@ type StatusError struct {
 }
 
 type TurnRuntimeStatus struct {
-	ID          string             `json:"id"`
-	State       TurnLifecycleState `json:"state"`
-	Phase       TurnPhase          `json:"phase"`
-	Streaming   bool               `json:"streaming"`
-	ResumeState TurnLifecycleState `json:"resume_state,omitempty"`
-	ResumePhase TurnPhase          `json:"resume_phase,omitempty"`
-	StartedAt   time.Time          `json:"started_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
-	Error       *StatusError       `json:"error,omitempty"`
+	ID           string             `json:"id"`
+	State        TurnLifecycleState `json:"state"`
+	Phase        TurnPhase          `json:"phase"`
+	Streaming    bool               `json:"streaming"`
+	CanInterrupt bool               `json:"can_interrupt"`
+	ResumeState  TurnLifecycleState `json:"resume_state,omitempty"`
+	ResumePhase  TurnPhase          `json:"resume_phase,omitempty"`
+	StartedAt    time.Time          `json:"started_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+	Error        *StatusError       `json:"error,omitempty"`
 }
 
 type ToolCallStatus struct {
@@ -305,7 +306,9 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 
 	switch event.Type {
 	case TurnAdmittedType:
+		payload := payloadAs[TurnAdmittedPayload](event.Payload)
 		next.Turn = newTurnStatus(event, TurnLifecycleAdmitted, TurnPhaseAdmitted)
+		next.Turn.CanInterrupt = !payload.NonInterruptible
 		next.Tools = []ToolCallStatus{}
 		next.Session.State = SessionRuntimeTurnActive
 		next.LastError = nil
@@ -392,6 +395,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
 		next.LastError = &StatusError{Message: payload.Reason, Kind: "pending_input_full"}
 	case "context.compact.started":
+		payload := payloadAs[ContextCompactStartedPayload](event.Payload)
 		resumable := next.Turn != nil &&
 			next.Turn.ID == event.TurnID &&
 			(next.Turn.State == TurnLifecycleAdmitted ||
@@ -407,6 +411,9 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		turn.State = TurnLifecycleActive
 		turn.Phase = TurnPhaseCompacting
 		turn.Streaming = false
+		if !payload.Auto {
+			turn.CanInterrupt = false
+		}
 		next.Session.State = SessionRuntimeTurnActive
 	case "context.compact.completed":
 		completeCompactionStatus(&next, nil)
@@ -457,11 +464,12 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 
 func newTurnStatus(event events.Event, state TurnLifecycleState, phase TurnPhase) *TurnRuntimeStatus {
 	return &TurnRuntimeStatus{
-		ID:        event.TurnID,
-		State:     state,
-		Phase:     phase,
-		StartedAt: event.Timestamp,
-		UpdatedAt: event.Timestamp,
+		ID:           event.TurnID,
+		State:        state,
+		Phase:        phase,
+		CanInterrupt: true,
+		StartedAt:    event.Timestamp,
+		UpdatedAt:    event.Timestamp,
 	}
 }
 
@@ -476,6 +484,9 @@ func ensureTurnStatus(snapshot *StatusSnapshot, event events.Event) *TurnRuntime
 }
 
 func upsertToolStatus(snapshot *StatusSnapshot, event events.Event, toolUseID, name string, state ToolCallState, statusErr *StatusError) {
+	if !turnAcceptsToolEvent(snapshot, event) {
+		return
+	}
 	turn := ensureTurnStatus(snapshot, event)
 	turn.State = TurnLifecycleActive
 	turn.Phase = TurnPhaseToolBatch
@@ -497,6 +508,17 @@ func upsertToolStatus(snapshot *StatusSnapshot, event events.Event, toolUseID, n
 		UpdatedAt: event.Timestamp,
 		Error:     cloneStatusError(statusErr),
 	})
+}
+
+func turnAcceptsToolEvent(snapshot *StatusSnapshot, event events.Event) bool {
+	if snapshot.Turn == nil {
+		return false
+	}
+	if event.TurnID != "" && snapshot.Turn.ID != event.TurnID {
+		return false
+	}
+	return snapshot.Turn.State == TurnLifecycleAdmitted ||
+		snapshot.Turn.State == TurnLifecycleActive
 }
 
 func setPendingStatus(snapshot *StatusSnapshot, pendingCount, maxPending int) {

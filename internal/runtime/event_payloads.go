@@ -16,7 +16,9 @@ const (
 	PendingInputPromotedType = "pending_input.promoted"
 )
 
-type TurnAdmittedPayload struct{}
+type TurnAdmittedPayload struct {
+	NonInterruptible bool `json:"non_interruptible,omitempty"`
+}
 
 type TurnPhasePayload struct {
 	Phase TurnPhase `json:"phase"`

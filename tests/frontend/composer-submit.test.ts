@@ -11,6 +11,7 @@ function status(
   pendingCount = 0,
   maxPendingInputs = 4,
   phase: RuntimeTurnPhase = "provider_iteration",
+  canInterrupt = true,
 ): AgentRuntimeStatusSnapshot {
   const active = state === "turn_active" || state === "draining_pending";
   return {
@@ -28,6 +29,7 @@ function status(
           state: "active",
           phase,
           streaming: phase === "provider_iteration",
+          can_interrupt: canInterrupt,
           started_at: "",
           updated_at: "",
         }
@@ -42,7 +44,7 @@ test("composerSubmitAction blocks empty idle submissions", () => {
   assert.equal(composerSubmitAction({ status: status("idle"), text: "   " }), "empty");
 });
 
-test("composerSubmitAction stops an active turn with empty input", () => {
+test("composerSubmitAction stops only interruptible active turns with empty input", () => {
   assert.equal(
     composerSubmitAction({ status: status("turn_active"), text: "" }),
     "stop",
@@ -53,6 +55,20 @@ test("composerSubmitAction stops an active turn with empty input", () => {
       text: "",
     }),
     "stop",
+  );
+  assert.equal(
+    composerSubmitAction({
+      status: status("turn_active", 0, 4, "admitted", false),
+      text: "",
+    }),
+    "empty",
+  );
+  assert.equal(
+    composerSubmitAction({
+      status: status("turn_active", 0, 4, "compacting", false),
+      text: "",
+    }),
+    "empty",
   );
 });
 

@@ -210,6 +210,12 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 	if err := a.beginCompactAdmission(compactID); err != nil {
 		t.Fatal(err)
 	}
+	compactStatus := a.Status.Snapshot()
+	if compactStatus.Turn == nil ||
+		compactStatus.Turn.ID != compactID ||
+		compactStatus.Turn.CanInterrupt {
+		t.Fatalf("compact admission status = %+v, want non-interruptible", compactStatus.Turn)
+	}
 
 	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
 		Prompt: "after compact",
@@ -225,6 +231,12 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 	}
 	if status := a.Engine.PendingInputStatus(); status.TurnID != "turn-1" || status.PendingCount != 0 {
 		t.Fatalf("runtime pending status = %+v", status)
+	}
+	promotedStatus := a.Status.Snapshot()
+	if promotedStatus.Turn == nil ||
+		promotedStatus.Turn.ID != "turn-1" ||
+		!promotedStatus.Turn.CanInterrupt {
+		t.Fatalf("promoted turn status = %+v, want interruptible", promotedStatus.Turn)
 	}
 }
 

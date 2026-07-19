@@ -25,7 +25,8 @@ export function composerSubmitAction({
     status?.turn?.state === "admitted" ||
     status?.turn?.state === "active" ||
     (!status && turnActiveFallback);
-  if (!hasInput) return turnActive ? "stop" : "empty";
+  const canInterrupt = status?.turn?.can_interrupt !== false;
+  if (!hasInput) return turnActive && canInterrupt ? "stop" : "empty";
   if (status && !status.session.can_accept_input) return "queue-full";
   return turnActive ? "queue" : "send";
 }

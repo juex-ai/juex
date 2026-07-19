@@ -378,7 +378,10 @@ func TestStatusSnapshotJSONResumeRestoresPreCompactionPhase(t *testing.T) {
 
 func TestStatusStandaloneCompactionCompletesAdmittedTurn(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
-	store.Publish(statusEvent("1", TurnAdmittedType, "compact-1", TurnAdmittedPayload{}))
+	store.Publish(statusEvent("1", TurnAdmittedType, "compact-1", TurnAdmittedPayload{NonInterruptible: true}))
+	if snapshot := store.Snapshot(); snapshot.Turn == nil || snapshot.Turn.CanInterrupt {
+		t.Fatalf("admitted standalone compact turn = %+v, want non-interruptible", snapshot.Turn)
+	}
 	store.Publish(statusEvent("2", "context.compact.started", "compact-1", ContextCompactStartedPayload{}))
 	store.Publish(statusEvent("3", "context.compact.completed", "compact-1", ContextCompactCompletedPayload{}))
 	assertTurnStatus(t, store.Snapshot(), TurnLifecycleAdmitted, TurnPhaseAdmitted, false)
@@ -389,6 +392,66 @@ func TestStatusStandaloneCompactionCompletesAdmittedTurn(t *testing.T) {
 	assertSessionStatus(t, snapshot, SessionRuntimeIdle, 0, true)
 	if snapshot.Turn.ResumePhase != "" {
 		t.Fatalf("standalone compact resume phase = %q", snapshot.Turn.ResumePhase)
+	}
+}
+
+func TestStatusIgnoresLateToolOutputForTerminalOrSupersededTurn(t *testing.T) {
+	tool := toolevents.ToolCallPayload{ToolUseID: "tool-1", Name: "exec_command"}
+	withoutTurn := NewStatusStore(StatusSeed{SessionID: "session-1"})
+	withoutTurn.Publish(statusEvent("1", toolevents.OutputDeltaType, "old-turn",
+		toolevents.Delta(tool, toolevents.OutputDelta{Text: "late"})))
+	emptySnapshot := withoutTurn.Snapshot()
+	if emptySnapshot.Turn != nil ||
+		emptySnapshot.Session.State != SessionRuntimeIdle ||
+		len(emptySnapshot.Tools) != 0 {
+		t.Fatalf("orphaned tool output changed status = %+v", emptySnapshot)
+	}
+
+	tests := []struct {
+		name  string
+		setup []events.Event
+		want  TurnLifecycleState
+	}{
+		{
+			name: "terminal turn",
+			setup: []events.Event{
+				statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}),
+				statusEvent("2", toolevents.RequestedType, "turn-1", toolevents.Requested(tool)),
+				statusEvent("3", "turn.completed", "turn-1", TurnCompletedPayload{}),
+			},
+			want: TurnLifecycleCompleted,
+		},
+		{
+			name: "superseded turn",
+			setup: []events.Event{
+				statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}),
+				statusEvent("2", toolevents.RequestedType, "turn-1", toolevents.Requested(tool)),
+				statusEvent("3", TurnAdmittedType, "turn-2", TurnAdmittedPayload{}),
+			},
+			want: TurnLifecycleAdmitted,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewStatusStore(StatusSeed{SessionID: "session-1"})
+			for _, event := range test.setup {
+				store.Publish(event)
+			}
+			store.Publish(statusEvent("4", toolevents.OutputDeltaType, "turn-1",
+				toolevents.Delta(tool, toolevents.OutputDelta{Text: "late"})))
+
+			snapshot := store.Snapshot()
+			if snapshot.Turn == nil || snapshot.Turn.State != test.want {
+				t.Fatalf("turn = %+v, want state %q", snapshot.Turn, test.want)
+			}
+			if snapshot.Session.State == SessionRuntimeTurnActive && test.want == TurnLifecycleCompleted {
+				t.Fatalf("terminal session reactivated = %+v", snapshot.Session)
+			}
+			if len(snapshot.Tools) != 0 {
+				t.Fatalf("late tool output restored tools = %+v", snapshot.Tools)
+			}
+		})
 	}
 }
 

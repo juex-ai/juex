@@ -256,6 +256,7 @@ export interface RuntimeTurnStatus {
   state: RuntimeTurnLifecycleState;
   phase: RuntimeTurnPhase;
   streaming: boolean;
+  can_interrupt?: boolean;
   resume_state?: RuntimeTurnLifecycleState;
   resume_phase?: RuntimeTurnPhase;
   started_at: string;

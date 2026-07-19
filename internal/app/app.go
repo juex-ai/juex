@@ -715,7 +715,9 @@ func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto b
 	if a == nil || a.Engine == nil {
 		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
 	}
-	admitted := events.Normalize(events.Event{Type: runtime.TurnAdmittedType, Payload: runtime.TurnAdmittedPayload{}})
+	admitted := events.Normalize(events.Event{Type: runtime.TurnAdmittedType, Payload: runtime.TurnAdmittedPayload{
+		NonInterruptible: true,
+	}})
 	turnID := "compact-" + admitted.ID
 	admitted.TurnID = turnID
 	a.Bus.Emit(admitted)
