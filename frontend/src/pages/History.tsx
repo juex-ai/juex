@@ -107,7 +107,10 @@ export function History() {
               disabled={refreshing}
             >
               <RefreshCw
-                className={cn("size-3.5", refreshing && "animate-spin")}
+                className={cn(
+                  "size-3.5 motion-reduce:animate-none",
+                  refreshing && "animate-spin",
+                )}
               />
               Refresh
             </Button>
@@ -133,7 +136,10 @@ export function History() {
           <AgentRuntimeStateBar />
         ) : null}
         {error ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
             {error}
           </div>
         ) : null}
@@ -216,7 +222,7 @@ function HistoryRow({
         aria-label="Delete session"
         disabled={deleting || !mutationsEnabled}
         onClick={onDelete}
-        className="text-muted-foreground opacity-100 hover:text-destructive sm:opacity-0 sm:group-hover/history-row:opacity-100 sm:focus-visible:opacity-100"
+        className="text-muted-foreground opacity-100 transition-opacity hover:text-destructive motion-reduce:transition-none sm:opacity-0 sm:group-hover/history-row:opacity-100 sm:focus-visible:opacity-100"
       >
         <Trash2 className="size-3.5" />
       </Button>

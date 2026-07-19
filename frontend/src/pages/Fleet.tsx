@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Check,
   ChevronRight,
+  Circle,
   FileCog,
   Folder,
   FolderOpen,
@@ -173,7 +174,12 @@ export function Fleet() {
                 aria-label="Refresh fleet"
                 title="Refresh fleet"
               >
-                <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+                <RefreshCw
+                  className={cn(
+                    "size-4",
+                    refreshing && "animate-spin motion-reduce:animate-none",
+                  )}
+                />
               </Button>
             </div>
           </div>
@@ -350,7 +356,7 @@ function AgentRow({
           className={cn(
             "text-[10px]",
             agent.enabled
-              ? "border-emerald-600/35 text-emerald-700"
+              ? "border-juex-done/35 text-juex-done"
               : "border-border text-muted-foreground",
           )}
         >
@@ -379,7 +385,14 @@ function AgentRow({
               busy || !agent.enabled || agent.runtime_health === "stopped"
             }
             onClick={() => onAction("restart")}
-            icon={<RotateCw className={cn("size-3.5", busy && "animate-spin")} />}
+            icon={
+              <RotateCw
+                className={cn(
+                  "size-3.5",
+                  busy && "animate-spin motion-reduce:animate-none",
+                )}
+              />
+            }
           />
           <AgentAction
             label={agent.enabled ? "Disable agent" : "Enable agent"}
@@ -486,152 +499,185 @@ function AddAgentDialog({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1"
+          className="flex min-h-0 flex-1 flex-col [&_[data-slot=dialog-footer]]:mx-0 [&_[data-slot=dialog-footer]]:mb-0 [&_[data-slot=dialog-footer]]:rounded-none [&_[data-slot=dialog-footer]]:bg-transparent [&_[data-slot=dialog-footer]]:px-0 [&_[data-slot=dialog-footer]]:pb-0 [&_[data-slot=dialog-footer]]:pt-4"
           onSubmit={(event) => void submit(event)}
         >
-          <div className="space-y-1.5">
-            <label htmlFor="agent-workspace" className="text-xs font-medium">
-              Workspace path
-            </label>
-            <div className="flex gap-2">
-              <Input
-                id="agent-workspace"
-                className="font-mono text-xs"
-                value={workspace}
-                onChange={(event) => setWorkspace(event.target.value)}
-                placeholder="/absolute/path/to/workspace"
-                required
-              />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void browse(workspace, showHidden)}
-                disabled={browsing || !workspace}
-              >
-                <FolderOpen className="size-3.5" />
-                Browse
-              </Button>
-            </div>
-          </div>
-
-          <div className="overflow-hidden rounded-md border">
-            <div className="flex min-h-9 items-center gap-1 border-b bg-muted/45 px-2">
-              <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
-                {listing
-                  ? pathBreadcrumbs(listing.path).map((crumb, index) => (
-                      <div key={crumb.path} className="flex shrink-0 items-center">
-                        {index > 0 ? (
-                          <ChevronRight className="size-3 text-muted-foreground" />
-                        ) : null}
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="xs"
-                          className="font-mono"
-                          onClick={() => void browse(crumb.path, showHidden)}
-                        >
-                          {crumb.label}
-                        </Button>
-                      </div>
-                    ))
-                  : null}
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="agent-workspace"
+                  className="text-xs font-medium"
+                >
+                  Workspace path
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    id="agent-workspace"
+                    className="font-mono text-xs"
+                    value={workspace}
+                    onChange={(event) => setWorkspace(event.target.value)}
+                    placeholder="/absolute/path/to/workspace"
+                    required
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void browse(workspace, showHidden)}
+                    disabled={browsing || !workspace}
+                  >
+                    <FolderOpen className="size-3.5" />
+                    Browse
+                  </Button>
+                </div>
               </div>
-              <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                Show hidden
-                <Switch
-                  checked={showHidden}
-                  onCheckedChange={(checked) => {
-                    setShowHidden(checked);
-                    void browse(listing?.path, checked);
-                  }}
-                  aria-label="Show hidden directories"
-                />
-              </label>
-            </div>
-            <ScrollArea className="h-52">
-              {browsing ? (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  Loading directories...
+
+              <div className="overflow-hidden rounded-md border">
+                <div className="flex min-h-9 items-center gap-1 border-b bg-muted/45 px-2">
+                  <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
+                    {listing
+                      ? pathBreadcrumbs(listing.path).map((crumb, index) => (
+                          <div
+                            key={crumb.path}
+                            className="flex shrink-0 items-center"
+                          >
+                            {index > 0 ? (
+                              <ChevronRight className="size-3 text-muted-foreground" />
+                            ) : null}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="xs"
+                              className="font-mono"
+                              onClick={() =>
+                                void browse(crumb.path, showHidden)
+                              }
+                            >
+                              {crumb.label}
+                            </Button>
+                          </div>
+                        ))
+                      : null}
+                  </div>
+                  <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                    Show hidden
+                    <Switch
+                      checked={showHidden}
+                      onCheckedChange={(checked) => {
+                        setShowHidden(checked);
+                        void browse(listing?.path, checked);
+                      }}
+                      aria-label="Show hidden directories"
+                    />
+                  </label>
                 </div>
-              ) : listing?.dirs.length ? (
-                <div className="divide-y">
-                  {listing.dirs.map((directory) => (
-                    <div
-                      key={directory.path}
-                      className="flex h-10 items-center gap-2 px-2"
-                    >
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        className="min-w-0 flex-1 justify-start"
-                        onClick={() => void browse(directory.path, showHidden)}
-                        title={directory.path}
-                      >
-                        <Folder className="size-3.5 text-muted-foreground" />
-                        <span className="truncate">{directory.name}</span>
-                        {directory.registered ? (
-                          <Badge variant="outline" className="ml-auto text-[10px]">
-                            Registered
-                          </Badge>
-                        ) : null}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={`Select ${directory.name}`}
-                        title={`Select ${directory.path}`}
-                        onClick={() => setWorkspace(directory.path)}
-                      >
-                        <Check className="size-3.5" />
-                      </Button>
+                <ScrollArea className="h-52">
+                  {browsing ? (
+                    <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                      Loading directories...
                     </div>
-                  ))}
+                  ) : listing?.dirs.length ? (
+                    <div className="divide-y">
+                      {listing.dirs.map((directory) => {
+                        const selected = workspace === directory.path;
+                        return (
+                          <div
+                            key={directory.path}
+                            className={cn(
+                              "flex h-10 items-center gap-2 px-2",
+                              selected && "bg-sidebar-accent/65",
+                            )}
+                            data-selected={selected ? "true" : "false"}
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="min-w-0 flex-1 justify-start"
+                              onClick={() =>
+                                void browse(directory.path, showHidden)
+                              }
+                              title={directory.path}
+                            >
+                              <Folder className="size-3.5 text-muted-foreground" />
+                              <span className="truncate">{directory.name}</span>
+                              {directory.registered ? (
+                                <Badge
+                                  variant="outline"
+                                  className="ml-auto text-[10px]"
+                                >
+                                  Registered
+                                </Badge>
+                              ) : null}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Select ${directory.name}`}
+                              title={`Select ${directory.path}`}
+                              onClick={() => setWorkspace(directory.path)}
+                              aria-pressed={selected}
+                              className={cn(
+                                selected &&
+                                  "bg-sidebar-accent text-sidebar-accent-foreground",
+                              )}
+                            >
+                              {selected ? (
+                                <Check className="size-3.5" />
+                              ) : (
+                                <Circle className="size-3.5 text-muted-foreground/55" />
+                              )}
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                      No subdirectories.
+                    </div>
+                  )}
+                </ScrollArea>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2 sm:items-end">
+                <div className="space-y-1.5">
+                  <label htmlFor="agent-name" className="text-xs font-medium">
+                    Name
+                  </label>
+                  <Input
+                    id="agent-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Optional display name"
+                  />
                 </div>
-              ) : (
-                <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  No subdirectories.
+                <div className="grid grid-cols-2 items-end gap-3">
+                  <ToggleField
+                    label="Autostart"
+                    checked={autostart}
+                    onCheckedChange={setAutostart}
+                  />
+                  <ToggleField
+                    label="Start now"
+                    checked={startNow}
+                    onCheckedChange={setStartNow}
+                  />
                 </div>
-              )}
-            </ScrollArea>
+              </div>
+
+              {error ? (
+                <div
+                  role="alert"
+                  className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                >
+                  {error}
+                </div>
+              ) : null}
+            </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <label htmlFor="agent-name" className="text-xs font-medium">
-                Name
-              </label>
-              <Input
-                id="agent-name"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Optional display name"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <ToggleField
-                label="Autostart"
-                checked={autostart}
-                onCheckedChange={setAutostart}
-              />
-              <ToggleField
-                label="Start now"
-                checked={startNow}
-                onCheckedChange={setStartNow}
-              />
-            </div>
-          </div>
-
-          {error ? (
-            <div
-              role="alert"
-              className="rounded-md border border-destructive/35 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-            >
-              {error}
-            </div>
-          ) : null}
-
-          <DialogFooter className="mx-0 mb-0 px-0 pb-0">
+          <DialogFooter className="shrink-0">
             <Button
               type="button"
               variant="outline"
@@ -848,9 +894,9 @@ function HealthBadge({ health }: { health: AgentRuntimeHealth }) {
       variant="outline"
       className={cn(
         "font-mono text-[10px]",
-        health === "healthy" && "border-emerald-600/35 text-emerald-700",
+        health === "healthy" && "border-juex-done/35 text-juex-done",
         health === "unhealthy" && "border-destructive/35 text-destructive",
-        health === "ambiguous" && "border-amber-600/35 text-amber-700",
+        health === "ambiguous" && "border-juex-pending/35 text-juex-pending",
       )}
     >
       {health}

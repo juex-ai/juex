@@ -20,7 +20,7 @@ const runtimeToolCatalogSource = readFileSync(
   "utf8",
 );
 
-test("Runtime page orders Provider, Tools, MCP, Skills, and Hooks", () => {
+test("Runtime page orders its level-two operational sections", () => {
   const headings = runtimePageHeadings(runtimePageSource);
   const expected = ["Provider", "Tools", "MCP", "Skills", "Hooks"];
   const offsets = expected.map((heading) => headings.indexOf(heading));
@@ -197,7 +197,7 @@ test("MCP table row keeps command and error visible and lazily mounts tools", ()
   );
 });
 
-test("Runtime table truncation is applied inside cells", () => {
+test("Runtime table long-value handling is applied inside cells", () => {
   const pageFile = parseSource(runtimePageSource, "Runtime.tsx");
   const catalogFile = parseSource(
     runtimeToolCatalogSource,
@@ -219,8 +219,8 @@ test("Runtime table truncation is applied inside cells", () => {
     }
     assert.match(
       fn.getText(),
-      /<(?:div|span) className=(?:\{|"[\s\S]*?\btruncate\b)/,
-      `${fn.name.text} must truncate content inside the table cell`,
+      /<(?:div|span) className=(?:\{|"[\s\S]*?\b(?:truncate|break-all|break-words)\b)/,
+      `${fn.name.text} must constrain or wrap content inside the table cell`,
     );
   }
 });
@@ -232,7 +232,7 @@ function runtimePageHeadings(source: string): string[] {
   const visit = (node: any) => {
     if (
       ts.isJsxElement(node) &&
-      node.openingElement.tagName.getText(sourceFile) === "h1"
+      node.openingElement.tagName.getText(sourceFile) === "h2"
     ) {
       const text = collectJsxText(node).replace(/\s+/g, " ").trim();
       if (text) headings.push(text);

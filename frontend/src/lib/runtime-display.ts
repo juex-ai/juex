@@ -80,8 +80,21 @@ export function runtimeGoalContinuationLabel(goal?: GoalStatusSnapshot): string 
   return String(goal.continuation_count ?? 0);
 }
 
-export function runtimeSessionStateBadgeLabel(): string {
-  return "state";
+export function runtimeSessionStateBadgeLabel(
+  goal?: GoalStatusSnapshot,
+  notes?: NotesSnapshot,
+): string {
+  if (runtimeGoalIsActive(goal)) {
+    return `goal ${goal?.status}`;
+  }
+  const progress = notesCheckboxProgress(notes);
+  if (progress.total > 0) {
+    return `notes ${progress.completed}/${progress.total}`;
+  }
+  if (notes?.content?.trim()) {
+    return "notes active";
+  }
+  return "state idle";
 }
 
 export function runtimeSessionStateIsActive(

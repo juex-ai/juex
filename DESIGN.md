@@ -18,8 +18,8 @@
   highlighting, tables, lists, and image media references.
 - Honour OS dark/light mode automatically.
 - Adapt from desktop to tablet/mobile without horizontal page overflow.
-- Use the Juex Design System: forest `#064032`, gold `#f6d78e`, warm paper,
-  system fonts, Lucide icons, and forest-tinted shadows.
+- Use the Juex Design System: forest `#064032`, gold `#f6d78e`, neutral
+  operational surfaces, system fonts, Lucide icons, and forest-tinted shadows.
 
 **Non-goals (v0.1):**
 
@@ -173,6 +173,24 @@ Edit React, see changes instantly.
 
 ---
 
+### 4.1 Visual foundations
+
+- Radius is a fixed four-step scale: `2px` (`sm`), `4px` (`md`), `6px`
+  (`lg`), and `8px` (`xl`). The base radius is `6px`. Shared controls,
+  dialogs, cards, menus, code surfaces, and message bubbles never exceed
+  `8px`; `rounded-full` is reserved for circular controls and semantic pills.
+- Light mode uses a neutral, slightly green-gray page and sidebar canvas.
+  Cream remains an accent surface for authored content and code, not the
+  dominant application background.
+- Runtime states use semantic `status-success`, `status-warning`, and
+  `status-working` foreground, background, and border tokens. Components do
+  not encode status with raw palette utilities.
+- Interactive controls use a visible `2px` focus ring with a `2px` offset.
+  Spinners, shimmer, pulse, and disclosure motion stop when the user requests
+  reduced motion.
+
+---
+
 ## 5. Page layout
 
 Every page renders inside a fleet-first shell. A persistent agent sidebar owns
@@ -198,10 +216,11 @@ narrower screens. Session history is opened from the stage header as
   The collapsed brand mark becomes the expand control on hover without moving
   other controls. Below 760px the sidebar becomes an overlay drawer opened from
   the stage header.
-- Agent rows show stopped, idle, working, and failed states; selected rows use a
-  gold left rule and tinted background. Expanded rows reveal exactly one
-  lifecycle toggle and one Runtime shortcut on hover. Pending input counts stay
-  visible as compact gold badges.
+- Agent rows show stopped, idle, working, and failed states. Selection,
+  hover, and rest states are distinguished by background color alone; selected
+  rows do not add a redundant accent rule around the avatar. Expanded rows
+  reveal exactly one lifecycle toggle and one Runtime shortcut on hover.
+  Pending input counts stay visible as compact gold badges.
 - Agent selection restores the last valid agent from local storage, then falls
   back to the first registered agent. Empty fleets show an Add agent action and
   the CLI registration hint.
@@ -364,7 +383,10 @@ open. Every expandable table row uses the same leftmost chevron button: right
 when collapsed and down when expanded. Dense tables scroll inside their section
 on narrow screens, cells wrap or truncate previews without hiding their labels,
 and disclosure buttons expose expanded state with visible keyboard focus rings.
-This is operational metadata, not a conversational surface.
+Long paths, URLs, commands, and errors remain readable through wrapping or an
+expanded disclosure rather than inaccessible hover-only truncation. Runtime
+section surfaces use the shared radius scale and one visible boundary per
+section. This is operational metadata, not a conversational surface.
 
 ### 6.6 Observables (`/agents/:agentId/observables`, `/agents/:agentId/observables/:id`)
 
@@ -531,8 +553,8 @@ runtime drains pending input, the drained rows leave the stack and appear in the
 conversation stream.
 
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
-both natively. The composer is a warm paper well with a 14px radius, subtle
-forest shadow, and a forest focus ring. The submit button is the state control:
+both natively. The composer is a warm paper well with an `8px` maximum radius,
+subtle forest shadow, and a forest focus ring. The submit button is the state control:
 empty + idle appears disabled and clicks show a short input hint; empty +
 running switches to a square stop icon; text + idle submits and clears the
 input; text + running submits to the pending-input queue for the next provider

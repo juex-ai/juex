@@ -70,13 +70,18 @@ test("fleet rail exposes compact status and exactly two hover actions", () => {
   assert.match(sidebarSource, /data-collapsed=\{compact \? "true" : "false"\}/);
   assert.match(sidebarSource, /aria-label="Expand fleet sidebar"/);
   assert.match(sidebarSource, /aria-label="Collapse fleet sidebar"/);
+  assert.match(sidebarSource, /aria-current=\{selected \? "true" : undefined\}/);
+  assert.match(sidebarSource, /pointer-events-none/);
+  assert.match(sidebarSource, /mobile \? "pointer-events-auto opacity-100"/);
   assert.match(sidebarSource, /group-hover:opacity-100/);
   assert.match(sidebarSource, /nextAgentLifecycleAction/);
   assert.match(sidebarSource, /Open \$\{name\} runtime/);
   assert.match(sidebarSource, /pending inputs/);
   assert.match(sidebarSource, /motion-reduce:animate-none/);
+  assert.doesNotMatch(sidebarSource, /before:absolute/);
+  assert.doesNotMatch(sidebarSource, /bg-primary\/10" : "hover/);
   assert.equal(
-    sidebarSource.match(/className="size-8 bg-card\/90"/g)?.length,
+    sidebarSource.match(/className="size-8"/g)?.length,
     2,
     "expanded agent rows should reveal one lifecycle action and one runtime action",
   );
@@ -167,6 +172,11 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   }
   assert.match(fleetSource, /Add agent/);
   assert.match(fleetSource, /Show hidden/);
+  assert.match(fleetSource, /sm:items-end/);
+  assert.match(fleetSource, /data-selected=\{selected \? "true" : "false"\}/);
+  assert.match(fleetSource, /aria-pressed=\{selected\}/);
+  assert.match(fleetSource, /className="min-h-0 flex-1 overflow-y-auto pr-1"/);
+  assert.match(fleetSource, /<DialogFooter className="shrink-0">/);
   assert.match(
     fleetSource,
     /const confirmationTarget = agent\.name \|\| agent\.id/,

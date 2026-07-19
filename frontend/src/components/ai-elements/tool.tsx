@@ -29,7 +29,7 @@ export type ToolProps = ComponentProps<typeof Collapsible>;
 export const Tool = ({ className, ...props }: ToolProps) => (
   <Collapsible
     className={cn(
-      "group not-prose mb-4 w-full max-w-full overflow-hidden rounded-[12px] border border-juex-tool-border bg-juex-tool-surface shadow-[var(--shadow-xs)] sm:max-w-[88%]",
+      "group not-prose mb-4 w-full max-w-full overflow-hidden rounded-lg border border-juex-tool-border bg-juex-tool-surface shadow-[var(--shadow-xs)] sm:max-w-[88%]",
       className
     )}
     {...props}
@@ -84,7 +84,7 @@ export const ToolHeader = ({
   return (
     <CollapsibleTrigger
       className={cn(
-        "flex w-full items-center justify-between gap-4 border-b border-juex-tool-border bg-juex-tool-header px-3.5 py-2.5 text-juex-tool transition-colors hover:bg-juex-tool-header/80",
+        "flex w-full items-center justify-between gap-4 border-b border-juex-tool-border bg-juex-tool-header px-3.5 py-2.5 text-juex-tool transition-colors hover:bg-juex-tool-header/80 motion-reduce:transition-none",
         className
       )}
       {...props}
@@ -104,7 +104,7 @@ export const ToolHeader = ({
           </Badge>
         ) : null}
       </div>
-      <ChevronDownIcon className="size-4 shrink-0 opacity-80 transition-transform group-hover:opacity-100 group-data-[state=open]:rotate-180" />
+      <ChevronDownIcon className="size-4 shrink-0 opacity-80 transition-transform group-hover:opacity-100 motion-reduce:transition-none group-data-[state=open]:rotate-180" />
     </CollapsibleTrigger>
   );
 };
@@ -114,7 +114,7 @@ export type ToolContentProps = ComponentProps<typeof CollapsibleContent>;
 export const ToolContent = ({ className, ...props }: ToolContentProps) => (
   <CollapsibleContent
     className={cn(
-      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-4 p-4 text-card-foreground outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+      "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 space-y-4 p-4 text-card-foreground outline-none motion-reduce:data-[state=closed]:animate-none motion-reduce:data-[state=open]:animate-none data-[state=closed]:animate-out data-[state=open]:animate-in",
       className
     )}
     {...props}
@@ -130,7 +130,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
     <h4 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground dark:text-juex-forest-200">
       Parameters
     </h4>
-    <div className="rounded-[10px]">
+    <div className="rounded-md">
       <CodeBlock
         className="[&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
         code={formatToolPayload(input)}
@@ -161,7 +161,7 @@ export const ToolOutput = ({
     if (typeof output === "object" && !isValidElement(output)) {
       Output = (
         <CodeBlock
-          className="rounded-[10px] [&>div]:max-h-80 [&>div]:overflow-auto [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
+          className="rounded-md [&>div]:max-h-80 [&>div]:overflow-auto [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
           code={formatToolPayload(output, "null")}
           language="json"
         />
@@ -171,7 +171,7 @@ export const ToolOutput = ({
       const formatted = formatToolResultText(output);
       Output = (
         <CodeBlock
-          className="rounded-[10px] [&>div]:max-h-80 [&>div]:overflow-auto [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
+          className="rounded-md [&>div]:max-h-80 [&>div]:overflow-auto [&_code]:text-xs [&_pre]:p-3 [&_pre]:text-xs"
           code={formatted.text}
           language="log"
         />
@@ -189,7 +189,7 @@ export const ToolOutput = ({
       </h4>
       <div
         className={cn(
-          "rounded-[10px] text-xs [&_table]:w-full",
+          "rounded-md text-xs [&_table]:w-full",
           errorText
             ? "overflow-x-auto border border-destructive/25 bg-destructive/10 p-3 text-destructive"
             : outputIsCodeBlock

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Save } from "lucide-react";
-import { useParams } from "react-router-dom";
+import { useBlocker, useParams } from "react-router-dom";
 
 import { getAgentConfig, updateAgentConfig } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
@@ -19,6 +19,8 @@ export function AgentConfig() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const dirty = config !== null && content !== config.content;
+  const blocker = useBlocker(dirty);
   useShellTitle("Config");
 
   const refresh = useCallback(async () => {
@@ -42,6 +44,35 @@ export function AgentConfig() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const beforeunload = (event: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", beforeunload);
+    return () => window.removeEventListener("beforeunload", beforeunload);
+  }, [dirty]);
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    if (window.confirm("Discard unsaved changes?")) {
+      blocker.proceed();
+    } else {
+      blocker.reset();
+    }
+  }, [blocker]);
+
+  async function reload() {
+    if (
+      dirty &&
+      !window.confirm("Discard unsaved changes and reload the saved config?")
+    ) {
+      return;
+    }
+    await refresh();
+  }
 
   async function save() {
     if (!agentId) return;
@@ -82,7 +113,6 @@ export function AgentConfig() {
     }
   }
 
-  const dirty = config !== null && content !== config.content;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-6 md:px-6">
@@ -110,10 +140,15 @@ export function AgentConfig() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => void refresh()}
+              onClick={() => void reload()}
               disabled={loading || saving}
             >
-              <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+              <RefreshCw
+                className={cn(
+                  "size-3.5 motion-reduce:animate-none",
+                  loading && "animate-spin",
+                )}
+              />
               Reload
             </Button>
             <Button
@@ -139,7 +174,7 @@ export function AgentConfig() {
         {notice ? (
           <div
             role="status"
-            className="rounded-md border border-emerald-600/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700"
+            className="rounded-md border border-juex-done/30 bg-juex-done/10 px-3 py-2 text-sm text-juex-done"
           >
             {notice}
           </div>
@@ -152,7 +187,7 @@ export function AgentConfig() {
           aria-label="Agent juex.yaml"
           aria-invalid={error ? true : undefined}
           spellCheck={false}
-          className="min-h-[32rem] resize-y rounded-md bg-card font-mono text-xs leading-5 shadow-[var(--shadow-xs)]"
+          className="min-h-[20rem] max-h-[calc(100svh-12rem)] resize-y overflow-auto rounded-md bg-card font-mono text-xs leading-5 shadow-[var(--shadow-xs)] sm:min-h-[32rem]"
           placeholder={loading ? "Loading config..." : "model: provider:model"}
         />
       </div>

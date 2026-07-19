@@ -343,6 +343,7 @@ export const CodeBlockCopyButton = ({
   timeout = 2000,
   children,
   className,
+  "aria-label": ariaLabel,
   ...props
 }: CodeBlockCopyButtonProps) => {
   const [isCopied, setIsCopied] = useState(false);
@@ -376,13 +377,15 @@ export const CodeBlockCopyButton = ({
 
   return (
     <Button
+      aria-label={ariaLabel ?? (isCopied ? "Code copied" : "Copy code")}
       className={cn("shrink-0", className)}
       onClick={copyToClipboard}
       size="icon"
+      type="button"
       variant="ghost"
       {...props}
     >
-      {children ?? <Icon size={14} />}
+      {children ?? <Icon aria-hidden="true" size={14} />}
     </Button>
   );
 };

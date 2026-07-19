@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 
 import { getAgentLogs } from "@/api";
 import { useShellTitle } from "@/components/AppShell";
+import { LoadingState } from "@/components/LoadingState";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -47,9 +48,9 @@ export function AgentLogs() {
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-6 md:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold text-foreground">Agent logs</h1>
-            <p className="mt-1 font-mono text-xs text-muted-foreground">
+            <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
               {agentId}
             </p>
           </div>
@@ -76,7 +77,12 @@ export function AgentLogs() {
               onClick={() => void refresh()}
               disabled={loading}
             >
-              <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+              <RefreshCw
+                className={cn(
+                  "size-3.5 motion-reduce:animate-none",
+                  loading && "animate-spin",
+                )}
+              />
               Refresh
             </Button>
           </div>
@@ -89,11 +95,16 @@ export function AgentLogs() {
             {error}
           </div>
         ) : null}
-        <pre className="min-h-[24rem] overflow-auto rounded-md border bg-card p-4 font-mono text-xs leading-5 text-foreground shadow-[var(--shadow-xs)]">
-          {loading && !content
-            ? "Loading logs..."
-            : content || "No log output in the selected tail."}
-        </pre>
+        {loading && !content ? (
+          <LoadingState
+            label="Loading logs"
+            className="min-h-[24rem] rounded-md border bg-card"
+          />
+        ) : (
+          <pre className="min-h-[24rem] overflow-auto rounded-md border bg-card p-4 font-mono text-xs leading-5 text-foreground shadow-[var(--shadow-xs)]">
+            {content || "No log output in the selected tail."}
+          </pre>
+        )}
       </div>
     </div>
   );

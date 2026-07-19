@@ -34,19 +34,25 @@ export function Observables() {
   const [refreshing, setRefreshing] = useState(false);
   const [busyID, setBusyID] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   useShellTitle("Observables");
 
   const refresh = useCallback(async (
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
-    if (!quiet) setRefreshing(true);
-    setError(null);
+    if (!quiet) {
+      setRefreshing(true);
+      setError(null);
+    }
     try {
       const data = await listObservables();
       setObservables(data.observables ?? []);
+      setRefreshError(null);
     } catch (e) {
       console.error("listObservables failed", e);
-      setError(e instanceof Error ? e.message : "Failed to load observables.");
+      setRefreshError(
+        e instanceof Error ? e.message : "Failed to load observables.",
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -99,6 +105,8 @@ export function Observables() {
     }
   }
 
+  const visibleError = error ?? refreshError;
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-4 py-6 md:px-6">
@@ -115,13 +123,21 @@ export function Observables() {
             onClick={() => void refresh()}
             disabled={refreshing}
           >
-            <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+            <RefreshCw
+              className={cn(
+                "size-3.5 motion-reduce:animate-none",
+                refreshing && "animate-spin",
+              )}
+            />
             Refresh
           </Button>
         </div>
-        {error ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
+        {visibleError ? (
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {visibleError}
           </div>
         ) : null}
         <div className="overflow-x-auto rounded-md border bg-card shadow-[var(--shadow-xs)]">
@@ -245,9 +261,6 @@ function ObservableRow({
                 <span>{last.content || "-"}</span>
               </div>
             ) : null}
-            <div className="border-t border-background/20 pt-1 text-[10px] opacity-75">
-              Use Up/Down or Page Up/Down while the row is focused to scroll.
-            </div>
           </div>
         </TooltipContent>
       </Tooltip>

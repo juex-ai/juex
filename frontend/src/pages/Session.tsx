@@ -12,6 +12,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import {
   Conversation,
@@ -56,6 +61,7 @@ import {
   QUEUE_FULL_SUBMIT_HINT,
   composerErrorMessage,
   composerSubmitAction,
+  settleSubmittedComposerText,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
 import {
@@ -81,6 +87,7 @@ import {
   toolDisplayName,
   toolProcessStatus,
   toolProcessStatusLabel,
+  toolTimeoutLabel,
   type ToolProcessStatus,
 } from "@/lib/tool-display";
 import { sessionPreviewTitle } from "@/lib/session-title";
@@ -99,7 +106,6 @@ import {
   processDisclosureClassName,
   processDisclosureDefaultOpen,
   processDisclosureSummaryClassName,
-  processStatusDotClassName,
   thinkingDisclosureBodyClassName,
   thinkingDisclosureSummaryClassName,
 } from "@/lib/message-rendering";
@@ -142,6 +148,7 @@ import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
 import { agentPathFromLocation } from "@/lib/fleet-routes";
 import {
   CheckIcon,
+  CircleAlertIcon,
   ChevronRightIcon,
   ChevronUpIcon,
   CircleGaugeIcon,
@@ -166,6 +173,9 @@ import type {
 } from "@/types";
 
 type InitialCommandState = SessionInitialCommandState;
+
+const COMPOSER_STATUS_CONTROL_CLASS =
+  "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-sm border border-border/70 bg-background px-2 font-mono text-[11px] text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 export function Session() {
   const { id = "" } = useParams<{ id: string }>();
@@ -408,7 +418,8 @@ export function Session() {
               multiple
               onError={(err) => showComposerHint(err.message)}
               onSubmit={async (msg) => {
-                const text = msg.text?.trim();
+                const submittedText = msg.text ?? "";
+                const text = submittedText.trim();
                 const files = msg.files ?? [];
                 if (!text && files.length === 0) {
                   showComposerHint("Enter a message or attach an image");
@@ -419,8 +430,9 @@ export function Session() {
                 if (!sent) {
                   throw new Error("start turn failed");
                 }
-                setDraft("");
-                setAttachmentCount(0);
+                setDraft((current) =>
+                  settleSubmittedComposerText(current, submittedText),
+                );
               }}
             >
               <PromptInputTextarea
@@ -431,27 +443,47 @@ export function Session() {
                 placeholder="Ask juex anything..."
               />
               <ComposerAttachmentStrip onCountChange={setAttachmentCount} />
+              {composerHint || composerError ? (
+                <div className="border-t border-border/60 px-2.5 py-1.5">
+                  {composerError ? (
+                    <ComposerFeedback tone="error">
+                      {composerError}
+                    </ComposerFeedback>
+                  ) : composerHint ? (
+                    <ComposerFeedback tone="hint">
+                      {composerHint}
+                    </ComposerFeedback>
+                  ) : null}
+                </div>
+              ) : null}
               <PromptInputFooter className="flex-nowrap items-end gap-2">
                 <TooltipProvider>
-                  <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-1.5">
-                    <ComposerAttachmentButton />
-                    {composerHint ? (
-                      <ComposerFeedback tone="hint">
-                        {composerHint}
-                      </ComposerFeedback>
-                    ) : null}
-                    {composerError ? (
-                      <ComposerFeedback tone="error">
-                        {composerError}
-                      </ComposerFeedback>
-                    ) : null}
-                    <ContextUsageLabel
-                      usage={contextUsage}
-                      activeContext={activeContext}
-                      tokenUsage={tokenUsage}
+                  <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-2">
+                    <div
+                      className="flex shrink-0 items-center gap-1"
+                      aria-label="Composer actions"
+                      role="group"
+                    >
+                      <ComposerAttachmentButton />
+                      <ScratchpadButton sessionID={data.id} />
+                    </div>
+                    <Separator
+                      className="h-4"
+                      orientation="vertical"
+                      decorative
                     />
-                    <SessionRuntimeStateBadges data={data} />
-                    <ScratchpadButton sessionID={data.id} />
+                    <div
+                      className="flex min-w-0 items-center gap-1"
+                      aria-label="Session status"
+                      role="group"
+                    >
+                      <ContextUsageLabel
+                        usage={contextUsage}
+                        activeContext={activeContext}
+                        tokenUsage={tokenUsage}
+                      />
+                      <SessionRuntimeStateBadges data={data} />
+                    </div>
                   </PromptInputTools>
                   <div className="flex shrink-0 items-center gap-1">
                     <ComposerSubmitButton
@@ -540,7 +572,10 @@ function LoadOlderMessagesControl({
         variant="outline"
       >
         {loading ? (
-          <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden="true" />
+          <LoaderCircleIcon
+            className="size-3.5 animate-spin motion-reduce:animate-none"
+            aria-hidden="true"
+          />
         ) : (
           <ChevronUpIcon className="size-3.5" aria-hidden="true" />
         )}
@@ -558,7 +593,7 @@ function LoadOlderMessagesControl({
 function SessionRuntimeStateBadges({ data }: { data: SessionShowResponse }) {
   return (
     <SessionStateBadge
-      label={runtimeSessionStateBadgeLabel()}
+      label={runtimeSessionStateBadgeLabel(data.goal, data.notes)}
       tone={
         runtimeSessionStateIsActive(data.goal, data.notes)
           ? "active"
@@ -629,27 +664,28 @@ function SessionStateBadge({
   tone: "active" | "muted";
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <Popover>
+      <PopoverTrigger asChild>
         <button
           className={cn(
-            "inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 font-mono text-[11px]",
+            COMPOSER_STATUS_CONTROL_CLASS,
             tone === "active"
-              ? "border-primary/30 bg-primary/10 text-primary"
-              : "border-transparent bg-muted text-muted-foreground",
+              ? "border-primary/30 text-primary"
+              : "text-muted-foreground",
           )}
           type="button"
+          aria-label={`Open session status: ${label}`}
         >
           {label}
         </button>
-      </TooltipTrigger>
-      <TooltipContent
-        hideArrow
-        className="block !w-[min(34rem,calc(100vw-2rem))] !max-w-[calc(100vw-2rem)] max-h-[24rem] overflow-auto border border-border bg-popover px-3 py-2 text-left text-xs text-popover-foreground shadow-lg"
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="block !w-[min(34rem,calc(100vw-2rem))] !max-w-[calc(100vw-2rem)] max-h-[24rem] overflow-auto text-left text-xs"
       >
         {children}
-      </TooltipContent>
-    </Tooltip>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -769,15 +805,16 @@ function ComposerFeedback({
   tone: "hint" | "error";
 }) {
   return (
-    <span
+    <div
       className={cn(
-        "min-w-0 truncate font-mono text-[11px]",
+        "min-w-0 break-words font-mono text-[11px]",
         tone === "error" ? "text-juex-error" : "text-muted-foreground",
       )}
-      title={children}
+      role={tone === "error" ? "alert" : "status"}
+      aria-live={tone === "error" ? "assertive" : "polite"}
     >
       {children}
-    </span>
+    </div>
   );
 }
 
@@ -959,14 +996,21 @@ function ContextUsageLabel({
   tokenUsage: TokenUsage;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-transparent bg-muted px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={COMPOSER_STATUS_CONTROL_CLASS}
+          aria-label={`Open context usage: ${runtimeContextPercentLabel(usage)}`}
+        >
           <CircleGaugeIcon className="size-3" aria-hidden="true" />
           context {runtimeContextPercentLabel(usage)}
-        </span>
-      </TooltipTrigger>
-      <TooltipContent className="block max-w-sm space-y-1.5 px-3 py-2 font-mono text-xs">
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="block max-h-[24rem] max-w-[calc(100vw-2rem)] space-y-1.5 overflow-auto font-mono text-xs"
+      >
         {usage ? (
           <ContextUsageTooltip
             usage={usage}
@@ -980,8 +1024,8 @@ function ContextUsageLabel({
             <ActiveContextDebugLine snapshot={activeContext} />
           </>
         )}
-      </TooltipContent>
-    </Tooltip>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1143,7 +1187,20 @@ function MessageGroupView({
             );
           }
           if (unit.kind === "image") {
-            return <ImageBlock key={i} media={unit.block.media} />;
+            if (i > 0 && group.units[i - 1]?.kind === "image") return null;
+            const media: MediaRef[] = [];
+            for (let cursor = i; cursor < group.units.length; cursor++) {
+              const candidate = group.units[cursor];
+              if (candidate.kind !== "image") break;
+              if (candidate.block.media) media.push(candidate.block.media);
+            }
+            return (
+              <MessageImageGallery
+                key={i}
+                media={media}
+                role={group.role}
+              />
+            );
           }
           if (unit.kind === "tool_batch") {
             return <ToolBatchProcessRow key={i} tools={unit.tools} />;
@@ -1151,7 +1208,9 @@ function MessageGroupView({
           return <ToolProcessRow key={i} tool={unit} />;
         })}
         {group.pending && isEmpty ? (
-          <div className="animate-pulse text-sm text-muted-foreground">...</div>
+          <div className="animate-pulse text-sm text-muted-foreground motion-reduce:animate-none">
+            ...
+          </div>
         ) : null}
         {canCopyMessage ? (
           <MessageCopyAction
@@ -1161,6 +1220,33 @@ function MessageGroupView({
         ) : null}
       </div>
     </Message>
+  );
+}
+
+function MessageImageGallery({
+  media,
+  role,
+}: {
+  media: MediaRef[];
+  role: MessageGroup["role"];
+}) {
+  if (media.length === 0) return null;
+  return (
+    <div
+      className={cn(
+        "grid w-fit max-w-full gap-2",
+        media.length > 1 && "grid-cols-2",
+        role === "user" ? "ml-auto" : "mr-auto",
+      )}
+    >
+      {media.map((item, index) => (
+        <ImageBlock
+          key={`${item.artifact_path ?? "image"}-${index}`}
+          media={item}
+          className={media.length > 1 ? "max-w-[16rem]" : undefined}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -1240,6 +1326,7 @@ function ToolProcessRow({
       status={status}
       title={name}
       nested={nested}
+      detail={toolTimeoutLabel(tool.use?.timeout_seconds)}
     >
       {hasContent ? (
         <div className="flex flex-col gap-2">
@@ -1283,16 +1370,18 @@ function ToolResultPayload({ result }: { result: NonNullable<ToolDisplayUnit["re
 
 function ProcessDisclosure({
   children,
+  detail,
   nested = false,
   status,
   title,
 }: {
   children: ReactNode;
+  detail?: string;
   nested?: boolean;
   status: ToolProcessStatus;
   title: string;
 }) {
-  const [isOpen, setIsOpen] = useState(processDisclosureDefaultOpen());
+  const [isOpen, setIsOpen] = useState(processDisclosureDefaultOpen(status));
 
   return (
     <details
@@ -1304,6 +1393,11 @@ function ProcessDisclosure({
         <ProcessStatusIndicator status={status} />
         <span className="sr-only">{toolProcessStatusLabel(status)}</span>
         <span className="min-w-0 truncate">{title}</span>
+        {detail ? (
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            {detail}
+          </span>
+        ) : null}
         <ChevronRightIcon
           className={processDisclosureChevronClassName(nested)}
           aria-hidden="true"
@@ -1318,18 +1412,27 @@ function ProcessStatusIndicator({ status }: { status: ToolProcessStatus }) {
   if (status === "running") {
     return (
       <LoaderCircleIcon
-        className="size-3 shrink-0 animate-spin text-muted-foreground"
+        className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
         aria-hidden="true"
       />
     );
   }
   return (
     <span
-      className={processStatusDotClassName(
-        status === "failed" ? "failed" : "done",
+      className={cn(
+        "grid size-4 shrink-0 place-items-center rounded-full",
+        status === "failed"
+          ? "bg-juex-error-bg text-juex-error"
+          : "bg-juex-success-bg text-juex-done",
       )}
       aria-hidden="true"
-    />
+    >
+      {status === "failed" ? (
+        <CircleAlertIcon className="size-3" />
+      ) : (
+        <CheckIcon className="size-3" />
+      )}
+    </span>
   );
 }
 

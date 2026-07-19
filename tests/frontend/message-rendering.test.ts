@@ -217,8 +217,10 @@ test("nested process disclosures only rotate their own chevrons", () => {
   assert.doesNotMatch(nestedChevron, /group-open\/process-row:rotate-90/);
 });
 
-test("process disclosures default closed for every status", () => {
-  assert.equal(processDisclosureDefaultOpen(), false);
+test("active and failed process disclosures default open", () => {
+  assert.equal(processDisclosureDefaultOpen("running"), true);
+  assert.equal(processDisclosureDefaultOpen("failed"), true);
+  assert.equal(processDisclosureDefaultOpen("done"), false);
 });
 
 test("process status dots are smaller while thinking has no dot contract", () => {

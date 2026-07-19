@@ -9,6 +9,13 @@ export type ComposerSubmitAction =
 
 export const QUEUE_FULL_SUBMIT_HINT = "Pending input queue is full";
 
+export function settleSubmittedComposerText(
+  currentText: string,
+  submittedText: string,
+): string {
+  return currentText === submittedText ? "" : currentText;
+}
+
 export function composerErrorMessage({
   status,
   localError,

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   composerErrorMessage,
   composerSubmitAction,
+  settleSubmittedComposerText,
 } from "../../frontend/src/lib/composer-submit.ts";
 import type {
   AgentRuntimeStatusSnapshot,
@@ -157,4 +158,13 @@ test("composer error prefers runtime failure and falls back to local submit fail
     "proxy unavailable",
   );
   assert.equal(composerErrorMessage({ status: status("idle") }), undefined);
+});
+
+test("successful submit clears only the text that was actually submitted", () => {
+  assert.equal(settleSubmittedComposerText("hello", "hello"), "");
+  assert.equal(
+    settleSubmittedComposerText("hello, and one more thing", "hello"),
+    "hello, and one more thing",
+  );
+  assert.equal(settleSubmittedComposerText("draft ", "draft "), "");
 });
