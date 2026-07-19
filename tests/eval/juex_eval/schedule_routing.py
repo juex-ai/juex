@@ -392,12 +392,36 @@ def _contains_detached_interval_sleep(command: str, segments: list[list[str]]) -
         program_index = _command_program_index(segment)
         if program_index is None or _program_name(segment[program_index]) != "sleep":
             continue
-        if not any(argument.lower() in {"21600", "6h"} for argument in segment[program_index + 1 :]):
+        if _sleep_duration_seconds(segment[program_index + 1 :]) != 21600:
             continue
         wrappers = {_program_name(token) for token in segment[:program_index]}
         if "&" in command or wrappers.intersection({"nohup", "setsid"}):
             return True
     return False
+
+
+def _sleep_duration_seconds(arguments: list[str]) -> float | None:
+    total = 0.0
+    saw_duration = False
+    index = 0
+    while index < len(arguments):
+        redirection_end = _shell_redirection_end(arguments, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        argument = arguments[index]
+        if argument == "--":
+            index += 1
+            continue
+        match = re.fullmatch(r"(\d+(?:\.\d*)?|\.\d+)([smhd]?)", argument.lower())
+        if match is None:
+            return None
+        value = float(match.group(1))
+        multiplier = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+        total += value * multiplier
+        saw_duration = True
+        index += 1
+    return total if saw_duration else None
 
 
 def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
@@ -417,6 +441,9 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
             nested_command = segment[nested_start:]
             expanded.append(nested_command)
             nested_commands.append(nested_command)
+    for name, payload in _shell_function_bodies(segments).items():
+        if _shell_function_is_invoked(name, expanded):
+            expanded.extend(_recursive_shell_segments(payload, depth + 1))
     for segment in nested_commands:
         env_payload = _env_split_string_payload(segment)
         if env_payload is not None:
@@ -435,6 +462,68 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
         if shell_payload is not None:
             expanded.extend(_recursive_shell_segments(shell_payload, depth + 1))
     return expanded
+
+
+def _shell_function_bodies(segments: list[list[str]]) -> dict[str, str]:
+    bodies: dict[str, str] = {}
+    segment_index = 0
+    while segment_index < len(segments):
+        definition = _shell_function_definition(segments[segment_index])
+        if definition is None:
+            segment_index += 1
+            continue
+        name, body_start = definition
+        depth = 1
+        body_segments: list[list[str]] = []
+        while segment_index < len(segments) and depth > 0:
+            segment = segments[segment_index]
+            start = body_start if not body_segments else 0
+            body_segment: list[str] = []
+            for token in segment[start:]:
+                if token == "{":
+                    depth += 1
+                elif token == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                body_segment.append(token)
+            if body_segment:
+                body_segments.append(body_segment)
+            segment_index += 1
+            body_start = 0
+        if body_segments:
+            bodies[name] = "; ".join(shlex.join(segment) for segment in body_segments)
+    return bodies
+
+
+def _shell_function_definition(tokens: list[str]) -> tuple[str, int] | None:
+    if not tokens:
+        return None
+    compact = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\(\)\{", tokens[0])
+    if compact is not None:
+        return compact.group(1), 1
+    if tokens[0] == "function" and len(tokens) >= 3:
+        name = tokens[1].removesuffix("()")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) and tokens[2] == "{":
+            return name, 3
+    if (
+        len(tokens) >= 3
+        and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tokens[0])
+        and tokens[1] == "()"
+        and tokens[2] == "{"
+    ):
+        return tokens[0], 3
+    return None
+
+
+def _shell_function_is_invoked(name: str, segments: list[list[str]]) -> bool:
+    for segment in segments:
+        if _shell_function_definition(segment) is not None:
+            continue
+        program_index = _command_program_index(segment)
+        if program_index is not None and _program_name(segment[program_index]) == name.lower():
+            return True
+    return False
 
 
 def _shell_control_command_start(tokens: list[str], program_index: int) -> int | None:
