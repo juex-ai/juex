@@ -273,7 +273,9 @@ def _is_shell_scheduling_command(use: _ToolUse) -> bool:
     normalized = " ".join(command.lower().split())
     if re.search(r"\b(?:while|until|for)\b.*\bsleep\b", normalized):
         return True
-    if re.search(r"\b(?:crontab|systemd-run)\b", normalized):
+    if re.search(r"\bsystemd-run\b", normalized):
+        return True
+    if _contains_mutating_crontab(command):
         return True
     if _contains_watch_command(command):
         return True
@@ -281,6 +283,52 @@ def _is_shell_scheduling_command(use: _ToolUse) -> bool:
         re.search(r"\bsleep\s+(?:21600|6h)\b", normalized)
         and ("&" in command or re.search(r"\b(?:nohup|setsid)\b", normalized))
     )
+
+
+def _contains_mutating_crontab(command: str, depth: int = 0) -> bool:
+    segments = _shell_command_segments(command)
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if (
+            program_index is not None
+            and _program_name(segment[program_index]) == "crontab"
+            and not _is_crontab_list(segment, program_index)
+        ):
+            return True
+    if depth >= 3 or not segments:
+        return False
+    for segment in segments:
+        env_payload = _env_split_string_payload(segment)
+        if env_payload is not None and _contains_mutating_crontab(env_payload, depth + 1):
+            return True
+        program_index = _command_program_index(segment)
+        if program_index is None or _program_name(segment[program_index]) not in SHELL_INTERPRETERS:
+            continue
+        shell_payload = _shell_command_payload(segment, program_index)
+        if shell_payload is not None and _contains_mutating_crontab(shell_payload, depth + 1):
+            return True
+    return False
+
+
+def _is_crontab_list(tokens: list[str], program_index: int) -> bool:
+    saw_list = False
+    index = program_index + 1
+    while index < len(tokens):
+        option = tokens[index]
+        if option in {"-l", "--list"}:
+            saw_list = True
+            index += 1
+            continue
+        if option in {"-u", "--user"}:
+            if index + 1 >= len(tokens):
+                return False
+            index += 2
+            continue
+        if option.startswith("--user="):
+            index += 1
+            continue
+        return False
+    return saw_list
 
 
 def _contains_watch_command(command: str, depth: int = 0) -> bool:
