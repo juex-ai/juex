@@ -401,6 +401,8 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
     if depth >= 3:
         return segments
     expanded = list(segments)
+    for payload in _shell_substitution_payloads(command):
+        expanded.extend(_recursive_shell_segments(payload, depth + 1))
     nested_commands = list(segments)
     for segment in segments:
         program_index = _command_program_index(segment)
@@ -430,6 +432,99 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
         if shell_payload is not None:
             expanded.extend(_recursive_shell_segments(shell_payload, depth + 1))
     return expanded
+
+
+def _shell_substitution_payloads(command: str) -> list[str]:
+    payloads: list[str] = []
+    index = 0
+    quote: str | None = None
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if command.startswith("$(", index) or (
+            quote is None and char in {"<", ">"} and index + 1 < len(command) and command[index + 1] == "("
+        ):
+            parsed = _parenthesized_substitution(command, index + 2)
+            if parsed is not None:
+                payload, end = parsed
+                payloads.append(payload)
+                index = end + 1
+                continue
+        if char == "`":
+            parsed = _backtick_substitution(command, index + 1)
+            if parsed is not None:
+                payload, end = parsed
+                payloads.append(payload)
+                index = end + 1
+                continue
+        index += 1
+    return payloads
+
+
+def _parenthesized_substitution(command: str, start: int) -> tuple[str, int] | None:
+    depth = 1
+    index = start
+    quote: str | None = None
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char == "'" and quote is None:
+            quote = "'"
+            index += 1
+            continue
+        if char == '"':
+            quote = None if quote == '"' else '"'
+            index += 1
+            continue
+        if command.startswith("$(", index):
+            nested = _parenthesized_substitution(command, index + 2)
+            if nested is None:
+                return None
+            _, end = nested
+            index = end + 1
+            continue
+        if quote is None and char == "(":
+            depth += 1
+        elif quote is None and char == ")":
+            depth -= 1
+            if depth == 0:
+                return command[start:index], index
+        index += 1
+    return None
+
+
+def _backtick_substitution(command: str, start: int) -> tuple[str, int] | None:
+    index = start
+    while index < len(command):
+        if command[index] == "\\":
+            index += 2
+            continue
+        if command[index] == "`":
+            return command[start:index], index
+        index += 1
+    return None
 
 
 def _eval_command_payload(tokens: list[str], program_index: int) -> str | None:
