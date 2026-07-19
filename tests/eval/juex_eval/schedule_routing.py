@@ -27,6 +27,10 @@ SHELL_INTERPRETERS = {"bash", "dash", "ksh", "sh", "zsh"}
 
 SHELL_OPTIONS_WITH_VALUE = {"-o", "+o", "-O", "+O", "--init-file", "--rcfile"}
 
+SHELL_COMMAND_PREFIXES = {"!", "{"}
+
+SHELL_CONTROL_PREFIXES = {"do", "elif", "else", "if", "then", "until", "while"}
+
 WRAPPER_OPTIONS_WITH_VALUE = {
     "command": set(),
     "env": {"-a", "--argv0", "-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
@@ -303,7 +307,7 @@ def _is_crontab_list(tokens: list[str], program_index: int) -> bool:
     saw_list = False
     index = program_index + 1
     while index < len(tokens):
-        option = tokens[index]
+        option = tokens[index].rstrip(")")
         if option in {"-l", "--list"}:
             saw_list = True
             index += 1
@@ -370,7 +374,7 @@ def _contains_systemd_run_command(segments: list[list[str]]) -> bool:
 def _is_systemd_run_inspection(tokens: list[str], program_index: int) -> bool:
     index = program_index + 1
     while index < len(tokens):
-        option = tokens[index]
+        option = tokens[index].rstrip(")")
         if option in {"-h", "--help", "--version"}:
             return True
         redirection_end = _shell_redirection_end(tokens, index)
@@ -406,12 +410,11 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
     nested_commands = list(segments)
     for segment in segments:
         program_index = _command_program_index(segment)
-        if (
-            program_index is not None
-            and _program_name(segment[program_index]) in {"while", "until", "do"}
-            and program_index + 1 < len(segment)
-        ):
-            nested_command = segment[program_index + 1 :]
+        if program_index is None:
+            continue
+        nested_start = _shell_control_command_start(segment, program_index)
+        if nested_start is not None:
+            nested_command = segment[nested_start:]
             expanded.append(nested_command)
             nested_commands.append(nested_command)
     for segment in nested_commands:
@@ -432,6 +435,20 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
         if shell_payload is not None:
             expanded.extend(_recursive_shell_segments(shell_payload, depth + 1))
     return expanded
+
+
+def _shell_control_command_start(tokens: list[str], program_index: int) -> int | None:
+    program = _program_name(tokens[program_index])
+    if program in SHELL_CONTROL_PREFIXES and program_index + 1 < len(tokens):
+        return program_index + 1
+    if program == "case":
+        for index in range(program_index + 1, len(tokens)):
+            if tokens[index].endswith(")") and index + 1 < len(tokens):
+                return index + 1
+        return None
+    if tokens[program_index].endswith(")") and program_index + 1 < len(tokens):
+        return program_index + 1
+    return None
 
 
 def _shell_substitution_payloads(command: str) -> list[str]:
@@ -611,7 +628,9 @@ def _shell_command_segments(command: str) -> list[list[str]]:
 def _command_program_index(tokens: list[str]) -> int | None:
     index = 0
     while index < len(tokens):
-        while index < len(tokens) and _is_assignment(tokens[index]):
+        while index < len(tokens) and (
+            _is_assignment(tokens[index]) or tokens[index] in SHELL_COMMAND_PREFIXES
+        ):
             index += 1
         if index >= len(tokens):
             return None
@@ -679,7 +698,10 @@ def _is_assignment(token: str) -> bool:
 
 
 def _program_name(token: str) -> str:
-    return token.rsplit("/", 1)[-1].lower()
+    name = token.rsplit("/", 1)[-1].lower()
+    if name.startswith("(") and not name.startswith("(("):
+        name = name.lstrip("(").rstrip(")")
+    return name
 
 
 def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, issues: list[str]) -> None:
