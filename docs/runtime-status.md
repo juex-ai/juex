@@ -229,8 +229,9 @@ The browser applies each `agent.status` event to the same
   presentation state rather than shown as still working, and its nonterminal
   tool-call projection is cleared.
 - A post-compact hook failure remains observational after the compact message
-  is committed. The runtime still publishes `context.compact.completed` with
-  the new context usage after reporting the hook error.
+  is committed. Command hook failures remain visible as `hook.errored`, while
+  the runtime publishes only `context.compact.completed` for the committed
+  compaction and its new context usage.
 - Unknown event families advance the cursor but do not change named state.
 - Existing browser event payloads, `events.jsonl`, turn status routes, and
   `GET /api/activity` remain compatible while new status routes are additive.

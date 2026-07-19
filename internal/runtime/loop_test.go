@@ -2005,9 +2005,8 @@ func TestCompactDoesNotFallbackAfterContextCancellation(t *testing.T) {
 
 func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	cases := []struct {
-		name             string
-		runner           *fakeHookRunner
-		wantCompactError bool
+		name   string
+		runner *fakeHookRunner
 	}{
 		{
 			name: "error",
@@ -2015,7 +2014,6 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 				responses: map[hooks.EventName][]fakeHookResponse{hooks.EventPreCompact: {{}}},
 				errors:    map[hooks.EventName]error{hooks.EventPostCompact: errors.New("audit sink unavailable")},
 			},
-			wantCompactError: true,
 		},
 		{
 			name: "deny",
@@ -2065,8 +2063,8 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 					sawCompleted = true
 				}
 			}
-			if sawErrored != tc.wantCompactError {
-				t.Fatalf("events = %+v, want compact error=%v", eventTypes, tc.wantCompactError)
+			if sawErrored {
+				t.Fatalf("events = %+v, committed compaction must not emit compact error", eventTypes)
 			}
 			if !sawCompleted {
 				t.Fatalf("events = %+v, want completed after committed compaction", eventTypes)
