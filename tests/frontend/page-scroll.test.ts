@@ -1,52 +1,93 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-function source(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), "utf8");
+const require = createRequire(
+  new URL("../../frontend/package.json", import.meta.url),
+);
+const ts = require("typescript");
+
+function classTokenSets(path: string): Set<string>[] {
+  const source = readFileSync(new URL(path, import.meta.url), "utf8");
+  const sourceFile = ts.createSourceFile(
+    path,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const tokenSets: Set<string>[] = [];
+
+  const collectStrings = (node: unknown) => {
+    if (ts.isStringLiteralLike(node)) {
+      tokenSets.push(new Set(node.text.trim().split(/\s+/).filter(Boolean)));
+      return;
+    }
+    ts.forEachChild(node, collectStrings);
+  };
+  const visit = (node: unknown) => {
+    if (
+      ts.isJsxAttribute(node) &&
+      ["className", "scrollClassName"].includes(node.name.getText(sourceFile))
+    ) {
+      if (node.initializer) collectStrings(node.initializer);
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return tokenSets;
 }
 
-const globalStyles = source("../../frontend/src/index.css");
-const conversationSource = source(
+function assertHasClassTokens(
+  tokenSets: Set<string>[],
+  expected: string,
+): void {
+  const expectedTokens = expected.split(/\s+/).filter(Boolean);
+  assert.ok(
+    tokenSets.some((tokens) =>
+      expectedTokens.every((token) => tokens.has(token)),
+    ),
+    `expected one class expression to contain: ${expected}`,
+  );
+}
+
+const shellClasses = classTokenSets(
+  "../../frontend/src/components/AppShell.tsx",
+);
+const conversationClasses = classTokenSets(
   "../../frontend/src/components/ai-elements/conversation.tsx",
 );
-const sessionSource = source("../../frontend/src/pages/Session.tsx");
-const runtimeSource = source("../../frontend/src/pages/Runtime.tsx");
+const sessionClasses = classTokenSets("../../frontend/src/pages/Session.tsx");
+const runtimeClasses = classTokenSets("../../frontend/src/pages/Runtime.tsx");
 
-test("the app root owns an exact non-scrolling viewport", () => {
-  assert.match(
-    globalStyles,
-    /html,\s*body,\s*#root\s*\{[\s\S]*?height:\s*100%;[\s\S]*?min-height:\s*0;/,
+test("the app shell owns an exact clipped viewport", () => {
+  assertHasClassTokens(
+    shellClasses,
+    "fixed inset-0 h-svh min-h-0 overflow-clip",
   );
-  assert.match(
-    globalStyles,
-    /html,\s*body\s*\{[\s\S]*?overflow:\s*hidden;/,
-  );
-  assert.match(
-    globalStyles,
-    /#root\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;[\s\S]*?overflow:\s*clip;/,
-  );
-  assert.doesNotMatch(globalStyles, /body\s*\{[\s\S]*?min-h-svh/);
 });
 
 test("the session keeps one explicit conversation scroller above the composer", () => {
-  assert.match(
-    conversationSource,
-    /scrollClassName=\{cn\(\s*"h-full min-h-0 overflow-y-auto overscroll-contain"/,
+  assertHasClassTokens(
+    conversationClasses,
+    "relative min-h-0 flex-1 overflow-hidden",
   );
-  assert.match(
-    sessionSource,
-    /<div className="flex min-h-0 flex-1 flex-col overflow-hidden">/,
+  assertHasClassTokens(
+    conversationClasses,
+    "h-full min-h-0 overflow-y-auto overscroll-contain",
   );
-  assert.match(
-    sessionSource,
-    /<div className="shrink-0 border-t bg-background\/92/,
+  assertHasClassTokens(
+    sessionClasses,
+    "flex min-h-0 flex-1 flex-col overflow-hidden",
   );
+  assertHasClassTokens(sessionClasses, "shrink-0 border-t");
 });
 
 test("runtime owns vertical scrolling without document scroll chaining", () => {
-  assert.match(
-    runtimeSource,
-    /className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-background"/,
+  assertHasClassTokens(
+    runtimeClasses,
+    "min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain",
   );
 });

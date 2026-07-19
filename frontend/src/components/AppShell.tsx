@@ -251,7 +251,7 @@ export function AppShell() {
   return (
     <ShellTitleContext.Provider value={shellTitleContext}>
       <FleetAgentProvider value={runtimeContext}>
-        <div className="flex h-svh min-h-0 overflow-hidden bg-background">
+        <div className="fixed inset-0 flex h-svh min-h-0 overflow-clip bg-background">
           <div className="hidden min-[760px]:flex">{sidebar}</div>
           <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
             <SheetContent
