@@ -66,7 +66,7 @@ export function Runtime() {
   const mcpServers = data.mcp?.servers ?? [];
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto bg-background">
+    <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain bg-background">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-4 py-5 md:px-6 md:py-6">
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">

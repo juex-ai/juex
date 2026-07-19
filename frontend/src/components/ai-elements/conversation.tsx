@@ -38,7 +38,7 @@ export const Conversation = ({
 
   return (
     <StickToBottom
-      className={cn("relative flex-1 overflow-y-hidden", className)}
+      className={cn("relative min-h-0 flex-1 overflow-hidden", className)}
       initial={scrollOptions.initial}
       resize={scrollOptions.resize}
       role="log"
@@ -53,10 +53,15 @@ export type ConversationContentProps = ComponentProps<
 
 export const ConversationContent = ({
   className,
+  scrollClassName,
   ...props
 }: ConversationContentProps) => (
   <StickToBottom.Content
     className={cn("flex flex-col gap-[18px] px-4 py-4 md:px-6 md:py-[22px]", className)}
+    scrollClassName={cn(
+      "h-full min-h-0 overflow-y-auto overscroll-contain",
+      scrollClassName,
+    )}
     {...props}
   />
 );
