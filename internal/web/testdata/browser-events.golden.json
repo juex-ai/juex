@@ -91,17 +91,6 @@
     }
   },
   {
-    "id": "evt-pending-draining",
-    "type": "pending_input.draining",
-    "ts": "2026-06-15T00:00:06.5Z",
-    "turn_id": "turn-1",
-    "payload": {
-      "count": 1,
-      "pending_count": 0,
-      "max_pending_inputs": 4
-    }
-  },
-  {
     "id": "evt-llm-delta",
     "type": "llm.output_delta",
     "ts": "2026-06-15T00:00:01.75Z",
@@ -189,6 +178,17 @@
       "input": "queued follow-up",
       "kind": "user",
       "pending_count": 1,
+      "max_pending_inputs": 4
+    }
+  },
+  {
+    "id": "evt-pending-draining",
+    "type": "pending_input.draining",
+    "ts": "2026-06-15T00:00:06.5Z",
+    "turn_id": "turn-1",
+    "payload": {
+      "count": 1,
+      "pending_count": 0,
       "max_pending_inputs": 4
     }
   },

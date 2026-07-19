@@ -479,6 +479,70 @@ test("projectLiveSessionEvent drains queued input before the pending assistant p
   );
 });
 
+test("projectLiveSessionEvent keeps newly queued input out of an announced drain", () => {
+  let state = createLiveSessionProjection();
+  state = projectQueuedInput(
+    state,
+    "draining follow-up",
+    undefined,
+    1,
+    [imageMedia],
+  );
+  state = apply(state, {
+    id: "e1",
+    type: "turn.started",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "turn-1",
+    payload: { input: "active prompt" },
+  });
+  state = apply(state, {
+    id: "e2",
+    type: "pending_input.draining",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "turn-1",
+    payload: { count: 1, pending_count: 0, max_pending_inputs: 4 },
+  });
+  state = apply(state, {
+    id: "e3",
+    type: "pending_input.queued",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "new queued follow-up",
+      kind: "",
+      pending_count: 1,
+      max_pending_inputs: 4,
+    },
+  });
+  state = apply(state, {
+    id: "e4",
+    type: "pending_input.drained",
+    ts: "2026-06-15T00:00:03Z",
+    turn_id: "turn-1",
+    payload: { count: 1, pending_count: 1, max_pending_inputs: 4 },
+  });
+
+  assert.deepEqual(
+    state.queuedInput.items.map((item) => item.input),
+    ["new queued follow-up"],
+  );
+  const drained = state.messages.find(
+    (message) => message.kind === "pending_input",
+  );
+  assert.deepEqual(drained?.blocks, [
+    { type: "text", text: "draining follow-up" },
+    { type: "image", media: imageMedia },
+  ]);
+  assert.equal(
+    state.messages.some(
+      (message) =>
+        message.blocks?.[0]?.type === "text" &&
+        message.blocks[0].text === "new queued follow-up",
+    ),
+    false,
+  );
+});
+
 test("projectLiveSessionEvent keeps drained input visible after the turn errors", () => {
   let state = createLiveSessionProjection();
   state = projectQueuedInput(state, "paused follow-up", undefined, 1);

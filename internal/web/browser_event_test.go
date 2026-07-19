@@ -238,17 +238,6 @@ func browserEventFixtureEvents() []events.Event {
 			},
 		},
 		{
-			ID:        "evt-pending-draining",
-			Type:      juexruntime.PendingInputDrainingType,
-			Timestamp: ts.Add(6500 * time.Millisecond),
-			TurnID:    "turn-1",
-			Payload: juexruntime.PendingInputDrainingPayload{
-				Count:            1,
-				PendingCount:     0,
-				MaxPendingInputs: 4,
-			},
-		},
-		{
 			ID:        "evt-llm-delta",
 			Type:      "llm.output_delta",
 			Timestamp: ts.Add(1750 * time.Millisecond),
@@ -330,6 +319,17 @@ func browserEventFixtureEvents() []events.Event {
 				Input:            "queued follow-up",
 				Kind:             "user",
 				PendingCount:     1,
+				MaxPendingInputs: 4,
+			},
+		},
+		{
+			ID:        "evt-pending-draining",
+			Type:      juexruntime.PendingInputDrainingType,
+			Timestamp: ts.Add(6500 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.PendingInputDrainingPayload{
+				Count:            1,
+				PendingCount:     0,
 				MaxPendingInputs: 4,
 			},
 		},

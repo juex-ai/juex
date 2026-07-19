@@ -43,6 +43,8 @@ export type LiveSessionProjection = {
   tokenUsage: TokenUsage | null;
   contextUsage: ContextUsage | null;
   queuedInput: QueuedInputState;
+  // Empty slots reserve announced drain positions missing from local queue state.
+  drainingQueuedInputs: Array<QueuedInput | undefined>;
   turnActive: boolean;
   compactActive: boolean;
   compactCommandInputs: Record<string, string>;
@@ -64,6 +66,7 @@ export function createLiveSessionProjection(): LiveSessionProjection {
     tokenUsage: null,
     contextUsage: null,
     queuedInput: createQueuedInputState(),
+    drainingQueuedInputs: [],
     turnActive: false,
     compactActive: false,
     compactCommandInputs: {},
@@ -90,8 +93,17 @@ export function clearLiveSessionTranscript(
 export function clearQueuedInputs(
   state: LiveSessionProjection,
 ): LiveSessionProjection {
-  if (state.queuedInput.items.length === 0) return state;
-  return { ...state, queuedInput: createQueuedInputState() };
+  if (
+    state.queuedInput.items.length === 0 &&
+    state.drainingQueuedInputs.length === 0
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    queuedInput: createQueuedInputState(),
+    drainingQueuedInputs: [],
+  };
 }
 
 export function clearLocalCompactMessages(
@@ -368,6 +380,14 @@ export function projectLiveSessionEvent(
         event.payload.pending_count,
       );
       break;
+    case "pending_input.draining":
+      next = reserveDrainingQueuedInputs(next, event.payload.count);
+      next = {
+        ...next,
+        turnActive: true,
+        status: { kind: "pending", count: event.payload.pending_count },
+      };
+      break;
     case "pending_input.promoted": {
       const promoted = drainQueuedInputState(next.queuedInput, 1);
       const item = promoted.drained[0];
@@ -545,11 +565,37 @@ function drainQueuedInputs(
   count: number,
   turnID: string | undefined,
 ): LiveSessionProjection {
-  const result = drainQueuedInputState(state.queuedInput, count);
+  const reservedCount = Math.min(count, state.drainingQueuedInputs.length);
+  const reserved = state.drainingQueuedInputs
+    .slice(0, reservedCount)
+    .filter((item): item is QueuedInput => item !== undefined);
+  const result = drainQueuedInputState(state.queuedInput, count - reservedCount);
   return {
     ...state,
     queuedInput: result.state,
-    messages: appendDrainedInputs(state.messages, result.drained, turnID),
+    drainingQueuedInputs: state.drainingQueuedInputs.slice(reservedCount),
+    messages: appendDrainedInputs(
+      state.messages,
+      [...reserved, ...result.drained],
+      turnID,
+    ),
+  };
+}
+
+function reserveDrainingQueuedInputs(
+  state: LiveSessionProjection,
+  count: number,
+): LiveSessionProjection {
+  if (count <= 0) return state;
+  const result = drainQueuedInputState(state.queuedInput, count);
+  const reserved: Array<QueuedInput | undefined> = [];
+  for (let index = 0; index < count; index++) {
+    reserved.push(result.drained[index]);
+  }
+  return {
+    ...state,
+    queuedInput: result.state,
+    drainingQueuedInputs: [...state.drainingQueuedInputs, ...reserved],
   };
 }
 
