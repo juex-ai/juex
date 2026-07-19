@@ -54,6 +54,9 @@ func serviceSearchPath(executable string, host hostInfo) string {
 		if value == "" || strings.ContainsAny(value, "\x00\n\r") {
 			return
 		}
+		if !filepath.IsAbs(value) && !path.IsAbs(filepath.ToSlash(value)) {
+			return
+		}
 		if _, ok := seen[value]; ok {
 			return
 		}

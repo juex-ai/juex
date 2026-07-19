@@ -271,6 +271,17 @@ func TestServiceSearchPathKeepsSafeAbsoluteEntriesInStableOrder(t *testing.T) {
 	}
 }
 
+func TestServiceSearchPathRejectsRelativeEntries(t *testing.T) {
+	got := serviceSearchPath("/opt/juex/bin/juex", hostInfo{
+		goos:       "linux",
+		userHome:   "relative-home",
+		searchPath: "relative-bin",
+	})
+	if strings.Contains(got, "relative") {
+		t.Fatalf("service search path contains a relative entry: %q", got)
+	}
+}
+
 func TestPublishFilesRollsBackEarlierDefinitionOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first")
@@ -415,6 +426,26 @@ func TestInstalledUsesNativeStateAndFailsUnknownErrors(t *testing.T) {
 			t.Fatal("Installed succeeded on unknown native-manager error")
 		}
 	})
+}
+
+func TestWaitLaunchdUnloadedPreservesCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager := &Manager{
+		plan: registrationPlan{
+			registration:  Registration{Name: "ai.juex.fleet.test"},
+			launchdTarget: "gui/501/ai.juex.fleet.test",
+		},
+		runner: commandRunnerFunc(func(context.Context, command) (string, error) {
+			cancel()
+			return "launchctl interrupted", errors.New("exit status 1")
+		}),
+	}
+
+	err := manager.waitLaunchdUnloaded(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitLaunchdUnloaded error = %v, want context.Canceled", err)
+	}
 }
 
 func TestInstalledUsesSystemdStateWithoutDefinition(t *testing.T) {
@@ -712,6 +743,12 @@ func validateXML(data []byte) error {
 type fakeCommandResult struct {
 	output string
 	err    error
+}
+
+type commandRunnerFunc func(context.Context, command) (string, error)
+
+func (f commandRunnerFunc) Run(ctx context.Context, cmd command) (string, error) {
+	return f(ctx, cmd)
 }
 
 type fakeRunner struct {
