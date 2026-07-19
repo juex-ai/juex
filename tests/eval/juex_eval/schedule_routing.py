@@ -276,7 +276,7 @@ def _is_shell_scheduling_command(use: _ToolUse) -> bool:
         for segment in segments
         if (program_index := _command_program_index(segment)) is not None
     ]
-    if any(program in {"while", "until", "for"} for program in programs) and "sleep" in programs:
+    if any(program in {"while", "until", "for", "select"} for program in programs) and "sleep" in programs:
         return True
     if _contains_systemd_run_command(segments):
         return True
@@ -401,7 +401,18 @@ def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
     if depth >= 3:
         return segments
     expanded = list(segments)
+    nested_commands = list(segments)
     for segment in segments:
+        program_index = _command_program_index(segment)
+        if (
+            program_index is not None
+            and _program_name(segment[program_index]) in {"while", "until", "do"}
+            and program_index + 1 < len(segment)
+        ):
+            nested_command = segment[program_index + 1 :]
+            expanded.append(nested_command)
+            nested_commands.append(nested_command)
+    for segment in nested_commands:
         env_payload = _env_split_string_payload(segment)
         if env_payload is not None:
             expanded.extend(_recursive_shell_segments(env_payload, depth + 1))
