@@ -469,7 +469,8 @@ def _env_split_option_payload(tokens: list[str], index: int) -> str | None:
 
 def _shell_command_segments(command: str) -> list[list[str]]:
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>\n")
+        lexer.whitespace = " \t\r"
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
@@ -478,7 +479,7 @@ def _shell_command_segments(command: str) -> list[list[str]]:
     segments: list[list[str]] = []
     segment: list[str] = []
     for token in tokens:
-        if token and all(char in ";&|" for char in token):
+        if token and all(char in ";&|\n" for char in token):
             if segment:
                 segments.append(segment)
                 segment = []
