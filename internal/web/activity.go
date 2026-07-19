@@ -88,9 +88,7 @@ func (h *agentStatusHub) subscribe(_ string) agentStatusSubscription {
 		updates: updates,
 		cancel: func() {
 			h.mu.Lock()
-			if _, ok := h.subscribers[id]; ok {
-				delete(h.subscribers, id)
-			}
+			delete(h.subscribers, id)
 			h.mu.Unlock()
 		},
 	}

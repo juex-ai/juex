@@ -277,9 +277,7 @@ func (s *StatusStore) SubscribeFrom(cursor string) *StatusSubscription {
 		Updates:   updates,
 		cancel: func() {
 			s.mu.Lock()
-			if _, ok := s.subscribers[id]; ok {
-				delete(s.subscribers, id)
-			}
+			delete(s.subscribers, id)
 			s.mu.Unlock()
 		},
 	}
