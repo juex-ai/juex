@@ -212,19 +212,25 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 }
 
 func activeSessionTurnResponse(as *activeSession) *sessionTurnResponse {
-	if as == nil || as.turns == nil {
+	if as == nil || as.app == nil || as.app.Status == nil {
 		return nil
 	}
-	turnID, status, ok := as.turns.activeStatus()
-	if !ok {
+	snapshot := as.app.Status.Snapshot()
+	if snapshot.Turn == nil {
 		return nil
 	}
+	if snapshot.Turn.State != runtime.TurnLifecycleAdmitted &&
+		snapshot.Turn.State != runtime.TurnLifecycleActive {
+		return nil
+	}
+	state := "running"
+	pendingCount := snapshot.Session.PendingCount
+	maxPendingInputs := snapshot.Session.MaxPendingInputs
 	return &sessionTurnResponse{
-		TurnID:           turnID,
-		State:            status.State,
-		Error:            status.Err,
-		PendingCount:     status.PendingCount,
-		MaxPendingInputs: status.MaxPendingInputs,
+		TurnID:           snapshot.Turn.ID,
+		State:            state,
+		PendingCount:     &pendingCount,
+		MaxPendingInputs: &maxPendingInputs,
 	}
 }
 
@@ -320,7 +326,7 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 		writeErr(w, http.StatusConflict, "conflict", "session busy")
 		return
 	}
-	result, err := as.app.CompactWithInstructions(r.Context(), req.Reason, false, req.Instructions)
+	result, err := as.app.CompactAdmittedWithInstructions(r.Context(), compactTurnID, req.Reason, false, req.Instructions)
 	if start := as.app.FinishCompactAdmission(compactTurnID, app.TurnIDFunc(s.nextTurnID)); start != nil {
 		as.turns.start(start.TurnID, start.Message)
 	}
@@ -615,10 +621,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
 
-	since := r.URL.Query().Get("since")
-	if since == "" {
-		since = r.Header.Get("Last-Event-ID")
-	}
+	since := sseResumeCursor(r)
 	if since != "" {
 		// Replay missed events from events.jsonl. The path comes from the
 		// session record so we never read outside the sessions dir.
@@ -653,4 +656,88 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 	}
+}
+
+func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request, id string) {
+	status, _, err := s.statusStoreForSession(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+	writeJSON(w, http.StatusOK, status.Snapshot())
+}
+
+func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Request, id string) {
+	status, live, err := s.statusStoreForSession(id)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "general_error", "streaming not supported")
+		return
+	}
+	since := sseResumeCursor(r)
+	subscription := status.SubscribeFrom(since)
+	defer subscription.Unsubscribe()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	for _, snapshot := range subscription.Snapshots {
+		if err := writeStatusSSE(w, snapshot); err != nil {
+			return
+		}
+	}
+	flusher.Flush()
+	if !live {
+		return
+	}
+	for {
+		select {
+		case snapshot, ok := <-subscription.Updates:
+			if !ok {
+				return
+			}
+			if err := writeStatusSSE(w, snapshot); err != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *Server) statusStoreForSession(id string) (*runtime.StatusStore, bool, error) {
+	if id == "" || filepath.Base(id) != id {
+		return nil, false, os.ErrNotExist
+	}
+	if value, ok := s.sessions.Load(id); ok {
+		active := value.(*activeSession)
+		if active.app == nil || active.app.Status == nil {
+			return nil, false, os.ErrNotExist
+		}
+		return active.app.Status, true, nil
+	}
+
+	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
+	info, _, err := session.LoadInfoPage(dir, "", 1)
+	if err != nil {
+		return nil, false, err
+	}
+	journal, err := session.ReadEvents(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	seed := runtime.StatusSeed{
+		SessionID:        info.ID,
+		SessionAlias:     info.Alias,
+		MaxPendingInputs: runtime.DefaultMaxPendingInput,
+		TokenUsage:       info.TokenUsage,
+		ContextUsage:     info.ContextUsage,
+	}
+	status := runtime.NewStatusStore(seed)
+	status.Reset(seed, journal)
+	status.RecoverAfterRestart()
+	return status, false, nil
 }

@@ -1,7 +1,12 @@
 package web
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"sync"
+
+	"github.com/juex-ai/juex/internal/runtime"
 )
 
 type agentActivityState string
@@ -12,10 +17,83 @@ const (
 )
 
 type agentActivityResponse struct {
-	State        agentActivityState `json:"state"`
-	SessionID    string             `json:"session_id,omitempty"`
-	SessionAlias string             `json:"session_alias,omitempty"`
-	PendingCount int                `json:"pending_count"`
+	State        agentActivityState      `json:"state"`
+	SessionID    string                  `json:"session_id,omitempty"`
+	SessionAlias string                  `json:"session_alias,omitempty"`
+	PendingCount int                     `json:"pending_count"`
+	Status       *runtime.StatusSnapshot `json:"status,omitempty"`
+}
+
+type agentStatusStreamEvent struct {
+	Type     string                `json:"type"`
+	Activity agentActivityResponse `json:"activity"`
+}
+
+type agentStatusHub struct {
+	mu          sync.Mutex
+	current     agentActivityResponse
+	subscribers map[uint64]chan agentActivityResponse
+	nextID      uint64
+}
+
+type agentStatusSubscription struct {
+	initial []agentActivityResponse
+	updates <-chan agentActivityResponse
+	cancel  func()
+}
+
+func newAgentStatusHub() *agentStatusHub {
+	return &agentStatusHub{subscribers: map[uint64]chan agentActivityResponse{}}
+}
+
+func (h *agentStatusHub) publish(status agentActivityResponse) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	h.current = status
+	channels := make([]chan agentActivityResponse, 0, len(h.subscribers))
+	for _, channel := range h.subscribers {
+		channels = append(channels, channel)
+	}
+	h.mu.Unlock()
+	for _, channel := range channels {
+		select {
+		case channel <- status:
+		default:
+			select {
+			case <-channel:
+			default:
+			}
+			select {
+			case channel <- status:
+			default:
+			}
+		}
+	}
+}
+
+func (h *agentStatusHub) subscribe(_ string) agentStatusSubscription {
+	h.mu.Lock()
+	h.nextID++
+	id := h.nextID
+	updates := make(chan agentActivityResponse, 16)
+	h.subscribers[id] = updates
+	// Presentation can change without advancing the durable event cursor, so a
+	// same-cursor reconnect still receives the current full snapshot.
+	initial := []agentActivityResponse{h.current}
+	h.mu.Unlock()
+	return agentStatusSubscription{
+		initial: initial,
+		updates: updates,
+		cancel: func() {
+			h.mu.Lock()
+			if _, ok := h.subscribers[id]; ok {
+				delete(h.subscribers, id)
+			}
+			h.mu.Unlock()
+		},
+	}
 }
 
 func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
@@ -26,30 +104,103 @@ func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.agentActivity())
 }
 
+func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
+	s.handleAgentActivity(w, r)
+}
+
+func (s *Server) handleAgentStatusEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "general_error", "streaming not supported")
+		return
+	}
+	since := sseResumeCursor(r)
+	subscription := s.statusHub.subscribe(since)
+	defer subscription.cancel()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	for _, status := range subscription.initial {
+		if err := writeAgentStatusSSE(w, status); err != nil {
+			return
+		}
+	}
+	flusher.Flush()
+	for {
+		select {
+		case status, ok := <-subscription.updates:
+			if !ok {
+				return
+			}
+			if err := writeAgentStatusSSE(w, status); err != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 func (s *Server) agentActivity() agentActivityResponse {
 	response := agentActivityResponse{State: agentActivityIdle}
 	var latest *activeSession
+	var latestWorking *activeSession
 	s.sessions.Range(func(_, value any) bool {
 		active, ok := value.(*activeSession)
-		if !ok || active == nil || active.turns == nil {
+		if !ok || active == nil || active.app == nil || active.app.Status == nil {
 			return true
 		}
-		_, status, running := active.turns.activeStatus()
-		if !running {
-			return true
-		}
-		response.State = agentActivityWorking
-		if status.PendingCount != nil {
-			response.PendingCount += *status.PendingCount
+		snapshot := active.app.Status.Snapshot()
+		working := snapshot.Session.State == runtime.SessionRuntimeTurnActive ||
+			snapshot.Session.State == runtime.SessionRuntimeDrainingPending
+		if working {
+			response.State = agentActivityWorking
+			response.PendingCount += snapshot.Session.PendingCount
+			if latestWorking == nil || active.StartedAt.After(latestWorking.StartedAt) {
+				latestWorking = active
+			}
 		}
 		if latest == nil || active.StartedAt.After(latest.StartedAt) {
 			latest = active
 		}
 		return true
 	})
-	if latest != nil && latest.app != nil && latest.app.Session != nil {
-		response.SessionID = latest.app.Session.ID
-		response.SessionAlias = latest.app.Session.Alias
+	selected := latestWorking
+	if selected == nil {
+		selected = latest
+	}
+	if selected != nil && selected.app != nil && selected.app.Status != nil {
+		snapshot := selected.app.Status.Snapshot()
+		response.SessionID = snapshot.Session.ID
+		response.SessionAlias = snapshot.Session.Alias
+		response.Status = &snapshot
 	}
 	return response
+}
+
+func writeAgentStatusSSE(w http.ResponseWriter, activity agentActivityResponse) error {
+	body, err := json.Marshal(agentStatusStreamEvent{Type: "agent.status", Activity: activity})
+	if err != nil {
+		return err
+	}
+	cursor := ""
+	if activity.Status != nil {
+		cursor = activity.Status.Cursor
+	}
+	if cursor != "" {
+		if _, err := fmt.Fprintf(w, "id: %s\n", cursor); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", body); err != nil {
+		return err
+	}
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return nil
 }

@@ -139,11 +139,28 @@ func browserEventFixtureEvents() []events.Event {
 	ts := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
 	return []events.Event{
 		{
+			ID:        "evt-turn-admitted",
+			Type:      juexruntime.TurnAdmittedType,
+			Timestamp: ts.Add(-time.Second),
+			TurnID:    "turn-1",
+			Payload:   juexruntime.TurnAdmittedPayload{},
+		},
+		{
 			ID:        "evt-turn-started",
 			Type:      "turn.started",
 			Timestamp: ts,
 			TurnID:    "turn-1",
 			Payload:   juexruntime.TurnStartedPayload{Input: "run command", Kind: "user"},
+		},
+		{
+			ID:        "evt-turn-provider-phase",
+			Type:      juexruntime.TurnPhaseType,
+			Timestamp: ts.Add(500 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.TurnPhasePayload{
+				Phase: juexruntime.TurnPhaseProviderIteration,
+				Iter:  testIntPtr(0),
+			},
 		},
 		{
 			ID:        "evt-llm-responded",
@@ -163,6 +180,17 @@ func browserEventFixtureEvents() []events.Event {
 					OutputTokens: 5,
 					TotalTokens:  15,
 				},
+			},
+		},
+		{
+			ID:        "evt-tool-running",
+			Type:      toolevents.RunningType,
+			Timestamp: ts.Add(2500 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: toolevents.RunningPayload{
+				Name:           "exec_command",
+				ToolUseID:      "tool-1",
+				TimeoutSeconds: 30,
 			},
 		},
 		{
@@ -186,6 +214,17 @@ func browserEventFixtureEvents() []events.Event {
 				},
 				Purpose: "turn",
 				Iter:    testIntPtr(0),
+			},
+		},
+		{
+			ID:        "evt-pending-draining",
+			Type:      juexruntime.PendingInputDrainingType,
+			Timestamp: ts.Add(6500 * time.Millisecond),
+			TurnID:    "turn-1",
+			Payload: juexruntime.PendingInputDrainingPayload{
+				Count:            1,
+				PendingCount:     0,
+				MaxPendingInputs: 4,
 			},
 		},
 		{

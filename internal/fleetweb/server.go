@@ -60,6 +60,7 @@ type Server struct {
 	spa             http.Handler
 	readActivity    func(context.Context, fleet.AgentStatus) (*agentActivity, error)
 	activityClients *activityClientPool
+	fleetStatus     *fleetStatusHub
 }
 
 func New(opts Options) (*Server, error) {
@@ -75,7 +76,7 @@ func newServer(manager backend, opts Options) *Server {
 		addr = config.DefaultFleetAddr
 	}
 	activityClients := newActivityClientPool()
-	return &Server{
+	server := &Server{
 		manager:         manager,
 		addr:            addr,
 		allowAnyBind:    opts.AllowAnyBind,
@@ -84,6 +85,8 @@ func newServer(manager backend, opts Options) *Server {
 		readActivity:    activityClients.fetch,
 		activityClients: activityClients,
 	}
+	server.fleetStatus = newFleetStatusHub(manager, activityClients)
+	return server
 }
 
 func (s *Server) Handler() http.Handler {
@@ -91,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/agents", s.handleAgents)
 	mux.HandleFunc("/api/agents/", s.dispatchAgentAPI)
+	mux.HandleFunc("/api/fleet/events", s.handleFleetEvents)
 	mux.HandleFunc("/api/fs/dirs", s.handleDirectories)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "API route not found")

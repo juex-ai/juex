@@ -201,6 +201,25 @@ func newStubApp(t *testing.T, replies ...llm.Response) (*App, *stubProvider) {
 	return a, prov
 }
 
+func TestCompactWithInstructionsWithoutEligibleContextLeavesRuntimeIdle(t *testing.T) {
+	a, _ := newStubApp(t)
+
+	result, err := a.CompactWithInstructions(context.Background(), "manual", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageID != "" {
+		t.Fatalf("compact result = %+v, want no eligible context", result)
+	}
+	snapshot := a.Status.Snapshot()
+	if snapshot.Session.State != runtime.SessionRuntimeIdle ||
+		snapshot.Turn == nil ||
+		snapshot.Turn.State != runtime.TurnLifecycleCompleted ||
+		!strings.HasPrefix(snapshot.Turn.ID, "compact-") {
+		t.Fatalf("runtime status = %+v", snapshot)
+	}
+}
+
 func TestAppNewModelCandidatePrecedenceAndHealthInjection(t *testing.T) {
 	dir := t.TempDir()
 	primary := &stubProvider{}

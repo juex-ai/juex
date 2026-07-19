@@ -1,11 +1,13 @@
 import { createContext, useContext } from "react";
 
 import type { AgentStatus } from "@/types";
+import type { AgentViewModelStore } from "@/lib/agent-view-model-store";
 
 export type FleetAgentContextValue = {
   agent: AgentStatus | null;
   agents: AgentStatus[];
   agentsLoaded: boolean;
+  statusStore: AgentViewModelStore | null;
   lifecycleBusy: boolean;
   startAgent: () => Promise<void>;
 };
@@ -21,6 +23,7 @@ export function useFleetAgent(): FleetAgentContextValue {
       agent: null,
       agents: [],
       agentsLoaded: false,
+      statusStore: null,
       lifecycleBusy: false,
       startAgent: async () => {},
     };

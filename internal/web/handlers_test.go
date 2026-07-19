@@ -1215,6 +1215,22 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	}()
 	waitPendingProviderStarted(t, prov, "provider did not start compaction")
 
+	statusResponse, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compactStatus juexruntime.StatusSnapshot
+	if err := json.NewDecoder(statusResponse.Body).Decode(&compactStatus); err != nil {
+		statusResponse.Body.Close()
+		t.Fatal(err)
+	}
+	statusResponse.Body.Close()
+	if compactStatus.Turn == nil ||
+		compactStatus.Turn.Phase != juexruntime.TurnPhaseCompacting ||
+		!compactStatus.Session.CanAcceptInput {
+		t.Fatalf("compacting status = %+v", compactStatus)
+	}
+
 	resp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
 		strings.NewReader(`{"prompt":"after please"}`))
 	if err != nil {
@@ -1258,6 +1274,101 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	secondHistory := prov.history(1)
 	if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "after please" {
 		t.Fatalf("second provider history = %+v", secondHistory)
+	}
+	statusResponse, err = http.Get(ts.URL + "/api/sessions/" + c.ID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completedStatus juexruntime.StatusSnapshot
+	if err := json.NewDecoder(statusResponse.Body).Decode(&completedStatus); err != nil {
+		statusResponse.Body.Close()
+		t.Fatal(err)
+	}
+	statusResponse.Body.Close()
+	if completedStatus.Session.State != juexruntime.SessionRuntimeIdle ||
+		completedStatus.Turn == nil ||
+		completedStatus.Turn.State != juexruntime.TurnLifecycleCompleted {
+		t.Fatalf("completed status = %+v", completedStatus)
+	}
+}
+
+func TestCompactWithoutEligibleContextLeavesSessionIdle(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(string) string
+		body string
+	}{
+		{
+			name: "slash command",
+			path: func(id string) string { return "/api/sessions/" + id + "/turns" },
+			body: `{"prompt":"/compact"}`,
+		},
+		{
+			name: "compact endpoint",
+			path: func(id string) string { return "/api/sessions/" + id + "/compact" },
+			body: `{}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			work := t.TempDir()
+			srv := NewServer(Options{
+				Cfg: config.Config{
+					ProviderID: "openai",
+					APIKey:     "x",
+					Model:      "m",
+					WorkDir:    work,
+					Compaction: config.DefaultCompactionConfig(),
+				},
+				Provider: newPendingProvider(),
+			})
+			t.Cleanup(srv.Close)
+			ts := httptest.NewServer(srv.Handler())
+			defer ts.Close()
+
+			created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var session struct{ ID string }
+			if err := json.NewDecoder(created.Body).Decode(&session); err != nil {
+				created.Body.Close()
+				t.Fatal(err)
+			}
+			created.Body.Close()
+
+			response, err := http.Post(
+				ts.URL+tt.path(session.ID),
+				"application/json",
+				strings.NewReader(tt.body),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(response.Body)
+				response.Body.Close()
+				t.Fatalf("compact status = %d body = %s", response.StatusCode, body)
+			}
+			response.Body.Close()
+
+			statusResponse, err := http.Get(ts.URL + "/api/sessions/" + session.ID + "/status")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status juexruntime.StatusSnapshot
+			if err := json.NewDecoder(statusResponse.Body).Decode(&status); err != nil {
+				statusResponse.Body.Close()
+				t.Fatal(err)
+			}
+			statusResponse.Body.Close()
+			if status.Session.State != juexruntime.SessionRuntimeIdle ||
+				status.Turn == nil ||
+				status.Turn.State != juexruntime.TurnLifecycleCompleted ||
+				!strings.HasPrefix(status.Turn.ID, "compact-") {
+				t.Fatalf("runtime status = %+v", status)
+			}
+		})
 	}
 }
 

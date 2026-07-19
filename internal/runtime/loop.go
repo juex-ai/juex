@@ -103,6 +103,10 @@ type Engine struct {
 	pendingMu    sync.Mutex
 	activeTurnID string
 	pendingInput []queuedPendingInput
+	// pendingDrainAnnouncing keeps queue mutations available while ensuring
+	// their events cannot overtake pending_input.draining.
+	pendingDrainAnnouncing bool
+	pendingDeferredEvents  []events.Event
 
 	hookRuntimeContextMu      sync.Mutex
 	pendingHookRuntimeContext []llm.Message
@@ -154,11 +158,16 @@ func (e *Engine) ReserveTurnID(turnID string) error {
 		return fmt.Errorf("runtime: empty turn id")
 	}
 	e.pendingMu.Lock()
-	defer e.pendingMu.Unlock()
 	if e.activeTurnID != "" && e.activeTurnID != turnID {
+		e.pendingMu.Unlock()
 		return ErrActiveTurnExists
 	}
+	admitted := e.activeTurnID == ""
 	e.activeTurnID = turnID
+	e.pendingMu.Unlock()
+	if admitted {
+		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}})
+	}
 	return nil
 }
 
@@ -189,14 +198,18 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 		return status, ErrNoActiveTurn
 	}
 	if len(e.pendingInput) >= max {
-		e.pendingMu.Unlock()
-		e.emit(events.Event{Type: "pending_input.rejected", TurnID: turnID, Payload: PendingInputRejectedPayload{
+		event := events.Event{Type: "pending_input.rejected", TurnID: turnID, Payload: PendingInputRejectedPayload{
 			Input:            userMsg.FirstText(),
 			Kind:             userMsg.Kind,
 			PendingCount:     status.PendingCount,
 			MaxPendingInputs: status.MaxPendingInputs,
 			Reason:           "queue_full",
-		}})
+		}}
+		deferred := e.deferPendingEventLocked(event)
+		e.pendingMu.Unlock()
+		if !deferred {
+			e.emit(event)
+		}
 		return status, ErrPendingInputQueueFull
 	}
 	recordID := ""
@@ -222,13 +235,17 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 	}
 	e.pendingInput = append(e.pendingInput, queuedPendingInput{RecordID: recordID, Message: userMsg})
 	status.PendingCount = len(e.pendingInput)
-	e.pendingMu.Unlock()
-	e.emit(events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
+	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
 		Input:            userMsg.FirstText(),
 		Kind:             userMsg.Kind,
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
-	}})
+	}}
+	deferred := e.deferPendingEventLocked(event)
+	e.pendingMu.Unlock()
+	if !deferred {
+		e.emit(event)
+	}
 	return status, nil
 }
 
@@ -254,26 +271,30 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 	}
 	max := e.effectiveMaxPendingInputs()
 	e.pendingMu.Lock()
-	defer e.pendingMu.Unlock()
 	if e.activeTurnID != currentTurnID || len(e.pendingInput) == 0 {
 		if e.activeTurnID == currentTurnID {
 			e.activeTurnID = ""
 		}
-		return llm.Message{}, PendingInputStatus{
+		status := PendingInputStatus{
 			TurnID:           e.activeTurnID,
 			PendingCount:     len(e.pendingInput),
 			MaxPendingInputs: max,
-		}, false
+		}
+		e.pendingMu.Unlock()
+		return llm.Message{}, status, false
 	}
 	item := e.pendingInput[0]
 	e.pendingInput[0] = queuedPendingInput{}
 	e.pendingInput = e.pendingInput[1:]
 	e.activeTurnID = nextTurnID
-	return item.Message, PendingInputStatus{
+	status := PendingInputStatus{
 		TurnID:           nextTurnID,
 		PendingCount:     len(e.pendingInput),
 		MaxPendingInputs: max,
-	}, true
+	}
+	e.pendingMu.Unlock()
+	e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
+	return item.Message, status, true
 }
 
 // TurnMessage drives one already-constructed user message to completion.
@@ -627,6 +648,7 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 }
 
 func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, policy compactionPolicy, toolCalls []llm.Block) error {
+	e.emit(events.Event{Type: TurnPhaseType, TurnID: turnID, Payload: TurnPhasePayload{Phase: TurnPhaseToolBatch}})
 	toolResults := e.runToolCalls(ctx, turnID, toolCalls)
 	toolResults = e.normalizeGuidedToolFailureResults(toolResults)
 	results := toolResultBlocks(toolResults)
@@ -753,6 +775,9 @@ func appendGuidedToolFailureHint(content, hint string) string {
 }
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) toolCallResult {
+	callPayload := toolCallPayload(call)
+	e.emit(events.Event{Type: toolevents.RequestedType, TurnID: turnID, Payload: toolevents.Requested(callPayload)})
+	e.emit(events.Event{Type: toolevents.RunningType, TurnID: turnID, Payload: toolevents.Running(callPayload)})
 	preReq := e.newHookRequest(hooks.EventPreToolUse, turnID)
 	preReq.ToolName = call.ToolName
 	preReq.ToolInput = call.Input
@@ -764,8 +789,6 @@ func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block)
 		return e.hookToolErrorResult(turnID, call, fmt.Errorf("hooks: tool %q denied%s", call.ToolName, hookReasonSuffix(reason)))
 	}
 
-	callPayload := toolCallPayload(call)
-	e.emit(events.Event{Type: toolevents.RequestedType, TurnID: turnID, Payload: toolevents.Requested(callPayload)})
 	toolCtx := tools.WithToolCallEvents(ctx, tools.ToolCallEvents{
 		Name:      call.ToolName,
 		ToolUseID: call.ToolUseID,
@@ -972,11 +995,16 @@ func isReplayablePendingState(state PendingInputState) bool {
 
 func (e *Engine) beginActiveTurn(turnID string) string {
 	e.pendingMu.Lock()
+	admitted := false
 	if e.activeTurnID == "" {
 		e.activeTurnID = turnID
+		admitted = true
 	}
 	turnID = e.activeTurnID
 	e.pendingMu.Unlock()
+	if admitted {
+		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}})
+	}
 	return turnID
 }
 
@@ -1054,10 +1082,19 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	e.pendingInput = nil
 	max := e.effectiveMaxPendingInputs()
 	queue := e.pendingInputQueueLocked()
+	if len(pending) > 0 {
+		e.pendingDrainAnnouncing = true
+	}
 	e.pendingMu.Unlock()
 	if len(pending) == 0 {
 		return nil
 	}
+	e.emit(events.Event{Type: PendingInputDrainingType, TurnID: turnID, Payload: PendingInputDrainingPayload{
+		Count:            len(pending),
+		PendingCount:     0,
+		MaxPendingInputs: max,
+	}})
+	e.flushPendingDrainEvents()
 	recordIDs := pendingRecordIDs(pending)
 	if queue != nil {
 		if err := queue.MarkAdmitted(recordIDs, turnID); err != nil {
@@ -1092,12 +1129,40 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 			return fmt.Errorf("mark pending input processed: %w", err)
 		}
 	}
+	e.pendingMu.Lock()
+	remaining := len(e.pendingInput)
+	e.pendingMu.Unlock()
 	e.emit(events.Event{Type: "pending_input.drained", TurnID: turnID, Payload: PendingInputDrainedPayload{
 		Count:            len(pending),
-		PendingCount:     0,
+		PendingCount:     remaining,
 		MaxPendingInputs: max,
 	}})
 	return nil
+}
+
+func (e *Engine) deferPendingEventLocked(event events.Event) bool {
+	if !e.pendingDrainAnnouncing {
+		return false
+	}
+	e.pendingDeferredEvents = append(e.pendingDeferredEvents, event)
+	return true
+}
+
+func (e *Engine) flushPendingDrainEvents() {
+	for {
+		e.pendingMu.Lock()
+		deferred := e.pendingDeferredEvents
+		e.pendingDeferredEvents = nil
+		if len(deferred) == 0 {
+			e.pendingDrainAnnouncing = false
+			e.pendingMu.Unlock()
+			return
+		}
+		e.pendingMu.Unlock()
+		for _, event := range deferred {
+			e.emit(event)
+		}
+	}
 }
 
 func (e *Engine) preservePendingInputAfterFailureLocked(turnID string) error {
@@ -1163,20 +1228,7 @@ func (e *Engine) emit(ev events.Event) {
 }
 
 func (e *Engine) failTurn(turnID string, err error) error {
-	classification := errorclass.Classify(err)
-	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
-	payload := TurnErroredPayload{
-		Error:     publicErr,
-		ErrorKind: string(classification.Kind),
-		TimedOut:  classification.TimedOut,
-		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
-	}
-	if signalErr, ok := cancellation.AsSignalError(err); ok {
-		payload.Signal = signalErr.Signal
-		payload.SignalNumber = signalErr.SignalNumber
-		payload.Interrupted = true
-	}
-	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: payload})
+	e.emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: NewTurnErroredPayload(err)})
 	return err
 }
 

@@ -119,16 +119,7 @@ func (a *App) ExecuteSlashCommand(ctx context.Context, input string) (SlashComma
 func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (SlashCommandResult, error) {
 	switch cmd.Name {
 	case SlashCompact:
-		compact, err := a.CompactWithInstructions(ctx, "manual", false, cmd.Args)
-		if err != nil {
-			return SlashCommandResult{}, err
-		}
-		text := "No eligible context to compact."
-		if compact.MessageID != "" {
-			text = fmt.Sprintf("Context compacted: %d -> %d tokens (%d summary chars).",
-				compact.TokensBefore, compact.TokensAfter, compact.SummaryChars)
-		}
-		return SlashCommandResult{Name: cmd.Name, Text: text, Compact: &compact}, nil
+		return a.executeCompactSlashCommand(ctx, cmd, "")
 	case SlashStatus:
 		status := a.StatusSnapshot(time.Now().UTC())
 		return SlashCommandResult{Name: cmd.Name, Text: status.Text(), Status: &status}, nil
@@ -142,6 +133,27 @@ func (a *App) ExecuteParsedSlashCommand(ctx context.Context, cmd SlashCommand) (
 	default:
 		return SlashCommandResult{}, &UnknownSlashCommandError{Input: cmd.Name}
 	}
+}
+
+func (a *App) executeCompactSlashCommand(ctx context.Context, cmd SlashCommand, admittedTurnID string) (SlashCommandResult, error) {
+	var (
+		compact runtime.CompactionResult
+		err     error
+	)
+	if admittedTurnID == "" {
+		compact, err = a.CompactWithInstructions(ctx, "manual", false, cmd.Args)
+	} else {
+		compact, err = a.CompactAdmittedWithInstructions(ctx, admittedTurnID, "manual", false, cmd.Args)
+	}
+	if err != nil {
+		return SlashCommandResult{}, err
+	}
+	text := "No eligible context to compact."
+	if compact.MessageID != "" {
+		text = fmt.Sprintf("Context compacted: %d -> %d tokens (%d summary chars).",
+			compact.TokensBefore, compact.TokensAfter, compact.SummaryChars)
+	}
+	return SlashCommandResult{Name: cmd.Name, Text: text, Compact: &compact}, nil
 }
 
 type StatusSnapshot struct {

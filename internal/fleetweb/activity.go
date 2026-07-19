@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/runtime"
 )
 
 const (
@@ -19,10 +20,11 @@ const (
 )
 
 type agentActivity struct {
-	State        string `json:"state"`
-	SessionID    string `json:"session_id,omitempty"`
-	SessionAlias string `json:"session_alias,omitempty"`
-	PendingCount int    `json:"pending_count"`
+	State        string                  `json:"state"`
+	SessionID    string                  `json:"session_id,omitempty"`
+	SessionAlias string                  `json:"session_alias,omitempty"`
+	PendingCount int                     `json:"pending_count"`
+	Status       *runtime.StatusSnapshot `json:"status,omitempty"`
 }
 
 type agentRosterItem struct {
@@ -124,7 +126,7 @@ func (p *activityClientPool) fetch(
 	request, err := http.NewRequestWithContext(
 		requestCtx,
 		http.MethodGet,
-		"http://juex/api/activity",
+		"http://juex/api/status",
 		nil,
 	)
 	if err != nil {
@@ -153,4 +155,28 @@ func (p *activityClientPool) fetch(
 		return nil, fmt.Errorf("decode agent activity: unsupported state %q", activity.State)
 	}
 	return &activity, nil
+}
+
+func (p *activityClientPool) streamStatus(
+	ctx context.Context,
+	status fleet.AgentStatus,
+	onActivity func(*agentActivity),
+) error {
+	client, err := p.client(status.Endpoint)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://juex/api/status/events", nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("stream agent status: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("stream agent status: status %d", response.StatusCode)
+	}
+	return scanAgentStatusSSE(response.Body, onActivity)
 }

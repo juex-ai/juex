@@ -2044,8 +2044,8 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 					sawCompleted = true
 				}
 			}
-			if sawErrored != tc.wantCompactError || !sawCompleted {
-				t.Fatalf("events = %+v, want compact error=%v and completed", eventTypes, tc.wantCompactError)
+			if sawErrored != tc.wantCompactError || sawCompleted == tc.wantCompactError {
+				t.Fatalf("events = %+v, want compact error=%v and mutually exclusive completed", eventTypes, tc.wantCompactError)
 			}
 		})
 	}
@@ -3480,6 +3480,52 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	}
 }
 
+func TestDrainPendingInputReportsMessagesQueuedWhileDraining(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	if err := eng.ReserveTurnID("turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingInput(context.Background(), "first"); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		enqueueErr error
+		eventOrder []string
+	)
+	bus.Subscribe("*", func(event events.Event) {
+		if event.Type == PendingInputDrainingType || event.Type == "pending_input.queued" {
+			eventOrder = append(eventOrder, event.Type)
+		}
+	})
+	bus.Subscribe(PendingInputDrainingType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "second")
+	})
+	var drained PendingInputDrainedPayload
+	bus.Subscribe("pending_input.drained", func(event events.Event) {
+		drained, _ = event.Payload.(PendingInputDrainedPayload)
+	})
+
+	eng.mu.Lock()
+	err := eng.drainPendingInputLocked(context.Background(), "turn-1")
+	eng.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enqueueErr != nil {
+		t.Fatalf("enqueue during drain: %v", enqueueErr)
+	}
+	if drained.Count != 1 || drained.PendingCount != 1 {
+		t.Fatalf("drained payload = %+v", drained)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 1 {
+		t.Fatalf("pending status = %+v", status)
+	}
+	if len(eventOrder) < 2 || strings.Join(eventOrder[len(eventOrder)-2:], ",") != PendingInputDrainingType+",pending_input.queued" {
+		t.Fatalf("drain event order = %v", eventOrder)
+	}
+}
+
 func TestEngine_PendingInputBackpressure(t *testing.T) {
 	prov := &mockProvider{
 		delay: 80 * time.Millisecond,
@@ -3492,6 +3538,12 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	eng.MaxPendingInputs = 1
 	requested := make(chan struct{}, 1)
 	rejected := make(chan struct{}, 1)
+	admitted := make(chan struct{}, 1)
+	phase := make(chan struct{}, 4)
+	draining := make(chan struct{}, 1)
+	bus.Subscribe(TurnAdmittedType, func(e events.Event) { signal(admitted) })
+	bus.Subscribe(TurnPhaseType, func(e events.Event) { signal(phase) })
+	bus.Subscribe(PendingInputDrainingType, func(e events.Event) { signal(draining) })
 	bus.Subscribe("llm.requested", func(e events.Event) { signal(requested) })
 	bus.Subscribe("pending_input.rejected", func(e events.Event) { signal(rejected) })
 	done := make(chan error, 1)
@@ -3499,7 +3551,9 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 		_, err := eng.Turn(context.Background(), "start")
 		done <- err
 	}()
+	waitSignal(t, admitted, TurnAdmittedType)
 	waitSignal(t, requested, "llm.requested")
+	waitSignal(t, phase, TurnPhaseType)
 	if _, err := eng.EnqueuePendingInput(context.Background(), "one"); err != nil {
 		t.Fatal(err)
 	}
@@ -3513,6 +3567,45 @@ func TestEngine_PendingInputBackpressure(t *testing.T) {
 	waitSignal(t, rejected, "pending_input.rejected")
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	waitSignal(t, draining, PendingInputDrainingType)
+}
+
+func TestRunToolCallEmitsRequestedRunningCompleted(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	eng.Tools.MustRegister(tools.Tool{
+		Name: "echo_status_test",
+		Handler: func(context.Context, map[string]any) (string, error) {
+			return "hello", nil
+		},
+	})
+	sequence := make(chan string, 3)
+	for _, eventType := range []string{
+		toolevents.RequestedType,
+		toolevents.RunningType,
+		toolevents.CompletedType,
+	} {
+		eventType := eventType
+		bus.Subscribe(eventType, func(events.Event) { sequence <- eventType })
+	}
+
+	results := eng.runToolCalls(context.Background(), "turn-1", []llm.Block{{
+		Type:      llm.BlockToolUse,
+		ToolUseID: "tool-1",
+		ToolName:  "echo_status_test",
+		Input:     map[string]any{"text": "hello"},
+	}})
+	if len(results) != 1 || results[0].Block.IsError {
+		t.Fatalf("results = %+v", results)
+	}
+	for _, want := range []string{
+		toolevents.RequestedType,
+		toolevents.RunningType,
+		toolevents.CompletedType,
+	} {
+		if got := <-sequence; got != want {
+			t.Fatalf("event = %q, want %q", got, want)
+		}
 	}
 }
 

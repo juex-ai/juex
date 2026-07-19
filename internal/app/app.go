@@ -89,6 +89,7 @@ const (
 
 type App struct {
 	Engine         *runtime.Engine
+	Status         *runtime.StatusStore
 	Bus            *events.Bus
 	Session        *session.Session
 	cleanup        []func() error
@@ -109,9 +110,10 @@ type App struct {
 
 	turnAdmission turnAdmission
 
-	sessionLock      *session.Lock
-	eventSink        *events.DurableSink
-	eventUnsubscribe func()
+	sessionLock       *session.Lock
+	eventSink         *events.DurableSink
+	eventUnsubscribe  func()
+	statusUnsubscribe func()
 
 	debug                    bool
 	logLevel                 string
@@ -302,7 +304,12 @@ func New(opts Options) (*App, error) {
 	chunkedWrites.RestoreActiveFromHistory(sess.History)
 	var eventSink *events.DurableSink
 	var eventUnsubscribe func()
+	var statusUnsubscribe func()
 	closeSessionResources := func() {
+		if statusUnsubscribe != nil {
+			statusUnsubscribe()
+			statusUnsubscribe = nil
+		}
 		if eventUnsubscribe != nil {
 			eventUnsubscribe()
 			eventUnsubscribe = nil
@@ -316,6 +323,15 @@ func New(opts Options) (*App, error) {
 	}
 	eventSink = events.NewDurableSink(sess)
 	eventUnsubscribe = bus.Subscribe("*", eventSink.Handle)
+	journalEvents, err := session.ReadEvents(sess.Dir)
+	if err != nil {
+		closeSessionResources()
+		return nil, fmt.Errorf("app: restore runtime status: %w", err)
+	}
+	status := runtime.NewStatusStore(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput))
+	status.Reset(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput), journalEvents)
+	status.RecoverAfterRestart()
+	statusUnsubscribe = eventSink.AddProjection(status)
 
 	pb := &prompt.Builder{
 		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
@@ -383,19 +399,21 @@ func New(opts Options) (*App, error) {
 	eng.SetNotesStore(notesStore(sess))
 
 	a := &App{
-		Engine:           eng,
-		Bus:              bus,
-		Session:          sess,
-		ctx:              appCtx,
-		cancel:           appCancel,
-		cfg:              cfg,
-		skills:           skillLoader.All(),
-		chunkedWrites:    chunkedWrites,
-		sessionLock:      sessLock,
-		eventSink:        eventSink,
-		eventUnsubscribe: eventUnsubscribe,
-		debug:            opts.Debug,
-		logLevel:         opts.LogLevel,
+		Engine:            eng,
+		Status:            status,
+		Bus:               bus,
+		Session:           sess,
+		ctx:               appCtx,
+		cancel:            appCancel,
+		cfg:               cfg,
+		skills:            skillLoader.All(),
+		chunkedWrites:     chunkedWrites,
+		sessionLock:       sessLock,
+		eventSink:         eventSink,
+		eventUnsubscribe:  eventUnsubscribe,
+		statusUnsubscribe: statusUnsubscribe,
+		debug:             opts.Debug,
+		logLevel:          opts.LogLevel,
 	}
 	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
 		_ = a.detachObservability()
@@ -440,6 +458,10 @@ func New(opts Options) (*App, error) {
 		}
 		return nil
 	}, func() error {
+		if a.statusUnsubscribe != nil {
+			a.statusUnsubscribe()
+			a.statusUnsubscribe = nil
+		}
 		if a.eventUnsubscribe != nil {
 			a.eventUnsubscribe()
 			a.eventUnsubscribe = nil
@@ -558,6 +580,14 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	if a.eventSink != nil {
 		a.eventSink.SetJournal(sess)
 	}
+	if a.Status != nil {
+		journalEvents, err := session.ReadEvents(sess.Dir)
+		a.Status.Reset(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput), journalEvents)
+		a.Status.RecoverAfterRestart()
+		if err != nil {
+			a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
+		}
+	}
 	if a.Engine != nil {
 		a.Engine.Session = sess
 		if a.Engine.Prompt != nil {
@@ -579,6 +609,19 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	}
 	if oldSession != nil {
 		_ = oldSession.Close()
+	}
+}
+
+func runtimeStatusSeed(sess *session.Session, maxPendingInputs int) runtime.StatusSeed {
+	if sess == nil {
+		return runtime.StatusSeed{MaxPendingInputs: maxPendingInputs}
+	}
+	return runtime.StatusSeed{
+		SessionID:        sess.ID,
+		SessionAlias:     sess.Alias,
+		MaxPendingInputs: maxPendingInputs,
+		TokenUsage:       sess.TokenUsageSnapshot(),
+		ContextUsage:     sess.ContextUsageSnapshot(),
 	}
 }
 
@@ -671,9 +714,35 @@ func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto b
 	if a == nil || a.Engine == nil {
 		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
 	}
+	admitted := events.Normalize(events.Event{Type: runtime.TurnAdmittedType, Payload: runtime.TurnAdmittedPayload{}})
+	turnID := "compact-" + admitted.ID
+	admitted.TurnID = turnID
+	a.Bus.Emit(admitted)
+	return a.compactWithTurnID(ctx, turnID, reason, auto, instructions)
+}
+
+func (a *App) CompactAdmittedWithInstructions(ctx context.Context, turnID, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
+	if a == nil || a.Engine == nil {
+		return runtime.CompactionResult{}, fmt.Errorf("app: nil engine")
+	}
+	if turnID == "" {
+		return runtime.CompactionResult{}, fmt.Errorf("app: empty compact turn id")
+	}
+	return a.compactWithTurnID(ctx, turnID, reason, auto, instructions)
+}
+
+func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
 	sections := a.Engine.Prompt.Sections()
 	systemPrompt := prompt.JoinSections(sections)
-	return a.Engine.CompactWithInstructions(ctx, "session-compact", systemPrompt, reason, auto, instructions)
+	result, err := a.Engine.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, instructions)
+	if err != nil {
+		a.Bus.Emit(events.Event{Type: "turn.errored", TurnID: turnID, Payload: runtime.NewTurnErroredPayload(err)})
+		return result, err
+	}
+	a.Bus.Emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: runtime.TurnCompletedPayload{
+		TokenUsage: a.Session.TokenUsageSnapshot(),
+	}})
+	return result, nil
 }
 
 func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) error {

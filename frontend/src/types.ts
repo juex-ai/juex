@@ -209,6 +209,80 @@ export interface SessionTurnStatus extends TurnStatusResponse {
   turn_id: string;
 }
 
+export type RuntimeToolCallState =
+  | "requested"
+  | "running"
+  | "streaming"
+  | "completed"
+  | "errored";
+
+export type RuntimeTurnLifecycleState =
+  | "admitted"
+  | "active"
+  | "completed"
+  | "errored"
+  | "cancelled";
+
+export type RuntimeTurnPhase =
+  | "admitted"
+  | "provider_iteration"
+  | "tool_batch"
+  | "compacting";
+
+export type RuntimeSessionState =
+  | "idle"
+  | "turn_active"
+  | "draining_pending"
+  | "failed";
+
+export interface RuntimeStatusError {
+  message: string;
+  kind?: string;
+  timed_out?: boolean;
+  cancelled?: boolean;
+}
+
+export interface RuntimeToolCallStatus {
+  tool_use_id: string;
+  name: string;
+  state: RuntimeToolCallState;
+  started_at: string;
+  updated_at: string;
+  error?: RuntimeStatusError;
+}
+
+export interface RuntimeTurnStatus {
+  id: string;
+  state: RuntimeTurnLifecycleState;
+  phase: RuntimeTurnPhase;
+  streaming: boolean;
+  resume_state?: RuntimeTurnLifecycleState;
+  resume_phase?: RuntimeTurnPhase;
+  started_at: string;
+  updated_at: string;
+  error?: RuntimeStatusError;
+}
+
+export interface RuntimeSessionStatus {
+  id: string;
+  alias?: string;
+  state: RuntimeSessionState;
+  pending_count: number;
+  max_pending_inputs: number;
+  can_accept_input: boolean;
+}
+
+export interface AgentRuntimeStatusSnapshot {
+  cursor?: string;
+  updated_at?: string;
+  session: RuntimeSessionStatus;
+  turn?: RuntimeTurnStatus;
+  tools: RuntimeToolCallStatus[];
+  token_usage: TokenUsage;
+  context_usage?: ContextUsage;
+  last_error?: RuntimeStatusError;
+}
+
 export interface InterruptResponse {
   cancelled: boolean;
 }
@@ -231,7 +305,9 @@ export interface ActiveContextSnapshot {
 }
 
 export const BROWSER_EVENT_TYPES = [
+  "turn.admitted",
   "turn.started",
+  "turn.phase",
   "turn.completed",
   "turn.errored",
   "llm.requested",
@@ -240,6 +316,7 @@ export const BROWSER_EVENT_TYPES = [
   "llm.retry",
   "llm.fallback",
   "tool.requested",
+  "tool.running",
   "tool.completed",
   "tool.output_delta",
   "tool.errored",
@@ -248,6 +325,7 @@ export const BROWSER_EVENT_TYPES = [
   "hook.errored",
   "hook.trace",
   "pending_input.queued",
+  "pending_input.draining",
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",
@@ -284,6 +362,13 @@ interface BrowserEventBase<TType extends BrowserEventType> {
 export interface TurnStartedPayload {
   input: string;
   kind?: string;
+}
+
+export type TurnAdmittedPayload = Record<string, never>;
+
+export interface TurnPhasePayload {
+  phase: RuntimeTurnPhase;
+  iter?: number;
 }
 
 export interface TurnCompletedPayload {
@@ -362,6 +447,12 @@ export interface LLMRespondedPayload {
 export interface ToolRequestedPayload {
   name: string;
   input?: Record<string, unknown> | null;
+  tool_use_id: string;
+  timeout_seconds: number;
+}
+
+export interface ToolRunningPayload {
+  name: string;
   tool_use_id: string;
   timeout_seconds: number;
 }
@@ -621,7 +712,9 @@ export interface NotesErroredPayload {
 }
 
 export type BrowserEvent =
+  | (BrowserEventBase<"turn.admitted"> & { payload: TurnAdmittedPayload })
   | (BrowserEventBase<"turn.started"> & { payload: TurnStartedPayload })
+  | (BrowserEventBase<"turn.phase"> & { payload: TurnPhasePayload })
   | (BrowserEventBase<"turn.completed"> & { payload: TurnCompletedPayload })
   | (BrowserEventBase<"turn.errored"> & { payload: TurnErroredPayload })
   | (BrowserEventBase<"llm.requested"> & { payload: LLMRequestedPayload })
@@ -630,6 +723,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"llm.retry"> & { payload: LLMRetryPayload })
   | (BrowserEventBase<"llm.fallback"> & { payload: LLMFallbackPayload })
   | (BrowserEventBase<"tool.requested"> & { payload: ToolRequestedPayload })
+  | (BrowserEventBase<"tool.running"> & { payload: ToolRunningPayload })
   | (BrowserEventBase<"tool.completed"> & { payload: ToolCompletedPayload })
   | (BrowserEventBase<"tool.output_delta"> & { payload: ToolOutputDeltaPayload })
   | (BrowserEventBase<"tool.errored"> & { payload: ToolErroredPayload })
@@ -638,6 +732,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"hook.errored"> & { payload: HookErroredPayload })
   | (BrowserEventBase<"hook.trace"> & { payload: HookTracePayload })
   | (BrowserEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
+  | (BrowserEventBase<"pending_input.draining"> & { payload: PendingInputDrainedPayload })
   | (BrowserEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
   | (BrowserEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
   | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })
@@ -916,6 +1011,13 @@ export interface AgentActivity {
   session_id?: string;
   session_alias?: string;
   pending_count: number;
+  status?: AgentRuntimeStatusSnapshot;
+}
+
+export interface FleetAgentStatusEvent {
+  type: "agent.status";
+  agent_id: string;
+  activity: AgentActivity;
 }
 
 export interface AgentStatus {

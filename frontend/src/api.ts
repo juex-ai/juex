@@ -26,6 +26,8 @@ import type {
   AddAgentResponse,
   DirectoryListing,
   RemovedAgent,
+  AgentRuntimeStatusSnapshot,
+  FleetAgentStatusEvent,
 } from "./types";
 import { agentBasePath } from "./lib/fleet-routes.ts";
 
@@ -200,6 +202,39 @@ export function subscribeEvents(
   return () => es.close();
 }
 
+export async function getSessionStatus(
+  id: string,
+): Promise<AgentRuntimeStatusSnapshot> {
+  return jsonOrThrow(
+    await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/status`)),
+  );
+}
+
+export function subscribeSessionStatus(
+  id: string,
+  opts: {
+    since?: string;
+    onStatus: (status: AgentRuntimeStatusSnapshot) => void;
+    onError?: (err: Event) => void;
+  },
+): () => void {
+  const qs = opts.since ? `?since=${encodeURIComponent(opts.since)}` : "";
+  const es = new EventSource(
+    agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/status/events${qs}`),
+  );
+  es.addEventListener("message", (event) => {
+    try {
+      opts.onStatus(
+        JSON.parse((event as MessageEvent).data) as AgentRuntimeStatusSnapshot,
+      );
+    } catch {
+      /* ignore malformed frames */
+    }
+  });
+  if (opts.onError) es.addEventListener("error", opts.onError);
+  return () => es.close();
+}
+
 export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {
   return jsonOrThrow(await fetch(agentAPIPath("/api/files/tree"), { signal }));
 }
@@ -305,6 +340,23 @@ export async function listObservableObservations(
 
 export async function listAgents(): Promise<AgentStatus[]> {
   return jsonOrThrow(await fetch("/api/agents"));
+}
+
+export function subscribeFleetEvents(opts: {
+  onEvent: (event: FleetAgentStatusEvent) => void;
+  onError?: (err: Event) => void;
+}): () => void {
+  const es = new EventSource("/api/fleet/events");
+  es.addEventListener("message", (event) => {
+    try {
+      const parsed = JSON.parse((event as MessageEvent).data) as FleetAgentStatusEvent;
+      if (parsed.type === "agent.status") opts.onEvent(parsed);
+    } catch {
+      /* ignore malformed frames */
+    }
+  });
+  if (opts.onError) es.addEventListener("error", opts.onError);
+  return () => es.close();
 }
 
 export async function addAgent(

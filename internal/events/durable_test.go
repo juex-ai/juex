@@ -88,6 +88,43 @@ func TestDurableSink_DeliversTransientEventWithoutJournal(t *testing.T) {
 	}
 }
 
+func TestDurableSink_ProjectsSynchronouslyAfterJournalCommit(t *testing.T) {
+	journal := &recordingJournal{}
+	sink := NewDurableSink(journal)
+	t.Cleanup(sink.Close)
+
+	var projected []Event
+	sink.AddProjection(DeliveryFunc(func(event Event) {
+		if len(journal.events) == 0 {
+			t.Fatal("projection ran before journal commit")
+		}
+		projected = append(projected, event)
+	}))
+
+	committed, err := sink.Commit(Event{ID: "evt-1", Type: "turn.admitted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projected) != 1 || projected[0].ID != committed.ID {
+		t.Fatalf("projected = %+v, committed = %+v", projected, committed)
+	}
+}
+
+func TestDurableSink_DoesNotProjectFailedJournalCommit(t *testing.T) {
+	sink := NewDurableSink(&recordingJournal{err: errors.New("disk full")})
+	t.Cleanup(sink.Close)
+
+	projected := 0
+	sink.AddProjection(DeliveryFunc(func(Event) { projected++ }))
+
+	if _, err := sink.Commit(Event{ID: "evt-1", Type: "turn.admitted"}); err == nil {
+		t.Fatal("Commit() error = nil, want journal failure")
+	}
+	if projected != 0 {
+		t.Fatalf("projected = %d, want 0", projected)
+	}
+}
+
 func TestDurableSink_PreservesDeliveryOrderFromJournalOrder(t *testing.T) {
 	journal := &recordingJournal{}
 	delivery := &recordingDelivery{}

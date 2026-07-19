@@ -194,7 +194,7 @@ func (a *App) admitCompactSlash(ctx context.Context, cmd SlashCommand, ids TurnI
 	if err := a.beginCompactAdmission(compactTurnID); err != nil {
 		return conflictResult("session busy", err, runtime.PendingInputStatus{})
 	}
-	result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
+	result, err := a.executeCompactSlashCommand(ctx, cmd, compactTurnID)
 	start := a.finishCompactAdmission(compactTurnID, ids)
 	if err != nil {
 		return errorResult(err, start)

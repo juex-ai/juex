@@ -84,6 +84,11 @@ func (l *turnLifecycle) runProviderIterationLocked(ctx context.Context, iter int
 	if err := l.engine.drainPendingInputLocked(ctx, l.turnID); err != nil {
 		return err
 	}
+	iterCopy := iter
+	l.engine.emit(events.Event{Type: TurnPhaseType, TurnID: l.turnID, Payload: TurnPhasePayload{
+		Phase: TurnPhaseProviderIteration,
+		Iter:  &iterCopy,
+	}})
 
 	request, err := l.engine.prepareProviderRequestLocked(l.turnID, iter, l.prepared)
 	if err != nil {

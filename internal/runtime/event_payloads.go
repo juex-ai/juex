@@ -3,9 +3,24 @@ package runtime
 import (
 	"time"
 
+	"github.com/juex-ai/juex/internal/cancellation"
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
+
+const (
+	TurnAdmittedType         = "turn.admitted"
+	TurnPhaseType            = "turn.phase"
+	PendingInputDrainingType = "pending_input.draining"
+)
+
+type TurnAdmittedPayload struct{}
+
+type TurnPhasePayload struct {
+	Phase TurnPhase `json:"phase"`
+	Iter  *int      `json:"iter,omitempty"`
+}
 
 type TurnStartedPayload struct {
 	Input string `json:"input"`
@@ -26,6 +41,23 @@ type TurnErroredPayload struct {
 	Signal       string `json:"signal,omitempty"`
 	SignalNumber int    `json:"signal_number,omitempty"`
 	Interrupted  bool   `json:"interrupted,omitempty"`
+}
+
+func NewTurnErroredPayload(err error) TurnErroredPayload {
+	classification := errorclass.Classify(err)
+	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	payload := TurnErroredPayload{
+		Error:     publicErr,
+		ErrorKind: string(classification.Kind),
+		TimedOut:  classification.TimedOut,
+		RawCause:  rawCauseIfDifferent(classification.RawCause, publicErr),
+	}
+	if signalErr, ok := cancellation.AsSignalError(err); ok {
+		payload.Signal = signalErr.Signal
+		payload.SignalNumber = signalErr.SignalNumber
+		payload.Interrupted = true
+	}
+	return payload
 }
 
 type HookStartedPayload struct {
@@ -202,6 +234,12 @@ type PendingInputQueuedPayload struct {
 	Kind             string `json:"kind"`
 	PendingCount     int    `json:"pending_count"`
 	MaxPendingInputs int    `json:"max_pending_inputs"`
+}
+
+type PendingInputDrainingPayload struct {
+	Count            int `json:"count"`
+	PendingCount     int `json:"pending_count"`
+	MaxPendingInputs int `json:"max_pending_inputs"`
 }
 
 type PendingInputDrainedPayload struct {

@@ -369,6 +369,17 @@ func (s *Session) TokenUsageSnapshot() llm.Usage {
 	return s.TokenUsage
 }
 
+func (s *Session) ContextUsageSnapshot() *llm.ContextUsage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ContextUsage == nil {
+		return nil
+	}
+	usage := *s.ContextUsage
+	usage.Breakdown = append([]llm.ContextUsagePart(nil), s.ContextUsage.Breakdown...)
+	return &usage
+}
+
 // Snapshot returns the current summary and a copy of the in-memory history.
 func (s *Session) Snapshot(now time.Time) (Info, []llm.Message) {
 	s.mu.Lock()
