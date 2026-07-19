@@ -30,20 +30,26 @@ export function ObservableDetail() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   useShellTitle(data?.observable.name || data?.observable.id || "Observable");
 
   const refresh = useCallback(async (
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
     if (!id) return;
-    if (!quiet) setRefreshing(true);
-    setError(null);
+    if (!quiet) {
+      setRefreshing(true);
+      setError(null);
+    }
     try {
       const next = await getObservable(id);
       setData(next);
+      setRefreshError(null);
     } catch (e) {
       console.error("getObservable failed", e);
-      setError(e instanceof Error ? e.message : "Failed to load observable.");
+      setRefreshError(
+        e instanceof Error ? e.message : "Failed to load observable.",
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -102,6 +108,7 @@ export function ObservableDetail() {
   }
 
   const observable = data?.observable;
+  const visibleError = error ?? refreshError;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-6 md:px-6">
@@ -119,7 +126,7 @@ export function ObservableDetail() {
               <h1 className="truncate text-xl font-semibold text-foreground">
                 {observable?.name || observable?.id || id}
               </h1>
-              <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+              <div className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
                 {id}
               </div>
             </div>
@@ -133,7 +140,10 @@ export function ObservableDetail() {
               disabled={refreshing}
             >
               <RefreshCw
-                className={cn("size-3.5", refreshing && "animate-spin")}
+                className={cn(
+                  "size-3.5 motion-reduce:animate-none",
+                  refreshing && "animate-spin",
+                )}
               />
               Refresh
             </Button>
@@ -184,9 +194,12 @@ export function ObservableDetail() {
             </Button>
           </div>
         </div>
-        {error ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
+        {visibleError ? (
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {visibleError}
           </div>
         ) : null}
         {observable ? (
@@ -195,7 +208,7 @@ export function ObservableDetail() {
               <h2 className="text-sm font-semibold text-foreground">Status</h2>
               <div className="overflow-hidden rounded-md border bg-card shadow-[var(--shadow-xs)]">
                 <dl className="grid text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
-                  <DetailRow label="State">
+                  <DetailRow label="State" first>
                     <StateBadge state={observable.state} />
                   </DetailRow>
                   <DetailRow label="Source">
@@ -254,7 +267,7 @@ export function ObservableDetail() {
                     </span>
                   </DetailRow>
                   <DetailRow label="Last error">
-                    <span className="break-words font-mono text-xs text-destructive">
+                    <span className="break-all font-mono text-xs text-destructive">
                       {observable.last_error || "-"}
                     </span>
                   </DetailRow>
@@ -273,11 +286,11 @@ export function ObservableDetail() {
               <ObservationList observations={data?.observations ?? []} />
             </section>
           </>
-        ) : (
+        ) : !visibleError ? (
           <div className="rounded-md border bg-card px-4 py-6 text-sm text-muted-foreground">
             Observable not found.
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -286,16 +299,25 @@ export function ObservableDetail() {
 function DetailRow({
   label,
   children,
+  first = false,
 }: {
   label: string;
   children: ReactNode;
+  first?: boolean;
 }) {
   return (
     <>
-      <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground first:border-t-0">
+      <dt
+        className={cn(
+          "bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground",
+          !first && "border-t",
+        )}
+      >
         {label}
       </dt>
-      <dd className="border-t px-3 py-2 first:border-t-0">{children}</dd>
+      <dd className={cn("min-w-0 px-3 py-2", !first && "border-t")}>
+        {children}
+      </dd>
     </>
   );
 }
@@ -342,8 +364,8 @@ function ObservationList({
             <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/60 px-3 py-2 font-mono text-xs text-foreground">
               {record.content || "-"}
             </pre>
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
-              <span>{record.id}</span>
+            <div className="mt-2 flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
+              <span className="min-w-0 break-all">{record.id}</span>
               <span>
                 window {formatObservationWindow(record.window_start, record.window_end)}
               </span>
@@ -353,9 +375,19 @@ function ObservationList({
               {record.delivered_at ? (
                 <span>delivered {formatObservationTimestamp(record.delivered_at)}</span>
               ) : null}
-              {record.source_event_id ? <span>{record.source_event_id}</span> : null}
-              {record.artifact_path ? <span>{record.artifact_path}</span> : null}
-              {record.error ? <span className="text-destructive">{record.error}</span> : null}
+              {record.source_event_id ? (
+                <span className="min-w-0 break-all">
+                  {record.source_event_id}
+                </span>
+              ) : null}
+              {record.artifact_path ? (
+                <span className="min-w-0 break-all">{record.artifact_path}</span>
+              ) : null}
+              {record.error ? (
+                <span className="min-w-0 break-all text-destructive">
+                  {record.error}
+                </span>
+              ) : null}
             </div>
           </div>
         ))}

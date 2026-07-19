@@ -53,6 +53,20 @@ export function Runtime() {
     };
   }, []);
 
+  if (error && !data) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        <div
+          role="alert"
+          className="w-full max-w-xl rounded-lg border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          <p className="font-medium">Runtime status is unavailable.</p>
+          <p className="mt-1 break-words font-mono text-xs">{error}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!data) {
     return <LoadingState label="Loading runtime" />;
   }
@@ -77,7 +91,7 @@ export function Runtime() {
               service
             </Badge>
           </div>
-          <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+          <div className="overflow-hidden rounded-lg border bg-card shadow-[var(--shadow-sm)]">
             <dl className="grid gap-0 text-sm sm:grid-cols-[9rem_minmax(0,1fr)]">
               <dt className="border-b bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground sm:border-b-0">
                 CWD
@@ -134,7 +148,10 @@ export function Runtime() {
                   <dt className="border-t bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     Refresh error
                   </dt>
-                  <dd className="text-destructive border-t break-words px-3 py-2 font-mono text-xs">
+                  <dd
+                    role="alert"
+                    className="text-destructive border-t break-words px-3 py-2 font-mono text-xs"
+                  >
                     {error}
                   </dd>
                 </>
@@ -145,14 +162,14 @@ export function Runtime() {
 
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
+            <h2 className="font-serif text-2xl italic leading-none text-primary">
               System Prompt
-            </h1>
+            </h2>
             <Badge variant="secondary" className="font-mono text-[11px]">
               {systemPrompt.count}
             </Badge>
           </div>
-          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+          <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
             {systemPromptItems.length === 0 ? (
               <div className="text-muted-foreground px-3 py-3 text-sm">
                 No system prompt entries.
@@ -165,11 +182,11 @@ export function Runtime() {
 
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
+            <h2 className="font-serif text-2xl italic leading-none text-primary">
               Provider
-            </h1>
+            </h2>
           </div>
-          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+          <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
             <table className="w-full min-w-[34rem] text-left text-sm">
               <tbody>
                 <tr>
@@ -200,7 +217,7 @@ export function Runtime() {
                   <th className="bg-muted/60 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                     Base URL
                   </th>
-                  <td className="max-w-[42rem] truncate px-3 py-2 font-mono text-xs">
+                  <td className="max-w-[42rem] break-all px-3 py-2 font-mono text-xs">
                     {data.provider.base_url || "-"}
                   </td>
                 </tr>
@@ -225,23 +242,23 @@ export function Runtime() {
 
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
+            <h2 className="font-serif text-2xl italic leading-none text-primary">
               Tools
-            </h1>
+            </h2>
             <Badge variant="secondary" className="font-mono text-[11px]">
               {runtimeTools.count ?? 0}
             </Badge>
           </div>
-          <div className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+          <div className="overflow-hidden rounded-lg border bg-card shadow-[var(--shadow-sm)]">
             <RuntimeToolGroups groups={runtimeToolGroups} />
           </div>
         </section>
 
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
+            <h2 className="font-serif text-2xl italic leading-none text-primary">
               MCP
-            </h1>
+            </h2>
             <Badge
               variant={data.mcp.errors > 0 ? "destructive" : "secondary"}
               className="font-mono text-[11px]"
@@ -250,11 +267,11 @@ export function Runtime() {
             </Badge>
           </div>
           {mcpServers.length === 0 ? (
-            <div className="text-muted-foreground rounded-[14px] border bg-card px-3 py-3 text-sm shadow-[var(--shadow-sm)]">
+            <div className="text-muted-foreground rounded-lg border bg-card px-3 py-3 text-sm shadow-[var(--shadow-sm)]">
               No MCP servers configured.
             </div>
           ) : (
-            <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+            <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
               <MCPServerTable servers={mcpServers} />
             </div>
           )}
@@ -262,14 +279,14 @@ export function Runtime() {
 
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
+            <h2 className="font-serif text-2xl italic leading-none text-primary">
               Skills
-            </h1>
+            </h2>
             <Badge variant="secondary" className="font-mono text-[11px]">
               {data.skills.count}
             </Badge>
           </div>
-          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+          <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
             <table className="w-full min-w-[56rem] text-left text-sm">
               <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
                 <tr>
@@ -300,7 +317,7 @@ export function Runtime() {
                           {skill.description || "-"}
                         </span>
                       </td>
-                      <td className="max-w-[24rem] truncate px-3 py-2 font-mono text-xs">
+                      <td className="max-w-[24rem] break-all px-3 py-2 font-mono text-xs">
                         {skill.path}
                       </td>
                     </tr>
@@ -313,14 +330,14 @@ export function Runtime() {
 
         <section className="space-y-3">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-            <h1 className="font-serif text-2xl italic leading-none text-primary">
+            <h2 className="font-serif text-2xl italic leading-none text-primary">
               Hooks
-            </h1>
+            </h2>
             <Badge variant="secondary" className="font-mono text-[11px]">
               {runtimeHooksSummaryLabel(hooks)}
             </Badge>
           </div>
-          <div className="overflow-x-auto rounded-[14px] border bg-card shadow-[var(--shadow-sm)]">
+          <div className="overflow-x-auto rounded-lg border bg-card shadow-[var(--shadow-sm)]">
             <table className="w-full min-w-[56rem] text-left text-sm">
               <thead className="bg-muted/60 text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
                 <tr>
@@ -372,7 +389,7 @@ function HookRow({ hook }: { hook: RuntimeHookInfo }) {
       <td className="px-3 py-2">
         <BadgeList items={hook.tools ?? []} empty="all" />
       </td>
-      <td className="max-w-[28rem] truncate px-3 py-2 font-mono text-xs">
+      <td className="max-w-[28rem] break-all px-3 py-2 font-mono text-xs">
         {runtimeHookCommandLabel(hook.command)}
       </td>
       <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">
@@ -454,7 +471,7 @@ function SystemPromptEntryRow({ entry }: { entry: SystemPromptEntry }) {
           </Badge>
         </td>
         <td className="px-3 py-2.5">
-          <div className="text-muted-foreground max-w-[30rem] truncate font-mono text-xs">
+          <div className="text-muted-foreground max-w-[30rem] break-all font-mono text-xs">
             {entry.path || entry.key}
           </div>
         </td>
@@ -552,7 +569,7 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
           </Badge>
         </td>
         <td className="px-3 py-2.5">
-          <div className="max-w-[24rem] truncate font-mono text-xs">
+          <div className="max-w-[24rem] break-all font-mono text-xs">
             {mcpServerCommand(server.command, server.args)}
           </div>
         </td>
@@ -563,8 +580,8 @@ function MCPServerRow({ server }: { server: MCPServerInfo }) {
           <div
             className={
               server.error
-                ? "max-w-[24rem] truncate font-mono text-xs text-destructive"
-                : "max-w-[24rem] truncate font-mono text-xs text-muted-foreground"
+                ? "max-w-[24rem] break-all font-mono text-xs text-destructive"
+                : "max-w-[24rem] break-all font-mono text-xs text-muted-foreground"
             }
           >
             {server.error || "-"}

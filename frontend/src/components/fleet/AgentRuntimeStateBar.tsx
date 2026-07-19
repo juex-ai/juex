@@ -32,7 +32,7 @@ export function AgentRuntimeStateBar() {
         disabled={lifecycleBusy || !agent.enabled}
       >
         {lifecycleBusy ? (
-          <LoaderCircle className="size-3.5 animate-spin" />
+          <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
         ) : (
           <Play className="size-3.5" />
         )}

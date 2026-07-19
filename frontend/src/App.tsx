@@ -6,6 +6,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
+import { LoadingState } from "@/components/LoadingState";
 import { agentPagePath } from "@/lib/fleet-routes";
 
 const Fleet = lazy(() =>
@@ -47,13 +48,7 @@ const Runtime = lazy(() =>
 
 function RouteSuspense({ children }: { children: ReactNode }) {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground text-sm">
-          Loading...
-        </div>
-      }
-    >
+    <Suspense fallback={<LoadingState label="Loading page" />}>
       {children}
     </Suspense>
   );

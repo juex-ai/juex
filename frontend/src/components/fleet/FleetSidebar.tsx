@@ -1,10 +1,10 @@
 import {
+  Gauge,
   LoaderCircle,
   PanelLeftClose,
   PanelLeftOpen,
   Play,
   Plus,
-  Settings,
   SlidersHorizontal,
   Square,
 } from "lucide-react";
@@ -171,6 +171,7 @@ export function FleetSidebar({
             agent={agent}
             selected={agent.id === selectedAgentID}
             compact={compact}
+            mobile={mobile}
             busy={busyAgentID === agent.id}
             onNavigate={onNavigate}
             onToggleLifecycle={() => onToggleLifecycle(agent)}
@@ -215,6 +216,7 @@ function AgentRailRow({
   agent,
   selected,
   compact,
+  mobile,
   busy,
   onNavigate,
   onToggleLifecycle,
@@ -222,6 +224,7 @@ function AgentRailRow({
   agent: AgentStatus;
   selected: boolean;
   compact: boolean;
+  mobile: boolean;
   busy: boolean;
   onNavigate?: () => void;
   onToggleLifecycle: () => void;
@@ -234,10 +237,8 @@ function AgentRailRow({
   return (
     <div
       className={cn(
-        "group relative mx-2 mb-1 flex min-h-12 items-center rounded-md transition-colors",
-        selected ? "bg-primary/10" : "hover:bg-muted/70",
-        selected &&
-          "before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-r before:bg-[var(--juex-gold-400)]",
+        "group relative mx-2 mb-1 flex h-12 items-center rounded-md transition-colors",
+        selected ? "bg-sidebar-accent" : "hover:bg-muted/70",
         compact && "justify-center",
       )}
       data-agent-state={state}
@@ -246,13 +247,21 @@ function AgentRailRow({
         to={agentTabPath(agent.id, "chat")}
         className={cn(
           "flex min-w-0 flex-1 items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/35",
-          compact ? "justify-center p-2" : "py-2 pl-3 pr-[4.75rem]",
+          compact
+            ? "size-12 flex-none justify-center p-0"
+            : "py-2 pl-3 pr-[4.75rem]",
         )}
         onClick={onNavigate}
-        aria-label={`Open ${name}`}
+        aria-current={selected ? "true" : undefined}
+        aria-label={`Open ${name}, ${agentStatusText(agent)}`}
         title={compact ? `${name}: ${agentStatusText(agent)}` : undefined}
       >
-        <AgentAvatar agent={agent} state={state} compact={compact} />
+        <AgentAvatar
+          agent={agent}
+          state={state}
+          compact={compact}
+          selected={selected}
+        />
         {!compact ? (
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-foreground">
@@ -284,7 +293,13 @@ function AgentRailRow({
       </Link>
 
       {!compact ? (
-        <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <div
+          className={cn(
+            "absolute right-1.5 flex items-center gap-0.5 transition-opacity",
+            mobile ? "pointer-events-auto opacity-100"
+              : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100",
+          )}
+        >
           <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -292,13 +307,13 @@ function AgentRailRow({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-8 bg-card/90"
+                  className="size-8"
                   disabled={busy || (!agent.enabled && lifecycleAction === "start")}
                   onClick={onToggleLifecycle}
                   aria-label={`${lifecycleAction === "stop" ? "Stop" : "Start"} ${name}`}
                 >
                   {busy ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
+                    <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
                   ) : lifecycleAction === "stop" ? (
                     <Square className="size-3.5" />
                   ) : (
@@ -316,14 +331,14 @@ function AgentRailRow({
                   asChild
                   variant="ghost"
                   size="icon"
-                  className="size-8 bg-card/90"
+                  className="size-8"
                 >
                   <Link
                     to={agentTabPath(agent.id, "runtime")}
                     onClick={onNavigate}
                     aria-label={`Open ${name} runtime`}
                   >
-                    <Settings className="size-3.5" />
+                    <Gauge className="size-3.5" />
                   </Link>
                 </Button>
               </TooltipTrigger>
@@ -340,18 +355,23 @@ function AgentAvatar({
   agent,
   state,
   compact,
+  selected,
 }: {
   agent: AgentStatus;
   state: ReturnType<typeof agentVisualState>;
   compact: boolean;
+  selected: boolean;
 }) {
   const name = agent.name || agent.id;
   const initial = name.trim().charAt(0).toUpperCase() || "J";
   return (
     <span
       className={cn(
-        "relative grid shrink-0 place-items-center rounded-md bg-primary/10 font-serif font-semibold text-primary",
-        compact ? "size-9 text-sm" : "size-8 text-xs",
+        "relative grid size-8 shrink-0 place-items-center rounded-md font-serif font-semibold",
+        selected
+          ? "bg-transparent text-sidebar-accent-foreground"
+          : "bg-muted text-primary",
+        compact ? "text-sm" : "text-xs",
       )}
       aria-hidden="true"
     >
@@ -360,10 +380,10 @@ function AgentAvatar({
         className={cn(
           "absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-card",
           state === "stopped" && "bg-muted-foreground/55",
-          state === "idle" && "bg-emerald-500",
+          state === "idle" && "bg-juex-done",
           state === "working" &&
-            "animate-pulse bg-emerald-500 motion-reduce:animate-none",
-          state === "failed" && "bg-destructive",
+            "animate-pulse bg-juex-pending motion-reduce:animate-none",
+          state === "failed" && "bg-juex-error",
         )}
       />
     </span>

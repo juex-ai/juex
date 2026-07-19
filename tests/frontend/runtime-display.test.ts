@@ -156,7 +156,25 @@ test("notesCheckboxProgress counts Markdown task items", () => {
 });
 
 test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
-  assert.equal(runtimeSessionStateBadgeLabel(), "state");
+  assert.equal(runtimeSessionStateBadgeLabel(), "state idle");
+  assert.equal(
+    runtimeSessionStateBadgeLabel({
+      status: "active",
+      description: "ship",
+      acceptance: "",
+      status_reason: "",
+      continuation_count: 0,
+      updated_at: "",
+    }),
+    "goal active",
+  );
+  assert.equal(
+    runtimeSessionStateBadgeLabel(undefined, {
+      content: "- [x] first\n- [ ] second",
+      updated_at: "",
+    }),
+    "notes 1/2",
+  );
 });
 
 test("runtimeSessionStateIsActive merges goal and notes presence", () => {

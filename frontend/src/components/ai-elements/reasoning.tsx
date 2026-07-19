@@ -137,7 +137,7 @@ export const Reasoning = memo(
       <ReasoningContext.Provider value={contextValue}>
         <Collapsible
           className={cn(
-            "not-prose mb-4 w-full max-w-full rounded-[12px] border border-dashed border-border bg-transparent px-3 py-2 text-juex-thinking sm:max-w-[78%]",
+            "not-prose mb-4 w-full max-w-full rounded-lg border border-dashed border-border bg-transparent px-3 py-2 text-juex-thinking motion-reduce:[&_*]:animate-none sm:max-w-[78%]",
             className
           )}
           onOpenChange={handleOpenChange}
@@ -179,7 +179,7 @@ export const ReasoningTrigger = memo(
     return (
       <CollapsibleTrigger
         className={cn(
-          "flex w-full items-center gap-2 text-[13px] font-medium text-juex-thinking transition-colors hover:text-foreground",
+          "flex w-full items-center gap-2 text-[13px] font-medium text-juex-thinking transition-colors hover:text-foreground motion-reduce:transition-none",
           className
         )}
         {...props}
@@ -190,7 +190,7 @@ export const ReasoningTrigger = memo(
             {getThinkingMessage(isStreaming, duration)}
             <ChevronDownIcon
               className={cn(
-                "size-4 transition-transform",
+                "size-4 transition-transform motion-reduce:transition-none",
                 isOpen ? "rotate-180" : "rotate-0"
               )}
             />
@@ -214,7 +214,7 @@ export const ReasoningContent = memo(
     <CollapsibleContent
       className={cn(
         "mt-2 text-[12.5px] leading-[1.6]",
-        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-juex-thinking outline-none data-[state=closed]:animate-out data-[state=open]:animate-in",
+        "data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 text-juex-thinking outline-none motion-reduce:data-[state=closed]:animate-none motion-reduce:data-[state=open]:animate-none data-[state=closed]:animate-out data-[state=open]:animate-in",
         className
       )}
       {...props}

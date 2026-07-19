@@ -531,6 +531,7 @@ export const PromptInput = ({
   // Refs
   const inputRef = useRef<HTMLInputElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const submittingRef = useRef(false);
 
   // ----- Local attachments (only used when no provider)
   const [items, setItems] = useState<(FileUIPart & { id: string })[]>([]);
@@ -564,6 +565,9 @@ export const PromptInput = ({
         .filter(Boolean);
 
       return patterns.some((pattern) => {
+        if (pattern.startsWith(".")) {
+          return f.name.toLowerCase().endsWith(pattern.toLowerCase());
+        }
         if (pattern.endsWith("/*")) {
           // e.g: image/* -> image/
           const prefix = pattern.slice(0, -1);
@@ -579,21 +583,31 @@ export const PromptInput = ({
     (fileList: File[] | FileList) => {
       const incoming = [...fileList];
       const accepted = incoming.filter((f) => matchesAccept(f));
-      if (incoming.length && accepted.length === 0) {
+      if (incoming.length !== accepted.length) {
         onError?.({
           code: "accept",
-          message: "No files match the accepted types.",
+          message:
+            accepted.length === 0
+              ? "No files match the accepted types."
+              : "Some files did not match the accepted types.",
         });
+      }
+      if (incoming.length && accepted.length === 0) {
         return;
       }
       const withinSize = (f: File) =>
         maxFileSize ? f.size <= maxFileSize : true;
       const sized = accepted.filter(withinSize);
-      if (accepted.length > 0 && sized.length === 0) {
+      if (accepted.length !== sized.length) {
         onError?.({
           code: "max_file_size",
-          message: "All files exceed the maximum size.",
+          message:
+            sized.length === 0
+              ? "All files exceed the maximum size."
+              : "Some files exceed the maximum size and were not added.",
         });
+      }
+      if (accepted.length > 0 && sized.length === 0) {
         return;
       }
 
@@ -643,21 +657,31 @@ export const PromptInput = ({
     (fileList: File[] | FileList) => {
       const incoming = [...fileList];
       const accepted = incoming.filter((f) => matchesAccept(f));
-      if (incoming.length && accepted.length === 0) {
+      if (incoming.length !== accepted.length) {
         onError?.({
           code: "accept",
-          message: "No files match the accepted types.",
+          message:
+            accepted.length === 0
+              ? "No files match the accepted types."
+              : "Some files did not match the accepted types.",
         });
+      }
+      if (incoming.length && accepted.length === 0) {
         return;
       }
       const withinSize = (f: File) =>
         maxFileSize ? f.size <= maxFileSize : true;
       const sized = accepted.filter(withinSize);
-      if (accepted.length > 0 && sized.length === 0) {
+      if (accepted.length !== sized.length) {
         onError?.({
           code: "max_file_size",
-          message: "All files exceed the maximum size.",
+          message:
+            sized.length === 0
+              ? "All files exceed the maximum size."
+              : "Some files exceed the maximum size and were not added.",
         });
+      }
+      if (accepted.length > 0 && sized.length === 0) {
         return;
       }
 
@@ -708,10 +732,25 @@ export const PromptInput = ({
     ? controller.attachments.openFileDialog
     : openFileDialogLocal;
 
-  const clear = useCallback(() => {
-    clearAttachments();
-    clearReferencedSources();
-  }, [clearAttachments, clearReferencedSources]);
+  const clearSubmittedAttachments = useCallback(
+    (submittedIDs: readonly string[]) => {
+      if (controller) {
+        for (const id of submittedIDs) {
+          controller.attachments.remove(id);
+        }
+        return;
+      }
+      const submitted = new Set(submittedIDs);
+      setItems((current) =>
+        current.filter((file) => {
+          if (!submitted.has(file.id)) return true;
+          if (file.url) URL.revokeObjectURL(file.url);
+          return false;
+        }),
+      );
+    },
+    [controller],
+  );
 
   // Let provider know about our hidden file input so external menus can call openFileDialog()
   useEffect(() => {
@@ -844,6 +883,8 @@ export const PromptInput = ({
   const handleSubmit: FormEventHandler<HTMLFormElement> = useCallback(
     async (event) => {
       event.preventDefault();
+      if (submittingRef.current) return;
+      submittingRef.current = true;
 
       const form = event.currentTarget;
       const text = usingProvider
@@ -853,11 +894,7 @@ export const PromptInput = ({
             return (formData.get("message") as string) || "";
           })();
 
-      // Reset form immediately after capturing text to avoid race condition
-      // where user input during async blob conversion would be lost
-      if (!usingProvider) {
-        form.reset();
-      }
+      const submittedFileIDs = files.map((file) => file.id);
 
       try {
         // Convert blob URLs to data URLs asynchronously
@@ -881,10 +918,9 @@ export const PromptInput = ({
         if (result instanceof Promise) {
           try {
             await result;
-            clear();
-            if (usingProvider) {
-              controller.textInput.clear();
-            }
+            clearSubmittedAttachments(submittedFileIDs);
+            clearReferencedSources();
+            resetSubmittedText(form, text, usingProvider, controller);
           } catch (error) {
             // Don't clear on error - user may want to retry
             onError?.({
@@ -895,10 +931,9 @@ export const PromptInput = ({
           }
         } else {
           // Sync function completed without throwing, clear inputs
-          clear();
-          if (usingProvider) {
-            controller.textInput.clear();
-          }
+          clearSubmittedAttachments(submittedFileIDs);
+          clearReferencedSources();
+          resetSubmittedText(form, text, usingProvider, controller);
         }
       } catch (error) {
         // Don't clear on error - user may want to retry
@@ -906,9 +941,19 @@ export const PromptInput = ({
           code: "submit_error",
           message: error instanceof Error ? error.message : "Submit failed.",
         });
+      } finally {
+        submittingRef.current = false;
       }
     },
-    [usingProvider, controller, files, onSubmit, clear, onError]
+    [
+      usingProvider,
+      controller,
+      files,
+      onSubmit,
+      clearReferencedSources,
+      clearSubmittedAttachments,
+      onError,
+    ],
   );
 
   // Render with or without local provider
@@ -948,6 +993,26 @@ export const PromptInput = ({
     </LocalAttachmentsContext.Provider>
   );
 };
+
+function resetSubmittedText(
+  form: HTMLFormElement,
+  submittedText: string,
+  usingProvider: boolean,
+  controller: PromptInputControllerProps | null,
+) {
+  const field = form.elements.namedItem("message");
+  if (
+    (field instanceof HTMLTextAreaElement || field instanceof HTMLInputElement) &&
+    field.value !== submittedText
+  ) {
+    return;
+  }
+  if (usingProvider) {
+    controller?.textInput.clear();
+    return;
+  }
+  form.reset();
+}
 
 export type PromptInputBodyProps = HTMLAttributes<HTMLDivElement>;
 

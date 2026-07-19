@@ -145,22 +145,40 @@ export function FileTreePanel({
                 disabled={refreshing}
                 aria-label={refreshLabel}
               >
-                <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
+                <RefreshCw
+                  className={cn(
+                    "size-3.5 motion-reduce:animate-none",
+                    refreshing && "animate-spin",
+                  )}
+                />
               </Button>
             </TooltipTrigger>
             <TooltipContent>{refreshLabel}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>
+      {error ? (
+        <div
+          role="alert"
+          className="border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-xs text-destructive"
+        >
+          {error}
+          {tree ? " Showing the last loaded snapshot." : ""}
+        </div>
+      ) : null}
       <ScrollArea className="flex-1 p-3">
         {loading ? (
-          <div className="animate-pulse p-2 text-sm text-muted-foreground">Loading...</div>
+          <div className="p-2 text-sm text-muted-foreground motion-safe:animate-pulse">
+            Loading...
+          </div>
         ) : tree && tree.is_dir && !tree.children_truncated && !tree.children?.length ? (
           <div className="p-2 text-sm text-muted-foreground">{emptyLabel}</div>
         ) : tree ? (
           <TreeNode node={tree} depth={0} onFileClick={handleFileClick} />
         ) : (
-          <div className="p-2 text-sm text-muted-foreground">{error}</div>
+          <div className="p-2 text-sm text-muted-foreground">
+            Workspace unavailable.
+          </div>
         )}
       </ScrollArea>
 
@@ -218,7 +236,7 @@ function TreeNode({
     return (
       <button
         type="button"
-        className="flex w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-left font-mono text-[12.5px] hover:bg-muted hover:text-foreground"
+        className="flex min-h-10 w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1.5 text-left font-mono text-[12.5px] outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35 sm:min-h-8"
         onClick={() => onFileClick(node.path)}
       >
         <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
@@ -232,7 +250,7 @@ function TreeNode({
       <button
         type="button"
         className={cn(
-          "flex w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1 text-left font-mono text-[12.5px] hover:bg-muted hover:text-foreground",
+          "flex min-h-10 w-full min-w-0 items-center gap-1.5 rounded-[6px] px-2 py-1.5 text-left font-mono text-[12.5px] outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/35 sm:min-h-8",
           depth === 0 && "font-medium",
         )}
         onClick={() => setExpanded(!expanded)}

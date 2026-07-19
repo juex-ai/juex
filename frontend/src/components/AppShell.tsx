@@ -110,12 +110,11 @@ export function AppShell() {
       statusStore.seedAgents(next);
       setAgents(next);
       setFleetError(null);
+      setAgentsLoaded(true);
     } catch (cause) {
       setFleetError(
         cause instanceof Error ? cause.message : "Failed to load fleet agents.",
       );
-    } finally {
-      setAgentsLoaded(true);
     }
   }, [statusStore]);
 
@@ -323,7 +322,7 @@ export function AppShell() {
                 </Button>
               </div>
             ) : null}
-            {fleetError ? (
+            {fleetError && agentsLoaded ? (
               <div
                 className="shrink-0 border-b border-destructive/25 bg-destructive/10 px-4 py-2 text-sm text-destructive"
                 role="alert"
@@ -334,7 +333,28 @@ export function AppShell() {
 
             <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
               <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-                {emptyFleet ? (
+                {fleetError && !agentsLoaded ? (
+                  <div
+                    className="flex min-h-0 flex-1 items-center justify-center px-4 py-8"
+                    role="alert"
+                  >
+                    <div className="w-full max-w-lg rounded-md border border-destructive/35 bg-destructive/10 px-6 py-8 text-center text-destructive">
+                      <AlertTriangle className="mx-auto size-5" />
+                      <h1 className="mt-3 text-base font-semibold">
+                        Fleet roster unavailable
+                      </h1>
+                      <p className="mt-2 text-sm">{fleetError}</p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="mt-5"
+                        onClick={() => void refreshAgents()}
+                      >
+                        Retry
+                      </Button>
+                    </div>
+                  </div>
+                ) : emptyFleet ? (
                   <FleetEmptyState />
                 ) : location.pathname === "/" ? (
                   <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
