@@ -10,7 +10,7 @@ import (
 
 const NotesToolUpdate = "update_notes"
 
-const notesGuide = "MUST load the `juex-session-state` skill before first use."
+const notesGuide = `Guide available via skill_load("juex-session-state").`
 
 func NotesToolDefinitions() []tools.ToolDefinition {
 	return []tools.ToolDefinition{{

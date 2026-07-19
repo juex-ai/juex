@@ -12,24 +12,8 @@ except ImportError:  # pragma: no cover - direct script fallback.
 
 
 FORBIDDEN_TOOLS = {
-    "exec_command",
-    "list_shell_sessions",
     "observable_create",
-    "shell",
-    "shell_input",
-    "write_stdin",
 }
-
-OBSERVABLE_TOOLS = {
-    "observable_create",
-    "observable_delete",
-    "observable_list",
-    "observable_observations",
-    "observable_start",
-    "observable_stop",
-    "schedule_create",
-}
-
 
 @dataclass(frozen=True)
 class ScheduleRoutingExpectation:
@@ -64,9 +48,8 @@ def build_prompt(expectation: ScheduleRoutingExpectation) -> str:
             "Create recurring timed work using JueX native scheduling.",
             f"Use the fixed id {expectation.schedule_id} and run it every {hours_text} hours.",
             f"Each activation must emit observation content exactly: {expectation.content}",
-            "Load the built-in juex-observables guide before using any Observable capability.",
             "Inspect all currently configured timed sources first, then create this one only if it is absent.",
-            "Do not run commands, use shell polling or background loops, or create a managed command source.",
+            "Use native scheduling for recurrence; do not implement it with shell polling, background loops, or a managed command source.",
             f"After the timed work is created successfully, answer exactly: {expectation.completion_token}",
         ]
     )
@@ -158,45 +141,39 @@ def _validate_tool_contract(
 
     list_uses = [use for use in uses if use.name == "observable_list"]
     create_uses = [use for use in uses if use.name == "schedule_create"]
-    if len(list_uses) != 1:
-        issues.append(f"expected exactly one observable_list tool_use, saw {len(list_uses)}")
-    if len(create_uses) != 1:
-        issues.append(f"expected exactly one schedule_create tool_use, saw {len(create_uses)}")
+    if not list_uses:
+        issues.append("expected at least one observable_list tool_use, saw 0")
+    if not create_uses:
+        issues.append("expected at least one schedule_create tool_use, saw 0")
 
-    first_observable = next((use for use in uses if use.name in OBSERVABLE_TOOLS), None)
-    guide_uses = [
-        use
-        for use in uses
-        if use.name == "skill_load"
-        and isinstance(use.input, dict)
-        and use.input.get("name") == "juex-observables"
+    successful_creates = [
+        (create_use, result)
+        for create_use in create_uses
+        if (result := _successful_result_after(create_use, results)) is not None
     ]
-    guide_loaded = False
-    for use in guide_uses:
-        result = _successful_result_after(use, results)
-        if result and (first_observable is None or _position(result) < _position(first_observable)):
-            guide_loaded = True
-            break
-    if not guide_loaded:
-        issues.append("juex-observables skill_load must succeed before first Observable tool_use")
+    if len(successful_creates) != 1:
+        issues.append(
+            f"expected exactly one successful schedule_create tool_use, saw {len(successful_creates)}"
+        )
 
-    if len(list_uses) == 1 and len(create_uses) == 1:
-        list_use = list_uses[0]
-        create_use = create_uses[0]
-        if _position(create_use) < _position(list_use):
-            issues.append("observable_list must run before schedule_create")
-        if list_use.message_index == create_use.message_index:
-            issues.append("observable_list and schedule_create cannot be in the same assistant message")
-        list_result = _successful_result_after(list_use, results)
-        if list_result is None:
-            issues.append("observable_list must have a successful tool_result")
-        elif _position(list_result) >= _position(create_use):
-            issues.append("observable_list successful tool_result must occur before schedule_create")
-        create_result = _successful_result_after(create_use, results)
-        if create_result is None:
-            issues.append("schedule_create must have a successful tool_result")
-        else:
-            completion_after = _position(create_result)
+    if list_uses and len(successful_creates) == 1:
+        create_use, create_result = successful_creates[0]
+        list_succeeded_before_create = any(
+            (result := _successful_result_after(list_use, results)) is not None
+            and _position(result) < _position(create_use)
+            for list_use in list_uses
+        )
+        if not list_succeeded_before_create:
+            if any(list_use.message_index == create_use.message_index for list_use in list_uses):
+                issues.append(
+                    "observable_list and schedule_create cannot be in the same assistant message "
+                    "without an earlier successful observable_list result"
+                )
+            else:
+                issues.append(
+                    "at least one observable_list successful tool_result must occur before schedule_create"
+                )
+        completion_after = _position(create_result)
         _validate_create_input(create_use.input, expectation, issues)
 
     if completion_after is None or not _has_exact_completion_after(

@@ -83,9 +83,9 @@ func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
 			continue
 		}
 		for _, tool := range group.Tools {
-			wantPointer := "MUST load the `" + guide + "` skill before first use."
+			wantPointer := `Guide available via skill_load("` + guide + `").`
 			if !strings.Contains(tool.Description, wantPointer) {
-				t.Errorf("%s description missing hard guide pointer %q: %q", tool.Name, wantPointer, tool.Description)
+				t.Errorf("%s description missing guide availability pointer %q: %q", tool.Name, wantPointer, tool.Description)
 			}
 			if schemaContainsStringMetadata(tool.Schema, "description") {
 				t.Errorf("%s schema retains descriptive prose: %#v", tool.Name, tool.Schema)

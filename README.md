@@ -265,11 +265,13 @@ Skills are exposed with progressive disclosure. The system prompt contains a
 compact, budgeted catalog of filesystem skills instead of every full
 `SKILL.md`; the model can call `skill_search` to discover catalog entries and
 `skill_load` to read the full markdown body plus its source path when a skill
-is relevant. JueX also embeds required guides for the low-frequency
+is relevant. JueX also embeds guides for the low-frequency
 `observable`, `session_state`, and `chunked_write` tool groups. Those guides
 appear as `source=builtin` in search and Runtime status, are listed by dry-run
 and counted by doctor, but stay out of the prompt skill catalog because each
-related tool description already points to its guide. Configure
+related tool description already points to its guide. Loading is advisory:
+successful tool use never depends on it, while failed calls in guided groups
+include a remediation hint naming the relevant guide. Configure
 `skills.include` or `skills.exclude` to
 control merged filesystem skills; builtin guides are always available.
 `skills.prompt_budget_chars` tunes the initial filesystem catalog budget. `juex repl`

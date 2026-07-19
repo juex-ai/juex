@@ -13,7 +13,7 @@ const (
 	GoalToolGet    = "get_goal"
 	GoalToolCreate = "create_goal"
 	GoalToolUpdate = "update_goal"
-	goalGuide      = "MUST load the `juex-session-state` skill before first use."
+	goalGuide      = `Guide available via skill_load("juex-session-state").`
 )
 
 func GoalToolDefinitions() []tools.ToolDefinition {

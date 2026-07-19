@@ -118,6 +118,29 @@ func TestDefaultBuiltinToolGroups(t *testing.T) {
 	}
 }
 
+func TestToolGroupGuideSkill(t *testing.T) {
+	tests := []struct {
+		name  string
+		group ToolGroup
+		want  string
+		ok    bool
+	}{
+		{name: "observable", group: ToolGroupObservable, want: "juex-observables", ok: true},
+		{name: "chunked write", group: ToolGroupChunkedWrite, want: "juex-chunked-write", ok: true},
+		{name: "session state", group: ToolGroupSessionState, want: "juex-session-state", ok: true},
+		{name: "unguided", group: ToolGroupFile},
+		{name: "unknown", group: ToolGroup("future")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := tt.group.GuideSkill()
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("GuideSkill() = (%q, %t), want (%q, %t)", got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func TestToolDefinitionBindsHandlersAndSpecsStayProviderFacing(t *testing.T) {
 	definition := ToolDefinition{
 		Name:           "classified",
@@ -1704,11 +1727,11 @@ func TestRegisterBuiltinsChunkedWriteSchema(t *testing.T) {
 		}
 	}
 	begin, _ := r.Get("write_begin")
-	if !strings.Contains(begin.Description, "use write for short content") || !strings.Contains(begin.Description, "MUST load the `juex-chunked-write` skill before first use.") {
+	if !strings.Contains(begin.Description, "use write for short content") || !strings.Contains(begin.Description, `Guide available via skill_load("juex-chunked-write").`) {
 		t.Fatalf("write_begin description missing routing and guide pointer: %q", begin.Description)
 	}
 	chunk, _ := r.Get("write_chunk")
-	if !strings.Contains(chunk.Description, "indexed content") || !strings.Contains(chunk.Description, "MUST load the `juex-chunked-write` skill before first use.") {
+	if !strings.Contains(chunk.Description, "indexed content") || !strings.Contains(chunk.Description, `Guide available via skill_load("juex-chunked-write").`) {
 		t.Fatalf("write_chunk description missing purpose and guide pointer: %q", chunk.Description)
 	}
 	if chunk.Schema["additionalProperties"] != false {

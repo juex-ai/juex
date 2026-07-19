@@ -2,7 +2,7 @@ package tools
 
 import "github.com/juex-ai/juex/internal/sandbox"
 
-const chunkedWriteGuidePointer = "MUST load the `juex-chunked-write` skill before first use."
+const chunkedWriteGuidePointer = `Guide available via skill_load("juex-chunked-write").`
 
 type ChunkedWriteToolProvider struct{}
 

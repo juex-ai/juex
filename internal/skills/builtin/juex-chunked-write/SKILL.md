@@ -1,13 +1,14 @@
 ---
 name: juex-chunked-write
-description: Required guide for safe long-file writes with begin, chunk, commit, and abort.
+description: Guide for safe long-file writes with begin, chunk, commit, and abort.
 type: builtin-guide
 ---
 # JueX Chunked Writes
 
-Load this guide before the first use of `write_begin`, `write_chunk`,
-`write_commit`, or `write_abort` in a turn. Use the ordinary `write` tool for
-generated content up to 2000 characters; use this workflow for longer files.
+Load this guide when you need detailed long-file write workflows, constraints,
+or examples. Correct tool calls do not require a prior guide load. Use the
+ordinary `write` tool for generated content up to 2000 characters; use this
+workflow for longer files.
 
 ## Workflow
 
