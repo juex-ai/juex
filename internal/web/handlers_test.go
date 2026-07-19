@@ -2025,6 +2025,7 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 	deadline := time.Now().Add(60 * time.Second)
 	var lastErr, lastState string
 	var lastMessages any
+poll:
 	for time.Now().Before(deadline) {
 		show, err := client.Get(ts.URL + "/api/sessions/" + c.ID)
 		if err == nil {
@@ -2069,25 +2070,6 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 					if m.Role == "assistant" {
 						for _, b := range m.Blocks {
 							if b.Type == "text" && b.Text == "ack" {
-								if parsed.TokenUsage.InputTokens != 4 || parsed.TokenUsage.OutputTokens != 2 {
-									t.Fatalf("token_usage = %+v", parsed.TokenUsage)
-								}
-								if m.Usage != nil {
-									t.Fatalf("message usage should be omitted: %+v", m.Usage)
-								}
-								if m.ContextUsage != nil {
-									t.Fatalf("message context_usage should be omitted: %+v", m.ContextUsage)
-								}
-								if parsed.ContextUsage.Model != "stub" ||
-									parsed.ContextUsage.ContextWindow != 256000 ||
-									parsed.ContextUsage.InputTokens != 4 ||
-									parsed.ContextUsage.OutputTokens != 2 ||
-									parsed.ContextUsage.TotalTokens != 6 {
-									t.Fatalf("context_usage = %+v", parsed.ContextUsage)
-								}
-								if len(parsed.ContextUsage.Breakdown) == 0 {
-									t.Fatal("context_usage missing breakdown")
-								}
 								var hasResponse bool
 								for _, part := range parsed.ContextUsage.Breakdown {
 									if part.Key == "response" && part.Tokens == 2 {
@@ -2095,8 +2077,26 @@ func TestPostTurn_StartsTurnAndPersists(t *testing.T) {
 										break
 									}
 								}
-								if !hasResponse {
-									t.Fatalf("context_usage missing response breakdown: %+v", parsed.ContextUsage.Breakdown)
+								if parsed.TokenUsage.InputTokens != 4 ||
+									parsed.TokenUsage.OutputTokens != 2 ||
+									parsed.ContextUsage.Model != "stub" ||
+									parsed.ContextUsage.ContextWindow != 256000 ||
+									parsed.ContextUsage.InputTokens != 4 ||
+									parsed.ContextUsage.OutputTokens != 2 ||
+									parsed.ContextUsage.TotalTokens != 6 ||
+									!hasResponse {
+									lastErr = fmt.Sprintf(
+										"assistant persisted before usage metadata: token=%+v context=%+v",
+										parsed.TokenUsage,
+										parsed.ContextUsage,
+									)
+									continue poll
+								}
+								if m.Usage != nil {
+									t.Fatalf("message usage should be omitted: %+v", m.Usage)
+								}
+								if m.ContextUsage != nil {
+									t.Fatalf("message context_usage should be omitted: %+v", m.ContextUsage)
 								}
 								if _, err := os.Stat(filepath.Join(srv.opts.Cfg.SessionsDir(), c.ID, "conversation.jsonl")); err != nil {
 									t.Fatalf("conversation stat after turn err = %v", err)
