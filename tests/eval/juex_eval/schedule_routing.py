@@ -16,7 +16,12 @@ FORBIDDEN_TOOLS = {
     "observable_create",
 }
 
-SHELL_TOOLS = {"exec_command", "shell"}
+SHELL_COMMAND_FIELDS = {
+    "exec_command": ("cmd", "command"),
+    "shell": ("cmd", "command"),
+    "write_stdin": ("chars",),
+}
+
 
 @dataclass(frozen=True)
 class ScheduleRoutingExpectation:
@@ -205,9 +210,17 @@ def _successful_result_after(use: _ToolUse, results: list[_ToolResult]) -> _Tool
 
 
 def _is_shell_scheduling_command(use: _ToolUse) -> bool:
-    if use.name not in SHELL_TOOLS or not isinstance(use.input, dict):
+    fields = SHELL_COMMAND_FIELDS.get(use.name)
+    if fields is None or not isinstance(use.input, dict):
         return False
-    command = use.input.get("cmd") or use.input.get("command")
+    command = next(
+        (
+            value
+            for field in fields
+            if isinstance(value := use.input.get(field), str)
+        ),
+        None,
+    )
     if not isinstance(command, str):
         return False
     normalized = " ".join(command.lower().split())
