@@ -228,7 +228,11 @@ def _is_shell_scheduling_command(use: _ToolUse) -> bool:
         return True
     if re.search(r"\b(?:crontab|systemd-run)\b", normalized):
         return True
-    if re.search(r"\bwatch\s+-n\b", normalized):
+    if re.search(
+        r"(?:^|[;&|]\s*|\b(?:command|env|nohup|setsid|sudo)\s+)"
+        r"(?:\S*/)?watch(?=\s|$)",
+        normalized,
+    ):
         return True
     return bool(
         re.search(r"\bsleep\s+(?:21600|6h)\b", normalized)
