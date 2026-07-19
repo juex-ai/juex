@@ -164,9 +164,12 @@ queued-to-drained transition still clear the projected pending count.
 promotes its first queued input into the next provider turn. It is also
 browser-visible, allowing the transcript projection to remove that queued item
 and preserve its text and attachments under the promoted turn id before
-`turn.started`. Restart recovery resets the projected count to the new
-process's empty in-memory queue; durable pending records remain available for
-restoration and draining by that next turn.
+`turn.started`. Concurrent queue mutations remain available but their events
+are deferred until both promotion and the following turn admission have been
+published, preventing an older promoted count from overwriting a newer queued
+count. Restart recovery resets the projected count to the new process's empty
+in-memory queue; durable pending records remain available for restoration and
+draining by that next turn.
 
 ## Layer 4: Agent ViewModel
 
@@ -187,6 +190,9 @@ process health to invent status.
 The session transcript projection still owns optimistic and streamed message
 content. Runtime status fields in that projection are compatibility inputs
 only and are derived from the shared Agent ViewModel.
+Composer failures prefer the authoritative runtime `last_error`; when a request
+fails before runtime can publish one, the local submission error remains the
+presentation fallback.
 
 ## Layer 5: Fleet Presentation
 

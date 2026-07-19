@@ -103,9 +103,9 @@ type Engine struct {
 	pendingMu    sync.Mutex
 	activeTurnID string
 	pendingInput []queuedPendingInput
-	// pendingDrainAnnouncing keeps queue mutations available while ensuring
-	// their events cannot overtake pending_input.draining.
-	pendingDrainAnnouncing bool
+	// pendingEventAnnouncing keeps queue mutations available while ensuring
+	// their events cannot overtake a queue transition already being announced.
+	pendingEventAnnouncing bool
 	pendingDeferredEvents  []events.Event
 
 	hookRuntimeContextMu      sync.Mutex
@@ -300,12 +300,14 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 		PendingCount:     len(e.pendingInput),
 		MaxPendingInputs: max,
 	}
+	e.pendingEventAnnouncing = true
 	e.pendingMu.Unlock()
 	e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}})
 	e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
+	e.flushPendingEvents()
 	return item.Message, status, true
 }
 
@@ -1095,7 +1097,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	max := e.effectiveMaxPendingInputs()
 	queue := e.pendingInputQueueLocked()
 	if len(pending) > 0 {
-		e.pendingDrainAnnouncing = true
+		e.pendingEventAnnouncing = true
 	}
 	e.pendingMu.Unlock()
 	if len(pending) == 0 {
@@ -1106,7 +1108,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 		PendingCount:     0,
 		MaxPendingInputs: max,
 	}})
-	e.flushPendingDrainEvents()
+	e.flushPendingEvents()
 	recordIDs := pendingRecordIDs(pending)
 	if queue != nil {
 		if err := queue.MarkAdmitted(recordIDs, turnID); err != nil {
@@ -1153,20 +1155,20 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 }
 
 func (e *Engine) deferPendingEventLocked(event events.Event) bool {
-	if !e.pendingDrainAnnouncing {
+	if !e.pendingEventAnnouncing {
 		return false
 	}
 	e.pendingDeferredEvents = append(e.pendingDeferredEvents, event)
 	return true
 }
 
-func (e *Engine) flushPendingDrainEvents() {
+func (e *Engine) flushPendingEvents() {
 	for {
 		e.pendingMu.Lock()
 		deferred := e.pendingDeferredEvents
 		e.pendingDeferredEvents = nil
 		if len(deferred) == 0 {
-			e.pendingDrainAnnouncing = false
+			e.pendingEventAnnouncing = false
 			e.pendingMu.Unlock()
 			return
 		}

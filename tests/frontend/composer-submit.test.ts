@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { composerSubmitAction } from "../../frontend/src/lib/composer-submit.ts";
+import {
+  composerErrorMessage,
+  composerSubmitAction,
+} from "../../frontend/src/lib/composer-submit.ts";
 import type {
   AgentRuntimeStatusSnapshot,
   RuntimeTurnPhase,
@@ -133,4 +136,25 @@ test("composer uses the live projection until status loads", () => {
     }),
     "queue",
   );
+});
+
+test("composer error prefers runtime failure and falls back to local submit failure", () => {
+  const runtimeFailure = status("failed");
+  runtimeFailure.last_error = { message: "provider failed" };
+
+  assert.equal(
+    composerErrorMessage({
+      status: runtimeFailure,
+      localError: "proxy unavailable",
+    }),
+    "provider failed",
+  );
+  assert.equal(
+    composerErrorMessage({
+      status: status("idle"),
+      localError: "proxy unavailable",
+    }),
+    "proxy unavailable",
+  );
+  assert.equal(composerErrorMessage({ status: status("idle") }), undefined);
 });

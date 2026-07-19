@@ -54,6 +54,7 @@ import {
 } from "@/lib/display-units";
 import {
   QUEUE_FULL_SUBMIT_HINT,
+  composerErrorMessage,
   composerSubmitAction,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
@@ -361,6 +362,13 @@ export function Session() {
     text: draft,
     attachmentCount,
   });
+  const composerError = composerErrorMessage({
+    status: runtimeStatus,
+    localError:
+      projection.status.kind === "error"
+        ? projection.status.detail
+        : undefined,
+  });
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -432,9 +440,9 @@ export function Session() {
                         {composerHint}
                       </ComposerFeedback>
                     ) : null}
-                    {runtimeStatus?.last_error ? (
+                    {composerError ? (
                       <ComposerFeedback tone="error">
-                        {runtimeStatus.last_error.message}
+                        {composerError}
                       </ComposerFeedback>
                     ) : null}
                     <ContextUsageLabel

@@ -3510,6 +3510,38 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 	}
 }
 
+func TestPromotePendingInputDefersReentrantQueuedEventUntilAfterPromotion(t *testing.T) {
+	eng, bus := newEngine(t, &mockProvider{}, false)
+	eng.MaxPendingInputs = 4
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 4})
+	var enqueueErr error
+	bus.Subscribe(PendingInputPromotedType, func(events.Event) {
+		_, enqueueErr = eng.EnqueuePendingInput(context.Background(), "racing input")
+	})
+	bus.Subscribe("*", store.Publish)
+
+	if err := eng.ReserveTurnID("compact-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.EnqueuePendingInput(context.Background(), "promoted input"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := eng.PromotePendingInputTurn("compact-1", "turn-1"); !ok {
+		t.Fatal("pending input was not promoted")
+	}
+	if enqueueErr != nil {
+		t.Fatalf("reentrant enqueue: %v", enqueueErr)
+	}
+
+	snapshot := store.Snapshot()
+	if snapshot.Session.PendingCount != 1 || snapshot.Session.MaxPendingInputs != 4 {
+		t.Fatalf("status queue = %+v, want 1/4", snapshot.Session)
+	}
+	if status := eng.PendingInputStatus(); status.PendingCount != 1 {
+		t.Fatalf("engine queue = %+v, want one pending input", status)
+	}
+}
+
 func TestDrainPendingInputReportsMessagesQueuedWhileDraining(t *testing.T) {
 	eng, bus := newEngine(t, &mockProvider{}, false)
 	if err := eng.ReserveTurnID("turn-1"); err != nil {

@@ -9,6 +9,16 @@ export type ComposerSubmitAction =
 
 export const QUEUE_FULL_SUBMIT_HINT = "Pending input queue is full";
 
+export function composerErrorMessage({
+  status,
+  localError,
+}: {
+  status?: AgentRuntimeStatusSnapshot;
+  localError?: string;
+}): string | undefined {
+  return status?.last_error?.message || localError;
+}
+
 export function composerSubmitAction({
   status,
   turnActiveFallback = false,
