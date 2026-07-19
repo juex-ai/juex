@@ -333,7 +333,7 @@ export function Session() {
   });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <Conversation className="min-h-0 flex-1">
         <ConversationContent className="mx-auto w-full max-w-[760px]">
           {data.has_more_before ||
@@ -359,7 +359,7 @@ export function Session() {
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
-      <div className="border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
+      <div className="shrink-0 border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
         <div className="mx-auto w-full max-w-[760px]">
           <QueuedInputStack items={projection.queuedInput.items} />
           {canSend ? (
