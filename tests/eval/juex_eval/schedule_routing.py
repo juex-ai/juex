@@ -25,6 +25,36 @@ SHELL_COMMAND_FIELDS = {
 
 SHELL_INTERPRETERS = {"bash", "dash", "ksh", "sh", "zsh"}
 
+WRAPPER_OPTIONS_WITH_VALUE = {
+    "command": set(),
+    "env": {"-a", "--argv0", "-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
+    "nohup": set(),
+    "setsid": set(),
+    "sudo": {
+        "-C",
+        "--close-from",
+        "-D",
+        "--chdir",
+        "-g",
+        "--group",
+        "-h",
+        "--host",
+        "-p",
+        "--prompt",
+        "-R",
+        "--chroot",
+        "-r",
+        "--role",
+        "-t",
+        "--type",
+        "-T",
+        "--command-timeout",
+        "-u",
+        "--user",
+    },
+    "time": {"-f", "--format", "-o", "--output"},
+}
+
 
 @dataclass(frozen=True)
 class ScheduleRoutingExpectation:
@@ -252,30 +282,93 @@ def _is_shell_scheduling_command(use: _ToolUse) -> bool:
 
 
 def _contains_watch_command(command: str, depth: int = 0) -> bool:
-    normalized = " ".join(command.lower().split())
-    if re.search(
-        r"(?:^|[;&|]\s*|\b(?:command|env|nohup|setsid|sudo)\s+)"
-        r"(?:\S*/)?watch(?=\s|$)",
-        normalized,
-    ):
-        return True
-    if depth >= 3:
+    segments = _shell_command_segments(command)
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if program_index is not None and _program_name(segment[program_index]) == "watch":
+            return True
+    if depth >= 3 or not segments:
         return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return False
-    for index, token in enumerate(tokens):
-        interpreter = token.rsplit("/", 1)[-1].lower()
-        if interpreter not in SHELL_INTERPRETERS:
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if program_index is None or _program_name(segment[program_index]) not in SHELL_INTERPRETERS:
             continue
-        for option_index in range(index + 1, len(tokens) - 1):
-            option = tokens[option_index]
+        for option_index in range(program_index + 1, len(segment) - 1):
+            option = segment[option_index]
             if option == "--":
                 break
             if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
-                return _contains_watch_command(tokens[option_index + 1], depth + 1)
+                return _contains_watch_command(segment[option_index + 1], depth + 1)
+            if not option.startswith("-"):
+                break
     return False
+
+
+def _shell_command_segments(command: str) -> list[list[str]]:
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    segments: list[list[str]] = []
+    segment: list[str] = []
+    for token in tokens:
+        if token and all(char in ";&|" for char in token):
+            if segment:
+                segments.append(segment)
+                segment = []
+            continue
+        segment.append(token)
+    if segment:
+        segments.append(segment)
+    return segments
+
+
+def _command_program_index(tokens: list[str]) -> int | None:
+    index = 0
+    while index < len(tokens):
+        while index < len(tokens) and _is_assignment(tokens[index]):
+            index += 1
+        if index >= len(tokens):
+            return None
+        program = _program_name(tokens[index])
+        options_with_value = WRAPPER_OPTIONS_WITH_VALUE.get(program)
+        if options_with_value is None:
+            return index
+        index = _skip_wrapper_arguments(tokens, index + 1, options_with_value)
+    return None
+
+
+def _skip_wrapper_arguments(
+    tokens: list[str],
+    index: int,
+    options_with_value: set[str],
+) -> int:
+    while index < len(tokens):
+        token = tokens[index]
+        if _is_assignment(token):
+            index += 1
+            continue
+        if token == "--":
+            return index + 1
+        if not token.startswith("-") or token == "-":
+            return index
+        option_name, separator, _ = token.partition("=")
+        if option_name in options_with_value and not separator:
+            index += 2
+        else:
+            index += 1
+    return index
+
+
+def _is_assignment(token: str) -> bool:
+    return re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) is not None
+
+
+def _program_name(token: str) -> str:
+    return token.rsplit("/", 1)[-1].lower()
 
 
 def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, issues: list[str]) -> None:
