@@ -293,6 +293,10 @@ func (e *Engine) PromotePendingInputTurn(currentTurnID, nextTurnID string) (llm.
 		MaxPendingInputs: max,
 	}
 	e.pendingMu.Unlock()
+	e.emit(events.Event{Type: PendingInputPromotedType, TurnID: nextTurnID, Payload: PendingInputPromotedPayload{
+		PendingCount:     status.PendingCount,
+		MaxPendingInputs: status.MaxPendingInputs,
+	}})
 	e.emit(events.Event{Type: TurnAdmittedType, TurnID: nextTurnID, Payload: TurnAdmittedPayload{}})
 	return item.Message, status, true
 }

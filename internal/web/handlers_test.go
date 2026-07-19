@@ -1277,6 +1277,8 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	}
 	waitForHTTPRuntimeStatus(t, ts.URL, c.ID, 5*time.Second, "queued turn completion", func(status juexruntime.StatusSnapshot) bool {
 		return status.Session.State == juexruntime.SessionRuntimeIdle &&
+			status.Session.PendingCount == 0 &&
+			status.Session.CanAcceptInput &&
 			status.Turn != nil &&
 			status.Turn.State == juexruntime.TurnLifecycleCompleted
 	})

@@ -152,6 +152,11 @@ remain unchanged. Queue mutations stay available during the draining callback,
 but their queued or rejected events are ordered after
 `pending_input.draining`. Legacy journals that contain a direct
 queued-to-drained transition still clear the projected pending count.
+`pending_input.promoted` records the queue decrement when manual compaction
+promotes its first queued input into the next provider turn. Restart recovery
+resets the projected count to the new process's empty in-memory queue; durable
+pending records remain available for restoration and draining by that next
+turn.
 
 ## Layer 4: Agent ViewModel
 

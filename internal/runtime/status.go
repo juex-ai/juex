@@ -207,7 +207,9 @@ func (s *StatusStore) RecoverAfterRestart() {
 	s.snapshot.Turn.Streaming = false
 	s.snapshot.Turn.Error = statusErr
 	s.snapshot.Session.State = SessionRuntimeFailed
+	s.snapshot.Session.PendingCount = 0
 	s.snapshot.LastError = statusErr
+	s.snapshot.pendingDrainActive = false
 	recomputeCanAcceptInput(&s.snapshot)
 	snapshot := cloneStatusSnapshot(s.snapshot)
 	s.history = append(s.history, snapshot)
@@ -362,6 +364,9 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
 		next.Session.State = SessionRuntimeDrainingPending
 		next.pendingDrainActive = true
+	case PendingInputPromotedType:
+		payload := payloadAs[PendingInputPromotedPayload](event.Payload)
+		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
 	case "pending_input.drained":
 		payload := payloadAs[PendingInputDrainedPayload](event.Payload)
 		if next.pendingDrainActive {

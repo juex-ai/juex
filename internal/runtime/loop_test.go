@@ -3457,13 +3457,22 @@ func TestTurn_PromotedPendingInputMarksProcessedWithoutDuplicateDrain(t *testing
 		t.Fatalf("pending count = %d", status.PendingCount)
 	}
 	var drained int32
+	var promoted PendingInputPromotedPayload
 	eng.Bus.Subscribe("pending_input.drained", func(e events.Event) {
 		atomic.AddInt32(&drained, 1)
 	})
+	eng.Bus.Subscribe(PendingInputPromotedType, func(e events.Event) {
+		promoted, _ = e.Payload.(PendingInputPromotedPayload)
+	})
 
-	msg, _, ok := eng.PromotePendingInputTurn("compact-1", "turn-1")
+	msg, promotedStatus, ok := eng.PromotePendingInputTurn("compact-1", "turn-1")
 	if !ok {
 		t.Fatal("pending input was not promoted")
+	}
+	if promotedStatus.PendingCount != 0 ||
+		promoted.PendingCount != 0 ||
+		promoted.MaxPendingInputs != DefaultMaxPendingInput {
+		t.Fatalf("promoted status/event = %+v / %+v, want empty queue", promotedStatus, promoted)
 	}
 	if _, err := eng.TurnMessageWithID(context.Background(), msg, "turn-1"); err != nil {
 		t.Fatal(err)

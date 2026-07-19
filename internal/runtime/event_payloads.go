@@ -13,6 +13,7 @@ const (
 	TurnAdmittedType         = "turn.admitted"
 	TurnPhaseType            = "turn.phase"
 	PendingInputDrainingType = "pending_input.draining"
+	PendingInputPromotedType = "pending_input.promoted"
 )
 
 type TurnAdmittedPayload struct{}
@@ -238,6 +239,11 @@ type PendingInputQueuedPayload struct {
 
 type PendingInputDrainingPayload struct {
 	Count            int `json:"count"`
+	PendingCount     int `json:"pending_count"`
+	MaxPendingInputs int `json:"max_pending_inputs"`
+}
+
+type PendingInputPromotedPayload struct {
 	PendingCount     int `json:"pending_count"`
 	MaxPendingInputs int `json:"max_pending_inputs"`
 }

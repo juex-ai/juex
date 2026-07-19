@@ -453,6 +453,9 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	store.Reset(StatusSeed{SessionID: "new", SessionAlias: "primary", MaxPendingInputs: 3}, []events.Event{
 		statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}),
 		statusEvent("2", "llm.requested", "turn-1", LLMRequestedPayload{Iter: 0}),
+		statusEvent("3", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
+			PendingCount: 3, MaxPendingInputs: 3,
+		}),
 	})
 	store.RecoverAfterRestart()
 
@@ -460,8 +463,8 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	if snapshot.Session.ID != "new" || snapshot.Session.Alias != "primary" {
 		t.Fatalf("session = %+v", snapshot.Session)
 	}
-	if snapshot.Cursor != "2" {
-		t.Fatalf("cursor = %q, want 2", snapshot.Cursor)
+	if snapshot.Cursor != "3" {
+		t.Fatalf("cursor = %q, want 3", snapshot.Cursor)
 	}
 	if snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleCancelled || snapshot.Turn.Streaming {
 		t.Fatalf("turn = %+v", snapshot.Turn)
@@ -469,8 +472,25 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	if snapshot.LastError == nil || snapshot.LastError.Kind != "runtime_restart" {
 		t.Fatalf("last error = %+v", snapshot.LastError)
 	}
-	if !snapshot.Session.CanAcceptInput {
-		t.Fatal("recovered session should accept input")
+	if snapshot.Session.PendingCount != 0 || !snapshot.Session.CanAcceptInput {
+		t.Fatalf("recovered session queue = %+v, want empty and accepting input", snapshot.Session)
+	}
+}
+
+func TestStatusStoreProjectsPromotedPendingInputCount(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 2})
+	store.Publish(statusEvent("1", TurnAdmittedType, "compact-1", TurnAdmittedPayload{}))
+	store.Publish(statusEvent("2", "pending_input.queued", "compact-1", PendingInputQueuedPayload{
+		PendingCount: 2, MaxPendingInputs: 2,
+	}))
+	store.Publish(statusEvent("3", PendingInputPromotedType, "turn-1", PendingInputPromotedPayload{
+		PendingCount: 1, MaxPendingInputs: 2,
+	}))
+	store.Publish(statusEvent("4", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
+
+	snapshot := store.Snapshot()
+	if snapshot.Session.PendingCount != 1 || !snapshot.Session.CanAcceptInput {
+		t.Fatalf("promoted queue status = %+v, want 1/2 and accepting input", snapshot.Session)
 	}
 }
 
