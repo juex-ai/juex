@@ -45,6 +45,7 @@ export type LiveSessionProjection = {
   queuedInput: QueuedInputState;
   // Empty slots reserve announced drain positions missing from local queue state.
   drainingQueuedInputs: Array<QueuedInput | undefined>;
+  compactAdmissionTurnID: string | null;
   turnActive: boolean;
   compactActive: boolean;
   compactCommandInputs: Record<string, string>;
@@ -67,6 +68,7 @@ export function createLiveSessionProjection(): LiveSessionProjection {
     contextUsage: null,
     queuedInput: createQueuedInputState(),
     drainingQueuedInputs: [],
+    compactAdmissionTurnID: null,
     turnActive: false,
     compactActive: false,
     compactCommandInputs: {},
@@ -95,7 +97,8 @@ export function clearQueuedInputs(
 ): LiveSessionProjection {
   if (
     state.queuedInput.items.length === 0 &&
-    state.drainingQueuedInputs.length === 0
+    state.drainingQueuedInputs.length === 0 &&
+    state.compactAdmissionTurnID === null
   ) {
     return state;
   }
@@ -103,6 +106,7 @@ export function clearQueuedInputs(
     ...state,
     queuedInput: createQueuedInputState(),
     drainingQueuedInputs: [],
+    compactAdmissionTurnID: null,
   };
 }
 
@@ -259,6 +263,11 @@ export function projectLiveSessionEvent(
   const effects: LiveSessionProjectionEffect[] = [];
 
   switch (event.type) {
+    case "turn.admitted":
+      if (event.turn_id && event.payload.non_interruptible) {
+        next = { ...next, compactAdmissionTurnID: event.turn_id };
+      }
+      break;
     case "turn.started": {
       const alreadyProjected = Boolean(
         event.turn_id &&
@@ -430,15 +439,17 @@ export function projectLiveSessionEvent(
       };
       break;
     case "turn.completed":
+      next = settleTerminalQueuedInputs(next, event.turn_id);
       next = {
-        ...markProjectionDone(clearQueuedInputs(next)),
+        ...markProjectionDone(next),
         turnActive: false,
       };
       effects.push({ type: "refresh" }, { type: "scheduleIdleStatus" });
       break;
     case "turn.errored":
+      next = settleTerminalQueuedInputs(next, event.turn_id);
       next = {
-        ...markProjectionError(clearQueuedInputs(next), event.payload.error),
+        ...markProjectionError(next, event.payload.error),
         turnActive: false,
       };
       effects.push({ type: "refresh" });
@@ -495,10 +506,14 @@ export function projectTurnStatusReconcile(
       effects: [],
     };
   }
+  const turnID = "turn_id" in turn && typeof turn.turn_id === "string"
+    ? turn.turn_id
+    : undefined;
+  const settled = settleTerminalQueuedInputs(state, turnID);
   if (turn.state === "errored") {
     return {
       state: {
-        ...markProjectionError(clearQueuedInputs(state), turn.error),
+        ...markProjectionError(settled, turn.error),
         turnActive: false,
       },
       effects: [{ type: "refresh" }],
@@ -506,7 +521,7 @@ export function projectTurnStatusReconcile(
   }
   return {
     state: {
-      ...markProjectionDone(clearQueuedInputs(state)),
+      ...markProjectionDone(settled),
       turnActive: false,
     },
     effects: [{ type: "refresh" }, { type: "scheduleIdleStatus" }],
@@ -607,6 +622,16 @@ function dropQueuedInputs(
     ...state,
     queuedInput: dropQueuedInputState(state.queuedInput, count),
   };
+}
+
+function settleTerminalQueuedInputs(
+  state: LiveSessionProjection,
+  turnID: string | undefined,
+): LiveSessionProjection {
+  if (turnID && state.compactAdmissionTurnID === turnID) {
+    return { ...state, compactAdmissionTurnID: null };
+  }
+  return clearQueuedInputs(state);
 }
 
 function appendDrainedInputs(

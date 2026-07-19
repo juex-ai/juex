@@ -24,11 +24,13 @@ export class AgentViewModelStore {
   seedAgents(agents: readonly AgentStatus[]): void {
     let changed = false;
     for (const agent of agents) {
-      if (agent.runtime_health !== "healthy" || !agent.activity) {
+      if (agent.runtime_health !== "healthy") {
         changed = this.activities.delete(agent.id) || changed;
         continue;
       }
-      changed = this.setActivityInternal(agent.id, agent.activity) || changed;
+      if (agent.activity) {
+        changed = this.setActivityInternal(agent.id, agent.activity) || changed;
+      }
     }
     if (changed) this.emit();
   }

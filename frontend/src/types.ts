@@ -366,7 +366,9 @@ export interface TurnStartedPayload {
   kind?: string;
 }
 
-export type TurnAdmittedPayload = Record<string, never>;
+export interface TurnAdmittedPayload {
+  non_interruptible?: boolean;
+}
 
 export interface TurnPhasePayload {
   phase: RuntimeTurnPhase;
