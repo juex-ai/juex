@@ -1275,21 +1275,11 @@ func TestPostTurn_QueuesDuringCompactAndRunsAfterCompact(t *testing.T) {
 	if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "after please" {
 		t.Fatalf("second provider history = %+v", secondHistory)
 	}
-	statusResponse, err = http.Get(ts.URL + "/api/sessions/" + c.ID + "/status")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var completedStatus juexruntime.StatusSnapshot
-	if err := json.NewDecoder(statusResponse.Body).Decode(&completedStatus); err != nil {
-		statusResponse.Body.Close()
-		t.Fatal(err)
-	}
-	statusResponse.Body.Close()
-	if completedStatus.Session.State != juexruntime.SessionRuntimeIdle ||
-		completedStatus.Turn == nil ||
-		completedStatus.Turn.State != juexruntime.TurnLifecycleCompleted {
-		t.Fatalf("completed status = %+v", completedStatus)
-	}
+	waitForHTTPRuntimeStatus(t, ts.URL, c.ID, 5*time.Second, "queued turn completion", func(status juexruntime.StatusSnapshot) bool {
+		return status.Session.State == juexruntime.SessionRuntimeIdle &&
+			status.Turn != nil &&
+			status.Turn.State == juexruntime.TurnLifecycleCompleted
+	})
 }
 
 func TestCompactWithoutEligibleContextLeavesSessionIdle(t *testing.T) {
@@ -1657,6 +1647,34 @@ func waitForHTTPTranscript(t *testing.T, baseURL, sessionID, turnID string, time
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s; last_state=%q last_error=%q last_messages=%+v", label, lastState, lastErr, lastMessages)
+}
+
+func waitForHTTPRuntimeStatus(t *testing.T, baseURL, sessionID string, timeout time.Duration, label string, match func(juexruntime.StatusSnapshot) bool) juexruntime.StatusSnapshot {
+	t.Helper()
+	client := &http.Client{Timeout: 2 * time.Second}
+	deadline := time.Now().Add(timeout)
+	var last juexruntime.StatusSnapshot
+	var lastErr string
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/status")
+		if err != nil {
+			lastErr = err.Error()
+		} else {
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(resp.Body)
+				lastErr = fmt.Sprintf("status=%d body=%s", resp.StatusCode, body)
+			} else if err := json.NewDecoder(resp.Body).Decode(&last); err != nil {
+				lastErr = err.Error()
+			} else if match(last) {
+				resp.Body.Close()
+				return last
+			}
+			resp.Body.Close()
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s; last_error=%q last_status=%+v", label, lastErr, last)
+	return juexruntime.StatusSnapshot{}
 }
 
 func fetchHTTPTranscript(client *http.Client, baseURL, sessionID string) ([]testTranscriptMessage, error) {
