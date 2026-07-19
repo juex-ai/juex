@@ -231,7 +231,8 @@ The browser applies each `agent.status` event to the same
 - A post-compact hook failure remains observational after the compact message
   is committed. Command hook failures remain visible as `hook.errored`, while
   the runtime publishes only `context.compact.completed` for the committed
-  compaction and its new context usage.
+  compaction and its new context usage. Context returned by earlier successful
+  post-compact hooks remains queued if a later hook fails.
 - Unknown event families advance the cursor but do not change named state.
 - Existing browser event payloads, `events.jsonl`, turn status routes, and
   `GET /api/activity` remain compatible while new status routes are additive.

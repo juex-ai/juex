@@ -197,10 +197,10 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
 	postReq.CompactReason = reason
 	postReq.CompactAuto = auto
-	postResults, err := e.runHooks(ctx, postReq)
-	if err == nil {
-		e.queueHookRuntimeContext(postResults)
-	}
+	postResults, _ := e.runHooks(ctx, postReq)
+	// Hook failures are observational after commit; keep context produced by
+	// earlier successful hooks when a later hook fails.
+	e.queueHookRuntimeContext(postResults)
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,
