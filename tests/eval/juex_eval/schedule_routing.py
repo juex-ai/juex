@@ -25,6 +25,8 @@ SHELL_COMMAND_FIELDS = {
 
 SHELL_INTERPRETERS = {"bash", "dash", "ksh", "sh", "zsh"}
 
+SHELL_OPTIONS_WITH_VALUE = {"-o", "+o", "-O", "+O", "--init-file", "--rcfile"}
+
 WRAPPER_OPTIONS_WITH_VALUE = {
     "command": set(),
     "env": {"-a", "--argv0", "-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
@@ -290,18 +292,58 @@ def _contains_watch_command(command: str, depth: int = 0) -> bool:
     if depth >= 3 or not segments:
         return False
     for segment in segments:
+        env_payload = _env_split_string_payload(segment)
+        if env_payload is not None and _contains_watch_command(env_payload, depth + 1):
+            return True
         program_index = _command_program_index(segment)
         if program_index is None or _program_name(segment[program_index]) not in SHELL_INTERPRETERS:
             continue
-        for option_index in range(program_index + 1, len(segment) - 1):
-            option = segment[option_index]
-            if option == "--":
-                break
-            if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
-                return _contains_watch_command(segment[option_index + 1], depth + 1)
-            if not option.startswith("-"):
-                break
+        payload = _shell_command_payload(segment, program_index)
+        if payload is not None and _contains_watch_command(payload, depth + 1):
+            return True
     return False
+
+
+def _env_split_string_payload(tokens: list[str]) -> str | None:
+    index = 0
+    while index < len(tokens):
+        while index < len(tokens) and _is_assignment(tokens[index]):
+            index += 1
+        if index >= len(tokens):
+            return None
+        program = _program_name(tokens[index])
+        if program == "env":
+            return _env_split_option_payload(tokens, index + 1)
+        if program == "command" and _is_command_inspection(tokens, index + 1):
+            return None
+        options_with_value = WRAPPER_OPTIONS_WITH_VALUE.get(program)
+        if options_with_value is None:
+            return None
+        index = _skip_wrapper_arguments(tokens, index + 1, options_with_value)
+    return None
+
+
+def _env_split_option_payload(tokens: list[str], index: int) -> str | None:
+    env_options_with_value = WRAPPER_OPTIONS_WITH_VALUE["env"]
+    while index < len(tokens):
+        option = tokens[index]
+        if _is_assignment(option):
+            index += 1
+            continue
+        if option == "--" or not option.startswith("-"):
+            return None
+        option_name, separator, value = option.partition("=")
+        if option_name in {"-S", "--split-string"}:
+            if separator:
+                return value
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        if option.startswith("-S") and len(option) > 2:
+            return option[2:]
+        if option_name in env_options_with_value and not separator:
+            index += 2
+        else:
+            index += 1
+    return None
 
 
 def _shell_command_segments(command: str) -> list[list[str]]:
@@ -334,11 +376,40 @@ def _command_program_index(tokens: list[str]) -> int | None:
         if index >= len(tokens):
             return None
         program = _program_name(tokens[index])
+        if program == "command" and _is_command_inspection(tokens, index + 1):
+            return index
         options_with_value = WRAPPER_OPTIONS_WITH_VALUE.get(program)
         if options_with_value is None:
             return index
         index = _skip_wrapper_arguments(tokens, index + 1, options_with_value)
     return None
+
+
+def _shell_command_payload(tokens: list[str], program_index: int) -> str | None:
+    index = program_index + 1
+    while index < len(tokens):
+        option = tokens[index]
+        if option == "--" or not option.startswith(("-", "+")):
+            return None
+        if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
+            return tokens[index + 1] if index + 1 < len(tokens) else None
+        option_name, separator, _ = option.partition("=")
+        if option_name in SHELL_OPTIONS_WITH_VALUE and not separator:
+            index += 2
+        else:
+            index += 1
+    return None
+
+
+def _is_command_inspection(tokens: list[str], index: int) -> bool:
+    while index < len(tokens):
+        option = tokens[index]
+        if option == "--" or not option.startswith("-"):
+            return False
+        if "v" in option[1:] or "V" in option[1:]:
+            return True
+        index += 1
+    return False
 
 
 def _skip_wrapper_arguments(
