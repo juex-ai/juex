@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -309,6 +311,50 @@ func TestStatusReplayKeepsTransientStateWithEqualTimestamp(t *testing.T) {
 		t.Fatalf("replay snapshots = %d, want durable update plus current transient state", len(subscription.Snapshots))
 	}
 	assertToolStatus(t, subscription.Snapshots[1], "tool-1", ToolCallStreaming)
+}
+
+func TestStatusStoreConcurrentPublishDeliversFinalSnapshotLast(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 1024})
+	subscriptions := make([]*StatusSubscription, 64)
+	for i := range subscriptions {
+		subscriptions[i] = store.SubscribeFrom("")
+		defer subscriptions[i].Unsubscribe()
+	}
+
+	const publishCount = 256
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(publishCount)
+	for i := 1; i <= publishCount; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			store.Publish(statusEvent(
+				strconv.Itoa(i),
+				"pending_input.queued",
+				"",
+				PendingInputQueuedPayload{PendingCount: i, MaxPendingInputs: 1024},
+			))
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	want := store.Snapshot()
+	for i, subscription := range subscriptions {
+		var last StatusSnapshot
+		for {
+			select {
+			case last = <-subscription.Updates:
+			default:
+				if !reflect.DeepEqual(last, want) {
+					t.Fatalf("subscription %d last snapshot = %#v, want %#v", i, last, want)
+				}
+				goto nextSubscription
+			}
+		}
+	nextSubscription:
+	}
 }
 
 func TestStatusSnapshotJSONResumeRestoresPreCompactionPhase(t *testing.T) {

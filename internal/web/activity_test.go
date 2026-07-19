@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,5 +96,46 @@ func TestAgentStatusHubSameCursorSubscriptionReturnsCurrentSnapshot(t *testing.T
 		subscription.initial[0].Status == nil ||
 		subscription.initial[0].Status.Cursor != "cursor-1" {
 		t.Fatalf("initial = %+v", subscription.initial)
+	}
+}
+
+func TestAgentStatusHubConcurrentPublishDeliversCurrentStatusLast(t *testing.T) {
+	hub := newAgentStatusHub()
+	subscriptions := make([]agentStatusSubscription, 64)
+	for i := range subscriptions {
+		subscriptions[i] = hub.subscribe("")
+		defer subscriptions[i].cancel()
+	}
+
+	const publishCount = 256
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(publishCount)
+	for i := 1; i <= publishCount; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			hub.publish(agentActivityResponse{SessionID: strconv.Itoa(i)})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	hub.mu.Lock()
+	want := hub.current
+	hub.mu.Unlock()
+	for i, subscription := range subscriptions {
+		var last agentActivityResponse
+		for {
+			select {
+			case last = <-subscription.updates:
+			default:
+				if last.SessionID != want.SessionID {
+					t.Fatalf("subscription %d last session = %q, want %q", i, last.SessionID, want.SessionID)
+				}
+				goto nextSubscription
+			}
+		}
+	nextSubscription:
 	}
 }

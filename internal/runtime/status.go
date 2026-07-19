@@ -176,16 +176,11 @@ func (s *StatusStore) Reset(seed StatusSeed, journal []events.Event) {
 	s.mu.Lock()
 	s.snapshot = recovered.snapshot
 	s.history = recovered.history
-	subscribers := make([]chan StatusSnapshot, 0, len(s.subscribers))
-	for _, subscriber := range s.subscribers {
-		subscribers = append(subscribers, subscriber)
-	}
 	snapshot := cloneStatusSnapshot(s.snapshot)
-	s.mu.Unlock()
-
-	for _, subscriber := range subscribers {
+	for _, subscriber := range s.subscribers {
 		publishLatestStatus(subscriber, snapshot)
 	}
+	s.mu.Unlock()
 }
 
 // RecoverAfterRestart closes an interrupted in-memory turn. The event cursor
@@ -216,15 +211,10 @@ func (s *StatusStore) RecoverAfterRestart() {
 	recomputeCanAcceptInput(&s.snapshot)
 	snapshot := cloneStatusSnapshot(s.snapshot)
 	s.history = append(s.history, snapshot)
-	subscribers := make([]chan StatusSnapshot, 0, len(s.subscribers))
 	for _, subscriber := range s.subscribers {
-		subscribers = append(subscribers, subscriber)
-	}
-	s.mu.Unlock()
-
-	for _, subscriber := range subscribers {
 		publishLatestStatus(subscriber, snapshot)
 	}
+	s.mu.Unlock()
 }
 
 func (s *StatusStore) Publish(event events.Event) {
@@ -240,15 +230,10 @@ func (s *StatusStore) Publish(event events.Event) {
 			s.history = append([]StatusSnapshot(nil), s.history[len(s.history)-statusHistoryLimit:]...)
 		}
 	}
-	subscribers := make([]chan StatusSnapshot, 0, len(s.subscribers))
 	for _, subscriber := range s.subscribers {
-		subscribers = append(subscribers, subscriber)
-	}
-	s.mu.Unlock()
-
-	for _, subscriber := range subscribers {
 		publishLatestStatus(subscriber, snapshot)
 	}
+	s.mu.Unlock()
 }
 
 func (s *StatusStore) Snapshot() StatusSnapshot {
@@ -557,6 +542,9 @@ func payloadAs[T any](payload any) T {
 	var out T
 	if payload == nil {
 		return out
+	}
+	if typed, ok := payload.(T); ok {
+		return typed
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

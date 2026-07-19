@@ -52,12 +52,7 @@ func (h *agentStatusHub) publish(status agentActivityResponse) {
 	}
 	h.mu.Lock()
 	h.current = status
-	channels := make([]chan agentActivityResponse, 0, len(h.subscribers))
 	for _, channel := range h.subscribers {
-		channels = append(channels, channel)
-	}
-	h.mu.Unlock()
-	for _, channel := range channels {
 		select {
 		case channel <- status:
 		default:
@@ -71,6 +66,7 @@ func (h *agentStatusHub) publish(status agentActivityResponse) {
 			}
 		}
 	}
+	h.mu.Unlock()
 }
 
 func (h *agentStatusHub) subscribe(_ string) agentStatusSubscription {
