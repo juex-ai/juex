@@ -91,7 +91,12 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, as.app.Session.Info(as.StartedAt.UTC()))
+	info, ok := as.app.SessionInfo(as.StartedAt.UTC())
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "general_error", app.ErrSessionUnavailable.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, info)
 }
 
 // sessionPathID extracts <id> from /api/sessions/<id>[/<rest>].
@@ -152,14 +157,43 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	}
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
-		info := as.app.Session.Info(time.Now().UTC())
-		info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+		var (
+			info  session.Info
+			page  session.MessagePage
+			goal  *runtime.GoalStatusSnapshot
+			notes *runtime.NotesSnapshot
+			turn  *sessionTurnResponse
+		)
+		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
+			info = sess.Info(time.Now().UTC())
+			var err error
+			page, err = sess.TranscriptMessagePage(window.Before, window.Limit)
+			if err != nil {
+				return err
+			}
+			goal, notes = as.app.Engine.SessionStateStatus()
+			turn = activeSessionTurnResponse(as.app.Status)
+			return nil
+		})
+		if err == nil {
+			info, err = session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, sessionShowResponse{
+				Info:            info,
+				Messages:        messagesForSessionResponse(page.Messages),
+				Model:           s.opts.Cfg.Model,
+				HasMoreBefore:   page.HasMoreBefore,
+				OldestMessageID: page.OldestMessageID,
+				Turn:            turn,
+				Goal:            goal,
+				Notes:           notes,
+			})
 			return
 		}
-		page, err := as.app.Session.TranscriptMessagePage(window.Before, window.Limit)
-		if err != nil {
+		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
 			if errors.Is(err, session.ErrBeforeMessageNotFound) {
 				writeErr(w, http.StatusBadRequest, "bad_request", err.Error())
 				return
@@ -167,18 +201,6 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 			return
 		}
-		goal, notes := s.sessionStateStatus(as.app.Session.Dir, as)
-		writeJSON(w, http.StatusOK, sessionShowResponse{
-			Info:            info,
-			Messages:        messagesForSessionResponse(page.Messages),
-			Model:           s.opts.Cfg.Model,
-			HasMoreBefore:   page.HasMoreBefore,
-			OldestMessageID: page.OldestMessageID,
-			Turn:            activeSessionTurnResponse(as),
-			Goal:            goal,
-			Notes:           notes,
-		})
-		return
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
 	info, page, err := session.LoadInfoPage(dir, window.Before, window.Limit)
@@ -211,11 +233,11 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	})
 }
 
-func activeSessionTurnResponse(as *activeSession) *sessionTurnResponse {
-	if as == nil || as.app == nil || as.app.Status == nil {
+func activeSessionTurnResponse(status *runtime.StatusStore) *sessionTurnResponse {
+	if status == nil {
 		return nil
 	}
-	snapshot := as.app.Status.Snapshot()
+	snapshot := status.Snapshot()
 	if snapshot.Turn == nil {
 		return nil
 	}
@@ -236,9 +258,7 @@ func activeSessionTurnResponse(as *activeSession) *sessionTurnResponse {
 
 func (s *Server) sessionStateStatus(dir string, as *activeSession) (*runtime.GoalStatusSnapshot, *runtime.NotesSnapshot) {
 	if as != nil && as.app != nil && as.app.Engine != nil {
-		goal, _ := as.app.Engine.GoalStatusSnapshot()
-		notes, _ := as.app.Engine.NotesStatusSnapshot()
-		return goal, notes
+		return as.app.SessionStateStatus()
 	}
 	goal, _ := runtime.NewGoalStateStore(dir, runtime.GoalStateOptions{}).StatusSnapshot()
 	notes, _ := runtime.NewNotesStore(dir).StatusSnapshot()
@@ -340,8 +360,10 @@ func (s *Server) handleCompactSession(w http.ResponseWriter, r *http.Request, id
 func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request, id string) {
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
-		writeJSON(w, http.StatusOK, as.app.Engine.ActiveContext())
-		return
+		if snapshot, ok := as.app.ActiveContextForSession(id); ok {
+			writeJSON(w, http.StatusOK, snapshot)
+			return
+		}
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
 	msgs, err := session.LoadActiveMessages(dir)
@@ -364,8 +386,9 @@ func (s *Server) mergeActiveSessionInfos(persisted []session.Info) []session.Inf
 	now := time.Now().UTC()
 	s.sessions.Range(func(_, v any) bool {
 		as := v.(*activeSession)
-		info := as.app.Session.Info(now)
-		byID[info.ID] = info
+		if info, ok := as.app.SessionInfo(now); ok {
+			byID[info.ID] = info
+		}
 		return true
 	})
 	infos := make([]session.Info, 0, len(byID))
@@ -398,8 +421,17 @@ func (s *Server) webTurnAllowed(id string) (session.Info, bool, string) {
 func (s *Server) sessionInfo(id string) (session.Info, error) {
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
-		info, _ := as.app.Session.Snapshot(time.Now().UTC())
-		return session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
+		var info session.Info
+		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
+			info = sess.Info(time.Now().UTC())
+			return nil
+		})
+		if err == nil {
+			return session.MarkActiveInfo(s.opts.Cfg.HistoryPath(), info)
+		}
+		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
+			return session.Info{}, err
+		}
 	}
 	info, _, err := session.LoadInfo(filepath.Join(s.opts.Cfg.SessionsDir(), id))
 	if err != nil {
@@ -625,7 +657,12 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	if since != "" {
 		// Replay missed events from events.jsonl. The path comes from the
 		// session record so we never read outside the sessions dir.
-		f, err := os.Open(filepath.Join(as.app.Session.Dir, "events.jsonl"))
+		var f *os.File
+		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
+			var openErr error
+			f, openErr = os.Open(filepath.Join(sess.Dir, "events.jsonl"))
+			return openErr
+		})
 		if err == nil {
 			replayed, replayErr := replaySince(f, since)
 			f.Close()
@@ -647,6 +684,9 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			if !ok {
 				return
 			}
+			if err := as.app.ReadSessionID(id, func(*session.Session) error { return nil }); err != nil {
+				return
+			}
 			if err := writeSSEFrame(w, e); err != nil {
 				return
 			}
@@ -659,16 +699,17 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request, id string) {
-	status, _, err := s.statusStoreForSession(id)
+	status, err := s.statusSnapshotForSession(id)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 		return
 	}
-	writeJSON(w, http.StatusOK, status.Snapshot())
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Request, id string) {
-	status, live, err := s.statusStoreForSession(id)
+	since := sseResumeCursor(r)
+	subscription, live, err := s.statusSubscriptionForSession(id, since)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 		return
@@ -678,13 +719,14 @@ func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Reques
 		writeErr(w, http.StatusInternalServerError, "general_error", "streaming not supported")
 		return
 	}
-	since := sseResumeCursor(r)
-	subscription := status.SubscribeFrom(since)
 	defer subscription.Unsubscribe()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	for _, snapshot := range subscription.Snapshots {
+		if snapshot.Session.ID != id {
+			return
+		}
 		if err := writeStatusSSE(w, snapshot); err != nil {
 			return
 		}
@@ -699,6 +741,9 @@ func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Reques
 			if !ok {
 				return
 			}
+			if snapshot.Session.ID != id {
+				return
+			}
 			if err := writeStatusSSE(w, snapshot); err != nil {
 				return
 			}
@@ -708,7 +753,36 @@ func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (s *Server) statusStoreForSession(id string) (*runtime.StatusStore, bool, error) {
+func (s *Server) statusSnapshotForSession(id string) (runtime.StatusSnapshot, error) {
+	if id == "" || filepath.Base(id) != id {
+		return runtime.StatusSnapshot{}, os.ErrNotExist
+	}
+	if value, ok := s.sessions.Load(id); ok {
+		active := value.(*activeSession)
+		if active.app == nil || active.app.Status == nil {
+			return runtime.StatusSnapshot{}, os.ErrNotExist
+		}
+		var snapshot runtime.StatusSnapshot
+		err := active.app.ReadSessionID(id, func(*session.Session) error {
+			snapshot = active.app.Status.Snapshot()
+			return nil
+		})
+		if err == nil {
+			return snapshot, nil
+		}
+		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
+			return runtime.StatusSnapshot{}, err
+		}
+	}
+
+	status, err := s.historicalStatusStore(id)
+	if err != nil {
+		return runtime.StatusSnapshot{}, err
+	}
+	return status.Snapshot(), nil
+}
+
+func (s *Server) statusSubscriptionForSession(id, since string) (*runtime.StatusSubscription, bool, error) {
 	if id == "" || filepath.Base(id) != id {
 		return nil, false, os.ErrNotExist
 	}
@@ -717,13 +791,31 @@ func (s *Server) statusStoreForSession(id string) (*runtime.StatusStore, bool, e
 		if active.app == nil || active.app.Status == nil {
 			return nil, false, os.ErrNotExist
 		}
-		return active.app.Status, true, nil
+		var subscription *runtime.StatusSubscription
+		err := active.app.ReadSessionID(id, func(*session.Session) error {
+			subscription = active.app.Status.SubscribeFrom(since)
+			return nil
+		})
+		if err == nil {
+			return subscription, true, nil
+		}
+		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
+			return nil, false, err
+		}
 	}
 
+	status, err := s.historicalStatusStore(id)
+	if err != nil {
+		return nil, false, err
+	}
+	return status.SubscribeFrom(since), false, nil
+}
+
+func (s *Server) historicalStatusStore(id string) (*runtime.StatusStore, error) {
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
 	info, _, err := session.LoadInfoPage(dir, "", 1)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	journal, _ := session.ReadEvents(dir)
 	seed := runtime.StatusSeed{
@@ -736,5 +828,5 @@ func (s *Server) statusStoreForSession(id string) (*runtime.StatusStore, bool, e
 	status := runtime.NewStatusStore(seed)
 	status.Reset(seed, journal)
 	status.RecoverAfterRestart()
-	return status, false, nil
+	return status, nil
 }

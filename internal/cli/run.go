@@ -233,7 +233,11 @@ execution is printed and the process exits with code 10.`,
 			if flags.verbose {
 				fmt.Fprintln(cmd.ErrOrStderr(), app.FormatResourceSummary(a.ResourceSummary()))
 			}
-			attachments, err := preparedAttachments.Store(cfg.WorkDir, a.Session.ID)
+			identity, ok := a.SessionIdentity()
+			if !ok {
+				return emit(jsonOut, cmd.ErrOrStderr(), app.ErrSessionUnavailable, "", false)
+			}
+			attachments, err := preparedAttachments.Store(cfg.WorkDir, identity.ID)
 			if err != nil {
 				return emitAttachmentError(jsonOut, cmd.ErrOrStderr(), err)
 			}
@@ -255,11 +259,11 @@ execution is printed and the process exits with code 10.`,
 			usage := a.TokenUsage()
 
 			if jsonOut {
-				info := a.Session.Info(time.Now().UTC())
+				info, _ := a.SessionInfo(time.Now().UTC())
 				cmdPrintln(cmd, mustJSON(runResult{
 					Text:        out,
-					SessionID:   a.Session.ID,
-					SessionDir:  a.Session.Dir,
+					SessionID:   info.ID,
+					SessionDir:  info.Dir,
 					SessionKind: info.Kind,
 					Active:      info.Active,
 					DurationMs:  time.Since(start).Milliseconds(),
@@ -309,18 +313,16 @@ func runDryRun(cmd *cobra.Command, flags *persistentFlags, cfg config.Config, us
 	}
 	defer func() { _ = a.CloseAndWait() }()
 
-	system := a.Engine.Prompt.Build()
-	sections := a.Engine.Prompt.Sections()
+	system := a.Engine.SystemPrompt()
+	sections := a.Engine.PromptSections()
 	toolList := a.Engine.Tools.List()
 	tools := make([]string, len(toolList))
 	for i, t := range toolList {
 		tools[i] = t.Name
 	}
 	var skillSummaries []skillSummary
-	if pb := a.Engine.Prompt; pb != nil && pb.Skills != nil {
-		for _, s := range pb.Skills.All() {
-			skillSummaries = append(skillSummaries, skillSummary{Name: s.Name, Path: s.Path})
-		}
+	for _, skill := range a.Skills() {
+		skillSummaries = append(skillSummaries, skillSummary{Name: skill.Name, Path: skill.Path})
 	}
 	sectionPlans := make([]promptSectionPlan, 0, len(sections))
 	for _, section := range sections {
@@ -445,9 +447,9 @@ func emitRunError(jsonOut bool, stderr io.Writer, err error, a *app.App, workDir
 			Retryable:  retryable,
 			Details:    details,
 		}
-		if a != nil && a.Session != nil {
-			body.SessionID = a.Session.ID
-			body.SessionDir = a.Session.Dir
+		if identity, ok := a.SessionIdentity(); ok {
+			body.SessionID = identity.ID
+			body.SessionDir = identity.Dir
 		}
 		body.WorkDir = workDir
 		fmt.Fprintln(stderr, mustJSON(body))

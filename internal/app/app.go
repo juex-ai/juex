@@ -100,6 +100,7 @@ type App struct {
 	closeRunning   bool
 	closeRunDone   chan struct{}
 	closeRunResult *error
+	sessionMu      sync.RWMutex
 	ctx            context.Context
 	cancel         context.CancelFunc
 	cfg            config.Config
@@ -388,6 +389,7 @@ func New(opts Options) (*App, error) {
 			EventsPath:       filepath.Join(sess.Dir, "events.jsonl"),
 		},
 		PendingInputQueue:     runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{}),
+		Notes:                 notesStore(sess),
 		PendingInputTTL:       pendingInputTTL,
 		ExternalEventTTL:      externalEventTTL,
 		GoalState:             goalStateStore(sess),
@@ -396,7 +398,10 @@ func New(opts Options) (*App, error) {
 		MaxOutputTokens:       runtimeLimits.MaxOutputTokens,
 		Compaction:            runtimeLimits.Compaction,
 	}
-	eng.SetNotesStore(notesStore(sess))
+	if err := eng.ReplaceSessionRuntime(sess); err != nil {
+		closeSessionResources()
+		return nil, err
+	}
 
 	a := &App{
 		Engine:            eng,
@@ -548,10 +553,15 @@ func toolsShellProfile(p config.ShellProfile) tools.ShellProfile {
 }
 
 func (a *App) SwitchToNewPrimarySession() error {
-	if a == nil || a.Session == nil {
+	var oldInfo session.Info
+	err := a.ReadSession(func(sess *session.Session) error {
+		oldInfo = sess.Info(time.Now().UTC())
+		return nil
+	})
+	if err != nil {
 		return fmt.Errorf("app: nil session")
 	}
-	if a.Session.Kind == session.KindSide {
+	if oldInfo.Kind == session.KindSide {
 		return fmt.Errorf("side sessions cannot switch workspace active session")
 	}
 	attachment, err := AttachWorkspaceSession(a.cfg, SessionAttachmentRequest{Mode: SessionModeNewPrimary})
@@ -564,11 +574,25 @@ func (a *App) SwitchToNewPrimarySession() error {
 		_ = sess.Close()
 		return err
 	}
-	a.replaceSession(sess, sessLock)
+	if err := a.replaceSession(sess, sessLock); err != nil {
+		_ = sessLock.Close()
+		_ = sess.Close()
+		cleanupErr := session.Delete(a.cfg.SessionsDir(), a.cfg.HistoryPath(), sess.ID)
+		restoreErr := session.SetActive(a.cfg.HistoryPath(), oldInfo)
+		return errors.Join(err, cleanupErr, restoreErr)
+	}
 	return nil
 }
 
-func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
+func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) error {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+
+	if a.Engine != nil {
+		if err := a.Engine.ReplaceSessionRuntime(sess); err != nil {
+			return err
+		}
+	}
 	_ = a.detachObservability()
 	oldLock := a.sessionLock
 	oldSession := a.Session
@@ -589,21 +613,14 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 			fmt.Fprintf(a.stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", err)
 		}
 	}
-	if a.Engine != nil {
-		a.Engine.Session = sess
-		if a.Engine.Prompt != nil {
-			a.Engine.Prompt.ScratchpadDir = sess.ScratchpadDir()
-		}
-		a.Engine.PendingInputQueue = runtime.NewPendingInputQueue(sess.Dir, runtime.PendingInputQueueOptions{})
-		a.Engine.SetNotesStore(notesStore(sess))
-		a.Engine.GoalState = goalStateStore(sess)
-	}
 	if err := a.attachObservability(sess); err != nil {
 		// Session switching happens after startup. Surface recorder failures as
 		// a runtime event so callers still receive a usable session.
 		a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
 	}
+	a.closeMu.Lock()
 	a.cleanup = append(a.cleanup, sessLock.Close, sess.Close)
+	a.closeMu.Unlock()
 
 	if oldLock != nil {
 		_ = oldLock.Close()
@@ -611,6 +628,7 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) {
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
+	return nil
 }
 
 func runtimeStatusSeed(sess *session.Session, maxPendingInputs int) runtime.StatusSeed {
@@ -676,24 +694,24 @@ func (a *App) Run(ctx context.Context, prompt string) (string, error) {
 			return "", err
 		}
 		if cmd.Name == SlashGoal {
-			return a.Engine.Turn(ctx, GoalInstructionPrompt(cmd.Args))
+			return a.runEngineTurn(ctx, GoalInstructionPrompt(cmd.Args))
 		}
 		result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
 		if err != nil {
 			return "", err
 		}
 		if cmd.Name == SlashNew {
-			return a.Engine.TurnMessage(ctx, NewSessionGreetingMessage())
+			return a.runEngineTurnMessage(ctx, NewSessionGreetingMessage())
 		}
 		return result.Text, nil
 	}
-	return a.Engine.Turn(ctx, prompt)
+	return a.runEngineTurn(ctx, prompt)
 }
 
 // RunWithAttachments drives one synchronous text, image, or mixed-content
 // user turn. Attachment references must belong to the current session.
 func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments []llm.MediaRef) (string, error) {
-	if a == nil || a.Session == nil || a.Engine == nil {
+	if a == nil || a.Engine == nil {
 		return "", errors.New("app: attachment turn requires an initialized session and engine")
 	}
 	if len(attachments) == 0 {
@@ -705,10 +723,33 @@ func (a *App) RunWithAttachments(ctx context.Context, prompt string, attachments
 		}
 		return "", errors.New("slash commands cannot include attachments")
 	}
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	if a.Session == nil {
+		return "", errors.New("app: attachment turn requires an initialized session and engine")
+	}
 	if err := usermedia.ValidateSessionMediaRefs(a.cfg.WorkDir, a.Session.ID, attachments, usermedia.Limits{}); err != nil {
 		return "", err
 	}
 	return a.Engine.TurnMessage(ctx, userTurnMessage(prompt, attachments))
+}
+
+func (a *App) runEngineTurn(ctx context.Context, input string) (string, error) {
+	if a == nil || a.Engine == nil {
+		return "", errors.New("app: turn requires an initialized engine")
+	}
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	return a.Engine.Turn(ctx, input)
+}
+
+func (a *App) runEngineTurnMessage(ctx context.Context, message llm.Message) (string, error) {
+	if a == nil || a.Engine == nil {
+		return "", errors.New("app: turn requires an initialized engine")
+	}
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	return a.Engine.TurnMessage(ctx, message)
 }
 
 func (a *App) CompactWithInstructions(ctx context.Context, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
@@ -735,7 +776,9 @@ func (a *App) CompactAdmittedWithInstructions(ctx context.Context, turnID, reaso
 }
 
 func (a *App) compactWithTurnID(ctx context.Context, turnID, reason string, auto bool, instructions string) (runtime.CompactionResult, error) {
-	sections := a.Engine.Prompt.Sections()
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	sections := a.Engine.PromptSections()
 	systemPrompt := prompt.JoinSections(sections)
 	result, err := a.Engine.CompactWithInstructions(ctx, turnID, systemPrompt, reason, auto, instructions)
 	if err != nil {
@@ -752,6 +795,8 @@ func (a *App) HandleMCPNotification(ctx context.Context, n mcp.Notification) err
 	if a == nil || a.Engine == nil {
 		return nil
 	}
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -786,6 +831,12 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	if a == nil || a.Engine == nil {
 		return observable.DeliveryOutcome{}, nil
 	}
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	targetSession := ""
+	if a.Session != nil {
+		targetSession = a.Session.ID
+	}
 	select {
 	case <-ctx.Done():
 		return observable.DeliveryOutcome{}, ctx.Err()
@@ -806,7 +857,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 		return observable.DeliveryOutcome{
 			State:          observable.ObservationStateQueued,
 			PendingInputID: pendingID,
-			TargetSession:  a.currentSessionID(),
+			TargetSession:  targetSession,
 		}, nil
 	} else if !errors.Is(err, runtime.ErrNoActiveTurn) {
 		return observable.DeliveryOutcome{}, err
@@ -815,7 +866,7 @@ func (a *App) DeliverObservation(ctx context.Context, record observable.Observat
 	if err == nil {
 		return observable.DeliveryOutcome{
 			State:         observable.ObservationStateDelivered,
-			TargetSession: a.currentSessionID(),
+			TargetSession: targetSession,
 		}, nil
 	}
 	return observable.DeliveryOutcome{}, err
@@ -1050,13 +1101,6 @@ func observationPendingInputID(record observable.ObservationRecord) string {
 	return "observation-" + record.ID
 }
 
-func (a *App) currentSessionID() string {
-	if a == nil || a.Session == nil {
-		return ""
-	}
-	return a.Session.ID
-}
-
 func (a *App) markObservationAttachmentError(record observable.ObservationRecord, messages []string) {
 	if a == nil || len(messages) == 0 {
 		return
@@ -1102,10 +1146,10 @@ func mcpNotificationPendingInputID(n mcp.Notification, eventType string) string 
 }
 
 func (a *App) TokenUsage() llm.Usage {
-	if a == nil || a.Session == nil {
+	info, ok := a.SessionInfo(time.Now().UTC())
+	if !ok {
 		return llm.Usage{}
 	}
-	info := a.Session.Info(time.Now().UTC())
 	return info.TokenUsage
 }
 

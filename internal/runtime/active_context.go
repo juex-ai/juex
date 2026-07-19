@@ -25,17 +25,17 @@ func (e *Engine) ActiveContext(incoming ...llm.Message) ActiveContextSnapshot {
 	if e == nil {
 		return ActiveContextSnapshot{}
 	}
-	session := e.Session
-	if session == nil {
+	runtime := e.SessionRuntimeSnapshot()
+	if runtime.Session == nil {
 		return ActiveContextSnapshot{}
 	}
-	_, history := session.Snapshot(time.Now().UTC())
+	_, history := runtime.Session.Snapshot(time.Now().UTC())
 	snap := assembleActiveContext(history, incoming)
 	var contextMessages []llm.Message
-	if text, ok := e.goalStateContextSnapshot(); ok {
+	if text, ok := goalStateContextFromStore(runtime.GoalState); ok {
 		contextMessages = append(contextMessages, goalStateContextMessage(text))
 	}
-	if text, ok := e.notesContextSnapshot(); ok {
+	if text, ok := e.notesContextFromStore(runtime.Notes); ok {
 		contextMessages = append(contextMessages, notesContextMessage(text))
 	}
 	contextMessages = append(contextMessages, e.pendingHookRuntimeContextSnapshot()...)
@@ -49,15 +49,16 @@ func (e *Engine) activeContextLocked(incoming ...llm.Message) ActiveContextSnaps
 }
 
 func (e *Engine) activeContextLockedWithHookContext(hookContext []llm.Message, incoming ...llm.Message) ActiveContextSnapshot {
-	if e == nil || e.Session == nil {
+	runtime := e.SessionRuntimeSnapshot()
+	if e == nil || runtime.Session == nil {
 		return ActiveContextSnapshot{}
 	}
-	snap := assembleActiveContext(e.Session.History, incoming)
+	snap := assembleActiveContext(runtime.Session.History, incoming)
 	var contextMessages []llm.Message
-	if text, ok := e.goalStateContextLocked(); ok {
+	if text, ok := goalStateContextFromStore(runtime.GoalState); ok {
 		contextMessages = append(contextMessages, goalStateContextMessage(text))
 	}
-	if text, ok := e.notesContextLocked(); ok {
+	if text, ok := e.notesContextFromStore(runtime.Notes); ok {
 		contextMessages = append(contextMessages, notesContextMessage(text))
 	}
 	contextMessages = append(contextMessages, hookContext...)

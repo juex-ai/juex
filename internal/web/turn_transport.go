@@ -92,7 +92,7 @@ func (t *webTurnTransport) status(turnID string) (webTurnStatus, bool) {
 	}
 	status := webTurnStatus{State: state.State, Err: state.Err}
 	if state.State == "running" && t.app != nil && t.app.Engine != nil {
-		pending := t.app.Engine.PendingInputStatus()
+		pending := t.app.PendingInputStatus()
 		status.PendingCount = &pending.PendingCount
 		status.MaxPendingInputs = &pending.MaxPendingInputs
 	}
@@ -171,7 +171,7 @@ func (t *webTurnTransport) wait() {
 func (t *webTurnTransport) run(ctx context.Context, turnID string, msg llm.Message) {
 	defer t.wg.Done()
 	defer t.completeAdmission(turnID)
-	_, err := t.app.Engine.TurnMessageWithID(ctx, msg, turnID)
+	_, err := t.app.RunAdmittedTurn(ctx, turnID, msg)
 
 	t.cancelMu.Lock()
 	if t.activeTurn == turnID {

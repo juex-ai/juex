@@ -26,7 +26,7 @@ func (s projectionStats) empty() bool {
 }
 
 func (e *Engine) projectMessageLocked(msg llm.Message, policy compactionPolicy) (llm.Message, projectionStats, error) {
-	if e == nil || e.Session == nil || !policy.Enabled {
+	if e == nil || e.currentSession() == nil || !policy.Enabled {
 		return msg, projectionStats{}, nil
 	}
 	if msg.ID == "" {
@@ -199,11 +199,15 @@ func (e *Engine) projectedArtifactStore() (artifact.Store, error) {
 }
 
 func (e *Engine) projectedArtifactPath(sourceKind, messageID string, block llm.Block) (string, error) {
-	if e == nil || e.Session == nil || e.Session.ID == "" {
+	if e == nil {
+		return "", fmt.Errorf("context artifact: missing session identity")
+	}
+	sess := e.currentSession()
+	if sess == nil || sess.ID == "" {
 		return "", fmt.Errorf("context artifact: missing session identity")
 	}
 	var dir, name string
-	sessionID := safeArtifactName(e.Session.ID)
+	sessionID := safeArtifactName(sess.ID)
 	switch sourceKind {
 	case "user_input":
 		dir = path.Join("user-inputs", sessionID)

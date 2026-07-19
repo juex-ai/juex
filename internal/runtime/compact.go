@@ -77,7 +77,11 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	if !policy.Enabled {
 		return CompactionResult{}, nil
 	}
-	selection := ensureCompactionProgress(selectCompactionInputWithEstimator(providerVisibleMessages(e.Session.History), policy, e.estimateMessageTokens))
+	sess := e.currentSession()
+	if sess == nil {
+		return CompactionResult{}, fmt.Errorf("compact context: missing session runtime")
+	}
+	selection := ensureCompactionProgress(selectCompactionInputWithEstimator(providerVisibleMessages(sess.History), policy, e.estimateMessageTokens))
 	if len(selection.SummaryInput) == 0 && !selection.HasPreviousSummary {
 		return CompactionResult{}, nil
 	}
@@ -124,7 +128,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 
 	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, summaryState, policy, instructions)
 	if err != nil {
-		e.Session.RecordResponseUsage(generation.Usage, nil)
+		sess.RecordResponseUsage(generation.Usage, nil)
 		compactErr := fmt.Errorf("compact context: %w", err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
@@ -155,12 +159,12 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	if selection.HasPreviousSummary {
 		msg.Compaction.PreviousSummaryID = selection.PreviousSummary.ID
 	}
-	simulated := make([]llm.Message, 0, len(e.Session.History)+1)
-	simulated = append(simulated, e.Session.History...)
+	simulated := make([]llm.Message, 0, len(sess.History)+1)
+	simulated = append(simulated, sess.History...)
 	simulated = append(simulated, msg)
 	tokensAfter := e.estimateContextTokens(systemPrompt, tools, assembleActiveContext(simulated, nil).Messages)
 	msg.Compaction.TokensAfter = tokensAfter
-	if err := e.Session.Append(msg); err != nil {
+	if err := sess.Append(msg); err != nil {
 		err := fmt.Errorf("session append compact: %w", err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
@@ -170,8 +174,8 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		return CompactionResult{}, err
 	}
 	e.autoCompactFailures = 0
-	if len(e.Session.History) > 0 {
-		msg = e.Session.History[len(e.Session.History)-1]
+	if len(sess.History) > 0 {
+		msg = sess.History[len(sess.History)-1]
 	}
 	result := CompactionResult{
 		MessageID:          msg.ID,
@@ -193,7 +197,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 			{Key: "active_context", Label: "active context after compaction", Tokens: tokensAfter},
 		},
 	}
-	e.Session.RecordResponseUsage(generation.Usage, &contextUsage)
+	sess.RecordResponseUsage(generation.Usage, &contextUsage)
 	postReq := e.newHookRequest(hooks.EventPostCompact, turnID)
 	postReq.CompactReason = reason
 	postReq.CompactAuto = auto

@@ -14,13 +14,14 @@ import (
 const goalCompletionGateName = "goal-completion-gate"
 
 func (e *Engine) newHookRequest(event hooks.EventName, turnID string) hooks.Request {
-	req := e.HookContext
+	runtime := e.SessionRuntimeSnapshot()
+	req := runtime.HookContext
 	req.EventName = event
 	req.TurnID = turnID
-	if req.SessionID == "" && e.Session != nil {
-		req.SessionID = e.Session.ID
+	if req.SessionID == "" && runtime.Session != nil {
+		req.SessionID = runtime.Session.ID
 	}
-	if state, ok := e.goalStateRawLocked(); ok {
+	if state, ok := goalStateRawFromStore(runtime.GoalState); ok {
 		req.GoalState = state
 	}
 	req.Observer = hookObserver{engine: e, turnID: turnID}
@@ -257,12 +258,16 @@ func (e *Engine) emitHookErrored(turnID string, payload HookErroredPayload) {
 }
 
 func (e *Engine) appendHookTraceMessage(turnID, text string) {
-	if e == nil || e.Session == nil || strings.TrimSpace(text) == "" {
+	if e == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	sess := e.currentSession()
+	if sess == nil {
 		return
 	}
 	msg := llm.TextMessage(llm.RoleSystem, text)
 	msg.Kind = llm.MessageKindHookEvent
-	_ = e.Session.Append(msg)
+	_ = sess.Append(msg)
 	e.emit(events.Event{Type: "hook.trace", TurnID: turnID, Payload: HookTracePayload{Text: text}})
 }
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/skills"
 )
 
 type ResourceSummary struct {
@@ -25,8 +26,8 @@ func (a *App) ResourceSummary() ResourceSummary {
 		return ResourceSummary{}
 	}
 	summary := ResourceSummary{SkillCount: len(a.skills)}
-	if a.Engine != nil && a.Engine.Prompt != nil {
-		sections := a.Engine.Prompt.Sections()
+	if a.Engine != nil {
+		sections := a.Engine.PromptSections()
 		for _, section := range sections {
 			switch section.Key {
 			case "skills":
@@ -37,11 +38,10 @@ func (a *App) ResourceSummary() ResourceSummary {
 				}
 			}
 		}
-		if a.Engine.Prompt.Skills != nil {
-			report := a.Engine.Prompt.Skills.PromptReport()
+		if report, filtered, ok := a.Engine.PromptSkillStatus(); ok {
 			summary.SkillPromptBudgetChars = report.BudgetChars
 			summary.SkillPromptOmitted = len(report.Omitted)
-			summary.SkillFiltered = len(a.Engine.Prompt.Skills.Filtered())
+			summary.SkillFiltered = filtered
 		}
 	}
 	mcpStatus := a.MCPStatus()
@@ -56,6 +56,13 @@ func (a *App) ResourceSummary() ResourceSummary {
 		summary.MCPServers = append(summary.MCPServers, label)
 	}
 	return summary
+}
+
+func (a *App) Skills() []skills.Skill {
+	if a == nil {
+		return nil
+	}
+	return append([]skills.Skill(nil), a.skills...)
 }
 
 func FormatResourceSummary(summary ResourceSummary) string {

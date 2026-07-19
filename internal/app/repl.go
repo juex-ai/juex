@@ -18,7 +18,10 @@ const replAttachCommand = "/attach"
 // results until the reader closes. /attach stages local images for the next
 // ordinary user prompt. Non-blocking capability warnings use errOut.
 func (a *App) REPL(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
-	if a == nil || a.Session == nil || a.Engine == nil {
+	if a == nil || a.Engine == nil {
+		return errors.New("app: REPL requires an initialized session and engine")
+	}
+	if _, ok := a.SessionIdentity(); !ok {
 		return errors.New("app: REPL requires an initialized session and engine")
 	}
 	if errOut == nil {
@@ -44,7 +47,11 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out, errOut io.Writer) err
 				}
 				continue
 			}
-			ref, err := usermedia.StoreFile(a.cfg.WorkDir, a.Session.ID, imagePath, usermedia.Limits{})
+			identity, ok := a.SessionIdentity()
+			if !ok {
+				return ErrSessionUnavailable
+			}
+			ref, err := usermedia.StoreFile(a.cfg.WorkDir, identity.ID, imagePath, usermedia.Limits{})
 			if err != nil {
 				if writeErr := writeREPLError(out, err); writeErr != nil {
 					return writeErr
@@ -64,9 +71,10 @@ func (a *App) REPL(ctx context.Context, in io.Reader, out, errOut io.Writer) err
 			err  error
 		)
 		if handled || parseErr != nil {
-			previousSessionID := a.Session.ID
+			previous, _ := a.SessionIdentity()
 			text, err = a.Run(ctx, line)
-			if parseErr == nil && cmd.Name == SlashNew && a.Session.ID != previousSessionID {
+			current, _ := a.SessionIdentity()
+			if parseErr == nil && cmd.Name == SlashNew && current.ID != previous.ID {
 				staged = nil
 			}
 		} else {
