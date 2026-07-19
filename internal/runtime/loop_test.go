@@ -3572,6 +3572,13 @@ func TestNormalizeGuidedToolFailureResults(t *testing.T) {
 			content:     "boom\n\n" + hint("juex-observables"),
 			wantContent: "boom\n\n" + hint("juex-observables"),
 		},
+		{
+			name:        "trailing whitespace is normalized",
+			toolName:    "observe",
+			isError:     true,
+			content:     "boom \n\n",
+			wantContent: "boom\n\n" + hint("juex-observables"),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

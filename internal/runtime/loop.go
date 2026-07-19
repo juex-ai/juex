@@ -745,10 +745,11 @@ func appendGuidedToolFailureHint(content, hint string) string {
 	if strings.Contains(content, hint) {
 		return content
 	}
-	if strings.TrimSpace(content) == "" {
+	trimmed := strings.TrimRight(content, " \t\r\n")
+	if trimmed == "" {
 		return hint
 	}
-	return content + "\n\n" + hint
+	return trimmed + "\n\n" + hint
 }
 
 func (e *Engine) runToolCall(ctx context.Context, turnID string, call llm.Block) toolCallResult {
