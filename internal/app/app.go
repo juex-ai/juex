@@ -476,7 +476,7 @@ func New(opts Options) (*App, error) {
 			a.eventSink.Close()
 		}
 		return nil
-	}, sessLock.Close, sess.Close)
+	}, a.closeActiveSessionResources)
 	if opts.MCPManager != nil {
 		if err := opts.MCPManager.RegisterTools(reg); err != nil {
 			_ = a.detachObservability()
@@ -618,10 +618,6 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		// a runtime event so callers still receive a usable session.
 		a.Bus.Emit(events.Event{Type: "turn.errored", Payload: runtime.TurnErroredPayload{Error: err.Error()}})
 	}
-	a.closeMu.Lock()
-	a.cleanup = append(a.cleanup, sessLock.Close, sess.Close)
-	a.closeMu.Unlock()
-
 	if oldLock != nil {
 		_ = oldLock.Close()
 	}
@@ -629,6 +625,27 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 		_ = oldSession.Close()
 	}
 	return nil
+}
+
+func (a *App) closeActiveSessionResources() error {
+	if a == nil {
+		return nil
+	}
+	a.sessionMu.Lock()
+	sessLock := a.sessionLock
+	sess := a.Session
+	a.sessionLock = nil
+	a.Session = nil
+	a.sessionMu.Unlock()
+
+	var lockErr, sessionErr error
+	if sessLock != nil {
+		lockErr = sessLock.Close()
+	}
+	if sess != nil {
+		sessionErr = sess.Close()
+	}
+	return errors.Join(lockErr, sessionErr)
 }
 
 func runtimeStatusSeed(sess *session.Session, maxPendingInputs int) runtime.StatusSeed {

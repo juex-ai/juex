@@ -131,6 +131,20 @@ func TestSwitchToNewPrimarySessionIsAtomicForConcurrentReaders(t *testing.T) {
 	}
 }
 
+func TestSwitchToNewPrimarySessionKeepsCleanupBounded(t *testing.T) {
+	a, _ := newStubApp(t)
+	initialCleanup := len(a.cleanup)
+
+	for i := 0; i < 12; i++ {
+		if err := a.SwitchToNewPrimarySession(); err != nil {
+			t.Fatalf("switch %d: %v", i, err)
+		}
+	}
+	if got := len(a.cleanup); got != initialCleanup {
+		t.Fatalf("cleanup entries after switches = %d, want %d", got, initialCleanup)
+	}
+}
+
 func assertAtomicAppSessionRead(a *App) error {
 	return a.ReadSession(func(sess *session.Session) error {
 		runtime := a.Engine.SessionRuntimeSnapshot()
