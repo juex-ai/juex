@@ -27,7 +27,7 @@ SHELL_INTERPRETERS = {"bash", "dash", "ksh", "sh", "zsh"}
 
 SHELL_OPTIONS_WITH_VALUE = {"-o", "+o", "-O", "+O", "--init-file", "--rcfile"}
 
-SHELL_COMMAND_PREFIXES = {"!", "{"}
+SHELL_COMMAND_PREFIXES = {"!", "(", "{"}
 
 SHELL_CONTROL_PREFIXES = {"do", "elif", "else", "if", "then", "until", "while"}
 
@@ -307,7 +307,11 @@ def _is_crontab_list(tokens: list[str], program_index: int) -> bool:
     saw_list = False
     index = program_index + 1
     while index < len(tokens):
-        option = tokens[index].rstrip(")")
+        raw_option = tokens[index]
+        if raw_option in {")", "}"}:
+            index += 1
+            continue
+        option = raw_option.rstrip(")")
         if option in {"-l", "--list"}:
             saw_list = True
             index += 1
@@ -717,10 +721,13 @@ def _shell_command_segments(command: str) -> list[list[str]]:
 def _command_program_index(tokens: list[str]) -> int | None:
     index = 0
     while index < len(tokens):
-        while index < len(tokens) and (
-            _is_assignment(tokens[index]) or tokens[index] in SHELL_COMMAND_PREFIXES
-        ):
+        if _is_assignment(tokens[index]) or tokens[index] in SHELL_COMMAND_PREFIXES:
             index += 1
+            continue
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
         if index >= len(tokens):
             return None
         program = _program_name(tokens[index])
