@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import shlex
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +22,8 @@ SHELL_COMMAND_FIELDS = {
     "shell": ("cmd", "command"),
     "write_stdin": ("chars",),
 }
+
+SHELL_INTERPRETERS = {"bash", "dash", "ksh", "sh", "zsh"}
 
 
 @dataclass(frozen=True)
@@ -166,14 +169,10 @@ def _validate_tool_contract(
             f"expected exactly one successful schedule_create tool_use, saw {len(successful_creates)}"
         )
 
-    if list_uses and len(successful_creates) == 1:
-        create_use, create_result = successful_creates[0]
-        list_succeeded_before_create = any(
-            (result := _successful_result_after(list_use, results)) is not None
-            and _position(result) < _position(create_use)
-            for list_use in list_uses
-        )
-        if not list_succeeded_before_create:
+    if list_uses:
+        for create_use in create_uses:
+            if _has_successful_list_before(create_use, list_uses, results):
+                continue
             if any(list_use.message_index == create_use.message_index for list_use in list_uses):
                 issues.append(
                     "observable_list and schedule_create cannot be in the same assistant message "
@@ -181,8 +180,12 @@ def _validate_tool_contract(
                 )
             else:
                 issues.append(
-                    "at least one observable_list successful tool_result must occur before schedule_create"
+                    "at least one observable_list successful tool_result must occur "
+                    "before every schedule_create"
                 )
+
+    if len(successful_creates) == 1:
+        create_use, create_result = successful_creates[0]
         completion_after = _position(create_result)
         _validate_create_input(create_use.input, expectation, issues)
 
@@ -209,6 +212,18 @@ def _successful_result_after(use: _ToolUse, results: list[_ToolResult]) -> _Tool
     return None
 
 
+def _has_successful_list_before(
+    create_use: _ToolUse,
+    list_uses: list[_ToolUse],
+    results: list[_ToolResult],
+) -> bool:
+    return any(
+        (result := _successful_result_after(list_use, results)) is not None
+        and _position(result) < _position(create_use)
+        for list_use in list_uses
+    )
+
+
 def _is_shell_scheduling_command(use: _ToolUse) -> bool:
     fields = SHELL_COMMAND_FIELDS.get(use.name)
     if fields is None or not isinstance(use.input, dict):
@@ -228,16 +243,39 @@ def _is_shell_scheduling_command(use: _ToolUse) -> bool:
         return True
     if re.search(r"\b(?:crontab|systemd-run)\b", normalized):
         return True
+    if _contains_watch_command(command):
+        return True
+    return bool(
+        re.search(r"\bsleep\s+(?:21600|6h)\b", normalized)
+        and ("&" in command or re.search(r"\b(?:nohup|setsid)\b", normalized))
+    )
+
+
+def _contains_watch_command(command: str, depth: int = 0) -> bool:
+    normalized = " ".join(command.lower().split())
     if re.search(
         r"(?:^|[;&|]\s*|\b(?:command|env|nohup|setsid|sudo)\s+)"
         r"(?:\S*/)?watch(?=\s|$)",
         normalized,
     ):
         return True
-    return bool(
-        re.search(r"\bsleep\s+(?:21600|6h)\b", normalized)
-        and ("&" in command or re.search(r"\b(?:nohup|setsid)\b", normalized))
-    )
+    if depth >= 3:
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    for index, token in enumerate(tokens):
+        interpreter = token.rsplit("/", 1)[-1].lower()
+        if interpreter not in SHELL_INTERPRETERS:
+            continue
+        for option_index in range(index + 1, len(tokens) - 1):
+            option = tokens[option_index]
+            if option == "--":
+                break
+            if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
+                return _contains_watch_command(tokens[option_index + 1], depth + 1)
+    return False
 
 
 def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, issues: list[str]) -> None:
