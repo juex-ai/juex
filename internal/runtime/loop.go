@@ -58,8 +58,12 @@ type Engine struct {
 	ModelHealth     *llm.ModelHealth
 	Tools           *tools.Registry
 	Bus             *events.Bus
-	Session         *session.Session
-	Prompt          *prompt.Builder
+	// Session, Prompt, HookContext, PendingInputQueue, Notes, and GoalState
+	// are constructor/test compatibility fields. Concurrent production code
+	// must use the synchronized session-runtime methods instead of reading or
+	// replacing these fields directly.
+	Session *session.Session
+	Prompt  *prompt.Builder
 	// WorkDir is the workspace root. Runtime state may live outside it, so
 	// workspace-relative tools and artifacts must not infer it from Session.
 	WorkDir string
@@ -100,6 +104,9 @@ type Engine struct {
 	// history; queuing them preserves the provider-facing transcript order.
 	mu sync.Mutex
 
+	sessionRuntimeMu sync.RWMutex
+	sessionRuntime   *sessionRuntimeState
+
 	pendingMu    sync.Mutex
 	activeTurnID string
 	pendingInput []queuedPendingInput
@@ -117,7 +124,6 @@ type Engine struct {
 	tokenCalibrationMu sync.RWMutex
 	tokenCalibration   tokenEstimateCalibration
 
-	notesStoreMu         sync.Mutex
 	notesContextErrorMu  sync.Mutex
 	notesContextErrorKey string
 }
@@ -198,6 +204,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 		return PendingInputStatus{}, err
 	}
 	max := e.effectiveMaxPendingInputs()
+	queue := e.currentPendingInputQueue()
 	e.pendingMu.Lock()
 	turnID := e.activeTurnID
 	status := PendingInputStatus{TurnID: turnID, PendingCount: len(e.pendingInput), MaxPendingInputs: max}
@@ -221,7 +228,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 		return status, ErrPendingInputQueueFull
 	}
 	recordID := ""
-	if queue := e.pendingInputQueueLocked(); queue != nil {
+	if queue != nil {
 		opts = e.defaultPendingInputOptions(userMsg, opts)
 		record, err := queue.Enqueue(userMsg, opts, turnID)
 		if err != nil {
@@ -401,7 +408,7 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 	userMsg = appendHookAdditionalContext(userMsg, userHookResults)
 
 	prepared := preparedTurnContext{
-		promptSections: e.Prompt.Sections(),
+		promptSections: e.PromptSections(),
 		tools:          e.Tools.Specs(),
 		policy:         effectiveCompactionPolicy(e.Compaction, e.ContextWindow),
 	}
@@ -422,7 +429,7 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 }
 
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
-	if err := e.Session.Append(userMsg); err != nil {
+	if err := e.currentSession().Append(userMsg); err != nil {
 		return fmt.Errorf("session append user: %w", err)
 	}
 	if err := e.markPendingInputMessageProcessed(userMsg); err != nil {
@@ -436,7 +443,7 @@ func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error
 }
 
 func (e *Engine) repairTranscriptLocked(turnID, reason string) error {
-	repairs, err := e.Session.RepairTranscript(reason)
+	repairs, err := e.currentSession().RepairTranscript(reason)
 	if err != nil {
 		return fmt.Errorf("session repair transcript: %w", err)
 	}
@@ -475,7 +482,7 @@ func (e *Engine) requestProviderTurnLocked(ctx context.Context, turnID string, p
 		refs[i] = candidates[i].Ref
 	}
 	attempted := map[string]struct{}{}
-	previousModel := previousAssistantModel(e.Session.History)
+	previousModel := previousAssistantModel(e.currentSession().History)
 	var failures []modelAttemptFailure
 	var skipped []llm.ModelHealthSkip
 	var pending *modelFallbackTransition
@@ -632,11 +639,12 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		messages = append(messages, *result.notice)
 	}
 	messages = append(messages, msg)
-	if err := e.Session.AppendBatch(messages); err != nil {
+	sess := e.currentSession()
+	if err := sess.AppendBatch(messages); err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("session append provider response: %w", err)
 	}
 	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
-	totalUsage := e.Session.RecordResponseUsage(resp.Usage, contextUsage)
+	totalUsage := sess.RecordResponseUsage(resp.Usage, contextUsage)
 
 	// Enrich the responded event with the assistant's text + thinking +
 	// tool calls so verbose UIs can render them without subscribing to
@@ -674,7 +682,7 @@ func (e *Engine) recordToolBatchLocked(ctx context.Context, turnID string, polic
 	}
 	toolResultMsg = projectedToolResultMsg
 	e.emitProjectionApplied(turnID, projection)
-	if err := e.Session.Append(toolResultMsg); err != nil {
+	if err := e.currentSession().Append(toolResultMsg); err != nil {
 		return fmt.Errorf("session append tool result: %w", err)
 	}
 	return nil
@@ -684,7 +692,7 @@ func (e *Engine) recordTurnCompletionLocked(turnID string, start time.Time, last
 	e.emit(events.Event{Type: "turn.completed", TurnID: turnID, Payload: TurnCompletedPayload{
 		DurationMS: time.Since(start).Milliseconds(),
 		OutputLen:  len(lastText),
-		TokenUsage: e.Session.TokenUsageSnapshot(),
+		TokenUsage: e.currentSession().TokenUsageSnapshot(),
 	}})
 }
 
@@ -954,20 +962,6 @@ func (e *Engine) defaultPendingInputOptions(msg llm.Message, opts PendingInputOp
 	return opts
 }
 
-func (e *Engine) pendingInputQueueLocked() *PendingInputQueue {
-	if e == nil {
-		return nil
-	}
-	if e.PendingInputQueue != nil {
-		return e.PendingInputQueue
-	}
-	if e.Session == nil || e.Session.Dir == "" {
-		return nil
-	}
-	e.PendingInputQueue = NewPendingInputQueue(e.Session.Dir, PendingInputQueueOptions{})
-	return e.PendingInputQueue
-}
-
 func (e *Engine) hasPendingRecordLocked(id string) bool {
 	if id == "" {
 		return false
@@ -980,11 +974,8 @@ func (e *Engine) hasPendingRecordLocked(id string) bool {
 	return false
 }
 
-func (e *Engine) sessionHasMessageIDLocked(id string) bool {
-	if e == nil || e.Session == nil || id == "" {
-		return false
-	}
-	return e.Session.HasMessageID(id)
+func sessionHasMessageID(sess *session.Session, id string) bool {
+	return sess != nil && id != "" && sess.HasMessageID(id)
 }
 
 func pendingRecordIDs(pending []queuedPendingInput) []string {
@@ -1026,8 +1017,9 @@ func (e *Engine) restorePendingInput(turnID, skipMessageID string) error {
 	if e == nil || turnID == "" {
 		return nil
 	}
+	queue := e.currentPendingInputQueue()
+	sess := e.currentSession()
 	e.pendingMu.Lock()
-	queue := e.pendingInputQueueLocked()
 	if queue == nil {
 		e.pendingMu.Unlock()
 		return nil
@@ -1051,7 +1043,7 @@ func (e *Engine) restorePendingInput(turnID, skipMessageID string) error {
 		if skipMessageID != "" && record.MessageID == skipMessageID {
 			continue
 		}
-		if e.sessionHasMessageIDLocked(record.MessageID) {
+		if sessionHasMessageID(sess, record.MessageID) {
 			alreadyProcessed = append(alreadyProcessed, record.ID)
 			continue
 		}
@@ -1068,9 +1060,7 @@ func (e *Engine) markPendingInputMessageProcessed(msg llm.Message) error {
 	if e == nil || msg.ID == "" {
 		return nil
 	}
-	e.pendingMu.Lock()
-	queue := e.pendingInputQueueLocked()
-	e.pendingMu.Unlock()
+	queue := e.currentPendingInputQueue()
 	if queue == nil {
 		return nil
 	}
@@ -1091,11 +1081,12 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	if err := cancellation.ContextError(ctx); err != nil {
 		return err
 	}
+	queue := e.currentPendingInputQueue()
+	sess := e.currentSession()
 	e.pendingMu.Lock()
 	pending := append([]queuedPendingInput(nil), e.pendingInput...)
 	e.pendingInput = nil
 	max := e.effectiveMaxPendingInputs()
-	queue := e.pendingInputQueueLocked()
 	if len(pending) > 0 {
 		e.pendingEventAnnouncing = true
 	}
@@ -1118,7 +1109,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 	var processedIDs []string
 	for _, item := range pending {
 		msg := item.Message
-		if msg.ID != "" && e.sessionHasMessageIDLocked(msg.ID) {
+		if sessionHasMessageID(sess, msg.ID) {
 			if item.RecordID != "" {
 				processedIDs = append(processedIDs, item.RecordID)
 			}
@@ -1131,7 +1122,7 @@ func (e *Engine) drainPendingInputLocked(ctx context.Context, turnID string) err
 		}
 		msg = projected
 		e.emitProjectionApplied(turnID, projection)
-		if err := e.Session.Append(msg); err != nil {
+		if err := sess.Append(msg); err != nil {
 			return fmt.Errorf("session append pending input: %w", err)
 		}
 		if item.RecordID != "" {
@@ -1207,10 +1198,14 @@ func (e *Engine) preservePendingInputAfterFailureLocked(turnID string) error {
 }
 
 func (e *Engine) cachePolicyLocked() llm.CachePolicy {
-	if e == nil || e.Session == nil || e.Session.ID == "" {
+	if e == nil {
 		return llm.CachePolicy{}
 	}
-	return llm.CachePolicy{StablePrefixKey: "juex:" + e.Session.ID}
+	sess := e.currentSession()
+	if sess == nil || sess.ID == "" {
+		return llm.CachePolicy{}
+	}
+	return llm.CachePolicy{StablePrefixKey: "juex:" + sess.ID}
 }
 
 func (e *Engine) finishActiveTurnIfNoPending(turnID string) bool {

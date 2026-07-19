@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -181,7 +182,17 @@ func (s *Server) runtimeScratchpadDir() (string, error) {
 		return "", err
 	}
 	if active, exists := s.sessions.Load(id); exists {
-		return active.(*activeSession).app.Session.ScratchpadDir(), nil
+		var scratchpadDir string
+		err := active.(*activeSession).app.ReadSessionID(id, func(sess *session.Session) error {
+			scratchpadDir = sess.ScratchpadDir()
+			return nil
+		})
+		if err == nil {
+			return scratchpadDir, nil
+		}
+		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
+			return "", err
+		}
 	}
 	return session.ScratchpadDir(filepath.Join(s.opts.Cfg.SessionsDir(), id)), nil
 }

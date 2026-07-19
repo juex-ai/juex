@@ -82,7 +82,10 @@ type turnAdmission struct {
 }
 
 func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmissionResult {
-	if a == nil || a.Engine == nil || a.Session == nil {
+	if a == nil || a.Engine == nil {
+		return errorResult(fmt.Errorf("turn admission: app, engine, or session is not initialized"), nil)
+	}
+	if _, ok := a.SessionIdentity(); !ok {
 		return errorResult(fmt.Errorf("turn admission: app, engine, or session is not initialized"), nil)
 	}
 	if ctx == nil {
@@ -167,7 +170,12 @@ func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAll
 	if !a.beginExclusiveCommand() {
 		return conflictResult("session busy", errTurnAdmissionBusy, runtime.PendingInputStatus{})
 	}
-	oldID := a.Session.ID
+	oldIdentity, ok := a.SessionIdentity()
+	if !ok {
+		a.finishExclusiveCommand()
+		return errorResult(ErrSessionUnavailable, nil)
+	}
+	oldID := oldIdentity.ID
 	result, err := a.ExecuteParsedSlashCommand(ctx, cmd)
 	if err != nil {
 		a.finishExclusiveCommand()
@@ -183,8 +191,8 @@ func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAll
 	a.finishExclusiveCommandAsRunning(turnID)
 
 	admitted := commandResult(result, start)
-	if a.Session.ID != oldID {
-		admitted.SessionChanged = &TurnAdmissionSessionChange{OldID: oldID, NewID: a.Session.ID}
+	if current, ok := a.SessionIdentity(); ok && current.ID != oldID {
+		admitted.SessionChanged = &TurnAdmissionSessionChange{OldID: oldID, NewID: current.ID}
 	}
 	return admitted
 }

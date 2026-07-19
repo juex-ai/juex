@@ -864,6 +864,24 @@ type Engine struct {
 func (e *Engine) Turn(ctx, userInput) (string, error)
 ```
 
+Session switching publishes one `SessionRuntimeSnapshot` in
+`internal/runtime`. The snapshot keeps the active `Session`, scratchpad-aware
+prompt builder, persistent pending-input queue, Notes store, Goal store, and
+session-specific hook paths coherent. `ReplaceSessionRuntime` serializes with
+turns and compaction and rejects an active reservation or in-memory pending
+input. The exported session-scoped `Engine` fields remain a constructor and
+test compatibility surface; production readers use snapshot methods such as
+`ActiveContext`, `PromptSections`, and `SessionStateStatus`.
+
+`internal/app` owns the wider lifecycle boundary. Session replacement holds an
+App write lock while it installs the Engine bundle, redirects the durable event
+sink, runtime status, observability recorder, chunked-write state, and session
+lock, then closes the old resources. `ReadSession` and higher-level App
+status/context/pending-input/turn methods hold the matching read lock, so an
+old session and lock cannot close underneath an in-flight reader. Lock order is
+App session lifecycle, Engine turn mutex, Engine session-runtime lock,
+pending-input mutex, then session/store mutexes.
+
 `TurnMessageWithID` is the stable runtime entrypoint. The internal
 `turn_lifecycle.go` runner owns the phase ordering for context preparation,
 provider iterations, tool batches, finish-policy gates, and active-turn

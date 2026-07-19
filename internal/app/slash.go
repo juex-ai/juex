@@ -224,6 +224,8 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 	if a == nil {
 		return StatusSnapshot{}
 	}
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -263,9 +265,7 @@ func (a *App) StatusSnapshot(now time.Time) StatusSnapshot {
 	var goal *runtime.GoalStatusSnapshot
 	if a.Engine != nil {
 		pending = a.Engine.PendingInputStatus()
-		if snapshot, err := a.Engine.GoalStatusSnapshot(); err == nil {
-			goal = snapshot
-		}
+		goal, _ = a.Engine.SessionStateStatus()
 	}
 	return StatusSnapshot{
 		SessionID:    sessionID,

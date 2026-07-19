@@ -7,14 +7,10 @@ import (
 )
 
 func (e *Engine) goalStateStoreLocked() *GoalStateStore {
-	if e == nil {
-		return nil
-	}
-	return e.GoalState
+	return e.currentGoalStateStore()
 }
 
-func (e *Engine) goalStateRawLocked() (json.RawMessage, bool) {
-	store := e.goalStateStoreLocked()
+func goalStateRawFromStore(store *GoalStateStore) (json.RawMessage, bool) {
 	if store == nil {
 		return nil, false
 	}
@@ -37,8 +33,7 @@ func (e *Engine) GoalStatusSnapshot() (*GoalStatusSnapshot, error) {
 	return store.StatusSnapshot()
 }
 
-func (e *Engine) goalStateContextSnapshot() (string, bool) {
-	store := e.goalStateStoreLocked()
+func goalStateContextFromStore(store *GoalStateStore) (string, bool) {
 	if store == nil {
 		return "", false
 	}
@@ -47,10 +42,6 @@ func (e *Engine) goalStateContextSnapshot() (string, bool) {
 		return "", false
 	}
 	return state.RenderProviderContext()
-}
-
-func (e *Engine) goalStateContextLocked() (string, bool) {
-	return e.goalStateContextSnapshot()
 }
 
 func (e *Engine) emitGoalUpdated(turnID string) {

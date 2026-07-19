@@ -212,7 +212,15 @@ func rejectScratchpadTreeSymlinks(root, relPath string) error {
 
 func (s *Server) sessionScratchpadDir(id string) (string, bool) {
 	if active, ok := s.sessions.Load(id); ok {
-		return active.(*activeSession).app.Session.ScratchpadDir(), true
+		as := active.(*activeSession)
+		var scratchpadDir string
+		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
+			scratchpadDir = sess.ScratchpadDir()
+			return nil
+		})
+		if err == nil {
+			return scratchpadDir, true
+		}
 	}
 	if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
 		return "", false

@@ -116,6 +116,22 @@ func NormalizeKind(kind string) string {
 }
 
 func LoadHistory(path string) (History, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return History{Sessions: []Info{}}, nil
+		}
+		return History{}, err
+	}
+	var history History
+	err := withHistoryLock(path, func() error {
+		var err error
+		history, err = loadHistoryFile(path)
+		return err
+	})
+	return history, err
+}
+
+func loadHistoryFile(path string) (History, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -148,7 +164,7 @@ func RecordSession(path string, info Info) error {
 		return nil
 	}
 	return withHistoryLock(path, func() error {
-		h, err := LoadHistory(path)
+		h, err := loadHistoryFile(path)
 		if err != nil {
 			return err
 		}
@@ -195,7 +211,7 @@ func activateInfo(path string, info Info) (Info, error) {
 		return active, nil
 	}
 	if err := withHistoryLock(path, func() error {
-		h, err := LoadHistory(path)
+		h, err := loadHistoryFile(path)
 		if err != nil {
 			return err
 		}
@@ -273,7 +289,7 @@ func RemoveHistory(path, id string) error {
 		return err
 	}
 	return withHistoryLock(path, func() error {
-		h, err := LoadHistory(path)
+		h, err := loadHistoryFile(path)
 		if err != nil {
 			return err
 		}

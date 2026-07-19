@@ -1083,6 +1083,154 @@ func TestPostTurn_NewSlashCreatesActivePrimary(t *testing.T) {
 	})
 }
 
+func TestPostTurn_NewSlashIsCoherentWithConcurrentSessionReaders(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	currentID := createTestSession(t, ts.URL)
+	var idMu sync.RWMutex
+	readID := func() string {
+		idMu.RLock()
+		defer idMu.RUnlock()
+		return currentID
+	}
+	writeID := func(id string) {
+		idMu.Lock()
+		currentID = id
+		idMu.Unlock()
+	}
+
+	done := make(chan struct{})
+	errs := make(chan error, 8)
+	var readers sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				id := readID()
+				for _, suffix := range []string{"", "/context", "/status"} {
+					if err := readConcurrentSessionEndpoint(ts.URL, id, suffix); err != nil {
+						errs <- err
+						return
+					}
+				}
+				if err := readConcurrentRuntimeEndpoint(ts.URL); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}()
+	}
+
+	var switchErr error
+	for i := 0; i < 12; i++ {
+		oldID := readID()
+		resp, err := http.Post(
+			ts.URL+"/api/sessions/"+oldID+"/turns",
+			"application/json",
+			strings.NewReader(`{"prompt":"/new"}`),
+		)
+		if err != nil {
+			switchErr = fmt.Errorf("switch %d: %w", i, err)
+			break
+		}
+		var parsed struct {
+			Command struct {
+				Status struct {
+					SessionID string `json:"session_id"`
+				} `json:"status"`
+			} `json:"command"`
+			TurnID string `json:"turn_id"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&parsed)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || decodeErr != nil ||
+			parsed.Command.Status.SessionID == "" || parsed.Command.Status.SessionID == oldID {
+			switchErr = fmt.Errorf(
+				"switch %d response: status=%d decode=%v old=%q new=%q",
+				i,
+				resp.StatusCode,
+				decodeErr,
+				oldID,
+				parsed.Command.Status.SessionID,
+			)
+			break
+		}
+		writeID(parsed.Command.Status.SessionID)
+		waitForHTTPTranscript(t, ts.URL, parsed.Command.Status.SessionID, parsed.TurnID, 30*time.Second, "concurrent new slash greeting", func(messages []testTranscriptMessage) bool {
+			return transcriptContainsRoleText(messages, "assistant", "ack")
+		})
+	}
+
+	close(done)
+	readers.Wait()
+	close(errs)
+	if switchErr != nil {
+		t.Fatal(switchErr)
+	}
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func readConcurrentSessionEndpoint(baseURL, id, suffix string) error {
+	resp, err := http.Get(baseURL + "/api/sessions/" + id + suffix)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET session %s%s: status=%d body=%s", id, suffix, resp.StatusCode, body)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return fmt.Errorf("GET session %s%s: decode: %w", id, suffix, err)
+	}
+	switch suffix {
+	case "":
+		if got, _ := decoded["id"].(string); got != id {
+			return fmt.Errorf("GET session %s returned session %q", id, got)
+		}
+	case "/status":
+		sessionStatus, _ := decoded["session"].(map[string]any)
+		if got, _ := sessionStatus["id"].(string); got != id {
+			return fmt.Errorf("GET session %s/status returned session %q", id, got)
+		}
+	}
+	return nil
+}
+
+func readConcurrentRuntimeEndpoint(baseURL string) error {
+	resp, err := http.Get(baseURL + "/api/runtime")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GET runtime: status=%d body=%s", resp.StatusCode, body)
+	}
+	var decoded map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return fmt.Errorf("GET runtime: decode: %w", err)
+	}
+	return nil
+}
+
 func TestPostTurn_UnknownSlashStartsAgentTurn(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.Handler())

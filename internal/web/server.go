@@ -461,10 +461,11 @@ func (s *Server) closeOtherPrimarySessions(activeID string) {
 	s.sessions.Range(func(key, value any) bool {
 		id, _ := key.(string)
 		as, _ := value.(*activeSession)
-		if id == "" || id == activeID || as == nil || as.app == nil || as.app.Session == nil {
+		if id == "" || id == activeID || as == nil || as.app == nil {
 			return true
 		}
-		if session.NormalizeKind(as.app.Session.Kind) == session.KindPrimary {
+		identity, ok := as.app.SessionIdentity()
+		if ok && session.NormalizeKind(identity.Kind) == session.KindPrimary {
 			ids = append(ids, id)
 		}
 		return true
@@ -544,7 +545,12 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	}
 	as.turns = newWebTurnTransport(a)
 	a.AddEventDelivery(as.bcast)
-	s.sessions.Store(a.Session.ID, as)
+	identity, ok := a.SessionIdentity()
+	if !ok {
+		_ = a.CloseAndWait()
+		return nil, app.ErrSessionUnavailable
+	}
+	s.sessions.Store(identity.ID, as)
 	if a.Status != nil {
 		snapshot := a.Status.Snapshot()
 		subscription := a.Status.SubscribeFrom(snapshot.Cursor)
@@ -566,8 +572,8 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		}()
 	}
 	s.statusHub.publish(s.agentActivity())
-	if session.NormalizeKind(a.Session.Kind) == session.KindPrimary {
-		s.closeOtherPrimarySessions(a.Session.ID)
+	if session.NormalizeKind(identity.Kind) == session.KindPrimary {
+		s.closeOtherPrimarySessions(identity.ID)
 	}
 	return as, nil
 }
@@ -798,11 +804,23 @@ func (s *Server) mcpErrors() map[string]string {
 // missing.
 func (s *Server) getActiveSession(ctx context.Context, id string) (*activeSession, error) {
 	if v, ok := s.sessions.Load(id); ok {
-		return v.(*activeSession), nil
+		as := v.(*activeSession)
+		if activeSessionMatches(as, id) {
+			return as, nil
+		}
+		return nil, os.ErrNotExist
 	}
 	dir := filepath.Join(s.opts.Cfg.SessionsDir(), id)
 	if !session.HasConversation(dir) {
 		return nil, os.ErrNotExist
 	}
 	return s.openSession(ctx, dir, app.SessionModeAttachActive)
+}
+
+func activeSessionMatches(as *activeSession, id string) bool {
+	if as == nil || as.app == nil || id == "" {
+		return false
+	}
+	identity, ok := as.app.SessionIdentity()
+	return ok && identity.ID == id
 }
