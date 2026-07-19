@@ -999,12 +999,28 @@ func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
 			Usage:      llm.Usage{InputTokens: 11, OutputTokens: 3},
 		},
 	}}
-	eng, _ := newEngine(t, prov, false)
+	eng, bus := newEngine(t, prov, false)
 	eng.ContextWindow = 1000
 	eng.Compaction = DefaultCompactionPolicy()
 	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
 		t.Fatal(err)
 	}
+	var completedContextUsage *llm.ContextUsage
+	bus.Subscribe("context.compact.completed", func(event events.Event) {
+		data, err := json.Marshal(event.Payload)
+		if err != nil {
+			t.Errorf("marshal compact completed payload: %v", err)
+			return
+		}
+		var payload struct {
+			ContextUsage *llm.ContextUsage `json:"context_usage"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			t.Errorf("decode compact completed payload: %v", err)
+			return
+		}
+		completedContextUsage = payload.ContextUsage
+	})
 
 	result, err := eng.Compact(context.Background(), "turn-1", "system", "manual", false)
 	if err != nil {
@@ -1022,6 +1038,11 @@ func TestCompact_RecordsUsageAndActiveContextStats(t *testing.T) {
 	}
 	if info.ContextUsage.ContextWindow != 1000 {
 		t.Fatalf("context window = %d", info.ContextUsage.ContextWindow)
+	}
+	if completedContextUsage == nil ||
+		completedContextUsage.TotalTokens != result.TokensAfter ||
+		completedContextUsage.ContextWindow != 1000 {
+		t.Fatalf("completed event context usage = %+v", completedContextUsage)
 	}
 }
 

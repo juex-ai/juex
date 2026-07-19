@@ -220,6 +220,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 		ContextWindow:      contextWindow,
 		ReserveTokens:      policy.ReserveTokens,
 		KeepRecentTokens:   policy.KeepRecentTokens,
+		ContextUsage:       &contextUsage,
 	}})
 	return result, nil
 }

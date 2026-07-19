@@ -416,6 +416,10 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		}
 		next.Session.State = SessionRuntimeTurnActive
 	case "context.compact.completed":
+		payload := payloadAs[ContextCompactCompletedPayload](event.Payload)
+		if payload.ContextUsage != nil {
+			next.ContextUsage = cloneContextUsage(payload.ContextUsage)
+		}
 		completeCompactionStatus(&next, nil)
 	case "context.compact.errored":
 		payload := payloadAs[ContextCompactErroredPayload](event.Payload)

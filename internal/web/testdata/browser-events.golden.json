@@ -347,7 +347,14 @@
       "tail_start_message_id": "m-tail",
       "context_window": 1000,
       "reserve_tokens": 100,
-      "keep_recent_tokens": 100
+      "keep_recent_tokens": 100,
+      "context_usage": {
+        "model": "gpt-test",
+        "context_window": 1000,
+        "input_tokens": 40,
+        "output_tokens": 0,
+        "total_tokens": 40
+      }
     }
   },
   {

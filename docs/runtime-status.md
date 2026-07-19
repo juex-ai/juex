@@ -124,6 +124,9 @@ journal but cannot reactivate the authoritative turn or Fleet activity.
   request returns.
 - `turn.phase` records provider-iteration and tool-batch transitions.
 - Existing `context.compact.*` events remain the compaction phase facts.
+  `context.compact.completed` additively carries the post-compaction
+  `context_usage` snapshot so status consumers update the context gauge
+  immediately.
 
 ## Layer 3: Session
 
@@ -158,10 +161,12 @@ but their queued or rejected events are ordered after
 `pending_input.draining`. Legacy journals that contain a direct
 queued-to-drained transition still clear the projected pending count.
 `pending_input.promoted` records the queue decrement when manual compaction
-promotes its first queued input into the next provider turn. Restart recovery
-resets the projected count to the new process's empty in-memory queue; durable
-pending records remain available for restoration and draining by that next
-turn.
+promotes its first queued input into the next provider turn. It is also
+browser-visible, allowing the transcript projection to remove that queued item
+and preserve its text and attachments under the promoted turn id before
+`turn.started`. Restart recovery resets the projected count to the new
+process's empty in-memory queue; durable pending records remain available for
+restoration and draining by that next turn.
 
 ## Layer 4: Agent ViewModel
 
@@ -200,6 +205,8 @@ upstream agent streams stop until a new subscriber arrives. Each aggregate
 event retains the agent's durable runtime cursor inside its snapshot.
 Periodic roster reconciliation only discovers process lifecycle changes; it is
 not the source of turn activity.
+An agent status stream starts with a valid `idle` activity even before any
+session has been opened or status fact has been published.
 
 The browser applies each `agent.status` event to the same
 `AgentViewModelStore` used by the active session.

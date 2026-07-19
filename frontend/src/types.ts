@@ -327,6 +327,7 @@ export const BROWSER_EVENT_TYPES = [
   "hook.trace",
   "pending_input.queued",
   "pending_input.draining",
+  "pending_input.promoted",
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",
@@ -540,6 +541,11 @@ export interface PendingInputDrainedPayload {
   max_pending_inputs: number;
 }
 
+export interface PendingInputPromotedPayload {
+  pending_count: number;
+  max_pending_inputs: number;
+}
+
 export type PendingInputDroppedPayload = PendingInputDrainedPayload;
 
 export interface PendingInputRejectedPayload {
@@ -694,6 +700,7 @@ export interface ContextCompactCompletedPayload {
   context_window: number;
   reserve_tokens: number;
   keep_recent_tokens: number;
+  context_usage?: ContextUsage;
 }
 
 export interface ContextProjectionAppliedPayload {
@@ -734,6 +741,7 @@ export type BrowserEvent =
   | (BrowserEventBase<"hook.trace"> & { payload: HookTracePayload })
   | (BrowserEventBase<"pending_input.queued"> & { payload: PendingInputQueuedPayload })
   | (BrowserEventBase<"pending_input.draining"> & { payload: PendingInputDrainedPayload })
+  | (BrowserEventBase<"pending_input.promoted"> & { payload: PendingInputPromotedPayload })
   | (BrowserEventBase<"pending_input.drained"> & { payload: PendingInputDrainedPayload })
   | (BrowserEventBase<"pending_input.dropped"> & { payload: PendingInputDroppedPayload })
   | (BrowserEventBase<"pending_input.rejected"> & { payload: PendingInputRejectedPayload })

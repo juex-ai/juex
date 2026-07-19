@@ -20,6 +20,7 @@
   "hook.trace",
   "pending_input.queued",
   "pending_input.draining",
+  "pending_input.promoted",
   "pending_input.drained",
   "pending_input.dropped",
   "pending_input.rejected",

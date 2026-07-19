@@ -78,8 +78,20 @@ func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 
 	snapshot = apply("13", "context.compact.started", "turn-1", ContextCompactStartedPayload{})
 	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseCompacting, false)
-	snapshot = apply("14", "context.compact.completed", "turn-1", ContextCompactCompletedPayload{})
+	snapshot = apply("14", "context.compact.completed", "turn-1", map[string]any{
+		"context_usage": map[string]any{
+			"model":          "compact-model",
+			"context_window": 1000,
+			"input_tokens":   40,
+			"total_tokens":   40,
+		},
+	})
 	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseToolBatch, false)
+	if snapshot.ContextUsage == nil ||
+		snapshot.ContextUsage.Model != "compact-model" ||
+		snapshot.ContextUsage.TotalTokens != 40 {
+		t.Fatalf("compacted context usage = %+v", snapshot.ContextUsage)
+	}
 
 	snapshot = apply("15", "turn.completed", "turn-1", TurnCompletedPayload{})
 	assertSessionStatus(t, snapshot, SessionRuntimeIdle, 0, true)

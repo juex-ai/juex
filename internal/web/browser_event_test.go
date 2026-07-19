@@ -42,6 +42,27 @@ func TestBrowserEventFromRuntimeSkipsRuntimeOnlyEvents(t *testing.T) {
 	}
 }
 
+func TestBrowserEventFromRuntimeExposesPendingInputPromotion(t *testing.T) {
+	got, visible, err := browserEventFromRuntime(events.Event{
+		ID:     "promoted-1",
+		Type:   juexruntime.PendingInputPromotedType,
+		TurnID: "turn-2",
+		Payload: juexruntime.PendingInputPromotedPayload{
+			PendingCount:     0,
+			MaxPendingInputs: 16,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !visible {
+		t.Fatal("pending input promotion should be browser-visible")
+	}
+	if got.Type != juexruntime.PendingInputPromotedType || got.TurnID != "turn-2" {
+		t.Fatalf("browser event = %+v", got)
+	}
+}
+
 func TestBrowserEventFromRuntimeValidatesKnownPayload(t *testing.T) {
 	_, visible, err := browserEventFromRuntime(events.Event{
 		ID:      "bad-1",
@@ -461,6 +482,12 @@ func browserEventFixtureEvents() []events.Event {
 				ContextWindow:      1000,
 				ReserveTokens:      100,
 				KeepRecentTokens:   100,
+				ContextUsage: &llm.ContextUsage{
+					Model:         "gpt-test",
+					ContextWindow: 1000,
+					InputTokens:   40,
+					TotalTokens:   40,
+				},
 			},
 		},
 		{

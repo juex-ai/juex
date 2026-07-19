@@ -43,7 +43,10 @@ type agentStatusSubscription struct {
 }
 
 func newAgentStatusHub() *agentStatusHub {
-	return &agentStatusHub{subscribers: map[uint64]chan agentActivityResponse{}}
+	return &agentStatusHub{
+		current:     agentActivityResponse{State: agentActivityIdle},
+		subscribers: map[uint64]chan agentActivityResponse{},
+	}
 }
 
 func (h *agentStatusHub) publish(status agentActivityResponse) {

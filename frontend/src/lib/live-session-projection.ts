@@ -248,11 +248,16 @@ export function projectLiveSessionEvent(
 
   switch (event.type) {
     case "turn.started": {
-      const consumed = consumeQueuedInput(
-        next,
-        event.payload.input,
-        event.payload.kind,
+      const alreadyProjected = Boolean(
+        event.turn_id &&
+          next.messages.some(
+            (message) =>
+              message.role === "user" && message.turn_id === event.turn_id,
+          ),
       );
+      const consumed = alreadyProjected
+        ? { state: next }
+        : consumeQueuedInput(next, event.payload.input, event.payload.kind);
       next = consumed.state;
       next = {
         ...next,
@@ -363,6 +368,27 @@ export function projectLiveSessionEvent(
         event.payload.pending_count,
       );
       break;
+    case "pending_input.promoted": {
+      const promoted = drainQueuedInputState(next.queuedInput, 1);
+      const item = promoted.drained[0];
+      next = {
+        ...next,
+        queuedInput: promoted.state,
+        messages: item
+          ? appendLiveTurnToMessages(
+              next.messages,
+              event.turn_id,
+              item.input,
+              item.kind,
+              "event",
+              item.attachments,
+            )
+          : next.messages,
+        turnActive: true,
+        status: { kind: "running" },
+      };
+      break;
+    }
     case "pending_input.drained":
       next = drainQueuedInputs(next, event.payload.count, event.turn_id);
       next = { ...next, turnActive: true, status: { kind: "running" } };
@@ -403,6 +429,7 @@ export function projectLiveSessionEvent(
     case "context.compact.completed":
       next = {
         ...clearLocalCompactMessages(next),
+        contextUsage: event.payload.context_usage ?? next.contextUsage,
         compactActive: false,
       };
       effects.push({ type: "refresh", preserveLiveMessages: true });

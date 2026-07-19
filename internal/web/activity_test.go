@@ -99,6 +99,16 @@ func TestAgentStatusHubSameCursorSubscriptionReturnsCurrentSnapshot(t *testing.T
 	}
 }
 
+func TestAgentStatusHubInitialSubscriptionIsIdle(t *testing.T) {
+	hub := newAgentStatusHub()
+	subscription := hub.subscribe("")
+	defer subscription.cancel()
+
+	if len(subscription.initial) != 1 || subscription.initial[0].State != agentActivityIdle {
+		t.Fatalf("initial = %+v, want idle activity", subscription.initial)
+	}
+}
+
 func TestAgentStatusHubConcurrentPublishDeliversCurrentStatusLast(t *testing.T) {
 	hub := newAgentStatusHub()
 	subscriptions := make([]agentStatusSubscription, 64)

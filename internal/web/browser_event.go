@@ -50,6 +50,7 @@ var browserPayloadFactories = []browserPayloadFactory{
 	{"hook.trace", func() any { return &juexruntime.HookTracePayload{} }},
 	{"pending_input.queued", func() any { return &juexruntime.PendingInputQueuedPayload{} }},
 	{juexruntime.PendingInputDrainingType, func() any { return &juexruntime.PendingInputDrainingPayload{} }},
+	{juexruntime.PendingInputPromotedType, func() any { return &juexruntime.PendingInputPromotedPayload{} }},
 	{"pending_input.drained", func() any { return &juexruntime.PendingInputDrainedPayload{} }},
 	{"pending_input.dropped", func() any { return &juexruntime.PendingInputDroppedPayload{} }},
 	{"pending_input.rejected", func() any { return &juexruntime.PendingInputRejectedPayload{} }},

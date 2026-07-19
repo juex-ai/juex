@@ -311,16 +311,17 @@ type ContextCompactSummaryRetryPayload struct {
 }
 
 type ContextCompactCompletedPayload struct {
-	MessageID          string `json:"message_id"`
-	Reason             string `json:"reason"`
-	Auto               bool   `json:"auto"`
-	EstimatedTokens    int    `json:"estimated_tokens"`
-	TokensBefore       int    `json:"tokens_before"`
-	TokensAfter        int    `json:"tokens_after"`
-	SummaryChars       int    `json:"summary_chars"`
-	SummaryModel       string `json:"summary_model"`
-	TailStartMessageID string `json:"tail_start_message_id"`
-	ContextWindow      int    `json:"context_window"`
-	ReserveTokens      int    `json:"reserve_tokens"`
-	KeepRecentTokens   int    `json:"keep_recent_tokens"`
+	MessageID          string            `json:"message_id"`
+	Reason             string            `json:"reason"`
+	Auto               bool              `json:"auto"`
+	EstimatedTokens    int               `json:"estimated_tokens"`
+	TokensBefore       int               `json:"tokens_before"`
+	TokensAfter        int               `json:"tokens_after"`
+	SummaryChars       int               `json:"summary_chars"`
+	SummaryModel       string            `json:"summary_model"`
+	TailStartMessageID string            `json:"tail_start_message_id"`
+	ContextWindow      int               `json:"context_window"`
+	ReserveTokens      int               `json:"reserve_tokens"`
+	KeepRecentTokens   int               `json:"keep_recent_tokens"`
+	ContextUsage       *llm.ContextUsage `json:"context_usage,omitempty"`
 }
