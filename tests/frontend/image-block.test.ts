@@ -12,13 +12,17 @@ const sessionSource = readFileSync(
 );
 
 test("image lightbox uses the modal dialog primitive", () => {
-  assert.match(imageBlockSource, /<Dialog>/);
+  assert.match(imageBlockSource, /<Dialog[\s>]/);
   assert.match(imageBlockSource, /<DialogTrigger asChild>/);
   assert.match(imageBlockSource, /<DialogContent/);
   assert.match(imageBlockSource, /<DialogClose asChild>/);
   assert.match(imageBlockSource, /aria-describedby/);
   assert.match(imageBlockSource, /focus-visible:ring-2/);
   assert.match(imageBlockSource, /onError=\{\(\) => setFailed\(true\)\}/);
+  assert.match(imageBlockSource, /const \[previewFailed, setPreviewFailed\]/);
+  assert.match(imageBlockSource, /onError=\{\(\) => setPreviewFailed\(true\)\}/);
+  assert.match(imageBlockSource, /Failed to load full-size image/);
+  assert.match(imageBlockSource, /if \(!Number\.isFinite\(bytes\) \|\| bytes <= 0\)/);
 });
 
 test("message images follow role alignment and consecutive images form a gallery", () => {

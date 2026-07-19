@@ -734,7 +734,7 @@ export const PromptInput = ({
 
   const clearSubmittedAttachments = useCallback(
     (submittedIDs: readonly string[]) => {
-      if (usingProvider) {
+      if (controller) {
         for (const id of submittedIDs) {
           controller.attachments.remove(id);
         }
@@ -749,7 +749,7 @@ export const PromptInput = ({
         }),
       );
     },
-    [controller, usingProvider],
+    [controller],
   );
 
   // Let provider know about our hidden file input so external menus can call openFileDialog()

@@ -38,6 +38,7 @@ test("composer feedback is announced and queued inputs stay bounded", () => {
   assert.match(queuedSource, /max-h-/);
   assert.match(queuedSource, /overflow-y-auto/);
   assert.match(queuedSource, /Queued.*items\.length/s);
+  assert.match(queuedSource, /text-foreground group-open:hidden/);
 });
 
 test("deferred submit keeps follow-up text and attachment counts authoritative", () => {

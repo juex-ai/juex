@@ -28,7 +28,7 @@ export function QueuedInputStack({ items }: { items: QueuedInput[] }) {
                 {reviewable ? (
                   <details className="group">
                     <summary className="cursor-pointer list-none rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/35">
-                      <span className="line-clamp-2 whitespace-pre-wrap break-words text-sm leading-5 text-foreground">
+                      <span className="line-clamp-2 whitespace-pre-wrap break-words text-sm leading-5 text-foreground group-open:hidden">
                         {label}
                       </span>
                       <span className="font-mono text-[10px] text-muted-foreground group-open:hidden">

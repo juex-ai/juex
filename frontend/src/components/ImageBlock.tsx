@@ -22,6 +22,7 @@ type ImageBlockProps = {
 export function ImageBlock({ className, media }: ImageBlockProps) {
   const path = media?.artifact_path?.trim();
   const [failed, setFailed] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
   const captionID = useId();
   const meta = useMemo(() => mediaMetadata(media), [media]);
 
@@ -46,7 +47,11 @@ export function ImageBlock({ className, media }: ImageBlockProps) {
     media?.width && media.height ? `${media.width} / ${media.height}` : undefined;
 
   return (
-    <Dialog>
+    <Dialog
+      onOpenChange={(open) => {
+        if (open) setPreviewFailed(false);
+      }}
+    >
       <figure
         className={cn(
           "w-fit max-w-[min(100%,32rem)] overflow-hidden rounded-lg border border-border/60 bg-card shadow-[var(--shadow-xs)]",
@@ -108,12 +113,22 @@ export function ImageBlock({ className, media }: ImageBlockProps) {
             <XIcon className="size-4" aria-hidden="true" />
           </Button>
         </DialogClose>
-        <img
-          src={src}
-          alt={name}
-          className="max-h-full max-w-full object-contain"
-          onError={() => setFailed(true)}
-        />
+        {previewFailed ? (
+          <div
+            className="flex items-center gap-2 rounded-md border border-destructive/30 bg-background px-4 py-3 text-sm text-destructive"
+            role="alert"
+          >
+            <ImageOffIcon className="size-4 shrink-0" aria-hidden="true" />
+            Failed to load full-size image
+          </div>
+        ) : (
+          <img
+            src={src}
+            alt={name}
+            className="max-h-full max-w-full object-contain"
+            onError={() => setPreviewFailed(true)}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -137,6 +152,7 @@ function mediaName(path: string): string {
 }
 
 function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
