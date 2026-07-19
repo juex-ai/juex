@@ -107,6 +107,61 @@ func TestWithHistoryLockRemovesStaleLock(t *testing.T) {
 	}
 }
 
+func TestLoadHistoryWaitsForWriterLock(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(root, "history.json")
+	if err := RecordHistory(historyPath, Info{ID: "initial", Kind: KindPrimary}); err != nil {
+		t.Fatal(err)
+	}
+
+	writerEntered := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		writerDone <- withHistoryLock(historyPath, func() error {
+			close(writerEntered)
+			<-releaseWriter
+			return nil
+		})
+	}()
+	<-writerEntered
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := LoadHistory(historyPath)
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		t.Fatalf("LoadHistory returned while writer held lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseWriter)
+	if err := <-writerDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-readDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadHistoryMissingDoesNotCreateParent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	historyPath := filepath.Join(root, "history.json")
+
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Sessions) != 0 {
+		t.Fatalf("sessions = %+v, want empty", history.Sessions)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("parent stat = %v, want not exist", err)
+	}
+}
+
 func TestAtomicWriteFileOverwritesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.json")
 	if err := atomicWriteFile(path, []byte("old\n"), 0o644); err != nil {

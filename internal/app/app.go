@@ -113,6 +113,7 @@ type App struct {
 	turnAdmission turnAdmission
 
 	sessionLock       *session.Lock
+	sessionResource   *session.Session
 	eventSink         *events.DurableSink
 	eventUnsubscribe  func()
 	statusUnsubscribe func()
@@ -415,6 +416,7 @@ func New(opts Options) (*App, error) {
 		skills:            skillLoader.All(),
 		chunkedWrites:     chunkedWrites,
 		sessionLock:       sessLock,
+		sessionResource:   sess,
 		eventSink:         eventSink,
 		eventUnsubscribe:  eventUnsubscribe,
 		statusUnsubscribe: statusUnsubscribe,
@@ -595,10 +597,11 @@ func (a *App) replaceSession(sess *session.Session, sessLock *session.Lock) erro
 	}
 	_ = a.detachObservability()
 	oldLock := a.sessionLock
-	oldSession := a.Session
+	oldSession := a.sessionResource
 
 	a.Session = sess
 	a.sessionLock = sessLock
+	a.sessionResource = sess
 	if a.chunkedWrites != nil {
 		a.chunkedWrites.RestoreActiveFromHistory(sess.History)
 	}
@@ -633,8 +636,9 @@ func (a *App) closeActiveSessionResources() error {
 	}
 	a.sessionMu.Lock()
 	sessLock := a.sessionLock
-	sess := a.Session
+	sess := a.sessionResource
 	a.sessionLock = nil
+	a.sessionResource = nil
 	a.Session = nil
 	a.sessionMu.Unlock()
 
