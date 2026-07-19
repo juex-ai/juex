@@ -32,8 +32,10 @@ SHELL_COMMAND_PREFIXES = {"!", "(", "{"}
 SHELL_CONTROL_PREFIXES = {"do", "elif", "else", "if", "then", "until", "while"}
 
 WRAPPER_OPTIONS_WITH_VALUE = {
+    "builtin": set(),
     "command": set(),
     "env": {"-a", "--argv0", "-C", "--chdir", "-S", "--split-string", "-u", "--unset"},
+    "exec": {"-a"},
     "nohup": set(),
     "setsid": set(),
     "sudo": {
