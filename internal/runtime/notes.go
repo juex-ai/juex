@@ -42,14 +42,6 @@ func (e *Engine) notesContextSnapshot() (string, bool) {
 	return e.notesContextFromStore(store)
 }
 
-func (e *Engine) notesContextLocked() (string, bool) {
-	store := e.notesStoreLocked()
-	if store == nil {
-		return "", false
-	}
-	return e.notesContextFromStore(store)
-}
-
 func (e *Engine) notesContextFromStore(store *NotesStore) (string, bool) {
 	if e == nil || store == nil {
 		return "", false
