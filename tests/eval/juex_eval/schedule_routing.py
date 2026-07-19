@@ -270,23 +270,24 @@ def _is_shell_scheduling_command(use: _ToolUse) -> bool:
     )
     if not isinstance(command, str):
         return False
-    normalized = " ".join(command.lower().split())
-    if re.search(r"\b(?:while|until|for)\b.*\bsleep\b", normalized):
+    segments = _recursive_shell_segments(command)
+    programs = [
+        _program_name(segment[program_index])
+        for segment in segments
+        if (program_index := _command_program_index(segment)) is not None
+    ]
+    if any(program in {"while", "until", "for"} for program in programs) and "sleep" in programs:
         return True
-    if re.search(r"\bsystemd-run\b", normalized):
+    if _contains_systemd_run_command(segments):
         return True
-    if _contains_mutating_crontab(command):
+    if _contains_mutating_crontab(segments):
         return True
-    if _contains_watch_command(command):
+    if _contains_watch_command(segments):
         return True
-    return bool(
-        re.search(r"\bsleep\s+(?:21600|6h)\b", normalized)
-        and ("&" in command or re.search(r"\b(?:nohup|setsid)\b", normalized))
-    )
+    return _contains_detached_interval_sleep(command, segments)
 
 
-def _contains_mutating_crontab(command: str, depth: int = 0) -> bool:
-    segments = _shell_command_segments(command)
+def _contains_mutating_crontab(segments: list[list[str]]) -> bool:
     for segment in segments:
         program_index = _command_program_index(segment)
         if (
@@ -294,18 +295,6 @@ def _contains_mutating_crontab(command: str, depth: int = 0) -> bool:
             and _program_name(segment[program_index]) == "crontab"
             and not _is_crontab_list(segment, program_index)
         ):
-            return True
-    if depth >= 3 or not segments:
-        return False
-    for segment in segments:
-        env_payload = _env_split_string_payload(segment)
-        if env_payload is not None and _contains_mutating_crontab(env_payload, depth + 1):
-            return True
-        program_index = _command_program_index(segment)
-        if program_index is None or _program_name(segment[program_index]) not in SHELL_INTERPRETERS:
-            continue
-        shell_payload = _shell_command_payload(segment, program_index)
-        if shell_payload is not None and _contains_mutating_crontab(shell_payload, depth + 1):
             return True
     return False
 
@@ -358,25 +347,71 @@ def _shell_redirection_end(tokens: list[str], index: int) -> int | None:
     return index + 2 if index + 1 < len(tokens) else None
 
 
-def _contains_watch_command(command: str, depth: int = 0) -> bool:
-    segments = _shell_command_segments(command)
+def _contains_watch_command(segments: list[list[str]]) -> bool:
     for segment in segments:
         program_index = _command_program_index(segment)
         if program_index is not None and _program_name(segment[program_index]) == "watch":
             return True
-    if depth >= 3 or not segments:
-        return False
+    return False
+
+
+def _contains_systemd_run_command(segments: list[list[str]]) -> bool:
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if (
+            program_index is not None
+            and _program_name(segment[program_index]) == "systemd-run"
+            and not _is_systemd_run_inspection(segment, program_index)
+        ):
+            return True
+    return False
+
+
+def _is_systemd_run_inspection(tokens: list[str], program_index: int) -> bool:
+    index = program_index + 1
+    while index < len(tokens):
+        option = tokens[index]
+        if option in {"-h", "--help", "--version"}:
+            return True
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
+        if option == "--" or not option.startswith("-"):
+            return False
+        index += 1
+    return False
+
+
+def _contains_detached_interval_sleep(command: str, segments: list[list[str]]) -> bool:
+    for segment in segments:
+        program_index = _command_program_index(segment)
+        if program_index is None or _program_name(segment[program_index]) != "sleep":
+            continue
+        if not any(argument.lower() in {"21600", "6h"} for argument in segment[program_index + 1 :]):
+            continue
+        wrappers = {_program_name(token) for token in segment[:program_index]}
+        if "&" in command or wrappers.intersection({"nohup", "setsid"}):
+            return True
+    return False
+
+
+def _recursive_shell_segments(command: str, depth: int = 0) -> list[list[str]]:
+    segments = _shell_command_segments(command)
+    if depth >= 3:
+        return segments
+    expanded = list(segments)
     for segment in segments:
         env_payload = _env_split_string_payload(segment)
-        if env_payload is not None and _contains_watch_command(env_payload, depth + 1):
-            return True
+        if env_payload is not None:
+            expanded.extend(_recursive_shell_segments(env_payload, depth + 1))
         program_index = _command_program_index(segment)
         if program_index is None or _program_name(segment[program_index]) not in SHELL_INTERPRETERS:
             continue
-        payload = _shell_command_payload(segment, program_index)
-        if payload is not None and _contains_watch_command(payload, depth + 1):
-            return True
-    return False
+        shell_payload = _shell_command_payload(segment, program_index)
+        if shell_payload is not None:
+            expanded.extend(_recursive_shell_segments(shell_payload, depth + 1))
+    return expanded
 
 
 def _env_split_string_payload(tokens: list[str]) -> str | None:
