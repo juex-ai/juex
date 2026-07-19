@@ -327,8 +327,35 @@ def _is_crontab_list(tokens: list[str], program_index: int) -> bool:
         if option.startswith("--user="):
             index += 1
             continue
+        redirection_end = _shell_redirection_end(tokens, index)
+        if redirection_end is not None:
+            index = redirection_end
+            continue
         return False
     return saw_list
+
+
+def _shell_redirection_end(tokens: list[str], index: int) -> int | None:
+    if index >= len(tokens):
+        return None
+    if tokens[index].isdigit():
+        index += 1
+    if index >= len(tokens) or tokens[index] not in {
+        "<",
+        ">",
+        ">>",
+        ">|",
+        "<>",
+        "<&",
+        ">&",
+        "<<",
+        "<<-",
+        "<<<",
+        "&>",
+        "&>>",
+    }:
+        return None
+    return index + 2 if index + 1 < len(tokens) else None
 
 
 def _contains_watch_command(command: str, depth: int = 0) -> bool:
@@ -396,7 +423,7 @@ def _env_split_option_payload(tokens: list[str], index: int) -> str | None:
 
 def _shell_command_segments(command: str) -> list[list[str]]:
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
         lexer.whitespace_split = True
         lexer.commenters = ""
         tokens = list(lexer)
