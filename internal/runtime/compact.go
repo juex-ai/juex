@@ -204,9 +204,9 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 			Auto:   auto,
 			Error:  fmt.Sprintf("compact context: post hook failed: %v", err),
 		}})
-		return result, nil
+	} else {
+		e.queueHookRuntimeContext(postResults)
 	}
-	e.queueHookRuntimeContext(postResults)
 	e.emit(events.Event{Type: "context.compact.completed", TurnID: turnID, Payload: ContextCompactCompletedPayload{
 		MessageID:          result.MessageID,
 		Reason:             result.Reason,

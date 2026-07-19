@@ -531,15 +531,24 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 		statusEvent("3", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
 			PendingCount: 3, MaxPendingInputs: 3,
 		}),
+		statusEvent("4", toolevents.RequestedType, "turn-1", toolevents.RequestedPayload{
+			Name: "exec_command", ToolUseID: "tool-1",
+		}),
+		statusEvent("5", toolevents.RunningType, "turn-1", toolevents.RunningPayload{
+			Name: "exec_command", ToolUseID: "tool-1",
+		}),
 	})
+	if tools := store.Snapshot().Tools; len(tools) != 1 || tools[0].State != ToolCallRunning {
+		t.Fatalf("pre-recovery tools = %+v, want one running tool", tools)
+	}
 	store.RecoverAfterRestart()
 
 	snapshot := store.Snapshot()
 	if snapshot.Session.ID != "new" || snapshot.Session.Alias != "primary" {
 		t.Fatalf("session = %+v", snapshot.Session)
 	}
-	if snapshot.Cursor != "3" {
-		t.Fatalf("cursor = %q, want 3", snapshot.Cursor)
+	if snapshot.Cursor != "5" {
+		t.Fatalf("cursor = %q, want 5", snapshot.Cursor)
 	}
 	if snapshot.Turn == nil || snapshot.Turn.State != TurnLifecycleCancelled || snapshot.Turn.Streaming {
 		t.Fatalf("turn = %+v", snapshot.Turn)
@@ -549,6 +558,9 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	}
 	if snapshot.Session.PendingCount != 0 || !snapshot.Session.CanAcceptInput {
 		t.Fatalf("recovered session queue = %+v, want empty and accepting input", snapshot.Session)
+	}
+	if len(snapshot.Tools) != 0 {
+		t.Fatalf("recovered tools = %+v, want none", snapshot.Tools)
 	}
 }
 

@@ -2065,8 +2065,11 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 					sawCompleted = true
 				}
 			}
-			if sawErrored != tc.wantCompactError || sawCompleted == tc.wantCompactError {
-				t.Fatalf("events = %+v, want compact error=%v and mutually exclusive completed", eventTypes, tc.wantCompactError)
+			if sawErrored != tc.wantCompactError {
+				t.Fatalf("events = %+v, want compact error=%v", eventTypes, tc.wantCompactError)
+			}
+			if !sawCompleted {
+				t.Fatalf("events = %+v, want completed after committed compaction", eventTypes)
 			}
 		})
 	}

@@ -226,7 +226,11 @@ The browser applies each `agent.status` event to the same
   remains attached to that tool while the turn continues.
 - A runtime restart replays legacy and current durable events. A dangling
   nonterminal turn from an unclean process exit is recovered as cancelled
-  presentation state rather than shown as still working.
+  presentation state rather than shown as still working, and its nonterminal
+  tool-call projection is cleared.
+- A post-compact hook failure remains observational after the compact message
+  is committed. The runtime still publishes `context.compact.completed` with
+  the new context usage after reporting the hook error.
 - Unknown event families advance the cursor but do not change named state.
 - Existing browser event payloads, `events.jsonl`, turn status routes, and
   `GET /api/activity` remain compatible while new status routes are additive.
