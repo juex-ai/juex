@@ -7,7 +7,7 @@ const MESSAGE_CONTENT_BASE_CLASS_NAME =
   "flex w-fit min-w-0 flex-col gap-2 overflow-hidden rounded-lg border border-border bg-card px-4 py-3 text-[14.5px] leading-[1.6] text-card-foreground shadow-[var(--shadow-xs)]";
 
 const MESSAGE_CONTENT_USER_CLASS_NAME =
-  "group-[.is-user]:ml-auto group-[.is-user]:max-w-[92%] group-[.is-user]:rounded-tr-sm sm:group-[.is-user]:max-w-[78%]";
+  "group-[.is-user]:ml-auto group-[.is-user]:max-w-[92%] group-[.is-user]:rounded-[16px] group-[.is-user]:rounded-tr-md sm:group-[.is-user]:max-w-[78%]";
 
 const EXTERNAL_EVENT_ROW_CLASS_NAME =
   "flex min-w-0 cursor-pointer list-none items-center gap-2 px-1 py-1.5 text-xs text-juex-gold-900 outline-none transition hover:text-juex-ink-900 focus-visible:ring-2 focus-visible:ring-ring/40 dark:text-juex-gold-400 dark:hover:text-juex-gold-200 [&::-webkit-details-marker]:hidden";

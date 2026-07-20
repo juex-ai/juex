@@ -31,7 +31,7 @@ const dialogSource = source("../../frontend/src/components/ui/dialog.tsx");
 const buttonSource = source("../../frontend/src/components/ui/button.tsx");
 const inputSource = source("../../frontend/src/components/ui/input.tsx");
 
-test("the design system uses a restrained fixed radius scale", () => {
+test("the design system uses a restrained radius scale with conversational exceptions", () => {
   for (const declaration of [
     "--radius-sm: 2px",
     "--radius-md: 4px",
@@ -43,11 +43,19 @@ test("the design system uses a restrained fixed radius scale", () => {
   assert.match(cssSource, /--radius: 6px/);
 
   const forbidden = /rounded-(?:xl|2xl|3xl|4xl)!?|rounded-\[(?:1[0-9]|[2-9][0-9])px\]/g;
-  const violations = productionSources(frontendRoot)
+  const oversized = productionSources(frontendRoot)
     .flatMap(([path, contents]) =>
-      [...contents.matchAll(forbidden)].map((match) => `${path}: ${match[0]}`),
-    );
-  assert.deepEqual(violations, []);
+      [...contents.matchAll(forbidden)].map(
+        (match) =>
+          `${path.slice(frontendRoot.pathname.length)}: ${match[0]}`,
+      ),
+    )
+    .sort();
+  assert.deepEqual(oversized, [
+    "components/QueuedInputStack.tsx: rounded-[16px]",
+    "components/ai-elements/prompt-input.tsx: rounded-[16px]",
+    "lib/message-rendering.ts: rounded-[16px]",
+  ]);
 });
 
 test("shared controls and dialogs use the same compact geometry", () => {

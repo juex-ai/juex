@@ -10,6 +10,13 @@ const queuedSource = readFileSync(
   new URL("../../frontend/src/components/QueuedInputStack.tsx", import.meta.url),
   "utf8",
 );
+const promptInputSource = readFileSync(
+  new URL(
+    "../../frontend/src/components/ai-elements/prompt-input.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
 
 test("composer groups utility actions before matching status controls", () => {
   const actions = sessionSource.indexOf('aria-label="Composer actions"');
@@ -62,11 +69,14 @@ test("composer stages image previews above draft text at the top-left", () => {
   const stripClasses = new Set(stripClassName.split(/\s+/));
   for (const expectedClass of [
     "flex",
+    "max-h-[min(10.5rem,24dvh)]",
     "w-full",
     "flex-wrap",
     "items-start",
     "justify-start",
     "gap-2",
+    "overflow-y-auto",
+    "overscroll-contain",
     "px-2.5",
     "pt-2",
   ]) {
@@ -101,4 +111,94 @@ test("composer feedback is announced and queued inputs stay bounded", () => {
 test("deferred submit keeps follow-up text and attachment counts authoritative", () => {
   assert.match(sessionSource, /settleSubmittedComposerText\(current, submittedText\)/);
   assert.doesNotMatch(sessionSource, /setAttachmentCount\(0\)/);
+});
+
+test("active session composer floats without consuming conversation layout", () => {
+  assert.match(sessionSource, /new ResizeObserver/);
+  assert.match(
+    sessionSource,
+    /<ConversationContent[\s\S]*style=\{\{[\s\S]*paddingBottom:/,
+  );
+  assert.match(
+    sessionSource,
+    /<ConversationScrollButton[\s\S]*style=\{\{[\s\S]*bottom:/,
+  );
+  assert.match(
+    sessionSource,
+    /<ConversationClearanceFollower clearance=\{composerClearance\}/,
+  );
+  assert.match(
+    sessionSource,
+    /clearance > previousClearance\.current[\s\S]*scrollToBottom\(\{ animation: "instant" \}\)/,
+  );
+  assert.match(sessionSource, /composerOverlayHeight \+ 12/);
+  assert.match(
+    sessionSource,
+    /data-testid="session-composer-overlay"/,
+  );
+  assert.match(
+    sessionSource,
+    /pointer-events-none absolute inset-0[\s\S]*items-end/,
+  );
+  assert.match(
+    sessionSource,
+    /max-h-full[\s\S]*bg-linear-to-b[\s\S]*pt-\[clamp\(1\.5rem,10dvh,4rem\)\]/,
+  );
+  assert.match(sessionSource, /data-testid="session-composer-obstruction"/);
+  assert.match(
+    sessionSource,
+    /pb-\[max\(0\.75rem,env\(safe-area-inset-bottom\)\)\][\s\S]*md:pb-\[max\(1\.25rem,env\(safe-area-inset-bottom\)\)\]/,
+  );
+  assert.match(sessionSource, /data-testid="session-composer-stack"/);
+  assert.match(
+    sessionSource,
+    /pointer-events-auto[\s\S]*min-h-0[\s\S]*overflow-hidden/,
+  );
+  assert.match(
+    sessionSource,
+    /<PromptInputTextarea[\s\S]*className="max-h-\[min\(12rem,30dvh\)\]"/,
+  );
+  assert.match(sessionSource, /safe-area-inset-bottom/);
+  assert.doesNotMatch(sessionSource, /max-h-\[calc\(100dvh_/);
+  assert.doesNotMatch(
+    sessionSource,
+    /shrink-0 border-t bg-background\/92/,
+  );
+});
+
+test("prompt input uses a floating surface and one border-only focus state", () => {
+  assert.match(
+    promptInputSource,
+    /<InputGroup[\s\S]*rounded-\[16px\][\s\S]*shadow-\[var\(--shadow-lg\)\]/,
+  );
+  assert.match(
+    promptInputSource,
+    /has-\[\[data-slot=input-group-control\]:focus-visible\]:border-ring/,
+  );
+  assert.match(
+    promptInputSource,
+    /has-\[\[data-slot=input-group-control\]:focus-visible\]:ring-0/,
+  );
+  assert.match(
+    promptInputSource,
+    /has-\[\[data-slot=input-group-control\]:focus-visible\]:ring-offset-0/,
+  );
+  assert.doesNotMatch(
+    sessionSource,
+    /variant=\{isStop \? "outline" : "default"\}/,
+  );
+});
+
+test("queued inputs share one translucent floating surface", () => {
+  assert.match(queuedSource, /data-testid="queued-input-stack"/);
+  assert.match(queuedSource, /bg-background\/80/);
+  assert.match(queuedSource, /backdrop-blur-xl/);
+  assert.match(queuedSource, /shadow-\[var\(--shadow-md\)\]/);
+  assert.match(
+    queuedSource,
+    /max-h-\[min\(14rem,30dvh\)\][\s\S]*min-h-0[\s\S]*shrink[\s\S]*flex-col/,
+  );
+  assert.match(queuedSource, /min-h-0 flex-1[\s\S]*overflow-y-auto/);
+  assert.match(queuedSource, /divide-y/);
+  assert.doesNotMatch(queuedSource, /bg-card\/90/);
 });

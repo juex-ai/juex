@@ -69,7 +69,7 @@ test("the app shell owns an exact clipped viewport", () => {
   );
 });
 
-test("the session keeps one explicit conversation scroller above the composer", () => {
+test("the session keeps its conversation scroller behind a bounded composer overlay", () => {
   assertHasClassTokens(
     conversationClasses,
     "relative min-h-0 flex-1 overflow-hidden",
@@ -80,9 +80,16 @@ test("the session keeps one explicit conversation scroller above the composer", 
   );
   assertHasClassTokens(
     sessionClasses,
-    "flex min-h-0 flex-1 flex-col overflow-hidden",
+    "relative flex min-h-0 flex-1 flex-col overflow-hidden",
   );
-  assertHasClassTokens(sessionClasses, "shrink-0 border-t");
+  assertHasClassTokens(
+    sessionClasses,
+    "pointer-events-none absolute inset-0 items-end",
+  );
+  assertHasClassTokens(
+    sessionClasses,
+    "pointer-events-auto min-h-0 overflow-hidden",
+  );
 });
 
 test("runtime owns vertical scrolling without document scroll chaining", () => {

@@ -36,6 +36,8 @@ test("user message chrome uses a weak card treatment", () => {
   assert.match(base, /border-border/);
   assert.match(base, /text-card-foreground/);
   assert.match(user, /group-\[\.is-user\]:ml-auto/);
+  assert.match(user, /group-\[\.is-user\]:rounded-\[16px\]/);
+  assert.match(user, /group-\[\.is-user\]:rounded-tr-md/);
   assert.doesNotMatch(user, /bg-juex-user/);
   assert.doesNotMatch(user, /text-juex-user-foreground/);
 });
