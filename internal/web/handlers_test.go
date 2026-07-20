@@ -604,6 +604,26 @@ func TestGetSessionShow_LimitsRecentTranscript(t *testing.T) {
 	}
 }
 
+func TestMessagesForSessionResponseProjectsCanonicalCreatedAt(t *testing.T) {
+	messages := messagesForSessionResponse([]llm.Message{
+		{ID: "msg-20260718T065604-8f0582f4", Role: llm.RoleAssistant},
+		{ID: "legacy-message", Role: llm.RoleAssistant},
+	})
+	if got, want := messages[0].CreatedAt, "2026-07-18T06:56:04Z"; got != want {
+		t.Fatalf("created_at = %q, want %q", got, want)
+	}
+	if messages[1].CreatedAt != "" {
+		t.Fatalf("legacy created_at = %q, want empty", messages[1].CreatedAt)
+	}
+	data, err := json.Marshal(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"created_at":""`) {
+		t.Fatalf("legacy response should omit empty created_at: %s", data)
+	}
+}
+
 func TestGetSessionShow_DefaultsToLatestCompactWindow(t *testing.T) {
 	srv := newTestServer(t)
 	id := "20260507T101010-compact1"

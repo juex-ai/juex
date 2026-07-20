@@ -65,6 +65,43 @@ test("messageGroupCopyText skips redacted reasoning internals", () => {
   assert.equal(messageGroupCanCopy(group), false);
 });
 
+test("messageGroupCopyText skips visible reasoning without content", () => {
+  const group = {
+    key: "a-visible-reasoning",
+    role: "assistant" as const,
+    pending: false,
+    units: [
+      {
+        kind: "reasoning" as const,
+        block: {
+          type: "reasoning" as const,
+          text: "visible process",
+        },
+      },
+    ],
+  };
+  assert.equal(messageGroupCopyText(group), "");
+  assert.equal(messageGroupCanCopy(group), false);
+});
+
+test("messageGroupCopyText copies text but not visible reasoning", () => {
+  assert.equal(
+    messageGroupCopyText({
+      key: "a-reasoning-and-text",
+      role: "assistant",
+      pending: false,
+      units: [
+        {
+          kind: "reasoning",
+          block: { type: "reasoning", text: "visible process" },
+        },
+        { kind: "text", block: { type: "text", text: "visible answer" } },
+      ],
+    }),
+    "visible answer",
+  );
+});
+
 test("messageGroupCopyText keeps visible text next to redacted reasoning", () => {
   assert.equal(
     messageGroupCopyText({

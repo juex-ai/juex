@@ -98,6 +98,7 @@ juex/
 │   │   ├── lib/
 │   │   │   ├── utils.ts            # shadcn `cn` helper
 │   │   │   ├── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
+│   │   │   ├── assistant-work-groups.ts # projects consecutive assistant process work
 │   │   │   └── message-rendering.ts # message chrome and display-policy helpers
 │   │   ├── pages/
 │   │   │   ├── Fleet.tsx           # /
@@ -336,7 +337,8 @@ User and system message bubbles expose a copy action on hover/focus. The action
 sits under the bubble, uses a copy icon, copies the whole message text, and
 temporarily changes its tooltip to `Copied to clipboard`.
 Copyable text is limited to content visibly represented in the transcript;
-provider-redacted reasoning content is never copied from hidden block fields.
+reasoning and process metadata are never part of the normal message copy path.
+Compact dividers and external events retain their dedicated copy controls.
 
 Tool cards use lifecycle labels rather than transport labels: `running` while a
 tool_use has no result, `success` when a result arrives, and `failed` for error
@@ -478,6 +480,15 @@ text. MCP notifications, Observations, and hook traces bypass normal message
 chrome and render as low-emphasis transcript rows so they do not read as
 human-authored messages.
 
+When a normal assistant response starts with reasoning and a tool call, its
+consecutive process-only messages collapse into one assistant work disclosure.
+The running title follows the latest tool-bearing message; once non-empty text
+arrives, the title shows the persisted response span and total tool-call count,
+and the assistant content remains ordinary unframed text below it. Expanding
+the disclosure reuses the existing Thinking and tool process rows. Historical
+or interrupted process tails are not labeled as running, and loading an older
+page recomputes this read-only projection without changing transcript storage.
+
 ### 7.6 Text rendering
 
 `<MessageContent>` wraps `<MessageResponse>{text}</MessageResponse>`.
@@ -507,8 +518,9 @@ instead of aligning to the far right, with right/down directions for
 collapsed/expanded states. Live tool event projection happens in
 `src/lib/live-session-projection.ts`, using `src/lib/live-tool-events.ts` for
 the transcript block updates. The render layer in `pages/Session.tsx` calls
-`toDisplayUnits` from `src/lib/display-units.ts` to fold the two blocks into
-one display unit (see §13).
+`messagesToGroups` from `src/lib/display-units.ts` to fold the two blocks into
+one display unit, then `assistantWorkItems` to project consecutive process
+groups for display (see §13).
 
 | `use` | `result` | `result.is_error` | state passed to `<ToolHeader>` |
 |---|---|---|---|

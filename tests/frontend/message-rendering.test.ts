@@ -242,6 +242,24 @@ test("all process disclosures start closed and only follow user toggles", () => 
   assert.doesNotMatch(disclosure, /setIsOpen\([^)]*status/);
 });
 
+test("assistant work disclosure owns process rows and leaves content outside", () => {
+  const start = sessionSource.indexOf("function AssistantWorkGroupView(");
+  const end = sessionSource.indexOf("function AssistantWorkContent(", start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const disclosure = sessionSource.slice(start, end);
+
+  assert.match(disclosure, /const \[isOpen, setIsOpen\] = useState\(false\)/);
+  assert.match(disclosure, /assistantWorkTitle\(work\)/);
+  assert.match(disclosure, /group\/work-row/);
+  assert.match(disclosure, /work\.processGroups\.flatMap/);
+  assert.match(disclosure, /<ThinkingProcessRow/);
+  assert.match(disclosure, /<ToolBatchProcessRow/);
+  assert.match(disclosure, /<ToolProcessRow/);
+  assert.match(disclosure, /<AssistantWorkContent group=\{content\}/);
+  assert.match(disclosure, /<MessageCopyAction text=\{copyText\}/);
+});
+
 test("process status dots are smaller while thinking has no dot contract", () => {
   const dot = processStatusDotClassName("done");
   const failedDot = processStatusDotClassName("failed");

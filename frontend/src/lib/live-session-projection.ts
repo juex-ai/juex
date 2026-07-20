@@ -47,6 +47,8 @@ export type LiveSessionProjection = {
   drainingQueuedInputs: Array<QueuedInput | undefined>;
   compactAdmissionTurnID: string | null;
   turnActive: boolean;
+  activeTurnID: string | null;
+  settledTurnID: string | null;
   compactActive: boolean;
   compactCommandInputs: Record<string, string>;
   status: LiveSessionStatus;
@@ -70,6 +72,8 @@ export function createLiveSessionProjection(): LiveSessionProjection {
     drainingQueuedInputs: [],
     compactAdmissionTurnID: null,
     turnActive: false,
+    activeTurnID: null,
+    settledTurnID: null,
     compactActive: false,
     compactCommandInputs: {},
     status: { kind: "idle" },
@@ -82,6 +86,7 @@ export function resetLiveSessionProjection(opts?: {
   return {
     ...createLiveSessionProjection(),
     turnActive: Boolean(opts?.activeTurnID),
+    activeTurnID: opts?.activeTurnID ?? null,
     status: opts?.activeTurnID ? { kind: "running" } : { kind: "idle" },
   };
 }
@@ -191,6 +196,7 @@ export function projectOptimisticTurn(
       attachments,
     ),
     turnActive: true,
+    activeTurnID: turnID ?? state.activeTurnID,
     status: { kind: "running" },
   };
 }
@@ -443,6 +449,8 @@ export function projectLiveSessionEvent(
       next = {
         ...markProjectionDone(next),
         turnActive: false,
+        activeTurnID: null,
+        settledTurnID: event.turn_id ?? next.settledTurnID,
       };
       effects.push({ type: "refresh" }, { type: "scheduleIdleStatus" });
       break;
@@ -451,6 +459,8 @@ export function projectLiveSessionEvent(
       next = {
         ...markProjectionError(next, event.payload.error),
         turnActive: false,
+        activeTurnID: null,
+        settledTurnID: event.turn_id ?? next.settledTurnID,
       };
       effects.push({ type: "refresh" });
       break;
@@ -486,6 +496,9 @@ export function projectLiveSessionEvent(
       break;
   }
 
+  if (next.turnActive && event.turn_id) {
+    next = { ...next, activeTurnID: event.turn_id };
+  }
   return { state: next, effects };
 }
 
@@ -493,11 +506,15 @@ export function projectTurnStatusReconcile(
   state: LiveSessionProjection,
   turn: TurnStatusResponse,
 ): LiveSessionProjectionResult {
+  const turnID = "turn_id" in turn && typeof turn.turn_id === "string"
+    ? turn.turn_id
+    : undefined;
   if (turn.state === "running") {
     return {
       state: {
         ...state,
         turnActive: true,
+        activeTurnID: turnID ?? state.activeTurnID,
         status:
           turn.pending_count && turn.pending_count > 0
             ? { kind: "pending", count: turn.pending_count }
@@ -506,15 +523,14 @@ export function projectTurnStatusReconcile(
       effects: [],
     };
   }
-  const turnID = "turn_id" in turn && typeof turn.turn_id === "string"
-    ? turn.turn_id
-    : undefined;
   const settled = settleTerminalQueuedInputs(state, turnID);
   if (turn.state === "errored") {
     return {
       state: {
         ...markProjectionError(settled, turn.error),
         turnActive: false,
+        activeTurnID: null,
+        settledTurnID: turnID ?? settled.settledTurnID,
       },
       effects: [{ type: "refresh" }],
     };
@@ -523,6 +539,8 @@ export function projectTurnStatusReconcile(
     state: {
       ...markProjectionDone(settled),
       turnActive: false,
+      activeTurnID: null,
+      settledTurnID: turnID ?? settled.settledTurnID,
     },
     effects: [{ type: "refresh" }, { type: "scheduleIdleStatus" }],
   };
@@ -782,6 +800,7 @@ function applyAssistantResponse(
       pending: false,
       blocks,
       model,
+      created_at: event.ts,
     };
     if (event.payload.notice) {
       messages.splice(pendingIndex, 0, {
@@ -799,7 +818,14 @@ function applyAssistantResponse(
     messages: [
       ...state.messages,
       ...appended,
-      { role: "assistant", turn_id: event.turn_id, pending: false, blocks, model },
+      {
+        role: "assistant",
+        turn_id: event.turn_id,
+        pending: false,
+        blocks,
+        model,
+        created_at: event.ts,
+      },
     ],
   };
 }

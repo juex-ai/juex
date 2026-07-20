@@ -55,6 +55,7 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
   assert.deepEqual(state.tokenUsage, { input_tokens: 10, output_tokens: 5 });
   assert.equal(state.contextUsage?.total_tokens, 15);
   assert.equal(state.messages[1].pending, false);
+  assert.equal(state.messages[1].created_at, "2026-06-15T00:00:01Z");
 
   state = apply(state, {
     id: "e3",
@@ -217,6 +218,7 @@ test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final re
 
   const reconciled = state.messages[1];
   assert.equal(reconciled.pending, false);
+  assert.equal(reconciled.created_at, "2026-06-15T00:00:04Z");
   assert.deepEqual(reconciled.blocks, [
     { type: "reasoning", text: "plan final" },
     { type: "text", text: "hello final" },

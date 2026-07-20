@@ -23,10 +23,6 @@ export function messageGroupCopyText(group: MessageGroup): string {
   return group.units
     .flatMap((unit) => {
       if (unit.kind === "text") return [unit.block.text];
-      if (unit.kind === "reasoning") {
-        if (unit.block.redacted) return [];
-        return [unit.block.text ?? unit.block.content ?? ""];
-      }
       return [];
     })
     .map((part) => part.trim())

@@ -64,6 +64,9 @@ export type Block = TextBlock | ImageBlock | ReasoningBlock | ToolUseBlock | Too
 
 export interface Message {
   id?: string;
+  // Read-model metadata projected by the Web API or live event stream.
+  // Persisted llm.Message values do not contain this field.
+  created_at?: string;
   role: Role;
   blocks?: Block[] | null;
   kind?: string;

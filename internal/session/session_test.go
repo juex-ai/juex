@@ -60,6 +60,27 @@ func TestValidIDRequiresCanonicalGeneratedShape(t *testing.T) {
 	}
 }
 
+func TestMessageCreatedAtParsesOnlyCanonicalMessageIDs(t *testing.T) {
+	got, ok := MessageCreatedAt("msg-20260718T065604-8f0582f4")
+	if !ok {
+		t.Fatal("MessageCreatedAt(valid) = false")
+	}
+	want := time.Date(2026, 7, 18, 6, 56, 4, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("MessageCreatedAt(valid) = %s, want %s", got, want)
+	}
+	for _, id := range []string{
+		"",
+		"m1",
+		"20260718T065604-8f0582f4",
+		"msg-20260718T065604-bad",
+	} {
+		if got, ok := MessageCreatedAt(id); ok {
+			t.Fatalf("MessageCreatedAt(%q) = %s, true", id, got)
+		}
+	}
+}
+
 func TestSession_AppendDoesNotMutateHistoryWhenPersistFails(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root)
