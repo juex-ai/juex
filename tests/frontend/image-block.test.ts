@@ -31,4 +31,5 @@ test("message images follow role alignment and consecutive images form a gallery
   assert.match(sessionSource, /function MessageImageGallery/);
   assert.match(sessionSource, /role === "user" \? "ml-auto" : "mr-auto"/);
   assert.match(sessionSource, /grid-cols-2/);
+  assert.match(sessionSource, /media\.push\(candidate\.block\.media \?\? null\)/);
 });

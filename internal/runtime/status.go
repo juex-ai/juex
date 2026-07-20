@@ -207,6 +207,7 @@ func (s *StatusStore) RecoverAfterRestart() {
 	s.snapshot.Turn.State = TurnLifecycleCancelled
 	s.snapshot.Turn.Streaming = false
 	s.snapshot.Turn.Error = statusErr
+	s.snapshot.Tools = []ToolCallStatus{}
 	s.snapshot.Session.State = SessionRuntimeFailed
 	s.snapshot.Session.PendingCount = 0
 	s.snapshot.LastError = statusErr

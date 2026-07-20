@@ -1188,11 +1188,11 @@ function MessageGroupView({
           }
           if (unit.kind === "image") {
             if (i > 0 && group.units[i - 1]?.kind === "image") return null;
-            const media: MediaRef[] = [];
+            const media: Array<MediaRef | null> = [];
             for (let cursor = i; cursor < group.units.length; cursor++) {
               const candidate = group.units[cursor];
               if (candidate.kind !== "image") break;
-              if (candidate.block.media) media.push(candidate.block.media);
+              media.push(candidate.block.media ?? null);
             }
             return (
               <MessageImageGallery
@@ -1227,7 +1227,7 @@ function MessageImageGallery({
   media,
   role,
 }: {
-  media: MediaRef[];
+  media: Array<MediaRef | null>;
   role: MessageGroup["role"];
 }) {
   if (media.length === 0) return null;
@@ -1241,7 +1241,7 @@ function MessageImageGallery({
     >
       {media.map((item, index) => (
         <ImageBlock
-          key={`${item.artifact_path ?? "image"}-${index}`}
+          key={`${item?.artifact_path ?? "image"}-${index}`}
           media={item}
           className={media.length > 1 ? "max-w-[16rem]" : undefined}
         />

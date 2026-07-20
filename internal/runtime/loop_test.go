@@ -2005,9 +2005,9 @@ func TestCompactDoesNotFallbackAfterContextCancellation(t *testing.T) {
 
 func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 	cases := []struct {
-		name             string
-		runner           *fakeHookRunner
-		wantCompactError bool
+		name              string
+		runner            HookRunner
+		wantQueuedContext string
 	}{
 		{
 			name: "error",
@@ -2015,7 +2015,6 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 				responses: map[hooks.EventName][]fakeHookResponse{hooks.EventPreCompact: {{}}},
 				errors:    map[hooks.EventName]error{hooks.EventPostCompact: errors.New("audit sink unavailable")},
 			},
-			wantCompactError: true,
 		},
 		{
 			name: "deny",
@@ -2025,6 +2024,21 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 					hooks.EventPostCompact: {{ExitCode: 2, Stdout: "audit failed"}},
 				},
 			},
+		},
+		{
+			name: "partial success before error",
+			runner: hookRunnerFunc(func(_ context.Context, req hooks.Request) ([]hooks.Result, error) {
+				if req.EventName != hooks.EventPostCompact {
+					return nil, nil
+				}
+				return []hooks.Result{{
+					Hook:      hooks.CommandHook{Name: "audit", Events: []hooks.EventName{req.EventName}},
+					EventName: req.EventName,
+					ExitCode:  0,
+					Stdout:    "retain this context",
+				}}, errors.New("later audit hook unavailable")
+			}),
+			wantQueuedContext: "retain this context",
 		},
 	}
 	for _, tc := range cases {
@@ -2065,8 +2079,19 @@ func TestCompactPostHookFailuresAreObservational(t *testing.T) {
 					sawCompleted = true
 				}
 			}
-			if sawErrored != tc.wantCompactError || sawCompleted == tc.wantCompactError {
-				t.Fatalf("events = %+v, want compact error=%v and mutually exclusive completed", eventTypes, tc.wantCompactError)
+			if sawErrored {
+				t.Fatalf("events = %+v, committed compaction must not emit compact error", eventTypes)
+			}
+			if !sawCompleted {
+				t.Fatalf("events = %+v, want completed after committed compaction", eventTypes)
+			}
+			queued := eng.pendingHookRuntimeContextSnapshot()
+			if tc.wantQueuedContext == "" {
+				if len(queued) != 0 {
+					t.Fatalf("queued context = %+v, want none", queued)
+				}
+			} else if len(queued) != 1 || !strings.Contains(queued[0].FirstText(), tc.wantQueuedContext) {
+				t.Fatalf("queued context = %+v, want %q", queued, tc.wantQueuedContext)
 			}
 		})
 	}
