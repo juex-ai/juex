@@ -108,6 +108,19 @@ test("composer feedback is announced and queued inputs stay bounded", () => {
   assert.match(queuedSource, /text-foreground group-open:hidden/);
 });
 
+test("blocked keyboard submissions preserve the composer draft", () => {
+  assert.match(
+    sessionSource,
+    /submitAction === "loading"[\s\S]*?throw new Error\("Loading session status"\)/,
+    "loading status must reject form submission so PromptInput does not clear the draft",
+  );
+  assert.match(
+    sessionSource,
+    /submitAction === "queue-full"[\s\S]*?throw new Error\(QUEUE_FULL_SUBMIT_HINT\)/,
+    "a full queue must reject form submission so PromptInput does not clear the draft",
+  );
+});
+
 test("deferred submit keeps follow-up text and attachment counts authoritative", () => {
   assert.match(sessionSource, /settleSubmittedComposerText\(current, submittedText\)/);
   assert.doesNotMatch(sessionSource, /setAttachmentCount\(0\)/);

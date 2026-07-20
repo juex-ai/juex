@@ -17,6 +17,9 @@ const stageHeaderSource = source(
 const stateBarSource = source(
   "../../frontend/src/components/fleet/AgentRuntimeStateBar.tsx",
 );
+const agentContextSource = source(
+  "../../frontend/src/components/fleet/FleetAgentContext.tsx",
+);
 const sessionSource = source("../../frontend/src/pages/Session.tsx");
 const sessionsSource = source("../../frontend/src/pages/Sessions.tsx");
 const historySource = source("../../frontend/src/pages/History.tsx");
@@ -171,8 +174,18 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
-    /statusStore\.status\(agent\.id, id\)/,
-    "the session must read the canonical per-session runtime snapshot",
+    /useAgentSessionStatus\(agent\?\.id, id\)/,
+    "the session must select its canonical per-session runtime snapshot",
+  );
+  assert.match(
+    agentContextSource,
+    /statusStore\.status\(agentID, sessionID\)/,
+    "the canonical session selector must read the shared status store",
+  );
+  assert.match(
+    agentContextSource,
+    /useSyncExternalStore\(/,
+    "the canonical session selector must subscribe to the shared status store",
   );
   assert.match(
     sessionSource,

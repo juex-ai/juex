@@ -335,7 +335,6 @@ func New(opts Options) (*App, error) {
 		journalEvents,
 	)
 	status.RecoverAfterRestart()
-	statusUnsubscribe = eventSink.AddProjection(status)
 
 	pb := &prompt.Builder{
 		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
@@ -425,6 +424,11 @@ func New(opts Options) (*App, error) {
 		debug:             opts.Debug,
 		logLevel:          opts.LogLevel,
 	}
+	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
+		status:       status,
+		completeTurn: a.CompleteAdmittedTurn,
+	})
+	a.statusUnsubscribe = statusUnsubscribe
 	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
 		_ = a.detachObservability()
 		closeSessionResources()

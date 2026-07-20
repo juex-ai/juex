@@ -43,7 +43,10 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
 import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
-import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
+import {
+  useAgentSessionStatus,
+  useFleetAgent,
+} from "@/components/fleet/FleetAgentContext";
 import { AssistantMarkdown } from "@/components/AssistantMarkdown";
 import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
@@ -54,7 +57,6 @@ import {
   type ToolDisplayUnit,
 } from "@/lib/display-units";
 import {
-  assistantWorkTailActive,
   assistantWorkItems,
   assistantWorkTitle,
   transcriptItemModelLabels,
@@ -180,6 +182,7 @@ export function Session() {
   const location = useLocation();
   const navigate = useNavigate();
   const { agent, agentsLoaded, statusStore } = useFleetAgent();
+  const runtimeStatus = useAgentSessionStatus(agent?.id, id);
   const [readState, setReadState] = useState<SessionReadState>(() =>
     createSessionReadState(),
   );
@@ -355,15 +358,19 @@ export function Session() {
     [data?.messages, projection.messages],
   );
   const groups = useMemo(() => messagesToGroups(messages), [messages]);
-  const runtimeStatus =
-    agent && statusStore
-      ? statusStore.status(agent.id, id)
-      : undefined;
-  const tailActive = assistantWorkTailActive({
-    runtimeTurn: runtimeStatus?.turn,
-  });
-  const transcriptItems = assistantWorkItems(groups, { tailActive });
-  const modelLabels = transcriptItemModelLabels(transcriptItems);
+  const runtimeTurnState = runtimeStatus?.turn?.state;
+  const transcriptItems = useMemo(
+    () =>
+      assistantWorkItems(groups, {
+        tailActive:
+          runtimeTurnState === "admitted" || runtimeTurnState === "active",
+      }),
+    [groups, runtimeTurnState],
+  );
+  const modelLabels = useMemo(
+    () => transcriptItemModelLabels(transcriptItems),
+    [transcriptItems],
+  );
 
   if (!data) {
     if (loadError) {
@@ -463,11 +470,10 @@ export function Session() {
                   onError={(err) => showComposerHint(err.message)}
                   onSubmit={async (msg) => {
                     if (submitAction === "loading") {
-                      return;
+                      throw new Error("Loading session status");
                     }
                     if (submitAction === "queue-full") {
-                      showComposerHint(QUEUE_FULL_SUBMIT_HINT);
-                      return;
+                      throw new Error(QUEUE_FULL_SUBMIT_HINT);
                     }
                     const submittedText = msg.text ?? "";
                     const text = submittedText.trim();

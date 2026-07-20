@@ -22,6 +22,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
@@ -1259,6 +1260,109 @@ func TestPostTurn_NewSlashIsCoherentWithConcurrentSessionReaders(t *testing.T) {
 	}
 	for err := range errs {
 		t.Error(err)
+	}
+}
+
+func TestCanonicalTerminalStatusPublishesAfterAdmissionRelease(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+
+	terminalPublished := make(chan struct{})
+	releaseTerminal := make(chan struct{})
+	var terminalOnce sync.Once
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseTerminal) })
+	}
+	defer release()
+	unsubscribe := active.app.Bus.Subscribe("turn.completed", func(events.Event) {
+		terminalOnce.Do(func() { close(terminalPublished) })
+		<-releaseTerminal
+	})
+	defer unsubscribe()
+
+	first, err := http.Post(
+		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"first"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstBody, readErr := io.ReadAll(first.Body)
+	first.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("first turn status = %d, want %d; body=%s", first.StatusCode, http.StatusAccepted, firstBody)
+	}
+
+	select {
+	case <-terminalPublished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal status was not published")
+	}
+
+	statusResp, err := http.Get(ts.URL + "/api/sessions/" + sessionID + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status statusapi.Snapshot
+	decodeErr := json.NewDecoder(statusResp.Body).Decode(&status)
+	statusResp.Body.Close()
+	if statusResp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("status response = %d, decode=%v", statusResp.StatusCode, decodeErr)
+	}
+	if status.Turn == nil || status.Turn.State != statusapi.TurnCompleted {
+		t.Fatalf("canonical status = %+v, want completed turn", status)
+	}
+
+	type responseResult struct {
+		status int
+		body   []byte
+		err    error
+	}
+	secondResult := make(chan responseResult, 1)
+	go func() {
+		second, err := http.Post(
+			ts.URL+"/api/sessions/"+sessionID+"/turns",
+			"application/json",
+			strings.NewReader(`{"prompt":"/new"}`),
+		)
+		if err != nil {
+			secondResult <- responseResult{err: err}
+			return
+		}
+		body, readErr := io.ReadAll(second.Body)
+		second.Body.Close()
+		secondResult <- responseResult{status: second.StatusCode, body: body, err: readErr}
+	}()
+
+	select {
+	case result := <-secondResult:
+		release()
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		t.Fatalf("new-session request completed before admission release: status=%d body=%s", result.status, result.body)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	result := <-secondResult
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.status != http.StatusOK {
+		t.Fatalf("new-session status = %d, want %d; body=%s", result.status, http.StatusOK, result.body)
 	}
 }
 
