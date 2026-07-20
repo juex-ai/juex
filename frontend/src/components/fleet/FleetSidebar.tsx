@@ -27,6 +27,9 @@ import {
 import { cn } from "@/lib/utils";
 import type { AgentStatus } from "@/types";
 
+const sidebarToggleClass =
+  "group relative grid size-10 shrink-0 place-items-center rounded-md text-primary outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/35";
+
 type FleetSidebarProps = {
   agents: AgentStatus[];
   selectedAgentID: string;
@@ -51,12 +54,6 @@ export function FleetSidebar({
   onToggleLifecycle,
 }: FleetSidebarProps) {
   const compact = collapsed && !mobile;
-  const workingCount = agents.filter(
-    (agent) => agentVisualState(agent) === "working",
-  ).length;
-  const onlineCount = agents.filter(
-    (agent) => agent.runtime_health === "healthy",
-  ).length;
   const version =
     agents.find((agent) => agent.binary_version)?.binary_version ?? "local";
 
@@ -70,16 +67,17 @@ export function FleetSidebar({
       aria-label="Fleet agents"
       data-collapsed={compact ? "true" : "false"}
     >
-      <div className="flex h-[var(--juex-header-height)] shrink-0 items-center border-b px-3">
+      <div className="flex h-[var(--juex-header-height)] shrink-0 items-center px-3">
         {compact ? (
           <TooltipProvider delayDuration={200}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  className="group relative grid size-10 place-items-center rounded-md text-primary outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/35"
+                  className={sidebarToggleClass}
                   onClick={onExpand}
                   aria-label="Expand fleet sidebar"
+                  data-testid="fleet-sidebar-toggle"
                 >
                   <LogoMark className="size-6 transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0" />
                   <PanelLeftOpen className="absolute size-5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" />
@@ -99,69 +97,52 @@ export function FleetSidebar({
               <span className="font-serif text-2xl italic leading-tight">juex</span>
             </Link>
             {!mobile ? (
-              <Button
+              <button
                 type="button"
-                variant="ghost"
-                size="icon"
+                className={sidebarToggleClass}
                 onClick={onCollapse}
                 aria-label="Collapse fleet sidebar"
                 title="Collapse fleet sidebar"
+                data-testid="fleet-sidebar-toggle"
               >
-                <PanelLeftClose className="size-4" />
-              </Button>
+                <PanelLeftClose className="size-5" />
+              </button>
             ) : null}
           </>
         )}
       </div>
 
       <div
-        className={cn(
-          "shrink-0 border-b",
-          compact ? "px-2 py-2" : "px-3 py-3",
-        )}
+        data-testid="fleet-add-agent-region"
+        className="h-14 shrink-0 px-2 py-2"
       >
-        {compact ? (
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  asChild
-                  variant="ghost"
-                  size="icon"
-                  className="w-full text-primary"
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                asChild
+                variant="outline"
+                className="h-10 w-full"
+                data-testid="fleet-add-agent"
+              >
+                <Link
+                  to="/settings?add=1"
+                  className={cn(
+                    compact ? "justify-center px-0" : "justify-start px-3",
+                  )}
+                  onClick={onNavigate}
+                  aria-label="Add agent"
                 >
-                  <Link
-                    to="/settings?add=1"
-                    onClick={onNavigate}
-                    aria-label="Add agent"
-                  >
-                    <Plus className="size-4" />
-                  </Link>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">Add agent</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        ) : (
-          <>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-xs font-semibold uppercase text-muted-foreground">
-                  Fleet
-                </div>
-                <div className="truncate text-[11px] text-muted-foreground">
-                  {workingCount} working · {onlineCount} online
-                </div>
-              </div>
-              <Button asChild size="sm" className="shrink-0">
-                <Link to="/settings?add=1" onClick={onNavigate}>
-                  <Plus className="size-3.5" />
-                  Add
+                  <Plus className="size-4" />
+                  {!compact ? <span>Add agent</span> : null}
                 </Link>
               </Button>
-            </div>
-          </>
-        )}
+            </TooltipTrigger>
+            {compact ? (
+              <TooltipContent side="right">Add agent</TooltipContent>
+            ) : null}
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto py-2" aria-label="Agents">
@@ -256,12 +237,7 @@ function AgentRailRow({
         aria-label={`Open ${name}, ${agentStatusText(agent)}`}
         title={compact ? `${name}: ${agentStatusText(agent)}` : undefined}
       >
-        <AgentAvatar
-          agent={agent}
-          state={state}
-          compact={compact}
-          selected={selected}
-        />
+        <AgentAvatar agent={agent} state={state} compact={compact} />
         {!compact ? (
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-foreground">
@@ -355,22 +331,17 @@ function AgentAvatar({
   agent,
   state,
   compact,
-  selected,
 }: {
   agent: AgentStatus;
   state: ReturnType<typeof agentVisualState>;
   compact: boolean;
-  selected: boolean;
 }) {
   const name = agent.name || agent.id;
   const initial = name.trim().charAt(0).toUpperCase() || "J";
   return (
     <span
       className={cn(
-        "relative grid size-8 shrink-0 place-items-center rounded-md font-serif font-semibold",
-        selected
-          ? "bg-transparent text-sidebar-accent-foreground"
-          : "bg-muted text-primary",
+        "relative grid size-8 shrink-0 place-items-center rounded-md bg-juex-gold-100 font-serif font-semibold text-juex-gold-900 dark:bg-juex-gold-400/10 dark:text-juex-gold-300",
         compact ? "text-sm" : "text-xs",
       )}
       aria-hidden="true"

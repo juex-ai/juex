@@ -87,6 +87,33 @@ test("fleet rail exposes compact status and exactly two hover actions", () => {
   );
 });
 
+test("fleet rail keeps its header controls lightweight and vertically stable", () => {
+  assert.doesNotMatch(sidebarSource, /workingCount|onlineCount/);
+  assert.doesNotMatch(sidebarSource, />\s*Fleet\s*</);
+  assert.doesNotMatch(sidebarSource, /\{workingCount\} working/);
+  assert.doesNotMatch(sidebarSource, /border-b/);
+  assert.match(sidebarSource, /const sidebarToggleClass =[\s\S]*size-10/);
+  assert.equal(
+    sidebarSource.match(/className=\{sidebarToggleClass\}/g)?.length,
+    2,
+    "expanded and collapsed toggles must use the same visual contract",
+  );
+  assert.match(sidebarSource, /<PanelLeftOpen className="absolute size-5/);
+  assert.match(sidebarSource, /<PanelLeftClose className="size-5"/);
+  assert.match(
+    sidebarSource,
+    /data-testid="fleet-add-agent-region"[\s\S]*className="h-14 shrink-0 px-2 py-2"/,
+  );
+  assert.match(
+    sidebarSource,
+    /variant="outline"[\s\S]*data-testid="fleet-add-agent"/,
+  );
+  assert.match(sidebarSource, /className="h-10 w-full"/);
+  assert.match(sidebarSource, />Add agent</);
+  assert.match(sidebarSource, /bg-juex-gold-100/);
+  assert.match(sidebarSource, /dark:bg-juex-gold-400\/10/);
+});
+
 test("stage remounts existing pages through tabs and gates offline composers", () => {
   for (const label of ["Chat", "Runtime", "Observables", "Logs", "Config"]) {
     assert.match(stageHeaderSource, new RegExp(`label: "${label}"`));

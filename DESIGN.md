@@ -215,13 +215,18 @@ narrower screens. Session history is opened from the stage header as
 
 - The fleet sidebar is 268px wide and collapses to a stable 64px avatar rail.
   The collapsed brand mark becomes the expand control on hover without moving
-  other controls. Below 760px the sidebar becomes an overlay drawer opened from
-  the stage header.
+  other controls. Expand and collapse controls share the same footprint and
+  visual treatment. The Add agent region below the brand header keeps a fixed
+  height in both modes and contains a full-width outline action without fleet
+  summary copy or separators, so the agent list does not move vertically.
+  Below 760px the sidebar becomes an overlay drawer opened from the stage
+  header.
 - Agent rows show stopped, idle, working, and failed states. Selection,
   hover, and rest states are distinguished by background color alone; selected
-  rows do not add a redundant accent rule around the avatar. Expanded rows
-  reveal exactly one lifecycle toggle and one Runtime shortcut on hover.
-  Pending input counts stay visible as compact gold badges.
+  rows do not add a redundant accent rule around the avatar. Avatars use a pale
+  gold surface in both expanded and collapsed modes. Expanded rows reveal
+  exactly one lifecycle toggle and one Runtime shortcut on hover. Pending input
+  counts stay visible as compact gold badges.
 - Agent selection restores the last valid agent from local storage, then falls
   back to the first registered agent. Empty fleets show an Add agent action and
   the CLI registration hint.
