@@ -117,10 +117,11 @@ test("tab routing remounts existing selected-agent pages", () => {
   );
 });
 
-test("single lifecycle toggle stops healthy agents and starts other states", () => {
+test("single lifecycle toggle starts stopped agents and stops every recorded runtime", () => {
   assert.equal(nextAgentLifecycleAction(agent("idle", "healthy")), "stop");
   assert.equal(nextAgentLifecycleAction(agent("stopped", "stopped")), "start");
-  assert.equal(nextAgentLifecycleAction(agent("failed", "unhealthy")), "start");
+  assert.equal(nextAgentLifecycleAction(agent("failed", "unhealthy")), "stop");
+  assert.equal(nextAgentLifecycleAction(agent("ambiguous", "ambiguous")), "stop");
 });
 
 test("restart continuation failures produce an actionable fleet warning", () => {
