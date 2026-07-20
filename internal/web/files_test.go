@@ -390,6 +390,31 @@ func TestFilesContentReturnsImageMetadata(t *testing.T) {
 	}
 }
 
+func TestFilesContentReturnsBMPMetadata(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.bmp"), tinyBMP)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files/content?path=screenshots%2Fpreview.bmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	var got FileContent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "image" || got.MediaType != "image/bmp" || got.Size != int64(len(tinyBMP)) {
+		t.Fatalf("content metadata = %+v", got)
+	}
+}
+
 func TestFilesContentDoesNotTrustImageExtension(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteFile(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "not-an-image.png"), "plain text")
@@ -650,6 +675,7 @@ func TestFilesContentTruncatesLargeFiles(t *testing.T) {
 }
 
 var tinyPNG = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x00}
+var tinyBMP = []byte{'B', 'M', 0x00, 0x00, 0x00, 0x00}
 
 func mustWriteFile(t *testing.T, path, body string) {
 	t.Helper()

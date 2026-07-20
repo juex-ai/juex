@@ -89,28 +89,29 @@ function useResolvedLocalImages(targetKey: string): ResolvedLocalImages {
   });
 
   useEffect(() => {
-    if (targets.length === 0) return;
-
     const controller = new AbortController();
     let active = true;
-    Promise.all(
-      targets.map(async (path) => {
+    setResolved({ targetKey, mediaByPath: emptyMediaByPath });
+
+    for (const path of targets) {
+      void (async () => {
         try {
           const file = await getFileContent(path, controller.signal);
           const media = mediaRefFromFileContent(path, file);
-          return media ? ([path, media] as const) : null;
+          if (!active || !media) return;
+          setResolved((current) => {
+            const mediaByPath =
+              current.targetKey === targetKey
+                ? new Map(current.mediaByPath)
+                : new Map<string, MediaRef>();
+            mediaByPath.set(path, media);
+            return { targetKey, mediaByPath };
+          });
         } catch {
-          return null;
+          // Missing, rejected, and non-image local links remain ordinary links.
         }
-      }),
-    ).then((entries) => {
-      if (!active) return;
-      const mediaByPath = new Map<string, MediaRef>();
-      for (const entry of entries) {
-        if (entry) mediaByPath.set(entry[0], entry[1]);
-      }
-      setResolved({ targetKey, mediaByPath });
-    });
+      })();
+    }
 
     return () => {
       active = false;
@@ -122,6 +123,7 @@ function useResolvedLocalImages(targetKey: string): ResolvedLocalImages {
 }
 
 type AssistantMarkdownImageProps = ComponentProps<"img"> & {
+  "data-juex-image-block"?: boolean | string;
   mediaByPath: ReadonlyMap<string, MediaRef>;
   node?: unknown;
 };
@@ -129,6 +131,7 @@ type AssistantMarkdownImageProps = ComponentProps<"img"> & {
 function AssistantMarkdownImage({
   alt,
   className,
+  "data-juex-image-block": imageBlock,
   loading,
   mediaByPath,
   node: _node,
@@ -136,7 +139,7 @@ function AssistantMarkdownImage({
   ...props
 }: AssistantMarkdownImageProps) {
   const path = markdownMediaPath(src);
-  if (path) {
+  if (path && imageBlock) {
     return (
       <ImageBlock
         alt={alt}

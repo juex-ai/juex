@@ -27,6 +27,7 @@ test("localMarkdownLinkTargets extracts ordinary local links without images", ()
     "![explicit](screenshots/explicit.png)",
     "[external](https://example.com/image.png)",
     "[encoded](screenshots/dream%20pink.png)",
+    "See [inline preview](screenshots/inline.png) here.",
   ].join("\n\n");
 
   assert.deepEqual(localMarkdownLinkTargets(markdown), [
@@ -63,7 +64,7 @@ test("mediaRefFromFileContent accepts only backend-confirmed images", () => {
   );
 });
 
-test("rewriteLocalMarkdownImages converts only confirmed local links", () => {
+test("rewriteLocalMarkdownImages converts only standalone confirmed links", () => {
   const tree = {
     type: "root",
     children: [
@@ -80,7 +81,30 @@ test("rewriteLocalMarkdownImages converts only confirmed local links", () => {
             },
             children: [{ type: "text", value: "Dream pink" }],
           },
-          { type: "text", value: " and " },
+        ],
+      },
+      {
+        type: "element",
+        tagName: "p",
+        properties: {},
+        children: [
+          { type: "text", value: "See " },
+          {
+            type: "element",
+            tagName: "a",
+            properties: {
+              href: "screenshots/dream.png",
+            },
+            children: [{ type: "text", value: "inline preview" }],
+          },
+          { type: "text", value: " here." },
+        ],
+      },
+      {
+        type: "element",
+        tagName: "p",
+        properties: {},
+        children: [
           {
             type: "element",
             tagName: "a",
@@ -99,16 +123,32 @@ test("rewriteLocalMarkdownImages converts only confirmed local links", () => {
     mediaURL: (path) => `/api/media?path=${encodeURIComponent(path)}`,
   })(tree);
 
-  assert.deepEqual(tree.children[0]?.children?.[0], {
+  assert.deepEqual(tree.children[0], {
     type: "element",
-    tagName: "img",
-    properties: {
-      src: "/api/media?path=screenshots%2Fdream.png",
-      alt: "Dream pink",
-    },
-    children: [],
+    tagName: "div",
+    properties: {},
+    children: [
+      {
+        type: "element",
+        tagName: "img",
+        properties: {
+          src: "/api/media?path=screenshots%2Fdream.png",
+          alt: "Dream pink",
+          "data-juex-image-block": true,
+        },
+        children: [],
+      },
+    ],
   });
-  assert.deepEqual(tree.children[0]?.children?.[2], {
+  assert.deepEqual(tree.children[1]?.children?.[1], {
+    type: "element",
+    tagName: "a",
+    properties: {
+      href: "screenshots/dream.png",
+    },
+    children: [{ type: "text", value: "inline preview" }],
+  });
+  assert.deepEqual(tree.children[2]?.children?.[0], {
     type: "element",
     tagName: "a",
     properties: {
@@ -136,6 +176,31 @@ test("rewriteLocalMarkdownImages rewrites explicit local images before URL harde
             },
             children: [],
           },
+        ],
+      },
+      {
+        type: "element",
+        tagName: "p",
+        properties: {},
+        children: [
+          { type: "text", value: "See " },
+          {
+            type: "element",
+            tagName: "img",
+            properties: {
+              src: "screenshots/inline.png",
+              alt: "Inline",
+            },
+            children: [],
+          },
+          { type: "text", value: " here." },
+        ],
+      },
+      {
+        type: "element",
+        tagName: "p",
+        properties: {},
+        children: [
           {
             type: "element",
             tagName: "img",
@@ -154,12 +219,25 @@ test("rewriteLocalMarkdownImages rewrites explicit local images before URL harde
     mediaURL: (path) => `/api/media?path=${encodeURIComponent(path)}`,
   })(tree);
 
+  assert.equal(tree.children[0]?.tagName, "div");
   assert.equal(
     tree.children[0]?.children?.[0]?.properties?.src,
     "/api/media?path=screenshots%2Fexplicit.png",
   );
   assert.equal(
-    tree.children[0]?.children?.[1]?.properties?.src,
+    tree.children[0]?.children?.[0]?.properties?.["data-juex-image-block"],
+    true,
+  );
+  assert.equal(
+    tree.children[1]?.children?.[1]?.properties?.src,
+    "/api/media?path=screenshots%2Finline.png",
+  );
+  assert.equal(
+    tree.children[1]?.children?.[1]?.properties?.["data-juex-image-block"],
+    undefined,
+  );
+  assert.equal(
+    tree.children[2]?.children?.[0]?.properties?.src,
     "https://example.com/external.png",
   );
 });

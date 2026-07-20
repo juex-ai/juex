@@ -40,8 +40,12 @@ export function localMarkdownLinkTargets(markdown: string): string[] {
   const seen = new Set<string>();
   try {
     marked.walkTokens(marked.lexer(markdown), (token) => {
-      if (token.type !== "link") return;
-      const path = localMarkdownPath(token.href);
+      if (token.type !== "paragraph") return;
+      const inlineTokens = (token.tokens ?? []).filter(
+        (item) => item.type !== "space",
+      );
+      if (inlineTokens.length !== 1 || inlineTokens[0]?.type !== "link") return;
+      const path = localMarkdownPath(inlineTokens[0].href);
       if (!path || seen.has(path)) return;
       seen.add(path);
       targets.push(path);
@@ -84,29 +88,61 @@ function rewriteLocalImages(
   imagePaths: ReadonlySet<string>,
   mediaURL: (path: string) => string,
 ) {
+  if (node.type === "element" && node.tagName === "p") {
+    const child = standaloneChild(node);
+    if (
+      child?.tagName === "a" &&
+      child.properties &&
+      rewriteConfirmedImageLink(child, imagePaths, mediaURL)
+    ) {
+      child.properties["data-juex-image-block"] = true;
+      node.tagName = "div";
+    } else if (child?.tagName === "img" && child.properties) {
+      const path = localMarkdownPath(stringProperty(child.properties.src));
+      if (path) {
+        child.properties.src = mediaURL(path);
+        child.properties["data-juex-image-block"] = true;
+        node.tagName = "div";
+      }
+    }
+  }
+
   if (node.type === "element" && node.properties) {
     if (node.tagName === "img") {
       const path = stringProperty(node.properties.src);
       const localPath = localMarkdownPath(path);
       if (localPath) node.properties.src = mediaURL(localPath);
     }
-    if (node.tagName === "a") {
-      const path = localMarkdownPath(stringProperty(node.properties.href));
-      if (path && imagePaths.has(path)) {
-        const title = node.properties.title;
-        node.tagName = "img";
-        node.properties = {
-          src: mediaURL(path),
-          alt: htmlNodeText(node),
-          ...(typeof title === "string" ? { title } : {}),
-        };
-        node.children = [];
-      }
-    }
   }
   for (const child of node.children ?? []) {
     rewriteLocalImages(child, imagePaths, mediaURL);
   }
+}
+
+function rewriteConfirmedImageLink(
+  node: HTMLNode,
+  imagePaths: ReadonlySet<string>,
+  mediaURL: (path: string) => string,
+): boolean {
+  const path = localMarkdownPath(stringProperty(node.properties?.href));
+  if (!path || !imagePaths.has(path)) return false;
+
+  const title = node.properties?.title;
+  node.tagName = "img";
+  node.properties = {
+    src: mediaURL(path),
+    alt: htmlNodeText(node),
+    ...(typeof title === "string" ? { title } : {}),
+  };
+  node.children = [];
+  return true;
+}
+
+function standaloneChild(node: HTMLNode): HTMLNode | null {
+  const children = (node.children ?? []).filter(
+    (child) => child.type !== "text" || Boolean(child.value?.trim()),
+  );
+  return children.length === 1 ? children[0] : null;
 }
 
 function htmlNodeText(node: HTMLNode): string {
