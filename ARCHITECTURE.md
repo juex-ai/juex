@@ -1158,7 +1158,12 @@ removal, lifecycle, bounded logs, and workspace config routes delegate to
 `internal/fleet`; HTTP handlers do not inspect registry or process state
 directly. Directory browsing rejects symlink targets and children, hides dot
 directories by default, and uses agentstate's marker probe without recursively
-walking the filesystem.
+walking the filesystem. The same loopback-only browser endpoint creates one
+empty child directory from a validated absolute, non-symlink parent and a
+single-component name; conflicts remain explicit and no recursive creation is
+performed. The listener is trusted to mutate its host filesystem: loopback is
+the default boundary, while operators who enable `--unsafe-bind-any` explicitly
+extend that trust to remote clients.
 
 The fleet roster enriches healthy agents with the selected runtime's
 `GET /api/activity` presentation read model. Activity is fetched concurrently
@@ -1282,6 +1287,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/api/agents` | Fleet roster JSON with best-effort live activity for healthy agents |
 | POST | `/api/agents` | Register an absolute workspace, optionally set metadata and start |
 | GET | `/api/fs/dirs?path=&show_hidden=` | Browse one level of server-side directories |
+| POST | `/api/fs/dirs` | Create one empty child directory under a browsed absolute parent |
 | POST | `/api/agents/<id>/start\|stop\|restart` | Agent lifecycle action |
 | POST | `/api/agents/<id>/enable\|disable` | Persist reversible enabled state; disable also stops |
 | DELETE | `/api/agents/<id>` | Confirm, stop, and intentionally remove registered agent state |

@@ -1090,6 +1090,11 @@ export interface DirectoryEntry {
   registered: boolean;
 }
 
+export interface CreateDirectoryRequest {
+  parent: string;
+  name: string;
+}
+
 export interface DirectoryListing {
   path: string;
   parent: string;

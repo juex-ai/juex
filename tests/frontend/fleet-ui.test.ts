@@ -200,6 +200,7 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(fleetSource, /Edit config/);
   for (const operation of [
     "addAgent",
+    "createDirectory",
     "listDirectories",
     "setAgentEnabled",
     "removeAgent",
@@ -209,6 +210,25 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   }
   assert.match(fleetSource, /Add agent/);
   assert.match(fleetSource, /Show hidden/);
+  assert.match(fleetSource, /Create directory/);
+  assert.match(fleetSource, /directoryCreateKeyAction/);
+  assert.match(fleetSource, /directoryCreatingRef\.current/);
+  assert.match(fleetSource, /shouldApplyDirectoryCreateResult/);
+  assert.match(fleetSource, /disabled=\{directoryNavigationLocked\}/);
+  assert.match(fleetSource, /\[scrollbar-width:none\]/);
+  assert.match(fleetSource, /revealScrollableTail\(breadcrumbRef\.current\)/);
+  assert.match(
+    fleetSource,
+    /focus-visible:ring-0 focus-visible:ring-offset-0/,
+    "dialog text inputs should retain their focus border without an outer ring",
+  );
+  assert.match(
+    fleetSource,
+    /\[&_\[data-slot=dialog-footer\]\]:border-0/,
+    "the Add agent footer should not add a separator below its fields",
+  );
+  assert.match(fleetSource, /aria-describedby=/);
+  assert.match(fleetSource, /role="alert"/);
   assert.match(fleetSource, /sm:items-end/);
   assert.match(fleetSource, /data-selected=\{selected \? "true" : "false"\}/);
   assert.match(fleetSource, /aria-pressed=\{selected\}/);

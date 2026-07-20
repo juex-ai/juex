@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
@@ -20,6 +20,7 @@ import {
 
 import {
   addAgent,
+  createDirectory,
   listAgents,
   listDirectories,
   removeAgent,
@@ -45,6 +46,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  directoryCreateKeyAction,
+  mergeCreatedDirectory,
+  revealScrollableTail,
+  shouldApplyDirectoryCreateResult,
+  validateNewDirectoryName,
+  workspacePathUpdate,
+} from "@/lib/fleet-directories";
 import { agentPagePath } from "@/lib/fleet-routes";
 import { cn } from "@/lib/utils";
 import type {
@@ -434,8 +443,34 @@ function AddAgentDialog({
   const [showHidden, setShowHidden] = useState(false);
   const [listing, setListing] = useState<DirectoryListing | null>(null);
   const [browsing, setBrowsing] = useState(false);
+  const [directoryDraftOpen, setDirectoryDraftOpen] = useState(false);
+  const [directoryName, setDirectoryName] = useState("");
+  const [directoryCreating, setDirectoryCreating] = useState(false);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const workspaceInputRef = useRef<HTMLInputElement>(null);
+  const breadcrumbRef = useRef<HTMLDivElement>(null);
+  const directoryInputRef = useRef<HTMLInputElement>(null);
+  const createDirectoryButtonRef = useRef<HTMLButtonElement>(null);
+  const createGenerationRef = useRef(0);
+  const directoryCreatingRef = useRef(false);
+  const dialogOpenRef = useRef(open);
+  const draftOpenRef = useRef(directoryDraftOpen);
+  const listingRef = useRef(listing);
+
+  const setWorkspacePath = useCallback(
+    (path: string, source: "browser" | "manual") => {
+      const update = workspacePathUpdate(path, source);
+      setWorkspace(update.path);
+      if (update.revealTail) {
+        window.requestAnimationFrame(() =>
+          revealScrollableTail(workspaceInputRef.current),
+        );
+      }
+    },
+    [],
+  );
 
   const browse = useCallback(
     async (path: string | undefined, hidden: boolean) => {
@@ -444,7 +479,8 @@ function AddAgentDialog({
       try {
         const next = await listDirectories(path, hidden);
         setListing(next);
-        setWorkspace(next.path);
+        listingRef.current = next;
+        setWorkspacePath(next.path, "browser");
       } catch (cause) {
         setError(
           cause instanceof Error ? cause.message : "Failed to browse directories.",
@@ -453,10 +489,18 @@ function AddAgentDialog({
         setBrowsing(false);
       }
     },
-    [],
+    [setWorkspacePath],
   );
 
   useEffect(() => {
+    dialogOpenRef.current = open;
+    createGenerationRef.current += 1;
+    draftOpenRef.current = false;
+    setDirectoryDraftOpen(false);
+    setDirectoryName("");
+    directoryCreatingRef.current = false;
+    setDirectoryCreating(false);
+    setDirectoryError(null);
     if (!open) return;
     setWorkspace("");
     setName("");
@@ -464,9 +508,118 @@ function AddAgentDialog({
     setStartNow(false);
     setShowHidden(false);
     setListing(null);
+    listingRef.current = null;
     setError(null);
     void browse(undefined, false);
   }, [open, browse]);
+
+  useEffect(() => {
+    if (!listing?.path) return;
+    window.requestAnimationFrame(() =>
+      revealScrollableTail(breadcrumbRef.current),
+    );
+  }, [listing?.path]);
+
+  function invalidateDirectoryCreate(returnFocus = false) {
+    createGenerationRef.current += 1;
+    draftOpenRef.current = false;
+    setDirectoryDraftOpen(false);
+    setDirectoryName("");
+    directoryCreatingRef.current = false;
+    setDirectoryCreating(false);
+    setDirectoryError(null);
+    if (returnFocus) {
+      window.requestAnimationFrame(() =>
+        createDirectoryButtonRef.current?.focus(),
+      );
+    }
+  }
+
+  function handleOpenChange(nextOpen: boolean) {
+    dialogOpenRef.current = nextOpen;
+    if (!nextOpen) invalidateDirectoryCreate();
+    onOpenChange(nextOpen);
+  }
+
+  function beginDirectoryCreate() {
+    if (!listing) return;
+    createGenerationRef.current += 1;
+    draftOpenRef.current = true;
+    setDirectoryDraftOpen(true);
+    setDirectoryName("");
+    directoryCreatingRef.current = false;
+    setDirectoryCreating(false);
+    setDirectoryError(null);
+    window.requestAnimationFrame(() => directoryInputRef.current?.focus());
+  }
+
+  async function submitDirectoryCreate() {
+    if (!listing || directoryCreatingRef.current) return;
+    const validation = validateNewDirectoryName(
+      listing,
+      directoryName,
+      showHidden,
+    );
+    if (validation.error) {
+      setDirectoryError(validation.error);
+      return;
+    }
+
+    const capturedParent = listing.path;
+    const requestGeneration = createGenerationRef.current + 1;
+    createGenerationRef.current = requestGeneration;
+    directoryCreatingRef.current = true;
+    setDirectoryCreating(true);
+    setDirectoryError(null);
+
+    const resultStillApplies = () =>
+      shouldApplyDirectoryCreateResult({
+        requestGeneration,
+        currentGeneration: createGenerationRef.current,
+        capturedParent,
+        currentParent: listingRef.current?.path,
+        dialogOpen: dialogOpenRef.current,
+        draftOpen: draftOpenRef.current,
+      });
+
+    try {
+      const created = await createDirectory({
+        parent: capturedParent,
+        name: validation.name,
+      });
+      if (!resultStillApplies()) return;
+
+      const currentListing = listingRef.current;
+      if (currentListing) {
+        const nextListing = mergeCreatedDirectory(
+          currentListing,
+          capturedParent,
+          created,
+        );
+        listingRef.current = nextListing;
+        setListing(nextListing);
+      }
+      setWorkspacePath(created.path, "browser");
+      draftOpenRef.current = false;
+      directoryCreatingRef.current = false;
+      setDirectoryDraftOpen(false);
+      setDirectoryName("");
+      setDirectoryCreating(false);
+      setDirectoryError(null);
+    } catch (cause) {
+      if (!resultStillApplies()) return;
+      setDirectoryError(
+        cause instanceof Error
+          ? cause.message
+          : "Failed to create directory.",
+      );
+    } finally {
+      if (resultStillApplies()) {
+        directoryCreatingRef.current = false;
+        setDirectoryCreating(false);
+      }
+    }
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -480,7 +633,7 @@ function AddAgentDialog({
         start: startNow,
       });
       onAdded(result.agent);
-      onOpenChange(false);
+      handleOpenChange(false);
     } catch (cause) {
       await onPartialFailure();
       setError(cause instanceof Error ? cause.message : "Failed to add agent.");
@@ -489,17 +642,19 @@ function AddAgentDialog({
     }
   }
 
+  const directoryNavigationLocked = directoryDraftOpen || directoryCreating;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="flex max-h-[calc(100svh-2rem)] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Add agent</DialogTitle>
           <DialogDescription>
-            Register an existing workspace from this machine.
+            Choose or create a workspace on this machine.
           </DialogDescription>
         </DialogHeader>
         <form
-          className="flex min-h-0 flex-1 flex-col [&_[data-slot=dialog-footer]]:mx-0 [&_[data-slot=dialog-footer]]:mb-0 [&_[data-slot=dialog-footer]]:rounded-none [&_[data-slot=dialog-footer]]:bg-transparent [&_[data-slot=dialog-footer]]:px-0 [&_[data-slot=dialog-footer]]:pb-0 [&_[data-slot=dialog-footer]]:pt-4"
+          className="flex min-h-0 flex-1 flex-col [&_[data-slot=dialog-footer]]:mx-0 [&_[data-slot=dialog-footer]]:mb-0 [&_[data-slot=dialog-footer]]:rounded-none [&_[data-slot=dialog-footer]]:border-0 [&_[data-slot=dialog-footer]]:bg-transparent [&_[data-slot=dialog-footer]]:px-0 [&_[data-slot=dialog-footer]]:pb-0 [&_[data-slot=dialog-footer]]:pt-4"
           onSubmit={(event) => void submit(event)}
         >
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -513,10 +668,13 @@ function AddAgentDialog({
                 </label>
                 <div className="flex gap-2">
                   <Input
+                    ref={workspaceInputRef}
                     id="agent-workspace"
-                    className="font-mono text-xs"
+                    className="font-mono text-xs focus-visible:ring-0 focus-visible:ring-offset-0"
                     value={workspace}
-                    onChange={(event) => setWorkspace(event.target.value)}
+                    onChange={(event) =>
+                      setWorkspacePath(event.target.value, "manual")
+                    }
                     placeholder="/absolute/path/to/workspace"
                     required
                   />
@@ -524,7 +682,9 @@ function AddAgentDialog({
                     type="button"
                     variant="outline"
                     onClick={() => void browse(workspace, showHidden)}
-                    disabled={browsing || !workspace}
+                    disabled={
+                      browsing || !workspace || directoryNavigationLocked
+                    }
                   >
                     <FolderOpen className="size-3.5" />
                     Browse
@@ -534,7 +694,10 @@ function AddAgentDialog({
 
               <div className="overflow-hidden rounded-md border">
                 <div className="flex min-h-9 items-center gap-1 border-b bg-muted/45 px-2">
-                  <div className="flex min-w-0 flex-1 items-center overflow-x-auto">
+                  <div
+                    ref={breadcrumbRef}
+                    className="flex min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  >
                     {listing
                       ? pathBreadcrumbs(listing.path).map((crumb, index) => (
                           <div
@@ -544,17 +707,16 @@ function AddAgentDialog({
                             {index > 0 ? (
                               <ChevronRight className="size-3 text-muted-foreground" />
                             ) : null}
-                            <Button
+                            <button
                               type="button"
-                              variant="ghost"
-                              size="xs"
-                              className="font-mono"
+                              className="cursor-pointer font-mono text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50"
                               onClick={() =>
                                 void browse(crumb.path, showHidden)
                               }
+                              disabled={directoryNavigationLocked}
                             >
                               {crumb.label}
-                            </Button>
+                            </button>
                           </div>
                         ))
                       : null}
@@ -563,6 +725,7 @@ function AddAgentDialog({
                     Show hidden
                     <Switch
                       checked={showHidden}
+                      disabled={directoryNavigationLocked}
                       onCheckedChange={(checked) => {
                         setShowHidden(checked);
                         void browse(listing?.path, checked);
@@ -576,8 +739,13 @@ function AddAgentDialog({
                     <div className="px-3 py-6 text-center text-sm text-muted-foreground">
                       Loading directories...
                     </div>
-                  ) : listing?.dirs.length ? (
+                  ) : listing ? (
                     <div className="divide-y">
+                      {listing.dirs.length === 0 ? (
+                        <div className="px-3 py-4 text-center text-sm text-muted-foreground">
+                          No subdirectories.
+                        </div>
+                      ) : null}
                       {listing.dirs.map((directory) => {
                         const selected = workspace === directory.path;
                         return (
@@ -597,6 +765,7 @@ function AddAgentDialog({
                                 void browse(directory.path, showHidden)
                               }
                               title={directory.path}
+                              disabled={directoryNavigationLocked}
                             >
                               <Folder className="size-3.5 text-muted-foreground" />
                               <span className="truncate">{directory.name}</span>
@@ -615,7 +784,10 @@ function AddAgentDialog({
                               size="icon-sm"
                               aria-label={`Select ${directory.name}`}
                               title={`Select ${directory.path}`}
-                              onClick={() => setWorkspace(directory.path)}
+                              onClick={() =>
+                                setWorkspacePath(directory.path, "browser")
+                              }
+                              disabled={directoryNavigationLocked}
                               aria-pressed={selected}
                               className={cn(
                                 selected &&
@@ -631,10 +803,90 @@ function AddAgentDialog({
                           </div>
                         );
                       })}
+                      {directoryDraftOpen ? (
+                        <div className="space-y-1.5 px-2 py-2">
+                          <div className="flex items-center gap-2">
+                            <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+                            <label
+                              htmlFor="new-directory-name"
+                              className="sr-only"
+                            >
+                              New directory name
+                            </label>
+                            <Input
+                              ref={directoryInputRef}
+                              id="new-directory-name"
+                              className="h-7 min-w-0 flex-1 focus-visible:ring-0 focus-visible:ring-offset-0"
+                              value={directoryName}
+                              onChange={(event) => {
+                                setDirectoryName(event.target.value);
+                                setDirectoryError(null);
+                              }}
+                              onKeyDown={(event) => {
+                                const action = directoryCreateKeyAction(
+                                  event.key,
+                                );
+                                if (!action) return;
+                                event.preventDefault();
+                                event.stopPropagation();
+                                if (action === "create") {
+                                  void submitDirectoryCreate();
+                                } else {
+                                  invalidateDirectoryCreate(true);
+                                }
+                              }}
+                              aria-invalid={directoryError ? true : undefined}
+                              aria-describedby={
+                                directoryError
+                                  ? "new-directory-error"
+                                  : undefined
+                              }
+                              autoComplete="off"
+                              placeholder="Directory name"
+                              disabled={directoryCreating}
+                            />
+                            <Button
+                              type="button"
+                              size="sm"
+                              onClick={() => void submitDirectoryCreate()}
+                              disabled={directoryCreating}
+                            >
+                              {directoryCreating ? "Creating..." : "Create"}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => invalidateDirectoryCreate(true)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                          {directoryError ? (
+                            <p
+                              id="new-directory-error"
+                              role="alert"
+                              className="pl-5.5 text-xs text-destructive"
+                            >
+                              {directoryError}
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <button
+                          ref={createDirectoryButtonRef}
+                          type="button"
+                          className="flex h-10 w-full cursor-pointer items-center gap-2 px-3 text-left text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:underline"
+                          onClick={beginDirectoryCreate}
+                        >
+                          <Plus className="size-3.5" />
+                          Create directory
+                        </button>
+                      )}
                     </div>
                   ) : (
                     <div className="px-3 py-6 text-center text-sm text-muted-foreground">
-                      No subdirectories.
+                      Directory listing unavailable.
                     </div>
                   )}
                 </ScrollArea>
@@ -647,6 +899,7 @@ function AddAgentDialog({
                   </label>
                   <Input
                     id="agent-name"
+                    className="focus-visible:ring-0 focus-visible:ring-offset-0"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                     placeholder="Optional display name"
@@ -681,7 +934,7 @@ function AddAgentDialog({
             <Button
               type="button"
               variant="outline"
-              onClick={() => onOpenChange(false)}
+              onClick={() => handleOpenChange(false)}
             >
               Cancel
             </Button>
