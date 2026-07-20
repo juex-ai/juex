@@ -108,7 +108,10 @@ test("fleet rail keeps its header controls lightweight and vertically stable", (
     sidebarSource,
     /variant="outline"[\s\S]*data-testid="fleet-add-agent"/,
   );
-  assert.match(sidebarSource, /className="h-10 w-full"/);
+  assert.match(
+    sidebarSource,
+    /className=\{cn\(\s*"h-10 w-full",[\s\S]*compact \? "justify-center px-0" : "justify-start px-3"/,
+  );
   assert.match(sidebarSource, />Add agent</);
   assert.match(sidebarSource, /bg-juex-gold-100/);
   assert.match(sidebarSource, /dark:bg-juex-gold-400\/10/);

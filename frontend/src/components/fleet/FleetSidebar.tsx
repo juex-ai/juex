@@ -122,14 +122,14 @@ export function FleetSidebar({
               <Button
                 asChild
                 variant="outline"
-                className="h-10 w-full"
+                className={cn(
+                  "h-10 w-full",
+                  compact ? "justify-center px-0" : "justify-start px-3",
+                )}
                 data-testid="fleet-add-agent"
               >
                 <Link
                   to="/settings?add=1"
-                  className={cn(
-                    compact ? "justify-center px-0" : "justify-start px-3",
-                  )}
                   onClick={onNavigate}
                   aria-label="Add agent"
                 >
