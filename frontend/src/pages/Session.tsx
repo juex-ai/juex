@@ -43,7 +43,10 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { useShellTitle } from "@/components/AppShell";
 import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
-import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
+import {
+  useAgentSessionStatus,
+  useFleetAgent,
+} from "@/components/fleet/FleetAgentContext";
 import { AssistantMarkdown } from "@/components/AssistantMarkdown";
 import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
@@ -54,7 +57,6 @@ import {
   type ToolDisplayUnit,
 } from "@/lib/display-units";
 import {
-  assistantWorkTailActive,
   assistantWorkItems,
   assistantWorkTitle,
   transcriptItemModelLabels,
@@ -138,7 +140,6 @@ import {
   getSession,
   getSessionContext,
   getSessionStatus,
-  getTurnStatus,
   interrupt,
   startTurn,
   subscribeEvents,
@@ -182,6 +183,7 @@ export function Session() {
   const location = useLocation();
   const navigate = useNavigate();
   const { agent, agentsLoaded, statusStore } = useFleetAgent();
+  const runtimeStatus = useAgentSessionStatus(agent?.id, id);
   const [readState, setReadState] = useState<SessionReadState>(() =>
     createSessionReadState(),
   );
@@ -192,7 +194,6 @@ export function Session() {
         onStateChange: setReadState,
         getSession,
         getSessionContext,
-        getTurnStatus,
         startTurn,
         subscribeEvents,
         logError: (message, error) => console.error(message, error),
@@ -210,6 +211,7 @@ export function Session() {
     projection,
     activeContext,
     composerHint,
+    submitError,
     loadingOlderMessages,
     olderMessagesError,
   } = readState;
@@ -357,23 +359,14 @@ export function Session() {
     [data?.messages, projection.messages],
   );
   const groups = useMemo(() => messagesToGroups(messages), [messages]);
-  const runtimeStatus =
-    agent && statusStore
-      ? statusStore.status(agent.id, id) ??
-        (agent.activity?.selected_status?.session.id === id
-          ? agent.activity.selected_status
-          : undefined)
-      : undefined;
-  const tailActive = assistantWorkTailActive({
-    liveTurnActive: projection.turnActive,
-    liveTurnID: projection.activeTurnID,
-    settledTurnID: projection.settledTurnID,
-    sessionTurn: data?.turn,
-    runtimeTurn: runtimeStatus?.turn,
-  });
+  const runtimeTurnState = runtimeStatus?.turn?.state;
   const transcriptItems = useMemo(
-    () => assistantWorkItems(groups, { tailActive }),
-    [groups, tailActive],
+    () =>
+      assistantWorkItems(groups, {
+        tailActive:
+          runtimeTurnState === "admitted" || runtimeTurnState === "active",
+      }),
+    [groups, runtimeTurnState],
   );
   const modelLabels = useMemo(
     () => transcriptItemModelLabels(transcriptItems),
@@ -394,26 +387,18 @@ export function Session() {
     return <LoadingState label="Loading conversation" />;
   }
 
-  const tokenUsage =
-    runtimeStatus?.token_usage ?? projection.tokenUsage ?? data.token_usage;
-  const contextUsage =
-    runtimeStatus?.context_usage ?? projection.contextUsage ?? data.context_usage;
   const canSend = sessionCanSend(data) && agentRuntimeHealthy;
   const composerClearance = canSend
     ? sessionComposerClearance(composerOverlayHeight)
     : 0;
   const submitAction = composerSubmitAction({
     status: runtimeStatus,
-    turnActiveFallback: projection.turnActive || projection.compactActive,
     text: draft,
     attachmentCount,
   });
   const composerError = composerErrorMessage({
     status: runtimeStatus,
-    localError:
-      projection.status.kind === "error"
-        ? projection.status.detail
-        : undefined,
+    localError: submitError ?? undefined,
   });
 
   return (
@@ -491,6 +476,12 @@ export function Session() {
                   multiple
                   onError={(err) => showComposerHint(err.message)}
                   onSubmit={async (msg) => {
+                    if (submitAction === "loading") {
+                      throw new Error("Loading session status");
+                    }
+                    if (submitAction === "queue-full") {
+                      throw new Error(QUEUE_FULL_SUBMIT_HINT);
+                    }
                     const submittedText = msg.text ?? "";
                     const text = submittedText.trim();
                     const files = msg.files ?? [];
@@ -550,11 +541,15 @@ export function Session() {
                           aria-label="Session status"
                           role="group"
                         >
-                          <ContextUsageLabel
-                            usage={contextUsage}
-                            activeContext={activeContext}
-                            tokenUsage={tokenUsage}
-                          />
+                          {runtimeStatus ? (
+                            <ContextUsageLabel
+                              usage={runtimeStatus.context_usage}
+                              activeContext={activeContext}
+                              tokenUsage={runtimeStatus.token_usage}
+                            />
+                          ) : (
+                            <ComposerStatusLoading />
+                          )}
                           <SessionRuntimeStateBadges data={data} />
                         </div>
                       </PromptInputTools>
@@ -965,11 +960,14 @@ function ComposerSubmitButton({
   onQueueFull: () => void;
   onStop: () => void;
 }) {
+  const isLoading = action === "loading";
   const isEmpty = action === "empty";
   const isQueueFull = action === "queue-full";
   const isStop = action === "stop";
   const tooltip =
-    action === "empty"
+    action === "loading"
+      ? "Loading session status"
+      : action === "empty"
       ? "Enter a message or attach an image"
       : action === "queue-full"
         ? QUEUE_FULL_SUBMIT_HINT
@@ -979,7 +977,9 @@ function ComposerSubmitButton({
           ? "Queue message"
           : "Send message";
   const ariaLabel =
-    action === "empty"
+    action === "loading"
+      ? "Loading session status"
+      : action === "empty"
       ? "Enter a message or attach an image before sending"
       : action === "queue-full"
         ? QUEUE_FULL_SUBMIT_HINT
@@ -993,10 +993,12 @@ function ComposerSubmitButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <PromptInputSubmit
-          aria-disabled={isEmpty || isQueueFull}
+          aria-disabled={isLoading || isEmpty || isQueueFull}
           aria-label={ariaLabel}
+          disabled={isLoading}
           className={cn(
-            (isEmpty || isQueueFull) && "cursor-not-allowed opacity-50",
+            (isLoading || isEmpty || isQueueFull) &&
+              "cursor-not-allowed opacity-50",
           )}
           onClick={(event) => {
             if (isEmpty) {
@@ -1014,9 +1016,16 @@ function ComposerSubmitButton({
               onStop();
             }
           }}
-          type={isEmpty || isQueueFull || isStop ? "button" : "submit"}
+          type={
+            isLoading || isEmpty || isQueueFull || isStop ? "button" : "submit"
+          }
         >
-          {isStop ? (
+          {isLoading ? (
+            <LoaderCircleIcon
+              className="size-4 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
+          ) : isStop ? (
             <SquareIcon className="size-4" aria-hidden="true" />
           ) : (
             <SendHorizontalIcon className="size-4" aria-hidden="true" />
@@ -1025,6 +1034,22 @@ function ComposerSubmitButton({
       </TooltipTrigger>
       <TooltipContent>{tooltip}</TooltipContent>
     </Tooltip>
+  );
+}
+
+function ComposerStatusLoading() {
+  return (
+    <div
+      aria-label="Loading session status"
+      className={COMPOSER_STATUS_CONTROL_CLASS}
+      role="status"
+    >
+      <LoaderCircleIcon
+        className="size-3 animate-spin motion-reduce:animate-none"
+        aria-hidden="true"
+      />
+      status
+    </div>
   );
 }
 

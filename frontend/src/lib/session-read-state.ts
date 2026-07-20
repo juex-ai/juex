@@ -11,8 +11,6 @@ import {
   projectOptimisticTurn,
   projectPendingCompact,
   projectQueuedInput,
-  projectSessionTurnStatus,
-  projectTurnStatusReconcile,
   resetLiveSessionProjection,
   type LiveSessionProjection,
   type LiveSessionProjectionEffect,
@@ -26,7 +24,6 @@ import type {
   SessionShowResponse,
   SlashCommandResponse,
   StartTurnResponse,
-  TurnStatusResponse,
 } from "../types.ts";
 
 export type SessionInitialCommandState = {
@@ -41,6 +38,7 @@ export type SessionReadState = {
   projection: LiveSessionProjection;
   activeContext: ActiveContextSnapshot | null;
   composerHint: string | null;
+  submitError: string | null;
   loadingOlderMessages: boolean;
   olderMessagesError: string | null;
 };
@@ -68,6 +66,7 @@ export function createSessionReadState(): SessionReadState {
     projection: createLiveSessionProjection(),
     activeContext: null,
     composerHint: null,
+    submitError: null,
     loadingOlderMessages: false,
     olderMessagesError: null,
   };
@@ -84,6 +83,7 @@ export function resetSessionReadState(
     projection: resetLiveSessionProjection(opts),
     activeContext: null,
     composerHint: null,
+    submitError: null,
     loadingOlderMessages: false,
     olderMessagesError: null,
   };
@@ -103,7 +103,7 @@ export function projectSessionLoaded(
     loadError: null,
     loadingOlderMessages: false,
     olderMessagesError: null,
-    projection: projectSessionTurnStatus(projection, data.turn),
+    projection,
   };
 }
 
@@ -174,14 +174,6 @@ export function projectLiveBrowserEvent(
   );
 }
 
-export function projectTurnStatus(
-  state: SessionReadState,
-  turn: TurnStatusResponse,
-): SessionReadResult {
-  const result = projectTurnStatusReconcile(state.projection, turn);
-  return withProjectionResult(state, result.state, result.effects);
-}
-
 export function projectInitialCommand(
   state: SessionReadState,
   commandInput: string,
@@ -201,7 +193,7 @@ export function projectInitialCommand(
 export function projectPromptInputChanged(
   state: SessionReadState,
 ): SessionReadState {
-  let next = state;
+  let next = state.submitError ? { ...state, submitError: null } : state;
   if (next.composerHint) {
     next = { ...next, composerHint: null };
   }
@@ -229,6 +221,7 @@ export function projectPendingSubmit(
   state: SessionReadState,
   prompt: string,
 ): SessionReadState {
+  state = state.submitError ? { ...state, submitError: null } : state;
   if (!isCompactCommandInput(prompt)) return state;
   return { ...state, projection: projectPendingCompact(state.projection, prompt) };
 }
@@ -239,6 +232,7 @@ export function projectStartTurnSucceeded(
   turn: StartTurnResponse,
   attachments: MediaRef[] = [],
 ): SessionReadResult {
+  state = state.submitError ? { ...state, submitError: null } : state;
   if (turn.command) {
     return projectCommandTurnSucceeded(state, prompt, turn);
   }
@@ -303,6 +297,7 @@ export function projectStartTurnFailed(
   compactCommand: boolean,
   error: unknown,
 ): SessionReadResult {
+  const detail = errorMessage(error, "Failed to start turn.");
   let projection = state.projection;
   if (compactCommand) {
     projection = {
@@ -313,9 +308,10 @@ export function projectStartTurnFailed(
   return {
     state: {
       ...state,
+      submitError: detail,
       projection: markProjectionError(
         projection,
-        errorMessage(error, "Failed to start turn."),
+        detail,
       ),
     },
     effects: [],

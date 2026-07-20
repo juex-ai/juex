@@ -7,6 +7,7 @@ import {
 } from "../../frontend/src/lib/composer-submit.ts";
 import type {
   AgentRuntimeStatusSnapshot,
+  RuntimeTurnLifecycleState,
   RuntimeTurnPhase,
 } from "../../frontend/src/types.ts";
 
@@ -16,6 +17,7 @@ function status(
   maxPendingInputs = 4,
   phase: RuntimeTurnPhase = "provider_iteration",
   canInterrupt = true,
+  turnState: RuntimeTurnLifecycleState = "active",
 ): AgentRuntimeStatusSnapshot {
   const active = state === "turn_active" || state === "draining_pending";
   return {
@@ -30,7 +32,7 @@ function status(
     turn: active
       ? {
           id: "turn-1",
-          state: "active",
+          state: turnState,
           phase,
           streaming: phase === "provider_iteration",
           can_interrupt: canInterrupt,
@@ -62,7 +64,7 @@ test("composerSubmitAction stops only interruptible active turns with empty inpu
   );
   assert.equal(
     composerSubmitAction({
-      status: status("turn_active", 0, 4, "admitted", false),
+      status: status("turn_active", 0, 4, "", false, "admitted"),
       text: "",
     }),
     "empty",
@@ -122,20 +124,18 @@ test("composer rejects only when the pending queue is full", () => {
   );
 });
 
-test("composer uses the live projection until status loads", () => {
+test("composer stays disabled until canonical status loads", () => {
   assert.equal(
     composerSubmitAction({
-      turnActiveFallback: true,
       text: "",
     }),
-    "stop",
+    "loading",
   );
   assert.equal(
     composerSubmitAction({
-      turnActiveFallback: true,
       text: "queue while loading",
     }),
-    "queue",
+    "loading",
   );
 });
 

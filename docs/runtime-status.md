@@ -1,138 +1,95 @@
-# Runtime Status State Machines
+# Runtime Status
 
-This document defines the authoritative runtime status read model. It records
-the behavior that existed before the model, then marks the additive contract
-introduced by the runtime-status refactor.
+This document defines the authoritative runtime status read model shared by
+the CLI, single-agent web API, browser UI, and Fleet.
 
-## Scope
+## Ownership
 
-The model answers one question for every presentation adapter: what is this
-agent doing now? It covers tool calls, turns, session admission and pending
-input, the browser Agent ViewModel, and Fleet aggregation.
+`internal/runtime.StatusStore` projects committed runtime events into one
+`StatusSnapshot`. It owns turn lifecycle, execution phase, tool-call state,
+pending-input state, token/context usage, and presentation errors.
 
-Conversation content remains owned by the session transcript. Process health
-remains owned by Fleet. Runtime status is a projection of committed runtime
-events, not a second execution engine.
+Other concerns keep separate owners:
 
-## Current Behavior Before This Refactor
+- the session transcript owns conversation content;
+- Fleet owns process health and lifecycle control;
+- `internal/statusapi` maps runtime snapshots to the public transport DTO;
+- browser stores replace status snapshots but do not recompute runtime rules.
 
-| Layer | Existing source | Limitation |
-| --- | --- | --- |
-| Tool call | `tool.requested`, `tool.output_delta`, `tool.completed`, and `tool.errored` | Consumers infer running and streaming; no named state contract exists. |
-| Turn | App admission, `webTurnTransport`, and runtime events | The web transport exposes only running/done/errored. Provider, tool-batch, and compaction phases are inferred independently by consumers. |
-| Session | App admission phase plus `Engine.activeTurnID` and the persisted pending-input queue | Queue admission already accepts input while running or compacting and rejects only a full queue, but this policy is not exposed as status. |
-| Agent ViewModel | Session GET, turn polling, SSE, and component-local flags | Refresh can lose compacting or streaming state, and UI modules derive conflicting send and activity state. |
-| Fleet | Three-second roster polling plus `GET /api/activity` | Process health is current, but turn activity can remain stale until the next poll. |
+Status projection runs synchronously after durable journal append and before
+live event delivery. A journal write failure therefore cannot advance the
+status cursor.
 
-The existing durable event families and JSON shapes remain stable. Old
-`events.jsonl` journals continue to project.
+## Snapshot And Stream
 
-## Shared Boundary Protocol
+Session consumers use this sequence:
 
-Every consumer follows the same ordering:
+1. `GET /api/sessions/<id>/status`
+2. read the snapshot `cursor`
+3. subscribe to `GET /api/sessions/<id>/status/events?since=<cursor>`
+4. replace local state with every later full snapshot
 
-1. GET a status snapshot.
-2. Read its `cursor`.
-3. Subscribe to the event stream from that cursor.
-4. Replace the local status with each later full snapshot in order.
+`Last-Event-ID` takes precedence over `since` on reconnect. A same-cursor
+subscription may receive the current snapshot again because transient
+presentation changes and restart recovery do not advance the durable cursor.
+Replacement is idempotent.
 
-The snapshot is projected from the same committed facts sent on the stream.
-Applying all events after snapshot cursor A produces snapshot B. Transient
-provider text deltas never advance the durable cursor; `llm.requested` already
-captures the durable provider-streaming phase.
+The active session uses its in-memory store. A historical session builds a
+read-only store from its journal, emits its available snapshots, and closes
+without activating that session.
 
-The session boundary is `GET /api/sessions/<id>/status` followed by
-`GET /api/sessions/<id>/status/events?since=<cursor>`. The status stream emits
-full snapshots so consumers do not need to duplicate transition logic. The
-existing session event stream remains responsible for transcript content.
-A status read for the active session uses its live in-memory projection. A
-historical-session read builds a read-only projection from that session's
-journal and never activates it or replaces the current session; its status
-stream replays available snapshots and then closes.
-A same-cursor reconnect may receive the current snapshot again because
-transient presentation state and restart recovery do not advance the durable
-cursor. Consumers replace state idempotently. On browser reconnect,
-`Last-Event-ID` takes precedence over the original `?since=` query so replay
-continues from the latest frame the browser received.
+The agent-level equivalents are `GET /api/status` and
+`GET /api/status/events`. Fleet consumes these routes and publishes aggregate
+`agent.status` updates on `GET /api/fleet/events`.
 
-Status projection runs synchronously after journal append and before live
-delivery. A journal failure therefore cannot advance the status cursor.
+`GET /api/sessions/<id>/events` remains the transcript stream. It does not
+provide runtime status.
 
-## Layer 1: Tool Call
+## Tool Calls
 
-### States
-
-`requested`, `running`, `streaming`, `completed`, `errored`
-
-### Transitions
+Tool-call states are:
 
 ```text
-tool.requested
-    requested -> tool.running -> running
-running -- tool.output_delta --> streaming
-streaming -- tool.output_delta --> streaming
-running|streaming -- tool.completed --> completed
-running|streaming -- tool.errored --> errored
+requested -> running -> streaming -> completed
+                              \----> errored
 ```
 
-`tool_use_id` is the identity key. Timeout is an errored cause, not a separate
-state. Completed and errored calls remain in the active turn snapshot until
-the turn becomes terminal.
+`tool_use_id` is the identity key. `tool.requested`, `tool.running`,
+`tool.output_delta`, `tool.completed`, and `tool.errored` drive the
+transitions. Timeout is an error kind, not a separate lifecycle state.
+Completed and errored calls remain visible until the turn becomes terminal.
 
-### Additive Delta
+Tool events update only the current admitted or active turn. Late output from
+a completed or superseded turn cannot reactivate runtime status.
 
-`tool.running` makes the transition between accepted tool use and adapter
-execution explicit. Existing tool events keep their names and payloads.
-
-## Layer 2: Turn
-
-### States And Phases
+## Turns
 
 Turn lifecycle states are `admitted`, `active`, `completed`, `errored`, and
-`cancelled`. Active phases are `provider_iteration`, `tool_batch`, and
-`compacting`.
+`cancelled`.
+
+Active phases are `provider_iteration`, `tool_batch`, and `compacting`.
+An admitted turn has an empty phase because execution has not started.
 
 ```text
 turn.admitted -> admitted
-admitted -- turn.started/turn.phase(provider_iteration) --> active
-active(provider_iteration) -- turn.phase(tool_batch) --> active(tool_batch)
-active(*) -- context.compact.started --> active(compacting)
-admitted|active(compacting) -- context.compact.completed --> previous state and phase
-active(*) -- turn.completed --> completed
-active(*) -- turn.errored(cancel cause) --> cancelled
-active(*) -- turn.errored(other cause) --> errored
+turn.phase | llm.requested -> active(provider_iteration or tool_batch)
+context.compact.started -> active(compacting)
+turn.completed -> completed
+turn.errored(cancel cause) -> cancelled
+turn.errored(other cause) -> errored
 ```
 
-The snapshot records turn id, lifecycle state, active phase, timestamps,
-streaming flag, interruption capability, and error details. `can_interrupt`
-is false for standalone manual compaction because that synchronous command is
-not owned by the normal cancellable turn runner. `llm.requested` drives provider
-streaming; `llm.responded` clears the streaming flag. While compacting,
-`resume_phase` and `resume_state` record the preceding lifecycle position so
-`context.compact.completed` restores it. Standalone compaction still terminates
-through an explicit `turn.completed` or `turn.errored` event; the compact event
-never invents a terminal turn outcome.
-The most recent terminal turn remains in the snapshot while the session returns
-to `idle` or `failed`; consumers therefore do not lose the completion cause.
-Tool status events update only the current admitted or active turn. Late output
-from a completed or superseded yielded shell session remains in the event
-journal but cannot reactivate the authoritative turn or Fleet activity.
+`llm.requested` sets provider streaming and `llm.responded` clears it.
+Compaction records its previous lifecycle and phase internally so completion
+can resume an enclosing turn. Standalone compaction terminates through an
+explicit turn event.
 
-### Additive Delta
+The newest terminal turn remains in the snapshot after the session returns to
+`idle` or `failed`, preserving the completion or failure cause.
 
-- `turn.admitted` is emitted when runtime reserves the turn id, before a web
-  request returns.
-- `turn.phase` records provider-iteration and tool-batch transitions.
-- Existing `context.compact.*` events remain the compaction phase facts.
-  `context.compact.completed` additively carries the post-compaction
-  `context_usage` snapshot so status consumers update the context gauge
-  immediately.
+## Sessions And Pending Input
 
-## Layer 3: Session
-
-### States
-
-`idle`, `turn_active`, `draining_pending`, `failed`
+Session states are `idle`, `turn_active`, `draining_pending`, and `failed`.
 
 ```text
 idle|failed -- turn.admitted --> turn_active
@@ -140,156 +97,84 @@ turn_active -- pending_input.draining --> draining_pending
 draining_pending -- pending_input.drained --> turn_active
 turn_active -- turn.completed --> idle
 turn_active|draining_pending -- turn.errored --> failed
-failed -- turn.admitted --> turn_active
 ```
 
-`can_accept_input` is derived only from queue capacity:
+Input admission depends only on queue capacity:
 
 ```text
 can_accept_input = pending_count < max_pending_inputs
 ```
 
-It remains true during provider work, tool work, compaction, and pending-input
-draining. The only capacity rejection is `pending_input_full`.
+The runtime accepts input during provider work, tool work, compaction, and
+pending-input draining until the queue is full.
 
-### Additive Delta
+`pending_input.draining` publishes the dequeued count before callbacks may
+queue more input. A later queued event is authoritative, so
+`pending_input.drained` preserves the current projected count instead of
+overwriting it with stale drain data. `pending_input.promoted` records the
+queue decrement when compaction promotes an input into the next turn.
 
-`pending_input.draining` exposes the interval between dequeue and durable
-transcript processing. Existing queued, drained, dropped, and rejected events
-remain unchanged. Queue mutations stay available during the draining callback,
-but their queued or rejected events are ordered after
-`pending_input.draining`. Legacy journals that contain a direct
-queued-to-drained transition still clear the projected pending count.
-`pending_input.promoted` records the queue decrement when manual compaction
-promotes its first queued input into the next provider turn. It is also
-browser-visible, allowing the transcript projection to remove that queued item
-and preserve its text and attachments under the promoted turn id before
-`turn.started`. Concurrent queue mutations remain available but their events
-are deferred until both promotion and the following turn admission have been
-published, preventing an older promoted count from overwriting a newer queued
-count. Restart recovery resets the projected count to the new process's empty
-in-memory queue; durable pending records remain available for restoration and
-draining by that next turn.
+## Agent And Fleet Status
 
-## Layer 4: Agent Status Read Model
-
-The backend snapshot contains:
+The public snapshot contains:
 
 - durable cursor and update timestamp;
-- session id, alias, state, backend-computed `working`, pending count, queue
-  capacity, and `can_accept_input`;
-- active turn state and phase;
-- tool calls paired by `tool_use_id`;
-- token/context usage and the latest presentation error.
+- session id, alias, state, `working`, pending count, capacity, and
+  `can_accept_input`;
+- current or most recent turn lifecycle and phase;
+- tool calls keyed by `tool_use_id`;
+- token/context usage and latest error.
 
-`internal/statusapi` is the Layer 4 transport boundary. Session snapshot and
-SSE routes plus agent snapshot and SSE routes all map the internal runtime
-projection into this explicit DTO. Compaction recovery bookkeeping
-(`resume_state` and `resume_phase`) stays inside the runtime projection and is
-never serialized by those routes.
+`working` means exactly `turn_active || draining_pending` and is computed by
+the backend.
 
-`working` means exactly `turn_active || draining_pending`. Runtime owns that
-predicate and every current producer emits it as a required boolean. Contract
-consumers read the aggregate state or this field; they never infer working from
-session state strings.
+Agent status has two pending-count scopes. Top-level `pending_input_count` is
+the sum across working sessions. `selected_status.session.pending_count`
+belongs to the selected session. The selected status is the newest working
+session, or the newest session when none is working.
 
-Agent activity has two pending-count scopes. Top-level
-`pending_input_count` is the sum across all working sessions. Nested
-`selected_status.session.pending_count` belongs only to the selected session.
-`selected_status` is the newest working session, or the newest session when no
-session is working. It is absent when the agent has no session. There are no
-top-level session identity mirrors or fallback fields.
+Fleet roster polling discovers process lifecycle changes. Runtime turn
+activity arrives through shared upstream agent status streams and the
+aggregate Fleet SSE stream.
 
-The frontend owns one external `AgentViewModelStore`. Fleet rows, the active
-session composer, in-progress indicators, and status labels subscribe to this
-store. Components do not combine turn polling, local compact flags, and
-process health to invent status.
+## Browser Consumption
 
-The session transcript projection still owns optimistic and streamed message
-content. Runtime status fields in that projection are compatibility inputs
-only and are derived from the shared Agent ViewModel.
-Composer failures prefer the authoritative runtime `last_error`; when a request
-fails before runtime can publish one, the local submission error remains the
-presentation fallback.
+The browser uses one `AgentViewModelStore` for Fleet rows and per-session
+runtime snapshots. The Session page fetches a canonical snapshot before
+opening its status stream. Status-dependent submission remains disabled until
+that snapshot is available.
 
-## Layer 5: Fleet Control And Presentation
+The composer derives send, queue, stop, and queue-full behavior only from the
+canonical snapshot. The transcript projection may optimistically render
+submitted messages and apply transcript SSE events, but it is not a fallback
+runtime-status source.
 
-`GET /api/agents` remains the process-health and roster snapshot. Each healthy
-agent activity item carries its runtime-status cursor and snapshot fields.
+Runtime `last_error` is the preferred visible failure. A local request failure
+is shown only when the runtime did not publish an error.
 
-`GET /api/fleet/events` is the aggregate push stream. Fleet opens upstream
-agent status streams and emits `agent.status` updates immediately. Concurrent
-browser subscribers share one upstream stream per healthy agent. Each downstream
-subscriber coalesces updates per agent, so a hot agent cannot evict the latest
-state of another agent. The aggregate stream keeps a bounded replay window,
-accepts `?since=<cursor>` or `Last-Event-ID`, and falls back to current snapshots
-when a cursor is absent, expired, or belongs to an earlier Fleet process. The
-bounded replay window survives periods with zero browser subscribers, while
-upstream agent streams stop until a new subscriber arrives. Each aggregate
-event retains the agent's durable runtime cursor inside its snapshot.
-Periodic roster reconciliation only discovers process lifecycle changes; it is
-not the source of turn activity.
-An agent status stream starts with a valid `idle` activity even before any
-session has been opened or status fact has been published.
+## Restart Recovery
 
-The browser applies each `agent.status` event to the same
-`AgentViewModelStore` used by the active session.
+Startup and historical reads use `NewStatusStoreFromJournal` to replay the
+current event contract. Session switches call `Reset` on the existing store so
+subscribers keep the same store identity.
 
-Fleet also consumes the Layer 4 contract for restart control. Before a
-graceful restart it records the selected working session and turn, then sends
-an identity-bound shutdown request with `reason=runtime_restart`. A current
-agent acknowledges the intent, cancels the active turn with that typed cause,
-and persists a cancelled turn whose error kind is `runtime_restart`. Fleet
-submits a continuation only when the replacement projects the same session and
-turn with both that terminal state and strong error kind.
+After replay, a dangling nonterminal turn is presented as cancelled with
+`runtime_restart`, its active tools are cleared, and the session becomes
+`failed`. This recovery changes presentation state without inventing a durable
+event cursor.
 
-An unacknowledged restart intent is insufficient evidence and Fleet reports
-that it skipped continuation. There is no weak same-session/same-turn
-cancellation fallback. Ordinary `Stop` sends no restart intent and never
-submits a continuation.
+Fleet submits restart continuation only after the old runtime acknowledges a
+restart intent and the replacement projects the same session and turn as
+cancelled with error kind `runtime_restart`. User cancellation is insufficient.
+Ordinary Stop never submits continuation.
 
-Restart continuation uses the ordinary turn admission route with
-`kind=system_notice`. The App and HTTP layers accept only that non-empty
-external kind, reject attachments, and reject internal kinds such as
-`runtime_context`, `compact`, `model_fallback`, `observation`, and `mcp_event`.
-The notice remains a provider-visible user-role turn, including normal hooks,
-compaction, queueing, transcript turn count, and preview behavior. The browser
-labels it `Automated notice`; the label does not imply a stronger trust level
-than the deployment's normal endpoint access controls.
+## Verification
 
-## Recovery And Compatibility
-
-- A page refresh reads the current in-process snapshot before subscribing, so
-  compacting and provider streaming survive reattachment.
-- A provider or terminal turn failure moves the session to `failed`; the next
-  admitted turn clears that presentation failure. A recoverable tool error
-  remains attached to that tool while the turn continues.
-- A runtime restart replays legacy and current durable events. A dangling
-  nonterminal turn from an unclean process exit is recovered as cancelled
-  presentation state rather than shown as still working, and its nonterminal
-  tool-call projection is cleared.
-- A Fleet-controlled graceful restart uses the acknowledged `runtime_restart`
-  cause described above. A user cancellation remains `cancelled` and is not
-  sufficient evidence for current-agent restart continuation.
-- A post-compact hook failure remains observational after the compact message
-  is committed. Command hook failures remain visible as `hook.errored`, while
-  the runtime publishes only `context.compact.completed` for the committed
-  compaction and its new context usage. Context returned by earlier successful
-  post-compact hooks remains queued if a later hook fails.
-- Unknown event families advance the cursor but do not change named state.
-- Existing browser event payloads, `events.jsonl`, turn status routes, and
-  `GET /api/activity` remain compatible while new status routes are additive.
-
-## Verification Contract
-
-- Table-driven transition-completeness tests cover every named state.
-- Snapshot-at-cursor plus subsequent-event replay reproduces the next
-  snapshot.
-- A legacy journal fixture projects without new event families.
-- Web tests cover refresh during compaction and provider streaming.
-- Fleet tests cover immediate working projection from aggregate push.
-- Fleet restart tests distinguish acknowledged restart intent, user
-  cancellation, and missing acknowledgement.
-- Frontend tests cover queueing during pending-input processing and queue-full
-  rejection.
-- Runtime and compaction changes run the compaction evaluation.
+- Table-driven runtime tests cover every lifecycle state and phase.
+- JSON snapshot round-trip plus later events must equal uninterrupted
+  projection.
+- Web tests cover canonical snapshot/SSE routes and removed-route `404`
+  behavior.
+- Fleet tests cover aggregate push and acknowledged restart continuation.
+- Frontend tests cover initial loading, active/admitted turns, pending drains,
+  terminal turns, and queue capacity without fallback status sources.

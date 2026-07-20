@@ -81,24 +81,31 @@ func TestStatusRoutesExposePublicDTOOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	as.app.Status = juexruntime.NewStatusStoreFromSnapshot(juexruntime.StatusSnapshot{
-		Session: juexruntime.SessionRuntimeStatus{
-			ID:               as.app.Session.ID,
-			State:            juexruntime.SessionRuntimeTurnActive,
-			MaxPendingInputs: 4,
-			CanAcceptInput:   true,
+	as.app.Status = juexruntime.NewStatusStore(juexruntime.StatusSeed{
+		SessionID:        as.app.Session.ID,
+		MaxPendingInputs: 4,
+	})
+	as.app.Status.Publish(events.Event{
+		ID:        "event-admitted",
+		Type:      juexruntime.TurnAdmittedType,
+		TurnID:    "turn-one",
+		Timestamp: now,
+	})
+	as.app.Status.Publish(events.Event{
+		ID:        "event-tool-phase",
+		Type:      juexruntime.TurnPhaseType,
+		TurnID:    "turn-one",
+		Timestamp: now,
+		Payload: juexruntime.TurnPhasePayload{
+			Phase: juexruntime.TurnPhaseToolBatch,
 		},
-		Turn: &juexruntime.TurnRuntimeStatus{
-			ID:           "turn-one",
-			State:        juexruntime.TurnLifecycleActive,
-			Phase:        juexruntime.TurnPhaseCompacting,
-			ResumeState:  juexruntime.TurnLifecycleActive,
-			ResumePhase:  juexruntime.TurnPhaseToolBatch,
-			CanInterrupt: true,
-			StartedAt:    now,
-			UpdatedAt:    now,
-		},
-		Tools: []juexruntime.ToolCallStatus{},
+	})
+	as.app.Status.Publish(events.Event{
+		ID:        "event-compact",
+		Type:      "context.compact.started",
+		TurnID:    "turn-one",
+		Timestamp: now,
+		Payload:   juexruntime.ContextCompactStartedPayload{},
 	})
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

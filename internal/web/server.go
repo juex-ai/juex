@@ -149,7 +149,6 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/content", s.handleFilesContent)
 	mux.HandleFunc("/api/files/raw", s.handleFilesRaw)
 	mux.HandleFunc("/api/media", s.handleMedia)
-	mux.HandleFunc("/api/activity", s.handleAgentActivity)
 	mux.HandleFunc("/api/status", s.handleAgentStatus)
 	mux.HandleFunc("/api/status/events", s.handleAgentStatusEvents)
 	mux.HandleFunc("/api/runtime", s.handleRuntimeStatus)
@@ -217,8 +216,6 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteSession(w, r, id)
 	case rest == "activate" && r.Method == http.MethodPost:
 		s.handleActivateSession(w, r, id)
-	case strings.HasPrefix(rest, "turns/") && r.Method == http.MethodGet:
-		s.handleTurnStatus(w, r, id, strings.TrimPrefix(rest, "turns/"))
 	case rest == "turns" && r.Method == http.MethodPost:
 		s.handleStartTurn(w, r, id)
 	case rest == "attachments" && r.Method == http.MethodPost:
@@ -237,6 +234,8 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleSessionContext(w, r, id)
 	case rest == "scratchpad" && r.Method == http.MethodGet:
 		s.handleSessionScratchpad(w, r, id)
+	case strings.HasPrefix(rest, "turns/"):
+		writeErr(w, http.StatusNotFound, "not_found", "session API route not found")
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
 	}

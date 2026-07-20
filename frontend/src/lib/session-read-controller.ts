@@ -16,7 +16,6 @@ import {
   projectSessionLoaded,
   projectStartTurnFailed,
   projectStartTurnSucceeded,
-  projectTurnStatus,
   resetSessionReadState,
   type SessionInitialCommandState,
   type SessionReadEffect,
@@ -31,7 +30,6 @@ import type {
   SessionShowResponse,
   SlashCommandResponse,
   StartTurnResponse,
-  TurnStatusResponse,
 } from "../types.ts";
 
 export type SessionReadRouteSnapshot = {
@@ -67,10 +65,6 @@ export type SessionReadControllerPorts = {
     opts?: { before?: string; limit?: number },
   ) => Promise<SessionShowResponse>;
   getSessionContext: (id: string) => Promise<ActiveContextSnapshot>;
-  getTurnStatus: (
-    id: string,
-    turnID: string,
-  ) => Promise<TurnStatusResponse>;
   startTurn: (
     id: string,
     prompt: string,
@@ -83,15 +77,8 @@ export type SessionReadControllerPorts = {
   logError?: (message: string, error: unknown) => void;
 };
 
-export type StartTurnStatusPollingOptions = {
-  sessionID: string;
-  turnID: string;
-  retryOnError?: boolean;
-};
-
 export type SessionReadController = ReturnType<typeof createSessionReadController>;
 
-const TURN_STATUS_POLL_MS = 1000;
 const IDLE_STATUS_DELAY_MS = 1500;
 const COMPOSER_HINT_DELAY_MS = 1800;
 
@@ -222,36 +209,6 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     }
   }
 
-  function startTurnStatusPolling(opts: StartTurnStatusPollingOptions) {
-    let cancelled = false;
-    let timer: TimerHandle | null = null;
-
-    const poll = async () => {
-      try {
-        const turn = await ports.getTurnStatus(opts.sessionID, opts.turnID);
-        if (cancelled || !isLatestSessionRoute(route, opts.sessionID)) return;
-        runSessionReadResult(projectTurnStatus(state, turn));
-        if (turn.state === "running") {
-          timer = setTimer(() => void poll(), TURN_STATUS_POLL_MS);
-        }
-      } catch (error) {
-        if (cancelled || !isLatestSessionRoute(route, opts.sessionID)) return;
-        logError("getTurnStatus failed", error);
-        if (opts.retryOnError) {
-          timer = setTimer(() => void poll(), TURN_STATUS_POLL_MS);
-        }
-      }
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer !== null) {
-        clearTimer(timer);
-      }
-    };
-  }
-
   function subscribeLiveEvents(sessionID = route.id) {
     let subscribed = true;
     const unsubscribe = ports.subscribeEvents(sessionID, {
@@ -362,7 +319,6 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     runSessionReadResult,
     setRoute,
     showComposerHint,
-    startTurnStatusPolling,
     submitPrompt,
     subscribeLiveEvents,
     dispose: clearTransientTimers,

@@ -17,7 +17,6 @@ import {
   projectSessionLoaded,
   projectStartTurnFailed,
   projectStartTurnSucceeded,
-  projectTurnStatus,
   resetSessionReadState,
 } from "../../frontend/src/lib/session-read-state.ts";
 import type {
@@ -63,29 +62,6 @@ test("session load failure leaves loading and route reset clears stale data", ()
   assert.equal(state.loadError, null);
 });
 
-test("session load restores running turn from session DTO", () => {
-  const state = projectSessionLoaded(createSessionReadState(), {
-    ...session("running", [{ role: "user", blocks: [{ type: "text", text: "go" }] }]),
-    turn: {
-      turn_id: "turn-1",
-      state: "running",
-      pending_count: 1,
-      max_pending_inputs: 4,
-    },
-  });
-
-  assert.equal(state.projection.turnActive, true);
-  assert.deepEqual(state.projection.status, { kind: "pending", count: 1 });
-  assert.deepEqual(
-    state.projection.messages.map((message) => ({
-      role: message.role,
-      turn_id: message.turn_id,
-      pending: message.pending,
-    })),
-    [{ role: "assistant", turn_id: "turn-1", pending: true }],
-  );
-});
-
 test("session load failure extracts plain API error objects", () => {
   let state = projectSessionLoadFailed(createSessionReadState(), {
     message: "session not found: object-message",
@@ -119,6 +95,7 @@ test("session transient failures extract plain API error objects", () => {
     kind: "error",
     detail: "turn rejected",
   });
+  assert.equal(result.state.submitError, "turn rejected");
 
   const fallbackResult = projectStartTurnFailed(createSessionReadState(), false, {});
 
@@ -126,6 +103,7 @@ test("session transient failures extract plain API error objects", () => {
     kind: "error",
     detail: "Failed to start turn.",
   });
+  assert.equal(fallbackResult.state.submitError, "Failed to start turn.");
 });
 
 test("projectLiveBrowserEvent carries projection effects through controller", () => {
@@ -147,16 +125,11 @@ test("projectLiveBrowserEvent carries projection effects through controller", ()
   ]);
 });
 
-test("terminal live event settles the loaded running turn without refresh", () => {
-  const initial = projectSessionLoaded(createSessionReadState(), {
-    ...session("running", []),
-    turn: {
-      turn_id: "turn-1",
-      state: "running",
-      pending_count: 0,
-      max_pending_inputs: 4,
-    },
-  });
+test("terminal live event settles the optimistic active turn", () => {
+  const initial = resetSessionReadState(
+    projectSessionLoaded(createSessionReadState(), session("running", [])),
+    { activeTurnID: "turn-1" },
+  );
 
   assert.equal(initial.projection.activeTurnID, "turn-1");
   const result = projectLiveBrowserEvent(initial, {
@@ -170,7 +143,6 @@ test("terminal live event settles the loaded running turn without refresh", () =
   assert.equal(result.state.projection.turnActive, false);
   assert.equal(result.state.projection.activeTurnID, null);
   assert.equal(result.state.projection.settledTurnID, "turn-1");
-  assert.equal(result.state.data?.turn?.state, "running");
   assert.deepEqual(result.effects, [{ type: "refresh" }]);
 });
 
@@ -237,21 +209,6 @@ test("projectLiveBrowserEvent refreshes session notes", () => {
   });
   assert.equal(result.state.data?.id, "s1");
   assert.deepEqual(result.effects, []);
-});
-
-test("projectTurnStatus reconciles running and done states", () => {
-  let state = createSessionReadState();
-  let result = projectTurnStatus(state, { state: "running", pending_count: 2 });
-  state = result.state;
-  assert.deepEqual(state.projection.status, { kind: "pending", count: 2 });
-  assert.deepEqual(result.effects, []);
-
-  result = projectTurnStatus(state, { state: "done" });
-  assert.deepEqual(result.state.projection.status, { kind: "done" });
-  assert.deepEqual(result.effects, [
-    { type: "refresh" },
-    { type: "scheduleIdleStatus" },
-  ]);
 });
 
 test("projectStartTurnSucceeded records queued and optimistic turns", () => {
@@ -447,6 +404,7 @@ test("composer hint and input changes are controller state", () => {
 
   state = projectPromptInputChanged(state);
   assert.deepEqual(state.projection.status, { kind: "idle" });
+  assert.equal(state.submitError, null);
 
   state = markSessionProjectionIdle(state);
   assert.deepEqual(state.projection.status, { kind: "idle" });

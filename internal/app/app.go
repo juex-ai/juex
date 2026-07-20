@@ -330,10 +330,11 @@ func New(opts Options) (*App, error) {
 	if statusReplayErr != nil {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
 	}
-	status := runtime.NewStatusStore(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput))
-	status.Reset(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput), journalEvents)
+	status := runtime.NewStatusStoreFromJournal(
+		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
+		journalEvents,
+	)
 	status.RecoverAfterRestart()
-	statusUnsubscribe = eventSink.AddProjection(status)
 
 	pb := &prompt.Builder{
 		GlobalAgentsMDPath: resourcePaths.GlobalAgentsMDPath,
@@ -423,6 +424,11 @@ func New(opts Options) (*App, error) {
 		debug:             opts.Debug,
 		logLevel:          opts.LogLevel,
 	}
+	statusUnsubscribe = eventSink.AddProjection(turnAdmissionStatusProjection{
+		status:       status,
+		completeTurn: a.CompleteAdmittedTurn,
+	})
+	a.statusUnsubscribe = statusUnsubscribe
 	if err := runtime.RegisterGoalTools(reg, eng); err != nil {
 		_ = a.detachObservability()
 		closeSessionResources()

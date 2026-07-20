@@ -1,6 +1,7 @@
 import type { AgentRuntimeStatusSnapshot } from "../types.ts";
 
 export type ComposerSubmitAction =
+  | "loading"
   | "empty"
   | "queue-full"
   | "stop"
@@ -28,20 +29,18 @@ export function composerErrorMessage({
 
 export function composerSubmitAction({
   status,
-  turnActiveFallback = false,
   text,
   attachmentCount = 0,
 }: {
   status?: AgentRuntimeStatusSnapshot;
-  turnActiveFallback?: boolean;
   text: string;
   attachmentCount?: number;
 }): ComposerSubmitAction {
+  if (!status) return "loading";
   const hasInput = text.trim().length > 0 || attachmentCount > 0;
   const turnActive =
     status?.turn?.state === "admitted" ||
-    status?.turn?.state === "active" ||
-    (!status && turnActiveFallback);
+    status?.turn?.state === "active";
   const canInterrupt = status?.turn?.can_interrupt !== false;
   if (!hasInput) return turnActive && canInterrupt ? "stop" : "empty";
   if (status && !status.session.can_accept_input) return "queue-full";

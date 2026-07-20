@@ -1,6 +1,11 @@
-import { createContext, useContext } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useSyncExternalStore,
+} from "react";
 
-import type { AgentStatus } from "@/types";
+import type { AgentRuntimeStatusSnapshot, AgentStatus } from "@/types";
 import type { AgentViewModelStore } from "@/lib/agent-view-model-store";
 
 export type FleetAgentContextValue = {
@@ -29,4 +34,28 @@ export function useFleetAgent(): FleetAgentContextValue {
     };
   }
   return context;
+}
+
+export function useAgentSessionStatus(
+  agentID: string | undefined,
+  sessionID: string | undefined,
+): AgentRuntimeStatusSnapshot | undefined {
+  const { statusStore } = useFleetAgent();
+  const getSnapshot = useCallback(
+    () =>
+      statusStore && agentID && sessionID
+        ? statusStore.status(agentID, sessionID)
+        : undefined,
+    [agentID, sessionID, statusStore],
+  );
+
+  return useSyncExternalStore(
+    statusStore?.subscribe ?? emptySubscribe,
+    getSnapshot,
+    getSnapshot,
+  );
+}
+
+function emptySubscribe(): () => void {
+  return () => {};
 }

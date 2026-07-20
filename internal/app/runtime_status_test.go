@@ -19,10 +19,10 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-func TestRuntimeStatusServiceProjectsBuiltinToolCatalog(t *testing.T) {
+func TestRuntimeCatalogServiceProjectsBuiltinToolCatalog(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
-	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestRuntimeStatusServiceProjectsBuiltinToolCatalog(t *testing.T) {
 }
 
 func TestRuntimeStatusTierTwoToolsUseBuiltinGuidesWithinBudget(t *testing.T) {
-	status, err := NewRuntimeStatusService(config.Config{WorkDir: t.TempDir()}).Snapshot(RuntimeStatusOptions{})
+	status, err := NewRuntimeCatalogService(config.Config{WorkDir: t.TempDir()}).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-func TestRuntimeStatusServiceCatalogMatchesRealAppRegistry(t *testing.T) {
+func TestRuntimeCatalogServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	work := t.TempDir()
 	cfg := config.Config{WorkDir: work, ToolTimeout: 1500 * time.Millisecond}
 	a, err := New(Options{Config: cfg, Provider: &stubProvider{}, WorkDir: work, DisableMCP: true})
@@ -165,7 +165,7 @@ func TestRuntimeStatusServiceCatalogMatchesRealAppRegistry(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = a.Close() })
 
-	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestRuntimeMCPToolSchemaMatchesNormalizedRegistryDefinition(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatusServiceIncludesPromptSkillsAndProvider(t *testing.T) {
+func TestRuntimeCatalogServiceIncludesPromptSkillsAndProvider(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, "AGENTS.md"), "你好世界")
@@ -286,7 +286,7 @@ body`)
 		EnableUserAgentsResources: true,
 	}
 
-	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,10 +340,10 @@ body`)
 	}
 }
 
-func TestRuntimeStatusServiceIncludesSessionScratchpadPrompt(t *testing.T) {
+func TestRuntimeCatalogServiceIncludesSessionScratchpadPrompt(t *testing.T) {
 	work := t.TempDir()
 	scratchpadDir := filepath.Join(work, ".juex", "sessions", "session-1", "scratchpad")
-	status, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
+	status, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
 		ScratchpadDir: scratchpadDir,
 	})
 	if err != nil {
@@ -360,7 +360,7 @@ func TestRuntimeStatusServiceIncludesSessionScratchpadPrompt(t *testing.T) {
 	t.Fatalf("system prompt missing session scratchpad: %+v", status.SystemPrompt.Items)
 }
 
-func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
+func TestRuntimeCatalogServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	work := t.TempDir()
 	homeAgents := t.TempDir()
 	mustWriteRuntimeStatusFile(t, filepath.Join(homeAgents, "mcp.json"), `{
@@ -381,7 +381,7 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 		EnableUserAgentsResources: true,
 	}
 
-	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{
+	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{
 		MCPToolDescriptors: map[string][]mcp.ToolDescriptor{
 			"shared": {
 				{Name: "alpha", Description: "first", InputSchema: map[string]any{"type": "object"}},
@@ -411,14 +411,14 @@ func TestRuntimeStatusServiceMCPStatusSourcesAndOverrides(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatusServiceTreatsZeroToolDescriptorMembershipAsConnected(t *testing.T) {
+func TestRuntimeCatalogServiceTreatsZeroToolDescriptorMembershipAsConnected(t *testing.T) {
 	work := t.TempDir()
 	mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
   "mcpServers": {
     "empty": { "command": "empty-server" }
   }
 }`)
-	status, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
+	status, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{
 		MCPToolDescriptors: map[string][]mcp.ToolDescriptor{"empty": {}},
 	})
 	if err != nil {
@@ -433,7 +433,7 @@ func TestRuntimeStatusServiceTreatsZeroToolDescriptorMembershipAsConnected(t *te
 	}
 }
 
-func TestRuntimeStatusServiceIncludesHookStatus(t *testing.T) {
+func TestRuntimeCatalogServiceIncludesHookStatus(t *testing.T) {
 	cfg := config.Config{
 		WorkDir: t.TempDir(),
 		Hooks: hooks.Config{Commands: []hooks.CommandHook{{
@@ -445,7 +445,7 @@ func TestRuntimeStatusServiceIncludesHookStatus(t *testing.T) {
 		}}},
 	}
 
-	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,7 +467,7 @@ func TestRuntimeStatusServiceIncludesHookStatus(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatusServiceIncludesSandboxPolicy(t *testing.T) {
+func TestRuntimeCatalogServiceIncludesSandboxPolicy(t *testing.T) {
 	cfg := config.Config{
 		WorkDir: t.TempDir(),
 		Sandbox: config.SandboxPolicy{
@@ -479,7 +479,7 @@ func TestRuntimeStatusServiceIncludesSandboxPolicy(t *testing.T) {
 		},
 	}
 
-	status, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+	status, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +488,7 @@ func TestRuntimeStatusServiceIncludesSandboxPolicy(t *testing.T) {
 	}
 }
 
-func TestRuntimeStatusServiceCachesSkillsWhenProvided(t *testing.T) {
+func TestRuntimeCatalogServiceCachesSkillsWhenProvided(t *testing.T) {
 	work := t.TempDir()
 	skillPath := filepath.Join(work, ".agents", "skills", "review", "SKILL.md")
 	mustWriteRuntimeStatusFile(t, skillPath, `---
@@ -499,7 +499,7 @@ body`)
 	cfg := config.Config{WorkDir: work}
 	cache := NewRuntimeStatusSkillCache()
 
-	first, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
+	first, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ name: review
 description: changed
 ---
 body`)
-	second, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
+	second, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{SkillCache: cache})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -517,7 +517,7 @@ body`)
 	}
 }
 
-func TestRuntimeStatusServiceRejectsExtensionResourceDuplicates(t *testing.T) {
+func TestRuntimeCatalogServiceRejectsExtensionResourceDuplicates(t *testing.T) {
 	t.Run("mcp", func(t *testing.T) {
 		work := t.TempDir()
 		mustWriteRuntimeStatusFile(t, filepath.Join(work, ".agents", "mcp.json"), `{
@@ -530,7 +530,7 @@ func TestRuntimeStatusServiceRejectsExtensionResourceDuplicates(t *testing.T) {
     "shared": { "command": "extension" }
   }
 }`)
-		_, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
+		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate MCP server "shared"`) {
 			t.Fatalf("err = %v, want duplicate MCP error", err)
 		}
@@ -548,7 +548,7 @@ name: shared
 description: extension
 ---
 body`)
-		_, err := NewRuntimeStatusService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
+		_, err := NewRuntimeCatalogService(config.Config{WorkDir: work}).Snapshot(RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate skill "shared"`) {
 			t.Fatalf("err = %v, want duplicate skill error", err)
 		}
@@ -571,7 +571,7 @@ commands:
 				Source:  "project",
 			}}},
 		}
-		_, err := NewRuntimeStatusService(cfg).Snapshot(RuntimeStatusOptions{})
+		_, err := NewRuntimeCatalogService(cfg).Snapshot(RuntimeStatusOptions{})
 		if err == nil || !strings.Contains(err.Error(), `duplicate hook "shared"`) {
 			t.Fatalf("err = %v, want duplicate hook error", err)
 		}

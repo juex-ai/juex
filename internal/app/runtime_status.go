@@ -20,14 +20,14 @@ import (
 	"github.com/juex-ai/juex/internal/tools"
 )
 
-// RuntimeStatusService assembles read-only runtime facts for presentation
+// RuntimeCatalogService assembles read-only runtime facts for presentation
 // layers such as the web UI.
-type RuntimeStatusService struct {
+type RuntimeCatalogService struct {
 	cfg config.Config
 }
 
-func NewRuntimeStatusService(cfg config.Config) RuntimeStatusService {
-	return RuntimeStatusService{cfg: cfg}
+func NewRuntimeCatalogService(cfg config.Config) RuntimeCatalogService {
+	return RuntimeCatalogService{cfg: cfg}
 }
 
 type RuntimeStatusOptions struct {
@@ -178,7 +178,7 @@ type RuntimeSkillOmittedInfo struct {
 	Reason string
 }
 
-func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
+func (s RuntimeCatalogService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus, error) {
 	resourceGraph, err := ResolveRuntimeResourceGraph(s.cfg)
 	if err != nil {
 		return RuntimeStatus{}, err
@@ -212,7 +212,7 @@ func (s RuntimeStatusService) Snapshot(opts RuntimeStatusOptions) (RuntimeStatus
 	}, nil
 }
 
-func (s RuntimeStatusService) toolsStatus() (RuntimeToolsStatus, error) {
+func (s RuntimeCatalogService) toolsStatus() (RuntimeToolsStatus, error) {
 	definitions := tools.DefaultBuiltinToolDefinitions(tools.BuiltinDefinitionOptions{
 		Shell: toolsShellProfile(s.cfg.Shell),
 	})
@@ -303,7 +303,7 @@ func hooksStatus(cfg hooks.Config) RuntimeHooksStatus {
 	return RuntimeHooksStatus{Configured: len(commands), Commands: commands}
 }
 
-func (s RuntimeStatusService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
+func (s RuntimeCatalogService) systemPromptStatus(skillLoader *skills.Loader, scratchpadDir string) (RuntimeSystemPromptStatus, error) {
 	var memStore *memory.Store
 	if memoryDir := s.cfg.MemoryDir(); memoryDir != "" {
 		memStore = memory.NewStore(memoryDir)
@@ -346,7 +346,7 @@ func runtimePromptSource(section prompt.Section) string {
 	return "runtime"
 }
 
-func (s RuntimeStatusService) skillsStatus(cache *RuntimeStatusSkillCache, dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
+func (s RuntimeCatalogService) skillsStatus(cache *RuntimeStatusSkillCache, dirs []skills.Dir, policy config.SkillPolicy) (RuntimeSkillsStatus, *skills.Loader, error) {
 	if cache != nil {
 		return cache.snapshot(dirs, policy)
 	}
@@ -467,7 +467,7 @@ type runtimeMCPServerConfig struct {
 	Spec   mcp.ServerSpec
 }
 
-func (s RuntimeStatusService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef) (RuntimeMCPStatus, error) {
+func (s RuntimeCatalogService) mcpStatus(opts RuntimeStatusOptions, refs []mcpConfigRef) (RuntimeMCPStatus, error) {
 	servers, err := s.configuredMCPServers(refs)
 	if err != nil {
 		return RuntimeMCPStatus{}, err
@@ -528,7 +528,7 @@ func runtimeMCPToolInfos(descriptors []mcp.ToolDescriptor, defaultTimeoutSeconds
 	return infos
 }
 
-func (s RuntimeStatusService) configuredMCPServers(refs []mcpConfigRef) ([]runtimeMCPServerConfig, error) {
+func (s RuntimeCatalogService) configuredMCPServers(refs []mcpConfigRef) ([]runtimeMCPServerConfig, error) {
 	serversByName := map[string]runtimeMCPServerConfig{}
 	_, merged, sources, err := loadMCPConfigRefs(refs, s.absoluteWorkDir())
 	if err != nil {
@@ -551,7 +551,7 @@ func (s RuntimeStatusService) configuredMCPServers(refs []mcpConfigRef) ([]runti
 	return servers, nil
 }
 
-func (s RuntimeStatusService) absoluteWorkDir() string {
+func (s RuntimeCatalogService) absoluteWorkDir() string {
 	workDir := s.cfg.WorkDir
 	if workDir == "" {
 		cwd, err := os.Getwd()

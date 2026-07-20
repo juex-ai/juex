@@ -25,9 +25,7 @@ import type {
   ContextUsage,
   MediaRef,
   Message,
-  SessionTurnStatus,
   TokenUsage,
-  TurnStatusResponse,
 } from "../types.ts";
 
 export type LiveSessionStatus =
@@ -502,68 +500,6 @@ export function projectLiveSessionEvent(
   return { state: next, effects };
 }
 
-export function projectTurnStatusReconcile(
-  state: LiveSessionProjection,
-  turn: TurnStatusResponse,
-): LiveSessionProjectionResult {
-  const turnID = "turn_id" in turn && typeof turn.turn_id === "string"
-    ? turn.turn_id
-    : undefined;
-  if (turn.state === "running") {
-    return {
-      state: {
-        ...state,
-        turnActive: true,
-        activeTurnID: turnID ?? state.activeTurnID,
-        status:
-          turn.pending_count && turn.pending_count > 0
-            ? { kind: "pending", count: turn.pending_count }
-            : { kind: "running" },
-      },
-      effects: [],
-    };
-  }
-  const settled = settleTerminalQueuedInputs(state, turnID);
-  if (turn.state === "errored") {
-    return {
-      state: {
-        ...markProjectionError(settled, turn.error),
-        turnActive: false,
-        activeTurnID: null,
-        settledTurnID: turnID ?? settled.settledTurnID,
-      },
-      effects: [{ type: "refresh" }],
-    };
-  }
-  return {
-    state: {
-      ...markProjectionDone(settled),
-      turnActive: false,
-      activeTurnID: null,
-      settledTurnID: turnID ?? settled.settledTurnID,
-    },
-    effects: [{ type: "refresh" }, { type: "scheduleIdleStatus" }],
-  };
-}
-
-export function projectSessionTurnStatus(
-  state: LiveSessionProjection,
-  turn: SessionTurnStatus | undefined,
-): LiveSessionProjection {
-  if (!turn?.turn_id) return state;
-  if (turn.state !== "running") {
-    return projectTurnStatusReconcile(state, turn).state;
-  }
-  const result = projectTurnStatusReconcile(
-    {
-      ...state,
-      messages: ensurePendingAssistant(state.messages, turn.turn_id),
-    },
-    turn,
-  );
-  return result.state;
-}
-
 function consumeQueuedInput(
   state: LiveSessionProjection,
   input: string | undefined,
@@ -728,27 +664,6 @@ function inputBlocks(
     blocks.push({ type: "image", media });
   }
   return blocks;
-}
-
-function ensurePendingAssistant(messages: Message[], turnID: string): Message[] {
-  if (!turnID) return messages;
-  if (
-    messages.some(
-      (message) =>
-        message.turn_id === turnID && message.role === "assistant",
-    )
-  ) {
-    return messages;
-  }
-  return [
-    ...messages,
-    {
-      role: "assistant",
-      turn_id: turnID,
-      pending: true,
-      blocks: [],
-    },
-  ];
 }
 
 function findPendingTurnForInput(

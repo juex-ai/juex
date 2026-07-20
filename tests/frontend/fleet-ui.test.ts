@@ -17,6 +17,9 @@ const stageHeaderSource = source(
 const stateBarSource = source(
   "../../frontend/src/components/fleet/AgentRuntimeStateBar.tsx",
 );
+const agentContextSource = source(
+  "../../frontend/src/components/fleet/FleetAgentContext.tsx",
+);
 const sessionSource = source("../../frontend/src/pages/Session.tsx");
 const sessionsSource = source("../../frontend/src/pages/Sessions.tsx");
 const historySource = source("../../frontend/src/pages/History.tsx");
@@ -175,7 +178,31 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     /composerSubmitAction\(\{[\s\S]*status: runtimeStatus/,
     "the composer must derive admission state from the shared runtime status",
   );
-  assert.doesNotMatch(sessionSource, /startTurnStatusPolling\(/);
+  assert.match(
+    sessionSource,
+    /useAgentSessionStatus\(agent\?\.id, id\)/,
+    "the session must select its canonical per-session runtime snapshot",
+  );
+  assert.match(
+    agentContextSource,
+    /statusStore\.status\(agentID, sessionID\)/,
+    "the canonical session selector must read the shared status store",
+  );
+  assert.match(
+    agentContextSource,
+    /useSyncExternalStore\(/,
+    "the canonical session selector must subscribe to the shared status store",
+  );
+  assert.match(
+    sessionSource,
+    /getSessionStatus\(id\)[\s\S]*subscribeSessionStatus\(id/,
+    "the session must load a canonical snapshot before opening its status stream",
+  );
+  assert.match(
+    sessionSource,
+    /submitAction === "loading"/,
+    "status-dependent submission must remain disabled before the snapshot loads",
+  );
   assert.match(
     sessionSource,
     /!agentsLoaded \|\| agent\?\.runtime_health === "healthy"/,

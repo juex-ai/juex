@@ -1,8 +1,0 @@
-{"id":"legacy-1","type":"turn.started","ts":"2026-07-19T00:00:01Z","turn_id":"turn-legacy","payload":{"input":"hello"}}
-{"id":"legacy-2","type":"pending_input.queued","ts":"2026-07-19T00:00:02Z","turn_id":"turn-legacy","payload":{"input":"queued","pending_count":1,"max_pending_inputs":1}}
-{"id":"legacy-3","type":"pending_input.drained","ts":"2026-07-19T00:00:03Z","turn_id":"turn-legacy","payload":{"count":1,"pending_count":0,"max_pending_inputs":1}}
-{"id":"legacy-4","type":"llm.requested","ts":"2026-07-19T00:00:04Z","turn_id":"turn-legacy","payload":{"iter":0,"history_len":1,"tool_count":1}}
-{"id":"legacy-5","type":"tool.requested","ts":"2026-07-19T00:00:05Z","turn_id":"turn-legacy","payload":{"name":"read","tool_use_id":"tool-legacy","input":{"path":"README.md"},"timeout_seconds":60}}
-{"id":"legacy-6","type":"tool.completed","ts":"2026-07-19T00:00:06Z","turn_id":"turn-legacy","payload":{"name":"read","tool_use_id":"tool-legacy","timeout_seconds":60,"len":2,"preview":"ok"}}
-{"id":"legacy-7","type":"llm.responded","ts":"2026-07-19T00:00:07Z","turn_id":"turn-legacy","payload":{"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1},"token_usage":{"input_tokens":1,"output_tokens":1},"blocks":[],"text":"done","thinking":"","tool_calls":[],"model":"legacy"}}
-{"id":"legacy-8","type":"turn.completed","ts":"2026-07-19T00:00:08Z","turn_id":"turn-legacy","payload":{"duration_ms":5,"output_len":4,"token_usage":{"input_tokens":1,"output_tokens":1}}}

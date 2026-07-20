@@ -8,7 +8,6 @@ import type {
   SessionShowResponse,
   SessionsListResponse,
   StartTurnResponse,
-  TurnStatusResponse,
   MediaRef,
   FileContentResponse,
   FileNode,
@@ -160,17 +159,6 @@ export async function getSessionContext(
 ): Promise<ActiveContextSnapshot> {
   return jsonOrThrow(
     await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/context`)),
-  );
-}
-
-export async function getTurnStatus(
-  id: string,
-  turnID: string,
-): Promise<TurnStatusResponse> {
-  return jsonOrThrow(
-    await fetch(
-      agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnID)}`),
-    ),
   );
 }
 

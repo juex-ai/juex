@@ -132,11 +132,12 @@ unbound, unhealthy, and ambiguous agents remain untouched.
 
 Before restarting a healthy agent, fleet checks its runtime session state.
 `turn_active` and `draining_pending` work is cancelled cleanly during graceful
-shutdown, then the healthy replacement process receives one ordinary
-continuation turn on that session. A missing legacy status route degrades to an
-ordinary restart, and continuation admission failure is reported without
-turning a successful process restart into a failure. `fleet stop` never submits
-a continuation.
+shutdown with an acknowledged `runtime_restart` intent. The healthy replacement
+receives one ordinary continuation turn only when it projects that same session
+and turn as cancelled by the restart. Missing acknowledgement skips
+continuation, and continuation admission failure is reported without turning a
+successful process restart into a failure. `fleet stop` never submits a
+continuation.
 
 ## Common Commands
 

@@ -258,53 +258,27 @@ test("inactive incomplete tail and interrupted buffers flush original messages",
   );
 });
 
-test("a terminal live turn overrides stale session and runtime activity", () => {
+test("tail activity follows only the canonical runtime turn", () => {
   assert.equal(
     assistantWorkTailActive({
-      liveTurnActive: true,
-      liveTurnID: null,
-      settledTurnID: null,
-    }),
-    true,
-  );
-  assert.equal(
-    assistantWorkTailActive({
-      liveTurnActive: false,
-      liveTurnID: null,
-      settledTurnID: "turn-1",
-      sessionTurn: { turn_id: "turn-1", state: "running" },
       runtimeTurn: { id: "turn-1", state: "active" },
     }),
-    false,
+    true,
   );
   assert.equal(
     assistantWorkTailActive({
-      liveTurnActive: false,
-      liveTurnID: null,
-      settledTurnID: "turn-1",
-      sessionTurn: { turn_id: "turn-1", state: "running" },
-      runtimeTurn: { id: "turn-2", state: "active" },
+      runtimeTurn: { id: "turn-1", state: "admitted" },
     }),
     true,
   );
   assert.equal(
     assistantWorkTailActive({
-      liveTurnActive: false,
-      liveTurnID: null,
-      settledTurnID: null,
-      sessionTurn: { turn_id: "turn-1", state: "running" },
       runtimeTurn: { id: "turn-1", state: "completed" },
     }),
     false,
   );
   assert.equal(
-    assistantWorkTailActive({
-      liveTurnActive: true,
-      liveTurnID: "turn-1",
-      settledTurnID: null,
-      sessionTurn: { turn_id: "turn-1", state: "running" },
-      runtimeTurn: { id: "turn-1", state: "errored" },
-    }),
+    assistantWorkTailActive({}),
     false,
   );
 });

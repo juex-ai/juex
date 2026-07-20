@@ -17,7 +17,6 @@ import type {
   Message,
   SessionShowResponse,
   StartTurnResponse,
-  TurnStatusResponse,
 } from "../../frontend/src/types.ts";
 
 test("isLatestSessionRoute compares route identity", () => {
@@ -52,71 +51,6 @@ test("refresh ignores stale session results after route changes", async () => {
 
   assert.deepEqual(states, []);
   assert.equal(contextCalls, 0);
-});
-
-test("turn polling retries initial route-state failures and cancels timers", async () => {
-  const timers = new FakeTimers();
-  const turns: Array<TurnStatusResponse | Error> = [
-    new Error("temporary"),
-    { state: "running" },
-    { state: "done" },
-  ];
-  let calls = 0;
-  const controller = createSessionReadController({
-    ...ports(),
-    setTimeout: timers.setTimeout,
-    clearTimeout: timers.clearTimeout,
-    getTurnStatus: async () => {
-      const result = turns[calls++] ?? { state: "done" };
-      if (result instanceof Error) throw result;
-      return result;
-    },
-  });
-
-  controller.setRoute("s1");
-  const cleanup = controller.startTurnStatusPolling({
-    sessionID: "s1",
-    turnID: "turn-1",
-    retryOnError: true,
-  });
-  await flushPromises();
-  assert.equal(calls, 1);
-  assert.equal(timers.pendingCount(), 1);
-
-  timers.runNext();
-  await flushPromises();
-  assert.equal(calls, 2);
-  assert.equal(timers.pendingCount(), 1);
-
-  cleanup();
-  timers.runNext();
-  await flushPromises();
-  assert.equal(calls, 2);
-});
-
-test("loaded turn polling does not retry transient failures", async () => {
-  const timers = new FakeTimers();
-  let calls = 0;
-  const controller = createSessionReadController({
-    ...ports(),
-    setTimeout: timers.setTimeout,
-    clearTimeout: timers.clearTimeout,
-    getTurnStatus: async () => {
-      calls++;
-      throw new Error("gone");
-    },
-  });
-
-  controller.setRoute("s1");
-  controller.startTurnStatusPolling({
-    sessionID: "s1",
-    turnID: "turn-1",
-    retryOnError: false,
-  });
-  await flushPromises();
-
-  assert.equal(calls, 1);
-  assert.equal(timers.pendingCount(), 0);
 });
 
 test("live events are ignored after route changes or subscription cleanup", () => {
@@ -312,7 +246,6 @@ function ports(): SessionReadControllerPorts & { initialState: SessionReadState 
     onStateChange: () => {},
     getSession: async (id) => session(id),
     getSessionContext: async () => activeContext(),
-    getTurnStatus: async () => ({ state: "done" }),
     startTurn: async (): Promise<StartTurnResponse> => ({ turn_id: "turn-1" }),
     subscribeEvents: (_id, _opts) => () => {},
   };

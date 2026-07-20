@@ -37,7 +37,6 @@ const (
 type TurnPhase string
 
 const (
-	TurnPhaseAdmitted          TurnPhase = "admitted"
 	TurnPhaseProviderIteration TurnPhase = "provider_iteration"
 	TurnPhaseToolBatch         TurnPhase = "tool_batch"
 	TurnPhaseCompacting        TurnPhase = "compacting"
@@ -137,8 +136,6 @@ type StatusSnapshot struct {
 	TokenUsage   llm.Usage            `json:"token_usage"`
 	ContextUsage *llm.ContextUsage    `json:"context_usage,omitempty"`
 	LastError    *StatusError         `json:"last_error,omitempty"`
-
-	pendingDrainActive bool
 }
 
 type StatusStore struct {
@@ -179,10 +176,18 @@ func NewStatusStore(seed StatusSeed) *StatusStore {
 		TokenUsage:   seed.TokenUsage,
 		ContextUsage: cloneContextUsage(seed.ContextUsage),
 	}
-	return NewStatusStoreFromSnapshot(snapshot)
+	return newStatusStoreFromSnapshot(snapshot)
 }
 
-func NewStatusStoreFromSnapshot(snapshot StatusSnapshot) *StatusStore {
+func NewStatusStoreFromJournal(seed StatusSeed, journal []events.Event) *StatusStore {
+	store := NewStatusStore(seed)
+	for _, event := range journal {
+		store.Publish(event)
+	}
+	return store
+}
+
+func newStatusStoreFromSnapshot(snapshot StatusSnapshot) *StatusStore {
 	snapshot = cloneStatusSnapshot(snapshot)
 	recomputeCanAcceptInput(&snapshot)
 	return &StatusStore{
@@ -198,10 +203,7 @@ func (s *StatusStore) Reset(seed StatusSeed, journal []events.Event) {
 	if s == nil {
 		return
 	}
-	recovered := NewStatusStore(seed)
-	for _, event := range journal {
-		recovered.Publish(event)
-	}
+	recovered := NewStatusStoreFromJournal(seed, journal)
 
 	s.mu.Lock()
 	s.snapshot = recovered.snapshot
@@ -240,7 +242,6 @@ func (s *StatusStore) RecoverAfterRestart() {
 	s.snapshot.Session.State = SessionRuntimeFailed
 	s.snapshot.Session.PendingCount = 0
 	s.snapshot.LastError = statusErr
-	s.snapshot.pendingDrainActive = false
 	recomputeCanAcceptInput(&s.snapshot)
 	snapshot := cloneStatusSnapshot(s.snapshot)
 	s.history = append(s.history, snapshot)
@@ -337,17 +338,11 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 	switch event.Type {
 	case TurnAdmittedType:
 		payload := payloadAs[TurnAdmittedPayload](event.Payload)
-		next.Turn = newTurnStatus(event, TurnLifecycleAdmitted, TurnPhaseAdmitted)
+		next.Turn = newTurnStatus(event, TurnLifecycleAdmitted, "")
 		next.Turn.CanInterrupt = !payload.NonInterruptible
 		next.Tools = []ToolCallStatus{}
 		next.Session.State = SessionRuntimeTurnActive
 		next.LastError = nil
-		next.pendingDrainActive = false
-	case "turn.started":
-		turn := ensureTurnStatus(&next, event)
-		turn.State = TurnLifecycleActive
-		turn.Phase = TurnPhaseProviderIteration
-		turn.Streaming = false
 	case TurnPhaseType:
 		payload := payloadAs[TurnPhasePayload](event.Payload)
 		turn := ensureTurnStatus(&next, event)
@@ -400,22 +395,14 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		payload := payloadAs[PendingInputDrainingPayload](event.Payload)
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
 		next.Session.State = SessionRuntimeDrainingPending
-		next.pendingDrainActive = true
 	case PendingInputPromotedType:
 		payload := payloadAs[PendingInputPromotedPayload](event.Payload)
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
 	case "pending_input.drained":
 		payload := payloadAs[PendingInputDrainedPayload](event.Payload)
-		if next.pendingDrainActive {
-			// New runtimes announce the cleared queue before accepting and
-			// publishing input queued during the drain.
-			setPendingStatus(&next, -1, payload.MaxPendingInputs)
-		} else {
-			// Legacy journals have queued -> drained without the draining
-			// event, so their terminal count remains authoritative.
-			setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
-		}
-		next.pendingDrainActive = false
+		// pending_input.draining publishes the dequeued count before callbacks
+		// can queue more input. Preserve any later queued count here.
+		setPendingStatus(&next, -1, payload.MaxPendingInputs)
 		if next.Turn != nil {
 			next.Session.State = SessionRuntimeTurnActive
 		} else {
@@ -470,7 +457,6 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		next.Tools = []ToolCallStatus{}
 		next.Session.State = SessionRuntimeIdle
 		next.LastError = nil
-		next.pendingDrainActive = false
 	case "turn.errored":
 		payload := payloadAs[TurnErroredPayload](event.Payload)
 		errorKind := StatusErrorKind(payload.ErrorKind)
@@ -492,7 +478,6 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		}
 		next.Session.State = SessionRuntimeFailed
 		next.LastError = statusErr
-		next.pendingDrainActive = false
 	}
 
 	if next.Turn != nil && !event.Timestamp.IsZero() {

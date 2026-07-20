@@ -11,68 +11,6 @@ import (
 	"github.com/juex-ai/juex/internal/runtime"
 )
 
-func TestWebTurnTransportStatusTracksRunningAndDone(t *testing.T) {
-	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
-	_, as := newTurnTransportTestSession(t, prov)
-
-	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	waitPendingProviderStarted(t, prov, "provider did not start")
-	status, ok := as.turns.status("turn-1")
-	if !ok || status.State != "running" {
-		t.Fatalf("running status = %+v, ok=%v", status, ok)
-	}
-
-	close(prov.release)
-	as.turns.wait()
-	status, ok = as.turns.status("turn-1")
-	if !ok || status.State != "done" || status.Err != "" {
-		t.Fatalf("done status = %+v, ok=%v", status, ok)
-	}
-}
-
-func TestWebTurnTransportStatusForwardsPendingCounts(t *testing.T) {
-	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
-	_, as := newTurnTransportTestSession(t, prov)
-
-	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	waitPendingProviderStarted(t, prov, "provider did not start")
-	if _, err := as.app.Engine.EnqueuePendingInput(context.Background(), "queued"); err != nil {
-		t.Fatal(err)
-	}
-	status, ok := as.turns.status("turn-1")
-	if !ok || status.State != "running" || status.PendingCount == nil || *status.PendingCount != 1 {
-		t.Fatalf("running status = %+v, ok=%v", status, ok)
-	}
-	if status.MaxPendingInputs == nil || *status.MaxPendingInputs == 0 {
-		t.Fatalf("missing max pending inputs: %+v", status)
-	}
-
-	close(prov.release)
-	as.turns.wait()
-}
-
-func TestWebTurnTransportActiveStatusOnlyWhileRunning(t *testing.T) {
-	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
-	_, as := newTurnTransportTestSession(t, prov)
-
-	if turnID, status, ok := as.turns.activeStatus(); ok {
-		t.Fatalf("idle active status = %q %+v", turnID, status)
-	}
-
-	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
-	waitPendingProviderStarted(t, prov, "provider did not start")
-	turnID, status, ok := as.turns.activeStatus()
-	if !ok || turnID != "turn-1" || status.State != "running" {
-		t.Fatalf("running active status = %q %+v ok=%v", turnID, status, ok)
-	}
-
-	close(prov.release)
-	as.turns.wait()
-	if turnID, status, ok := as.turns.activeStatus(); ok {
-		t.Fatalf("completed active status = %q %+v", turnID, status)
-	}
-}
-
 func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 	prov := newPendingProvider(llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn})
 	_, as := newTurnTransportTestSession(t, prov)
@@ -89,9 +27,10 @@ func TestWebTurnTransportInterruptIsIdempotent(t *testing.T) {
 		t.Fatal("second interrupt returned true")
 	}
 	as.turns.wait()
-	status, ok := as.turns.status("turn-1")
-	if !ok || status.State != "errored" {
-		t.Fatalf("interrupted status = %+v, ok=%v", status, ok)
+	status := as.app.Status.Snapshot()
+	if status.Turn == nil || status.Turn.ID != "turn-1" ||
+		status.Turn.State != runtime.TurnLifecycleCancelled {
+		t.Fatalf("interrupted canonical status = %+v", status)
 	}
 }
 
@@ -139,27 +78,30 @@ func TestWebTurnTransportStartCancelsExistingTurn(t *testing.T) {
 	as.turns.start("turn-2", llm.TextMessage(llm.RoleUser, "second"))
 	as.turns.wait()
 
-	first, ok := as.turns.status("turn-1")
-	if !ok || first.State != "errored" {
-		t.Fatalf("first status = %+v, ok=%v", first, ok)
-	}
-	second, ok := as.turns.status("turn-2")
-	if !ok || second.State != "done" || second.Err != "" {
-		t.Fatalf("second status = %+v, ok=%v", second, ok)
+	status := as.app.Status.Snapshot()
+	if status.Turn == nil || status.Turn.ID != "turn-2" ||
+		status.Turn.State != runtime.TurnLifecycleCompleted {
+		t.Fatalf("final canonical status = %+v", status)
 	}
 }
 
-func TestWebTurnTransportResetClearsTurnStates(t *testing.T) {
+func TestWebTurnTransportResetClearsAdmissionBookkeeping(t *testing.T) {
 	_, as := newTurnTransportTestSession(t, stubProvider{})
 
 	as.turns.start("turn-1", llm.TextMessage(llm.RoleUser, "hi"))
 	as.turns.wait()
-	if _, ok := as.turns.status("turn-1"); !ok {
-		t.Fatal("missing completed turn before reset")
+	as.turns.admissionsMu.Lock()
+	if completed := as.turns.admissions["turn-1"]; !completed {
+		as.turns.admissionsMu.Unlock()
+		t.Fatal("admission was not completed before reset")
 	}
+	as.turns.admissionsMu.Unlock()
+
 	as.turns.reset()
-	if status, ok := as.turns.status("turn-1"); ok {
-		t.Fatalf("status after reset = %+v", status)
+	as.turns.admissionsMu.Lock()
+	defer as.turns.admissionsMu.Unlock()
+	if len(as.turns.admissions) != 0 {
+		t.Fatalf("admissions after reset = %+v", as.turns.admissions)
 	}
 }
 
