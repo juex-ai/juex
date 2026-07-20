@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -16,6 +17,40 @@ import (
 	"github.com/juex-ai/juex/internal/fleetservice"
 	"github.com/juex-ai/juex/internal/version"
 )
+
+type fakeFleetServiceInstaller struct {
+	existing      fleetservice.InstalledServeOptions
+	existingFound bool
+	registration  fleetservice.Registration
+	installCalls  int
+}
+
+func (f *fakeFleetServiceInstaller) ExistingServeOptions() (
+	fleetservice.InstalledServeOptions,
+	bool,
+	error,
+) {
+	return f.existing, f.existingFound, nil
+}
+
+func (f *fakeFleetServiceInstaller) Install(context.Context) (fleetservice.Registration, error) {
+	f.installCalls++
+	return f.registration, nil
+}
+
+type fakeFleetAgentRestarter struct {
+	result fleet.RestartAgentsResult
+	err    error
+	calls  int
+}
+
+func (f *fakeFleetAgentRestarter) RestartRunningAgents(context.Context) (
+	fleet.RestartAgentsResult,
+	error,
+) {
+	f.calls++
+	return f.result, f.err
+}
 
 func TestFleetStatusDoesNotCreateWorkspaceIdentity(t *testing.T) {
 	home := t.TempDir()
@@ -516,6 +551,144 @@ func TestFleetInstallExplicitFlagsOverrideExistingServiceOptions(t *testing.T) {
 		settings.PreservedLegacyBind ||
 		settings.ConfigPath == "" {
 		t.Fatalf("settings = %+v", settings)
+	}
+}
+
+func TestFleetInstallRestartAgentsFlagIsOptIn(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		args      []string
+		wantCalls int
+	}{
+		{name: "default", wantCalls: 0},
+		{name: "explicit", args: []string{"--restart-agents"}, wantCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("JUEX_HOME", t.TempDir())
+			service := &fakeFleetServiceInstaller{
+				registration: fleetservice.Registration{
+					Platform:       fleetservice.PlatformLaunchd,
+					Name:           "dev.juex.fleet",
+					DefinitionPath: "/tmp/dev.juex.fleet.plist",
+				},
+			}
+			agents := &fakeFleetAgentRestarter{
+				result: fleet.RestartAgentsResult{
+					Items: []fleet.RestartAgentResult{{
+						Agent: fleet.AgentStatus{
+							ID:            "aaaaaaaa",
+							Name:          "alpha",
+							RuntimeHealth: fleet.RuntimeHealthy,
+						},
+						Outcome: fleet.RestartAgentRestarted,
+						Resume:  fleet.RestartResume{Required: true, Sent: true},
+					}},
+					Restarted: 1,
+				},
+			}
+			cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
+				newServiceManager: func(bool) (fleetServiceInstaller, error) {
+					return service, nil
+				},
+				newAgentManager: func() (fleetAgentRestarter, error) {
+					return agents, nil
+				},
+			})
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetErr(&output)
+			cmd.SetArgs(test.args)
+
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if service.installCalls != 1 || agents.calls != test.wantCalls {
+				t.Fatalf(
+					"install calls = %d, agent refresh calls = %d, want 1/%d",
+					service.installCalls,
+					agents.calls,
+					test.wantCalls,
+				)
+			}
+			if test.wantCalls == 1 {
+				for _, want := range []string{
+					"Agent aaaaaaaa alpha: restarted runtime=healthy resume=sent",
+					"Agent refresh: 1 restarted, 0 skipped, 0 failed.",
+				} {
+					if !strings.Contains(output.String(), want) {
+						t.Fatalf("output missing %q:\n%s", want, output.String())
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestFleetInstallRestartAgentsRendersCompleteBatchBeforeReturningFailure(t *testing.T) {
+	t.Setenv("JUEX_HOME", t.TempDir())
+	service := &fakeFleetServiceInstaller{
+		registration: fleetservice.Registration{
+			Platform:       fleetservice.PlatformSystemd,
+			Name:           "juex-fleet.service",
+			DefinitionPath: "/tmp/juex-fleet.service",
+		},
+	}
+	agents := &fakeFleetAgentRestarter{
+		result: fleet.RestartAgentsResult{
+			Items: []fleet.RestartAgentResult{
+				{
+					Agent: fleet.AgentStatus{
+						ID:            "aaaaaaaa",
+						Name:          "failed",
+						RuntimeHealth: fleet.RuntimeHealthy,
+					},
+					Outcome: fleet.RestartAgentFailed,
+					Reason:  "shutdown failed",
+				},
+				{
+					Agent: fleet.AgentStatus{
+						ID:            "bbbbbbbb",
+						Name:          "continued",
+						RuntimeHealth: fleet.RuntimeHealthy,
+					},
+					Outcome: fleet.RestartAgentRestarted,
+					Resume: fleet.RestartResume{
+						Error: "status route unavailable",
+					},
+				},
+			},
+			Restarted: 1,
+			Failed:    1,
+		},
+		err: &fleet.RestartAgentsError{Failed: 1},
+	}
+	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
+		newServiceManager: func(bool) (fleetServiceInstaller, error) {
+			return service, nil
+		},
+		newAgentManager: func() (fleetAgentRestarter, error) {
+			return agents, nil
+		},
+	})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	cmd.SetArgs([]string{"--restart-agents"})
+
+	err := cmd.Execute()
+	var aggregate *fleet.RestartAgentsError
+	if !errors.As(err, &aggregate) {
+		t.Fatalf("error = %T %v, want RestartAgentsError", err, err)
+	}
+	for _, want := range []string{
+		"Agent aaaaaaaa failed: failed",
+		"Agent bbbbbbbb continued: restarted",
+		"resume=unknown",
+		"Agent refresh: 1 restarted, 0 skipped, 1 failed.",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("output missing %q:\n%s", want, output.String())
+		}
 	}
 }
 

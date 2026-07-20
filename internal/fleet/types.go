@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/runtime"
 )
 
 type BindingState string
@@ -45,6 +46,49 @@ type AgentStatus struct {
 	EndpointReachable bool          `json:"endpoint_reachable"`
 	EndpointMatched   bool          `json:"endpoint_matched"`
 	Problem           string        `json:"problem,omitempty"`
+}
+
+type RestartResume struct {
+	Required  bool   `json:"required"`
+	Sent      bool   `json:"sent"`
+	SessionID string `json:"session_id,omitempty"`
+	TurnID    string `json:"turn_id,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type RestartResult struct {
+	AgentStatus
+	Resume RestartResume `json:"resume"`
+}
+
+type RestartAgentOutcome string
+
+const (
+	RestartAgentRestarted RestartAgentOutcome = "restarted"
+	RestartAgentSkipped   RestartAgentOutcome = "skipped"
+	RestartAgentFailed    RestartAgentOutcome = "failed"
+)
+
+type RestartAgentResult struct {
+	Agent   AgentStatus         `json:"agent"`
+	Outcome RestartAgentOutcome `json:"outcome"`
+	Reason  string              `json:"reason,omitempty"`
+	Resume  RestartResume       `json:"resume"`
+}
+
+type RestartAgentsResult struct {
+	Items     []RestartAgentResult `json:"items"`
+	Restarted int                  `json:"restarted"`
+	Skipped   int                  `json:"skipped"`
+	Failed    int                  `json:"failed"`
+}
+
+type RestartAgentsError struct {
+	Failed int
+}
+
+func (e *RestartAgentsError) Error() string {
+	return fmt.Sprintf("fleet: %d agent restart(s) failed", e.Failed)
 }
 
 // ReadOnlyAgentState identifies the durable workspace and identity-owned state
@@ -170,19 +214,26 @@ type spawnedProcess struct {
 	LogPath string
 }
 
+type restartActivity struct {
+	SessionID string
+	State     runtime.SessionRuntimeState
+}
+
 type dependencies struct {
-	listRegistry       func(string) ([]agentstate.RegistryEntry, error)
-	inspectBinding     func(agentstate.RegistryEntry) agentstate.WorkspaceBinding
-	resolveAgent       func(agentstate.Options) (agentstate.Resolution, error)
-	updateAgent        func(string, string, agentstate.AgentUpdate) (agentstate.Agent, error)
-	deleteRegistered   func(string, string) error
-	readRuntime        func(string) (endpoint.Runtime, error)
-	removeRuntime      func(string, endpoint.Runtime) error
-	acquireMaintenance func(string) (maintenanceGuard, error)
-	processAlive       func(int) (bool, error)
-	probe              func(context.Context, endpoint.Runtime) error
-	requestShutdown    func(context.Context, endpoint.Runtime) error
-	spawn              func(string, string, agentstate.RegistryEntry) (spawnedProcess, error)
+	listRegistry        func(string) ([]agentstate.RegistryEntry, error)
+	inspectBinding      func(agentstate.RegistryEntry) agentstate.WorkspaceBinding
+	resolveAgent        func(agentstate.Options) (agentstate.Resolution, error)
+	updateAgent         func(string, string, agentstate.AgentUpdate) (agentstate.Agent, error)
+	deleteRegistered    func(string, string) error
+	readRuntime         func(string) (endpoint.Runtime, error)
+	removeRuntime       func(string, endpoint.Runtime) error
+	acquireMaintenance  func(string) (maintenanceGuard, error)
+	processAlive        func(int) (bool, error)
+	probe               func(context.Context, endpoint.Runtime) error
+	requestShutdown     func(context.Context, endpoint.Runtime) error
+	readRestartActivity func(context.Context, endpoint.Runtime) (restartActivity, error)
+	postRestartResume   func(context.Context, endpoint.Runtime, string, string) (string, error)
+	spawn               func(string, string, agentstate.RegistryEntry) (spawnedProcess, error)
 }
 
 func defaultDependencies() dependencies {
@@ -197,10 +248,12 @@ func defaultDependencies() dependencies {
 		acquireMaintenance: func(agentDir string) (maintenanceGuard, error) {
 			return endpoint.AcquireMaintenance(agentDir)
 		},
-		processAlive:    processExists,
-		probe:           endpoint.Probe,
-		requestShutdown: endpoint.RequestShutdown,
-		spawn:           spawnDetached,
+		processAlive:        processExists,
+		probe:               endpoint.Probe,
+		requestShutdown:     endpoint.RequestShutdown,
+		readRestartActivity: readRestartActivity,
+		postRestartResume:   postRestartResume,
+		spawn:               spawnDetached,
 	}
 }
 

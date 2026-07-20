@@ -970,7 +970,7 @@ juex
 ├── serve [--addr <host:port>] [--unsafe-bind-any] [--headless]
 ├── fleet
 │   ├── serve [--addr <host:port>] [--unsafe-bind-any]
-│   ├── install [--addr <host:port>] [--unsafe-bind-any]
+│   ├── install [--addr <host:port>] [--unsafe-bind-any] [--restart-agents]
 │   ├── uninstall
 │   ├── status [--format table|json]
 │   ├── start|stop|restart <agent>
@@ -1098,8 +1098,15 @@ or browser-listener exit never stops them.
 Per-agent lifecycle operations hold
 `$JUEX_HOME/.locks/fleet/<agent-id>.lock`. Start waits for the spawned PID to
 publish and answer with an exact runtime identity. Stop requests instance-bound
-self-shutdown and never sends a process signal. Add resolves an explicitly
-supplied absolute workspace through the standard marker rules, then applies
+self-shutdown and never sends a process signal. Restart reads the healthy
+agent's `/api/status` before shutdown and remembers only `turn_active` or
+`draining_pending` session work for that invocation. After the replacement
+process is healthy, it submits one continuation through the existing session
+turn endpoint. Status detection failure preserves legacy compatibility by
+continuing an ordinary restart with a diagnostic; continuation admission
+failure is also diagnostic-only. Stop never performs either step. Add resolves
+an explicitly supplied absolute workspace through the standard marker rules,
+then applies
 optional metadata and start-now under that same lifecycle lock. Disable stops
 before persisting `enabled=false`; enable does not implicitly start.
 Intentional remove verifies confirmation, stops the process, takes the endpoint
@@ -1109,7 +1116,7 @@ boundary but remains limited to revalidated definite orphans. Fleet commands
 resolve the effective home directly and never load or mint an identity for
 their current directory implicitly. Status projects the recorded
 binary version and warns when a live agent differs from the current CLI without
-restarting that detached process.
+implicitly restarting that detached process.
 
 ### 3.8.2 Fleet Service Registration
 
@@ -1119,7 +1126,11 @@ explicit `--addr`, then `fleet.addr` in `$JUEX_HOME/juex.yaml`, then
 `127.0.0.1:5839`. Home fleet config is loaded independently of provider and
 workspace config resolution. `juex fleet install --addr ...` validates a
 stable non-zero loopback address and atomically merges it into the home YAML
-before installing. The service definition runs `juex fleet serve` without an
+before installing. The opt-in `--restart-agents` flag runs a sequential
+`internal/fleet` bulk operation after service installation. It selects only
+enabled, bound, healthy agents from one status snapshot, reports every
+restarted, skipped, or failed item, and continues after individual failures.
+The service definition runs `juex fleet serve` without an
 address argument, so config edits take effect after a service restart. Before
 replacing an existing launchd, systemd, or Termux definition, install reads its
 legacy `fleet serve` arguments. With no explicit replacement flags, a
@@ -1146,8 +1157,8 @@ terminating detached agent processes. Registration paths live in the platform
 service manager's user directory rather than under `JUEX_HOME`; the
 home-derived name keeps multiple installations distinct. The package owns
 rendering, paths, manager commands, and strict state classification.
-`internal/cli` owns flags and presentation, while agent reconciliation remains
-in `internal/fleet`.
+`internal/cli` owns flags and presentation, while agent selection, restart, and
+reconciliation remain in `internal/fleet`.
 
 ### 3.8.3 Fleet Web Backend
 
@@ -2020,10 +2031,12 @@ detects platform archives, works when piped into `bash`, verifies the archive
 against `checksums.txt`, and installs into a user-writable bin directory. Both
 POSIX installers use the newly installed binary to detect and refresh an
 existing per-user fleet service. A missing service is only installed when
-`INSTALL_FLEET_SERVICE=1`; detached agents are never restarted, and status
-reports any remaining agent-version skew. Service-manager probe, refresh, or
-status failures are post-install warnings and do not invalidate a successfully
-installed binary.
+`INSTALL_FLEET_SERVICE=1`. The released-binary installer leaves detached agents
+running and reports version skew. The source `scripts/install-local.sh` passes
+`--restart-agents` only while refreshing an already installed service, so
+eligible running agents adopt the newly built binary; first installation
+remains non-disruptive. Service-manager probe, refresh, or status failures are
+post-install warnings and do not invalidate a successfully installed binary.
 `scripts/install.ps1` is the Windows PowerShell installer for released `zip`
 archives. `scripts/install-local.sh` remains the source-build installer for
 this checkout.

@@ -126,7 +126,17 @@ effective `JUEX_HOME`, so independent homes can coexist. `fleet uninstall`
 removes only the supervisor registration; already detached agents keep running
 and remain manageable with the ordinary fleet lifecycle commands. Fleet status
 includes each running agent's binary version and warns when it differs from the
-current CLI; detached agents are not restarted automatically.
+current CLI. `fleet install --restart-agents` explicitly refreshes currently
+healthy, enabled, bound agents after service installation; stopped, disabled,
+unbound, unhealthy, and ambiguous agents remain untouched.
+
+Before restarting a healthy agent, fleet checks its runtime session state.
+`turn_active` and `draining_pending` work is cancelled cleanly during graceful
+shutdown, then the healthy replacement process receives one ordinary
+continuation turn on that session. A missing legacy status route degrades to an
+ordinary restart, and continuation admission failure is reported without
+turning a successful process restart into a failure. `fleet stop` never submits
+a continuation.
 
 ## Common Commands
 
@@ -157,13 +167,13 @@ current CLI; detached agents are not restarted automatically.
 | `juex serve --addr 127.0.0.1:9000` | Add an explicit loopback TCP listener for the agent JSON/SSE API. |
 | `juex serve --headless` | Compatibility form of endpoint-only `juex serve`; implied without `--addr`. |
 | `juex fleet serve [--addr 127.0.0.1:5839]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
-| `juex fleet install [--addr 127.0.0.1:5839]` | Persist an explicit address when provided, then register and start the fleet supervisor. |
+| `juex fleet install [--addr 127.0.0.1:5839] [--restart-agents]` | Persist an explicit address when provided, register and start the fleet supervisor, and optionally refresh eligible running agents. |
 | `juex fleet uninstall` | Stop and remove the supervisor service without stopping detached agents. |
 | `juex fleet status [--format table\|json]` | Show every registry entry with separate workspace binding and runtime health. |
 | `juex fleet add <path> [--name N] [--autostart] [--start]` | Register an existing absolute workspace and optionally start it. |
 | `juex fleet enable\|disable <agent>` | Persist reversible enabled state; disable also stops the agent. |
 | `juex fleet remove <agent> [--yes]` | Confirm and permanently remove registered agent state without deleting workspace files. |
-| `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity. |
+| `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity; restart resumes active session work after the replacement is healthy. |
 | `juex fleet logs <agent> [--lines 200]` | Tail bounded output for fleet-started agents; adopted external processes retain their original logging destination. |
 | `juex fleet gc [--yes]` | Review and explicitly delete definitely orphaned agent state. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |

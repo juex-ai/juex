@@ -14,6 +14,13 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   waits for an exact PID and endpoint identity.
 - `Stop` requests instance-bound self-shutdown; it never signals or force-kills
   a recorded PID.
+- `Restart` detects active or pending-drain session work before graceful
+  shutdown and submits one continuation turn only after the replacement is
+  healthy. Legacy status-read and continuation-submit failures are reported in
+  the result without changing process restart success; `Stop` never resumes.
+- `RestartRunningAgents` sequentially restarts only enabled, bound, healthy
+  entries from one status snapshot, reports skips and failures, and continues
+  after individual restart errors.
 - `Serve` reconciles once, adopts verified runtimes, starts enabled autostart
   agents, and remains resident without owning child lifetime.
 - `Logs` tails only the fleet-owned output created by `Start`; adopted

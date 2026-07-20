@@ -9,6 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/runtime"
 )
 
 const runtimeReadRetryWindow = time.Second
@@ -200,32 +201,97 @@ func (m *Manager) stopEntry(ctx context.Context, entry agentstate.RegistryEntry)
 	}
 }
 
-func (m *Manager) Restart(ctx context.Context, selector string) (AgentStatus, error) {
+func (m *Manager) Restart(ctx context.Context, selector string) (RestartResult, error) {
+	return m.restart(ctx, selector, false)
+}
+
+func (m *Manager) restart(
+	ctx context.Context,
+	selector string,
+	requireEligible bool,
+) (RestartResult, error) {
 	entry, err := m.resolve(selector)
 	if err != nil {
-		return AgentStatus{}, err
+		return RestartResult{}, err
 	}
 	guard, err := acquireLifecycleLock(m.homeDir, entry.ID)
 	if err != nil {
-		return AgentStatus{}, err
+		return RestartResult{}, err
 	}
 	defer func() { _ = guard.Close() }()
 	entry, err = m.reload(entry.ID)
 	if err != nil {
-		return AgentStatus{}, err
+		return RestartResult{}, err
 	}
 	status := m.inspectStatus(ctx, entry)
+	result := RestartResult{AgentStatus: status}
+	if requireEligible {
+		if reason := restartSkipReason(status); reason != "" {
+			return result, &restartSkippedError{Reason: reason}
+		}
+	}
 	if err := startableConflict(entry, status); err != nil {
-		return status, err
+		return result, err
+	}
+	if status.RuntimeHealth == RuntimeHealthy {
+		runtimeState, readErr := m.deps.readRuntime(entry.Dir)
+		if readErr != nil {
+			result.Resume.Error = fmt.Sprintf("detect interrupted turn: read runtime: %v", readErr)
+		} else {
+			activityCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
+			activity, activityErr := m.deps.readRestartActivity(activityCtx, runtimeState)
+			cancel()
+			if activityErr != nil {
+				result.Resume.Error = fmt.Sprintf("detect interrupted turn: %v", activityErr)
+			} else if activity.State == runtime.SessionRuntimeTurnActive ||
+				activity.State == runtime.SessionRuntimeDrainingPending {
+				result.Resume.Required = true
+				result.Resume.SessionID = activity.SessionID
+			}
+		}
 	}
 	if _, err := m.stopEntry(ctx, entry); err != nil {
-		return AgentStatus{}, err
+		return result, err
 	}
 	entry, err = m.reload(entry.ID)
 	if err != nil {
-		return AgentStatus{}, err
+		return result, err
 	}
-	return m.startEntry(ctx, entry)
+	result.AgentStatus, err = m.startEntry(ctx, entry)
+	if err != nil {
+		return result, err
+	}
+	if !result.Resume.Required {
+		return result, nil
+	}
+	runtimeState, readErr := m.deps.readRuntime(entry.Dir)
+	if readErr != nil {
+		result.Resume.Error = fmt.Sprintf("submit restart continuation: read runtime: %v", readErr)
+		return result, nil
+	}
+	resumeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
+	turnID, resumeErr := m.deps.postRestartResume(
+		resumeCtx,
+		runtimeState,
+		result.Resume.SessionID,
+		restartResumePrompt,
+	)
+	cancel()
+	if resumeErr != nil {
+		result.Resume.Error = fmt.Sprintf("submit restart continuation: %v", resumeErr)
+		return result, nil
+	}
+	result.Resume.Sent = true
+	result.Resume.TurnID = turnID
+	return result, nil
+}
+
+type restartSkippedError struct {
+	Reason string
+}
+
+func (e *restartSkippedError) Error() string {
+	return "fleet: restart skipped: " + e.Reason
 }
 
 func startableConflict(entry agentstate.RegistryEntry, status AgentStatus) error {

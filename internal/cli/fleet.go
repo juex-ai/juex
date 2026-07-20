@@ -193,6 +193,31 @@ type fleetInstallSettings struct {
 	PreservedLegacyBind bool
 }
 
+type fleetServiceInstaller interface {
+	ExistingServeOptions() (fleetservice.InstalledServeOptions, bool, error)
+	Install(context.Context) (fleetservice.Registration, error)
+}
+
+type fleetAgentRestarter interface {
+	RestartRunningAgents(context.Context) (fleet.RestartAgentsResult, error)
+}
+
+type fleetInstallCommandDeps struct {
+	newServiceManager func(bool) (fleetServiceInstaller, error)
+	newAgentManager   func() (fleetAgentRestarter, error)
+}
+
+func defaultFleetInstallCommandDeps() fleetInstallCommandDeps {
+	return fleetInstallCommandDeps{
+		newServiceManager: func(unsafeBindAny bool) (fleetServiceInstaller, error) {
+			return newFleetServiceManager(unsafeBindAny)
+		},
+		newAgentManager: func() (fleetAgentRestarter, error) {
+			return newFleetManager()
+		},
+	}
+}
+
 func resolveFleetInstallSettings(
 	cmd *cobra.Command,
 	flagAddr string,
@@ -241,9 +266,14 @@ func resolveFleetInstallSettings(
 }
 
 func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
+	return newFleetInstallCmdWithDeps(defaultFleetInstallCommandDeps())
+}
+
+func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 	var (
 		addr          string
 		unsafeBindAny bool
+		restartAgents bool
 	)
 	cmd := &cobra.Command{
 		Use:   "install",
@@ -267,7 +297,7 @@ func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
 					msg: "juex fleet install: --addr must bind to loopback (got " + selectedAddr + "). Pass --unsafe-bind-any if you have your own network protection.",
 				}
 			}
-			probeManager, err := newFleetServiceManager(false)
+			probeManager, err := deps.newServiceManager(false)
 			if err != nil {
 				return err
 			}
@@ -289,7 +319,7 @@ func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
 			if settings.UnsafeBindAny {
 				fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: --unsafe-bind-any in use; juex has no authentication. Anyone who can reach this address can run shell commands.")
 			}
-			manager, err := newFleetServiceManager(settings.UnsafeBindAny)
+			manager, err := deps.newServiceManager(settings.UnsafeBindAny)
 			if err != nil {
 				return err
 			}
@@ -312,12 +342,59 @@ func newFleetInstallCmd(_ *persistentFlags) *cobra.Command {
 				return err
 			}
 			renderFleetServiceResult(cmd, "Installed", registration)
-			return nil
+			if !restartAgents {
+				return nil
+			}
+			agentManager, err := deps.newAgentManager()
+			if err != nil {
+				return err
+			}
+			result, restartErr := agentManager.RestartRunningAgents(cmd.Context())
+			renderRestartAgentsResult(cmd, result)
+			return restartErr
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", config.DefaultFleetAddr, "stable fleet browser address (host:port)")
 	cmd.Flags().BoolVar(&unsafeBindAny, "unsafe-bind-any", false, "allow --addr to bind beyond loopback (no auth — use only on trusted networks)")
+	cmd.Flags().BoolVar(&restartAgents, "restart-agents", false, "restart currently healthy resident agents after installing the service")
 	return cmd
+}
+
+func renderRestartAgentsResult(cmd *cobra.Command, result fleet.RestartAgentsResult) {
+	for _, item := range result.Items {
+		resume := "not-needed"
+		switch {
+		case item.Resume.Sent:
+			resume = "sent"
+		case item.Resume.Required:
+			resume = "failed"
+		case item.Resume.Error != "":
+			resume = "unknown"
+		}
+		fmt.Fprintf(
+			cmd.OutOrStdout(),
+			"Agent %s %s: %s runtime=%s resume=%s",
+			item.Agent.ID,
+			item.Agent.Name,
+			item.Outcome,
+			item.Agent.RuntimeHealth,
+			resume,
+		)
+		if item.Reason != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), " reason=%s", item.Reason)
+		}
+		if item.Resume.Error != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), " warning=%s", item.Resume.Error)
+		}
+		fmt.Fprintln(cmd.OutOrStdout())
+	}
+	fmt.Fprintf(
+		cmd.OutOrStdout(),
+		"Agent refresh: %d restarted, %d skipped, %d failed.\n",
+		result.Restarted,
+		result.Skipped,
+		result.Failed,
+	)
 }
 
 func newFleetUninstallCmd(_ *persistentFlags) *cobra.Command {
@@ -631,13 +708,17 @@ func newFleetLifecycleCmd(_ *persistentFlags, action string) *cobra.Command {
 				return err
 			}
 			var status fleet.AgentStatus
+			var resume *fleet.RestartResume
 			switch action {
 			case "start":
 				status, err = manager.Start(cmd.Context(), args[0])
 			case "stop":
 				status, err = manager.Stop(cmd.Context(), args[0])
 			case "restart":
-				status, err = manager.Restart(cmd.Context(), args[0])
+				var result fleet.RestartResult
+				result, err = manager.Restart(cmd.Context(), args[0])
+				status = result.AgentStatus
+				resume = &result.Resume
 			}
 			if err != nil {
 				return mapFleetError(err)
@@ -651,6 +732,21 @@ func newFleetLifecycleCmd(_ *persistentFlags, action string) *cobra.Command {
 			)
 			if status.Endpoint != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), " at %s", status.Endpoint)
+			}
+			if resume != nil {
+				switch {
+				case resume.Sent:
+					fmt.Fprint(cmd.OutOrStdout(), " resume=sent")
+				case resume.Required:
+					fmt.Fprint(cmd.OutOrStdout(), " resume=failed")
+				case resume.Error != "":
+					fmt.Fprint(cmd.OutOrStdout(), " resume=unknown")
+				default:
+					fmt.Fprint(cmd.OutOrStdout(), " resume=not-needed")
+				}
+				if resume.Error != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), " warning=%s", resume.Error)
+				}
 			}
 			fmt.Fprintln(cmd.OutOrStdout())
 			return nil
