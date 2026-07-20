@@ -421,7 +421,7 @@ func (s *Server) serveReadOnlyAgent(
 	selector string,
 	upstreamPath string,
 ) bool {
-	if r.Method != http.MethodGet || !isReadOnlyAgentPath(upstreamPath) {
+	if !isReadOnlyAgentRequest(r.Method, upstreamPath) {
 		return false
 	}
 	stateBackend, ok := s.manager.(readOnlyStateBackend)
@@ -442,6 +442,11 @@ func (s *Server) serveReadOnlyAgent(
 		AgentStateDir: state.StateDir,
 	}).ServeHTTP(w, request)
 	return true
+}
+
+func isReadOnlyAgentRequest(method, path string) bool {
+	return isReadOnlyAgentPath(path) &&
+		(method == http.MethodGet || (method == http.MethodHead && path == "/api/media"))
 }
 
 func isReadOnlyAgentPath(path string) bool {
