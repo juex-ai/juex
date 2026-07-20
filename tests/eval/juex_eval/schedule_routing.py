@@ -199,6 +199,18 @@ def validate_outcome(
         hard_issues.append(
             "observable_list did not produce a successful result for contract-valid input"
         )
+    if (
+        expectation.variant == SEEDED_EQUIVALENT_VARIANT
+        and _has_unexplained_seeded_list_mismatch(
+            list_uses,
+            uses,
+            results,
+            expectation,
+        )
+    ):
+        hard_issues.append(
+            "observable_list returned an incorrect result for the pre-seeded schedule"
+        )
     persistence_issues: list[str] = []
     _validate_persisted_config(observables_path, expectation, persistence_issues)
     create_uses = [use for use in uses if use.name == "schedule_create"]
@@ -230,7 +242,7 @@ def validate_outcome(
         successful_mutations = [
             use
             for use in uses
-            if use.name in {*SEEDED_MUTATION_TOOLS, "schedule_create"}
+            if use.name in {*SEEDED_MUTATION_TOOLS, *FORBIDDEN_TOOLS, "schedule_create"}
             and _successful_result_after(use, results) is not None
         ]
         if successful_mutations:
@@ -480,6 +492,45 @@ def _list_result_contains_equivalent(
             continue
         schedule_config = entry.get("schedule_config")
         if _schedule_config_matches(schedule_config, expectation):
+            return True
+    return False
+
+
+def _has_unexplained_seeded_list_mismatch(
+    list_uses: list[_ToolUse],
+    uses: list[_ToolUse],
+    results: list[_ToolResult],
+    expectation: ScheduleRoutingExpectation,
+) -> bool:
+    for list_use in list_uses:
+        if not _observable_list_input_matches(list_use.input):
+            continue
+        result = _successful_result_after(list_use, results)
+        if result is None or _list_result_contains_equivalent(result, expectation):
+            continue
+        if not _has_successful_seed_state_mutation_before(
+            list_use,
+            uses,
+            results,
+            expectation,
+        ):
+            return True
+    return False
+
+
+def _has_successful_seed_state_mutation_before(
+    list_use: _ToolUse,
+    uses: list[_ToolUse],
+    results: list[_ToolResult],
+    expectation: ScheduleRoutingExpectation,
+) -> bool:
+    for use in uses:
+        if use.name not in SEEDED_MUTATION_TOOLS or not isinstance(use.input, dict):
+            continue
+        if use.input.get("id") != expectation.existing_schedule_id:
+            continue
+        result = _successful_result_after(use, results)
+        if result is not None and _position(result) < _position(list_use):
             return True
     return False
 
