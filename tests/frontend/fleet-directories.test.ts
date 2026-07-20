@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  compareDirectoryNames,
   directoryCreateKeyAction,
   mergeCreatedDirectory,
   revealScrollableTail,
+  revealWorkspaceSelectionTail,
+  shouldApplyDirectoryBrowseResult,
   shouldApplyDirectoryCreateResult,
   validateNewDirectoryName,
   workspacePathUpdate,
@@ -64,6 +67,16 @@ test("created directories merge only into their captured parent in sorted order"
     listing,
     "late responses must not merge into another listing",
   );
+
+  const names = ["z", "é", "A", "🦁", "a", "Z"];
+  assert.deepEqual(names.sort(compareDirectoryNames), [
+    "A",
+    "Z",
+    "a",
+    "z",
+    "é",
+    "🦁",
+  ]);
 });
 
 test("request generation rejects late create results after cancel close or reopen", () => {
@@ -86,6 +99,29 @@ test("request generation rejects late create results after cancel close or reope
   }
 });
 
+test("browse generation allows only the latest open-dialog response", () => {
+  const valid = {
+    requestGeneration: 7,
+    currentGeneration: 7,
+    dialogOpen: true,
+  };
+  assert.equal(shouldApplyDirectoryBrowseResult(valid), true);
+  assert.equal(
+    shouldApplyDirectoryBrowseResult({
+      ...valid,
+      currentGeneration: 8,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldApplyDirectoryBrowseResult({
+      ...valid,
+      dialogOpen: false,
+    }),
+    false,
+  );
+});
+
 test("directory keyboard actions and path-tail policy are explicit", () => {
   assert.equal(directoryCreateKeyAction("Enter"), "create");
   assert.equal(directoryCreateKeyAction("Escape"), "cancel");
@@ -103,4 +139,10 @@ test("directory keyboard actions and path-tail policy are explicit", () => {
   revealScrollableTail(scrollTarget);
   assert.equal(scrollTarget.scrollLeft, 640);
   revealScrollableTail(null);
+
+  const workspaceTarget = { scrollLeft: 0, scrollWidth: 320 };
+  const breadcrumbTarget = { scrollLeft: 10, scrollWidth: 960 };
+  revealWorkspaceSelectionTail(workspaceTarget, breadcrumbTarget);
+  assert.equal(workspaceTarget.scrollLeft, 320);
+  assert.equal(breadcrumbTarget.scrollLeft, 960);
 });

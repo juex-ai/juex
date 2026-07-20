@@ -58,9 +58,35 @@ export function mergeCreatedDirectory(
   return {
     ...listing,
     dirs: [...listing.dirs, created].sort((left, right) =>
-      left.name.localeCompare(right.name),
+      compareDirectoryNames(left.name, right.name),
     ),
   };
+}
+
+export function compareDirectoryNames(left: string, right: string): number {
+  const leftCodePoints = Array.from(left, (value) => value.codePointAt(0) ?? 0);
+  const rightCodePoints = Array.from(
+    right,
+    (value) => value.codePointAt(0) ?? 0,
+  );
+  const sharedLength = Math.min(leftCodePoints.length, rightCodePoints.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = leftCodePoints[index] - rightCodePoints[index];
+    if (difference !== 0) return difference;
+  }
+  return leftCodePoints.length - rightCodePoints.length;
+}
+
+export function shouldApplyDirectoryBrowseResult({
+  requestGeneration,
+  currentGeneration,
+  dialogOpen,
+}: {
+  requestGeneration: number;
+  currentGeneration: number;
+  dialogOpen: boolean;
+}): boolean {
+  return requestGeneration === currentGeneration && dialogOpen;
 }
 
 export function shouldApplyDirectoryCreateResult({
@@ -105,4 +131,12 @@ export function revealScrollableTail(
   target: Pick<HTMLElement, "scrollLeft" | "scrollWidth"> | null,
 ): void {
   if (target) target.scrollLeft = target.scrollWidth;
+}
+
+export function revealWorkspaceSelectionTail(
+  workspaceTarget: Pick<HTMLElement, "scrollLeft" | "scrollWidth"> | null,
+  breadcrumbTarget: Pick<HTMLElement, "scrollLeft" | "scrollWidth"> | null,
+): void {
+  revealScrollableTail(workspaceTarget);
+  revealScrollableTail(breadcrumbTarget);
 }

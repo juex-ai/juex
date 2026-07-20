@@ -213,6 +213,7 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(fleetSource, /Create directory/);
   assert.match(fleetSource, /directoryCreateKeyAction/);
   assert.match(fleetSource, /directoryCreatingRef\.current/);
+  assert.match(fleetSource, /browseGenerationRef\.current/);
   assert.match(fleetSource, /shouldApplyDirectoryCreateResult/);
   assert.match(fleetSource, /disabled=\{directoryNavigationLocked\}/);
   assert.match(fleetSource, /\[scrollbar-width:none\]/);
@@ -228,6 +229,11 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
     "the Add agent footer should not add a separator below its fields",
   );
   assert.match(fleetSource, /aria-describedby=/);
+  assert.match(fleetSource, /aria-invalid:ring-0/);
+  assert.match(
+    fleetSource,
+    /disabled=\{\s*directoryCreating \|\|\s*directoryName\.trim\(\) === ""\s*\}/,
+  );
   assert.match(fleetSource, /role="alert"/);
   assert.match(fleetSource, /sm:items-end/);
   assert.match(fleetSource, /data-selected=\{selected \? "true" : "false"\}/);

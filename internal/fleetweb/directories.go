@@ -3,6 +3,7 @@ package fleetweb
 import (
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -55,6 +56,16 @@ func (s *Server) handleListDirectories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateDirectory(w http.ResponseWriter, r *http.Request) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(
+			w,
+			http.StatusUnsupportedMediaType,
+			"unsupported_media_type",
+			"Content-Type must be application/json",
+		)
+		return
+	}
 	var body struct {
 		Parent *string `json:"parent"`
 		Name   *string `json:"name"`

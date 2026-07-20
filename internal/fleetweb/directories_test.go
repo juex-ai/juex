@@ -21,15 +21,17 @@ func TestDirectoryAPICreatesOneEmptyDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := newServer(&fakeBackend{}, Options{Addr: "127.0.0.1:0"})
-	body := bytes.NewBufferString(
-		`{"parent":` + quotedJSON(filepath.Join(root, "nested", "..")) + `,"name":"  workspace  "}`,
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/fs/dirs",
+		bytes.NewBufferString(
+			`{"parent":`+quotedJSON(filepath.Join(root, "nested", ".."))+`,"name":"  workspace  "}`,
+		),
 	)
+	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
-	server.Handler().ServeHTTP(
-		recorder,
-		httptest.NewRequest(http.MethodPost, "/api/fs/dirs", body),
-	)
+	server.Handler().ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -113,6 +115,18 @@ func TestDirectoryAPICreateUsesStrictBoundedJSONAndMethods(t *testing.T) {
 		wantStatus int
 	}{
 		{
+			name:       "missing content type",
+			method:     http.MethodPost,
+			body:       `{"parent":` + quotedJSON(root) + `,"name":"workspace"}`,
+			wantStatus: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:       "simple cross origin content type",
+			method:     http.MethodPost,
+			body:       `{"parent":` + quotedJSON(root) + `,"name":"workspace"}`,
+			wantStatus: http.StatusUnsupportedMediaType,
+		},
+		{
 			name:       "unknown field",
 			method:     http.MethodPost,
 			body:       `{"parent":` + quotedJSON(root) + `,"name":"workspace","extra":true}`,
@@ -152,9 +166,21 @@ func TestDirectoryAPICreateUsesStrictBoundedJSONAndMethods(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(
+				tt.method,
+				"/api/fs/dirs",
+				bytes.NewBufferString(tt.body),
+			)
+			if tt.method == http.MethodPost && tt.name != "missing content type" {
+				contentType := "application/json"
+				if tt.name == "simple cross origin content type" {
+					contentType = "text/plain"
+				}
+				request.Header.Set("Content-Type", contentType)
+			}
 			server.Handler().ServeHTTP(
 				recorder,
-				httptest.NewRequest(tt.method, "/api/fs/dirs", bytes.NewBufferString(tt.body)),
+				request,
 			)
 			if recorder.Code != tt.wantStatus {
 				t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
@@ -292,9 +318,15 @@ func createDirectoryRequest(
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/fs/dirs",
+		bytes.NewReader(payload),
+	)
+	request.Header.Set("Content-Type", "application/json")
 	server.Handler().ServeHTTP(
 		recorder,
-		httptest.NewRequest(http.MethodPost, "/api/fs/dirs", bytes.NewReader(payload)),
+		request,
 	)
 	return recorder
 }
