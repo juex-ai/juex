@@ -93,6 +93,11 @@ test("fleet rail keeps its header controls lightweight and vertically stable", (
   assert.doesNotMatch(sidebarSource, /\{workingCount\} working/);
   assert.doesNotMatch(sidebarSource, /border-b/);
   assert.match(sidebarSource, /const sidebarToggleClass =[\s\S]*size-10/);
+  assert.match(
+    sidebarSource,
+    /const sidebarToggleClass =[\s\S]*focus-visible:ring-2[\s\S]*focus-visible:ring-offset-2[\s\S]*focus-visible:ring-offset-background/,
+    "sidebar toggles must keep the standard offset focus ring",
+  );
   assert.equal(
     sidebarSource.match(/className=\{sidebarToggleClass\}/g)?.length,
     2,

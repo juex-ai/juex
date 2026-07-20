@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import type { AgentStatus } from "@/types";
 
 const sidebarToggleClass =
-  "group relative grid size-10 shrink-0 place-items-center rounded-md text-primary outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/35";
+  "group relative grid size-10 shrink-0 place-items-center rounded-md text-primary outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/35 focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 type FleetSidebarProps = {
   agents: AgentStatus[];
