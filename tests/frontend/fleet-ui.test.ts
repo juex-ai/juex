@@ -214,6 +214,11 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(fleetSource, /directoryCreateKeyAction/);
   assert.match(fleetSource, /directoryCreatingRef\.current/);
   assert.match(fleetSource, /browseGenerationRef\.current/);
+  assert.match(
+    fleetSource,
+    /catch \(cause\) \{\s*if \(!resultStillApplies\(\)\) return;\s*setListing\(null\);\s*listingRef\.current = null;/,
+    "an applied browse failure must not expose a stale directory listing",
+  );
   assert.match(fleetSource, /shouldApplyDirectoryCreateResult/);
   assert.match(fleetSource, /disabled=\{directoryNavigationLocked\}/);
   assert.match(fleetSource, /\[scrollbar-width:none\]/);

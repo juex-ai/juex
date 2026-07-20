@@ -498,6 +498,8 @@ function AddAgentDialog({
         setWorkspacePath(next.path, "browser");
       } catch (cause) {
         if (!resultStillApplies()) return;
+        setListing(null);
+        listingRef.current = null;
         setError(
           cause instanceof Error ? cause.message : "Failed to browse directories.",
         );
