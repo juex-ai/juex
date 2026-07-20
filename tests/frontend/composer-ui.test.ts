@@ -39,6 +39,32 @@ test("composer goal chip names the disclosed goal and notes content", () => {
   );
 });
 
+test("composer stages image previews above draft text at the top-left", () => {
+  const composer = sessionSource.match(
+    /<PromptInput\s[\s\S]*?<\/PromptInput>/,
+  )?.[0];
+  assert.ok(composer);
+  const attachmentStrip = composer.indexOf("<ComposerAttachmentStrip");
+  const textarea = composer.indexOf("<PromptInputTextarea");
+  assert.ok(
+    attachmentStrip >= 0 && textarea > attachmentStrip,
+    "attachment strip should render before the textarea",
+  );
+
+  const strip = sessionSource.match(
+    /function ComposerAttachmentStrip[\s\S]*?\n}\n\nfunction ComposerSubmitButton/,
+  )?.[0];
+  assert.ok(strip);
+  assert.match(
+    strip,
+    /flex w-full flex-wrap items-start justify-start gap-2 px-2\.5 pt-2/,
+  );
+  assert.doesNotMatch(strip, /border-t|min-h-20/);
+  assert.match(strip, /size-20 shrink-0/);
+  assert.match(strip, /aria-label="Attached images"/);
+  assert.match(strip, /rounded-full bg-foreground text-background/);
+});
+
 test("composer feedback is announced and queued inputs stay bounded", () => {
   assert.match(sessionSource, /role=\{tone === "error" \? "alert" : "status"\}/);
   assert.match(sessionSource, /aria-live=/);
