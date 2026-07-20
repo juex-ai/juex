@@ -518,6 +518,7 @@ successful results stay closed until the user expands.
 ```tsx
 <PromptInput onSubmit={({ text }) => handleSend(text)}>
   <PromptInputBody>
+    <ComposerAttachmentStrip />
     <PromptInputTextarea placeholder="Ask juex anything..." />
     <PromptInputFooter>
       <PromptInputTools>
@@ -554,8 +555,12 @@ runtime drains pending input, the drained rows leave the stack and appear in the
 conversation stream.
 
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
-both natively. The composer is a warm paper well with an `8px` maximum radius,
-subtle forest shadow, and a forest focus ring. The submit button is the state control:
+both natively. Accepted images stage in a Juex-owned preview strip above the
+textarea, aligned to the top-left without a separator. The 80px previews wrap
+naturally on narrow widths and keep an always-visible circular remove control;
+this local strip does not adopt the deferred general-purpose AI Elements
+`Attachments` primitive. The composer is a warm paper well with an `8px`
+maximum radius, subtle forest shadow, and a forest focus ring. The submit button is the state control:
 empty + idle appears disabled and clicks show a short input hint; empty +
 running switches to a square stop icon; text + idle submits and clears the
 input; text + running submits to the pending-input queue for the next provider

@@ -436,6 +436,7 @@ export function Session() {
                 );
               }}
             >
+              <ComposerAttachmentStrip onCountChange={setAttachmentCount} />
               <PromptInputTextarea
                 onChange={(event) => {
                   setDraft(event.currentTarget.value);
@@ -443,7 +444,6 @@ export function Session() {
                 }}
                 placeholder="Ask juex anything..."
               />
-              <ComposerAttachmentStrip onCountChange={setAttachmentCount} />
               {composerHint || composerError ? (
                 <div className="border-t border-border/60 px-2.5 py-1.5">
                   {composerError ? (
@@ -874,11 +874,14 @@ function ComposerAttachmentStrip({
 
   if (files.length === 0) return null;
   return (
-    <div className="flex min-h-20 flex-wrap gap-2 border-t border-border/60 px-2.5 py-2">
+    <ul
+      aria-label="Attached images"
+      className="flex w-full flex-wrap items-start justify-start gap-2 px-2.5 pt-2"
+    >
       {files.map((file) => (
-        <div
+        <li
           key={file.id}
-          className="group relative size-16 overflow-hidden rounded-md border border-border/70 bg-muted"
+          className="relative size-20 shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted"
         >
           <img
             src={file.url}
@@ -887,7 +890,7 @@ function ComposerAttachmentStrip({
           />
           <Button
             aria-label={`Remove ${file.filename ?? "attached image"}`}
-            className="absolute right-1 top-1 size-6 border border-border/70 bg-background/90 opacity-95 shadow-[var(--shadow-xs)] group-hover:opacity-100"
+            className="absolute right-1 top-1 size-6 rounded-full bg-foreground text-background shadow-[var(--shadow-xs)] hover:bg-foreground/80 hover:text-background"
             onClick={() => attachments.remove(file.id)}
             size="icon"
             type="button"
@@ -895,9 +898,9 @@ function ComposerAttachmentStrip({
           >
             <XIcon className="size-3.5" aria-hidden="true" />
           </Button>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
