@@ -6,7 +6,9 @@ provider_smoke_models:
   - openai-codex:gpt-5.5
   - ark:doubao-seed-2.0-pro
   - ark-anthropic:minimax-m3
-  - ollama-local:qwen3.6
+  - ref: ollama-local:qwen3.6
+    scenario_expectations:
+      schedule-routing: optional
   - clip-local:gemini-3.5-flash-low
   - clip-local-responses:gpt-5.3-codex-spark
 

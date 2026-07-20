@@ -10,6 +10,9 @@ import os
 import pathlib
 import sys
 import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 import yaml
@@ -18,6 +21,21 @@ import yaml
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 DEFAULT_MODEL_LIST = REPO_ROOT / "tests" / "eval" / "live-models.yaml"
 DEFAULT_STATE_PATH = REPO_ROOT / ".juex" / "live-model-rotation.json"
+MODEL_SPEC_FIELDS = {"ref", "scenario_expectations"}
+SCENARIOS_BY_SECTION = {
+    "provider_smoke_models": {"schedule-routing"},
+    "compaction_eval_models": set(),
+}
+SCENARIO_EXPECTATIONS = {"expected", "optional"}
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    ref: str
+    scenario_expectations: Mapping[str, str]
+
+    def expectation(self, scenario: str) -> str:
+        return self.scenario_expectations.get(scenario, "expected")
 
 
 def main() -> int:
@@ -96,17 +114,61 @@ def add_section_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--section", required=True, choices=("provider_smoke_models", "compaction_eval_models"))
 
 
-def load_model_refs(path: pathlib.Path, section: str) -> list[str]:
+def load_model_specs(path: pathlib.Path, section: str) -> list[ModelSpec]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
     values = data.get(section)
     if not isinstance(values, list):
         raise ValueError(f"model list {path} section {section} is missing or not a list")
-    refs = [str(value).strip() for value in values if str(value).strip()]
-    if not refs:
+    allowed_scenarios = SCENARIOS_BY_SECTION.get(section)
+    if allowed_scenarios is None:
+        raise ValueError(f"unsupported model list section: {section}")
+    specs: list[ModelSpec] = []
+    seen_refs: set[str] = set()
+    for index, value in enumerate(values):
+        location = f"{path} section {section} entry {index + 1}"
+        if isinstance(value, str):
+            ref = value.strip()
+            expectations: dict[str, str] = {}
+        elif isinstance(value, dict):
+            unknown_fields = sorted(str(field) for field in set(value) - MODEL_SPEC_FIELDS)
+            if unknown_fields:
+                raise ValueError(f"{location} contains unknown fields: {', '.join(unknown_fields)}")
+            raw_ref = value.get("ref")
+            if not isinstance(raw_ref, str):
+                raise ValueError(f"{location} ref must be a non-empty string")
+            ref = raw_ref.strip()
+            raw_expectations = value.get("scenario_expectations", {})
+            if raw_expectations is None:
+                raw_expectations = {}
+            if not isinstance(raw_expectations, dict):
+                raise ValueError(f"{location} scenario_expectations must be a mapping")
+            expectations = {}
+            for scenario, expectation in raw_expectations.items():
+                if scenario not in allowed_scenarios:
+                    raise ValueError(f"{location} contains unknown scenario: {scenario}")
+                if not isinstance(expectation, str) or expectation not in SCENARIO_EXPECTATIONS:
+                    raise ValueError(
+                        f"{location} scenario {scenario} expectation must be "
+                        f"one of {sorted(SCENARIO_EXPECTATIONS)}, got {expectation!r}"
+                    )
+                expectations[scenario] = expectation
+        else:
+            raise ValueError(f"{location} must be a model ref string or mapping")
+        if not ref:
+            raise ValueError(f"{location} ref must be a non-empty string")
+        if ref in seen_refs:
+            raise ValueError(f"model list {path} section {section} contains duplicate ref: {ref}")
+        seen_refs.add(ref)
+        specs.append(ModelSpec(ref, MappingProxyType(dict(sorted(expectations.items())))))
+    if not specs:
         raise ValueError(f"model list {path} section {section} is empty")
-    return refs
+    return specs
+
+
+def load_model_refs(path: pathlib.Path, section: str) -> list[str]:
+    return [spec.ref for spec in load_model_specs(path, section)]
 
 
 def load_state(path: pathlib.Path) -> dict[str, Any]:

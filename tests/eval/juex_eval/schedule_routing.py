@@ -5,6 +5,7 @@ import json
 import pathlib
 import re
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -95,6 +96,12 @@ class ScheduleRoutingExpectation:
 
 
 @dataclass(frozen=True)
+class ValidationOutcome:
+    kind: str
+    report: contract_oracle.ContractReport
+
+
+@dataclass(frozen=True)
 class _ToolUse:
     name: str
     tool_use_id: str
@@ -170,12 +177,89 @@ def validate_contract(
     observables_path: pathlib.Path,
     expectation: ScheduleRoutingExpectation,
 ) -> contract_oracle.ContractReport:
-    issues: list[str] = []
-    messages = _load_jsonl(conversation_path, "conversation", issues)
+    return validate_outcome(conversation_path, observables_path, expectation).report
+
+
+def validate_outcome(
+    conversation_path: pathlib.Path,
+    observables_path: pathlib.Path,
+    expectation: ScheduleRoutingExpectation,
+) -> ValidationOutcome:
+    hard_issues: list[str] = []
+    capability_issues: list[str] = []
+    messages = _load_jsonl(conversation_path, "conversation", hard_issues)
     uses, results = _transcript_tools(messages)
-    _validate_tool_contract(messages, uses, results, expectation, issues)
-    _validate_persisted_config(observables_path, expectation, issues)
-    return contract_oracle.ContractReport(passed=not issues, issues=issues)
+    _validate_tool_contract(messages, uses, results, expectation, capability_issues)
+    list_uses = [use for use in uses if use.name == "observable_list"]
+    if _has_unrecovered_valid_tool_failure(
+        list_uses,
+        results,
+        _observable_list_input_matches,
+    ):
+        hard_issues.append(
+            "observable_list did not produce a successful result for contract-valid input"
+        )
+    if (
+        expectation.variant == SEEDED_EQUIVALENT_VARIANT
+        and _has_unexplained_seeded_list_mismatch(
+            list_uses,
+            uses,
+            results,
+            expectation,
+        )
+    ):
+        hard_issues.append(
+            "observable_list returned an incorrect result for the pre-seeded schedule"
+        )
+    persistence_issues: list[str] = []
+    _validate_persisted_config(observables_path, expectation, persistence_issues)
+    create_uses = [use for use in uses if use.name == "schedule_create"]
+    successful_creates = [
+        use
+        for use in create_uses
+        if _successful_result_after(use, results) is not None
+    ]
+    create_input_issues: list[str] = []
+    if len(successful_creates) == 1:
+        _validate_create_input(successful_creates[0].input, expectation, create_input_issues)
+    if expectation.variant == EMPTY_VARIANT and _has_unrecovered_valid_tool_failure(
+        create_uses,
+        results,
+        lambda value: _create_input_matches(value, expectation),
+    ):
+        hard_issues.append(
+            "schedule_create did not produce a successful result for contract-valid input"
+        )
+    if expectation.variant == SEEDED_EQUIVALENT_VARIANT and _has_unrecovered_valid_tool_missing_result(
+        create_uses,
+        results,
+        lambda value: _create_input_matches(value, expectation),
+    ):
+        hard_issues.append(
+            "schedule_create did not produce a result for contract-valid input"
+        )
+    if expectation.variant == SEEDED_EQUIVALENT_VARIANT:
+        successful_mutations = [
+            use
+            for use in uses
+            if use.name in {*SEEDED_MUTATION_TOOLS, *FORBIDDEN_TOOLS, "schedule_create"}
+            and _successful_result_after(use, results) is not None
+        ]
+        if successful_mutations:
+            capability_issues.extend(persistence_issues)
+        else:
+            hard_issues.extend(persistence_issues)
+    elif len(successful_creates) == 1 and not create_input_issues:
+        hard_issues.extend(persistence_issues)
+    else:
+        capability_issues.extend(persistence_issues)
+    issues = [*hard_issues, *capability_issues]
+    report = contract_oracle.ContractReport(passed=not issues, issues=issues)
+    if hard_issues:
+        return ValidationOutcome("hard_failed", report)
+    if capability_issues:
+        return ValidationOutcome("capability_failed", report)
+    return ValidationOutcome("passed", report)
 
 
 def _load_jsonl(path: pathlib.Path, label: str, issues: list[str]) -> list[dict[str, Any]]:
@@ -339,14 +423,49 @@ def _position(value: _ToolUse | _ToolResult) -> tuple[int, int]:
 
 
 def _successful_result_after(use: _ToolUse, results: list[_ToolResult]) -> _ToolResult | None:
+    result = _result_after(use, results)
+    return None if result is None or result.is_error else result
+
+
+def _result_after(use: _ToolUse, results: list[_ToolResult]) -> _ToolResult | None:
     for result in results:
         if (
             result.tool_use_id
             and result.tool_use_id == use.tool_use_id
             and _position(result) > _position(use)
         ):
-            return None if result.is_error else result
+            return result
     return None
+
+
+def _has_unrecovered_valid_tool_failure(
+    uses: list[_ToolUse],
+    results: list[_ToolResult],
+    input_matches: Callable[[Any], bool],
+) -> bool:
+    valid_results = [
+        _result_after(use, results)
+        for use in uses
+        if input_matches(use.input)
+    ]
+    return any(result is None or result.is_error for result in valid_results) and not any(
+        result is not None and not result.is_error for result in valid_results
+    )
+
+
+def _has_unrecovered_valid_tool_missing_result(
+    uses: list[_ToolUse],
+    results: list[_ToolResult],
+    input_matches: Callable[[Any], bool],
+) -> bool:
+    valid_results = [
+        _result_after(use, results)
+        for use in uses
+        if input_matches(use.input)
+    ]
+    return any(result is None for result in valid_results) and not any(
+        result is not None and not result.is_error for result in valid_results
+    )
 
 
 def _list_result_contains_equivalent(
@@ -373,6 +492,45 @@ def _list_result_contains_equivalent(
             continue
         schedule_config = entry.get("schedule_config")
         if _schedule_config_matches(schedule_config, expectation):
+            return True
+    return False
+
+
+def _has_unexplained_seeded_list_mismatch(
+    list_uses: list[_ToolUse],
+    uses: list[_ToolUse],
+    results: list[_ToolResult],
+    expectation: ScheduleRoutingExpectation,
+) -> bool:
+    for list_use in list_uses:
+        if not _observable_list_input_matches(list_use.input):
+            continue
+        result = _successful_result_after(list_use, results)
+        if result is None or _list_result_contains_equivalent(result, expectation):
+            continue
+        if not _has_successful_seed_state_mutation_before(
+            list_use,
+            uses,
+            results,
+            expectation,
+        ):
+            return True
+    return False
+
+
+def _has_successful_seed_state_mutation_before(
+    list_use: _ToolUse,
+    uses: list[_ToolUse],
+    results: list[_ToolResult],
+    expectation: ScheduleRoutingExpectation,
+) -> bool:
+    for use in uses:
+        if use.name not in SEEDED_MUTATION_TOOLS or not isinstance(use.input, dict):
+            continue
+        if use.input.get("id") != expectation.existing_schedule_id:
+            continue
+        result = _successful_result_after(use, results)
+        if result is not None and _position(result) < _position(list_use):
             return True
     return False
 
@@ -941,6 +1099,93 @@ def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, 
     observation = value.get("observation")
     if not isinstance(observation, dict) or observation.get("content") != expectation.content:
         issues.append(f"schedule_create observation.content must equal {expectation.content!r}")
+
+
+def _create_input_matches(value: Any, expectation: ScheduleRoutingExpectation) -> bool:
+    issues: list[str] = []
+    _validate_create_input(value, expectation, issues)
+    if issues or not isinstance(value, dict):
+        return False
+    if set(value) - {
+        "id",
+        "name",
+        "timezone",
+        "interval",
+        "catch_up",
+        "observation",
+    }:
+        return False
+    if "name" in value and not isinstance(value["name"], str):
+        return False
+    if "timezone" in value and not isinstance(value["timezone"], str):
+        return False
+    interval = value["interval"]
+    if not isinstance(interval, dict) or set(interval) != {"every_seconds"}:
+        return False
+    every_seconds = interval["every_seconds"]
+    if isinstance(every_seconds, bool) or not isinstance(every_seconds, int):
+        return False
+    if "catch_up" in value and not _catch_up_input_valid(value["catch_up"]):
+        return False
+    return _observation_input_valid(value["observation"], expectation.content)
+
+
+def _catch_up_input_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) - {"mode", "max_lateness_minutes"}:
+        return False
+    mode = value.get("mode", "")
+    if not isinstance(mode, str):
+        return False
+    max_lateness = value.get("max_lateness_minutes", 0)
+    if isinstance(max_lateness, bool) or not isinstance(max_lateness, int):
+        return False
+    mode = mode.strip()
+    if mode in {"", "none"}:
+        return True
+    return mode == "latest" and 1 <= max_lateness <= 1440
+
+
+def _observation_input_valid(value: Any, content: str) -> bool:
+    if not isinstance(value, dict) or set(value) - {
+        "kind",
+        "severity",
+        "content",
+        "attachments",
+    }:
+        return False
+    if value.get("content") != content:
+        return False
+    if "kind" in value and not isinstance(value["kind"], str):
+        return False
+    if "severity" in value:
+        severity = value["severity"]
+        if not isinstance(severity, str) or severity.strip() not in {
+            "",
+            "info",
+            "warning",
+            "error",
+            "critical",
+        }:
+            return False
+    if "attachments" not in value:
+        return True
+    attachments = value["attachments"]
+    if not isinstance(attachments, list):
+        return False
+    return all(_attachment_input_valid(attachment) for attachment in attachments)
+
+
+def _attachment_input_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) - {"path", "media_type"}:
+        return False
+    path = value.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return False
+    return "media_type" not in value or isinstance(value["media_type"], str)
+
+
+def _observable_list_input_matches(value: Any) -> bool:
+    return value == {}
 
 
 def _has_exact_completion_after(
