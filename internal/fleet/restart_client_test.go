@@ -18,10 +18,13 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/status":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
-				"state":"working",
-				"session_id":"session-one",
-				"status":{"session":{"id":"session-one","state":"turn_active"}}
-			}`))
+					"state":"working",
+					"session_id":"session-one",
+					"status":{
+						"session":{"id":"session-one","state":"turn_active"},
+						"turn":{"id":"turn-original","state":"active"}
+					}
+				}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/sessions/session-one/turns":
 			var body struct {
 				Prompt string `json:"prompt"`
@@ -46,7 +49,10 @@ func TestRestartClientReadsActivityAndPostsContinuation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if activity.SessionID != "session-one" || activity.State != "turn_active" {
+	if activity.SessionID != "session-one" ||
+		activity.TurnID != "turn-original" ||
+		activity.State != "turn_active" ||
+		activity.TurnState != "active" {
 		t.Fatalf("activity = %+v", activity)
 	}
 	turnID, err := postRestartResume(
@@ -76,6 +82,27 @@ func TestRestartClientRejectsActiveStatusWithoutSessionID(t *testing.T) {
 		Endpoint: "tcp://" + strings.TrimPrefix(server.URL, "http://"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "omitted session id") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestRestartClientRejectsActiveStatusWithoutTurnID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"state":"working",
+			"session_id":"session-one",
+			"status":{
+				"session":{"id":"session-one","state":"turn_active"},
+				"turn":{"state":"active"}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	_, err := readRestartActivity(context.Background(), endpoint.Runtime{
+		Endpoint: "tcp://" + strings.TrimPrefix(server.URL, "http://"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "omitted turn id") {
 		t.Fatalf("error = %v", err)
 	}
 }

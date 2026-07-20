@@ -708,17 +708,15 @@ func newFleetLifecycleCmd(_ *persistentFlags, action string) *cobra.Command {
 				return err
 			}
 			var status fleet.AgentStatus
-			var resume *fleet.RestartResume
+			var restartResult fleet.RestartResult
 			switch action {
 			case "start":
 				status, err = manager.Start(cmd.Context(), args[0])
 			case "stop":
 				status, err = manager.Stop(cmd.Context(), args[0])
 			case "restart":
-				var result fleet.RestartResult
-				result, err = manager.Restart(cmd.Context(), args[0])
-				status = result.AgentStatus
-				resume = &result.Resume
+				restartResult, err = manager.Restart(cmd.Context(), args[0])
+				status = restartResult.AgentStatus
 			}
 			if err != nil {
 				return mapFleetError(err)
@@ -733,7 +731,8 @@ func newFleetLifecycleCmd(_ *persistentFlags, action string) *cobra.Command {
 			if status.Endpoint != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), " at %s", status.Endpoint)
 			}
-			if resume != nil {
+			if action == "restart" {
+				resume := restartResult.Resume
 				switch {
 				case resume.Sent:
 					fmt.Fprint(cmd.OutOrStdout(), " resume=sent")

@@ -216,7 +216,9 @@ type spawnedProcess struct {
 
 type restartActivity struct {
 	SessionID string
+	TurnID    string
 	State     runtime.SessionRuntimeState
+	TurnState runtime.TurnLifecycleState
 }
 
 type dependencies struct {

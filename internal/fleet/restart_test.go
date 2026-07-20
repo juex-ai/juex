@@ -18,6 +18,8 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 		name           string
 		state          runtime.SessionRuntimeState
 		detectErr      error
+		confirmState   runtime.TurnLifecycleState
+		confirmErr     error
 		resumeErr      error
 		wantRequired   bool
 		wantSent       bool
@@ -30,14 +32,27 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 		{
 			name:         "active turn resumes",
 			state:        runtime.SessionRuntimeTurnActive,
+			confirmState: runtime.TurnLifecycleCancelled,
 			wantRequired: true,
 			wantSent:     true,
 		},
 		{
 			name:         "draining pending resumes",
 			state:        runtime.SessionRuntimeDrainingPending,
+			confirmState: runtime.TurnLifecycleCancelled,
 			wantRequired: true,
 			wantSent:     true,
+		},
+		{
+			name:         "turn completed before shutdown does not resume",
+			state:        runtime.SessionRuntimeTurnActive,
+			confirmState: runtime.TurnLifecycleCompleted,
+		},
+		{
+			name:           "confirmation failure does not risk duplicate continuation",
+			state:          runtime.SessionRuntimeTurnActive,
+			confirmErr:     errors.New("replacement status unavailable"),
+			wantDiagnostic: "replacement status unavailable",
 		},
 		{
 			name:           "detection failure preserves ordinary restart",
@@ -47,6 +62,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 		{
 			name:           "resume failure is reported without failing restart",
 			state:          runtime.SessionRuntimeTurnActive,
+			confirmState:   runtime.TurnLifecycleCancelled,
 			resumeErr:      errors.New("resume rejected"),
 			wantRequired:   true,
 			wantDiagnostic: "resume rejected",
@@ -58,14 +74,30 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			manager, events := restartTestManager(t, []agentstate.RegistryEntry{
 				registryEntry("aaaaaaaa", "alpha"),
 			})
+			activityReads := 0
 			manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
-				*events = append(*events, "detect")
-				if test.detectErr != nil {
-					return restartActivity{}, test.detectErr
+				activityReads++
+				if activityReads == 1 {
+					*events = append(*events, "detect")
+					if test.detectErr != nil {
+						return restartActivity{}, test.detectErr
+					}
+					return restartActivity{
+						SessionID: "session-one",
+						TurnID:    "turn-original",
+						State:     test.state,
+						TurnState: runtime.TurnLifecycleActive,
+					}, nil
+				}
+				*events = append(*events, "confirm")
+				if test.confirmErr != nil {
+					return restartActivity{}, test.confirmErr
 				}
 				return restartActivity{
 					SessionID: "session-one",
-					State:     test.state,
+					TurnID:    "turn-original",
+					State:     runtime.SessionRuntimeFailed,
+					TurnState: test.confirmState,
 				}, nil
 			}
 			manager.deps.postRestartResume = func(
@@ -110,8 +142,8 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				t.Fatalf("events = %q, want detect before shutdown and spawn", gotEvents)
 			}
 			if test.wantRequired && test.resumeErr == nil {
-				if gotEvents != "detect,shutdown,spawn,resume" {
-					t.Fatalf("events = %q, want resume only after spawn", gotEvents)
+				if gotEvents != "detect,shutdown,spawn,confirm,resume" {
+					t.Fatalf("events = %q, want confirmed resume only after spawn", gotEvents)
 				}
 			} else if !test.wantRequired && strings.Contains(gotEvents, "resume") {
 				t.Fatalf("events = %q, unexpected resume", gotEvents)

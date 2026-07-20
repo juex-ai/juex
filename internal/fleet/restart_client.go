@@ -47,6 +47,7 @@ func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartAc
 		SessionID string `json:"session_id"`
 		Status    *struct {
 			Session runtime.SessionRuntimeStatus `json:"session"`
+			Turn    *runtime.TurnRuntimeStatus   `json:"turn"`
 		} `json:"status"`
 	}
 	if err := decodeRestartResponse(response.Body, &body); err != nil {
@@ -63,10 +64,18 @@ func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartAc
 		SessionID: sessionID,
 		State:     body.Status.Session.State,
 	}
-	if (activity.State == runtime.SessionRuntimeTurnActive ||
-		activity.State == runtime.SessionRuntimeDrainingPending) &&
-		activity.SessionID == "" {
-		return restartActivity{}, fmt.Errorf("active restart activity omitted session id")
+	if body.Status.Turn != nil {
+		activity.TurnID = strings.TrimSpace(body.Status.Turn.ID)
+		activity.TurnState = body.Status.Turn.State
+	}
+	if activity.State == runtime.SessionRuntimeTurnActive ||
+		activity.State == runtime.SessionRuntimeDrainingPending {
+		if activity.SessionID == "" {
+			return restartActivity{}, fmt.Errorf("active restart activity omitted session id")
+		}
+		if activity.TurnID == "" {
+			return restartActivity{}, fmt.Errorf("active restart activity omitted turn id")
+		}
 	}
 	return activity, nil
 }

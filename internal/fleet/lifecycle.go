@@ -233,6 +233,7 @@ func (m *Manager) restart(
 	if err := startableConflict(entry, status); err != nil {
 		return result, err
 	}
+	var interrupted *restartActivity
 	if status.RuntimeHealth == RuntimeHealthy {
 		runtimeState, readErr := m.deps.readRuntime(entry.Dir)
 		if readErr != nil {
@@ -245,8 +246,7 @@ func (m *Manager) restart(
 				result.Resume.Error = fmt.Sprintf("detect interrupted turn: %v", activityErr)
 			} else if activity.State == runtime.SessionRuntimeTurnActive ||
 				activity.State == runtime.SessionRuntimeDrainingPending {
-				result.Resume.Required = true
-				result.Resume.SessionID = activity.SessionID
+				interrupted = &activity
 			}
 		}
 	}
@@ -261,14 +261,28 @@ func (m *Manager) restart(
 	if err != nil {
 		return result, err
 	}
-	if !result.Resume.Required {
+	if interrupted == nil {
 		return result, nil
 	}
 	runtimeState, readErr := m.deps.readRuntime(entry.Dir)
 	if readErr != nil {
-		result.Resume.Error = fmt.Sprintf("submit restart continuation: read runtime: %v", readErr)
+		result.Resume.Error = fmt.Sprintf("confirm interrupted turn: read runtime: %v", readErr)
 		return result, nil
 	}
+	confirmCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
+	confirmed, confirmErr := m.deps.readRestartActivity(confirmCtx, runtimeState)
+	cancel()
+	if confirmErr != nil {
+		result.Resume.Error = fmt.Sprintf("confirm interrupted turn: %v", confirmErr)
+		return result, nil
+	}
+	if confirmed.SessionID != interrupted.SessionID ||
+		confirmed.TurnID != interrupted.TurnID ||
+		confirmed.TurnState != runtime.TurnLifecycleCancelled {
+		return result, nil
+	}
+	result.Resume.Required = true
+	result.Resume.SessionID = interrupted.SessionID
 	resumeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
 	turnID, resumeErr := m.deps.postRestartResume(
 		resumeCtx,
