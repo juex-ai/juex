@@ -4,6 +4,7 @@ import json
 import pathlib
 import re
 import shlex
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -128,6 +129,15 @@ def validate_outcome(
     messages = _load_jsonl(conversation_path, "conversation", hard_issues)
     uses, results = _transcript_tools(messages)
     _validate_tool_contract(messages, uses, results, expectation, capability_issues)
+    list_uses = [use for use in uses if use.name == "observable_list"]
+    if _has_unrecovered_valid_tool_failure(
+        list_uses,
+        results,
+        _observable_list_input_matches,
+    ):
+        hard_issues.append(
+            "observable_list did not produce a successful result for contract-valid input"
+        )
     persistence_issues: list[str] = []
     _validate_persisted_config(observables_path, expectation, persistence_issues)
     create_uses = [use for use in uses if use.name == "schedule_create"]
@@ -139,18 +149,14 @@ def validate_outcome(
     create_input_issues: list[str] = []
     if len(successful_creates) == 1:
         _validate_create_input(successful_creates[0].input, expectation, create_input_issues)
-    successful_valid_create = any(
-        _create_input_matches(use.input, expectation)
-        for use in successful_creates
-    )
-    errored_valid_create = any(
-        (result := _result_after(use, results)) is not None
-        and result.is_error
-        and _create_input_matches(use.input, expectation)
-        for use in create_uses
-    )
-    if errored_valid_create and not successful_valid_create:
-        hard_issues.append("schedule_create returned an error for contract-valid input")
+    if _has_unrecovered_valid_tool_failure(
+        create_uses,
+        results,
+        lambda value: _create_input_matches(value, expectation),
+    ):
+        hard_issues.append(
+            "schedule_create did not produce a successful result for contract-valid input"
+        )
     if len(successful_creates) == 1 and not create_input_issues:
         hard_issues.extend(persistence_issues)
     else:
@@ -300,6 +306,21 @@ def _result_after(use: _ToolUse, results: list[_ToolResult]) -> _ToolResult | No
         ):
             return result
     return None
+
+
+def _has_unrecovered_valid_tool_failure(
+    uses: list[_ToolUse],
+    results: list[_ToolResult],
+    input_matches: Callable[[Any], bool],
+) -> bool:
+    valid_results = [
+        _result_after(use, results)
+        for use in uses
+        if input_matches(use.input)
+    ]
+    return any(result is None or result.is_error for result in valid_results) and not any(
+        result is not None and not result.is_error for result in valid_results
+    )
 
 
 def _has_successful_list_before(
@@ -872,6 +893,10 @@ def _create_input_matches(value: Any, expectation: ScheduleRoutingExpectation) -
     issues: list[str] = []
     _validate_create_input(value, expectation, issues)
     return not issues
+
+
+def _observable_list_input_matches(value: Any) -> bool:
+    return value == {}
 
 
 def _has_exact_completion_after(
