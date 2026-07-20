@@ -5,6 +5,10 @@ This package adapts `fleet.Manager` to the loopback browser surface used by
 
 - Fleet API routes return the existing fleet status, lifecycle, bounded log,
   and workspace config types.
+- `GET /api/fs/dirs` browses one server-side directory level and
+  `POST /api/fs/dirs` creates exactly one validated empty child directory for
+  the Add agent workflow. The mutation requires `application/json`, so a
+  cross-origin browser cannot invoke it as a CORS-safelisted form request.
 - `/api/fleet/events` aggregates healthy agents' status streams and pushes
   `agent.status` snapshots; browser clients share one upstream stream per agent,
   slow clients coalesce updates per agent, aggregate cursors support bounded
@@ -15,8 +19,9 @@ This package adapts `fleet.Manager` to the loopback browser surface used by
 - Other GET routes reuse `web.SPAHandler` for embedded assets and client-side
   route fallback.
 - The listener is loopback-only unless the CLI explicitly enables the unsafe
-  bind escape hatch, and shutdown drains active requests with a bounded
-  timeout.
+  bind escape hatch. That escape hatch deliberately extends the trusted
+  filesystem-mutation surface to remote clients. Shutdown drains active
+  requests with a bounded timeout.
 
 Registry, runtime ownership, lifecycle locking, and config update policy remain
 in `internal/fleet`. Single-agent routes and frontend assets remain in

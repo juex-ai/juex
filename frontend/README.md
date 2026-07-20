@@ -56,6 +56,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
 | `src/types.ts` | TypeScript mirror of fleet, agent, session, and message API shapes, including the tagged Command Observable/Schedule create union, transcript paging metadata, and the browser event contract from `internal/web` |
 | `src/lib/agent-config.ts` | pure config-save reconciliation for distinguishing persisted updates from restart failures |
+| `src/lib/fleet-directories.ts` | pure Add agent directory validation, stale-request isolation, listing merge, keyboard, and path-tail behavior |
 | `src/lib/fleet-routes.ts` | pure route helpers for fleet and selected-agent navigation |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
 | `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
@@ -101,7 +102,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
 | `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
-| `src/pages/Fleet.tsx` | fleet settings stage with service summaries, registration, lifecycle, and removal controls |
+| `src/pages/Fleet.tsx` | fleet settings stage with service summaries, registration, inline workspace-directory creation, lifecycle, and removal controls |
 | `src/pages/AgentConfig.tsx` | workspace config editor with validation and post-save restart reconciliation |
 | `src/pages/AgentLogs.tsx` | bounded resident agent log tail with explicit refresh and line-count controls |
 | `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |

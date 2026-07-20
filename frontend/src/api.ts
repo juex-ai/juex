@@ -24,6 +24,8 @@ import type {
   AgentStatus,
   AddAgentRequest,
   AddAgentResponse,
+  CreateDirectoryRequest,
+  DirectoryEntry,
   DirectoryListing,
   RemovedAgent,
   AgentRuntimeStatusSnapshot,
@@ -408,6 +410,18 @@ export async function listDirectories(
   const query = params.toString();
   return jsonOrThrow(
     await fetch(`/api/fs/dirs${query ? `?${query}` : ""}`),
+  );
+}
+
+export async function createDirectory(
+  input: CreateDirectoryRequest,
+): Promise<DirectoryEntry> {
+  return jsonOrThrow(
+    await fetch("/api/fs/dirs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
   );
 }
 

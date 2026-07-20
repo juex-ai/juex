@@ -3,6 +3,7 @@ package fleetweb
 import (
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,10 +27,17 @@ type DirectoryListing struct {
 }
 
 func (s *Server) handleDirectories(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
-		return
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListDirectories(w, r)
+	case http.MethodPost:
+		s.handleCreateDirectory(w, r)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or POST required")
 	}
+}
+
+func (s *Server) handleListDirectories(w http.ResponseWriter, r *http.Request) {
 	showHidden := false
 	if raw := r.URL.Query().Get("show_hidden"); raw != "" {
 		parsed, err := strconv.ParseBool(raw)
@@ -45,6 +53,101 @@ func (s *Server) handleDirectories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, listing)
+}
+
+func (s *Server) handleCreateDirectory(w http.ResponseWriter, r *http.Request) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(
+			w,
+			http.StatusUnsupportedMediaType,
+			"unsupported_media_type",
+			"Content-Type must be application/json",
+		)
+		return
+	}
+	var body struct {
+		Parent *string `json:"parent"`
+		Name   *string `json:"name"`
+	}
+	if !decodeJSONBody(
+		w,
+		r,
+		maxAgentMutationRequestBytes,
+		&body,
+		"request body must describe a parent and directory name",
+	) {
+		return
+	}
+	if body.Parent == nil || body.Name == nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "parent and name are required")
+		return
+	}
+	entry, err := createDirectory(*body.Parent, *body.Name)
+	if err != nil {
+		var validation *directoryValidationError
+		switch {
+		case errors.As(err, &validation):
+			writeError(w, http.StatusBadRequest, "bad_request", validation.Error())
+		case errors.Is(err, os.ErrExist):
+			writeError(w, http.StatusConflict, "conflict", "a file or directory with that name already exists")
+		default:
+			writeError(w, http.StatusInternalServerError, "internal_error", "failed to create directory")
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, entry)
+}
+
+type directoryValidationError struct {
+	message string
+}
+
+func (e *directoryValidationError) Error() string {
+	return e.message
+}
+
+func createDirectory(parent, name string) (DirectoryEntry, error) {
+	if parent == "" {
+		return DirectoryEntry{}, &directoryValidationError{message: "parent is required"}
+	}
+	if !filepath.IsAbs(parent) {
+		return DirectoryEntry{}, &directoryValidationError{message: "parent must be an absolute directory"}
+	}
+	parent = filepath.Clean(parent)
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return DirectoryEntry{}, &directoryValidationError{
+			message: fmt.Sprintf("inspect parent directory: %v", err),
+		}
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return DirectoryEntry{}, &directoryValidationError{
+			message: "parent must be a real directory",
+		}
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return DirectoryEntry{}, &directoryValidationError{message: "directory name is required"}
+	}
+	if name == "." ||
+		name == ".." ||
+		strings.ContainsAny(name, `/\`) ||
+		strings.ContainsRune(name, '\x00') {
+		return DirectoryEntry{}, &directoryValidationError{
+			message: "directory name must be one path component",
+		}
+	}
+
+	path := filepath.Join(parent, name)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		return DirectoryEntry{}, fmt.Errorf("create directory: %w", err)
+	}
+	return DirectoryEntry{
+		Name: name,
+		Path: path,
+	}, nil
 }
 
 func listDirectories(path string, showHidden bool) (DirectoryListing, error) {

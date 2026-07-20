@@ -283,11 +283,16 @@ shows agent identity, runtime health, workspace, process metadata, explicit
 lifecycle actions, enabled state, and links to bounded logs and config.
 
 The Add agent action uses an editable absolute path, server-side one-level
-directory browser, breadcrumbs, hidden-directory switch, optional name,
-autostart, and start-now controls. Disable is reversible. Destructive removal
-uses a separate dialog and enables its command only after the persisted agent
-name is typed exactly. Errors are shown in the active dialog or page-level
-alert and never hidden behind optimistic status.
+directory browser, compact breadcrumbs, hidden-directory switch, inline
+single-directory creation, optional name, autostart, and start-now controls.
+Long selected paths and breadcrumbs reveal their tail without showing a
+breadcrumb scrollbar. The workspace and name inputs use a border-only focus
+treatment inside this dialog. Directory creation locks browser navigation
+until it is created or canceled and reports validation failures beside the
+draft. Disable is reversible. Destructive removal uses a separate dialog and
+enables its command only after the persisted agent name is typed exactly.
+Errors are shown in the active dialog or page-level alert and never hidden
+behind optimistic status.
 
 ### 6.2 Sessions list (`/agents/:agentId`)
 
