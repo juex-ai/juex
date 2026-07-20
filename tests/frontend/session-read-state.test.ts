@@ -158,6 +158,7 @@ test("terminal live event settles the loaded running turn without refresh", () =
     },
   });
 
+  assert.equal(initial.projection.activeTurnID, "turn-1");
   const result = projectLiveBrowserEvent(initial, {
     id: "evt-error",
     type: "turn.errored",
@@ -167,6 +168,7 @@ test("terminal live event settles the loaded running turn without refresh", () =
   });
 
   assert.equal(result.state.projection.turnActive, false);
+  assert.equal(result.state.projection.activeTurnID, null);
   assert.equal(result.state.projection.settledTurnID, "turn-1");
   assert.equal(result.state.data?.turn?.state, "running");
   assert.deepEqual(result.effects, [{ type: "refresh" }]);

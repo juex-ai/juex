@@ -343,6 +343,7 @@ export function Session() {
       : undefined;
   const tailActive = assistantWorkTailActive({
     liveTurnActive: projection.turnActive,
+    liveTurnID: projection.activeTurnID,
     settledTurnID: projection.settledTurnID,
     sessionTurn: data?.turn,
     runtimeTurn: runtimeStatus?.turn,
