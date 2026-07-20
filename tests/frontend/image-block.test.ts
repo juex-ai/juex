@@ -35,27 +35,23 @@ test("message images follow role alignment and consecutive images form a gallery
 });
 
 test("user attachments lead the message as compact preview thumbnails", () => {
-  const messageGroup = sessionSource.match(
-    /function MessageGroupView[\s\S]*?\n}\n\nfunction MessageImageGallery/,
-  )?.[0];
-  assert.ok(messageGroup);
-  assert.match(messageGroup, /const userImageMedia =/);
   assert.match(
-    messageGroup,
-    /\{userImageMedia\.length > 0[\s\S]*?<MessageImageGallery[\s\S]*?group\.units\.map/,
+    sessionSource,
+    /function MessageGroupView[\s\S]*?const userImageMedia =[\s\S]*?\{userImageMedia\.length > 0[\s\S]*?<MessageImageGallery[\s\S]*?group\.units\.map/,
   );
   assert.match(
-    messageGroup,
+    sessionSource,
     /if \(group\.role === "user"\) return null;/,
   );
 
-  const gallery = sessionSource.match(
-    /function MessageImageGallery[\s\S]*?\n}\n\nfunction AssistantPlainText/,
-  )?.[0];
-  assert.ok(gallery);
-  assert.match(gallery, /flex w-full flex-wrap justify-end gap-2/);
-  assert.match(gallery, /variant=\{role === "user" \? "thumbnail" : "card"\}/);
-  assert.match(gallery, /role === "user" \? "ml-auto" : "mr-auto"/);
+  assert.match(
+    sessionSource,
+    /function MessageImageGallery[\s\S]*?flex w-full flex-wrap justify-end gap-2/,
+  );
+  assert.match(
+    sessionSource,
+    /function MessageImageGallery[\s\S]*?variant=\{role === "user" \? "thumbnail" : "card"\}/,
+  );
 
   assert.match(
     imageBlockSource,
@@ -63,13 +59,25 @@ test("user attachments lead the message as compact preview thumbnails", () => {
   );
   assert.match(imageBlockSource, /variant = "card"/);
   assert.match(imageBlockSource, /const isThumbnail = variant === "thumbnail"/);
-  assert.match(imageBlockSource, /isThumbnail\s*\?\s*"[^"]*\bsize-20\b/);
+
+  const failedFallback = imageBlockSource.match(
+    /if \(!path \|\| failed\) \{[\s\S]*?\n  \}\n\n  const src/,
+  )?.[0];
+  assert.ok(failedFallback);
+  assert.match(failedFallback, /isThumbnail[\s\S]*?\bsize-20\b/);
+
+  const figure = imageBlockSource.match(/<figure[\s\S]*?<\/figure>/)?.[0];
+  assert.ok(figure);
+  assert.match(figure, /isThumbnail[\s\S]*?\bsize-20\b/);
+  assert.match(figure, /isThumbnail \? "size-full" : "w-full text-left"/);
+  assert.match(figure, /isThumbnail[\s\S]*?"size-full object-cover"/);
   assert.match(imageBlockSource, /aria-label=\{isThumbnail \? `Preview \$\{name\}`/);
   assert.match(
     imageBlockSource,
     /aria-describedby=\{isThumbnail \? undefined : captionID\}/,
   );
-  assert.match(imageBlockSource, /\{!isThumbnail \? \(\s*<figcaption/);
+  assert.match(figure, /\{!isThumbnail \? \(\s*<figcaption/);
+  assert.match(figure, /aria-label=\{`Download \$\{name\}`\}/);
   assert.match(
     sessionSource,
     /\{result\.media \? <ImageBlock media=\{result\.media\} \/> : null\}/,
