@@ -83,6 +83,12 @@ export function agentTabPath(
 export function nextAgentLifecycleAction(
   agent: AgentStatus,
 ): AgentLifecycleAction {
+  return agent.runtime_health === "healthy" ? "stop" : "start";
+}
+
+export function nextFleetRosterLifecycleAction(
+  agent: AgentStatus,
+): AgentLifecycleAction {
   return agent.runtime_health === "stopped" ? "start" : "stop";
 }
 

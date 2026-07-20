@@ -130,6 +130,12 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   assert.match(stageHeaderSource, /filePanelTitle: string/);
   assert.match(stageHeaderSource, /filePanelActionLabel/);
   assert.match(stateBarSource, /Start agent/);
+  assert.match(stateBarSource, /onClick=\{\(\) => void startAgent\(\)\}/);
+  assert.match(
+    shellSource,
+    /const action = nextAgentLifecycleAction\(agent\)/,
+    "the selected-agent retry control must keep start semantics for failed runtimes",
+  );
   assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
   assert.match(sessionSource, /<AgentRuntimeStateBar \/>/);
   assert.match(sessionsSource, /<AgentRuntimeStateBar \/>/);
@@ -303,7 +309,7 @@ test("fleet settings condenses roster state and actions without losing lifecycle
     /agent\.enabled \? "enabled" : "disabled"/,
   );
 
-  assert.match(fleetSource, /nextAgentLifecycleAction\(agent\)/);
+  assert.match(fleetSource, /nextFleetRosterLifecycleAction\(agent\)/);
   assert.match(fleetSource, /agentStateLabel\(agent\)/);
   assert.match(fleetSource, /\{agent\.binding\}/);
   assert.match(

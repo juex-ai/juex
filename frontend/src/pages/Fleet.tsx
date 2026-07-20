@@ -61,7 +61,7 @@ import {
   agentActionWarning,
   agentStateLabel,
   agentVisualState,
-  nextAgentLifecycleAction,
+  nextFleetRosterLifecycleAction,
 } from "@/lib/fleet-shell";
 import { cn } from "@/lib/utils";
 import type { AgentStatus, DirectoryListing } from "@/types";
@@ -337,7 +337,7 @@ function AgentRow({
   onRemove: () => void;
 }) {
   const base = agentPagePath(agent.id);
-  const lifecycleAction = nextAgentLifecycleAction(agent);
+  const lifecycleAction = nextFleetRosterLifecycleAction(agent);
   const visualState = agentVisualState(agent);
   return (
     <div
