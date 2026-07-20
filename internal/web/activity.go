@@ -9,8 +9,6 @@ import (
 	"github.com/juex-ai/juex/internal/statusapi"
 )
 
-type agentActivityState = statusapi.ActivityState
-
 const (
 	agentActivityIdle    = statusapi.ActivityIdle
 	agentActivityWorking = statusapi.ActivityWorking
