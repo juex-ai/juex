@@ -162,7 +162,7 @@ func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {
 	if err != nil {
 		return runtimeStatusResponse{}, err
 	}
-	status, err := app.NewRuntimeStatusService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
+	status, err := app.NewRuntimeCatalogService(s.opts.Cfg).Snapshot(app.RuntimeStatusOptions{
 		MCPToolDescriptors: s.mcpToolDescriptors(),
 		MCPErrors:          s.mcpErrors(),
 		SkillCache:         s.runtimeSkills,

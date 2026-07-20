@@ -4,10 +4,7 @@ import type {
   ToolDisplayUnit,
 } from "./display-units";
 import { toolDisplayName } from "./tool-display.ts";
-import type {
-  RuntimeTurnStatus,
-  SessionTurnStatus,
-} from "../types.ts";
+import type { RuntimeTurnStatus } from "../types.ts";
 
 type ProcessDisplayUnit = Extract<
   DisplayUnit,
@@ -122,42 +119,11 @@ export function assistantWorkItems(
 }
 
 export function assistantWorkTailActive({
-  liveTurnActive,
-  liveTurnID,
-  settledTurnID,
-  sessionTurn,
   runtimeTurn,
 }: {
-  liveTurnActive: boolean;
-  liveTurnID: string | null;
-  settledTurnID: string | null;
-  sessionTurn?: Pick<SessionTurnStatus, "turn_id" | "state">;
   runtimeTurn?: Pick<RuntimeTurnStatus, "id" | "state">;
 }): boolean {
-  const runtimeTerminal =
-    runtimeTurn !== undefined &&
-    runtimeTurn.state !== "admitted" &&
-    runtimeTurn.state !== "active";
-  const runtimeSettledLive =
-    runtimeTerminal &&
-    liveTurnID !== null &&
-    runtimeTurn.id === liveTurnID;
-  const runtimeSettledSession =
-    runtimeTerminal &&
-    sessionTurn !== undefined &&
-    runtimeTurn.id === sessionTurn.turn_id;
-  const liveActive =
-    liveTurnActive &&
-    (liveTurnID === null || liveTurnID !== settledTurnID) &&
-    !runtimeSettledLive;
-  const sessionActive =
-    sessionTurn?.state === "running" &&
-    sessionTurn.turn_id !== settledTurnID &&
-    !runtimeSettledSession;
-  const runtimeActive =
-    (runtimeTurn?.state === "admitted" || runtimeTurn?.state === "active") &&
-    runtimeTurn.id !== settledTurnID;
-  return liveActive || sessionActive || runtimeActive;
+  return runtimeTurn?.state === "admitted" || runtimeTurn?.state === "active";
 }
 
 export function assistantWorkTitle(work: AssistantWorkItem): string {

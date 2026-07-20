@@ -37,7 +37,6 @@ const (
 type TurnPhase string
 
 const (
-	TurnPhaseAdmitted          TurnPhase = "admitted"
 	TurnPhaseProviderIteration TurnPhase = "provider_iteration"
 	TurnPhaseToolBatch         TurnPhase = "tool_batch"
 	TurnPhaseCompacting        TurnPhase = "compacting"

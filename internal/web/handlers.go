@@ -120,17 +120,8 @@ type sessionShowResponse struct {
 	Model           string                      `json:"model,omitempty"`
 	HasMoreBefore   bool                        `json:"has_more_before"`
 	OldestMessageID string                      `json:"oldest_message_id,omitempty"`
-	Turn            *sessionTurnResponse        `json:"turn,omitempty"`
 	Goal            *runtime.GoalStatusSnapshot `json:"goal,omitempty"`
 	Notes           *runtime.NotesSnapshot      `json:"notes,omitempty"`
-}
-
-type sessionTurnResponse struct {
-	TurnID           string `json:"turn_id"`
-	State            string `json:"state"`
-	Error            string `json:"error,omitempty"`
-	PendingCount     *int   `json:"pending_count,omitempty"`
-	MaxPendingInputs *int   `json:"max_pending_inputs,omitempty"`
 }
 
 const (
@@ -176,7 +167,6 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 			page  session.MessagePage
 			goal  *runtime.GoalStatusSnapshot
 			notes *runtime.NotesSnapshot
-			turn  *sessionTurnResponse
 		)
 		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
 			info = sess.Info(time.Now().UTC())
@@ -186,7 +176,6 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 				return err
 			}
 			goal, notes = as.app.Engine.SessionStateStatus()
-			turn = activeSessionTurnResponse(as.app.Status)
 			return nil
 		})
 		if err == nil {
@@ -201,7 +190,6 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 				Model:           s.opts.Cfg.Model,
 				HasMoreBefore:   page.HasMoreBefore,
 				OldestMessageID: page.OldestMessageID,
-				Turn:            turn,
 				Goal:            goal,
 				Notes:           notes,
 			})
@@ -245,29 +233,6 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 		Goal:            goal,
 		Notes:           notes,
 	})
-}
-
-func activeSessionTurnResponse(status *runtime.StatusStore) *sessionTurnResponse {
-	if status == nil {
-		return nil
-	}
-	snapshot := status.Snapshot()
-	if snapshot.Turn == nil {
-		return nil
-	}
-	if snapshot.Turn.State != runtime.TurnLifecycleAdmitted &&
-		snapshot.Turn.State != runtime.TurnLifecycleActive {
-		return nil
-	}
-	state := "running"
-	pendingCount := snapshot.Session.PendingCount
-	maxPendingInputs := snapshot.Session.MaxPendingInputs
-	return &sessionTurnResponse{
-		TurnID:           snapshot.Turn.ID,
-		State:            state,
-		PendingCount:     &pendingCount,
-		MaxPendingInputs: &maxPendingInputs,
-	}
 }
 
 func (s *Server) sessionStateStatus(dir string, as *activeSession) (*runtime.GoalStatusSnapshot, *runtime.NotesSnapshot) {
@@ -622,33 +587,6 @@ func (s *Server) writeTurnAdmissionResult(w http.ResponseWriter, result app.Turn
 	}
 }
 
-type turnStatusResponse struct {
-	State            string `json:"state"`
-	Error            string `json:"error,omitempty"`
-	PendingCount     *int   `json:"pending_count,omitempty"`
-	MaxPendingInputs *int   `json:"max_pending_inputs,omitempty"`
-}
-
-func (s *Server) handleTurnStatus(w http.ResponseWriter, r *http.Request, id, turnID string) {
-	as, err := s.getActiveSession(r.Context(), id)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
-		return
-	}
-	status, ok := as.turns.status(turnID)
-	if !ok {
-		writeErr(w, http.StatusNotFound, "not_found", "turn not found: "+turnID)
-		return
-	}
-	resp := turnStatusResponse{
-		State:            status.State,
-		Error:            status.Err,
-		PendingCount:     status.PendingCount,
-		MaxPendingInputs: status.MaxPendingInputs,
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
 func (s *Server) handleInterrupt(w http.ResponseWriter, r *http.Request, id string) {
 	as, err := s.getActiveSession(r.Context(), id)
 	if err != nil {
@@ -849,8 +787,7 @@ func (s *Server) historicalStatusStore(id string) (*runtime.StatusStore, error) 
 		TokenUsage:       info.TokenUsage,
 		ContextUsage:     info.ContextUsage,
 	}
-	status := runtime.NewStatusStore(seed)
-	status.Reset(seed, journal)
+	status := runtime.NewStatusStoreFromJournal(seed, journal)
 	status.RecoverAfterRestart()
 	return status, nil
 }

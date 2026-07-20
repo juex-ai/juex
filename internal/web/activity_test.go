@@ -16,14 +16,8 @@ import (
 	"github.com/juex-ai/juex/internal/statusapi"
 )
 
-func TestAgentActivityReportsRunningSession(t *testing.T) {
+func TestAgentStatusReportsRunningSession(t *testing.T) {
 	server := NewServer(Options{})
-	turns := newWebTurnTransport(nil)
-	turns.activeTurn = "turn-1"
-	turns.states["turn-1"] = &webTurnState{
-		ID:    "turn-1",
-		State: "running",
-	}
 	status := runtime.NewStatusStore(runtime.StatusSeed{
 		SessionID:    "session-1",
 		SessionAlias: "Release prep",
@@ -40,10 +34,9 @@ func TestAgentActivityReportsRunningSession(t *testing.T) {
 			Status:  status,
 		},
 		StartedAt: time.Now().UTC(),
-		turns:     turns,
 	})
 
-	request := httptest.NewRequest(http.MethodGet, "/api/activity", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/status", nil)
 	response := httptest.NewRecorder()
 	server.APIHandler().ServeHTTP(response, request)
 
@@ -64,7 +57,7 @@ func TestAgentActivityReportsRunningSession(t *testing.T) {
 	}
 }
 
-func TestAgentActivityAggregatesWorkingPendingAndMirrorsSelectedSession(t *testing.T) {
+func TestAgentStatusAggregatesWorkingPendingAndSelectsSession(t *testing.T) {
 	server := NewServer(Options{})
 	add := func(id, alias string, pending int, started time.Time) {
 		status := runtime.NewStatusStore(runtime.StatusSeed{
@@ -109,15 +102,27 @@ func TestAgentActivityAggregatesWorkingPendingAndMirrorsSelectedSession(t *testi
 	}
 }
 
-func TestAgentActivityRejectsNonGET(t *testing.T) {
+func TestAgentStatusRejectsNonGET(t *testing.T) {
 	server := NewServer(Options{})
-	request := httptest.NewRequest(http.MethodPost, "/api/activity", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/status", nil)
 	response := httptest.NewRecorder()
 
 	server.APIHandler().ServeHTTP(response, request)
 
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestLegacyAgentActivityRouteReturnsNotFound(t *testing.T) {
+	server := NewServer(Options{})
+	request := httptest.NewRequest(http.MethodGet, "/api/activity", nil)
+	response := httptest.NewRecorder()
+
+	server.APIHandler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
 	}
 }
 

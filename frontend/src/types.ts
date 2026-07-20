@@ -144,7 +144,6 @@ export interface SessionShowResponse extends SessionInfo {
   model?: string;
   has_more_before?: boolean;
   oldest_message_id?: string;
-  turn?: SessionTurnStatus;
   goal?: GoalStatusSnapshot;
   notes?: NotesSnapshot;
 }
@@ -199,19 +198,6 @@ export interface SlashStatusResponse {
   pending_input?: Record<string, unknown>;
 }
 
-export type TurnState = "running" | "done" | "errored";
-
-export interface TurnStatusResponse {
-  state: TurnState;
-  error?: string;
-  pending_count?: number;
-  max_pending_inputs?: number;
-}
-
-export interface SessionTurnStatus extends TurnStatusResponse {
-  turn_id: string;
-}
-
 export type RuntimeToolCallState =
   | "requested"
   | "running"
@@ -227,7 +213,7 @@ export type RuntimeTurnLifecycleState =
   | "cancelled";
 
 export type RuntimeTurnPhase =
-  | "admitted"
+  | ""
   | "provider_iteration"
   | "tool_batch"
   | "compacting";

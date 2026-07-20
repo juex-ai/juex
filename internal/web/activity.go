@@ -85,16 +85,12 @@ func (h *agentStatusHub) subscribe(_ string) agentStatusSubscription {
 	}
 }
 
-func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
 		return
 	}
 	writeJSON(w, http.StatusOK, s.agentActivity())
-}
-
-func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
-	s.handleAgentActivity(w, r)
 }
 
 func (s *Server) handleAgentStatusEvents(w http.ResponseWriter, r *http.Request) {

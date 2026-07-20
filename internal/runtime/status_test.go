@@ -1,10 +1,7 @@
 package runtime
 
 import (
-	"bufio"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"sync"
@@ -102,7 +99,7 @@ func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 
 	snapshot := apply("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{})
 	assertSessionStatus(t, snapshot, SessionRuntimeTurnActive, 0, true)
-	assertTurnStatus(t, snapshot, TurnLifecycleAdmitted, TurnPhaseAdmitted, false)
+	assertTurnStatus(t, snapshot, TurnLifecycleAdmitted, "", false)
 
 	snapshot = apply("2", TurnPhaseType, "turn-1", TurnPhasePayload{Phase: TurnPhaseProviderIteration})
 	assertTurnStatus(t, snapshot, TurnLifecycleActive, TurnPhaseProviderIteration, false)
@@ -335,7 +332,7 @@ func TestStatusSnapshotResumeIsDeterministic(t *testing.T) {
 	}
 	atCursor := first.Snapshot()
 
-	resumed := NewStatusStoreFromSnapshot(atCursor)
+	resumed := newStatusStoreFromSnapshot(atCursor)
 	for _, event := range all[3:] {
 		resumed.Publish(event)
 	}
@@ -455,7 +452,7 @@ func TestStatusSnapshotJSONResumeRestoresPreCompactionPhase(t *testing.T) {
 	if err := json.Unmarshal(encoded, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	resumed := NewStatusStoreFromSnapshot(snapshot)
+	resumed := newStatusStoreFromSnapshot(snapshot)
 	resumed.Publish(statusEvent("4", "context.compact.completed", "turn-1", ContextCompactCompletedPayload{}))
 	assertTurnStatus(t, resumed.Snapshot(), TurnLifecycleActive, TurnPhaseToolBatch, false)
 }
@@ -468,11 +465,11 @@ func TestStatusStandaloneCompactionCompletesAdmittedTurn(t *testing.T) {
 	}
 	store.Publish(statusEvent("2", "context.compact.started", "compact-1", ContextCompactStartedPayload{}))
 	store.Publish(statusEvent("3", "context.compact.completed", "compact-1", ContextCompactCompletedPayload{}))
-	assertTurnStatus(t, store.Snapshot(), TurnLifecycleAdmitted, TurnPhaseAdmitted, false)
+	assertTurnStatus(t, store.Snapshot(), TurnLifecycleAdmitted, "", false)
 	store.Publish(statusEvent("4", "turn.completed", "compact-1", TurnCompletedPayload{}))
 
 	snapshot := store.Snapshot()
-	assertTurnStatus(t, snapshot, TurnLifecycleCompleted, TurnPhaseAdmitted, false)
+	assertTurnStatus(t, snapshot, TurnLifecycleCompleted, "", false)
 	assertSessionStatus(t, snapshot, SessionRuntimeIdle, 0, true)
 	if snapshot.Turn.ResumePhase != "" {
 		t.Fatalf("standalone compact resume phase = %q", snapshot.Turn.ResumePhase)
@@ -539,7 +536,7 @@ func TestStatusIgnoresLateToolOutputForTerminalOrSupersededTurn(t *testing.T) {
 	}
 }
 
-func TestStatusAutoCompactionRestoresAdmittedTurnUntilStart(t *testing.T) {
+func TestStatusAutoCompactionRestoresAdmittedTurnUntilPhase(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 	store.Publish(statusEvent("2", "context.compact.started", "turn-1", ContextCompactStartedPayload{Auto: true}))
@@ -547,51 +544,55 @@ func TestStatusAutoCompactionRestoresAdmittedTurnUntilStart(t *testing.T) {
 
 	snapshot := store.Snapshot()
 	assertSessionStatus(t, snapshot, SessionRuntimeTurnActive, 0, true)
-	assertTurnStatus(t, snapshot, TurnLifecycleAdmitted, TurnPhaseAdmitted, false)
+	assertTurnStatus(t, snapshot, TurnLifecycleAdmitted, "", false)
 
 	store.Publish(statusEvent("4", "turn.started", "turn-1", TurnStartedPayload{Input: "next"}))
+	assertTurnStatus(t, store.Snapshot(), TurnLifecycleAdmitted, "", false)
+	store.Publish(statusEvent("5", TurnPhaseType, "turn-1", TurnPhasePayload{Phase: TurnPhaseProviderIteration}))
 	assertTurnStatus(t, store.Snapshot(), TurnLifecycleActive, TurnPhaseProviderIteration, false)
 }
 
-func TestStatusDrainedEventDoesNotOverwriteInputQueuedDuringDrain(t *testing.T) {
-	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 2})
-	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
-	store.Publish(statusEvent("2", PendingInputDrainingType, "turn-1", PendingInputDrainingPayload{
-		Count: 1, PendingCount: 0, MaxPendingInputs: 2,
-	}))
-	store.Publish(statusEvent("3", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
-		PendingCount: 1, MaxPendingInputs: 2,
-	}))
-	store.Publish(statusEvent("4", "pending_input.drained", "turn-1", PendingInputDrainedPayload{
-		Count: 1, PendingCount: 0, MaxPendingInputs: 2,
-	}))
+func TestStatusSnapshotJSONResumePreservesInputsQueuedDuringDrain(t *testing.T) {
+	eventsBeforeSnapshot := []events.Event{
+		statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}),
+		statusEvent("2", PendingInputDrainingType, "turn-1", PendingInputDrainingPayload{
+			Count: 1, PendingCount: 0, MaxPendingInputs: 2,
+		}),
+	}
+	eventsAfterSnapshot := []events.Event{
+		statusEvent("3", "pending_input.queued", "turn-1", PendingInputQueuedPayload{
+			PendingCount: 1, MaxPendingInputs: 2,
+		}),
+		statusEvent("4", "pending_input.drained", "turn-1", PendingInputDrainedPayload{
+			Count: 1, PendingCount: 0, MaxPendingInputs: 2,
+		}),
+	}
+	seed := StatusSeed{SessionID: "session-1", MaxPendingInputs: 2}
+	direct := NewStatusStore(seed)
+	for _, event := range append(eventsBeforeSnapshot, eventsAfterSnapshot...) {
+		direct.Publish(event)
+	}
 
-	assertSessionStatus(t, store.Snapshot(), SessionRuntimeTurnActive, 1, true)
-}
-
-func TestStatusStoreProjectsLegacyEventJournal(t *testing.T) {
-	file, err := os.Open(filepath.Join("testdata", "legacy_status_events.jsonl"))
+	resumed := NewStatusStore(seed)
+	for _, event := range eventsBeforeSnapshot {
+		resumed.Publish(event)
+	}
+	encoded, err := json.Marshal(resumed.Snapshot())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
-
-	store := NewStatusStore(StatusSeed{SessionID: "legacy", MaxPendingInputs: 16})
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		var event events.Event
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			t.Fatal(err)
-		}
-		store.Publish(event)
-	}
-	if err := scanner.Err(); err != nil {
+	var snapshot StatusSnapshot
+	if err := json.Unmarshal(encoded, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := store.Snapshot()
-	assertSessionStatus(t, snapshot, SessionRuntimeIdle, 0, true)
-	if snapshot.Cursor != "legacy-8" || snapshot.Session.PendingCount != 0 {
-		t.Fatalf("legacy snapshot = %+v, want cursor legacy-8 and empty pending queue", snapshot)
+	resumed = newStatusStoreFromSnapshot(snapshot)
+	for _, event := range eventsAfterSnapshot {
+		resumed.Publish(event)
+	}
+
+	assertSessionStatus(t, resumed.Snapshot(), SessionRuntimeTurnActive, 1, true)
+	if !reflect.DeepEqual(resumed.Snapshot(), direct.Snapshot()) {
+		t.Fatalf("resumed = %#v\ndirect = %#v", resumed.Snapshot(), direct.Snapshot())
 	}
 }
 

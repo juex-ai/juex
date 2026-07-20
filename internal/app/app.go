@@ -330,8 +330,10 @@ func New(opts Options) (*App, error) {
 	if statusReplayErr != nil {
 		fmt.Fprintf(stderr, "juex: warning: restore runtime status: %v; continuing with recovered events\n", statusReplayErr)
 	}
-	status := runtime.NewStatusStore(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput))
-	status.Reset(runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput), journalEvents)
+	status := runtime.NewStatusStoreFromJournal(
+		runtimeStatusSeed(sess, runtime.DefaultMaxPendingInput),
+		journalEvents,
+	)
 	status.RecoverAfterRestart()
 	statusUnsubscribe = eventSink.AddProjection(status)
 

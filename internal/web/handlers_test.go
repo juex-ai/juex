@@ -26,6 +26,7 @@ import (
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
 
@@ -551,7 +552,7 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var parsed struct {
-		Turn  *sessionTurnResponse `json:"turn"`
+		Turn  json.RawMessage `json:"turn"`
 		Notes *struct {
 			Content string `json:"content"`
 		} `json:"notes"`
@@ -559,11 +560,25 @@ func TestGetSessionShowAndContextReturnDuringRunningTurn(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Turn == nil || parsed.Turn.TurnID == "" || parsed.Turn.State != "running" {
-		t.Fatalf("turn = %+v, want running turn", parsed.Turn)
+	if len(parsed.Turn) != 0 {
+		t.Fatalf("session transcript contains legacy turn status: %s", parsed.Turn)
 	}
 	if parsed.Notes == nil || parsed.Notes.Content != "- [ ] visible while running" {
 		t.Fatalf("notes = %+v", parsed.Notes)
+	}
+	statusResp, err := client.Get(ts.URL + "/api/sessions/" + id + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statusResp.Body.Close()
+	var status statusapi.Snapshot
+	if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Turn == nil ||
+		status.Turn.State != statusapi.TurnActive ||
+		status.Session.State != statusapi.SessionTurnActive {
+		t.Fatalf("canonical status = %+v, want active turn", status)
 	}
 }
 
@@ -1702,19 +1717,18 @@ func TestPostTurn_QueuesWhileRunning(t *testing.T) {
 		t.Fatalf("queued response = %+v, first turn = %+v", queued, firstTurn)
 	}
 
-	statusResp, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/turns/" + firstTurn.TurnID)
+	statusResp, err := http.Get(ts.URL + "/api/sessions/" + c.ID + "/status")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var status struct {
-		State        string `json:"state"`
-		PendingCount int    `json:"pending_count"`
-	}
+	var status statusapi.Snapshot
 	if err := json.NewDecoder(statusResp.Body).Decode(&status); err != nil {
 		t.Fatal(err)
 	}
 	statusResp.Body.Close()
-	if status.State != "running" || status.PendingCount != 1 {
+	if status.Turn == nil ||
+		status.Turn.State != statusapi.TurnActive ||
+		status.Session.PendingCount != 1 {
 		t.Fatalf("turn status = %+v", status)
 	}
 
@@ -1846,15 +1860,16 @@ func waitForHTTPTranscript(t *testing.T, baseURL, sessionID, turnID string, time
 			}
 		}
 		if turnID != "" {
-			state, turnErr, err := fetchTurnState(client, baseURL, sessionID, turnID)
+			state, turnErr, err := fetchRuntimeTurnState(client, baseURL, sessionID, turnID)
 			if err != nil {
 				lastState = err.Error()
 			} else {
 				lastState = state
-				if state == "errored" {
+				if state == string(statusapi.TurnErrored) ||
+					state == string(statusapi.TurnCancelled) {
 					t.Fatalf("turn %s errored while waiting for %s: %s", turnID, label, turnErr)
 				}
-				if matched && state == "done" {
+				if matched && state == string(statusapi.TurnCompleted) {
 					return
 				}
 			}
@@ -1913,24 +1928,28 @@ func fetchHTTPTranscript(client *http.Client, baseURL, sessionID string) ([]test
 	return parsed.Messages, nil
 }
 
-func fetchTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {
-	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/turns/" + turnID)
+func fetchRuntimeTurnState(client *http.Client, baseURL, sessionID, turnID string) (string, string, error) {
+	resp, err := client.Get(baseURL + "/api/sessions/" + sessionID + "/status")
 	if err != nil {
 		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", "", fmt.Errorf("turn status=%d body=%s", resp.StatusCode, body)
+		return "", "", fmt.Errorf("runtime status=%d body=%s", resp.StatusCode, body)
 	}
-	var parsed struct {
-		State string `json:"state"`
-		Error string `json:"error"`
-	}
+	var parsed statusapi.Snapshot
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		return "", "", err
 	}
-	return parsed.State, parsed.Error, nil
+	if parsed.Turn == nil || parsed.Turn.ID != turnID {
+		return "", "", nil
+	}
+	turnErr := ""
+	if parsed.Turn.Error != nil {
+		turnErr = parsed.Turn.Error.Message
+	}
+	return string(parsed.Turn.State), turnErr, nil
 }
 
 func createTestSession(t *testing.T, baseURL string) string {
@@ -2325,12 +2344,13 @@ poll:
 		} else {
 			lastErr = err.Error()
 		}
-		state, turnErr, err := fetchTurnState(client, ts.URL, c.ID, got.TurnID)
+		state, turnErr, err := fetchRuntimeTurnState(client, ts.URL, c.ID, got.TurnID)
 		if err != nil {
 			lastState = err.Error()
 		} else {
 			lastState = state
-			if state == "errored" {
+			if state == string(statusapi.TurnErrored) ||
+				state == string(statusapi.TurnCancelled) {
 				t.Fatalf("turn %s errored while waiting for ack to persist: %s", got.TurnID, turnErr)
 			}
 		}
@@ -2377,53 +2397,50 @@ func TestPostTurn_RequiresActivePrimary(t *testing.T) {
 	}
 }
 
-func TestGetTurnStatus_DoneAfterCompletion(t *testing.T) {
-	srv := newTestServer(t)
+func TestLegacyTurnStatusRouteReturnsNotFound(t *testing.T) {
+	provider := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "done"), StopReason: llm.StopEndTurn},
+	)
+	srv := NewServer(Options{
+		Cfg: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    t.TempDir(),
+			Compaction: config.DefaultCompactionConfig(),
+		},
+		Provider: provider,
+	})
+	t.Cleanup(srv.Close)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	sessionID := createTestSession(t, ts.URL)
+	turnResp, err := http.Post(
+		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"hi"}`),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var c struct{ ID string }
-	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
-		t.Fatal(err)
-	}
-	created.Body.Close()
-
-	turnResp, err := http.Post(ts.URL+"/api/sessions/"+c.ID+"/turns", "application/json",
-		strings.NewReader(`{"prompt":"hi"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var t1 struct {
-		TurnID string `json:"turn_id"`
-	}
-	if err := json.NewDecoder(turnResp.Body).Decode(&t1); err != nil {
+	var turn startTurnResponse
+	if err := json.NewDecoder(turnResp.Body).Decode(&turn); err != nil {
 		t.Fatal(err)
 	}
 	turnResp.Body.Close()
+	waitPendingProviderStarted(t, provider, "provider did not start")
+	defer close(provider.release)
 
-	client := &http.Client{Timeout: 2 * time.Second}
-	deadline := time.Now().Add(30 * time.Second)
-	var lastErr, lastState string
-	for time.Now().Before(deadline) {
-		state, turnErr, err := fetchTurnState(client, ts.URL, c.ID, t1.TurnID)
-		if err != nil {
-			lastErr = err.Error()
-		} else {
-			lastState = state
-			if state == "errored" {
-				t.Fatalf("turn errored while waiting for done: %s", turnErr)
-			}
-		}
-		if state == "done" {
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID + "/turns/" + turn.TurnID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("turn never reached done state; last_state=%q last_error=%q", lastState, lastErr)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status = %d, want %d; body=%s", resp.StatusCode, http.StatusNotFound, body)
+	}
 }
 
 func TestPostInterrupt_IdempotentWhenIdle(t *testing.T) {

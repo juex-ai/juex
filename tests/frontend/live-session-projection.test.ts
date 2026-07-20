@@ -6,7 +6,6 @@ import {
   projectLiveSessionEvent,
   projectOptimisticTurn,
   projectQueuedInput,
-  projectSessionTurnStatus,
   type LiveSessionProjection,
 } from "../../frontend/src/lib/live-session-projection.ts";
 import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
@@ -509,49 +508,6 @@ test("projectLiveSessionEvent preserves queued attachments across compact termin
   assert.equal(state.messages[0]?.turn_id, "turn-2");
   assert.equal(state.messages[1]?.role, "assistant");
   assert.equal(state.messages[1]?.pending, true);
-});
-
-test("projectSessionTurnStatus preserves a compact admission queue before promotion", () => {
-  let state = apply(createLiveSessionProjection(), {
-    id: "e1",
-    type: "turn.admitted",
-    ts: "2026-06-15T00:00:00Z",
-    turn_id: "compact-1",
-    payload: { non_interruptible: true },
-  });
-  state = projectQueuedInput(state, "", "user", 1, [imageMedia]);
-
-  state = projectSessionTurnStatus(state, {
-    turn_id: "compact-1",
-    state: "done",
-  });
-
-  assert.deepEqual(state.queuedInput.items[0]?.attachments, [imageMedia]);
-});
-
-test("projectSessionTurnStatus does not duplicate an existing assistant turn", () => {
-  const state = projectSessionTurnStatus(
-    {
-      ...createLiveSessionProjection(),
-      messages: [
-        {
-          role: "assistant",
-          turn_id: "turn-1",
-          pending: false,
-          blocks: [{ type: "text", text: "partial answer" }],
-        },
-      ],
-    },
-    { turn_id: "turn-1", state: "running" },
-  );
-
-  assert.equal(state.turnActive, true);
-  assert.equal(
-    state.messages.filter(
-      (message) => message.role === "assistant" && message.turn_id === "turn-1",
-    ).length,
-    1,
-  );
 });
 
 test("projectLiveSessionEvent drains queued input before the pending assistant placeholder", () => {

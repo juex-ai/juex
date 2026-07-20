@@ -169,7 +169,21 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     /composerSubmitAction\(\{[\s\S]*status: runtimeStatus/,
     "the composer must derive admission state from the shared runtime status",
   );
-  assert.doesNotMatch(sessionSource, /startTurnStatusPolling\(/);
+  assert.match(
+    sessionSource,
+    /statusStore\.status\(agent\.id, id\)/,
+    "the session must read the canonical per-session runtime snapshot",
+  );
+  assert.match(
+    sessionSource,
+    /getSessionStatus\(id\)[\s\S]*subscribeSessionStatus\(id/,
+    "the session must load a canonical snapshot before opening its status stream",
+  );
+  assert.match(
+    sessionSource,
+    /submitAction === "loading"/,
+    "status-dependent submission must remain disabled before the snapshot loads",
+  );
   assert.match(
     sessionSource,
     /!agentsLoaded \|\| agent\?\.runtime_health === "healthy"/,

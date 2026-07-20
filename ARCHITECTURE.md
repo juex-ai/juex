@@ -1177,10 +1177,9 @@ the default boundary, while operators who enable `--unsafe-bind-any` explicitly
 extend that trust to remote clients.
 
 The fleet roster enriches healthy agents with the selected runtime's
-`GET /api/activity` presentation read model. Activity is fetched concurrently
-with a short bound and reports the authoritative runtime-status snapshot while
-retaining idle/working compatibility fields. Process health remains owned by
-`internal/fleet`; runtime turn state remains owned by `internal/runtime`;
+`GET /api/status` read model. Status is fetched concurrently with a short bound
+and reports the authoritative runtime snapshot. Process health remains owned
+by `internal/fleet`; runtime turn state remains owned by `internal/runtime`;
 enrichment failure leaves the process-health roster usable. The aggregate
 `GET /api/fleet/events` SSE stream pushes `agent.status` changes from healthy
 agent status streams. Browser subscribers share one upstream stream per healthy
@@ -1305,7 +1304,8 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/api/agents/<id>/logs?lines=N` | Bounded combined log tail |
 | GET, PUT | `/api/agents/<id>/config` | Read or validate, write, and restart config |
 | GET | `/api/sessions` | JSON list |
-| GET | `/api/activity` | Lightweight selected-agent idle/working and pending-input read model |
+| GET | `/api/status` | Authoritative selected-agent runtime-status snapshot |
+| GET | `/api/status/events` | Resumable selected-agent runtime-status SSE stream |
 | POST | `/api/sessions` | create active primary session |
 | GET | `/api/sessions/<id>` | JSON transcript window (`?before=&limit=` for older pages) |
 | DELETE | `/api/sessions/<id>` | delete session and remove it from history |
@@ -1315,7 +1315,6 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/sessions/<id>/compact` | append a manual compact summary marker |
 | POST | `/api/sessions/<id>/attachments` | validate and store one session-scoped image upload |
 | POST | `/api/sessions/<id>/turns` | start a text, image, or mixed-content turn |
-| GET | `/api/sessions/<id>/turns/<turn_id>` | turn status |
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/status` | authoritative layered runtime-status snapshot with event cursor |
 | GET | `/api/sessions/<id>/status/events` | resumable full runtime-status snapshot SSE stream after a cursor |
