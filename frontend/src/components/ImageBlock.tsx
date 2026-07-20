@@ -18,26 +18,37 @@ type ImageBlockProps = {
   alt?: string;
   className?: string;
   media?: MediaRef | null;
+  variant?: "card" | "thumbnail";
 };
 
-export function ImageBlock({ alt, className, media }: ImageBlockProps) {
+export function ImageBlock({
+  alt,
+  className,
+  media,
+  variant = "card",
+}: ImageBlockProps) {
   const path = media?.artifact_path?.trim();
   const [failed, setFailed] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
   const captionID = useId();
   const meta = useMemo(() => mediaMetadata(media), [media]);
+  const isThumbnail = variant === "thumbnail";
 
   if (!path || failed) {
     return (
       <div
         className={cn(
-          "flex max-w-[min(100%,32rem)] items-center gap-2 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-sm text-muted-foreground",
+          isThumbnail
+            ? "flex size-20 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/35 text-muted-foreground"
+            : "flex max-w-[min(100%,32rem)] items-center gap-2 rounded-md border border-border/60 bg-muted/35 px-3 py-2 text-sm text-muted-foreground",
           className,
         )}
         role="status"
       >
         <ImageOffIcon className="size-4 shrink-0" aria-hidden="true" />
-        <span>{failed ? "Image failed to load" : "Image unavailable"}</span>
+        <span className={isThumbnail ? "sr-only" : undefined}>
+          {failed ? "Image failed to load" : "Image unavailable"}
+        </span>
       </div>
     );
   }
@@ -55,44 +66,56 @@ export function ImageBlock({ alt, className, media }: ImageBlockProps) {
     >
       <figure
         className={cn(
-          "w-fit max-w-[min(100%,32rem)] overflow-hidden rounded-lg border border-border/60 bg-card shadow-[var(--shadow-xs)]",
+          isThumbnail
+            ? "size-20 shrink-0 overflow-hidden rounded-lg border border-border/60 bg-card shadow-[var(--shadow-xs)]"
+            : "w-fit max-w-[min(100%,32rem)] overflow-hidden rounded-lg border border-border/60 bg-card shadow-[var(--shadow-xs)]",
           className,
         )}
       >
         <DialogTrigger asChild>
           <button
             type="button"
-            className="block w-full bg-background text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-            aria-describedby={captionID}
+            className={cn(
+              "block bg-background outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              isThumbnail ? "size-full" : "w-full text-left",
+            )}
+            aria-label={isThumbnail ? `Preview ${name}` : undefined}
+            aria-describedby={isThumbnail ? undefined : captionID}
           >
             <img
               src={src}
               alt={alt?.trim() || name}
               loading="lazy"
-              className="max-h-[24rem] w-full object-contain"
-              style={aspectRatio ? { aspectRatio } : undefined}
+              className={
+                isThumbnail
+                  ? "size-full object-cover"
+                  : "max-h-[24rem] w-full object-contain"
+              }
+              style={!isThumbnail && aspectRatio ? { aspectRatio } : undefined}
               onError={() => setFailed(true)}
             />
           </button>
         </DialogTrigger>
-        <figcaption
-          id={captionID}
-          className="flex min-w-0 items-center justify-between gap-2 border-t border-border/60 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground"
-        >
-          <span className="min-w-0 truncate" title={meta}>
-            {meta}
-          </span>
-          <Button
-            asChild
-            className="size-7 shrink-0"
-            size="icon"
-            variant="ghost"
+        {!isThumbnail ? (
+          <figcaption
+            id={captionID}
+            className="flex min-w-0 items-center justify-between gap-2 border-t border-border/60 px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground"
           >
-            <a href={src} download={name} aria-label={`Download ${name}`}>
-              <DownloadIcon className="size-3.5" aria-hidden="true" />
-            </a>
-          </Button>
-        </figcaption>
+            <span className="min-w-0 truncate" title={meta}>
+              {meta}
+            </span>
+            <Button
+              asChild
+              className="size-7 shrink-0"
+              size="icon"
+              variant="ghost"
+            >
+              <a href={src} download={name} aria-label={`Download ${name}`}>
+                <DownloadIcon className="size-3.5" aria-hidden="true" />
+              </a>
+            </Button>
+          </figcaption>
+        ) : null}
       </figure>
 
       <DialogContent

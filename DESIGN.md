@@ -460,13 +460,18 @@ size. Copy stays short and descriptive, such as `Loading conversation` or
 `<Message from={role}>` (AI Elements) groups the visible units for one canonical
 message. User messages render as right-aligned card-like bubbles with normal
 card foreground text, subtle borders, and a tighter top-right corner so they
-read as authored input without competing with assistant output. Assistant text
-renders as unframed, left-aligned conversation text. A model label appears only
-on the first group in a contiguous run from the same model; a user or status
-message starts a new run. Reasoning and tool sub-units render as compact process
-rows below the assistant text. MCP notifications, Observations, and hook traces
-bypass normal message chrome and render as low-emphasis transcript rows so they
-do not read as human-authored messages.
+read as authored input without competing with assistant output. Sent user image
+attachments render as right-aligned 80px square thumbnails above the bubble,
+wrap without horizontal overflow, and open the existing full-size lightbox.
+This is a view projection only; persisted message block order remains
+unchanged. Assistant and tool-result images keep the full media card with
+metadata and download action. Assistant text renders as unframed, left-aligned
+conversation text. A model label appears only on the first group in a
+contiguous run from the same model; a user or status message starts a new run.
+Reasoning and tool sub-units render as compact process rows below the assistant
+text. MCP notifications, Observations, and hook traces bypass normal message
+chrome and render as low-emphasis transcript rows so they do not read as
+human-authored messages.
 
 ### 7.6 Text rendering
 

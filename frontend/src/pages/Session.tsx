@@ -1099,6 +1099,12 @@ function MessageGroupView({
   }
 
   const isEmpty = group.units.length === 0;
+  const userImageMedia =
+    group.role === "user"
+      ? group.units.flatMap((unit) =>
+          unit.kind === "image" ? [unit.block.media ?? null] : [],
+        )
+      : [];
 
   return (
     <Message from={group.role}>
@@ -1107,6 +1113,9 @@ function MessageGroupView({
           <span className="font-mono text-[11px] text-muted-foreground">
             {modelLabel}
           </span>
+        ) : null}
+        {userImageMedia.length > 0 ? (
+          <MessageImageGallery media={userImageMedia} role="user" />
         ) : null}
         {group.units.map((unit, i) => {
           if (unit.kind === "text") {
@@ -1130,6 +1139,7 @@ function MessageGroupView({
             );
           }
           if (unit.kind === "image") {
+            if (group.role === "user") return null;
             if (i > 0 && group.units[i - 1]?.kind === "image") return null;
             const media: Array<MediaRef | null> = [];
             for (let cursor = i; cursor < group.units.length; cursor++) {
@@ -1177,8 +1187,10 @@ function MessageImageGallery({
   return (
     <div
       className={cn(
-        "grid w-fit max-w-full gap-2",
-        media.length > 1 && "grid-cols-2",
+        role === "user"
+          ? "flex w-full flex-wrap justify-end gap-2"
+          : "grid w-fit max-w-full gap-2",
+        role !== "user" && media.length > 1 && "grid-cols-2",
         role === "user" ? "ml-auto" : "mr-auto",
       )}
     >
@@ -1186,7 +1198,12 @@ function MessageImageGallery({
         <ImageBlock
           key={`${item?.artifact_path ?? "image"}-${index}`}
           media={item}
-          className={media.length > 1 ? "max-w-[16rem]" : undefined}
+          variant={role === "user" ? "thumbnail" : "card"}
+          className={
+            role !== "user" && media.length > 1
+              ? "max-w-[16rem]"
+              : undefined
+          }
         />
       ))}
     </div>

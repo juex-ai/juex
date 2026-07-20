@@ -119,3 +119,34 @@ test("messagesToGroups keeps image-only messages as image units", () => {
   assert.equal(messageGroupCopyText(groups[0]), "");
   assert.equal(messageGroupCanCopy(groups[0]), false);
 });
+
+test("messagesToGroups preserves canonical mixed text and image order", () => {
+  const messages: Message[] = [
+    {
+      id: "mixed-image",
+      role: "user",
+      blocks: [
+        { type: "text", text: "before" },
+        {
+          type: "image",
+          media: {
+            artifact_path: ".juex/artifacts/media/s/image.png",
+            media_type: "image/png",
+            sha256: "abc",
+            original_bytes: 12,
+            width: 2,
+            height: 3,
+          },
+        },
+        { type: "text", text: "after" },
+      ],
+    },
+  ];
+
+  const groups = messagesToGroups(messages);
+
+  assert.deepEqual(
+    groups[0].units.map((unit) => unit.kind),
+    ["text", "image", "text"],
+  );
+});
