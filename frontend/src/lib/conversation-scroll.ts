@@ -5,6 +5,9 @@ export type SessionConversationScrollOptions = {
   resize: "instant" | "smooth";
 };
 
+const SESSION_COMPOSER_MIN_CLEARANCE = 150;
+const SESSION_COMPOSER_FADE_HEIGHT = 48;
+
 export function sessionConversationScrollOptions(
   phase: SessionConversationScrollPhase = "hydrate",
 ): SessionConversationScrollOptions {
@@ -18,7 +21,10 @@ export function sessionComposerClearance(
   measuredOverlayHeight: number,
 ): number {
   if (!Number.isFinite(measuredOverlayHeight) || measuredOverlayHeight <= 0) {
-    return 150;
+    return SESSION_COMPOSER_MIN_CLEARANCE;
   }
-  return Math.max(150, Math.ceil(measuredOverlayHeight) + 12);
+  return Math.max(
+    SESSION_COMPOSER_MIN_CLEARANCE,
+    Math.ceil(measuredOverlayHeight) + SESSION_COMPOSER_FADE_HEIGHT,
+  );
 }

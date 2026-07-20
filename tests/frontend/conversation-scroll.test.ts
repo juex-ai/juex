@@ -20,9 +20,10 @@ test("sessionConversationScrollOptions smooths live follow-up resize", () => {
   });
 });
 
-test("sessionComposerClearance keeps a 150px floor and grows with the measured overlay", () => {
+test("sessionComposerClearance keeps a 150px floor and reserves the 48px fade", () => {
   assert.equal(sessionComposerClearance(0), 150);
   assert.equal(sessionComposerClearance(Number.NaN), 150);
-  assert.equal(sessionComposerClearance(124), 150);
-  assert.equal(sessionComposerClearance(180.2), 193);
+  assert.equal(sessionComposerClearance(80), 150);
+  assert.equal(sessionComposerClearance(124), 172);
+  assert.equal(sessionComposerClearance(180.2), 229);
 });

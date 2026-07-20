@@ -257,12 +257,13 @@ narrower screens. Session history is opened from the stage header as
   768px.
 - The active composer floats over the bottom of the center column and is
   bounded by the actual Session container height. Its full obstruction,
-  including the bottom safe area, reserves at least 150px of scroll clearance
-  for the transcript and latest-message control without consuming conversation
-  layout. A 48px fade is confined to the composer width and appears only above
-  the input, never across the transcript scrollbar or below the floating
-  surface. Clearance growth follows the bottom only when the reader is already
-  there; it does not steal a manually scrolled reading position.
+  including the bottom safe area and the 48px top fade, reserves at least 150px
+  of scroll clearance for the transcript and latest-message control without
+  consuming conversation layout. The fade is confined to the composer width
+  and appears only above the input, never across the transcript scrollbar or
+  below the floating surface. Clearance growth follows the bottom only when the
+  reader is already there; it does not steal a manually scrolled reading
+  position.
 - Stopped and failed agents keep persisted conversations readable. Their
   composer is replaced by a runtime state bar with a Start agent action;
   failures also show the reason and a Logs shortcut. The stage does not poll
