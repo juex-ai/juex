@@ -20,6 +20,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 		detectErr      error
 		confirmState   runtime.TurnLifecycleState
 		confirmErr     error
+		confirmWarmups int
 		resumeErr      error
 		wantRequired   bool
 		wantSent       bool
@@ -42,6 +43,14 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 			confirmState: runtime.TurnLifecycleCancelled,
 			wantRequired: true,
 			wantSent:     true,
+		},
+		{
+			name:           "replacement status warmup is retried",
+			state:          runtime.SessionRuntimeTurnActive,
+			confirmState:   runtime.TurnLifecycleCancelled,
+			confirmWarmups: 1,
+			wantRequired:   true,
+			wantSent:       true,
 		},
 		{
 			name:         "turn completed before shutdown does not resume",
@@ -90,6 +99,9 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 					}, nil
 				}
 				*events = append(*events, "confirm")
+				if activityReads-1 <= test.confirmWarmups {
+					return restartActivity{}, nil
+				}
 				if test.confirmErr != nil {
 					return restartActivity{}, test.confirmErr
 				}
@@ -142,7 +154,12 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				t.Fatalf("events = %q, want detect before shutdown and spawn", gotEvents)
 			}
 			if test.wantRequired && test.resumeErr == nil {
-				if gotEvents != "detect,shutdown,spawn,confirm,resume" {
+				wantEvents := []string{"detect", "shutdown", "spawn"}
+				for index := 0; index <= test.confirmWarmups; index++ {
+					wantEvents = append(wantEvents, "confirm")
+				}
+				wantEvents = append(wantEvents, "resume")
+				if gotEvents != strings.Join(wantEvents, ",") {
 					t.Fatalf("events = %q, want confirmed resume only after spawn", gotEvents)
 				}
 			} else if !test.wantRequired && strings.Contains(gotEvents, "resume") {
