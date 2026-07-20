@@ -598,6 +598,19 @@ func TestPOSIXInstallersShareFleetRefreshContract(t *testing.T) {
 			}
 		}
 	}
+	localBody, err := os.ReadFile(filepath.Join(root, "scripts/install-local.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	localText := string(localBody)
+	for _, want := range []string{
+		`if "$binary" fleet install --restart-agents; then`,
+		`if "$binary" fleet install; then`,
+	} {
+		if !strings.Contains(localText, want) {
+			t.Fatalf("scripts/install-local.sh missing install mode %q", want)
+		}
+	}
 }
 
 func TestReleaseInstallScriptVerifyChecksum(t *testing.T) {

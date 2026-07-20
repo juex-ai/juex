@@ -39,7 +39,7 @@ type backend interface {
 	Add(context.Context, fleet.AddOptions) (fleet.AddResult, error)
 	Start(context.Context, string) (fleet.AgentStatus, error)
 	Stop(context.Context, string) (fleet.AgentStatus, error)
-	Restart(context.Context, string) (fleet.AgentStatus, error)
+	Restart(context.Context, string) (fleet.RestartResult, error)
 	SetEnabled(context.Context, string, bool) (fleet.AgentStatus, error)
 	Remove(context.Context, string, fleet.RemoveOptions) (fleet.RemovedAgent, error)
 	Logs(string, int) ([]byte, error)
@@ -227,22 +227,22 @@ func (s *Server) dispatchAgentAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var (
-			status fleet.AgentStatus
-			err    error
+			payload any
+			err     error
 		)
 		switch action {
 		case "start":
-			status, err = s.manager.Start(r.Context(), selector)
+			payload, err = s.manager.Start(r.Context(), selector)
 		case "stop":
-			status, err = s.manager.Stop(r.Context(), selector)
+			payload, err = s.manager.Stop(r.Context(), selector)
 		case "restart":
-			status, err = s.manager.Restart(r.Context(), selector)
+			payload, err = s.manager.Restart(r.Context(), selector)
 		}
 		if err != nil {
 			writeFleetError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, status)
+		writeJSON(w, http.StatusOK, payload)
 	case "enable", "disable":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")

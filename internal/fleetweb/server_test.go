@@ -83,9 +83,17 @@ func (f *fakeBackend) Stop(context.Context, string) (fleet.AgentStatus, error) {
 	return f.actionStatus, f.actionErr
 }
 
-func (f *fakeBackend) Restart(context.Context, string) (fleet.AgentStatus, error) {
+func (f *fakeBackend) Restart(context.Context, string) (fleet.RestartResult, error) {
 	f.recordAction("restart")
-	return f.actionStatus, f.actionErr
+	return fleet.RestartResult{
+		AgentStatus: f.actionStatus,
+		Resume: fleet.RestartResume{
+			Required:  true,
+			Sent:      true,
+			SessionID: "session-one",
+			TurnID:    "turn-resume",
+		},
+	}, f.actionErr
 }
 
 func (f *fakeBackend) SetEnabled(
@@ -339,10 +347,19 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			path:       "/api/agents/aaaaaaaa/restart",
 			wantStatus: http.StatusOK,
 			assert: func(t *testing.T, body []byte) {
-				var got fleet.AgentStatus
+				var got fleet.RestartResult
 				decodeJSON(t, body, &got)
-				if got.ID != status.ID || backend.action != "restart" {
+				if got.ID != status.ID ||
+					!got.Resume.Required ||
+					!got.Resume.Sent ||
+					got.Resume.TurnID != "turn-resume" ||
+					backend.action != "restart" {
 					t.Fatalf("status/action = %+v/%q", got, backend.action)
+				}
+				var legacy fleet.AgentStatus
+				decodeJSON(t, body, &legacy)
+				if legacy.ID != status.ID || legacy.RuntimeHealth != status.RuntimeHealth {
+					t.Fatalf("legacy status decode = %+v", legacy)
 				}
 			},
 		},

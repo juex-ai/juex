@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentActionWarning,
   agentStatusText,
   agentStateLabel,
   agentTabFromPath,
@@ -120,4 +121,27 @@ test("single lifecycle toggle stops healthy agents and starts other states", () 
   assert.equal(nextAgentLifecycleAction(agent("idle", "healthy")), "stop");
   assert.equal(nextAgentLifecycleAction(agent("stopped", "stopped")), "start");
   assert.equal(nextAgentLifecycleAction(agent("failed", "unhealthy")), "start");
+});
+
+test("restart continuation failures produce an actionable fleet warning", () => {
+  const restarted = {
+    ...agent("alpha", "healthy"),
+    resume: {
+      required: true,
+      sent: false,
+      error: "provider unavailable",
+    },
+  };
+  assert.equal(
+    agentActionWarning("restart", restarted),
+    "Agent restarted, but interrupted work was not resumed: provider unavailable",
+  );
+  assert.equal(agentActionWarning("stop", restarted), null);
+  assert.equal(
+    agentActionWarning("restart", {
+      ...restarted,
+      resume: { required: true, sent: true },
+    }),
+    null,
+  );
 });

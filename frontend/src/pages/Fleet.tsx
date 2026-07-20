@@ -57,6 +57,7 @@ import {
   workspacePathUpdate,
 } from "@/lib/fleet-directories";
 import { agentPagePath } from "@/lib/fleet-routes";
+import { agentActionWarning } from "@/lib/fleet-shell";
 import { cn } from "@/lib/utils";
 import type {
   AgentRuntimeHealth,
@@ -118,6 +119,7 @@ export function Fleet() {
     try {
       const next = await runAgentAction(agent.id, action);
       replaceAgent(next);
+      setError(agentActionWarning(action, next));
     } catch (cause) {
       const actionError =
         cause instanceof Error

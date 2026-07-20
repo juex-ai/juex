@@ -20,7 +20,7 @@ refresh_fleet_service() {
   fi
   case "$installed" in
     true)
-      if "$binary" fleet install; then
+      if "$binary" fleet install --restart-agents; then
         printf 'Refreshed existing JueX fleet service.\n'
         if ! "$binary" fleet status --format json >/dev/null; then
           printf 'warning: refreshed JueX fleet service, but could not check running agent versions.\n' >&2

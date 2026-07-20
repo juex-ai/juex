@@ -5,12 +5,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +24,153 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 )
+
+func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compiled-binary fleet restart resume is slow")
+	}
+	oldBinary := buildJuexVersion(t, "0.0.1-old")
+	newBinary := buildJuexVersion(t, "0.0.2-new")
+
+	for _, mode := range []string{"single", "bulk"} {
+		t.Run(mode, func(t *testing.T) {
+			var providerCalls atomic.Int32
+			var firstStarted sync.Once
+			firstRequestStarted := make(chan struct{})
+			continuationRequests := make(chan map[string]any, 1)
+			providerErrors := make(chan error, 2)
+			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					providerErrors <- err
+					return
+				}
+				call := providerCalls.Add(1)
+				if call == 1 {
+					firstStarted.Do(func() { close(firstRequestStarted) })
+					<-r.Context().Done()
+					return
+				}
+				select {
+				case continuationRequests <- body:
+				default:
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, chatCompletionResponse("continued after restart"))
+			}))
+			defer provider.Close()
+
+			home := t.TempDir()
+			workspace := t.TempDir()
+			agentID := "aaaaaaaa"
+			agentDir := writeFleetE2EAgent(t, home, workspace, agentID)
+			writeFleetProviderConfig(t, workspace, provider.URL)
+			environment := fleetE2EEnvironmentForProvider(
+				home,
+				"local-chat",
+				"openai/chat",
+				provider.URL,
+				"chat-test",
+			)
+			t.Cleanup(func() {
+				shutdownFleetAgent(t, agentDir)
+			})
+
+			if stdout, stderr, err := runFleetE2E(
+				oldBinary,
+				environment,
+				"",
+				"start",
+				agentID,
+			); err != nil {
+				t.Fatalf("fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+			}
+			oldRuntime := waitFleetRuntimeVersion(t, agentDir, "", "0.0.1-old")
+			sessionID, originalTurnID := startFleetBlockingTurn(t, oldRuntime)
+			select {
+			case <-firstRequestStarted:
+			case err := <-providerErrors:
+				t.Fatalf("provider request: %v", err)
+			case <-time.After(5 * time.Second):
+				eventsBody, _ := os.ReadFile(
+					filepath.Join(agentDir, "sessions", sessionID, "events.jsonl"),
+				)
+				logBody, _ := os.ReadFile(filepath.Join(agentDir, "logs", "fleet.log"))
+				t.Fatalf(
+					"original provider request did not start\nevents:\n%s\nfleet log:\n%s",
+					eventsBody,
+					logBody,
+				)
+			}
+
+			switch mode {
+			case "single":
+				stdout, stderr, err := runFleetE2E(
+					newBinary,
+					environment,
+					"",
+					"restart",
+					agentID,
+				)
+				if err != nil {
+					t.Fatalf("fleet restart: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+				}
+				if !strings.Contains(stdout, "resume=sent") {
+					t.Fatalf("restart output missing resume result:\n%s", stdout)
+				}
+			case "bulk":
+				manager, err := fleet.New(fleet.Options{
+					HomeDir:    home,
+					Executable: newBinary,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := manager.RestartRunningAgents(context.Background())
+				if err != nil {
+					t.Fatalf("bulk restart: %v; result=%+v", err, result)
+				}
+				if result.Restarted != 1 ||
+					len(result.Items) != 1 ||
+					!result.Items[0].Resume.Sent {
+					t.Fatalf("bulk result = %+v", result)
+				}
+			}
+
+			newRuntime := waitFleetRuntimeVersion(
+				t,
+				agentDir,
+				oldRuntime.InstanceID,
+				"0.0.2-new",
+			)
+			if newRuntime.PID == oldRuntime.PID {
+				t.Fatalf("restart reused pid %d", newRuntime.PID)
+			}
+			probeFleetRuntime(t, newRuntime)
+			status := waitFleetHealth(t, newBinary, environment, agentID, fleet.RuntimeHealthy)
+			if status.BinaryVersion != "0.0.2-new" {
+				t.Fatalf("status binary version = %q", status.BinaryVersion)
+			}
+
+			select {
+			case request := <-continuationRequests:
+				encoded, _ := json.Marshal(request)
+				if !strings.Contains(string(encoded), "System notice") {
+					t.Fatalf("continuation request missing system notice: %s", encoded)
+				}
+			case err := <-providerErrors:
+				t.Fatalf("provider request: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("continuation turn did not reach provider")
+			}
+			waitFleetInterruptedAndContinuationEvents(
+				t,
+				filepath.Join(agentDir, "sessions", sessionID, "events.jsonl"),
+				originalTurnID,
+			)
+		})
+	}
+}
 
 func TestFleetStatusReportsRunningBinaryVersionSkew(t *testing.T) {
 	if testing.Short() {
@@ -414,6 +567,34 @@ func waitFleetRuntime(t *testing.T, agentDir string) endpoint.Runtime {
 	return endpoint.Runtime{}
 }
 
+func waitFleetRuntimeVersion(
+	t *testing.T,
+	agentDir string,
+	previousInstanceID string,
+	wantVersion string,
+) endpoint.Runtime {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	var last endpoint.Runtime
+	for time.Now().Before(deadline) {
+		runtimeState, err := endpoint.ReadRuntime(agentDir)
+		if err == nil {
+			last = runtimeState
+			if runtimeState.InstanceID != previousInstanceID &&
+				runtimeState.BinaryVersion == wantVersion {
+				return runtimeState
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf(
+		"runtime did not reach version %q with a new instance; last=%+v",
+		wantVersion,
+		last,
+	)
+	return endpoint.Runtime{}
+}
+
 func probeFleetRuntime(t *testing.T, runtimeState endpoint.Runtime) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -472,6 +653,22 @@ func runFleetE2E(
 }
 
 func fleetE2EEnvironment(home string) []string {
+	return fleetE2EEnvironmentForProvider(
+		home,
+		"openai",
+		"",
+		"http://127.0.0.1:1",
+		"test-model",
+	)
+}
+
+func fleetE2EEnvironmentForProvider(
+	home string,
+	providerID string,
+	protocol string,
+	baseURL string,
+	model string,
+) []string {
 	environment := filteredEnv(
 		"HOME",
 		"USERPROFILE",
@@ -479,6 +676,7 @@ func fleetE2EEnvironment(home string) []string {
 		"GIT_CONFIG_GLOBAL",
 		"GIT_CONFIG_NOSYSTEM",
 		"PROVIDER_API_ID",
+		"PROVIDER_API_PROTOCOL",
 		"PROVIDER_API_BASE",
 		"PROVIDER_API_KEY",
 		"PROVIDER_API_MODEL",
@@ -490,10 +688,11 @@ func fleetE2EEnvironment(home string) []string {
 		"JUEX_HOME="+home,
 		"GIT_CONFIG_GLOBAL="+filepath.Join(home, "gitconfig"),
 		"GIT_CONFIG_NOSYSTEM=1",
-		"PROVIDER_API_ID=openai",
-		"PROVIDER_API_BASE=http://127.0.0.1:1",
+		"PROVIDER_API_ID="+providerID,
+		"PROVIDER_API_PROTOCOL="+protocol,
+		"PROVIDER_API_BASE="+baseURL,
 		"PROVIDER_API_KEY=test-key",
-		"PROVIDER_API_MODEL=test-model",
+		"PROVIDER_API_MODEL="+model,
 	)
 }
 
@@ -533,4 +732,165 @@ func writeFleetE2EJSON(t *testing.T, path string, value any) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeFleetProviderConfig(t *testing.T, workspace string, providerURL string) {
+	t.Helper()
+	body := fmt.Sprintf(`model: local-chat:chat-test
+providers:
+  - id: local-chat
+    protocol: openai/chat
+    base_url: %s
+    api_key: test-key
+    capabilities:
+      streaming: false
+    models:
+      - id: chat-test
+`, providerURL)
+	if err := os.WriteFile(
+		filepath.Join(workspace, ".juex", "juex.yaml"),
+		[]byte(body),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func startFleetBlockingTurn(
+	t *testing.T,
+	runtimeState endpoint.Runtime,
+) (sessionID string, turnID string) {
+	t.Helper()
+	target, err := endpoint.Parse(runtimeState.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := target.NewClient()
+	createRequest, err := http.NewRequest(
+		http.MethodPost,
+		target.URL("/api/sessions"),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createResponse, err := client.Do(createRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer createResponse.Body.Close()
+	if createResponse.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(createResponse.Body)
+		t.Fatalf("create session status = %d body=%s", createResponse.StatusCode, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(createResponse.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+
+	turnRequest, err := http.NewRequest(
+		http.MethodPost,
+		target.URL("/api/sessions/"+created.ID+"/turns"),
+		strings.NewReader(`{"prompt":"work until restarted"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnRequest.Header.Set("Content-Type", "application/json")
+	turnResponse, err := client.Do(turnRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer turnResponse.Body.Close()
+	if turnResponse.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(turnResponse.Body)
+		t.Fatalf("start turn status = %d body=%s", turnResponse.StatusCode, body)
+	}
+	var started struct {
+		TurnID string `json:"turn_id"`
+	}
+	if err := json.NewDecoder(turnResponse.Body).Decode(&started); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || started.TurnID == "" {
+		t.Fatalf("created session/turn = %q/%q", created.ID, started.TurnID)
+	}
+	return created.ID, started.TurnID
+}
+
+func waitFleetInterruptedAndContinuationEvents(
+	t *testing.T,
+	path string,
+	originalTurnID string,
+) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var body []byte
+	for time.Now().Before(deadline) {
+		body, _ = os.ReadFile(path)
+		text := string(body)
+		if strings.Contains(text, `"type":"turn.errored"`) &&
+			strings.Contains(text, `"turn_id":"`+originalTurnID+`"`) &&
+			strings.Contains(text, `"error_kind":"cancelled"`) &&
+			strings.Count(text, `"type":"turn.started"`) >= 2 &&
+			strings.Contains(text, `"type":"turn.completed"`) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("restart events did not settle in %s:\n%s", path, body)
+}
+
+func shutdownFleetAgent(t *testing.T, agentDir string) {
+	t.Helper()
+	runtimeState, err := endpoint.ReadRuntime(agentDir)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	err = endpoint.RequestShutdown(ctx, runtimeState)
+	cancel()
+	if err == nil {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, readErr := endpoint.ReadRuntime(agentDir); os.IsNotExist(readErr) {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	process, findErr := os.FindProcess(runtimeState.PID)
+	if findErr == nil {
+		_ = process.Kill()
+	}
+}
+
+func buildJuexVersion(t *testing.T, stampedVersion string) string {
+	t.Helper()
+	name := "juex-" + strings.ReplaceAll(stampedVersion, ".", "-")
+	if goruntime.GOOS == "windows" {
+		name += ".exe"
+	}
+	out := filepath.Join(t.TempDir(), name)
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ldflags := "-X github.com/juex-ai/juex/internal/version.Version=" + stampedVersion
+	command := exec.Command(
+		"go",
+		"build",
+		"-ldflags",
+		ldflags,
+		"-o",
+		out,
+		"./cmd/juex",
+	)
+	command.Dir = root
+	if buildOut, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build juex %s: %v\n%s", stampedVersion, err, buildOut)
+	}
+	return out
 }

@@ -1,4 +1,4 @@
-import type { AgentStatus } from "../types.ts";
+import type { AgentActionResult, AgentStatus } from "../types.ts";
 
 export type AgentVisualState = "stopped" | "idle" | "working" | "failed";
 export type AgentStageTab =
@@ -8,6 +8,7 @@ export type AgentStageTab =
   | "logs"
   | "config";
 export type AgentLifecycleAction = "start" | "stop";
+export type AgentManagementAction = AgentLifecycleAction | "restart";
 
 export function agentVisualState(agent: AgentStatus): AgentVisualState {
   if (agent.runtime_health === "stopped") return "stopped";
@@ -83,6 +84,16 @@ export function nextAgentLifecycleAction(
   agent: AgentStatus,
 ): AgentLifecycleAction {
   return agent.runtime_health === "healthy" ? "stop" : "start";
+}
+
+export function agentActionWarning(
+  action: AgentManagementAction,
+  result: AgentActionResult,
+): string | null {
+  if (action !== "restart" || result.resume?.sent || !result.resume?.error) {
+    return null;
+  }
+  return `Agent restarted, but interrupted work was not resumed: ${result.resume.error}`;
 }
 
 function lastPathSegment(path: string | undefined): string {
