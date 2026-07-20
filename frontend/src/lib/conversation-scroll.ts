@@ -13,3 +13,12 @@ export function sessionConversationScrollOptions(
     resize: phase === "hydrate" ? "instant" : "smooth",
   };
 }
+
+export function sessionComposerClearance(
+  measuredOverlayHeight: number,
+): number {
+  if (!Number.isFinite(measuredOverlayHeight) || measuredOverlayHeight <= 0) {
+    return 150;
+  }
+  return Math.max(150, Math.ceil(measuredOverlayHeight) + 12);
+}

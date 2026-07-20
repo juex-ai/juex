@@ -280,6 +280,58 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
   assert.match(configSource, /Save and restart/);
 });
 
+test("fleet settings condenses roster state and actions without losing lifecycle semantics", () => {
+  assert.match(
+    fleetSource,
+    /const FLEET_ROSTER_GRID_CLASS =\s+"grid grid-cols-\[minmax\(13rem,1fr\)_minmax\(18rem,1\.4fr\)_8rem_15rem\]"/,
+  );
+  assert.equal(
+    fleetSource.match(/FLEET_ROSTER_GRID_CLASS/g)?.length,
+    3,
+    "the header and rows must share one complete grid",
+  );
+  for (const heading of ["Agent", "Workspace", "State", "Actions"]) {
+    assert.match(fleetSource, new RegExp(`>${heading}<`));
+  }
+  assert.doesNotMatch(fleetSource, />Health</);
+  assert.doesNotMatch(fleetSource, />Process</);
+  assert.doesNotMatch(fleetSource, /agent\.pid/);
+  assert.doesNotMatch(fleetSource, /<HealthBadge/);
+  assert.doesNotMatch(fleetSource, /label="Open agent"/);
+  assert.doesNotMatch(
+    fleetSource,
+    /agent\.enabled \? "enabled" : "disabled"/,
+  );
+
+  assert.match(fleetSource, /nextAgentLifecycleAction\(agent\)/);
+  assert.match(fleetSource, /agentStateLabel\(agent\)/);
+  assert.match(fleetSource, /\{agent\.binding\}/);
+  assert.match(
+    fleetSource,
+    /lifecycleAction === "start" \? "Start agent" : "Stop agent"/,
+  );
+  assert.match(
+    fleetSource,
+    /lifecycleAction === "start" \? \([\s\S]*?<Play[\s\S]*?\) : \([\s\S]*?<Square/,
+  );
+  assert.match(fleetSource, /agent\.enabled \? \([\s\S]*?<CircleOff/);
+  assert.match(fleetSource, /\) : \([\s\S]*?<CircleCheck/);
+  assert.match(
+    fleetSource,
+    /!agent\.enabled && "bg-muted\/25"/,
+    "disabled rows should be visibly muted without disabling the row",
+  );
+
+  const action = fleetSource.match(
+    /function AgentAction\([\s\S]*?\n}\n\nfunction AgentLink/,
+  )?.[0];
+  assert.ok(action);
+  assert.match(action, /variant="ghost"/);
+  assert.match(action, /text-destructive/);
+  assert.match(action, /hover:bg-destructive\/10/);
+  assert.doesNotMatch(action, /variant=\{destructive \? "destructive"/);
+});
+
 test("vite proxies agent APIs without stealing selected-agent page routes", () => {
   assert.match(viteSource, /"\^\/agents\/\[\^\/\]\+\/api\(\?:\/\|\$\)"/);
   assert.doesNotMatch(viteSource, /^\s*"\/agents":/m);

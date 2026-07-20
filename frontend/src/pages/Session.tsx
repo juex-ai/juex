@@ -94,6 +94,7 @@ import {
   type ToolProcessStatus,
 } from "@/lib/tool-display";
 import { sessionPreviewTitle } from "@/lib/session-title";
+import { sessionComposerClearance } from "@/lib/conversation-scroll";
 import {
   formatMCPEventForDisplay,
   formatObservationEventForDisplay,
@@ -398,8 +399,9 @@ export function Session() {
   const contextUsage =
     runtimeStatus?.context_usage ?? projection.contextUsage ?? data.context_usage;
   const canSend = sessionCanSend(data) && agentRuntimeHealthy;
-  const composerClearance =
-    canSend && composerOverlayHeight > 0 ? composerOverlayHeight + 12 : 0;
+  const composerClearance = canSend
+    ? sessionComposerClearance(composerOverlayHeight)
+    : 0;
   const submitAction = composerSubmitAction({
     status: runtimeStatus,
     turnActiveFallback: projection.turnActive || projection.compactActive,
@@ -419,7 +421,7 @@ export function Session() {
       <Conversation className="min-h-0 flex-1">
         <ConversationClearanceFollower clearance={composerClearance} />
         <ConversationContent
-          className="mx-auto w-full max-w-[760px]"
+          className="mx-auto w-full max-w-[808px]"
           style={{ paddingBottom: composerClearance || undefined }}
         >
           {data.has_more_before ||
@@ -464,13 +466,18 @@ export function Session() {
           data-testid="session-composer-overlay"
         >
           <div
-            className="flex max-h-full w-full flex-col overflow-hidden bg-linear-to-b from-transparent via-background/90 to-background px-3 pt-[clamp(1.5rem,10dvh,4rem)] md:px-6"
+            className="flex max-h-full w-full flex-col overflow-hidden px-4 md:px-6"
           >
             <div
-              className="pointer-events-none mx-auto flex min-h-0 w-full max-w-[760px] flex-col pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+              className="pointer-events-none relative mx-auto flex min-h-0 w-full max-w-[760px] flex-col pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
               data-testid="session-composer-obstruction"
               ref={setComposerOverlayNode}
             >
+              <div
+                data-testid="session-composer-fade"
+                className="pointer-events-none absolute inset-x-0 -top-12 h-12 bg-linear-to-b from-transparent to-background/95"
+                aria-hidden="true"
+              />
               <div
                 className="pointer-events-auto flex min-h-0 flex-col overflow-hidden"
                 data-testid="session-composer-stack"
@@ -534,7 +541,7 @@ export function Session() {
                           <ComposerAttachmentButton />
                         </div>
                         <Separator
-                          className="h-4"
+                          className="h-4 self-center"
                           orientation="vertical"
                           decorative
                         />
@@ -1383,12 +1390,7 @@ function MessageImageGallery({
         <ImageBlock
           key={`${item?.artifact_path ?? "image"}-${index}`}
           media={item}
-          variant={role === "user" ? "thumbnail" : "card"}
-          className={
-            role !== "user" && media.length > 1
-              ? "max-w-[16rem]"
-              : undefined
-          }
+          variant="thumbnail"
         />
       ))}
     </div>
@@ -1501,7 +1503,9 @@ function ToolResultPayload({ result }: { result: NonNullable<ToolDisplayUnit["re
           value={text}
         />
       ) : null}
-      {result.media ? <ImageBlock media={result.media} /> : null}
+      {result.media ? (
+        <ImageBlock media={result.media} variant="thumbnail" />
+      ) : null}
       {!text && !result.media ? (
         <ProcessPayload
           label={result.is_error ? "Error" : "Result"}

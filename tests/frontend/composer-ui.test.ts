@@ -135,7 +135,15 @@ test("active session composer floats without consuming conversation layout", () 
     sessionSource,
     /clearance > previousClearance\.current[\s\S]*scrollToBottom\(\{ animation: "instant" \}\)/,
   );
-  assert.match(sessionSource, /composerOverlayHeight \+ 12/);
+  assert.match(
+    sessionSource,
+    /canSend\s+\? sessionComposerClearance\(composerOverlayHeight\)\s+: 0/,
+  );
+  assert.match(
+    sessionSource,
+    /<ConversationContent[\s\S]*max-w-\[808px\]/,
+    "desktop transcript content bounds should align with the 760px composer after padding",
+  );
   assert.match(
     sessionSource,
     /data-testid="session-composer-overlay"/,
@@ -146,9 +154,23 @@ test("active session composer floats without consuming conversation layout", () 
   );
   assert.match(
     sessionSource,
-    /max-h-full[\s\S]*bg-linear-to-b[\s\S]*pt-\[clamp\(1\.5rem,10dvh,4rem\)\]/,
+    /max-h-full[\s\S]*px-4[\s\S]*md:px-6/,
   );
   assert.match(sessionSource, /data-testid="session-composer-obstruction"/);
+  assert.match(
+    sessionSource,
+    /data-testid="session-composer-fade"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*-top-12[\s\S]*h-12[\s\S]*bg-linear-to-b/,
+    "the fade should be local to the composer width and live only above it",
+  );
+  const overlay = sessionSource.match(
+    /data-testid="session-composer-overlay"[\s\S]*?data-testid="session-composer-obstruction"/,
+  )?.[0];
+  assert.ok(overlay);
+  assert.doesNotMatch(
+    overlay,
+    /bg-linear-to-b|to-background/,
+    "the full-width overlay must not paint over the scrollbar or rounded prompt corners",
+  );
   assert.match(
     sessionSource,
     /pb-\[max\(0\.75rem,env\(safe-area-inset-bottom\)\)\][\s\S]*md:pb-\[max\(1\.25rem,env\(safe-area-inset-bottom\)\)\]/,
@@ -163,6 +185,10 @@ test("active session composer floats without consuming conversation layout", () 
     /<PromptInputTextarea[\s\S]*className="max-h-\[min\(12rem,30dvh\)\]"/,
   );
   assert.match(sessionSource, /safe-area-inset-bottom/);
+  assert.match(
+    sessionSource,
+    /<Separator[\s\S]*className="h-4 self-center"[\s\S]*orientation="vertical"/,
+  );
   assert.doesNotMatch(sessionSource, /max-h-\[calc\(100dvh_/);
   assert.doesNotMatch(
     sessionSource,

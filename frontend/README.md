@@ -59,7 +59,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/fleet-directories.ts` | pure Add agent directory validation, stale-request isolation, listing merge, keyboard, and path-tail behavior |
 | `src/lib/fleet-routes.ts` | pure route helpers for fleet and selected-agent navigation |
 | `src/lib/clipboard.ts` | clipboard writer and local HTTP fallback used by copy controls |
-| `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options |
+| `src/lib/conversation-scroll.ts` | pure session conversation scroll behavior options and composer-clearance sizing |
 | `src/lib/assistant-blocks.ts` | converts live `llm.responded` event payloads into ordered assistant blocks |
 | `src/lib/composer-submit.ts` | pure composer submit-state transitions |
 | `src/lib/code-theme.ts` | shared light/dark syntax themes for markdown and reasoning code blocks |
@@ -99,10 +99,10 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/components/AssistantMarkdown.tsx` | assistant Markdown rendering with backend-verified inline local image links |
-| `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
+| `src/components/ImageBlock.tsx` | shared 80px transcript image thumbnails, failure metadata, download, and full-size lightbox |
 | `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |
-| `src/pages/Fleet.tsx` | fleet settings stage with service summaries, registration, inline workspace-directory creation, lifecycle, and removal controls |
+| `src/pages/Fleet.tsx` | fleet settings stage with service summaries, registration, inline workspace-directory creation, condensed operational state, lifecycle, enablement, and removal controls |
 | `src/pages/AgentConfig.tsx` | workspace config editor with validation and post-save restart reconciliation |
 | `src/pages/AgentLogs.tsx` | bounded resident agent log tail with explicit refresh and line-count controls |
 | `src/pages/Observables.tsx` | compact workspace Observable list with full-content tooltips, sticky actions, and Schedule Run plus lifecycle controls |

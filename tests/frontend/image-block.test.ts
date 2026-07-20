@@ -10,6 +10,10 @@ const sessionSource = readFileSync(
   new URL("../../frontend/src/pages/Session.tsx", import.meta.url),
   "utf8",
 );
+const assistantMarkdownSource = readFileSync(
+  new URL("../../frontend/src/components/AssistantMarkdown.tsx", import.meta.url),
+  "utf8",
+);
 
 test("image lightbox uses the modal dialog primitive", () => {
   assert.match(imageBlockSource, /<Dialog[\s>]/);
@@ -50,7 +54,7 @@ test("user attachments lead the message as compact preview thumbnails", () => {
   );
   assert.match(
     sessionSource,
-    /function MessageImageGallery[\s\S]*?variant=\{role === "user" \? "thumbnail" : "card"\}/,
+    /function MessageImageGallery[\s\S]*?variant="thumbnail"/,
   );
 
   assert.match(
@@ -80,6 +84,21 @@ test("user attachments lead the message as compact preview thumbnails", () => {
   assert.match(figure, /aria-label=\{`Download \$\{name\}`\}/);
   assert.match(
     sessionSource,
-    /\{result\.media \? <ImageBlock media=\{result\.media\} \/> : null\}/,
+    /\{result\.media \? \(\s*<ImageBlock media=\{result\.media\} variant="thumbnail" \/>\s*\) : null\}/,
+  );
+});
+
+test("assistant markdown and direct transcript images use the same thumbnail lightbox", () => {
+  assert.match(
+    sessionSource,
+    /function MessageImageGallery[\s\S]*?<ImageBlock[\s\S]*?variant="thumbnail"/,
+  );
+  assert.doesNotMatch(
+    sessionSource,
+    /variant=\{role === "user" \? "thumbnail" : "card"\}/,
+  );
+  assert.match(
+    assistantMarkdownSource,
+    /<ImageBlock[\s\S]*?variant="thumbnail"[\s\S]*?media=\{mediaByPath\.get\(path\)/,
   );
 });
