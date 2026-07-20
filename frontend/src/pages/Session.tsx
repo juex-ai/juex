@@ -674,7 +674,7 @@ function SessionStateBadge({
               : "text-muted-foreground",
           )}
           type="button"
-          aria-label={`Open session status: ${label}`}
+          aria-label={`Open goal and notes: ${label}`}
         >
           {label}
         </button>

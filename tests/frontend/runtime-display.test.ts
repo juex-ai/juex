@@ -156,7 +156,7 @@ test("notesCheckboxProgress counts Markdown task items", () => {
 });
 
 test("runtimeSessionStateBadgeLabel keeps footer label compact", () => {
-  assert.equal(runtimeSessionStateBadgeLabel(), "state idle");
+  assert.equal(runtimeSessionStateBadgeLabel(), "goal idle");
   assert.equal(
     runtimeSessionStateBadgeLabel({
       status: "active",
