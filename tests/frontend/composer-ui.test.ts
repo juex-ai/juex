@@ -32,6 +32,13 @@ test("composer groups utility actions before matching status controls", () => {
   );
 });
 
+test("composer goal chip names the disclosed goal and notes content", () => {
+  assert.match(
+    sessionSource,
+    /aria-label=\{`Open goal and notes: \$\{label\}`\}/,
+  );
+});
+
 test("composer feedback is announced and queued inputs stay bounded", () => {
   assert.match(sessionSource, /role=\{tone === "error" \? "alert" : "status"\}/);
   assert.match(sessionSource, /aria-live=/);

@@ -94,7 +94,7 @@ export function runtimeSessionStateBadgeLabel(
   if (notes?.content?.trim()) {
     return "notes active";
   }
-  return "state idle";
+  return "goal idle";
 }
 
 export function runtimeSessionStateIsActive(
