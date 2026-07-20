@@ -6,7 +6,7 @@ import {
 } from "react";
 import { defaultRehypePlugins } from "streamdown";
 
-import { getFileContent, getMediaURL } from "@/api";
+import { getMediaMetadata, getMediaURL } from "@/api";
 import {
   MessageResponse,
   type MessageResponseProps,
@@ -15,7 +15,7 @@ import { ImageBlock } from "@/components/ImageBlock";
 import {
   localMarkdownLinkTargets,
   localMarkdownPath,
-  mediaRefFromFileContent,
+  resolveLocalImageTargets,
   rewriteLocalMarkdownImages,
 } from "@/lib/markdown-media";
 import { cn } from "@/lib/utils";
@@ -93,25 +93,21 @@ function useResolvedLocalImages(targetKey: string): ResolvedLocalImages {
     let active = true;
     setResolved({ targetKey, mediaByPath: emptyMediaByPath });
 
-    for (const path of targets) {
-      void (async () => {
-        try {
-          const file = await getFileContent(path, controller.signal);
-          const media = mediaRefFromFileContent(path, file);
-          if (!active || !media) return;
-          setResolved((current) => {
-            const mediaByPath =
-              current.targetKey === targetKey
-                ? new Map(current.mediaByPath)
-                : new Map<string, MediaRef>();
-            mediaByPath.set(path, media);
-            return { targetKey, mediaByPath };
-          });
-        } catch {
-          // Missing, rejected, and non-image local links remain ordinary links.
-        }
-      })();
-    }
+    void resolveLocalImageTargets(
+      targets,
+      (path) => getMediaMetadata(path, controller.signal),
+      (path, media) => {
+        if (!active) return;
+        setResolved((current) => {
+          const mediaByPath =
+            current.targetKey === targetKey
+              ? new Map(current.mediaByPath)
+              : new Map<string, MediaRef>();
+          mediaByPath.set(path, media);
+          return { targetKey, mediaByPath };
+        });
+      },
+    );
 
     return () => {
       active = false;

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -503,6 +504,46 @@ func TestMediaServesWorkDirImageWithRevalidationCache(t *testing.T) {
 	}
 	if !bytes.Equal(body, tinyPNG) {
 		t.Fatalf("media body = %x, want %x", body, tinyPNG)
+	}
+}
+
+func TestMediaHeadReturnsImageMetadataWithoutBody(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.WorkDir, "notes.txt"), "plain text")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Head(ts.URL + "/api/media?path=screenshots%2Fpreview.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
+	}
+	if got := resp.Header.Get("Content-Length"); got != strconv.Itoa(len(tinyPNG)) {
+		t.Fatalf("content length = %q", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("HEAD body length = %d", len(body))
+	}
+
+	resp, err = http.Head(ts.URL + "/api/media?path=notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("non-image status = %d", resp.StatusCode)
 	}
 }
 

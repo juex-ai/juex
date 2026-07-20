@@ -1,6 +1,6 @@
 import { marked } from "marked";
 
-import type { FileContentResponse, MediaRef } from "../types";
+import type { MediaRef } from "../types";
 
 type HTMLNode = {
   children?: HTMLNode[];
@@ -56,16 +56,34 @@ export function localMarkdownLinkTargets(markdown: string): string[] {
   return targets;
 }
 
-export function mediaRefFromFileContent(
-  requestedPath: string,
-  file: FileContentResponse,
-): MediaRef | null {
-  if (file.kind !== "image") return null;
-  return {
-    artifact_path: file.path || requestedPath,
-    media_type: file.media_type,
-    original_bytes: file.size,
-  };
+const localImageProbeConcurrency = 4;
+
+export async function resolveLocalImageTargets(
+  targets: readonly string[],
+  probe: (path: string) => Promise<MediaRef>,
+  onResolved: (path: string, media: MediaRef) => void,
+  concurrency = localImageProbeConcurrency,
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(
+    targets.length,
+    Math.max(1, Math.floor(concurrency)),
+  );
+
+  async function worker() {
+    while (nextIndex < targets.length) {
+      const path = targets[nextIndex];
+      nextIndex += 1;
+      if (!path) continue;
+      try {
+        onResolved(path, await probe(path));
+      } catch {
+        // Missing, rejected, and non-image local links remain ordinary links.
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
 }
 
 export type RewriteLocalMarkdownImagesOptions = {

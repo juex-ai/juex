@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   localMarkdownLinkTargets,
   localMarkdownPath,
-  mediaRefFromFileContent,
+  resolveLocalImageTargets,
   rewriteLocalMarkdownImages,
 } from "../../frontend/src/lib/markdown-media.ts";
 
@@ -36,32 +36,44 @@ test("localMarkdownLinkTargets extracts ordinary local links without images", ()
   ]);
 });
 
-test("mediaRefFromFileContent accepts only backend-confirmed images", () => {
-  assert.deepEqual(
-    mediaRefFromFileContent("draft.png", {
-      path: "screenshots/draft.png",
-      content: "",
-      kind: "image",
-      media_type: "image/png",
-      size: 128,
-      truncated: false,
-    }),
+test("resolveLocalImageTargets bounds probes and reports each success", async () => {
+  const started: string[] = [];
+  const resolved: string[] = [];
+  const pending = new Map<
+    string,
     {
-      artifact_path: "screenshots/draft.png",
-      media_type: "image/png",
-      original_bytes: 128,
-    },
+      reject: (error: Error) => void;
+      resolve: (media: { artifact_path: string }) => void;
+    }
+  >();
+  const probe = (path: string) =>
+    new Promise<{ artifact_path: string }>((resolve, reject) => {
+      started.push(path);
+      pending.set(path, { reject, resolve });
+    });
+
+  const running = resolveLocalImageTargets(
+    ["a.png", "b.png", "missing.png", "c.png"],
+    probe,
+    (path) => resolved.push(path),
+    2,
   );
-  assert.equal(
-    mediaRefFromFileContent("draft.png", {
-      path: "draft.png",
-      content: "not an image",
-      kind: "text",
-      size: 12,
-      truncated: false,
-    }),
-    null,
-  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ["a.png", "b.png"]);
+
+  pending.get("b.png")?.resolve({ artifact_path: "b.png" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(resolved, ["b.png"]);
+  assert.deepEqual(started, ["a.png", "b.png", "missing.png"]);
+
+  pending.get("missing.png")?.reject(new Error("not an image"));
+  pending.get("a.png")?.resolve({ artifact_path: "a.png" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(started, ["a.png", "b.png", "missing.png", "c.png"]);
+
+  pending.get("c.png")?.resolve({ artifact_path: "c.png" });
+  await running;
+  assert.deepEqual(resolved, ["b.png", "a.png", "c.png"]);
 });
 
 test("rewriteLocalMarkdownImages converts only standalone confirmed links", () => {
