@@ -171,6 +171,68 @@ func TestRequestShutdownSendsExpectedRuntime(t *testing.T) {
 	}
 }
 
+func TestRequestRestartNegotiatesRestartIntent(t *testing.T) {
+	expected := Runtime{
+		AgentID:    "abcdefghijklmnop",
+		InstanceID: "instance-one",
+		PID:        42,
+		StartedAt:  time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC),
+	}
+	var received struct {
+		Runtime
+		Reason ShutdownReason `json:"reason"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != shutdownPath || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]ShutdownReason{
+			"restart_intent": ShutdownReasonRuntimeRestart,
+		})
+	}))
+	defer server.Close()
+	expected.Endpoint = "tcp://" + server.Listener.Addr().String()
+
+	acknowledged, err := RequestRestart(context.Background(), expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !acknowledged {
+		t.Fatal("restart intent was not acknowledged")
+	}
+	if received.Runtime != expected || received.Reason != ShutdownReasonRuntimeRestart {
+		t.Fatalf("restart request = %+v, want runtime %+v and reason %q", received, expected, ShutdownReasonRuntimeRestart)
+	}
+}
+
+func TestRequestRestartRequiresRestartIntentAcknowledgement(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"stopping"}`))
+	}))
+	defer server.Close()
+
+	acknowledged, err := RequestRestart(context.Background(), Runtime{
+		AgentID:    "abcdefghijklmnop",
+		InstanceID: "instance-one",
+		Endpoint:   "tcp://" + server.Listener.Addr().String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acknowledged {
+		t.Fatal("response without restart intent unexpectedly acknowledged restart")
+	}
+}
+
 func waitForEndpointConnectionCount(t *testing.T, count *atomic.Int32, want int32) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

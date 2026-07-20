@@ -9,7 +9,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 const (
@@ -133,33 +133,54 @@ func (m *Manager) Stop(ctx context.Context, selector string) (AgentStatus, error
 }
 
 func (m *Manager) stopEntry(ctx context.Context, entry agentstate.RegistryEntry) (AgentStatus, error) {
+	status, _, err := m.stopEntryMode(ctx, entry, false)
+	return status, err
+}
+
+func (m *Manager) stopEntryForRestart(
+	ctx context.Context,
+	entry agentstate.RegistryEntry,
+) (AgentStatus, bool, error) {
+	return m.stopEntryMode(ctx, entry, true)
+}
+
+func (m *Manager) stopEntryMode(
+	ctx context.Context,
+	entry agentstate.RegistryEntry,
+	restarting bool,
+) (AgentStatus, bool, error) {
 	status := m.inspectStatus(ctx, entry)
 	switch status.RuntimeHealth {
 	case RuntimeStopped:
-		return status, nil
+		return status, false, nil
 	case RuntimeUnhealthy:
 		runtimeState, err := m.deps.readRuntime(entry.Dir)
 		if err != nil {
-			return status, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("re-read stale runtime: %v", err)}
+			return status, false, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("re-read stale runtime: %v", err)}
 		}
 		if err := m.cleanStaleRuntime(ctx, entry, runtimeState); err != nil {
-			return status, err
+			return status, false, err
 		}
-		return m.inspectStatus(ctx, entry), nil
+		return m.inspectStatus(ctx, entry), false, nil
 	case RuntimeHealthy:
 	default:
-		return status, &ConflictError{AgentID: entry.ID, Reason: "runtime identity is not verified; refusing shutdown"}
+		return status, false, &ConflictError{AgentID: entry.ID, Reason: "runtime identity is not verified; refusing shutdown"}
 	}
 
 	runtimeState, err := m.deps.readRuntime(entry.Dir)
 	if err != nil {
-		return status, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("re-read runtime before shutdown: %v", err)}
+		return status, false, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("re-read runtime before shutdown: %v", err)}
 	}
 	shutdownCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
-	err = m.deps.requestShutdown(shutdownCtx, runtimeState)
+	restartAcknowledged := false
+	if restarting {
+		restartAcknowledged, err = m.deps.requestRestart(shutdownCtx, runtimeState)
+	} else {
+		err = m.deps.requestShutdown(shutdownCtx, runtimeState)
+	}
 	cancel()
 	if err != nil {
-		return status, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("verified shutdown request failed: %v", err)}
+		return status, false, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("verified shutdown request failed: %v", err)}
 	}
 
 	deadline := time.NewTimer(m.stopTimeout)
@@ -169,9 +190,9 @@ func (m *Manager) stopEntry(ctx context.Context, entry agentstate.RegistryEntry)
 	for {
 		select {
 		case <-ctx.Done():
-			return status, ctx.Err()
+			return status, restartAcknowledged, ctx.Err()
 		case <-deadline.C:
-			return status, &ConflictError{
+			return status, restartAcknowledged, &ConflictError{
 				AgentID: entry.ID,
 				Reason:  fmt.Sprintf("verified process did not stop within %s", m.stopTimeout),
 			}
@@ -179,16 +200,16 @@ func (m *Manager) stopEntry(ctx context.Context, entry agentstate.RegistryEntry)
 			current, readErr := m.deps.readRuntime(entry.Dir)
 			alive, aliveErr := m.deps.processAlive(runtimeState.PID)
 			if aliveErr != nil {
-				return status, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("check stopping process: %v", aliveErr)}
+				return status, restartAcknowledged, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("check stopping process: %v", aliveErr)}
 			}
 			if errors.Is(readErr, os.ErrNotExist) && !alive {
-				return m.inspectStatus(ctx, entry), nil
+				return m.inspectStatus(ctx, entry), restartAcknowledged, nil
 			}
 			if readErr == nil && !current.Matches(runtimeState) {
-				return status, &ConflictError{AgentID: entry.ID, Reason: "runtime identity changed while stopping"}
+				return status, restartAcknowledged, &ConflictError{AgentID: entry.ID, Reason: "runtime identity changed while stopping"}
 			}
 			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-				return status, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("runtime became invalid while stopping: %v", readErr)}
+				return status, restartAcknowledged, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("runtime became invalid while stopping: %v", readErr)}
 			}
 			if !alive && readErr == nil {
 				probeCtx, cancel := context.WithTimeout(ctx, m.probeTimeout)
@@ -196,9 +217,9 @@ func (m *Manager) stopEntry(ctx context.Context, entry agentstate.RegistryEntry)
 				cancel()
 				if probeErr != nil && !probeErrorProvesReachable(probeErr) {
 					if err := m.cleanStaleRuntime(ctx, entry, runtimeState); err != nil {
-						return status, err
+						return status, restartAcknowledged, err
 					}
-					return m.inspectStatus(ctx, entry), nil
+					return m.inspectStatus(ctx, entry), restartAcknowledged, nil
 				}
 			}
 		}
@@ -248,13 +269,13 @@ func (m *Manager) restart(
 			cancel()
 			if activityErr != nil {
 				result.Resume.Error = fmt.Sprintf("detect interrupted turn: %v", activityErr)
-			} else if activity.State == runtime.SessionRuntimeTurnActive ||
-				activity.State == runtime.SessionRuntimeDrainingPending {
+			} else if activity.State == statusapi.ActivityWorking {
 				interrupted = &activity
 			}
 		}
 	}
-	if _, err := m.stopEntry(ctx, entry); err != nil {
+	_, restartAcknowledged, err := m.stopEntryForRestart(ctx, entry)
+	if err != nil {
 		return result, err
 	}
 	entry, err = m.reload(entry.ID)
@@ -268,12 +289,20 @@ func (m *Manager) restart(
 	if interrupted == nil {
 		return result, nil
 	}
+	if !restartAcknowledged {
+		result.Resume.Error = "confirm interrupted turn: runtime restart intent was not acknowledged"
+		return result, nil
+	}
 	runtimeState, readErr := m.deps.readRuntime(entry.Dir)
 	if readErr != nil {
 		result.Resume.Error = fmt.Sprintf("confirm interrupted turn: read runtime: %v", readErr)
 		return result, nil
 	}
-	confirmed, confirmErr := m.confirmRestartInterrupted(ctx, runtimeState, *interrupted)
+	confirmed, confirmErr := m.confirmRestartInterrupted(
+		ctx,
+		runtimeState,
+		*interrupted,
+	)
 	if confirmErr != nil {
 		result.Resume.Error = fmt.Sprintf("confirm interrupted turn: %v", confirmErr)
 		return result, nil
@@ -323,9 +352,29 @@ func (m *Manager) confirmRestartInterrupted(
 		}
 		if actual.SessionID != "" || actual.TurnID != "" || actual.State != "" {
 			if actual.SessionID != expected.SessionID || actual.TurnID != expected.TurnID {
-				return false, nil
+				return false, fmt.Errorf(
+					"replacement selected session %q turn %q, want session %q turn %q",
+					actual.SessionID,
+					actual.TurnID,
+					expected.SessionID,
+					expected.TurnID,
+				)
 			}
-			return actual.TurnState == runtime.TurnLifecycleCancelled, nil
+			if actual.TurnState != statusapi.TurnCancelled {
+				return false, fmt.Errorf(
+					"replacement turn state is %q, want %q",
+					actual.TurnState,
+					statusapi.TurnCancelled,
+				)
+			}
+			if actual.TurnErrorKind != statusapi.StatusErrorRuntimeRestart {
+				return false, fmt.Errorf(
+					"replacement turn error kind is %q, want %q",
+					actual.TurnErrorKind,
+					statusapi.StatusErrorRuntimeRestart,
+				)
+			}
+			return true, nil
 		}
 
 		select {

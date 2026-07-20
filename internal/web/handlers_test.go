@@ -891,6 +891,53 @@ func TestPostSessionAttachmentRejectsTooLargeRequest(t *testing.T) {
 	}
 }
 
+func TestPostTurnKindWhitelist(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	id := createTestSession(t, ts.URL)
+
+	valid, err := http.Post(
+		ts.URL+"/api/sessions/"+id+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"/status","kind":"system_notice"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validBody, _ := io.ReadAll(valid.Body)
+	valid.Body.Close()
+	if valid.StatusCode != http.StatusAccepted {
+		t.Fatalf("system notice status = %d body=%s", valid.StatusCode, validBody)
+	}
+
+	for _, kind := range []string{
+		"runtime_context",
+		"compact",
+		"model_fallback",
+		"observation",
+		"mcp_event",
+		"hook_event",
+		"unknown",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			response, err := http.Post(
+				ts.URL+"/api/sessions/"+id+"/turns",
+				"application/json",
+				strings.NewReader(`{"prompt":"notice","kind":"`+kind+`"}`),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s", response.StatusCode, body)
+			}
+		})
+	}
+}
+
 func TestPostTurn_AttachmentTextAndImageReachesProvider(t *testing.T) {
 	prov := newPendingProvider(
 		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "ack"), StopReason: llm.StopEndTurn},

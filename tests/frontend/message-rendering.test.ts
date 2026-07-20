@@ -244,6 +244,22 @@ test("all process disclosures start closed and only follow user toggles", () => 
   assert.doesNotMatch(disclosure, /setIsOpen\([^)]*status/);
 });
 
+test("system notices render as automated notices instead of user messages", () => {
+  assert.match(
+    sessionSource,
+    /group\.role === "user" && group\.kind === "system_notice"/,
+  );
+  assert.match(sessionSource, /<SystemNoticeGroup group=\{group\} \/>/);
+
+  const start = sessionSource.indexOf("function SystemNoticeGroup(");
+  const end = sessionSource.indexOf("\nfunction ", start + 1);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const notice = sessionSource.slice(start, end);
+  assert.match(notice, /Automated notice/);
+  assert.doesNotMatch(notice, /<Message from="user">/);
+});
+
 test("assistant work disclosure owns process rows and leaves content outside", () => {
   const start = sessionSource.indexOf("function AssistantWorkGroupView(");
   const end = sessionSource.indexOf("function AssistantWorkContent(", start);

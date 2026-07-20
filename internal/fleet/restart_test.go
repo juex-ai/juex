@@ -10,15 +10,18 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 func TestRestartAutoResumeLifecycle(t *testing.T) {
 	tests := []struct {
 		name           string
-		state          runtime.SessionRuntimeState
+		state          statusapi.ActivityState
 		detectErr      error
-		confirmState   runtime.TurnLifecycleState
+		confirmState   statusapi.TurnState
+		confirmKind    statusapi.StatusErrorKind
+		confirmSession string
+		confirmTurn    string
 		confirmErr     error
 		confirmWarmups int
 		resumeErr      error
@@ -28,38 +31,65 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 	}{
 		{
 			name:  "idle does not resume",
-			state: runtime.SessionRuntimeIdle,
+			state: statusapi.ActivityIdle,
 		},
 		{
 			name:         "active turn resumes",
-			state:        runtime.SessionRuntimeTurnActive,
-			confirmState: runtime.TurnLifecycleCancelled,
+			state:        statusapi.ActivityWorking,
+			confirmState: statusapi.TurnCancelled,
+			confirmKind:  statusapi.StatusErrorRuntimeRestart,
 			wantRequired: true,
 			wantSent:     true,
 		},
 		{
 			name:         "draining pending resumes",
-			state:        runtime.SessionRuntimeDrainingPending,
-			confirmState: runtime.TurnLifecycleCancelled,
+			state:        statusapi.ActivityWorking,
+			confirmState: statusapi.TurnCancelled,
+			confirmKind:  statusapi.StatusErrorRuntimeRestart,
 			wantRequired: true,
 			wantSent:     true,
 		},
 		{
 			name:           "replacement status warmup is retried",
-			state:          runtime.SessionRuntimeTurnActive,
-			confirmState:   runtime.TurnLifecycleCancelled,
+			state:          statusapi.ActivityWorking,
+			confirmState:   statusapi.TurnCancelled,
+			confirmKind:    statusapi.StatusErrorRuntimeRestart,
 			confirmWarmups: 1,
 			wantRequired:   true,
 			wantSent:       true,
 		},
 		{
-			name:         "turn completed before shutdown does not resume",
-			state:        runtime.SessionRuntimeTurnActive,
-			confirmState: runtime.TurnLifecycleCompleted,
+			name:           "user stop cancellation does not resume",
+			state:          statusapi.ActivityWorking,
+			confirmState:   statusapi.TurnCancelled,
+			confirmKind:    statusapi.StatusErrorCancelled,
+			wantDiagnostic: "error kind",
+		},
+		{
+			name:           "turn completed before shutdown does not resume",
+			state:          statusapi.ActivityWorking,
+			confirmState:   statusapi.TurnCompleted,
+			wantDiagnostic: "turn state",
+		},
+		{
+			name:           "different selected session does not resume",
+			state:          statusapi.ActivityWorking,
+			confirmState:   statusapi.TurnCancelled,
+			confirmKind:    statusapi.StatusErrorRuntimeRestart,
+			confirmSession: "session-other",
+			wantDiagnostic: "want session",
+		},
+		{
+			name:           "different selected turn does not resume",
+			state:          statusapi.ActivityWorking,
+			confirmState:   statusapi.TurnCancelled,
+			confirmKind:    statusapi.StatusErrorRuntimeRestart,
+			confirmTurn:    "turn-other",
+			wantDiagnostic: "want session",
 		},
 		{
 			name:           "confirmation failure does not risk duplicate continuation",
-			state:          runtime.SessionRuntimeTurnActive,
+			state:          statusapi.ActivityWorking,
 			confirmErr:     errors.New("replacement status unavailable"),
 			wantDiagnostic: "replacement status unavailable",
 		},
@@ -70,8 +100,9 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 		},
 		{
 			name:           "resume failure is reported without failing restart",
-			state:          runtime.SessionRuntimeTurnActive,
-			confirmState:   runtime.TurnLifecycleCancelled,
+			state:          statusapi.ActivityWorking,
+			confirmState:   statusapi.TurnCancelled,
+			confirmKind:    statusapi.StatusErrorRuntimeRestart,
 			resumeErr:      errors.New("resume rejected"),
 			wantRequired:   true,
 			wantDiagnostic: "resume rejected",
@@ -95,7 +126,7 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 						SessionID: "session-one",
 						TurnID:    "turn-original",
 						State:     test.state,
-						TurnState: runtime.TurnLifecycleActive,
+						TurnState: statusapi.TurnActive,
 					}, nil
 				}
 				*events = append(*events, "confirm")
@@ -105,11 +136,20 @@ func TestRestartAutoResumeLifecycle(t *testing.T) {
 				if test.confirmErr != nil {
 					return restartActivity{}, test.confirmErr
 				}
+				sessionID := test.confirmSession
+				if sessionID == "" {
+					sessionID = "session-one"
+				}
+				turnID := test.confirmTurn
+				if turnID == "" {
+					turnID = "turn-original"
+				}
 				return restartActivity{
-					SessionID: "session-one",
-					TurnID:    "turn-original",
-					State:     runtime.SessionRuntimeFailed,
-					TurnState: test.confirmState,
+					SessionID:     sessionID,
+					TurnID:        turnID,
+					State:         statusapi.ActivityIdle,
+					TurnState:     test.confirmState,
+					TurnErrorKind: test.confirmKind,
 				}, nil
 			}
 			manager.deps.postRestartResume = func(
@@ -191,6 +231,49 @@ func TestStopNeverDetectsOrPostsResume(t *testing.T) {
 	}
 }
 
+func TestRestartWithoutIntentAcknowledgementDoesNotResume(t *testing.T) {
+	manager, _ := restartTestManager(t, []agentstate.RegistryEntry{
+		registryEntry("aaaaaaaa", "alpha"),
+	})
+	requestRestart := manager.deps.requestRestart
+	manager.deps.requestRestart = func(ctx context.Context, state endpoint.Runtime) (bool, error) {
+		_, err := requestRestart(ctx, state)
+		return false, err
+	}
+	reads := 0
+	manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
+		reads++
+		if reads == 1 {
+			return restartActivity{
+				SessionID: "session-one",
+				TurnID:    "turn-original",
+				State:     statusapi.ActivityWorking,
+				TurnState: statusapi.TurnActive,
+			}, nil
+		}
+		return restartActivity{
+			SessionID:     "session-one",
+			TurnID:        "turn-original",
+			State:         statusapi.ActivityIdle,
+			TurnState:     statusapi.TurnCancelled,
+			TurnErrorKind: statusapi.StatusErrorCancelled,
+		}, nil
+	}
+	manager.deps.postRestartResume = func(context.Context, endpoint.Runtime, string, string) (string, error) {
+		t.Fatal("restart without acknowledgement posted a continuation")
+		return "", nil
+	}
+
+	result, err := manager.Restart(context.Background(), "aaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Resume.Required || result.Resume.Sent ||
+		!strings.Contains(result.Resume.Error, "not acknowledged") {
+		t.Fatalf("resume = %+v", result.Resume)
+	}
+}
+
 func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 	entries := []agentstate.RegistryEntry{
 		registryEntry("aaaaaaaa", "healthy-one"),
@@ -246,13 +329,13 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 		}
 		return restartActivity{}, nil
 	}
-	requestShutdown := manager.deps.requestShutdown
-	manager.deps.requestShutdown = func(ctx context.Context, state endpoint.Runtime) error {
+	requestRestart := manager.deps.requestRestart
+	manager.deps.requestRestart = func(ctx context.Context, state endpoint.Runtime) (bool, error) {
 		if state.AgentID == "ffffffff" {
-			return errors.New("shutdown failed")
+			return false, errors.New("shutdown failed")
 		}
 		*events = append(*events, "shutdown:"+state.AgentID)
-		return requestShutdown(ctx, state)
+		return requestRestart(ctx, state)
 	}
 
 	result, err := manager.RestartRunningAgents(context.Background())
@@ -388,6 +471,11 @@ func restartTestManager(
 		events = append(events, "shutdown")
 		running[state.AgentID] = false
 		return nil
+	}
+	deps.requestRestart = func(_ context.Context, state endpoint.Runtime) (bool, error) {
+		events = append(events, "shutdown")
+		running[state.AgentID] = false
+		return true, nil
 	}
 	deps.spawn = func(_ string, _ string, entry agentstate.RegistryEntry) (spawnedProcess, error) {
 		events = append(events, "spawn")

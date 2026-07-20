@@ -65,6 +65,14 @@ func TestContextErrorReturnsSignalCause(t *testing.T) {
 	}
 }
 
+func TestContextErrorReturnsRuntimeRestartCause(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(ErrRuntimeRestart)
+	if got := ContextError(ctx); !errors.Is(got, ErrRuntimeRestart) {
+		t.Fatalf("ContextError = %v, want ErrRuntimeRestart", got)
+	}
+}
+
 func TestNotifyContextPreservesParentCancelCause(t *testing.T) {
 	parent, cancelParent := context.WithCancelCause(context.Background())
 	ctx, stop := NotifyContext(parent, os.Interrupt)

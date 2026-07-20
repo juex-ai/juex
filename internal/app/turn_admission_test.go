@@ -43,6 +43,81 @@ func TestAdmitTurnStartsWhenIdle(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnSystemNoticeUsesOrdinaryAdmissionWithoutSlashParsing(t *testing.T) {
+	a, _ := newStubApp(t)
+	ids := &testTurnIDs{}
+
+	started := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt: "/status",
+		Kind:   llm.MessageKindSystemNotice,
+		IDs:    ids,
+	})
+	if started.Kind != TurnAdmissionStarted || started.Start == nil {
+		t.Fatalf("started = %+v", started)
+	}
+	if started.Start.Message.Role != llm.RoleUser ||
+		started.Start.Message.Kind != llm.MessageKindSystemNotice ||
+		started.Start.Message.FirstText() != "/status" {
+		t.Fatalf("system notice = %+v", started.Start.Message)
+	}
+
+	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt: "continue after restart",
+		Kind:   llm.MessageKindSystemNotice,
+		IDs:    ids,
+	})
+	if queued.Kind != TurnAdmissionQueued {
+		t.Fatalf("queued = %+v", queued)
+	}
+	records, err := a.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v", records)
+	}
+	for _, record := range records {
+		if record.Message.Kind != llm.MessageKindSystemNotice {
+			t.Fatalf("pending record = %+v", record)
+		}
+	}
+}
+
+func TestAdmitTurnRejectsUnsupportedKindsAndSystemNoticeAttachments(t *testing.T) {
+	for _, kind := range []string{
+		llm.MessageKindRuntimeContext,
+		llm.MessageKindCompact,
+		llm.MessageKindModelFallback,
+		llm.MessageKindObservation,
+		llm.MessageKindMCPEvent,
+		llm.MessageKindHookEvent,
+		"unknown",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			a, _ := newStubApp(t)
+			result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+				Prompt: "/status",
+				Kind:   kind,
+				IDs:    &testTurnIDs{},
+			})
+			if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+
+	a, _ := newStubApp(t)
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt:      "notice",
+		Kind:        llm.MessageKindSystemNotice,
+		Attachments: []llm.MediaRef{turnAdmissionMediaRef()},
+		IDs:         &testTurnIDs{},
+	})
+	if result.Kind != TurnAdmissionRejected || result.Error.Kind != "bad_request" {
+		t.Fatalf("attachment result = %+v", result)
+	}
+}
+
 func TestAdmitTurnStartsWithImageAttachments(t *testing.T) {
 	a, _ := newStubApp(t)
 	ids := &testTurnIDs{}

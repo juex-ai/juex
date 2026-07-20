@@ -12,13 +12,14 @@ import (
 type Kind string
 
 const (
-	KindError       Kind = "error"
-	KindTimeout     Kind = "timeout"
-	KindCancelled   Kind = "cancelled"
-	KindInterrupted Kind = "interrupted"
-	KindTerminated  Kind = "terminated"
-	KindPermission  Kind = "permission"
-	KindAuth        Kind = "auth"
+	KindError          Kind = "error"
+	KindTimeout        Kind = "timeout"
+	KindCancelled      Kind = "cancelled"
+	KindInterrupted    Kind = "interrupted"
+	KindTerminated     Kind = "terminated"
+	KindPermission     Kind = "permission"
+	KindAuth           Kind = "auth"
+	KindRuntimeRestart Kind = "runtime_restart"
 )
 
 type Classification struct {
@@ -39,6 +40,9 @@ func Classify(err error) Classification {
 	raw := err.Error()
 	if signalErr, ok := cancellation.AsSignalError(err); ok {
 		return Classification{Kind: Kind(signalErr.Kind), RawCause: raw}
+	}
+	if errors.Is(err, cancellation.ErrRuntimeRestart) {
+		return Classification{Kind: KindRuntimeRestart, RawCause: raw}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return Classification{Kind: KindTimeout, TimedOut: true, RawCause: raw}
@@ -110,6 +114,9 @@ func PublicMessage(err error, opts MessageOptions) string {
 	}
 	if signalErr, ok := cancellation.AsSignalError(err); ok {
 		return signalErr.Error()
+	}
+	if errors.Is(err, cancellation.ErrRuntimeRestart) {
+		return cancellation.ErrRuntimeRestart.Error()
 	}
 	if cancellation.IsUserCancelled(err) {
 		return cancellation.ErrUserCancelled.Error()

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/events"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 func sseResumeCursor(r *http.Request) string {
@@ -64,7 +64,7 @@ func writeSSEFrame(w io.Writer, e events.Event) error {
 	return nil
 }
 
-func writeStatusSSE(w io.Writer, snapshot runtime.StatusSnapshot) error {
+func writeStatusSSE(w io.Writer, snapshot statusapi.Snapshot) error {
 	body, err := json.Marshal(snapshot)
 	if err != nil {
 		return err

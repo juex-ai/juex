@@ -11,7 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 type BindingState string
@@ -215,10 +215,11 @@ type spawnedProcess struct {
 }
 
 type restartActivity struct {
-	SessionID string
-	TurnID    string
-	State     runtime.SessionRuntimeState
-	TurnState runtime.TurnLifecycleState
+	SessionID     string
+	TurnID        string
+	State         statusapi.ActivityState
+	TurnState     statusapi.TurnState
+	TurnErrorKind statusapi.StatusErrorKind
 }
 
 type dependencies struct {
@@ -233,6 +234,7 @@ type dependencies struct {
 	processAlive        func(int) (bool, error)
 	probe               func(context.Context, endpoint.Runtime) error
 	requestShutdown     func(context.Context, endpoint.Runtime) error
+	requestRestart      func(context.Context, endpoint.Runtime) (bool, error)
 	readRestartActivity func(context.Context, endpoint.Runtime) (restartActivity, error)
 	postRestartResume   func(context.Context, endpoint.Runtime, string, string) (string, error)
 	spawn               func(string, string, agentstate.RegistryEntry) (spawnedProcess, error)
@@ -253,6 +255,7 @@ func defaultDependencies() dependencies {
 		processAlive:        processExists,
 		probe:               endpoint.Probe,
 		requestShutdown:     endpoint.RequestShutdown,
+		requestRestart:      endpoint.RequestRestart,
 		readRestartActivity: readRestartActivity,
 		postRestartResume:   postRestartResume,
 		spawn:               spawnDetached,

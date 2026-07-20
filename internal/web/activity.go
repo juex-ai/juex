@@ -6,23 +6,17 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
-type agentActivityState string
+type agentActivityState = statusapi.ActivityState
 
 const (
-	agentActivityIdle    agentActivityState = "idle"
-	agentActivityWorking agentActivityState = "working"
+	agentActivityIdle    = statusapi.ActivityIdle
+	agentActivityWorking = statusapi.ActivityWorking
 )
 
-type agentActivityResponse struct {
-	State        agentActivityState      `json:"state"`
-	SessionID    string                  `json:"session_id,omitempty"`
-	SessionAlias string                  `json:"session_alias,omitempty"`
-	PendingCount int                     `json:"pending_count"`
-	Status       *runtime.StatusSnapshot `json:"status,omitempty"`
-}
+type agentActivityResponse = statusapi.AgentActivity
 
 type agentStatusStreamEvent struct {
 	Type     string                `json:"type"`
@@ -152,11 +146,9 @@ func (s *Server) agentActivity() agentActivityResponse {
 			return true
 		}
 		snapshot := active.app.Status.Snapshot()
-		working := snapshot.Session.State == runtime.SessionRuntimeTurnActive ||
-			snapshot.Session.State == runtime.SessionRuntimeDrainingPending
-		if working {
+		if snapshot.Session.State.IsWorking() {
 			response.State = agentActivityWorking
-			response.PendingCount += snapshot.Session.PendingCount
+			response.PendingInputCount += snapshot.Session.PendingCount
 			if latestWorking == nil || active.StartedAt.After(latestWorking.StartedAt) {
 				latestWorking = active
 			}
@@ -172,9 +164,8 @@ func (s *Server) agentActivity() agentActivityResponse {
 	}
 	if selected != nil && selected.app != nil && selected.app.Status != nil {
 		snapshot := selected.app.Status.Snapshot()
-		response.SessionID = snapshot.Session.ID
-		response.SessionAlias = snapshot.Session.Alias
-		response.Status = &snapshot
+		publicStatus := statusapi.FromRuntime(snapshot)
+		response.SelectedStatus = &publicStatus
 	}
 	return response
 }
@@ -185,8 +176,8 @@ func writeAgentStatusSSE(w http.ResponseWriter, activity agentActivityResponse) 
 		return err
 	}
 	cursor := ""
-	if activity.Status != nil {
-		cursor = activity.Status.Cursor
+	if activity.SelectedStatus != nil {
+		cursor = activity.SelectedStatus.Cursor
 	}
 	if cursor != "" {
 		if _, err := fmt.Fprintf(w, "id: %s\n", cursor); err != nil {

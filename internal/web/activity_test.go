@@ -13,6 +13,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 func TestAgentActivityReportsRunningSession(t *testing.T) {
@@ -54,11 +55,57 @@ func TestAgentActivityReportsRunningSession(t *testing.T) {
 		t.Fatalf("decode activity: %v", err)
 	}
 	if got.State != agentActivityWorking ||
-		got.SessionID != "session-1" ||
-		got.SessionAlias != "Release prep" ||
-		got.Status == nil ||
-		got.Status.Cursor != "event-1" {
+		got.PendingInputCount != 0 ||
+		got.SelectedStatus == nil ||
+		got.SelectedStatus.Session.ID != "session-1" ||
+		got.SelectedStatus.Session.Alias != "Release prep" ||
+		got.SelectedStatus.Cursor != "event-1" {
 		t.Fatalf("activity = %+v", got)
+	}
+}
+
+func TestAgentActivityAggregatesWorkingPendingAndMirrorsSelectedSession(t *testing.T) {
+	server := NewServer(Options{})
+	add := func(id, alias string, pending int, started time.Time) {
+		status := runtime.NewStatusStore(runtime.StatusSeed{
+			SessionID:        id,
+			SessionAlias:     alias,
+			MaxPendingInputs: 4,
+		})
+		status.Publish(events.Event{
+			ID:      id + "-admitted",
+			Type:    runtime.TurnAdmittedType,
+			TurnID:  "turn-" + id,
+			Payload: runtime.TurnAdmittedPayload{},
+		})
+		status.Publish(events.Event{
+			ID:     id + "-queued",
+			Type:   "pending_input.queued",
+			TurnID: "turn-" + id,
+			Payload: runtime.PendingInputQueuedPayload{
+				PendingCount: pending, MaxPendingInputs: 4,
+			},
+		})
+		server.sessions.Store(id, &activeSession{
+			app: &app.App{
+				Session: &session.Session{ID: id, Alias: alias},
+				Status:  status,
+			},
+			StartedAt: started,
+		})
+	}
+	now := time.Now().UTC()
+	add("session-old", "Old", 1, now.Add(-time.Minute))
+	add("session-new", "New", 2, now)
+
+	got := server.agentActivity()
+	if got.State != agentActivityWorking || got.PendingInputCount != 3 {
+		t.Fatalf("activity = %+v", got)
+	}
+	if got.SelectedStatus == nil ||
+		got.SelectedStatus.Session.ID != "session-new" ||
+		got.SelectedStatus.Session.PendingCount != 2 {
+		t.Fatalf("selected activity = %+v", got)
 	}
 }
 
@@ -84,17 +131,17 @@ func TestAgentStatusHubSameCursorSubscriptionReturnsCurrentSnapshot(t *testing.T
 		Timestamp: time.Now().UTC(),
 	})
 	snapshot := status.Snapshot()
+	publicStatus := statusapi.FromRuntime(snapshot)
 	hub.publish(agentActivityResponse{
-		State:     agentActivityWorking,
-		SessionID: "session-1",
-		Status:    &snapshot,
+		State:          agentActivityWorking,
+		SelectedStatus: &publicStatus,
 	})
 
 	subscription := hub.subscribe("cursor-1")
 	defer subscription.cancel()
 	if len(subscription.initial) != 1 ||
-		subscription.initial[0].Status == nil ||
-		subscription.initial[0].Status.Cursor != "cursor-1" {
+		subscription.initial[0].SelectedStatus == nil ||
+		subscription.initial[0].SelectedStatus.Cursor != "cursor-1" {
 		t.Fatalf("initial = %+v", subscription.initial)
 	}
 }
@@ -125,7 +172,11 @@ func TestAgentStatusHubConcurrentPublishDeliversCurrentStatusLast(t *testing.T) 
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			hub.publish(agentActivityResponse{SessionID: strconv.Itoa(i)})
+			hub.publish(agentActivityResponse{
+				SelectedStatus: &statusapi.Snapshot{
+					Session: statusapi.SessionStatus{ID: strconv.Itoa(i)},
+				},
+			})
 		}(i)
 	}
 	close(start)
@@ -140,12 +191,24 @@ func TestAgentStatusHubConcurrentPublishDeliversCurrentStatusLast(t *testing.T) 
 			select {
 			case last = <-subscription.updates:
 			default:
-				if last.SessionID != want.SessionID {
-					t.Fatalf("subscription %d last session = %q, want %q", i, last.SessionID, want.SessionID)
+				if selectedSessionID(last) != selectedSessionID(want) {
+					t.Fatalf(
+						"subscription %d last session = %q, want %q",
+						i,
+						selectedSessionID(last),
+						selectedSessionID(want),
+					)
 				}
 				goto nextSubscription
 			}
 		}
 	nextSubscription:
 	}
+}
+
+func selectedSessionID(activity agentActivityResponse) string {
+	if activity.SelectedStatus == nil {
+		return ""
+	}
+	return activity.SelectedStatus.Session.ID
 }

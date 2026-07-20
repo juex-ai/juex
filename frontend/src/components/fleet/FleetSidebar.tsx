@@ -211,7 +211,7 @@ function AgentRailRow({
   onToggleLifecycle: () => void;
 }) {
   const state = agentVisualState(agent);
-  const pendingCount = agent.activity?.pending_count ?? 0;
+  const pendingCount = agent.activity?.pending_input_count ?? 0;
   const lifecycleAction = nextAgentLifecycleAction(agent);
   const name = agent.name || agent.id;
 

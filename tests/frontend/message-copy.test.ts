@@ -33,6 +33,24 @@ test("messageGroupCopyText joins copyable text blocks", () => {
   );
 });
 
+test("automated system notices are not copied as user chat", () => {
+  assert.equal(
+    messageGroupCanCopy({
+      key: "restart-notice",
+      role: "user",
+      kind: "system_notice",
+      pending: false,
+      units: [
+        {
+          kind: "text",
+          block: { type: "text", text: "continue after restart" },
+        },
+      ],
+    }),
+    false,
+  );
+});
+
 test("messageGroupCopyText skips redacted reasoning internals", () => {
   const group = {
     key: "a-redacted",

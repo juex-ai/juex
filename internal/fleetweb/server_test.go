@@ -491,10 +491,8 @@ func TestFleetRosterIncludesLiveActivityForHealthyAgents(t *testing.T) {
 			t.Fatalf("activity requested for %q", status.ID)
 		}
 		return &agentActivity{
-			State:        "working",
-			SessionID:    "session-1",
-			SessionAlias: "Release prep",
-			PendingCount: 2,
+			State:             "working",
+			PendingInputCount: 2,
 		}, nil
 	}
 
@@ -514,7 +512,7 @@ func TestFleetRosterIncludesLiveActivityForHealthyAgents(t *testing.T) {
 		t.Fatalf("roster = %+v", got)
 	}
 	if got[0].Activity.State != "working" ||
-		got[0].Activity.PendingCount != 2 ||
+		got[0].Activity.PendingInputCount != 2 ||
 		got[1].Activity != nil {
 		t.Fatalf("roster activities = %+v", got)
 	}
