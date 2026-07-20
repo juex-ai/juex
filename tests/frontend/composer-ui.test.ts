@@ -55,14 +55,38 @@ test("composer stages image previews above draft text at the top-left", () => {
     /function ComposerAttachmentStrip[\s\S]*?\n}\n\nfunction ComposerSubmitButton/,
   )?.[0];
   assert.ok(strip);
-  assert.match(
-    strip,
-    /flex w-full flex-wrap items-start justify-start gap-2 px-2\.5 pt-2/,
-  );
+  const stripClassName = strip.match(
+    /aria-label="Attached images"\s+className="([^"]+)"/,
+  )?.[1];
+  assert.ok(stripClassName);
+  const stripClasses = new Set(stripClassName.split(/\s+/));
+  for (const expectedClass of [
+    "flex",
+    "w-full",
+    "flex-wrap",
+    "items-start",
+    "justify-start",
+    "gap-2",
+    "px-2.5",
+    "pt-2",
+  ]) {
+    assert.ok(
+      stripClasses.has(expectedClass),
+      `attachment strip should include ${expectedClass}`,
+    );
+  }
   assert.doesNotMatch(strip, /border-t|min-h-20/);
-  assert.match(strip, /size-20 shrink-0/);
   assert.match(strip, /aria-label="Attached images"/);
-  assert.match(strip, /rounded-full bg-foreground text-background/);
+  for (const expectedClass of ["size-20", "shrink-0"]) {
+    assert.match(strip, new RegExp(`className="[^"]*\\b${expectedClass}\\b`));
+  }
+  for (const expectedClass of [
+    "rounded-full",
+    "bg-foreground",
+    "text-background",
+  ]) {
+    assert.match(strip, new RegExp(`\\b${expectedClass}\\b`));
+  }
 });
 
 test("composer feedback is announced and queued inputs stay bounded", () => {
