@@ -1053,7 +1053,84 @@ def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, 
 def _create_input_matches(value: Any, expectation: ScheduleRoutingExpectation) -> bool:
     issues: list[str] = []
     _validate_create_input(value, expectation, issues)
-    return not issues
+    if issues or not isinstance(value, dict):
+        return False
+    if set(value) - {
+        "id",
+        "name",
+        "timezone",
+        "interval",
+        "catch_up",
+        "observation",
+    }:
+        return False
+    if "name" in value and not isinstance(value["name"], str):
+        return False
+    if "timezone" in value and not isinstance(value["timezone"], str):
+        return False
+    interval = value["interval"]
+    if not isinstance(interval, dict) or set(interval) != {"every_seconds"}:
+        return False
+    every_seconds = interval["every_seconds"]
+    if isinstance(every_seconds, bool) or not isinstance(every_seconds, int):
+        return False
+    if "catch_up" in value and not _catch_up_input_valid(value["catch_up"]):
+        return False
+    return _observation_input_valid(value["observation"], expectation.content)
+
+
+def _catch_up_input_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) - {"mode", "max_lateness_minutes"}:
+        return False
+    mode = value.get("mode", "")
+    if not isinstance(mode, str):
+        return False
+    max_lateness = value.get("max_lateness_minutes", 0)
+    if isinstance(max_lateness, bool) or not isinstance(max_lateness, int):
+        return False
+    mode = mode.strip()
+    if mode in {"", "none"}:
+        return True
+    return mode == "latest" and 1 <= max_lateness <= 1440
+
+
+def _observation_input_valid(value: Any, content: str) -> bool:
+    if not isinstance(value, dict) or set(value) - {
+        "kind",
+        "severity",
+        "content",
+        "attachments",
+    }:
+        return False
+    if value.get("content") != content:
+        return False
+    if "kind" in value and not isinstance(value["kind"], str):
+        return False
+    if "severity" in value:
+        severity = value["severity"]
+        if not isinstance(severity, str) or severity.strip() not in {
+            "",
+            "info",
+            "warning",
+            "error",
+            "critical",
+        }:
+            return False
+    if "attachments" not in value:
+        return True
+    attachments = value["attachments"]
+    if not isinstance(attachments, list):
+        return False
+    return all(_attachment_input_valid(attachment) for attachment in attachments)
+
+
+def _attachment_input_valid(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) - {"path", "media_type"}:
+        return False
+    path = value.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return False
+    return "media_type" not in value or isinstance(value["media_type"], str)
 
 
 def _observable_list_input_matches(value: Any) -> bool:
