@@ -21,6 +21,7 @@ import type {
   RuntimeStatusResponse,
   AgentConfig,
   AgentConfigUpdateResponse,
+  AgentActionResult,
   AgentStatus,
   AddAgentRequest,
   AddAgentResponse,
@@ -414,7 +415,7 @@ export async function listDirectories(
 export async function runAgentAction(
   id: string,
   action: "start" | "stop" | "restart",
-): Promise<AgentStatus> {
+): Promise<AgentActionResult> {
   return jsonOrThrow(
     await fetch(`/api/agents/${encodeURIComponent(id)}/${action}`, {
       method: "POST",

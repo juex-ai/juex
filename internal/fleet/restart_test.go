@@ -284,6 +284,28 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 	}
 }
 
+func TestRestartRunningAgentsReportsPostFailureStatus(t *testing.T) {
+	manager, _ := restartTestManager(t, []agentstate.RegistryEntry{
+		registryEntry("aaaaaaaa", "spawn-fails"),
+	})
+	manager.deps.readRestartActivity = func(context.Context, endpoint.Runtime) (restartActivity, error) {
+		return restartActivity{}, nil
+	}
+	manager.deps.spawn = func(string, string, agentstate.RegistryEntry) (spawnedProcess, error) {
+		return spawnedProcess{}, errors.New("spawn failed")
+	}
+
+	result, err := manager.RestartRunningAgents(context.Background())
+	if err == nil {
+		t.Fatal("RestartRunningAgents returned nil aggregate error")
+	}
+	if len(result.Items) != 1 ||
+		result.Items[0].Outcome != RestartAgentFailed ||
+		result.Items[0].Agent.RuntimeHealth != RuntimeStopped {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestRestartRunningAgentsRechecksEligibilityUnderLifecycleLock(t *testing.T) {
 	manager, events := restartTestManager(t, []agentstate.RegistryEntry{
 		registryEntry("aaaaaaaa", "stops-after-snapshot"),

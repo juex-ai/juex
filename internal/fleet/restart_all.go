@@ -39,10 +39,15 @@ func (m *Manager) RestartRunningAgents(ctx context.Context) (RestartAgentsResult
 				result.Skipped++
 				continue
 			}
+			failedStatus := restarted.AgentStatus
+			if failedStatus.ID == "" {
+				failedStatus = status
+			}
 			result.Items = append(result.Items, RestartAgentResult{
-				Agent:   status,
+				Agent:   failedStatus,
 				Outcome: RestartAgentFailed,
 				Reason:  restartErr.Error(),
+				Resume:  restarted.Resume,
 			})
 			result.Failed++
 			continue

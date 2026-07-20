@@ -195,6 +195,7 @@ test("stage remounts existing pages through tabs and gates offline composers", (
 test("fleet operations expose roster lifecycle logs and config workflows", () => {
   assert.match(fleetSource, /listAgents/);
   assert.match(fleetSource, /runAgentAction/);
+  assert.match(fleetSource, /agentActionWarning\(action, next\)/);
   assert.match(fleetSource, /"start" \| "stop" \| "restart"/);
   assert.match(fleetSource, /View logs/);
   assert.match(fleetSource, /Edit config/);

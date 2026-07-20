@@ -1055,6 +1055,18 @@ export interface AgentStatus {
   activity?: AgentActivity;
 }
 
+export interface AgentRestartResume {
+  required: boolean;
+  sent: boolean;
+  session_id?: string;
+  turn_id?: string;
+  error?: string;
+}
+
+export interface AgentActionResult extends AgentStatus {
+  resume?: AgentRestartResume;
+}
+
 export interface AgentConfig {
   path: string;
   content: string;
