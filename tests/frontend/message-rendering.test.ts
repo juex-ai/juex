@@ -224,9 +224,12 @@ test("nested process disclosures only rotate their own chevrons", () => {
 
 test("all process disclosures start closed and only follow user toggles", () => {
   const start = sessionSource.indexOf("function ProcessDisclosure(");
-  const end = sessionSource.indexOf("\nfunction ProcessStatusIndicator", start);
   assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
+  const nextDeclaration = sessionSource
+    .slice(start + 1)
+    .search(/\n(?:export )?function /);
+  assert.notEqual(nextDeclaration, -1);
+  const end = start + 1 + nextDeclaration;
   const disclosure = sessionSource.slice(start, end);
 
   assert.match(disclosure, /const \[isOpen, setIsOpen\] = useState\(false\)/);
