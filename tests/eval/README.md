@@ -154,9 +154,10 @@ and competing scheduler commands. Its variant-specific contract is:
   `interval.every_seconds: 21600`, and the requested Observation content.
 - `seeded-equivalent`: begin with one different-id Schedule with the requested
   interval and content; inspect a native `observable_list` result that exposes
-  the equivalent `schedule_config`; produce no successful `schedule_create`,
-  do not call `observable_create`, `observable_delete`, or `observable_stop`;
-  and leave exactly that one equivalent Schedule available in final state.
+  the equivalent `schedule_config` with runtime state `running`; produce no
+  successful `schedule_create`, do not call `observable_create`,
+  `observable_delete`, or `observable_stop`; and leave exactly that one
+  equivalent Schedule available in final state.
 
 `skill_load` is advisory and is not part of this outcome contract. A run passes
 whether the guide is omitted, loaded in parallel with listing, or loaded later.

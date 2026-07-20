@@ -276,7 +276,9 @@ def _validate_tool_contract(
             if _list_result_contains_equivalent(result, expectation)
         ]
         if not matching_lists:
-            issues.append("expected a successful observable_list result exposing the equivalent seeded schedule")
+            issues.append(
+                "expected a successful observable_list result exposing the running equivalent seeded schedule"
+            )
         else:
             _, matching_result = matching_lists[0]
             completion_after = _position(matching_result)
@@ -366,6 +368,8 @@ def _list_result_contains_equivalent(
         if not isinstance(entry, dict) or entry.get("id") != expectation.existing_schedule_id:
             continue
         if entry.get("source_type") != "schedule":
+            continue
+        if entry.get("state") != "running":
             continue
         schedule_config = entry.get("schedule_config")
         if _schedule_config_matches(schedule_config, expectation):
