@@ -28,14 +28,18 @@ from typing import Any
 import yaml
 
 try:
-    from . import contract_oracle, schedule_routing
+    from . import contract_oracle, rotation, schedule_routing
 except ImportError:  # pragma: no cover - direct script fallback.
     import contract_oracle  # type: ignore[no-redef]
+    import rotation  # type: ignore[no-redef]
     import schedule_routing  # type: ignore[no-redef]
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 REPORT_ROOT = REPO_ROOT / ".tmp" / "reports"
+SCENARIO_PASSED = "passed"
+SCENARIO_CAPABILITY_FAILED = "capability_failed"
+SCENARIO_HARD_FAILED = "hard_failed"
 
 
 def main() -> int:
@@ -169,6 +173,11 @@ def provider_smoke(argv: list[str]) -> int:
         if not rows:
             raise ValueError(f"no providers/models found in {parsed.config}")
 
+        model_specs = load_provider_model_specs(
+            model_list_path,
+            required=not (parsed.only or parsed.all_config_models),
+        )
+        spec_by_ref = {spec.ref: spec for spec in model_specs}
         selected_refs: set[str] | None = None
         model_list_label = "all provider config models"
         if parsed.all_config_models:
@@ -176,7 +185,7 @@ def provider_smoke(argv: list[str]) -> int:
         elif parsed.only:
             model_list_label = f"filter {parsed.only}"
         else:
-            selected = load_model_refs(model_list_path, "provider_smoke_models")
+            selected = [spec.ref for spec in model_specs]
             selected_refs = set(selected)
             missing = sorted(ref for ref in selected if ref not in {row.ref for row in rows})
             if missing:
@@ -236,6 +245,11 @@ def provider_smoke(argv: list[str]) -> int:
                     timeout_seconds=parsed.timeout,
                     retries=parsed.retries,
                     codex_home=env_default("CODEX_HOME", str(pathlib.Path.home() / ".codex")),
+                    schedule_routing_expectation=(
+                        spec_by_ref[row.ref].expectation("schedule-routing")
+                        if row.ref in spec_by_ref
+                        else "expected"
+                    ),
                 )
             )
             results.append(result)
@@ -266,12 +280,39 @@ def provider_smoke(argv: list[str]) -> int:
                 "filesystem_verified": sum(1 for result in results if result.filesystem_status == "yes"),
                 "event_delta_recorded": sum(1 for result in results if result.event_delta_status == "yes"),
                 "thinking_observed": sum(1 for result in results if result.thinking_status == "observed"),
-                "schedule_routing_verified": sum(1 for result in results if result.schedule_routing_status == "yes"),
+                "schedule_routing_verified": sum(
+                    1 for result in results if result.schedule_routing_status == "passed"
+                ),
+                "schedule_routing_expected_failures": sum(
+                    1 for result in results if result.schedule_routing_status == "failed_expected"
+                ),
+                "schedule_routing_optional_failures": sum(
+                    1 for result in results if result.schedule_routing_status == "failed_optional"
+                ),
+                "schedule_routing_hard_failures": sum(
+                    1 for result in results if result.schedule_routing_status == "hard_failed"
+                ),
+                "optional_failures": [
+                    {
+                        "ref": result.ref,
+                        "scenario": "schedule-routing",
+                        "error": result.error,
+                        "artifacts": result.artifacts,
+                    }
+                    for result in results
+                    if result.schedule_routing_status == "failed_optional"
+                ],
                 "results_jsonl_path": str(results_file),
             },
             results,
         )
-        print(f"summary: total={total} failed={failed} report={summary_md}")
+        optional_failures = sum(
+            1 for result in results if result.schedule_routing_status == "failed_optional"
+        )
+        print(
+            f"summary: total={total} failed={failed} "
+            f"optional_failures={optional_failures} report={summary_md}"
+        )
         return 1 if failed else 0
     finally:
         if work_root_created and not parsed.keep:
@@ -308,7 +349,8 @@ class SmokeResult:
     filesystem_status: str = "no"
     event_delta_status: str = "no"
     thinking_status: str = "not_observed"
-    schedule_routing_status: str = "no"
+    schedule_routing_expectation: str = "expected"
+    schedule_routing_status: str = "not_run"
     error_stage: str = ""
     error: str = ""
     artifacts: str = ""
@@ -328,6 +370,34 @@ class ProviderSmokeContext:
     timeout_seconds: int
     retries: int
     codex_home: str
+    schedule_routing_expectation: str = "expected"
+
+
+@dataclass(frozen=True)
+class ScenarioRunOutcome:
+    kind: str
+    report: contract_oracle.ContractReport
+    session_id: str = ""
+
+
+@dataclass(frozen=True)
+class ScenarioVerdict:
+    passed: bool
+    status: str
+
+
+def scenario_verdict(expectation: str, outcome: str) -> ScenarioVerdict:
+    if expectation not in rotation.SCENARIO_EXPECTATIONS:
+        raise ValueError(f"unknown scenario expectation: {expectation}")
+    if outcome == SCENARIO_PASSED:
+        return ScenarioVerdict(True, "passed")
+    if outcome == SCENARIO_HARD_FAILED:
+        return ScenarioVerdict(False, "hard_failed")
+    if outcome == SCENARIO_CAPABILITY_FAILED:
+        if expectation == "optional":
+            return ScenarioVerdict(True, "failed_optional")
+        return ScenarioVerdict(False, "failed_expected")
+    raise ValueError(f"unknown scenario outcome: {outcome}")
 
 
 def enumerate_provider_matrix(cfg: dict[str, Any]) -> list[MatrixRow]:
@@ -400,6 +470,7 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         reasoning_effort_capability=row.reasoning_effort_capability,
         tools_capability=row.tools_capability,
         thinking_effort=row.thinking_effort,
+        schedule_routing_expectation=ctx.schedule_routing_expectation,
         artifacts=str(artifact_dir),
     )
 
@@ -462,20 +533,28 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         content=f"schedule routing evaluation {row.ref} {schedule_key}",
         completion_token=f"SCHEDULE_ROUTING_PASS {schedule_key}",
     )
-    schedule_report, schedule_session_id = run_schedule_routing_case(ctx, artifact_dir, expectation)
-    if not schedule_report.passed:
+    schedule_outcome = run_schedule_routing_case(ctx, artifact_dir, expectation)
+    verdict = scenario_verdict(ctx.schedule_routing_expectation, schedule_outcome.kind)
+    result.schedule_routing_status = verdict.status
+    if not verdict.passed:
         result.error_stage = "schedule-routing"
-        result.error = schedule_report.message()
+        result.error = schedule_outcome.report.message()
         print(f"FAIL {result.ref}: {result.error}", file=sys.stderr)
         return result
-    result.schedule_routing_status = "yes"
+    if schedule_outcome.kind == SCENARIO_CAPABILITY_FAILED:
+        result.error_stage = "schedule-routing"
+        result.error = schedule_outcome.report.message()
+        print(
+            f"WARN {result.ref}: optional schedule-routing capability failure recorded: {result.error}",
+            file=sys.stderr,
+        )
     result.status = "pass"
     print(
         f"ok  {row.ref} session={session_id} toolcall={result.tool_status} "
         f"exec_command={result.exec_command_status} tty={result.tty_status} "
         f"stdin={result.stdin_status} events={result.event_delta_status} "
         f"thinking={result.thinking_status} schedule_routing={result.schedule_routing_status} "
-        f"schedule_session={schedule_session_id} artifacts={artifact_dir}"
+        f"schedule_session={schedule_outcome.session_id} artifacts={artifact_dir}"
     )
     return result
 
@@ -571,7 +650,7 @@ def run_schedule_routing_case(
     ctx: ProviderSmokeContext,
     artifact_dir: pathlib.Path,
     expectation: schedule_routing.ScheduleRoutingExpectation,
-) -> tuple[contract_oracle.ContractReport, str]:
+) -> ScenarioRunOutcome:
     work_root = ctx.work_root / safe_ref(ctx.row.ref) / "schedule-routing"
     report_root = artifact_dir / "schedule-routing"
     for attempt in range(1, ctx.retries + 2):
@@ -589,8 +668,8 @@ def run_schedule_routing_case(
         except Exception as exc:  # noqa: BLE001
             copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
             report = contract_oracle.ContractReport(False, [f"schedule routing config: {exc}"])
-            write_contract_report(attempt_artifacts, report)
-            return report, ""
+            write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
+            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
 
         status = run_turn(ctx, case_dir, case_config, "turn1", ["--new", prompt])
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
@@ -607,22 +686,28 @@ def run_schedule_routing_case(
             provider_message = provider_error_message(attempt_artifacts)
             detail = combine_error(f"schedule routing turn failed with status {status}", provider_message)
             report = contract_oracle.ContractReport(False, [detail])
-            write_contract_report(attempt_artifacts, report)
-            return report, ""
+            write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
+            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
 
         session_id = json_file_value(case_dir / "turn1.stdout.json", "session_id")
         if not session_id:
             report = contract_oracle.ContractReport(False, ["schedule routing turn missing session_id"])
-            write_contract_report(attempt_artifacts, report)
-            return report, ""
-        sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
+            write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
+            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
+        try:
+            sessions = agent_sessions_dir(case_dir, case_dir / "home" / ".juex")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            report = contract_oracle.ContractReport(False, [f"schedule routing session artifacts: {exc}"])
+            write_contract_report(attempt_artifacts, SCENARIO_HARD_FAILED, report)
+            return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report, session_id)
         conversation = sessions / session_id / "conversation.jsonl"
         observables = case_dir / ".juex" / "observables.json"
-        report = schedule_routing.validate_contract(conversation, observables, expectation)
+        validation = schedule_routing.validate_outcome(conversation, observables, expectation)
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
-        write_contract_report(attempt_artifacts, report)
-        return report, session_id
-    return contract_oracle.ContractReport(False, ["schedule routing retries exhausted"]), ""
+        write_contract_report(attempt_artifacts, validation.kind, validation.report)
+        return ScenarioRunOutcome(validation.kind, validation.report, session_id)
+    report = contract_oracle.ContractReport(False, ["schedule routing retries exhausted"])
+    return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
 
 
 def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:
@@ -739,9 +824,18 @@ def copy_schedule_routing_artifacts(case_dir: pathlib.Path, artifact_dir: pathli
             shutil.copy2(source, artifact_dir / source.name)
 
 
-def write_contract_report(artifact_dir: pathlib.Path, report: contract_oracle.ContractReport) -> None:
+def write_contract_report(
+    artifact_dir: pathlib.Path,
+    outcome: str,
+    report: contract_oracle.ContractReport,
+) -> None:
     (artifact_dir / "contract.json").write_text(
-        json.dumps({"passed": report.passed, "issues": report.issues}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps(
+            {"outcome": outcome, "passed": report.passed, "issues": report.issues},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -833,9 +927,12 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Event delta recorded: {summary['event_delta_recorded']}",
         f"- Thinking observed: {summary['thinking_observed']}",
         f"- Schedule routing verified: {summary['schedule_routing_verified']}",
+        f"- Schedule routing expected failures: {summary['schedule_routing_expected_failures']}",
+        f"- Schedule routing optional failures: {summary['schedule_routing_optional_failures']}",
+        f"- Schedule routing hard failures: {summary['schedule_routing_hard_failures']}",
         "",
-        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Schedule routing | Error stage |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Schedule expectation | Schedule routing | Error stage |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in results:
         lines.append(
@@ -843,9 +940,28 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
             f"{result.status} | {result.tool_status} | {result.exec_command_status} | "
             f"{result.tty_status} | {result.stdin_status} | {result.filesystem_status} | "
             f"{result.event_delta_status} | {result.thinking_status} | "
-            f"{result.schedule_routing_status} | {result.error_stage} |"
+            f"{result.schedule_routing_expectation} | "
+            f"{schedule_routing_status_label(result.schedule_routing_status)} | {result.error_stage} |"
         )
+    optional_failures = summary.get("optional_failures") or []
+    if optional_failures:
+        lines.extend(["", "## Optional Scenario Failures", ""])
+        for failure in optional_failures:
+            lines.append(
+                f"- `{failure['ref']}` `{failure['scenario']}`: "
+                f"{failure['error']} (artifacts: `{failure['artifacts']}`)"
+            )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def schedule_routing_status_label(status: str) -> str:
+    return {
+        "passed": "passed",
+        "failed_expected": "failed (expected pass)",
+        "failed_optional": "failed (optional, recorded)",
+        "hard_failed": "failed (hard failure)",
+        "not_run": "not run",
+    }.get(status, status)
 
 
 def write_selected_config(
@@ -1052,6 +1168,9 @@ def write_development_record(
             ("event_delta_recorded", "Event delta recorded"),
             ("thinking_observed", "Thinking observed"),
             ("schedule_routing_verified", "Schedule routing verified"),
+            ("schedule_routing_expected_failures", "Schedule routing expected failures"),
+            ("schedule_routing_optional_failures", "Schedule routing optional failures"),
+            ("schedule_routing_hard_failures", "Schedule routing hard failures"),
         ]:
             if key in provider:
                 lines.append(f"- {label}: {provider[key]}")
@@ -1092,15 +1211,14 @@ def append_jsonl(path: pathlib.Path, value: dict[str, Any]) -> None:
         handle.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def load_provider_model_specs(path: pathlib.Path, *, required: bool) -> list[rotation.ModelSpec]:
+    if not path.exists() and not required:
+        return []
+    return rotation.load_model_specs(path, "provider_smoke_models")
+
+
 def load_model_refs(path: pathlib.Path, section: str) -> list[str]:
-    data = load_yaml_file(path)
-    values = data.get(section)
-    if not isinstance(values, list):
-        raise ValueError(f"model list {path} section {section} is missing or not a list")
-    refs = [str(value).strip() for value in values if str(value).strip()]
-    if not refs:
-        raise ValueError(f"model list {path} section {section} is empty")
-    return refs
+    return rotation.load_model_refs(path, section)
 
 
 def load_yaml_file(path: pathlib.Path) -> dict[str, Any]:

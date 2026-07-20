@@ -71,6 +71,200 @@ func TestLiveModelRotationScript(t *testing.T) {
 	}
 }
 
+func TestLiveModelScenarioExpectations(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper, rotation",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    model_list = work / 'live-models.yaml'",
+		"    model_list.write_text('''provider_smoke_models:",
+		"  - provider:expected",
+		"  - ref: provider:optional",
+		"    scenario_expectations:",
+		"      schedule-routing: optional",
+		"compaction_eval_models:",
+		"  - compaction:model",
+		"''', encoding='utf-8')",
+		"    specs = rotation.load_model_specs(model_list, 'provider_smoke_models')",
+		"    assert [spec.ref for spec in specs] == ['provider:expected', 'provider:optional'], specs",
+		"    assert specs[0].expectation('schedule-routing') == 'expected'",
+		"    assert specs[1].expectation('schedule-routing') == 'optional'",
+		"    assert rotation.load_model_refs(model_list, 'provider_smoke_models') == ['provider:expected', 'provider:optional']",
+		"    assert helper.load_provider_model_specs(work / 'missing.yaml', required=False) == []",
+		"    try:",
+		"        helper.load_provider_model_specs(work / 'missing.yaml', required=True)",
+		"    except FileNotFoundError:",
+		"        pass",
+		"    else:",
+		"        raise AssertionError('required model list must fail when missing')",
+		"    invalid_documents = [",
+		"        'provider_smoke_models: [{ref: provider:model, unknown: true}]\\n',",
+		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: {unknown: optional}}]\\n',",
+		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: {schedule-routing: ignored}}]\\n',",
+		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: false}]\\n',",
+		"        'provider_smoke_models: [{ref: provider:model, scenario_expectations: {schedule-routing: [optional]}}]\\n',",
+		"        'provider_smoke_models: [{scenario_expectations: {schedule-routing: optional}}]\\n',",
+		"        'provider_smoke_models: [provider:model, provider:model]\\n',",
+		"        'compaction_eval_models: [{ref: compaction:model, scenario_expectations: {schedule-routing: optional}}]\\n',",
+		"    ]",
+		"    for index, document in enumerate(invalid_documents):",
+		"        invalid = work / f'invalid-{index}.yaml'",
+		"        invalid.write_text(document, encoding='utf-8')",
+		"        section = 'compaction_eval_models' if document.startswith('compaction') else 'provider_smoke_models'",
+		"        try:",
+		"            rotation.load_model_specs(invalid, section)",
+		"        except ValueError:",
+		"            pass",
+		"        else:",
+		"            raise AssertionError(f'invalid model list accepted: {document}')",
+		"    malformed = work / 'malformed.yaml'",
+		"    malformed.write_text('provider_smoke_models: [\\n', encoding='utf-8')",
+		"    try:",
+		"        helper.load_provider_model_specs(malformed, required=False)",
+		"    except Exception:",
+		"        pass",
+		"    else:",
+		"        raise AssertionError('existing malformed model list must fail')",
+		"for expectation in ('expected', 'optional'):",
+		"    verdict = helper.scenario_verdict(expectation, helper.SCENARIO_PASSED)",
+		"    assert verdict.passed and verdict.status == 'passed', verdict",
+		"assert not helper.scenario_verdict('expected', helper.SCENARIO_CAPABILITY_FAILED).passed",
+		"assert helper.scenario_verdict('expected', helper.SCENARIO_CAPABILITY_FAILED).status == 'failed_expected'",
+		"assert helper.scenario_verdict('optional', helper.SCENARIO_CAPABILITY_FAILED).passed",
+		"assert helper.scenario_verdict('optional', helper.SCENARIO_CAPABILITY_FAILED).status == 'failed_optional'",
+		"for expectation in ('expected', 'optional'):",
+		"    verdict = helper.scenario_verdict(expectation, helper.SCENARIO_HARD_FAILED)",
+		"    assert not verdict.passed and verdict.status == 'hard_failed', verdict",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestOptionalScenarioVerdictControlsRotationAdvance(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import tempfile",
+		"from argparse import Namespace",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import cli, helper, rotation",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    model_list = work / 'live-models.yaml'",
+		"    state_path = work / 'rotation.json'",
+		"    model_list.write_text('provider_smoke_models:\\n  - ref: provider:optional\\n    scenario_expectations:\\n      schedule-routing: optional\\n  - provider:next\\n', encoding='utf-8')",
+		"    args = Namespace(model_list=str(model_list), rotation_state=str(state_path), only='', all_models=False, all_config_models=False)",
+		"    original_args = cli.provider_helper_args",
+		"    original_smoke = helper.provider_smoke",
+		"    cli.provider_helper_args = lambda args: []",
+		"    try:",
+		"        helper.provider_smoke = lambda args: 0 if helper.scenario_verdict('optional', helper.SCENARIO_CAPABILITY_FAILED).passed else 1",
+		"        assert cli.run_provider_smoke(args) == 0",
+		"        state = rotation.load_state(state_path)",
+		"        assert rotation.section_record(state, 'provider_smoke_models')['last_successful'] == 'provider:optional'",
+		"        helper.provider_smoke = lambda args: 0 if helper.scenario_verdict('optional', helper.SCENARIO_HARD_FAILED).passed else 1",
+		"        assert cli.run_provider_smoke(args) == 1",
+		"        state = rotation.load_state(state_path)",
+		"        assert rotation.section_record(state, 'provider_smoke_models')['last_successful'] == 'provider:optional'",
+		"        mechanical = helper.SmokeResult(",
+		"            run_id='unit', ref='provider:next', provider_id='provider', model_id='next',",
+		"            protocol='openai', reasoning_effort_capability='default', tools_capability='default', thinking_effort='unset',",
+		"        )",
+		"        assert mechanical.status == 'fail' and mechanical.schedule_routing_status == 'not_run'",
+		"        helper.provider_smoke = lambda args: 1",
+		"        assert cli.run_provider_smoke(args) == 1",
+		"        state = rotation.load_state(state_path)",
+		"        assert rotation.section_record(state, 'provider_smoke_models')['last_successful'] == 'provider:optional'",
+		"    finally:",
+		"        cli.provider_helper_args = original_args",
+		"        helper.provider_smoke = original_smoke",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
+func TestProviderSmokeScopesApplyScenarioExpectations(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import shutil",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import helper",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    config = work / 'juex.yaml'",
+		"    config.write_text('''providers:",
+		"  - id: provider",
+		"    protocol: openai",
+		"    models:",
+		"      - id: optional",
+		"      - id: unlisted",
+		"''', encoding='utf-8')",
+		"    model_list = work / 'live-models.yaml'",
+		"    model_list.write_text('''provider_smoke_models:",
+		"  - ref: provider:optional",
+		"    scenario_expectations:",
+		"      schedule-routing: optional",
+		"''', encoding='utf-8')",
+		"    true_bin = shutil.which('true')",
+		"    assert true_bin",
+		"    captured = []",
+		"    def fake_case(ctx):",
+		"        captured.append((ctx.row.ref, ctx.schedule_routing_expectation))",
+		"        return helper.SmokeResult(",
+		"            run_id=ctx.run_id, ref=ctx.row.ref, provider_id=ctx.row.provider_id, model_id=ctx.row.model_id,",
+		"            protocol=ctx.row.protocol, reasoning_effort_capability='default', tools_capability='default',",
+		"            thinking_effort='unset', status='pass', schedule_routing_status='passed',",
+		"        )",
+		"    original_case = helper.run_provider_smoke_case",
+		"    helper.run_provider_smoke_case = fake_case",
+		"    def run_scope(name, *scope, model_path=model_list):",
+		"        captured.clear()",
+		"        status = helper.provider_smoke([",
+		"            '--juex', true_bin, '--config', str(config), '--model-list', str(model_path),",
+		"            '--report-dir', str(work / f'report-{name}'), '--work-root', str(work / f'work-{name}'),",
+		"            '--run-id', name, *scope,",
+		"        ])",
+		"        assert status == 0",
+		"        return list(captured)",
+		"    try:",
+		"        assert run_scope('only-provider', '--only', 'provider') == [",
+		"            ('provider:optional', 'optional'), ('provider:unlisted', 'expected')",
+		"        ]",
+		"        assert run_scope('all-models', '--all-models') == [('provider:optional', 'optional')]",
+		"        assert run_scope('all-config', '--all-config-models') == [",
+		"            ('provider:optional', 'optional'), ('provider:unlisted', 'expected')",
+		"        ]",
+		"        assert run_scope(",
+		"            'missing-list', '--only', 'provider:unlisted', model_path=work / 'missing.yaml'",
+		"        ) == [('provider:unlisted', 'expected')]",
+		"    finally:",
+		"        helper.run_provider_smoke_case = original_case",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestEvalPythonModuleAndShellWrappersExposeHelp(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
@@ -641,6 +835,54 @@ func TestScheduleRoutingEvalContract(t *testing.T) {
 	runUV(t, root, "python", "-c", program)
 }
 
+func TestScheduleRoutingFailureClassification(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	program := strings.Join([]string{
+		"import json",
+		"import tempfile",
+		"from pathlib import Path",
+		"from tests.eval.juex_eval import schedule_routing",
+		"expect = schedule_routing.ScheduleRoutingExpectation('schedule-routing-eval', 21600, 'token', 'SCHEDULE_ROUTING_PASS token')",
+		"rows = [",
+		"    {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'list-1', 'tool_name': 'observable_list', 'input': {}}]},",
+		"    {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'list-1', 'content': '{}'}]},",
+		"    {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'create-1', 'tool_name': 'schedule_create', 'input': {'id': expect.schedule_id, 'interval': {'every_seconds': expect.every_seconds}, 'observation': {'content': expect.content}}}]},",
+		"    {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'create-1', 'content': '{}'}]},",
+		"    {'role': 'assistant', 'blocks': [{'type': 'text', 'text': expect.completion_token}]},",
+		"]",
+		"config = {'observables': [{'id': expect.schedule_id, 'type': 'schedule', 'schedule_config': {'interval': {'every_seconds': expect.every_seconds}, 'observation': {'content': expect.content}}}]}",
+		"with tempfile.TemporaryDirectory() as tmp:",
+		"    work = Path(tmp)",
+		"    conversation = work / 'conversation.jsonl'",
+		"    observables = work / 'observables.json'",
+		"    conversation.write_text('\\n'.join(json.dumps(row) for row in rows) + '\\n', encoding='utf-8')",
+		"    observables.write_text(json.dumps(config), encoding='utf-8')",
+		"    outcome = schedule_routing.validate_outcome(conversation, observables, expect)",
+		"    assert outcome.kind == 'passed' and outcome.report.passed, outcome",
+		"    bad_config = json.loads(json.dumps(config))",
+		"    bad_config['observables'][0]['schedule_config']['interval']['every_seconds'] = 60",
+		"    observables.write_text(json.dumps(bad_config), encoding='utf-8')",
+		"    outcome = schedule_routing.validate_outcome(conversation, observables, expect)",
+		"    assert outcome.kind == 'hard_failed' and not outcome.report.passed, outcome",
+		"    capability_rows = [{'role': 'assistant', 'blocks': [{'type': 'text', 'text': 'I cannot schedule this.'}]}]",
+		"    conversation.write_text('\\n'.join(json.dumps(row) for row in capability_rows) + '\\n', encoding='utf-8')",
+		"    observables.unlink()",
+		"    outcome = schedule_routing.validate_outcome(conversation, observables, expect)",
+		"    assert outcome.kind == 'capability_failed' and not outcome.report.passed, outcome",
+		"    conversation.unlink()",
+		"    outcome = schedule_routing.validate_outcome(conversation, observables, expect)",
+		"    assert outcome.kind == 'hard_failed' and not outcome.report.passed, outcome",
+	}, "\n")
+	runUV(t, root, "python", "-c", program)
+}
+
 func TestScheduleRoutingEvalReportingIsAdditive(t *testing.T) {
 	if _, err := exec.LookPath("uv"); err != nil {
 		t.Skip("uv not installed; install via `brew install uv` to enable this smoke")
@@ -660,29 +902,35 @@ func TestScheduleRoutingEvalReportingIsAdditive(t *testing.T) {
 		"    result = helper.SmokeResult(",
 		"        run_id='unit', ref='provider:model', provider_id='provider', model_id='model',",
 		"        protocol='openai', reasoning_effort_capability='default', tools_capability='default', thinking_effort='unset',",
-		"        status='pass', schedule_routing_status='yes',",
+		"        status='pass', schedule_routing_expectation='optional', schedule_routing_status='failed_optional',",
+		"        error_stage='schedule-routing', error='model did not call schedule_create', artifacts='cases/provider_model',",
 		"    )",
 		"    summary = {",
 		"        'run_id': 'unit', 'juex': './dist/juex', 'config': 'config.yaml', 'model_list': 'unit', 'work_root': 'cleaned',",
 		"        'total': 1, 'passed': 1, 'failed': 0, 'tool_use_recorded': 1, 'exec_command_tool_use_recorded': 1,",
 		"        'tty_recorded': 1, 'stdin_recorded': 1, 'filesystem_verified': 1, 'event_delta_recorded': 1,",
-		"        'thinking_observed': 0, 'schedule_routing_verified': 1, 'results_jsonl_path': 'results.jsonl',",
+		"        'thinking_observed': 0, 'schedule_routing_verified': 0, 'schedule_routing_expected_failures': 0,",
+		"        'schedule_routing_optional_failures': 1, 'schedule_routing_hard_failures': 0,",
+		"        'optional_failures': [{'ref': 'provider:model', 'scenario': 'schedule-routing', 'error': 'model did not call schedule_create', 'artifacts': 'cases/provider_model'}],",
+		"        'results_jsonl_path': 'results.jsonl',",
 		"    }",
 		"    summary_json = work / 'summary.json'",
 		"    summary_md = work / 'summary.md'",
 		"    helper.write_smoke_summary(summary_json, summary_md, summary, [result])",
 		"    parsed = json.loads(summary_json.read_text(encoding='utf-8'))",
-		"    assert parsed['total'] == 1 and parsed['schedule_routing_verified'] == 1, parsed",
+		"    assert parsed['total'] == 1 and parsed['schedule_routing_optional_failures'] == 1, parsed",
+		"    assert parsed['optional_failures'][0]['ref'] == 'provider:model', parsed",
 		"    markdown = summary_md.read_text(encoding='utf-8')",
-		"    assert 'Schedule routing verified: 1' in markdown, markdown",
-		"    assert '| not_observed | yes |  |' in markdown, markdown",
+		"    assert 'Schedule routing optional failures: 1' in markdown, markdown",
+		"    assert 'failed (optional, recorded)' in markdown, markdown",
+		"    assert '## Optional Scenario Failures' in markdown and 'model did not call schedule_create' in markdown, markdown",
 		"    commands = work / 'commands.jsonl'",
 		"    commands.write_text(json.dumps({'label': 'provider-model-smoke', 'exit_status': 0, 'log': 'provider.log'}) + '\\n', encoding='utf-8')",
 		"    record_json = work / 'record.json'",
 		"    record_md = work / 'record.md'",
 		"    helper.write_development_record(work, 'unit', commands, summary_json, '', 0, record_json, record_md)",
 		"    record = record_md.read_text(encoding='utf-8')",
-		"    assert 'Schedule routing verified: 1' in record, record",
+		"    assert 'Schedule routing optional failures: 1' in record, record",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }
@@ -744,12 +992,12 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    helper.write_selected_config = fake_write_config",
 		"    helper.run_turn = fake_run_turn",
 		"    try:",
-		"        report, session_id = helper.run_schedule_routing_case(ctx, work / 'report' / 'cases' / 'provider_model', expect)",
+		"        outcome = helper.run_schedule_routing_case(ctx, work / 'report' / 'cases' / 'provider_model', expect)",
 		"    finally:",
 		"        helper.write_selected_config = original_write_config",
 		"        helper.run_turn = original_run_turn",
-		"    assert report.passed, report.message()",
-		"    assert session_id == 'session-attempt-2', session_id",
+		"    assert outcome.kind == 'passed' and outcome.report.passed, outcome.report.message()",
+		"    assert outcome.session_id == 'session-attempt-2', outcome.session_id",
 		"    assert len(attempts) == 2 and attempts[0] != attempts[1], attempts",
 		"    assert attempts[0].name == 'attempt-1' and attempts[1].name == 'attempt-2', attempts",
 		"    artifacts = work / 'report' / 'cases' / 'provider_model' / 'schedule-routing'",
@@ -761,7 +1009,7 @@ func TestScheduleRoutingEvalRetriesUseFreshAttempts(t *testing.T) {
 		"    assert (artifacts / 'attempt-2' / 'observables.json').is_file(), artifacts",
 		"    assert (artifacts / 'attempt-2' / 'prompt.txt').is_file(), artifacts",
 		"    contract = json.loads((artifacts / 'attempt-2' / 'contract.json').read_text(encoding='utf-8'))",
-		"    assert contract == {'passed': True, 'issues': []}, contract",
+		"    assert contract == {'outcome': 'passed', 'passed': True, 'issues': []}, contract",
 	}, "\n")
 	runUV(t, root, "python", "-c", program)
 }

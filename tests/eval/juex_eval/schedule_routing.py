@@ -73,6 +73,12 @@ class ScheduleRoutingExpectation:
 
 
 @dataclass(frozen=True)
+class ValidationOutcome:
+    kind: str
+    report: contract_oracle.ContractReport
+
+
+@dataclass(frozen=True)
 class _ToolUse:
     name: str
     tool_use_id: str
@@ -109,12 +115,37 @@ def validate_contract(
     observables_path: pathlib.Path,
     expectation: ScheduleRoutingExpectation,
 ) -> contract_oracle.ContractReport:
-    issues: list[str] = []
-    messages = _load_jsonl(conversation_path, "conversation", issues)
+    return validate_outcome(conversation_path, observables_path, expectation).report
+
+
+def validate_outcome(
+    conversation_path: pathlib.Path,
+    observables_path: pathlib.Path,
+    expectation: ScheduleRoutingExpectation,
+) -> ValidationOutcome:
+    hard_issues: list[str] = []
+    capability_issues: list[str] = []
+    messages = _load_jsonl(conversation_path, "conversation", hard_issues)
     uses, results = _transcript_tools(messages)
-    _validate_tool_contract(messages, uses, results, expectation, issues)
-    _validate_persisted_config(observables_path, expectation, issues)
-    return contract_oracle.ContractReport(passed=not issues, issues=issues)
+    _validate_tool_contract(messages, uses, results, expectation, capability_issues)
+    persistence_issues: list[str] = []
+    _validate_persisted_config(observables_path, expectation, persistence_issues)
+    successful_create_count = sum(
+        _successful_result_after(use, results) is not None
+        for use in uses
+        if use.name == "schedule_create"
+    )
+    if successful_create_count == 1:
+        hard_issues.extend(persistence_issues)
+    else:
+        capability_issues.extend(persistence_issues)
+    issues = [*hard_issues, *capability_issues]
+    report = contract_oracle.ContractReport(passed=not issues, issues=issues)
+    if hard_issues:
+        return ValidationOutcome("hard_failed", report)
+    if capability_issues:
+        return ValidationOutcome("capability_failed", report)
+    return ValidationOutcome("passed", report)
 
 
 def _load_jsonl(path: pathlib.Path, label: str, issues: list[str]) -> list[dict[str, Any]]:

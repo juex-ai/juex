@@ -86,6 +86,24 @@ provider smoke and compaction eval commands below.
 - `provider_smoke_models` rotates routine provider/tool/exec/thinking smoke tests.
 - `compaction_eval_models` rotates routine compaction quality checks.
 
+Provider smoke entries may be plain refs or mappings with per-model capability
+expectations:
+
+```yaml
+provider_smoke_models:
+  - ark:doubao-seed-2.0-pro
+  - ref: ollama-local:qwen3.6
+    scenario_expectations:
+      schedule-routing: optional
+```
+
+Missing expectations default to `expected`. An `expected` capability failure
+fails the run and pins rotation. An `optional` capability failure is still run
+and retained in the JSON, Markdown, console, and case artifacts, but the model
+result passes and rotation advances. Configuration, provider/process, core
+session artifact, and runtime persistence failures always fail and pin
+rotation, regardless of expectation.
+
 Common selection and output flags are intentionally consistent across commands:
 
 - `provider_model_smoke.sh --only provider:model` runs one live provider smoke.
@@ -162,9 +180,10 @@ failure hint to recover; exactly one create call must ultimately succeed.
 
 Each Schedule retry uses a new workspace and session. Its transcript, events,
 stdout, stderr, prompt, `observables.json`, and contract report are retained under
-`cases/<provider_model>/schedule-routing/attempt-N/`. A Schedule contract
-failure fails the provider:model result rather than adding another result or
-rotation target.
+`cases/<provider_model>/schedule-routing/attempt-N/`. The contract report
+classifies failures as model capability failures or hard runtime failures.
+Summary output distinguishes `failed (expected pass)`,
+`failed (optional, recorded)`, and hard failures.
 
 A failed provider:model is not a skip; keep the report and explain whether the
 problem is configuration, provider capability, prompt-following, or a JueX
