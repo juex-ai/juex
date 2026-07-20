@@ -154,7 +154,8 @@ test("active session composer floats without consuming conversation layout", () 
   );
   assert.match(
     sessionSource,
-    /max-h-full[\s\S]*px-4[\s\S]*md:px-6/,
+    /className="flex max-h-full w-full flex-col overflow-visible px-4 md:px-6"/,
+    "the composer frame must let the negative top fade render outside its measured height",
   );
   assert.match(sessionSource, /data-testid="session-composer-obstruction"/);
   assert.match(

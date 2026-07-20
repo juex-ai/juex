@@ -466,7 +466,7 @@ export function Session() {
           data-testid="session-composer-overlay"
         >
           <div
-            className="flex max-h-full w-full flex-col overflow-hidden px-4 md:px-6"
+            className="flex max-h-full w-full flex-col overflow-visible px-4 md:px-6"
           >
             <div
               className="pointer-events-none relative mx-auto flex min-h-0 w-full max-w-[760px] flex-col pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
