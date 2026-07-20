@@ -130,14 +130,27 @@ def validate_outcome(
     _validate_tool_contract(messages, uses, results, expectation, capability_issues)
     persistence_issues: list[str] = []
     _validate_persisted_config(observables_path, expectation, persistence_issues)
+    create_uses = [use for use in uses if use.name == "schedule_create"]
     successful_creates = [
         use
-        for use in uses
-        if use.name == "schedule_create" and _successful_result_after(use, results) is not None
+        for use in create_uses
+        if _successful_result_after(use, results) is not None
     ]
     create_input_issues: list[str] = []
     if len(successful_creates) == 1:
         _validate_create_input(successful_creates[0].input, expectation, create_input_issues)
+    successful_valid_create = any(
+        _create_input_matches(use.input, expectation)
+        for use in successful_creates
+    )
+    errored_valid_create = any(
+        (result := _result_after(use, results)) is not None
+        and result.is_error
+        and _create_input_matches(use.input, expectation)
+        for use in create_uses
+    )
+    if errored_valid_create and not successful_valid_create:
+        hard_issues.append("schedule_create returned an error for contract-valid input")
     if len(successful_creates) == 1 and not create_input_issues:
         hard_issues.extend(persistence_issues)
     else:
@@ -274,13 +287,18 @@ def _position(value: _ToolUse | _ToolResult) -> tuple[int, int]:
 
 
 def _successful_result_after(use: _ToolUse, results: list[_ToolResult]) -> _ToolResult | None:
+    result = _result_after(use, results)
+    return None if result is None or result.is_error else result
+
+
+def _result_after(use: _ToolUse, results: list[_ToolResult]) -> _ToolResult | None:
     for result in results:
         if (
             result.tool_use_id
             and result.tool_use_id == use.tool_use_id
             and _position(result) > _position(use)
         ):
-            return None if result.is_error else result
+            return result
     return None
 
 
@@ -848,6 +866,12 @@ def _validate_create_input(value: Any, expectation: ScheduleRoutingExpectation, 
     observation = value.get("observation")
     if not isinstance(observation, dict) or observation.get("content") != expectation.content:
         issues.append(f"schedule_create observation.content must equal {expectation.content!r}")
+
+
+def _create_input_matches(value: Any, expectation: ScheduleRoutingExpectation) -> bool:
+    issues: list[str] = []
+    _validate_create_input(value, expectation, issues)
+    return not issues
 
 
 def _has_exact_completion_after(
