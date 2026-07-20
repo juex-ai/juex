@@ -782,6 +782,7 @@ function applyAssistantResponse(
       pending: false,
       blocks,
       model,
+      created_at: event.ts,
     };
     if (event.payload.notice) {
       messages.splice(pendingIndex, 0, {
@@ -799,7 +800,14 @@ function applyAssistantResponse(
     messages: [
       ...state.messages,
       ...appended,
-      { role: "assistant", turn_id: event.turn_id, pending: false, blocks, model },
+      {
+        role: "assistant",
+        turn_id: event.turn_id,
+        pending: false,
+        blocks,
+        model,
+        created_at: event.ts,
+      },
     ],
   };
 }

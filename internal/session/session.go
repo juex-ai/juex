@@ -514,19 +514,38 @@ func newID() string {
 
 // ValidID reports whether id has the canonical shape produced by newID.
 func ValidID(id string) bool {
+	_, ok := idCreatedAt(id)
+	return ok
+}
+
+func idCreatedAt(id string) (time.Time, bool) {
 	const suffixBytes = 4
 	timestampLength := len(idTimeLayout)
 	if len(id) != timestampLength+1+hex.EncodedLen(suffixBytes) ||
 		id[timestampLength] != '-' {
-		return false
+		return time.Time{}, false
 	}
 	timestamp := id[:timestampLength]
-	if _, err := time.Parse(idTimeLayout, timestamp); err != nil {
-		return false
+	createdAt, err := time.Parse(idTimeLayout, timestamp)
+	if err != nil {
+		return time.Time{}, false
 	}
 	suffix := id[timestampLength+1:]
 	decoded, err := hex.DecodeString(suffix)
-	return err == nil && hex.EncodeToString(decoded) == suffix
+	if err != nil || hex.EncodeToString(decoded) != suffix {
+		return time.Time{}, false
+	}
+	return createdAt, true
+}
+
+// MessageCreatedAt extracts the creation time encoded in a canonical message
+// ID. Legacy and caller-supplied message IDs do not carry this metadata.
+func MessageCreatedAt(id string) (time.Time, bool) {
+	const prefix = "msg-"
+	if !strings.HasPrefix(id, prefix) {
+		return time.Time{}, false
+	}
+	return idCreatedAt(strings.TrimPrefix(id, prefix))
 }
 
 func newMessageID() string {

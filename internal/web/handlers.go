@@ -115,7 +115,7 @@ func sessionPathID(p string) (id, rest string) {
 
 type sessionShowResponse struct {
 	session.Info
-	Messages        []llm.Message               `json:"messages"`
+	Messages        []sessionMessageResponse    `json:"messages"`
 	Model           string                      `json:"model,omitempty"`
 	HasMoreBefore   bool                        `json:"has_more_before"`
 	OldestMessageID string                      `json:"oldest_message_id,omitempty"`
@@ -142,11 +142,24 @@ type sessionMessageWindow struct {
 	Limit  int
 }
 
-func messagesForSessionResponse(msgs []llm.Message) []llm.Message {
+type sessionMessageResponse struct {
+	llm.Message
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+func messagesForSessionResponse(msgs []llm.Message) []sessionMessageResponse {
 	if msgs == nil {
-		return []llm.Message{}
+		return []sessionMessageResponse{}
 	}
-	return msgs
+	mapped := make([]sessionMessageResponse, 0, len(msgs))
+	for _, msg := range msgs {
+		response := sessionMessageResponse{Message: msg}
+		if createdAt, ok := session.MessageCreatedAt(msg.ID); ok {
+			response.CreatedAt = createdAt.UTC().Format(time.RFC3339)
+		}
+		mapped = append(mapped, response)
+	}
+	return mapped
 }
 
 func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id string) {

@@ -1231,6 +1231,9 @@ windowed by default: `GET /api/sessions/<id>` returns the latest compact marker
 and following messages when one exists, otherwise a bounded recent message
 window. Clients can request older windows with `before=<message_id>` and can
 lower or raise the window with `limit`, capped by the server.
+Each message response may also include an RFC3339 `created_at` read-model field
+derived by `internal/session` from canonical message IDs. This timestamp is not
+added to `llm.Message` or persisted JSONL; legacy IDs simply omit it.
 Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
 The web handler is a transport adapter over app-level turn admission: it

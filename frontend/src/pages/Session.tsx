@@ -51,6 +51,12 @@ import {
   type ToolDisplayUnit,
 } from "@/lib/display-units";
 import {
+  assistantWorkItems,
+  assistantWorkTitle,
+  transcriptItemModelLabels,
+  type AssistantWorkItem,
+} from "@/lib/assistant-work-groups";
+import {
   QUEUE_FULL_SUBMIT_HINT,
   composerErrorMessage,
   composerSubmitAction,
@@ -93,7 +99,6 @@ import {
   externalEventBodyClassName,
   externalEventCopyClassName,
   externalEventRowClassName,
-  messageGroupModelLabels,
   processDisclosureBodyClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
@@ -328,7 +333,26 @@ export function Session() {
     [data?.messages, projection.messages],
   );
   const groups = useMemo(() => messagesToGroups(messages), [messages]);
-  const modelLabels = useMemo(() => messageGroupModelLabels(groups), [groups]);
+  const runtimeStatus =
+    agent && statusStore
+      ? statusStore.status(agent.id, id) ??
+        (agent.activity?.status?.session.id === id
+          ? agent.activity.status
+          : undefined)
+      : undefined;
+  const tailActive =
+    projection.turnActive ||
+    data?.turn?.state === "running" ||
+    runtimeStatus?.turn?.state === "admitted" ||
+    runtimeStatus?.turn?.state === "active";
+  const transcriptItems = useMemo(
+    () => assistantWorkItems(groups, { tailActive }),
+    [groups, tailActive],
+  );
+  const modelLabels = useMemo(
+    () => transcriptItemModelLabels(transcriptItems),
+    [transcriptItems],
+  );
 
   if (!data) {
     if (loadError) {
@@ -344,13 +368,6 @@ export function Session() {
     return <LoadingState label="Loading conversation" />;
   }
 
-  const runtimeStatus =
-    agent && statusStore
-      ? statusStore.status(agent.id, id) ??
-        (agent.activity?.status?.session.id === id
-          ? agent.activity.status
-          : undefined)
-      : undefined;
   const tokenUsage =
     runtimeStatus?.token_usage ?? projection.tokenUsage ?? data.token_usage;
   const contextUsage =
@@ -384,16 +401,26 @@ export function Session() {
               onLoad={() => void handleLoadOlderMessages()}
             />
           ) : null}
-          {groups.map((group, index) => (
-            <MessageGroupView
-              key={group.key}
-              group={group}
-              modelLabel={modelLabels[index]}
-              compactCommand={
-                group.id ? projection.compactCommandInputs[group.id] : undefined
-              }
-            />
-          ))}
+          {transcriptItems.map((item, index) =>
+            item.kind === "assistant_work" ? (
+              <AssistantWorkGroupView
+                key={item.key}
+                work={item}
+                modelLabel={modelLabels[index]}
+              />
+            ) : (
+              <MessageGroupView
+                key={item.key}
+                group={item.group}
+                modelLabel={modelLabels[index]}
+                compactCommand={
+                  item.group.id
+                    ? projection.compactCommandInputs[item.group.id]
+                    : undefined
+                }
+              />
+            ),
+          )}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
@@ -1043,6 +1070,89 @@ function formatPercent(value: number): string {
 
 function trimFixed(value: number): string {
   return value.toFixed(1).replace(/\.0$/, "");
+}
+
+function AssistantWorkGroupView({
+  work,
+  modelLabel,
+}: {
+  work: AssistantWorkItem;
+  modelLabel?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const content = work.contentGroup;
+  const copyText = content ? messageGroupCopyText(content) : "";
+  const canCopy = content ? messageGroupCanCopy(content) : false;
+
+  return (
+    <Message from="assistant">
+      <div className="flex w-full flex-col gap-2">
+        {modelLabel ? (
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {modelLabel}
+          </span>
+        ) : null}
+        <details
+          open={isOpen}
+          onToggle={(event) => setIsOpen(event.currentTarget.open)}
+          className="group/work-row w-full"
+        >
+          <summary className={processDisclosureSummaryClassName()}>
+            <span className="min-w-0 truncate">
+              {assistantWorkTitle(work)}
+            </span>
+            <ChevronRightIcon
+              className="size-3 shrink-0 transition-transform motion-reduce:transition-none group-open/work-row:rotate-90"
+              aria-hidden="true"
+            />
+          </summary>
+          <div className={processDisclosureBodyClassName()}>
+            {work.processGroups.flatMap((group) =>
+              group.units.map((unit, index) => {
+                const key = `${group.key}:${index}`;
+                if (unit.kind === "reasoning") {
+                  return (
+                    <ThinkingProcessRow
+                      key={key}
+                      redacted={unit.block.redacted}
+                      text={thinkingProcessVisibleText(unit.block)}
+                    />
+                  );
+                }
+                if (unit.kind === "tool_batch") {
+                  return (
+                    <ToolBatchProcessRow key={key} tools={unit.tools} />
+                  );
+                }
+                return <ToolProcessRow key={key} tool={unit} />;
+              }),
+            )}
+          </div>
+        </details>
+        {content ? <AssistantWorkContent group={content} /> : null}
+        {canCopy ? <MessageCopyAction text={copyText} align="start" /> : null}
+      </div>
+    </Message>
+  );
+}
+
+function AssistantWorkContent({ group }: { group: MessageGroup }) {
+  return group.units.map((unit, index) => {
+    if (unit.kind === "text") {
+      return unit.block.text.trim() ? (
+        <AssistantPlainText key={index} text={unit.block.text} />
+      ) : null;
+    }
+    if (unit.kind !== "image") return null;
+    if (index > 0 && group.units[index - 1]?.kind === "image") return null;
+    const media: Array<MediaRef | null> = [];
+    for (let cursor = index; cursor < group.units.length; cursor++) {
+      const candidate = group.units[cursor];
+      if (candidate.kind !== "image") break;
+      media.push(candidate.block.media ?? null);
+    }
+    return <MessageImageGallery key={index} media={media} role="assistant" />;
+  });
 }
 
 function MessageGroupView({
