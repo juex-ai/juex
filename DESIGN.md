@@ -179,8 +179,10 @@ Edit React, see changes instantly.
 
 - Radius is a fixed four-step scale: `2px` (`sm`), `4px` (`md`), `6px`
   (`lg`), and `8px` (`xl`). The base radius is `6px`. Shared controls,
-  dialogs, cards, menus, code surfaces, and message bubbles never exceed
-  `8px`; `rounded-full` is reserved for circular controls and semantic pills.
+  dialogs, cards, menus, and code surfaces never exceed `8px`. Authored message
+  bubbles and the prompt surface may use a `16px` radius to distinguish
+  conversational input from operational chrome; `rounded-full` is reserved
+  for circular controls and semantic pills.
 - Light mode uses a neutral, slightly green-gray page and sidebar canvas.
   Cream remains an accent surface for authored content and code, not the
   dominant application background.
@@ -188,6 +190,8 @@ Edit React, see changes instantly.
   `status-working` foreground, background, and border tokens. Components do
   not encode status with raw palette utilities.
 - Interactive controls use a visible `2px` focus ring with a `2px` offset.
+  The prompt surface uses an equivalent high-contrast semantic border without
+  an outer ring so its focus treatment remains inside the floating surface.
   Spinners, shimmer, pulse, and disclosure motion stop when the user requests
   reduced motion.
 
@@ -249,7 +253,12 @@ narrower screens. Session history is opened from the stage header as
   whether the composer is available from the session kind and active state.
 - Center column max-width is 760px; the rest is gutter so reading lines do
   not get awkwardly wide. Gutters shrink from 24px to 16px below 768px.
-- Composer is sticky to the bottom of the center column.
+- The active composer floats over the bottom of the center column and is
+  bounded by the actual Session container height. Its full obstruction,
+  including the bottom safe area, reserves scroll clearance for the transcript
+  and latest-message control without consuming conversation layout. Clearance
+  growth follows the bottom only when the reader is already there; it does not
+  steal a manually scrolled reading position.
 - Stopped and failed agents keep persisted conversations readable. Their
   composer is replaced by a runtime state bar with a Start agent action;
   failures also show the reason and a Logs shortcut. The stage does not poll
@@ -288,7 +297,7 @@ primary session and navigates to `/agents/<id>/sessions/<new-id>`.
 
 ### 6.3 Session detail (`/agents/:agentId/sessions/:id`)
 
-Center column: compact header strip + scrollable message list + sticky
+Center column: compact header strip + scrollable message list + floating
 composer. The composer is shown only for the active primary session. Inactive
 primary sessions and side sessions are read-only and never show an activate
 control. The composer footer shows transient composer feedback, latest request
@@ -573,19 +582,25 @@ the command surface becomes insufficient. Slash-command output is ordinary
 message text; explicit newlines in that text stay visible in the message
 renderer.
 
-Pending inputs render as a compact stack directly above the composer while a
-turn is already running. The stack is ordered oldest first, uses small numbered
-rows labeled `Queued`, and stays local to the live session view. When the
-runtime drains pending input, the drained rows leave the stack and appear in the
-conversation stream.
+Pending inputs render inside one translucent, blurred floating surface directly
+above the composer while a turn is already running. The stack is ordered oldest
+first, uses small numbered rows labeled `Queued`, and stays local to the live
+session view. It shares the Session-container height budget with the composer
+and scrolls internally so the composer remains reachable on short or narrow
+screens. When the runtime drains pending input, the drained rows leave the
+stack and appear in the conversation stream.
 
 Enter submits, Shift+Enter inserts a newline — `<PromptInputTextarea>` handles
 both natively. Accepted images stage in a Juex-owned preview strip above the
 textarea, aligned to the top-left without a separator. The 80px previews wrap
-naturally on narrow widths and keep an always-visible circular remove control;
-this local strip does not adopt the deferred general-purpose AI Elements
-`Attachments` primitive. The composer is a warm paper well with an `8px`
-maximum radius, subtle forest shadow, and a forest focus ring. The submit button is the state control:
+naturally on narrow widths, scroll inside a bounded height on short screens,
+and keep an always-visible circular remove control. The textarea also has a
+viewport-height bound so the queue and submit action stay reachable. This local
+strip does not adopt the deferred general-purpose AI Elements `Attachments`
+primitive. The composer is a floating warm paper well with a `16px` radius,
+prominent forest shadow, and a high-contrast forest focus border without an
+outer ring. A light background fade separates it from messages without
+introducing a divider. The submit button is the state control:
 empty + idle appears disabled and clicks show a short input hint; empty +
 running switches to a square stop icon; text + idle submits and clears the
 input; text + running submits to the pending-input queue for the next provider
@@ -751,7 +766,8 @@ notification channel.
   built on Radix, which handles this).
 - Transient state controls convey their meaning through icons, labels, and
   tooltips — colour is not the sole indicator.
-- Focus states use a visible 2px ring in `--ring`. Do not remove focus rings.
+- Focus states use a visible 2px ring in `--ring`. The prompt input's semantic
+  focus border is the documented equivalent and must remain visible.
 - Juex tokens must meet WCAG AA contrast in both light and dark modes; re-test
   when introducing new colour tokens.
 

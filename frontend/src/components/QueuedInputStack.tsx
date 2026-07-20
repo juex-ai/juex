@@ -4,13 +4,17 @@ import type { QueuedInput } from "@/lib/queued-inputs";
 export function QueuedInputStack({ items }: { items: QueuedInput[] }) {
   if (items.length === 0) return null;
   return (
-    <section className="mb-2 min-h-0" aria-label="Queued inputs">
-      <div className="mb-1.5 flex items-center justify-between gap-2 px-1 font-mono text-[10px] uppercase text-muted-foreground">
+    <section
+      className="mb-2 flex max-h-[min(14rem,30dvh)] min-h-0 shrink flex-col overflow-hidden rounded-[16px] border border-border/70 bg-background/80 shadow-[var(--shadow-md)] backdrop-blur-xl"
+      aria-label="Queued inputs"
+      data-testid="queued-input-stack"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-2 px-3 pb-1.5 pt-2 font-mono text-[10px] uppercase text-muted-foreground">
         <span>Queued inputs</span>
         <span aria-label={`${items.length} queued`}>{items.length}</span>
       </div>
       <div
-        className="max-h-56 space-y-1.5 overflow-y-auto overscroll-contain pr-1"
+        className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto overscroll-contain"
         aria-live="polite"
       >
         {items.map((item, index) => {
@@ -19,7 +23,7 @@ export function QueuedInputStack({ items }: { items: QueuedInput[] }) {
           return (
             <div
               key={item.id}
-              className="flex min-w-0 items-start gap-2 rounded-md border border-border/70 bg-card/90 px-3 py-2 text-left shadow-[var(--shadow-xs)]"
+              className="flex min-w-0 items-start gap-2 px-3 py-2 text-left"
             >
               <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px] text-muted-foreground">
                 {index + 1}

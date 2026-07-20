@@ -1,10 +1,13 @@
 import {
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useStickToBottomContext } from "use-stick-to-bottom";
 import {
   Tooltip,
   TooltipContent,
@@ -197,6 +200,9 @@ export function Session() {
   );
   const [draft, setDraft] = useState("");
   const [attachmentCount, setAttachmentCount] = useState(0);
+  const [composerOverlayNode, setComposerOverlayNode] =
+    useState<HTMLDivElement | null>(null);
+  const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
   const {
     data,
     loadError,
@@ -229,6 +235,22 @@ export function Session() {
   useEffect(() => {
     return () => controller.dispose();
   }, [controller]);
+
+  useLayoutEffect(() => {
+    if (!composerOverlayNode) {
+      setComposerOverlayHeight(0);
+      return;
+    }
+    const measure = () => {
+      setComposerOverlayHeight(
+        Math.ceil(composerOverlayNode.getBoundingClientRect().height),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(composerOverlayNode);
+    return () => observer.disconnect();
+  }, [composerOverlayNode]);
 
   useEffect(() => {
     const state = location.state as InitialCommandState;
@@ -376,6 +398,8 @@ export function Session() {
   const contextUsage =
     runtimeStatus?.context_usage ?? projection.contextUsage ?? data.context_usage;
   const canSend = sessionCanSend(data) && agentRuntimeHealthy;
+  const composerClearance =
+    canSend && composerOverlayHeight > 0 ? composerOverlayHeight + 12 : 0;
   const submitAction = composerSubmitAction({
     status: runtimeStatus,
     turnActiveFallback: projection.turnActive || projection.compactActive,
@@ -391,9 +415,13 @@ export function Session() {
   });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <Conversation className="min-h-0 flex-1">
-        <ConversationContent className="mx-auto w-full max-w-[760px]">
+        <ConversationClearanceFollower clearance={composerClearance} />
+        <ConversationContent
+          className="mx-auto w-full max-w-[760px]"
+          style={{ paddingBottom: composerClearance || undefined }}
+        >
           {data.has_more_before ||
           loadingOlderMessages ||
           olderMessagesError ? (
@@ -425,107 +453,135 @@ export function Session() {
             ),
           )}
         </ConversationContent>
-        <ConversationScrollButton />
+        <ConversationScrollButton
+          className="z-30"
+          style={{ bottom: composerClearance ? composerClearance + 16 : 16 }}
+        />
       </Conversation>
-      <div className="shrink-0 border-t bg-background/92 px-4 py-3 backdrop-blur md:px-6">
-        <div className="mx-auto w-full max-w-[760px]">
-          <QueuedInputStack items={projection.queuedInput.items} />
-          {canSend ? (
-            <PromptInput
-              accept="image/*"
-              maxFileSize={10 * 1024 * 1024}
-              maxFiles={8}
-              multiple
-              onError={(err) => showComposerHint(err.message)}
-              onSubmit={async (msg) => {
-                const submittedText = msg.text ?? "";
-                const text = submittedText.trim();
-                const files = msg.files ?? [];
-                if (!text && files.length === 0) {
-                  showComposerHint("Enter a message or attach an image");
-                  return;
-                }
-                const attachments = await uploadPromptAttachments(id, files);
-                const sent = await handleSend(text ?? "", attachments);
-                if (!sent) {
-                  throw new Error("start turn failed");
-                }
-                setDraft((current) =>
-                  settleSubmittedComposerText(current, submittedText),
-                );
-              }}
+      {canSend ? (
+        <div
+          className="pointer-events-none absolute inset-0 z-20 flex items-end"
+          data-testid="session-composer-overlay"
+        >
+          <div
+            className="flex max-h-full w-full flex-col overflow-hidden bg-linear-to-b from-transparent via-background/90 to-background px-3 pt-[clamp(1.5rem,10dvh,4rem)] md:px-6"
+          >
+            <div
+              className="pointer-events-none mx-auto flex min-h-0 w-full max-w-[760px] flex-col pb-[max(0.75rem,env(safe-area-inset-bottom))] md:pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+              data-testid="session-composer-obstruction"
+              ref={setComposerOverlayNode}
             >
-              <ComposerAttachmentStrip onCountChange={setAttachmentCount} />
-              <PromptInputTextarea
-                onChange={(event) => {
-                  setDraft(event.currentTarget.value);
-                  controller.projectPromptInput();
-                }}
-                placeholder="Ask juex anything..."
-              />
-              {composerHint || composerError ? (
-                <div className="border-t border-border/60 px-2.5 py-1.5">
-                  {composerError ? (
-                    <ComposerFeedback tone="error">
-                      {composerError}
-                    </ComposerFeedback>
-                  ) : composerHint ? (
-                    <ComposerFeedback tone="hint">
-                      {composerHint}
-                    </ComposerFeedback>
+              <div
+                className="pointer-events-auto flex min-h-0 flex-col overflow-hidden"
+                data-testid="session-composer-stack"
+              >
+                <QueuedInputStack items={projection.queuedInput.items} />
+                <PromptInput
+                  accept="image/*"
+                  className="shrink-0"
+                  maxFileSize={10 * 1024 * 1024}
+                  maxFiles={8}
+                  multiple
+                  onError={(err) => showComposerHint(err.message)}
+                  onSubmit={async (msg) => {
+                    const submittedText = msg.text ?? "";
+                    const text = submittedText.trim();
+                    const files = msg.files ?? [];
+                    if (!text && files.length === 0) {
+                      showComposerHint("Enter a message or attach an image");
+                      return;
+                    }
+                    const attachments = await uploadPromptAttachments(id, files);
+                    const sent = await handleSend(text ?? "", attachments);
+                    if (!sent) {
+                      throw new Error("start turn failed");
+                    }
+                    setDraft((current) =>
+                      settleSubmittedComposerText(current, submittedText),
+                    );
+                  }}
+                >
+                  <ComposerAttachmentStrip onCountChange={setAttachmentCount} />
+                  <PromptInputTextarea
+                    className="max-h-[min(12rem,30dvh)]"
+                    onChange={(event) => {
+                      setDraft(event.currentTarget.value);
+                      controller.projectPromptInput();
+                    }}
+                    placeholder="Ask juex anything..."
+                  />
+                  {composerHint || composerError ? (
+                    <div className="border-t border-border/60 px-2.5 py-1.5">
+                      {composerError ? (
+                        <ComposerFeedback tone="error">
+                          {composerError}
+                        </ComposerFeedback>
+                      ) : composerHint ? (
+                        <ComposerFeedback tone="hint">
+                          {composerHint}
+                        </ComposerFeedback>
+                      ) : null}
+                    </div>
                   ) : null}
-                </div>
-              ) : null}
-              <PromptInputFooter className="flex-nowrap items-end gap-2">
-                <TooltipProvider>
-                  <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-2">
-                    <div
-                      className="flex shrink-0 items-center gap-1"
-                      aria-label="Composer actions"
-                      role="group"
-                    >
-                      <ComposerAttachmentButton />
-                    </div>
-                    <Separator
-                      className="h-4"
-                      orientation="vertical"
-                      decorative
-                    />
-                    <div
-                      className="flex min-w-0 items-center gap-1"
-                      aria-label="Session status"
-                      role="group"
-                    >
-                      <ContextUsageLabel
-                        usage={contextUsage}
-                        activeContext={activeContext}
-                        tokenUsage={tokenUsage}
-                      />
-                      <SessionRuntimeStateBadges data={data} />
-                    </div>
-                  </PromptInputTools>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <ComposerSubmitButton
-                      action={submitAction}
-                      onEmpty={() =>
-                        showComposerHint("Enter a message or attach an image")
-                      }
-                      onQueueFull={() =>
-                        showComposerHint(QUEUE_FULL_SUBMIT_HINT)
-                      }
-                      onStop={() => void handleInterrupt()}
-                    />
-                  </div>
-                </TooltipProvider>
-              </PromptInputFooter>
-            </PromptInput>
-          ) : !agentRuntimeHealthy ? (
-            <AgentRuntimeStateBar />
-          ) : (
-            <ReadOnlySessionBar data={data} />
-          )}
+                  <PromptInputFooter className="flex-nowrap items-end gap-2">
+                    <TooltipProvider>
+                      <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-2">
+                        <div
+                          className="flex shrink-0 items-center gap-1"
+                          aria-label="Composer actions"
+                          role="group"
+                        >
+                          <ComposerAttachmentButton />
+                        </div>
+                        <Separator
+                          className="h-4"
+                          orientation="vertical"
+                          decorative
+                        />
+                        <div
+                          className="flex min-w-0 items-center gap-1"
+                          aria-label="Session status"
+                          role="group"
+                        >
+                          <ContextUsageLabel
+                            usage={contextUsage}
+                            activeContext={activeContext}
+                            tokenUsage={tokenUsage}
+                          />
+                          <SessionRuntimeStateBadges data={data} />
+                        </div>
+                      </PromptInputTools>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <ComposerSubmitButton
+                          action={submitAction}
+                          onEmpty={() =>
+                            showComposerHint("Enter a message or attach an image")
+                          }
+                          onQueueFull={() =>
+                            showComposerHint(QUEUE_FULL_SUBMIT_HINT)
+                          }
+                          onStop={() => void handleInterrupt()}
+                        />
+                      </div>
+                    </TooltipProvider>
+                  </PromptInputFooter>
+                </PromptInput>
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="shrink-0 px-4 py-3 md:px-6">
+          <div className="mx-auto w-full max-w-[760px]">
+            <QueuedInputStack items={projection.queuedInput.items} />
+            {!agentRuntimeHealthy ? (
+              <AgentRuntimeStateBar />
+            ) : (
+              <ReadOnlySessionBar data={data} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -536,6 +592,24 @@ export function Session() {
   function showComposerHint(message: string) {
     controller.showComposerHint(message);
   }
+}
+
+function ConversationClearanceFollower({
+  clearance,
+}: {
+  clearance: number;
+}) {
+  const { isAtBottom, scrollToBottom } = useStickToBottomContext();
+  const previousClearance = useRef(clearance);
+
+  useLayoutEffect(() => {
+    const grew = clearance > previousClearance.current;
+    previousClearance.current = clearance;
+    if (!grew || !isAtBottom) return;
+    void scrollToBottom({ animation: "instant" });
+  }, [clearance, isAtBottom, scrollToBottom]);
+
+  return null;
 }
 
 function SessionLoadErrorState({
@@ -845,7 +919,7 @@ function ComposerAttachmentStrip({
   return (
     <ul
       aria-label="Attached images"
-      className="flex w-full flex-wrap items-start justify-start gap-2 px-2.5 pt-2"
+      className="flex max-h-[min(10.5rem,24dvh)] w-full flex-wrap items-start justify-start gap-2 overflow-y-auto overscroll-contain px-2.5 pt-2"
     >
       {files.map((file) => (
         <li
@@ -934,7 +1008,6 @@ function ComposerSubmitButton({
             }
           }}
           type={isEmpty || isQueueFull || isStop ? "button" : "submit"}
-          variant={isStop ? "outline" : "default"}
         >
           {isStop ? (
             <SquareIcon className="size-4" aria-hidden="true" />
