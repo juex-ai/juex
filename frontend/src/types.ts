@@ -593,6 +593,7 @@ export interface ObservableStatus {
   args?: string[];
   streams?: string[];
   batch: ObservableBatchSpec;
+  schedule_config?: ObservableScheduleConfig;
   schedule?: ObservableScheduleStatus;
   state: ObservableRunState | string;
   run_id?: string;

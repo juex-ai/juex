@@ -224,6 +224,8 @@ def provider_smoke(argv: list[str]) -> int:
         print(f"model list: {model_list_label}")
         print(f"work root: {work_root}")
         print(f"report dir: {report_dir}")
+        schedule_variant = schedule_routing.variant_for_run_id(parsed.run_id)
+        print(f"schedule routing variant: {schedule_variant}")
 
         total = 0
         failed = 0
@@ -302,6 +304,7 @@ def provider_smoke(argv: list[str]) -> int:
                     for result in results
                     if result.schedule_routing_status == "failed_optional"
                 ],
+                "schedule_routing_variant": schedule_variant,
                 "results_jsonl_path": str(results_file),
             },
             results,
@@ -351,6 +354,8 @@ class SmokeResult:
     thinking_status: str = "not_observed"
     schedule_routing_expectation: str = "expected"
     schedule_routing_status: str = "not_run"
+    schedule_routing_variant: str = ""
+    schedule_routing_existing_id: str = ""
     error_stage: str = ""
     error: str = ""
     artifacts: str = ""
@@ -471,6 +476,7 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         tools_capability=row.tools_capability,
         thinking_effort=row.thinking_effort,
         schedule_routing_expectation=ctx.schedule_routing_expectation,
+        schedule_routing_variant=schedule_routing.variant_for_run_id(ctx.run_id),
         artifacts=str(artifact_dir),
     )
 
@@ -527,15 +533,22 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
     result.thinking_status = "observed" if file_contains(conversation, '"type":"reasoning"') else "not_exposed"
     copy_case_artifacts(case_dir, artifact_dir)
     schedule_key = f"{int(time.time())}-{random.randrange(0x1000000):06x}"
+    existing_schedule_id = (
+        f"schedule-routing-existing-{schedule_key}"
+        if result.schedule_routing_variant == schedule_routing.SEEDED_EQUIVALENT_VARIANT
+        else None
+    )
     expectation = schedule_routing.ScheduleRoutingExpectation(
         schedule_id=f"schedule-routing-eval-{schedule_key}",
         every_seconds=21600,
         content=f"schedule routing evaluation {row.ref} {schedule_key}",
         completion_token=f"SCHEDULE_ROUTING_PASS {schedule_key}",
+        existing_schedule_id=existing_schedule_id,
     )
     schedule_outcome = run_schedule_routing_case(ctx, artifact_dir, expectation)
     verdict = scenario_verdict(ctx.schedule_routing_expectation, schedule_outcome.kind)
     result.schedule_routing_status = verdict.status
+    result.schedule_routing_existing_id = existing_schedule_id or ""
     if not verdict.passed:
         result.error_stage = "schedule-routing"
         result.error = schedule_outcome.report.message()
@@ -554,6 +567,7 @@ def run_provider_smoke_case(ctx: ProviderSmokeContext) -> SmokeResult:
         f"exec_command={result.exec_command_status} tty={result.tty_status} "
         f"stdin={result.stdin_status} events={result.event_delta_status} "
         f"thinking={result.thinking_status} schedule_routing={result.schedule_routing_status} "
+        f"schedule_variant={result.schedule_routing_variant} "
         f"schedule_session={schedule_outcome.session_id} artifacts={artifact_dir}"
     )
     return result
@@ -665,6 +679,11 @@ def run_schedule_routing_case(
         try:
             write_selected_config(ctx.config, ctx.row.provider_id, ctx.row.model_id, case_config)
             (case_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
+            if expectation.variant == schedule_routing.SEEDED_EQUIVALENT_VARIANT:
+                seed = schedule_routing.seeded_observables_config(expectation)
+                seed_text = json.dumps(seed, ensure_ascii=False, indent=2) + "\n"
+                (case_dir / ".juex" / "observables.json").write_text(seed_text, encoding="utf-8")
+                (attempt_artifacts / "seed-observables.json").write_text(seed_text, encoding="utf-8")
         except Exception as exc:  # noqa: BLE001
             copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
             report = contract_oracle.ContractReport(False, [f"schedule routing config: {exc}"])
@@ -705,6 +724,13 @@ def run_schedule_routing_case(
         validation = schedule_routing.validate_outcome(conversation, observables, expectation)
         copy_schedule_routing_artifacts(case_dir, attempt_artifacts)
         write_contract_report(attempt_artifacts, validation.kind, validation.report)
+        if not validation.report.passed and attempt <= ctx.retries:
+            print(
+                f"retry {ctx.row.ref} schedule-routing after contract failure "
+                f"(attempt {attempt}/{ctx.retries + 1}): {validation.report.message()}",
+                file=sys.stderr,
+            )
+            continue
         return ScenarioRunOutcome(validation.kind, validation.report, session_id)
     report = contract_oracle.ContractReport(False, ["schedule routing retries exhausted"])
     return ScenarioRunOutcome(SCENARIO_HARD_FAILED, report)
@@ -930,9 +956,10 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
         f"- Schedule routing expected failures: {summary['schedule_routing_expected_failures']}",
         f"- Schedule routing optional failures: {summary['schedule_routing_optional_failures']}",
         f"- Schedule routing hard failures: {summary['schedule_routing_hard_failures']}",
+        f"- Schedule routing variant: `{summary['schedule_routing_variant']}`",
         "",
-        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Schedule expectation | Schedule routing | Error stage |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Provider/model | Protocol | Thinking effort | Status | Tool use | Exec command | TTY | Stdin | Filesystem | Deltas | Thinking | Schedule expectation | Schedule routing | Variant | Error stage |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in results:
         lines.append(
@@ -941,7 +968,8 @@ def write_smoke_summary(summary_json: pathlib.Path, summary_md: pathlib.Path, su
             f"{result.tty_status} | {result.stdin_status} | {result.filesystem_status} | "
             f"{result.event_delta_status} | {result.thinking_status} | "
             f"{result.schedule_routing_expectation} | "
-            f"{schedule_routing_status_label(result.schedule_routing_status)} | {result.error_stage} |"
+            f"{schedule_routing_status_label(result.schedule_routing_status)} | "
+            f"{result.schedule_routing_variant} | {result.error_stage} |"
         )
     optional_failures = summary.get("optional_failures") or []
     if optional_failures:
@@ -1171,6 +1199,7 @@ def write_development_record(
             ("schedule_routing_expected_failures", "Schedule routing expected failures"),
             ("schedule_routing_optional_failures", "Schedule routing optional failures"),
             ("schedule_routing_hard_failures", "Schedule routing hard failures"),
+            ("schedule_routing_variant", "Schedule routing variant"),
         ]:
             if key in provider:
                 lines.append(f"- {label}: {provider[key]}")

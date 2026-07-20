@@ -315,6 +315,20 @@ func TestScheduleCreatePersistsTaggedSpecAndStartsSchedule(t *testing.T) {
 	if !strings.Contains(out, `"source_type": "schedule"`) {
 		t.Fatalf("create schedule output = %s", out)
 	}
+	listed, _, err := reg.CallWithInfo(context.Background(), "observable_list", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"schedule_config"`,
+		`"times": [`,
+		`"09:00"`,
+		`"content": "Prepare a concise work brief."`,
+	} {
+		if !strings.Contains(listed, want) {
+			t.Fatalf("observable_list schedule missing %s: %s", want, listed)
+		}
+	}
 	body, err := os.ReadFile(config)
 	if err != nil {
 		t.Fatal(err)

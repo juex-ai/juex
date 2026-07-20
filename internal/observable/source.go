@@ -120,6 +120,7 @@ func statusFromSpec(spec Spec, state string) ObservableStatus {
 		status.Batch = commandSpec.Batch
 	}
 	if scheduleSpec, ok := spec.scheduleRuntime(); ok {
+		status.ScheduleConfig = scheduleConfigSnapshot(scheduleSpec)
 		status.Schedule = &ScheduleStatus{
 			Summary:     scheduleSummary(scheduleSpec),
 			Timezone:    scheduleSpec.Timezone,
@@ -127,6 +128,11 @@ func statusFromSpec(spec Spec, state string) ObservableStatus {
 		}
 	}
 	return status
+}
+
+func scheduleConfigSnapshot(spec scheduleRuntimeSpec) *ScheduleSourceSpec {
+	config := cloneScheduleSourceSpec(spec.ScheduleSourceSpec)
+	return &config
 }
 
 func baseStatusFromSpec(spec Spec, state string) ObservableStatus {

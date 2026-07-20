@@ -130,22 +130,23 @@ type StatusCounts struct {
 }
 
 type ObservableStatus struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name,omitempty"`
-	SourceType      string            `json:"source_type,omitempty"`
-	Command         string            `json:"command"`
-	Args            []string          `json:"args,omitempty"`
-	Streams         []string          `json:"streams,omitempty"`
-	Batch           BatchSpec         `json:"batch"`
-	Schedule        *ScheduleStatus   `json:"schedule,omitempty"`
-	State           string            `json:"state"`
-	RunID           string            `json:"run_id,omitempty"`
-	PID             int               `json:"pid,omitempty"`
-	StartedAt       time.Time         `json:"started_at,omitempty"`
-	ExitedAt        time.Time         `json:"exited_at,omitempty"`
-	ExitCode        *int              `json:"exit_code,omitempty"`
-	LastError       string            `json:"last_error,omitempty"`
-	LastObservation ObservationRecord `json:"last_observation,omitempty"`
+	ID              string              `json:"id"`
+	Name            string              `json:"name,omitempty"`
+	SourceType      string              `json:"source_type,omitempty"`
+	Command         string              `json:"command"`
+	Args            []string            `json:"args,omitempty"`
+	Streams         []string            `json:"streams,omitempty"`
+	Batch           BatchSpec           `json:"batch"`
+	ScheduleConfig  *ScheduleSourceSpec `json:"schedule_config,omitempty"`
+	Schedule        *ScheduleStatus     `json:"schedule,omitempty"`
+	State           string              `json:"state"`
+	RunID           string              `json:"run_id,omitempty"`
+	PID             int                 `json:"pid,omitempty"`
+	StartedAt       time.Time           `json:"started_at,omitempty"`
+	ExitedAt        time.Time           `json:"exited_at,omitempty"`
+	ExitCode        *int                `json:"exit_code,omitempty"`
+	LastError       string              `json:"last_error,omitempty"`
+	LastObservation ObservationRecord   `json:"last_observation,omitempty"`
 }
 
 type ScheduleStatus struct {
