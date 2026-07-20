@@ -140,6 +140,8 @@ def load_model_specs(path: pathlib.Path, section: str) -> list[ModelSpec]:
                 raise ValueError(f"{location} ref must be a non-empty string")
             ref = raw_ref.strip()
             raw_expectations = value.get("scenario_expectations", {})
+            if raw_expectations is None:
+                raw_expectations = {}
             if not isinstance(raw_expectations, dict):
                 raise ValueError(f"{location} scenario_expectations must be a mapping")
             expectations = {}

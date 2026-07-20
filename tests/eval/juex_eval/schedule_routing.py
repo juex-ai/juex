@@ -130,12 +130,15 @@ def validate_outcome(
     _validate_tool_contract(messages, uses, results, expectation, capability_issues)
     persistence_issues: list[str] = []
     _validate_persisted_config(observables_path, expectation, persistence_issues)
-    successful_create_count = sum(
-        _successful_result_after(use, results) is not None
+    successful_creates = [
+        use
         for use in uses
-        if use.name == "schedule_create"
-    )
-    if successful_create_count == 1:
+        if use.name == "schedule_create" and _successful_result_after(use, results) is not None
+    ]
+    create_input_issues: list[str] = []
+    if len(successful_creates) == 1:
+        _validate_create_input(successful_creates[0].input, expectation, create_input_issues)
+    if len(successful_creates) == 1 and not create_input_issues:
         hard_issues.extend(persistence_issues)
     else:
         capability_issues.extend(persistence_issues)
