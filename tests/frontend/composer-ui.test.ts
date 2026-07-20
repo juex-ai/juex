@@ -124,6 +124,11 @@ test("blocked keyboard submissions preserve the composer draft", () => {
 test("disposed status subscriptions cannot clear a newer snapshot", () => {
   assert.match(
     sessionSource,
+    /onStatus: \(next\) => \{\s*if \(disposed\) return;\s*statusStore\.setStatus/,
+    "a queued frame from a closed status stream must not replace a newer snapshot",
+  );
+  assert.match(
+    sessionSource,
     /onError: \(event\) => \{\s*if \(disposed\) return;\s*statusStore\.clearStatus/,
     "an error from a closed status stream must not clear a replacement subscription",
   );
