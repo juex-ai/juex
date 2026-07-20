@@ -1,5 +1,4 @@
 import type { MessageGroup } from "./display-units";
-import type { ToolProcessStatus } from "./tool-display";
 
 const MESSAGE_RESPONSE_CLASS_NAME =
   "juex-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_code]:font-mono [&_p]:whitespace-pre-wrap [&_pre]:rounded-md";
@@ -112,12 +111,6 @@ export function processDisclosureChevronClassName(nested = false) {
   return nested
     ? PROCESS_DISCLOSURE_NESTED_CHEVRON_CLASS_NAME
     : PROCESS_DISCLOSURE_CHEVRON_CLASS_NAME;
-}
-
-export function processDisclosureDefaultOpen(
-  status: ToolProcessStatus,
-) {
-  return status === "running" || status === "failed";
 }
 
 export function processDisclosureBodyClassName() {

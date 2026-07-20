@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   externalEventBodyClassName,
@@ -11,12 +12,16 @@ import {
   messageResponseClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
-  processDisclosureDefaultOpen,
   processDisclosureSummaryClassName,
   processStatusDotClassName,
   thinkingDisclosureBodyClassName,
   thinkingDisclosureSummaryClassName,
 } from "../../frontend/src/lib/message-rendering.ts";
+
+const sessionSource = readFileSync(
+  new URL("../../frontend/src/pages/Session.tsx", import.meta.url),
+  "utf8",
+);
 
 test("messageResponseClassName preserves explicit paragraph newlines", () => {
   assert.match(messageResponseClassName(), /\[&_p\]:whitespace-pre-wrap/);
@@ -217,10 +222,24 @@ test("nested process disclosures only rotate their own chevrons", () => {
   assert.doesNotMatch(nestedChevron, /group-open\/process-row:rotate-90/);
 });
 
-test("active and failed process disclosures default open", () => {
-  assert.equal(processDisclosureDefaultOpen("running"), true);
-  assert.equal(processDisclosureDefaultOpen("failed"), true);
-  assert.equal(processDisclosureDefaultOpen("done"), false);
+test("all process disclosures start closed and only follow user toggles", () => {
+  const start = sessionSource.indexOf("function ProcessDisclosure(");
+  assert.notEqual(start, -1);
+  const nextDeclaration = sessionSource
+    .slice(start + 1)
+    .search(/\n(?:export )?function /);
+  assert.notEqual(nextDeclaration, -1);
+  const end = start + 1 + nextDeclaration;
+  const disclosure = sessionSource.slice(start, end);
+
+  assert.match(disclosure, /const \[isOpen, setIsOpen\] = useState\(false\)/);
+  assert.match(disclosure, /open=\{isOpen\}/);
+  assert.match(
+    disclosure,
+    /onToggle=\{\(event\) => setIsOpen\(event\.currentTarget\.open\)\}/,
+  );
+  assert.doesNotMatch(disclosure, /useEffect/);
+  assert.doesNotMatch(disclosure, /setIsOpen\([^)]*status/);
 });
 
 test("process status dots are smaller while thinking has no dot contract", () => {
