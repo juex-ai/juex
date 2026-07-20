@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -70,6 +71,82 @@ func TestSessionStatusSnapshotPreservesProviderStreamingOnRefresh(t *testing.T) 
 		!snapshot.Turn.Streaming ||
 		!snapshot.Session.CanAcceptInput {
 		t.Fatalf("status = %+v", snapshot)
+	}
+}
+
+func TestStatusRoutesExposePublicDTOOnly(t *testing.T) {
+	srv := newTestServer(t)
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	as.app.Status = juexruntime.NewStatusStoreFromSnapshot(juexruntime.StatusSnapshot{
+		Session: juexruntime.SessionRuntimeStatus{
+			ID:               as.app.Session.ID,
+			State:            juexruntime.SessionRuntimeTurnActive,
+			MaxPendingInputs: 4,
+			CanAcceptInput:   true,
+		},
+		Turn: &juexruntime.TurnRuntimeStatus{
+			ID:           "turn-one",
+			State:        juexruntime.TurnLifecycleActive,
+			Phase:        juexruntime.TurnPhaseCompacting,
+			ResumeState:  juexruntime.TurnLifecycleActive,
+			ResumePhase:  juexruntime.TurnPhaseToolBatch,
+			CanInterrupt: true,
+			StartedAt:    now,
+			UpdatedAt:    now,
+		},
+		Tools: []juexruntime.ToolCallStatus{},
+	})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	for _, path := range []string{
+		"/api/sessions/" + as.app.Session.ID + "/status",
+		"/api/status",
+	} {
+		response, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("%s status = %d body=%s", path, response.StatusCode, body)
+		}
+		if strings.Contains(string(body), "resume_state") ||
+			strings.Contains(string(body), "resume_phase") {
+			t.Fatalf("%s leaked recovery bookkeeping: %s", path, body)
+		}
+		if !strings.Contains(string(body), `"working": true`) {
+			t.Fatalf("%s omitted computed working: %s", path, body)
+		}
+		if path == "/api/status" {
+			var activity map[string]json.RawMessage
+			if err := json.Unmarshal(body, &activity); err != nil {
+				t.Fatal(err)
+			}
+			for _, required := range []string{"state", "pending_input_count", "selected_status"} {
+				if _, ok := activity[required]; !ok {
+					t.Fatalf("%s omitted %q: %s", path, required, body)
+				}
+			}
+			for _, forbidden := range []string{
+				"session_id",
+				"session_alias",
+				"pending_count",
+				"status",
+			} {
+				if _, ok := activity[forbidden]; ok {
+					t.Fatalf("%s leaked compatibility field %q: %s", path, forbidden, body)
+				}
+			}
+		}
 	}
 }
 

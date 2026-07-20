@@ -105,10 +105,8 @@ function sameActivity(
 ): boolean {
   return (
     current?.state === next.state &&
-    current?.session_id === next.session_id &&
-    current?.session_alias === next.session_alias &&
-    current?.pending_count === next.pending_count &&
-    sameStatus(current?.status, next.status)
+    current?.pending_input_count === next.pending_input_count &&
+    sameStatus(current?.selected_status, next.selected_status)
   );
 }
 
@@ -119,19 +117,4 @@ function sameStatus(
   if (current === next) return true;
   if (!current || !next) return false;
   return JSON.stringify(current) === JSON.stringify(next);
-}
-
-export function activityFromStatus(
-  status: AgentRuntimeStatusSnapshot,
-): AgentActivity {
-  const working =
-    status.session.state === "turn_active" ||
-    status.session.state === "draining_pending";
-  return {
-    state: working ? "working" : "idle",
-    session_id: status.session.id,
-    session_alias: status.session.alias,
-    pending_count: status.session.pending_count,
-    status,
-  };
 }

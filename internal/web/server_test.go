@@ -20,6 +20,7 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -334,6 +335,67 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	cancel()
 	if _, err := os.Stat(filepath.Join(srv.opts.Cfg.AgentStateDir, "runtime.json")); !os.IsNotExist(err) {
 		t.Fatalf("runtime.json remains after shutdown: %v", err)
+	}
+}
+
+func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T) {
+	provider := &blockingProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	srv := newTestServer(t)
+	srv.opts.Provider = provider
+	as, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.APIHandler())
+	defer ts.Close()
+	expected := endpoint.Runtime{
+		AgentID:    "abcdefghijklmnop",
+		InstanceID: "instance-one",
+		PID:        42,
+		Endpoint:   "tcp://" + strings.TrimPrefix(ts.URL, "http://"),
+		StartedAt:  time.Now().UTC(),
+	}
+	shutdown := srv.setEndpointControl(expected)
+	defer srv.clearEndpointControl(expected)
+
+	response, err := http.Post(
+		ts.URL+"/api/sessions/"+as.app.Session.ID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"work until restart"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	select {
+	case <-provider.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	acknowledged, err := endpoint.RequestRestart(context.Background(), expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !acknowledged {
+		t.Fatal("restart intent was not acknowledged")
+	}
+	select {
+	case <-shutdown:
+	case <-time.After(time.Second):
+		t.Fatal("restart did not request shutdown")
+	}
+	as.turns.wait()
+
+	snapshot := as.app.Status.Snapshot()
+	if snapshot.Turn == nil ||
+		snapshot.Turn.State != runtime.TurnLifecycleCancelled ||
+		snapshot.Turn.Error == nil ||
+		snapshot.Turn.Error.Kind != runtime.StatusErrorRuntimeRestart {
+		t.Fatalf("restart status = %+v", snapshot)
 	}
 }
 

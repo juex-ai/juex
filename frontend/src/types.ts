@@ -240,7 +240,18 @@ export type RuntimeSessionState =
 
 export interface RuntimeStatusError {
   message: string;
-  kind?: string;
+  kind?:
+    | "error"
+    | "timeout"
+    | "cancelled"
+    | "interrupted"
+    | "terminated"
+    | "permission"
+    | "auth"
+    | "pending_input_full"
+    | "compaction"
+    | "runtime_restart"
+    | (string & {});
   timed_out?: boolean;
   cancelled?: boolean;
 }
@@ -260,8 +271,6 @@ export interface RuntimeTurnStatus {
   phase: RuntimeTurnPhase;
   streaming: boolean;
   can_interrupt?: boolean;
-  resume_state?: RuntimeTurnLifecycleState;
-  resume_phase?: RuntimeTurnPhase;
   started_at: string;
   updated_at: string;
   error?: RuntimeStatusError;
@@ -271,6 +280,7 @@ export interface RuntimeSessionStatus {
   id: string;
   alias?: string;
   state: RuntimeSessionState;
+  working: boolean;
   pending_count: number;
   max_pending_inputs: number;
   can_accept_input: boolean;
@@ -1023,10 +1033,8 @@ export type AgentRuntimeHealth =
 
 export interface AgentActivity {
   state: "idle" | "working";
-  session_id?: string;
-  session_alias?: string;
-  pending_count: number;
-  status?: AgentRuntimeStatusSnapshot;
+  pending_input_count: number;
+  selected_status?: AgentRuntimeStatusSnapshot;
 }
 
 export interface FleetAgentStatusEvent {

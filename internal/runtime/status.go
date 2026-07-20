@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +52,36 @@ const (
 	SessionRuntimeFailed          SessionRuntimeState = "failed"
 )
 
+func (state SessionRuntimeState) IsWorking() bool {
+	return state == SessionRuntimeTurnActive ||
+		state == SessionRuntimeDrainingPending
+}
+
+type StatusErrorKind string
+
+const (
+	StatusErrorError            StatusErrorKind = "error"
+	StatusErrorTimeout          StatusErrorKind = "timeout"
+	StatusErrorCancelled        StatusErrorKind = "cancelled"
+	StatusErrorInterrupted      StatusErrorKind = "interrupted"
+	StatusErrorTerminated       StatusErrorKind = "terminated"
+	StatusErrorPermission       StatusErrorKind = "permission"
+	StatusErrorAuth             StatusErrorKind = "auth"
+	StatusErrorPendingInputFull StatusErrorKind = "pending_input_full"
+	StatusErrorCompaction       StatusErrorKind = "compaction"
+	StatusErrorRuntimeRestart   StatusErrorKind = "runtime_restart"
+)
+
+func (kind StatusErrorKind) IsCancellation() bool {
+	switch kind {
+	case StatusErrorCancelled, StatusErrorInterrupted, StatusErrorTerminated,
+		StatusErrorRuntimeRestart:
+		return true
+	default:
+		return false
+	}
+}
+
 type StatusSeed struct {
 	SessionID        string
 	SessionAlias     string
@@ -71,10 +100,10 @@ type SessionRuntimeStatus struct {
 }
 
 type StatusError struct {
-	Message   string `json:"message"`
-	Kind      string `json:"kind,omitempty"`
-	TimedOut  bool   `json:"timed_out,omitempty"`
-	Cancelled bool   `json:"cancelled,omitempty"`
+	Message   string          `json:"message"`
+	Kind      StatusErrorKind `json:"kind,omitempty"`
+	TimedOut  bool            `json:"timed_out,omitempty"`
+	Cancelled bool            `json:"cancelled,omitempty"`
 }
 
 type TurnRuntimeStatus struct {
@@ -201,7 +230,7 @@ func (s *StatusStore) RecoverAfterRestart() {
 	}
 	statusErr := &StatusError{
 		Message:   "turn interrupted by runtime restart",
-		Kind:      "runtime_restart",
+		Kind:      StatusErrorRuntimeRestart,
 		Cancelled: true,
 	}
 	s.snapshot.Turn.State = TurnLifecycleCancelled
@@ -358,7 +387,11 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		upsertToolStatus(&next, event, payload.ToolUseID, payload.Name, ToolCallCompleted, nil)
 	case toolevents.ErroredType:
 		payload := payloadAs[toolevents.ErroredPayload](event.Payload)
-		statusErr := &StatusError{Message: payload.Error, Kind: payload.ErrorKind, TimedOut: payload.TimedOut}
+		statusErr := &StatusError{
+			Message:  payload.Error,
+			Kind:     StatusErrorKind(payload.ErrorKind),
+			TimedOut: payload.TimedOut,
+		}
 		upsertToolStatus(&next, event, payload.ToolUseID, payload.Name, ToolCallErrored, statusErr)
 	case "pending_input.queued":
 		payload := payloadAs[PendingInputQueuedPayload](event.Payload)
@@ -394,7 +427,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 	case "pending_input.rejected":
 		payload := payloadAs[PendingInputRejectedPayload](event.Payload)
 		setPendingStatus(&next, payload.PendingCount, payload.MaxPendingInputs)
-		next.LastError = &StatusError{Message: payload.Reason, Kind: "pending_input_full"}
+		next.LastError = &StatusError{Message: payload.Reason, Kind: StatusErrorPendingInputFull}
 	case "context.compact.started":
 		payload := payloadAs[ContextCompactStartedPayload](event.Payload)
 		resumable := next.Turn != nil &&
@@ -424,7 +457,7 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		completeCompactionStatus(&next, nil)
 	case "context.compact.errored":
 		payload := payloadAs[ContextCompactErroredPayload](event.Payload)
-		completeCompactionStatus(&next, &StatusError{Message: payload.Error, Kind: "compaction"})
+		completeCompactionStatus(&next, &StatusError{Message: payload.Error, Kind: StatusErrorCompaction})
 	case "turn.completed":
 		payload := payloadAs[TurnCompletedPayload](event.Payload)
 		if !payload.TokenUsage.IsZero() {
@@ -440,10 +473,12 @@ func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
 		next.pendingDrainActive = false
 	case "turn.errored":
 		payload := payloadAs[TurnErroredPayload](event.Payload)
-		cancelled := payload.Interrupted || isCancellationKind(payload.ErrorKind)
+		errorKind := StatusErrorKind(payload.ErrorKind)
+		cancelled := errorKind.IsCancellation() ||
+			(errorKind == "" && payload.Interrupted)
 		statusErr := &StatusError{
 			Message:   payload.Error,
-			Kind:      payload.ErrorKind,
+			Kind:      errorKind,
 			TimedOut:  payload.TimedOut,
 			Cancelled: cancelled,
 		}
@@ -630,15 +665,6 @@ func recomputeCanAcceptInput(snapshot *StatusSnapshot) {
 		snapshot.Session.MaxPendingInputs = maxPending
 	}
 	snapshot.Session.CanAcceptInput = snapshot.Session.PendingCount < maxPending
-}
-
-func isCancellationKind(kind string) bool {
-	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "cancelled", "canceled", "interrupted", "terminated":
-		return true
-	default:
-		return false
-	}
 }
 
 func publishLatestStatus(channel chan StatusSnapshot, snapshot StatusSnapshot) {

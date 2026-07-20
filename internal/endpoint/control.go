@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,6 +35,20 @@ type HTTPStatusError struct {
 	Path       string
 	StatusCode int
 	Body       string
+}
+
+type ShutdownReason string
+
+const ShutdownReasonRuntimeRestart ShutdownReason = "runtime_restart"
+
+type ShutdownRequest struct {
+	Runtime
+	Reason ShutdownReason `json:"reason,omitempty"`
+}
+
+type ShutdownResponse struct {
+	Status        string         `json:"status"`
+	RestartIntent ShutdownReason `json:"restart_intent,omitempty"`
 }
 
 func (e *HTTPStatusError) Error() string {
@@ -71,13 +86,32 @@ func Probe(ctx context.Context, expected Runtime) error {
 }
 
 func RequestShutdown(ctx context.Context, expected Runtime) error {
+	_, err := requestShutdown(ctx, ShutdownRequest{Runtime: expected})
+	return err
+}
+
+// RequestRestart sends an explicit restart intent through the identity-bound
+// shutdown endpoint and reports whether the running agent acknowledged it.
+func RequestRestart(ctx context.Context, expected Runtime) (bool, error) {
+	response, err := requestShutdown(ctx, ShutdownRequest{
+		Runtime: expected,
+		Reason:  ShutdownReasonRuntimeRestart,
+	})
+	if err != nil {
+		return false, err
+	}
+	return response.RestartIntent == ShutdownReasonRuntimeRestart, nil
+}
+
+func requestShutdown(ctx context.Context, shutdown ShutdownRequest) (ShutdownResponse, error) {
+	expected := shutdown.Runtime
 	target, err := Parse(expected.Endpoint)
 	if err != nil {
-		return fmt.Errorf("endpoint: parse runtime endpoint: %w", err)
+		return ShutdownResponse{}, fmt.Errorf("endpoint: parse runtime endpoint: %w", err)
 	}
-	body, err := json.Marshal(expected)
+	body, err := json.Marshal(shutdown)
 	if err != nil {
-		return fmt.Errorf("endpoint: encode shutdown identity: %w", err)
+		return ShutdownResponse{}, fmt.Errorf("endpoint: encode shutdown identity: %w", err)
 	}
 	request, err := http.NewRequestWithContext(
 		ctx,
@@ -86,18 +120,23 @@ func RequestShutdown(ctx context.Context, expected Runtime) error {
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return fmt.Errorf("endpoint: build shutdown request: %w", err)
+		return ShutdownResponse{}, fmt.Errorf("endpoint: build shutdown request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := target.NewClient().Do(request)
 	if err != nil {
-		return fmt.Errorf("endpoint: request runtime shutdown: %w", err)
+		return ShutdownResponse{}, fmt.Errorf("endpoint: request runtime shutdown: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
-		return responseStatusError(response, http.MethodPost, shutdownPath)
+		return ShutdownResponse{}, responseStatusError(response, http.MethodPost, shutdownPath)
 	}
-	return nil
+	var result ShutdownResponse
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&result); err != nil &&
+		!errors.Is(err, io.EOF) {
+		return ShutdownResponse{}, fmt.Errorf("endpoint: decode shutdown response: %w", err)
+	}
+	return result, nil
 }
 
 func responseStatusError(response *http.Response, method, path string) error {

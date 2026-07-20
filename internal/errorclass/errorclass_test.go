@@ -92,6 +92,16 @@ func TestClassifySignalCancellation(t *testing.T) {
 	}
 }
 
+func TestClassifyRuntimeRestart(t *testing.T) {
+	got := Classify(cancellation.ErrRuntimeRestart)
+	if got.Kind != KindRuntimeRestart || got.TimedOut {
+		t.Fatalf("classification = %+v", got)
+	}
+	if message := PublicMessage(cancellation.ErrRuntimeRestart, MessageOptions{}); message != "turn interrupted by runtime restart" {
+		t.Fatalf("public message = %q", message)
+	}
+}
+
 func TestClassifyPermissionAndAuth(t *testing.T) {
 	tests := []struct {
 		name string

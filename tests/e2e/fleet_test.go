@@ -833,8 +833,9 @@ func waitFleetInterruptedAndContinuationEvents(
 		text := string(body)
 		if strings.Contains(text, `"type":"turn.errored"`) &&
 			strings.Contains(text, `"turn_id":"`+originalTurnID+`"`) &&
-			strings.Contains(text, `"error_kind":"cancelled"`) &&
+			strings.Contains(text, `"error_kind":"runtime_restart"`) &&
 			strings.Count(text, `"type":"turn.started"`) >= 2 &&
+			strings.Contains(text, `"kind":"system_notice"`) &&
 			strings.Contains(text, `"type":"turn.completed"`) {
 			return
 		}

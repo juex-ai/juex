@@ -11,7 +11,8 @@ import (
 	"strings"
 
 	"github.com/juex-ai/juex/internal/endpoint"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 const (
@@ -43,33 +44,32 @@ func readRestartActivity(ctx context.Context, state endpoint.Runtime) (restartAc
 		return restartActivity{}, restartHTTPStatusError(response, http.MethodGet, restartActivityPath)
 	}
 
-	var body struct {
-		SessionID string `json:"session_id"`
-		Status    *struct {
-			Session runtime.SessionRuntimeStatus `json:"session"`
-			Turn    *runtime.TurnRuntimeStatus   `json:"turn"`
-		} `json:"status"`
-	}
+	var body statusapi.AgentActivity
 	if err := decodeRestartResponse(response.Body, &body); err != nil {
 		return restartActivity{}, fmt.Errorf("decode restart activity: %w", err)
 	}
-	if body.Status == nil {
+	if body.State != statusapi.ActivityIdle && body.State != statusapi.ActivityWorking {
+		return restartActivity{}, fmt.Errorf("decode restart activity: unsupported state %q", body.State)
+	}
+	if body.SelectedStatus == nil {
+		if body.State == statusapi.ActivityWorking {
+			return restartActivity{}, fmt.Errorf("active restart activity omitted selected status")
+		}
 		return restartActivity{}, nil
 	}
-	sessionID := strings.TrimSpace(body.Status.Session.ID)
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(body.SessionID)
-	}
+	sessionID := strings.TrimSpace(body.SelectedStatus.Session.ID)
 	activity := restartActivity{
 		SessionID: sessionID,
-		State:     body.Status.Session.State,
+		State:     body.State,
 	}
-	if body.Status.Turn != nil {
-		activity.TurnID = strings.TrimSpace(body.Status.Turn.ID)
-		activity.TurnState = body.Status.Turn.State
+	if body.SelectedStatus.Turn != nil {
+		activity.TurnID = strings.TrimSpace(body.SelectedStatus.Turn.ID)
+		activity.TurnState = body.SelectedStatus.Turn.State
+		if body.SelectedStatus.Turn.Error != nil {
+			activity.TurnErrorKind = body.SelectedStatus.Turn.Error.Kind
+		}
 	}
-	if activity.State == runtime.SessionRuntimeTurnActive ||
-		activity.State == runtime.SessionRuntimeDrainingPending {
+	if activity.State == statusapi.ActivityWorking {
 		if activity.SessionID == "" {
 			return restartActivity{}, fmt.Errorf("active restart activity omitted session id")
 		}
@@ -92,7 +92,11 @@ func postRestartResume(
 	}
 	body, err := json.Marshal(struct {
 		Prompt string `json:"prompt"`
-	}{Prompt: prompt})
+		Kind   string `json:"kind"`
+	}{
+		Prompt: prompt,
+		Kind:   llm.MessageKindSystemNotice,
+	})
 	if err != nil {
 		return "", fmt.Errorf("encode restart continuation: %w", err)
 	}

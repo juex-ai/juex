@@ -18,6 +18,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/usermedia"
 )
 
@@ -456,6 +457,7 @@ func (s *Server) sessionInfo(id string) (session.Info, error) {
 // turnRequest is the wire shape for POST /turns.
 type turnRequest struct {
 	Prompt      string         `json:"prompt"`
+	Kind        string         `json:"kind,omitempty"`
 	Attachments []llm.MediaRef `json:"attachments,omitempty"`
 }
 
@@ -498,9 +500,18 @@ func (s *Server) handleStartTurn(w http.ResponseWriter, r *http.Request, id stri
 		writeErr(w, http.StatusBadRequest, "bad_request", "expected JSON body with non-empty prompt or attachments")
 		return
 	}
+	if req.Kind != "" && req.Kind != llm.MessageKindSystemNotice {
+		writeErr(w, http.StatusBadRequest, "bad_request", "unsupported turn kind")
+		return
+	}
+	if req.Kind == llm.MessageKindSystemNotice && len(req.Attachments) > 0 {
+		writeErr(w, http.StatusBadRequest, "bad_request", "system notices cannot include attachments")
+		return
+	}
 
 	result := as.app.AdmitTurn(r.Context(), app.TurnAdmissionRequest{
 		Prompt:      req.Prompt,
+		Kind:        req.Kind,
 		Attachments: req.Attachments,
 		IDs:         app.TurnIDFunc(s.nextTurnID),
 	})
@@ -717,7 +728,7 @@ func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request, id 
 		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 		return
 	}
-	writeJSON(w, http.StatusOK, status)
+	writeJSON(w, http.StatusOK, statusapi.FromRuntime(status))
 }
 
 func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Request, id string) {
@@ -740,7 +751,7 @@ func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Reques
 		if snapshot.Session.ID != id {
 			return
 		}
-		if err := writeStatusSSE(w, snapshot); err != nil {
+		if err := writeStatusSSE(w, statusapi.FromRuntime(snapshot)); err != nil {
 			return
 		}
 	}
@@ -757,7 +768,7 @@ func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Reques
 			if snapshot.Session.ID != id {
 				return
 			}
-			if err := writeStatusSSE(w, snapshot); err != nil {
+			if err := writeStatusSSE(w, statusapi.FromRuntime(snapshot)); err != nil {
 				return
 			}
 		case <-r.Context().Done():

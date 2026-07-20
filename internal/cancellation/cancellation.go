@@ -9,7 +9,10 @@ import (
 	"sync"
 )
 
-var ErrUserCancelled = errors.New("cancelled by user")
+var (
+	ErrUserCancelled  = errors.New("cancelled by user")
+	ErrRuntimeRestart = errors.New("turn interrupted by runtime restart")
+)
 
 type SignalKind string
 
@@ -99,6 +102,9 @@ func ContextError(ctx context.Context) error {
 	}
 	if signalErr, ok := AsSignalError(context.Cause(ctx)); ok {
 		return signalErr
+	}
+	if errors.Is(context.Cause(ctx), ErrRuntimeRestart) {
+		return ErrRuntimeRestart
 	}
 	return err
 }

@@ -139,6 +139,23 @@ func TestSessionAppendBatchPersistsAdjacentMessages(t *testing.T) {
 	}
 }
 
+func TestSystemNoticeRetainsUserTurnSummarySemantics(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	notice := llm.TextMessage(llm.RoleUser, "continue after restart")
+	notice.Kind = llm.MessageKindSystemNotice
+	if err := s.Append(notice); err != nil {
+		t.Fatal(err)
+	}
+	if s.transcript.turns != 1 || s.transcript.preview != "continue after restart" {
+		t.Fatalf("summary = turns %d preview %q", s.transcript.turns, s.transcript.preview)
+	}
+}
+
 func TestSessionAppendBatchRollsBackWhenSecondMessageCannotMarshal(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

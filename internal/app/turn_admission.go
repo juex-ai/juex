@@ -31,6 +31,7 @@ func (f TurnIDFunc) NextTurnID(prefix string) string { return f(prefix) }
 
 type TurnAdmissionRequest struct {
 	Prompt      string
+	Kind        string
 	Attachments []llm.MediaRef
 	IDs         TurnIDAllocator
 }
@@ -98,6 +99,15 @@ func (a *App) AdmitTurn(ctx context.Context, req TurnAdmissionRequest) TurnAdmis
 	if req.IDs == nil {
 		return errorResult(fmt.Errorf("turn admission: missing turn id allocator"), nil)
 	}
+	if req.Kind != "" && req.Kind != llm.MessageKindSystemNotice {
+		return rejectedResult("bad_request", "unsupported turn kind", "", false, nil, runtime.PendingInputStatus{})
+	}
+	if req.Kind == llm.MessageKindSystemNotice {
+		if len(req.Attachments) > 0 {
+			return rejectedResult("bad_request", "system notices cannot include attachments", "", false, nil, runtime.PendingInputStatus{})
+		}
+		return a.admitUserTurn(ctx, userTurnMessageWithKind(req.Prompt, nil, req.Kind), req.IDs)
+	}
 
 	if len(req.Attachments) > 0 {
 		if _, handled, err := ParseSlashCommand(req.Prompt); handled || err != nil {
@@ -156,6 +166,10 @@ func (a *App) admitSlashTurn(ctx context.Context, cmd SlashCommand, ids TurnIDAl
 }
 
 func userTurnMessage(prompt string, attachments []llm.MediaRef) llm.Message {
+	return userTurnMessageWithKind(prompt, attachments, "")
+}
+
+func userTurnMessageWithKind(prompt string, attachments []llm.MediaRef, kind string) llm.Message {
 	blocks := make([]llm.Block, 0, 1+len(attachments))
 	if prompt = strings.TrimSpace(prompt); prompt != "" {
 		blocks = append(blocks, llm.Block{Type: llm.BlockText, Text: prompt})
@@ -163,7 +177,7 @@ func userTurnMessage(prompt string, attachments []llm.MediaRef) llm.Message {
 	for i := range attachments {
 		blocks = append(blocks, llm.Block{Type: llm.BlockImage, Media: &attachments[i]})
 	}
-	return llm.Message{Role: llm.RoleUser, Blocks: blocks}
+	return llm.Message{Role: llm.RoleUser, Kind: kind, Blocks: blocks}
 }
 
 func (a *App) admitNewSlash(ctx context.Context, cmd SlashCommand, ids TurnIDAllocator) TurnAdmissionResult {

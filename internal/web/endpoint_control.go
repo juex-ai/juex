@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/endpoint"
 )
 
@@ -53,9 +54,13 @@ func (s *Server) handleEndpointShutdown(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
 		return
 	}
-	var expected endpoint.Runtime
-	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&expected); err != nil {
+	var request endpoint.ShutdownRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&request); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad_request", "invalid runtime identity")
+		return
+	}
+	if request.Reason != "" && request.Reason != endpoint.ShutdownReasonRuntimeRestart {
+		writeErr(w, http.StatusBadRequest, "bad_request", "unsupported shutdown reason")
 		return
 	}
 	actual, shutdown, ok := s.endpointControl()
@@ -63,11 +68,22 @@ func (s *Server) handleEndpointShutdown(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusServiceUnavailable, "endpoint_unavailable", "agent endpoint is not running")
 		return
 	}
-	if !actual.Matches(expected) {
+	if !actual.Matches(request.Runtime) {
 		writeErr(w, http.StatusConflict, "identity_mismatch", "runtime identity does not match")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+	response := endpoint.ShutdownResponse{Status: "stopping"}
+	if request.Reason == endpoint.ShutdownReasonRuntimeRestart {
+		s.sessions.Range(func(_, value any) bool {
+			active, _ := value.(*activeSession)
+			if active != nil && active.turns != nil {
+				active.turns.interruptWithCause(cancellation.ErrRuntimeRestart)
+			}
+			return true
+		})
+		response.RestartIntent = endpoint.ShutdownReasonRuntimeRestart
+	}
+	writeJSON(w, http.StatusAccepted, response)
 	select {
 	case shutdown <- struct{}{}:
 	default:

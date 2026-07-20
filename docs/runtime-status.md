@@ -171,16 +171,34 @@ count. Restart recovery resets the projected count to the new process's empty
 in-memory queue; durable pending records remain available for restoration and
 draining by that next turn.
 
-## Layer 4: Agent ViewModel
+## Layer 4: Agent Status Read Model
 
 The backend snapshot contains:
 
 - durable cursor and update timestamp;
-- session id, alias, state, pending count, queue capacity, and
-  `can_accept_input`;
+- session id, alias, state, backend-computed `working`, pending count, queue
+  capacity, and `can_accept_input`;
 - active turn state and phase;
 - tool calls paired by `tool_use_id`;
 - token/context usage and the latest presentation error.
+
+`internal/statusapi` is the Layer 4 transport boundary. Session snapshot and
+SSE routes plus agent snapshot and SSE routes all map the internal runtime
+projection into this explicit DTO. Compaction recovery bookkeeping
+(`resume_state` and `resume_phase`) stays inside the runtime projection and is
+never serialized by those routes.
+
+`working` means exactly `turn_active || draining_pending`. Runtime owns that
+predicate and every current producer emits it as a required boolean. Contract
+consumers read the aggregate state or this field; they never infer working from
+session state strings.
+
+Agent activity has two pending-count scopes. Top-level
+`pending_input_count` is the sum across all working sessions. Nested
+`selected_status.session.pending_count` belongs only to the selected session.
+`selected_status` is the newest working session, or the newest session when no
+session is working. It is absent when the agent has no session. There are no
+top-level session identity mirrors or fallback fields.
 
 The frontend owns one external `AgentViewModelStore`. Fleet rows, the active
 session composer, in-progress indicators, and status labels subscribe to this
@@ -194,7 +212,7 @@ Composer failures prefer the authoritative runtime `last_error`; when a request
 fails before runtime can publish one, the local submission error remains the
 presentation fallback.
 
-## Layer 5: Fleet Presentation
+## Layer 5: Fleet Control And Presentation
 
 `GET /api/agents` remains the process-health and roster snapshot. Each healthy
 agent activity item carries its runtime-status cursor and snapshot fields.
@@ -217,6 +235,28 @@ session has been opened or status fact has been published.
 The browser applies each `agent.status` event to the same
 `AgentViewModelStore` used by the active session.
 
+Fleet also consumes the Layer 4 contract for restart control. Before a
+graceful restart it records the selected working session and turn, then sends
+an identity-bound shutdown request with `reason=runtime_restart`. A current
+agent acknowledges the intent, cancels the active turn with that typed cause,
+and persists a cancelled turn whose error kind is `runtime_restart`. Fleet
+submits a continuation only when the replacement projects the same session and
+turn with both that terminal state and strong error kind.
+
+An unacknowledged restart intent is insufficient evidence and Fleet reports
+that it skipped continuation. There is no weak same-session/same-turn
+cancellation fallback. Ordinary `Stop` sends no restart intent and never
+submits a continuation.
+
+Restart continuation uses the ordinary turn admission route with
+`kind=system_notice`. The App and HTTP layers accept only that non-empty
+external kind, reject attachments, and reject internal kinds such as
+`runtime_context`, `compact`, `model_fallback`, `observation`, and `mcp_event`.
+The notice remains a provider-visible user-role turn, including normal hooks,
+compaction, queueing, transcript turn count, and preview behavior. The browser
+labels it `Automated notice`; the label does not imply a stronger trust level
+than the deployment's normal endpoint access controls.
+
 ## Recovery And Compatibility
 
 - A page refresh reads the current in-process snapshot before subscribing, so
@@ -228,6 +268,9 @@ The browser applies each `agent.status` event to the same
   nonterminal turn from an unclean process exit is recovered as cancelled
   presentation state rather than shown as still working, and its nonterminal
   tool-call projection is cleared.
+- A Fleet-controlled graceful restart uses the acknowledged `runtime_restart`
+  cause described above. A user cancellation remains `cancelled` and is not
+  sufficient evidence for current-agent restart continuation.
 - A post-compact hook failure remains observational after the compact message
   is committed. Command hook failures remain visible as `hook.errored`, while
   the runtime publishes only `context.compact.completed` for the committed
@@ -245,6 +288,8 @@ The browser applies each `agent.status` event to the same
 - A legacy journal fixture projects without new event families.
 - Web tests cover refresh during compaction and provider streaming.
 - Fleet tests cover immediate working projection from aggregate push.
+- Fleet restart tests distinguish acknowledged restart intent, user
+  cancellation, and missing acknowledgement.
 - Frontend tests cover queueing during pending-input processing and queue-full
   rejection.
 - Runtime and compaction changes run the compaction evaluation.

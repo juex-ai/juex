@@ -359,8 +359,8 @@ export function Session() {
   const runtimeStatus =
     agent && statusStore
       ? statusStore.status(agent.id, id) ??
-        (agent.activity?.status?.session.id === id
-          ? agent.activity.status
+        (agent.activity?.selected_status?.session.id === id
+          ? agent.activity.selected_status
           : undefined)
       : undefined;
   const tailActive = assistantWorkTailActive({
@@ -1246,6 +1246,8 @@ function MessageGroupView({
   const isHookEvent = group.kind === "hook_event";
   const isModelFallback =
     group.role === "user" && group.kind === "model_fallback";
+  const isSystemNotice =
+    group.role === "user" && group.kind === "system_notice";
   const isCompact = group.kind === "compact";
   const isPendingCompact = group.kind === LOCAL_COMPACT_PENDING_KIND;
   const copyText = messageGroupCopyText(group);
@@ -1266,6 +1268,10 @@ function MessageGroupView({
 
   if (isModelFallback) {
     return <ModelFallbackGroup group={group} />;
+  }
+
+  if (isSystemNotice) {
+    return <SystemNoticeGroup group={group} />;
   }
 
   if (isCompact) {
@@ -1684,6 +1690,29 @@ function HookEventGroup({ group }: { group: MessageGroup }) {
         title={text}
       >
         {text || "..."}
+      </div>
+    </div>
+  );
+}
+
+function SystemNoticeGroup({ group }: { group: MessageGroup }) {
+  const text = group.units
+    .filter((unit) => unit.kind === "text")
+    .map((unit) => (unit.kind === "text" ? unit.block.text : ""))
+    .filter(Boolean)
+    .join("\n");
+  if (!text && !group.pending) return null;
+  return (
+    <div
+      className="flex w-full justify-center px-2 py-0.5"
+      data-system-notice-message
+    >
+      <div className="w-full max-w-[min(42rem,100%)]">
+        <ProcessDisclosure status="done" title="Automated notice">
+          <MessageResponse className="break-words text-[13px] leading-6 text-muted-foreground">
+            {text || "..."}
+          </MessageResponse>
+        </ProcessDisclosure>
       </div>
     </div>
   );

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/juex-ai/juex/internal/app"
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -15,7 +16,7 @@ type webTurnTransport struct {
 	closed      bool
 
 	cancelMu   sync.Mutex
-	cancel     context.CancelFunc
+	cancel     context.CancelCauseFunc
 	activeTurn string
 	wg         sync.WaitGroup
 
@@ -53,9 +54,9 @@ func (t *webTurnTransport) start(turnID string, msg llm.Message) {
 		t.lifecycleMu.Unlock()
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 
-	var previousCancel context.CancelFunc
+	var previousCancel context.CancelCauseFunc
 	var previousTurnID string
 	t.cancelMu.Lock()
 	previousCancel = t.cancel
@@ -71,7 +72,7 @@ func (t *webTurnTransport) start(turnID string, msg llm.Message) {
 	t.wg.Add(1)
 	t.lifecycleMu.Unlock()
 	if previousCancel != nil {
-		previousCancel()
+		previousCancel(cancellation.ErrUserCancelled)
 		t.completeAdmission(previousTurnID)
 	}
 	go t.run(ctx, turnID, msg)
@@ -117,6 +118,10 @@ func (t *webTurnTransport) activeStatus() (string, webTurnStatus, bool) {
 }
 
 func (t *webTurnTransport) interrupt() bool {
+	return t.interruptWithCause(cancellation.ErrUserCancelled)
+}
+
+func (t *webTurnTransport) interruptWithCause(cause error) bool {
 	if t == nil {
 		return false
 	}
@@ -131,7 +136,7 @@ func (t *webTurnTransport) interrupt() bool {
 	if cancel == nil {
 		return false
 	}
-	cancel()
+	cancel(cause)
 	t.completeAdmission(turnID)
 	return true
 }
@@ -156,7 +161,7 @@ func (t *webTurnTransport) close() {
 	t.cancelMu.Unlock()
 	t.lifecycleMu.Unlock()
 	if cancel != nil {
-		cancel()
+		cancel(cancellation.ErrUserCancelled)
 	}
 	t.wg.Wait()
 }

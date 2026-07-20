@@ -11,7 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
-	"github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 const (
@@ -19,13 +19,7 @@ const (
 	maxAgentActivityBytes = 64 << 10
 )
 
-type agentActivity struct {
-	State        string                  `json:"state"`
-	SessionID    string                  `json:"session_id,omitempty"`
-	SessionAlias string                  `json:"session_alias,omitempty"`
-	PendingCount int                     `json:"pending_count"`
-	Status       *runtime.StatusSnapshot `json:"status,omitempty"`
-}
+type agentActivity = statusapi.AgentActivity
 
 type agentRosterItem struct {
 	fleet.AgentStatus

@@ -48,6 +48,9 @@ const (
 	// MessageKindModelFallback marks a provider-visible notice that explains a
 	// circuit-breaker-driven serving model change.
 	MessageKindModelFallback = "model_fallback"
+	// MessageKindSystemNotice marks an automated, provider-visible turn. It is
+	// still a user-role message and must not be presented as user-authored.
+	MessageKindSystemNotice = "system_notice"
 )
 
 type Block struct {

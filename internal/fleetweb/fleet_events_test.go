@@ -22,7 +22,7 @@ func TestFleetEventsPushesAgentStatusWithoutRosterPoll(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(`id: cursor-2
-data: {"type":"agent.status","activity":{"state":"working","session_id":"session-1","pending_count":0,"status":{"cursor":"cursor-2","session":{"id":"session-1","state":"turn_active","pending_count":0,"max_pending_inputs":16,"can_accept_input":true},"turn":{"id":"turn-1","state":"active","phase":"provider_iteration","streaming":true,"started_at":"2026-07-19T00:00:00Z","updated_at":"2026-07-19T00:00:01Z"},"tools":[],"token_usage":{"input_tokens":0,"output_tokens":0}}}}
+data: {"type":"agent.status","activity":{"state":"working","pending_input_count":0,"selected_status":{"cursor":"cursor-2","session":{"id":"session-1","state":"turn_active","working":true,"pending_count":0,"max_pending_inputs":16,"can_accept_input":true},"turn":{"id":"turn-1","state":"active","phase":"provider_iteration","streaming":true,"started_at":"2026-07-19T00:00:00Z","updated_at":"2026-07-19T00:00:01Z"},"tools":[],"token_usage":{"input_tokens":0,"output_tokens":0}}}}
 
 `))
 	}))
@@ -61,9 +61,9 @@ data: {"type":"agent.status","activity":{"state":"working","session_id":"session
 	if event.AgentID != "agent-1" || event.Activity == nil || event.Activity.State != "working" {
 		t.Fatalf("event = %+v", event)
 	}
-	if event.Activity.Status == nil || event.Activity.Status.Cursor != "cursor-2" ||
-		event.Activity.Status.Turn == nil || !event.Activity.Status.Turn.Streaming {
-		t.Fatalf("status = %+v", event.Activity.Status)
+	if event.Activity.SelectedStatus == nil || event.Activity.SelectedStatus.Cursor != "cursor-2" ||
+		event.Activity.SelectedStatus.Turn == nil || !event.Activity.SelectedStatus.Turn.Streaming {
+		t.Fatalf("status = %+v", event.Activity.SelectedStatus)
 	}
 }
 
@@ -77,7 +77,7 @@ func TestFleetEventsSharesOneUpstreamStreamAcrossBrowserClients(t *testing.T) {
 		upstreamConnections.Add(1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(`id: cursor-1
-data: {"type":"agent.status","activity":{"state":"idle","session_id":"session-1","pending_count":0,"status":{"cursor":"cursor-1","session":{"id":"session-1","state":"idle","pending_count":0,"max_pending_inputs":16,"can_accept_input":true},"tools":[],"token_usage":{"input_tokens":0,"output_tokens":0}}}}
+data: {"type":"agent.status","activity":{"state":"idle","pending_input_count":0,"selected_status":{"cursor":"cursor-1","session":{"id":"session-1","state":"idle","working":false,"pending_count":0,"max_pending_inputs":16,"can_accept_input":true},"tools":[],"token_usage":{"input_tokens":0,"output_tokens":0}}}}
 
 `))
 		w.(http.Flusher).Flush()

@@ -16,6 +16,78 @@ import (
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
+func TestSessionRuntimeStateIsWorking(t *testing.T) {
+	tests := []struct {
+		state SessionRuntimeState
+		want  bool
+	}{
+		{state: SessionRuntimeIdle, want: false},
+		{state: SessionRuntimeTurnActive, want: true},
+		{state: SessionRuntimeDrainingPending, want: true},
+		{state: SessionRuntimeFailed, want: false},
+		{state: SessionRuntimeState("future"), want: false},
+	}
+	for _, test := range tests {
+		t.Run(string(test.state), func(t *testing.T) {
+			if got := test.state.IsWorking(); got != test.want {
+				t.Fatalf("IsWorking() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestStatusErrorKindVocabulary(t *testing.T) {
+	kinds := []StatusErrorKind{
+		StatusErrorError,
+		StatusErrorTimeout,
+		StatusErrorCancelled,
+		StatusErrorInterrupted,
+		StatusErrorTerminated,
+		StatusErrorPermission,
+		StatusErrorAuth,
+		StatusErrorPendingInputFull,
+		StatusErrorCompaction,
+		StatusErrorRuntimeRestart,
+	}
+	want := []string{
+		"error",
+		"timeout",
+		"cancelled",
+		"interrupted",
+		"terminated",
+		"permission",
+		"auth",
+		"pending_input_full",
+		"compaction",
+		"runtime_restart",
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("kind count = %d, want %d", len(kinds), len(want))
+	}
+	for index := range kinds {
+		if string(kinds[index]) != want[index] {
+			t.Fatalf("kind[%d] = %q, want %q", index, kinds[index], want[index])
+		}
+	}
+
+	cancellation := map[StatusErrorKind]bool{
+		StatusErrorCancelled:      true,
+		StatusErrorInterrupted:    true,
+		StatusErrorTerminated:     true,
+		StatusErrorRuntimeRestart: true,
+	}
+	for _, kind := range kinds {
+		if got := kind.IsCancellation(); got != cancellation[kind] {
+			t.Fatalf("%q IsCancellation() = %v, want %v", kind, got, cancellation[kind])
+		}
+	}
+	for _, noncanonical := range []StatusErrorKind{"canceled", " CANCELLED ", "Cancelled", "future"} {
+		if noncanonical.IsCancellation() {
+			t.Fatalf("noncanonical kind %q classified as cancellation", noncanonical)
+		}
+	}
+}
+
 func TestStatusStoreProjectsLayeredTransitions(t *testing.T) {
 	store := NewStatusStore(StatusSeed{
 		SessionID:        "session-1",

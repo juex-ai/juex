@@ -10,7 +10,7 @@ import {
   nextAgentLifecycleAction,
   resolveAgentSelection,
 } from "../../frontend/src/lib/fleet-shell.ts";
-import type { AgentStatus } from "../../frontend/src/types.ts";
+import type { AgentActivity, AgentStatus } from "../../frontend/src/types.ts";
 
 function agent(
   id: string,
@@ -31,6 +31,32 @@ function agent(
   };
 }
 
+function activity(
+  state: AgentActivity["state"],
+  pendingInputCount: number,
+  alias?: string,
+): AgentActivity {
+  return {
+    state,
+    pending_input_count: pendingInputCount,
+    selected_status: alias
+      ? {
+          session: {
+            id: "session-1",
+            alias,
+            state: "turn_active",
+            working: true,
+            pending_count: pendingInputCount,
+            max_pending_inputs: 16,
+            can_accept_input: true,
+          },
+          tools: [],
+          token_usage: { input_tokens: 0, output_tokens: 0 },
+        }
+      : undefined,
+  };
+}
+
 test("agent visual state distinguishes process and live activity", () => {
   assert.equal(agentVisualState(agent("stopped", "stopped")), "stopped");
   assert.equal(agentVisualState(agent("failed", "unhealthy")), "failed");
@@ -39,7 +65,7 @@ test("agent visual state distinguishes process and live activity", () => {
   assert.equal(
     agentVisualState(
       agent("working", "healthy", {
-        activity: { state: "working", pending_count: 2 },
+        activity: activity("working", 2),
       }),
     ),
     "working",
@@ -57,11 +83,7 @@ test("agent status text uses concise operational context", () => {
   assert.equal(
     agentStatusText(
       agent("working", "healthy", {
-        activity: {
-          state: "working",
-          pending_count: 1,
-          session_alias: "Release prep",
-        },
+        activity: activity("working", 1, "Release prep"),
       }),
     ),
     "Working · Release prep",
@@ -87,7 +109,7 @@ test("agent state labels stay compact when failure details are long", () => {
     agentStateLabel(
       agent("working", "healthy", {
         runtime_health: "healthy",
-        activity: { state: "working", pending_count: 0 },
+        activity: activity("working", 0),
       }),
     ),
     "Working",
