@@ -635,6 +635,8 @@ func TestWeb_CreateScheduleObservableAndSurfaceObservation(t *testing.T) {
 	})
 	if got := snapshot.Observables[0]; got.Schedule == nil || got.Schedule.LastEmittedScheduledAt == nil {
 		t.Fatalf("schedule status = %+v", got)
+	} else if got.ScheduleConfig == nil || got.ScheduleConfig.Observation.Content != "schedule e2e payload" {
+		t.Fatalf("schedule config = %+v, want list-visible observation content", got.ScheduleConfig)
 	}
 	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/observables/schedule-e2e", nil)
 	if err != nil {

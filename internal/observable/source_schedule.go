@@ -105,6 +105,7 @@ func (s *scheduleSourceRuntime) runOnce(ctx context.Context) (ObservationRecord,
 }
 
 func (s *scheduleSourceRuntime) statusSnapshot(status ObservableStatus) ObservableStatus {
+	status.ScheduleConfig = scheduleConfigSnapshot(s.spec)
 	schedule := &ScheduleStatus{
 		Summary:     scheduleSummary(s.spec),
 		Timezone:    s.spec.Timezone,

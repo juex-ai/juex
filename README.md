@@ -378,7 +378,10 @@ Observation without changing whether the Schedule is running or stopped.
 command fields and the earlier nested `source` shape are reported as config
 issues and are not migrated automatically. The model-facing
 `observable_create` tool creates Command Observables, while `schedule_create`
-creates Schedules; the other `observable_*` tools remain shared. JSONL command
+creates Schedules; the other `observable_*` tools remain shared.
+`observable_list` includes each Schedule's read-only tagged `schedule_config`
+alongside runtime status so an agent can compare recurrence and Observation
+content before creating duplicate timed work. JSONL command
 parsers can map an `attachments_field` containing
 `[{ "path": "...", "media_type": "..." }]`;
 schedule observations can declare static `observation.attachments`. Attachment

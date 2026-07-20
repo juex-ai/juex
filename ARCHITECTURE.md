@@ -1337,6 +1337,9 @@ edits remain blocked until all issues are fixed.
 The model-facing creation tools are source-specific: `observable_create`
 creates Command Observables and `schedule_create` creates Schedules. The
 remaining Observable tools and all Web lifecycle routes stay source-agnostic.
+`observable_list` exposes a Schedule's cloned, read-only `schedule_config`
+beside its runtime `schedule` status so callers can compare configured intent
+without reading workspace persistence directly.
 The frontend mirrors the tagged Web DTO and does not duplicate source
 validation policy.
 
@@ -2081,12 +2084,16 @@ There are two live layers:
   `tests/eval/live-models.yaml`, verifies the selected ref exists in
   `~/.juex/juex.yaml`, then runs isolated real-binary capability and Schedule
   routing workflows and writes a redacted report under
-  `.tmp/reports/provider-model-smoke/`. Schedule routing validates successful
-  list-before-create tool results, rejects the command-Observable route, and
-  validates the tagged `.juex/observables.json` shape. Guide loading and
-  incidental inspection commands do not affect the outcome; shell loops and
-  scheduler commands remain rejected as competing recurring side effects. By
-  default the command rotates one
+  `.tmp/reports/provider-model-smoke/`. Schedule routing deterministically
+  selects an empty or seeded-equivalent sandbox from the run id. The empty
+  variant validates successful list-before-create results; the seeded variant
+  validates that listing exposes an equivalent different-id Schedule and no
+  duplicate is created. Both reject the command-Observable route and validate
+  the tagged `.juex/observables.json` outcome. Guide loading and incidental
+  inspection commands do not affect the outcome; shell loops and scheduler
+  commands remain rejected as competing recurring side effects. The selected
+  variant is recorded in result and summary artifacts. By default the command
+  rotates one
   model using `.juex/live-model-rotation.json`; pass `--all-models` to
   `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.
