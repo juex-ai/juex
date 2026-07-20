@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
-  ArrowRight,
   Check,
   ChevronRight,
   Circle,
+  CircleCheck,
+  CircleOff,
   FileCog,
   Folder,
   FolderOpen,
   Play,
   Plus,
-  Power,
   RefreshCw,
   RotateCw,
   ScrollText,
@@ -57,15 +57,19 @@ import {
   workspacePathUpdate,
 } from "@/lib/fleet-directories";
 import { agentPagePath } from "@/lib/fleet-routes";
-import { agentActionWarning } from "@/lib/fleet-shell";
+import {
+  agentActionWarning,
+  agentStateLabel,
+  agentVisualState,
+  nextFleetRosterLifecycleAction,
+} from "@/lib/fleet-shell";
 import { cn } from "@/lib/utils";
-import type {
-  AgentRuntimeHealth,
-  AgentStatus,
-  DirectoryListing,
-} from "@/types";
+import type { AgentStatus, DirectoryListing } from "@/types";
 
 type LifecycleAction = "start" | "stop" | "restart";
+
+const FLEET_ROSTER_GRID_CLASS =
+  "grid grid-cols-[minmax(13rem,1fr)_minmax(18rem,1.4fr)_8rem_15rem]";
 
 export function Fleet() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -237,12 +241,15 @@ export function Fleet() {
           </div>
 
           <div className="overflow-x-auto rounded-md border bg-card shadow-[var(--shadow-xs)]">
-            <div className="min-w-[64rem]">
-              <div className="grid grid-cols-[minmax(13rem,1fr)_8rem_minmax(18rem,1.4fr)_9rem_8rem_16rem] bg-muted/60 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+            <div className="min-w-[54rem]">
+              <div
+                className={cn(
+                  FLEET_ROSTER_GRID_CLASS,
+                  "bg-muted/60 text-[11px] uppercase tracking-[0.12em] text-muted-foreground",
+                )}
+              >
                 <div className="px-3 py-2 font-medium">Agent</div>
-                <div className="px-3 py-2 font-medium">Health</div>
                 <div className="px-3 py-2 font-medium">Workspace</div>
-                <div className="px-3 py-2 font-medium">Process</div>
                 <div className="px-3 py-2 font-medium">State</div>
                 <div className="px-3 py-2 text-right font-medium">Actions</div>
               </div>
@@ -330,12 +337,23 @@ function AgentRow({
   onRemove: () => void;
 }) {
   const base = agentPagePath(agent.id);
+  const lifecycleAction = nextFleetRosterLifecycleAction(agent);
+  const visualState = agentVisualState(agent);
   return (
-    <div className="grid grid-cols-[minmax(13rem,1fr)_8rem_minmax(18rem,1.4fr)_9rem_8rem_16rem] items-center text-sm">
+    <div
+      className={cn(
+        FLEET_ROSTER_GRID_CLASS,
+        "items-center text-sm transition-colors",
+        !agent.enabled && "bg-muted/25",
+      )}
+    >
       <div className="min-w-0 px-3 py-3">
         <Link
           to={base}
-          className="block truncate font-medium text-foreground outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/35"
+          className={cn(
+            "block truncate font-medium text-foreground outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-ring/35",
+            !agent.enabled && "text-muted-foreground",
+          )}
         >
           {agent.name || agent.id}
         </Link>
@@ -348,49 +366,48 @@ function AgentRow({
           </div>
         ) : null}
       </div>
-      <div className="px-3 py-3">
-        <HealthBadge health={agent.runtime_health} />
-        <div className="mt-1 font-mono text-[10px] text-muted-foreground">
-          {agent.binding}
-        </div>
-      </div>
       <div
         className="truncate px-3 py-3 font-mono text-xs text-muted-foreground"
         title={agent.workspace || "Workspace unavailable"}
       >
         {agent.workspace || "-"}
       </div>
-      <div className="px-3 py-3 font-mono text-xs text-muted-foreground">
-        {agent.pid ? `pid ${agent.pid}` : "-"}
-      </div>
       <div className="px-3 py-3">
         <Badge
           variant="outline"
           className={cn(
-            "text-[10px]",
-            agent.enabled
-              ? "border-juex-done/35 text-juex-done"
-              : "border-border text-muted-foreground",
+            "font-mono text-[10px]",
+            (visualState === "idle" || visualState === "working") &&
+              "border-juex-done/35 text-juex-done",
+            visualState === "failed" &&
+              "border-destructive/35 text-destructive",
+            visualState === "stopped" &&
+              "border-border text-muted-foreground",
           )}
         >
-          {agent.enabled ? "enabled" : "disabled"}
+          {agentStateLabel(agent)}
         </Badge>
+        <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+          {agent.binding}
+        </div>
       </div>
       <div className="flex items-center justify-end gap-1 px-3 py-3">
         <TooltipProvider delayDuration={250}>
           <AgentAction
-            label="Start agent"
-            disabled={
-              busy || !agent.enabled || agent.runtime_health === "healthy"
+            label={
+              lifecycleAction === "start" ? "Start agent" : "Stop agent"
             }
-            onClick={() => onAction("start")}
-            icon={<Play className="size-3.5" />}
-          />
-          <AgentAction
-            label="Stop agent"
-            disabled={busy || agent.runtime_health === "stopped"}
-            onClick={() => onAction("stop")}
-            icon={<Square className="size-3.5" />}
+            disabled={
+              busy || (lifecycleAction === "start" && !agent.enabled)
+            }
+            onClick={() => onAction(lifecycleAction)}
+            icon={
+              lifecycleAction === "start" ? (
+                <Play className="size-3.5" />
+              ) : (
+                <Square className="size-3.5" />
+              )
+            }
           />
           <AgentAction
             label="Restart agent"
@@ -411,11 +428,16 @@ function AgentRow({
             label={agent.enabled ? "Disable agent" : "Enable agent"}
             disabled={busy}
             onClick={onToggleEnabled}
-            icon={<Power className="size-3.5" />}
+            icon={
+              agent.enabled ? (
+                <CircleOff className="size-3.5" />
+              ) : (
+                <CircleCheck className="size-3.5" />
+              )
+            }
           />
           <AgentLink label="View logs" to={`${base}/logs`} icon={<ScrollText className="size-3.5" />} />
           <AgentLink label="Edit config" to={`${base}/config`} icon={<FileCog className="size-3.5" />} />
-          <AgentLink label="Open agent" to={base} icon={<ArrowRight className="size-3.5" />} />
           <AgentAction
             label="Remove agent"
             disabled={busy}
@@ -1133,8 +1155,12 @@ function AgentAction({
       <TooltipTrigger asChild>
         <Button
           type="button"
-          variant={destructive ? "destructive" : "ghost"}
+          variant="ghost"
           size="icon-sm"
+          className={cn(
+            destructive &&
+              "text-destructive hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive",
+          )}
           disabled={disabled}
           onClick={onClick}
           aria-label={label}
@@ -1167,21 +1193,5 @@ function AgentLink({
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
     </Tooltip>
-  );
-}
-
-function HealthBadge({ health }: { health: AgentRuntimeHealth }) {
-  return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "font-mono text-[10px]",
-        health === "healthy" && "border-juex-done/35 text-juex-done",
-        health === "unhealthy" && "border-destructive/35 text-destructive",
-        health === "ambiguous" && "border-juex-pending/35 text-juex-pending",
-      )}
-    >
-      {health}
-    </Badge>
   );
 }

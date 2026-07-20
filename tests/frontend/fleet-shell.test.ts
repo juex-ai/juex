@@ -7,6 +7,7 @@ import {
   agentTabFromPath,
   agentTabPath,
   agentVisualState,
+  nextFleetRosterLifecycleAction,
   nextAgentLifecycleAction,
   resolveAgentSelection,
 } from "../../frontend/src/lib/fleet-shell.ts";
@@ -139,10 +140,18 @@ test("tab routing remounts existing selected-agent pages", () => {
   );
 });
 
-test("single lifecycle toggle stops healthy agents and starts other states", () => {
+test("agent lifecycle toggle retries failed runtimes from the sidebar and state bar", () => {
   assert.equal(nextAgentLifecycleAction(agent("idle", "healthy")), "stop");
   assert.equal(nextAgentLifecycleAction(agent("stopped", "stopped")), "start");
   assert.equal(nextAgentLifecycleAction(agent("failed", "unhealthy")), "start");
+  assert.equal(nextAgentLifecycleAction(agent("ambiguous", "ambiguous")), "start");
+});
+
+test("fleet roster keeps stale-runtime cleanup available", () => {
+  assert.equal(nextFleetRosterLifecycleAction(agent("idle", "healthy")), "stop");
+  assert.equal(nextFleetRosterLifecycleAction(agent("stopped", "stopped")), "start");
+  assert.equal(nextFleetRosterLifecycleAction(agent("failed", "unhealthy")), "stop");
+  assert.equal(nextFleetRosterLifecycleAction(agent("ambiguous", "ambiguous")), "stop");
 });
 
 test("restart continuation failures produce an actionable fleet warning", () => {

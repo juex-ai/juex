@@ -251,14 +251,19 @@ narrower screens. Session history is opened from the stage header as
 - The history icon opens `/agents/<id>/history`; each row opens the canonical
   session route under `/agents/<id>/sessions/:id`. The session page decides
   whether the composer is available from the session kind and active state.
-- Center column max-width is 760px; the rest is gutter so reading lines do
-  not get awkwardly wide. Gutters shrink from 24px to 16px below 768px.
+- Transcript and composer content share a 760px visual boundary so system and
+  user message edges align with the input. The transcript container is 808px
+  wide including its 24px desktop gutters; gutters shrink to 16px below
+  768px.
 - The active composer floats over the bottom of the center column and is
   bounded by the actual Session container height. Its full obstruction,
-  including the bottom safe area, reserves scroll clearance for the transcript
-  and latest-message control without consuming conversation layout. Clearance
-  growth follows the bottom only when the reader is already there; it does not
-  steal a manually scrolled reading position.
+  including the bottom safe area and the 48px top fade, reserves at least 150px
+  of scroll clearance for the transcript and latest-message control without
+  consuming conversation layout. The fade is confined to the composer width
+  and appears only above the input, never across the transcript scrollbar or
+  below the floating surface. Clearance growth follows the bottom only when the
+  reader is already there; it does not steal a manually scrolled reading
+  position.
 - Stopped and failed agents keep persisted conversations readable. Their
   composer is replaced by a runtime state bar with a Start agent action;
   failures also show the reason and a Logs shortcut. The stage does not poll
@@ -279,8 +284,13 @@ narrower screens. Session history is opened from the stage header as
 Fleet settings is a stage view reached from the sidebar footer. It presents
 fleet listener and version details, system-service state, model/provider and
 extension ownership, followed by the dense operational roster. Each roster row
-shows agent identity, runtime health, workspace, process metadata, explicit
-lifecycle actions, enabled state, and links to bounded logs and config.
+uses the shared `Agent`, `Workspace`, `State`, and `Actions` grid. State combines
+the operational stopped/idle/working/failed projection with the runtime
+binding; process IDs and a separate health column are omitted. Actions expose
+one state-derived Start/Stop control, Restart, distinct Enable/Disable icons,
+bounded logs, config, and a transparent destructive Remove action. Disabled
+agents use a muted row treatment while their configuration and recovery actions
+remain available.
 
 The Add agent action uses an editable absolute path, server-side one-level
 directory browser, compact breadcrumbs, hidden-directory switch, inline
@@ -466,7 +476,8 @@ models, numbers, and units use mono with tabular numbers.
 `use-stick-to-bottom` so the view follows new content unless the user has
 scrolled up; `<ConversationScrollButton>` reveals a scroll-to-bottom
 affordance whenever that happens. Inside, `<ConversationContent>` holds the
-message column at `max-width: 760px` with `24px` horizontal padding.
+message column at `max-width: 808px` with `24px` horizontal padding, yielding
+the same 760px content boundary as the floating composer.
 
 ### 7.4 Loading state
 
@@ -485,14 +496,15 @@ read as authored input without competing with assistant output. Sent user image
 attachments render as right-aligned 80px square thumbnails above the bubble,
 wrap without horizontal overflow, and open the existing full-size lightbox.
 This is a view projection only; persisted message block order remains
-unchanged. Assistant and tool-result images keep the full media card with
-metadata and download action. Assistant text renders as unframed, left-aligned
-conversation text. A model label appears only on the first group in a
-contiguous run from the same model; a user or status message starts a new run.
-Reasoning and tool sub-units render as compact process rows below the assistant
-text. MCP notifications, Observations, and hook traces bypass normal message
-chrome and render as low-emphasis transcript rows so they do not read as
-human-authored messages.
+unchanged. Assistant, system, Markdown-local, and tool-result images reuse the
+same 80px square thumbnail and full-size lightbox interaction instead of a
+full media card. Assistant text renders as unframed, left-aligned conversation
+text. A model label appears only on the first group in a contiguous run from
+the same model; a user or status message starts a new run. Reasoning and tool
+sub-units render as compact process rows below the assistant text. MCP
+notifications, Observations, and hook traces bypass normal message chrome and
+render as low-emphasis transcript rows so they do not read as human-authored
+messages.
 
 When a normal assistant response starts with reasoning and a tool call, its
 consecutive process-only messages collapse into one assistant work disclosure.
@@ -604,8 +616,9 @@ viewport-height bound so the queue and submit action stay reachable. This local
 strip does not adopt the deferred general-purpose AI Elements `Attachments`
 primitive. The composer is a floating warm paper well with a `16px` radius,
 prominent forest shadow, and a high-contrast forest focus border without an
-outer ring. A light background fade separates it from messages without
-introducing a divider. The submit button is the state control:
+outer ring. A 48px top-only background fade, constrained to the 760px composer
+width, separates it from messages without covering the transcript scrollbar or
+adding a bottom background block. The submit button is the state control:
 empty + idle appears disabled and clicks show a short input hint; empty +
 running switches to a square stop icon; text + idle submits and clears the
 input; text + running submits to the pending-input queue for the next provider

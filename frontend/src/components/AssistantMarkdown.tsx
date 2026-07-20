@@ -139,6 +139,7 @@ function AssistantMarkdownImage({
     return (
       <ImageBlock
         alt={alt}
+        variant="thumbnail"
         media={mediaByPath.get(path) ?? { artifact_path: path }}
       />
     );

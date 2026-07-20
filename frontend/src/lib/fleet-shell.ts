@@ -86,6 +86,12 @@ export function nextAgentLifecycleAction(
   return agent.runtime_health === "healthy" ? "stop" : "start";
 }
 
+export function nextFleetRosterLifecycleAction(
+  agent: AgentStatus,
+): AgentLifecycleAction {
+  return agent.runtime_health === "stopped" ? "start" : "stop";
+}
+
 export function agentActionWarning(
   action: AgentManagementAction,
   result: AgentActionResult,
