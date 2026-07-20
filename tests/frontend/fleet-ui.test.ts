@@ -58,9 +58,9 @@ test("agent shell keeps the fleet rail mounted around selected-agent pages", () 
     "agent switches must remount the selected-agent page",
   );
   assert.equal(
-    shellSource.match(/<FileTreePanel\s+key=\{agentId\}/g)?.length,
+    shellSource.match(/rootKey=\{filePanelKey\}/g)?.length,
     2,
-    "agent switches must remount both workspace panel variants",
+    "root switches must reset both file panel variants",
   );
   assert.match(shellSource, /<FleetEmptyState \/>/);
   assert.match(shellSource, /View logs/);
@@ -92,6 +92,8 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     assert.match(stageHeaderSource, new RegExp(`label: "${label}"`));
   }
   assert.match(stageHeaderSource, /agentTabPath\(agent\.id, tab\.id\)/);
+  assert.match(stageHeaderSource, /filePanelTitle: string/);
+  assert.match(stageHeaderSource, /filePanelActionLabel/);
   assert.match(stateBarSource, /Start agent/);
   assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
   assert.match(sessionSource, /<AgentRuntimeStateBar \/>/);

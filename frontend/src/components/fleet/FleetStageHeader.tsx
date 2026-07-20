@@ -34,6 +34,7 @@ const TABS: Array<{ id: AgentStageTab; label: string }> = [
 export function FleetStageHeader({
   agent,
   activeTab,
+  filePanelTitle,
   settings,
   workspaceOpen,
   onOpenMobileSidebar,
@@ -41,12 +42,17 @@ export function FleetStageHeader({
 }: {
   agent: AgentStatus | null;
   activeTab: AgentStageTab;
+  filePanelTitle: string;
   settings: boolean;
   workspaceOpen: boolean;
   onOpenMobileSidebar: () => void;
   onToggleWorkspace: () => void;
 }) {
   const state = agent ? agentVisualState(agent) : "stopped";
+  const filePanelActionLabel = workspaceOpen
+    ? `Hide ${filePanelTitle.toLowerCase()}`
+    : `Show ${filePanelTitle.toLowerCase()}`;
+
   return (
     <header className="flex min-h-[var(--juex-header-height)] shrink-0 items-center gap-2 border-b bg-card px-3 shadow-[var(--shadow-xs)] md:px-4">
       <Button
@@ -132,7 +138,7 @@ export function FleetStageHeader({
                 className="shrink-0"
                 onClick={onToggleWorkspace}
                 disabled={agent.runtime_health !== "healthy"}
-                aria-label={workspaceOpen ? "Hide workspace" : "Show workspace"}
+                aria-label={filePanelActionLabel}
               >
                 {workspaceOpen ? (
                   <FolderOpen className="size-4" />
@@ -141,9 +147,7 @@ export function FleetStageHeader({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>
-              {workspaceOpen ? "Hide workspace" : "Show workspace"}
-            </TooltipContent>
+            <TooltipContent>{filePanelActionLabel}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       ) : null}
