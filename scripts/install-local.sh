@@ -77,8 +77,16 @@ CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$BUILD_TARGET" ./cmd/ju
 
 echo "Installing → ${INSTALL_TARGET}"
 mkdir -p "$INSTALL_DIR"
-cp "$BUILD_TARGET" "$INSTALL_TARGET"
-chmod +x "$INSTALL_TARGET"
+# Install via write-then-rename rather than overwriting the target in place:
+# on macOS, truncating an executable's bytes while a process still has it
+# mapped (e.g. a running fleet daemon) corrupts code-signing/text-page state
+# for that inode and the kernel SIGKILLs anything touching it, including the
+# `version` check below. Rename swaps the directory entry to a fresh inode,
+# leaving any already-running process on its old inode untouched.
+INSTALL_TMP="${INSTALL_TARGET}.tmp.$$"
+cp "$BUILD_TARGET" "$INSTALL_TMP"
+chmod +x "$INSTALL_TMP"
+mv -f "$INSTALL_TMP" "$INSTALL_TARGET"
 
 "$INSTALL_TARGET" version
 refresh_fleet_service "$INSTALL_TARGET"
