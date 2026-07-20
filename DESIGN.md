@@ -517,8 +517,9 @@ one display unit (see §13).
 render layer may pass `type={\`tool-${tool_name}\`}` for compatibility, but
 `src/lib/tool-display.ts` strips `tool-` and falls back to `tool` for missing
 names. Expanded tool parameters and results use compact labeled payload blocks;
-error results use the destructive tone. Running and failed tools default open;
-successful results stay closed until the user expands.
+error results use the destructive tone. Every Session tool process row,
+including batch and nested rows in any status, starts collapsed and opens only
+when the user expands it; the collapsed trigger still exposes its status.
 
 ### 7.9 Composer
 

@@ -97,7 +97,6 @@ import {
   processDisclosureBodyClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
-  processDisclosureDefaultOpen,
   processDisclosureSummaryClassName,
   thinkingDisclosureBodyClassName,
   thinkingDisclosureSummaryClassName,
@@ -1341,7 +1340,7 @@ function ProcessDisclosure({
   status: ToolProcessStatus;
   title: string;
 }) {
-  const [isOpen, setIsOpen] = useState(processDisclosureDefaultOpen(status));
+  const [isOpen, setIsOpen] = useState(false);
 
   return (
     <details
