@@ -2088,12 +2088,12 @@ There are two live layers:
   selects an empty or seeded-equivalent sandbox from the run id. The empty
   variant validates successful list-before-create results; the seeded variant
   validates that listing exposes an equivalent different-id Schedule and no
-  duplicate is created. Both reject the command-Observable route and validate
-  the tagged `.juex/observables.json` outcome. Guide loading and incidental
-  inspection commands do not affect the outcome; shell loops and scheduler
-  commands remain rejected as competing recurring side effects. The selected
-  variant is recorded in result and summary artifacts. By default the command
-  rotates one
+  duplicate is created or stopped. Both reject the command-Observable route and
+  validate the tagged `.juex/observables.json` outcome. Guide loading and
+  incidental inspection commands do not affect the outcome; shell loops and
+  scheduler commands remain rejected as competing recurring side effects. The
+  selected variant is recorded in result and summary artifacts. By default the
+  command rotates one
   model using `.juex/live-model-rotation.json`; pass `--all-models` to
   `tests/eval/provider_model_smoke.sh` only for provider matrix migrations or
   full local config audits.

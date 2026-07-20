@@ -714,7 +714,7 @@ func TestScheduleRoutingSeededEquivalentContract(t *testing.T) {
 		"    blind_report = validate(work, blind, duplicate)",
 		"    reject(blind_report, 'schedule_create')",
 		"    reject(blind_report, 'exactly one entry')",
-		"    for tool_name in ('observable_delete', 'observable_create'):",
+		"    for tool_name in ('observable_delete', 'observable_stop', 'observable_create'):",
 		"        mutated = rows()",
 		"        mutated.insert(2, {'role': 'assistant', 'blocks': [{'type': 'tool_use', 'tool_use_id': 'mutate-1', 'tool_name': tool_name, 'input': {'id': expect.existing_schedule_id}}]})",
 		"        mutated.insert(3, {'role': 'user', 'blocks': [{'type': 'tool_result', 'tool_use_id': 'mutate-1', 'tool_name': tool_name, 'content': '{}'}]})",

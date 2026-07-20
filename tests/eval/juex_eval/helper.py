@@ -648,7 +648,6 @@ def run_schedule_routing_case(
             )
             continue
         return report, session_id
-    return contract_oracle.ContractReport(False, ["schedule routing retries exhausted"]), ""
 
 
 def run_turn(ctx: ProviderSmokeContext, case_dir: pathlib.Path, case_config: pathlib.Path, label: str, args: list[str]) -> int:

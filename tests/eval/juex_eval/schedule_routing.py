@@ -23,6 +23,7 @@ SEEDED_EQUIVALENT_VARIANT = "seeded-equivalent"
 
 SEEDED_MUTATION_TOOLS = {
     "observable_delete",
+    "observable_stop",
 }
 
 SHELL_COMMAND_FIELDS = {
