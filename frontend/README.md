@@ -97,6 +97,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/fleet/` | persistent agent rail, tabbed stage header, runtime state bar, and selected-agent context |
 | `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
+| `src/components/AssistantMarkdown.tsx` | assistant Markdown rendering with backend-verified inline local image links |
 | `src/components/ImageBlock.tsx` | inline transcript image previews, metadata, download, and lightbox |
 | `src/components/RuntimeToolCatalog.tsx` | reusable grouped builtin and MCP tool disclosures with parameter and raw-schema details |
 | `src/pages/History.tsx` | session history list whose rows open canonical `/sessions/:id` URLs |

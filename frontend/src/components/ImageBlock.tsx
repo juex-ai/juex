@@ -15,11 +15,12 @@ import { cn } from "@/lib/utils";
 import type { MediaRef } from "@/types";
 
 type ImageBlockProps = {
+  alt?: string;
   className?: string;
   media?: MediaRef | null;
 };
 
-export function ImageBlock({ className, media }: ImageBlockProps) {
+export function ImageBlock({ alt, className, media }: ImageBlockProps) {
   const path = media?.artifact_path?.trim();
   const [failed, setFailed] = useState(false);
   const [previewFailed, setPreviewFailed] = useState(false);
@@ -66,7 +67,7 @@ export function ImageBlock({ className, media }: ImageBlockProps) {
           >
             <img
               src={src}
-              alt={name}
+              alt={alt?.trim() || name}
               loading="lazy"
               className="max-h-[24rem] w-full object-contain"
               style={aspectRatio ? { aspectRatio } : undefined}
@@ -124,7 +125,7 @@ export function ImageBlock({ className, media }: ImageBlockProps) {
         ) : (
           <img
             src={src}
-            alt={name}
+            alt={alt?.trim() || name}
             className="max-h-full max-w-full object-contain"
             onError={() => setPreviewFailed(true)}
           />

@@ -42,6 +42,7 @@ import {
 import { useShellTitle } from "@/components/AppShell";
 import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
 import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
+import { AssistantMarkdown } from "@/components/AssistantMarkdown";
 import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
 import { FileTreePanel } from "@/components/FileTreePanel";
@@ -1253,7 +1254,7 @@ function MessageImageGallery({
 function AssistantPlainText({ text }: { text: string }) {
   return (
     <div className="max-w-[min(100%,42rem)] text-[14.5px] leading-7 text-foreground">
-      <MessageResponse>{text}</MessageResponse>
+      <AssistantMarkdown>{text}</AssistantMarkdown>
     </div>
   );
 }

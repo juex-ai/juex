@@ -390,6 +390,31 @@ func TestFilesContentReturnsImageMetadata(t *testing.T) {
 	}
 }
 
+func TestFilesContentDoesNotTrustImageExtension(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "not-an-image.png"), "plain text")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files/content?path=screenshots%2Fnot-an-image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	var got FileContent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "text" || got.MediaType != "" || got.Content != "plain text" {
+		t.Fatalf("content metadata = %+v", got)
+	}
+}
+
 func TestFilesRawServesImage(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
@@ -490,6 +515,7 @@ func TestMediaRejectsEscapesAndNonImages(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "secret.png")
 	mustWriteBytes(t, outside, tinyPNG)
 	mustWriteFile(t, filepath.Join(work, "notes.txt"), "hello")
+	mustWriteFile(t, filepath.Join(work, "not-an-image.png"), "plain text")
 	if err := os.Symlink(outside, filepath.Join(work, "secret-link")); err != nil {
 		t.Fatal(err)
 	}
@@ -506,6 +532,7 @@ func TestMediaRejectsEscapesAndNonImages(t *testing.T) {
 		{name: "absolute path", path: "/etc/passwd", want: http.StatusForbidden},
 		{name: "outside symlink", path: "secret-link", want: http.StatusForbidden},
 		{name: "text", path: "notes.txt", want: http.StatusUnsupportedMediaType},
+		{name: "misleading extension", path: "not-an-image.png", want: http.StatusUnsupportedMediaType},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
