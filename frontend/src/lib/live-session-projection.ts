@@ -47,6 +47,7 @@ export type LiveSessionProjection = {
   drainingQueuedInputs: Array<QueuedInput | undefined>;
   compactAdmissionTurnID: string | null;
   turnActive: boolean;
+  settledTurnID: string | null;
   compactActive: boolean;
   compactCommandInputs: Record<string, string>;
   status: LiveSessionStatus;
@@ -70,6 +71,7 @@ export function createLiveSessionProjection(): LiveSessionProjection {
     drainingQueuedInputs: [],
     compactAdmissionTurnID: null,
     turnActive: false,
+    settledTurnID: null,
     compactActive: false,
     compactCommandInputs: {},
     status: { kind: "idle" },
@@ -443,6 +445,7 @@ export function projectLiveSessionEvent(
       next = {
         ...markProjectionDone(next),
         turnActive: false,
+        settledTurnID: event.turn_id ?? next.settledTurnID,
       };
       effects.push({ type: "refresh" }, { type: "scheduleIdleStatus" });
       break;
@@ -451,6 +454,7 @@ export function projectLiveSessionEvent(
       next = {
         ...markProjectionError(next, event.payload.error),
         turnActive: false,
+        settledTurnID: event.turn_id ?? next.settledTurnID,
       };
       effects.push({ type: "refresh" });
       break;
@@ -493,6 +497,9 @@ export function projectTurnStatusReconcile(
   state: LiveSessionProjection,
   turn: TurnStatusResponse,
 ): LiveSessionProjectionResult {
+  const turnID = "turn_id" in turn && typeof turn.turn_id === "string"
+    ? turn.turn_id
+    : undefined;
   if (turn.state === "running") {
     return {
       state: {
@@ -506,15 +513,13 @@ export function projectTurnStatusReconcile(
       effects: [],
     };
   }
-  const turnID = "turn_id" in turn && typeof turn.turn_id === "string"
-    ? turn.turn_id
-    : undefined;
   const settled = settleTerminalQueuedInputs(state, turnID);
   if (turn.state === "errored") {
     return {
       state: {
         ...markProjectionError(settled, turn.error),
         turnActive: false,
+        settledTurnID: turnID ?? settled.settledTurnID,
       },
       effects: [{ type: "refresh" }],
     };
@@ -523,6 +528,7 @@ export function projectTurnStatusReconcile(
     state: {
       ...markProjectionDone(settled),
       turnActive: false,
+      settledTurnID: turnID ?? settled.settledTurnID,
     },
     effects: [{ type: "refresh" }, { type: "scheduleIdleStatus" }],
   };

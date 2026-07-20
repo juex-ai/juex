@@ -51,6 +51,7 @@ import {
   type ToolDisplayUnit,
 } from "@/lib/display-units";
 import {
+  assistantWorkTailActive,
   assistantWorkItems,
   assistantWorkTitle,
   transcriptItemModelLabels,
@@ -340,11 +341,12 @@ export function Session() {
           ? agent.activity.status
           : undefined)
       : undefined;
-  const tailActive =
-    projection.turnActive ||
-    data?.turn?.state === "running" ||
-    runtimeStatus?.turn?.state === "admitted" ||
-    runtimeStatus?.turn?.state === "active";
+  const tailActive = assistantWorkTailActive({
+    liveTurnActive: projection.turnActive,
+    settledTurnID: projection.settledTurnID,
+    sessionTurn: data?.turn,
+    runtimeTurn: runtimeStatus?.turn,
+  });
   const transcriptItems = useMemo(
     () => assistantWorkItems(groups, { tailActive }),
     [groups, tailActive],

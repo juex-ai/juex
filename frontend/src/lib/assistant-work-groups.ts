@@ -4,6 +4,10 @@ import type {
   ToolDisplayUnit,
 } from "./display-units";
 import { toolDisplayName } from "./tool-display.ts";
+import type {
+  RuntimeTurnStatus,
+  SessionTurnStatus,
+} from "../types.ts";
 
 type ProcessDisplayUnit = Extract<
   DisplayUnit,
@@ -57,10 +61,15 @@ export function assistantWorkItems(
     const group = groups[index];
     if (!buffer) {
       if (canStartWork(group)) {
-        buffer = {
-          groups: [group],
-          effectiveModel: normalizedModel(group.model),
-        };
+        const effectiveModel = normalizedModel(group.model);
+        if (hasVisibleContent(group)) {
+          items.push(buildWorkItem([group], effectiveModel, "completed"));
+        } else {
+          buffer = {
+            groups: [group],
+            effectiveModel,
+          };
+        }
       } else {
         items.push(messageItem(group));
       }
@@ -110,6 +119,27 @@ export function assistantWorkItems(
   }
 
   return items;
+}
+
+export function assistantWorkTailActive({
+  liveTurnActive,
+  settledTurnID,
+  sessionTurn,
+  runtimeTurn,
+}: {
+  liveTurnActive: boolean;
+  settledTurnID: string | null;
+  sessionTurn?: Pick<SessionTurnStatus, "turn_id" | "state">;
+  runtimeTurn?: Pick<RuntimeTurnStatus, "id" | "state">;
+}): boolean {
+  if (liveTurnActive) return true;
+  const sessionActive =
+    sessionTurn?.state === "running" &&
+    sessionTurn.turn_id !== settledTurnID;
+  const runtimeActive =
+    (runtimeTurn?.state === "admitted" || runtimeTurn?.state === "active") &&
+    runtimeTurn.id !== settledTurnID;
+  return sessionActive || runtimeActive;
 }
 
 export function assistantWorkTitle(work: AssistantWorkItem): string {
@@ -172,14 +202,15 @@ function flushOriginal(
 }
 
 function canStartWork(group: MessageGroup): boolean {
-  if (!isNormalAssistant(group) || hasNonEmptyText(group) || hasMedia(group)) {
-    return false;
-  }
-  return hasReasoning(group) && toolCount(group) > 0;
+  return (
+    isNormalAssistant(group) &&
+    hasReasoning(group) &&
+    toolCount(group) > 0
+  );
 }
 
 function canContinueWork(group: MessageGroup): boolean {
-  if (!isNormalAssistant(group) || hasNonEmptyText(group) || hasMedia(group)) {
+  if (!isNormalAssistant(group) || hasVisibleContent(group)) {
     return false;
   }
   return (
@@ -193,7 +224,7 @@ function canContinueWork(group: MessageGroup): boolean {
 }
 
 function canCompleteWork(group: MessageGroup): boolean {
-  return isNormalAssistant(group) && hasNonEmptyText(group);
+  return isNormalAssistant(group) && hasVisibleContent(group);
 }
 
 function isNormalAssistant(group: MessageGroup): boolean {
@@ -212,6 +243,10 @@ function hasReasoning(group: MessageGroup): boolean {
 
 function hasMedia(group: MessageGroup): boolean {
   return group.units.some((unit) => unit.kind === "image");
+}
+
+function hasVisibleContent(group: MessageGroup): boolean {
+  return hasNonEmptyText(group) || hasMedia(group);
 }
 
 function isProcessUnit(unit: DisplayUnit): unit is ProcessDisplayUnit {
@@ -310,7 +345,6 @@ function latestToolSummary(
 function summarizeTools(
   tools: readonly ToolDisplayUnit[],
 ): AssistantWorkToolSummary[] {
-  const summaries: AssistantWorkToolSummary[] = [];
   const byName = new Map<string, AssistantWorkToolSummary>();
   for (const tool of tools) {
     const rawName = tool.use?.tool_name?.trim() || "tool";
@@ -320,11 +354,9 @@ function summarizeTools(
       existing.count++;
       continue;
     }
-    const summary = { name, count: 1 };
-    summaries.push(summary);
-    byName.set(name, summary);
+    byName.set(name, { name, count: 1 });
   }
-  return summaries;
+  return Array.from(byName.values());
 }
 
 function normalizedModel(model: string | undefined): string | undefined {
@@ -342,7 +374,7 @@ function responseSpan(
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
     return undefined;
   }
-  let seconds = Math.floor((end - start) / 1000);
+  let seconds = Math.floor(end / 1000) - Math.floor(start / 1000);
   const hours = Math.floor(seconds / 3600);
   seconds %= 3600;
   const minutes = Math.floor(seconds / 60);

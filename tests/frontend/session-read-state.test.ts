@@ -147,6 +147,31 @@ test("projectLiveBrowserEvent carries projection effects through controller", ()
   ]);
 });
 
+test("terminal live event settles the loaded running turn without refresh", () => {
+  const initial = projectSessionLoaded(createSessionReadState(), {
+    ...session("running", []),
+    turn: {
+      turn_id: "turn-1",
+      state: "running",
+      pending_count: 0,
+      max_pending_inputs: 4,
+    },
+  });
+
+  const result = projectLiveBrowserEvent(initial, {
+    id: "evt-error",
+    type: "turn.errored",
+    ts: "2026-07-20T01:00:00Z",
+    turn_id: "turn-1",
+    payload: { error: "cancelled", error_kind: "cancelled" },
+  });
+
+  assert.equal(result.state.projection.turnActive, false);
+  assert.equal(result.state.projection.settledTurnID, "turn-1");
+  assert.equal(result.state.data?.turn?.state, "running");
+  assert.deepEqual(result.effects, [{ type: "refresh" }]);
+});
+
 test("projectLiveBrowserEvent refreshes session goal state", () => {
   const initial = projectSessionLoaded(
     createSessionReadState(),

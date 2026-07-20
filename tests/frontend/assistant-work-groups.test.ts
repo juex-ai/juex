@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assistantWorkTailActive,
   assistantWorkItems,
   assistantWorkTitle,
   transcriptItemModelLabels,
@@ -129,6 +130,70 @@ test("assistantWorkItems folds process groups through final visible content", ()
   );
 });
 
+test("a mixed reasoning text and tool starter completes one work item", () => {
+  const items = assistantWorkItems(
+    [
+      assistant(
+        "mixed",
+        [
+          reasoning("plan"),
+          text("I will inspect it."),
+          tool("tu-mixed", "read"),
+          text("Inspection queued."),
+        ],
+        {
+          createdAt: "2026-07-20T01:00:00Z",
+        },
+      ),
+    ],
+    { tailActive: false },
+  );
+
+  assert.equal(items.length, 1);
+  const item = items[0];
+  assert.equal(item.kind, "assistant_work");
+  if (item.kind !== "assistant_work") return;
+  assert.equal(item.phase, "completed");
+  assert.deepEqual(
+    item.processGroups.flatMap((group) =>
+      group.units.map((unit) => unit.kind),
+    ),
+    ["reasoning", "tool"],
+  );
+  assert.deepEqual(
+    item.contentGroup?.units.map((unit) => unit.kind),
+    ["text", "text"],
+  );
+});
+
+test("an image-only assistant response completes preceding work", () => {
+  const items = assistantWorkItems(
+    [
+      assistant("starter", [reasoning("draw"), tool("tu-image", "read")]),
+      assistant("image", [
+        {
+          kind: "image",
+          block: {
+            type: "image",
+            media: { id: "img-1", mime_type: "image/png" },
+          },
+        },
+      ]),
+    ],
+    { tailActive: false },
+  );
+
+  assert.equal(items.length, 1);
+  const item = items[0];
+  assert.equal(item.kind, "assistant_work");
+  if (item.kind !== "assistant_work") return;
+  assert.equal(item.phase, "completed");
+  assert.deepEqual(
+    item.contentGroup?.units.map((unit) => unit.kind),
+    ["image"],
+  );
+});
+
 test("running title follows the latest single or parallel tool-bearing group", () => {
   const single = assistantWorkItems(
     [assistant("starter", [reasoning("x"), tool("tu-1", "exec_command")])],
@@ -190,6 +255,27 @@ test("inactive incomplete tail and interrupted buffers flush original messages",
   assert.deepEqual(
     interrupted.map((item) => item.kind),
     ["message", "message"],
+  );
+});
+
+test("a terminal live turn overrides stale session and runtime activity", () => {
+  assert.equal(
+    assistantWorkTailActive({
+      liveTurnActive: false,
+      settledTurnID: "turn-1",
+      sessionTurn: { turn_id: "turn-1", state: "running" },
+      runtimeTurn: { id: "turn-1", state: "active" },
+    }),
+    false,
+  );
+  assert.equal(
+    assistantWorkTailActive({
+      liveTurnActive: false,
+      settledTurnID: "turn-1",
+      sessionTurn: { turn_id: "turn-1", state: "running" },
+      runtimeTurn: { id: "turn-2", state: "active" },
+    }),
+    true,
   );
 });
 
@@ -289,6 +375,25 @@ test("duration falls back for missing, invalid, or reverse timestamps", () => {
     if (item.kind !== "assistant_work") continue;
     assert.equal(assistantWorkTitle(item), "Worked, called 1 tool");
   }
+});
+
+test("duration uses persisted second precision before and after refresh", () => {
+  const item = assistantWorkItems(
+    [
+      assistant(
+        "starter",
+        [reasoning("x"), tool("tu-1", "read")],
+        { createdAt: "2026-07-20T01:00:00.900Z" },
+      ),
+      assistant("final", [text("done")], {
+        createdAt: "2026-07-20T01:00:02.100Z",
+      }),
+    ],
+    { tailActive: false },
+  )[0];
+  assert.equal(item.kind, "assistant_work");
+  if (item.kind !== "assistant_work") return;
+  assert.equal(assistantWorkTitle(item), "Worked for 2s, called 1 tool");
 });
 
 test("page-head prefixes stay original until the starter is prepended", () => {
