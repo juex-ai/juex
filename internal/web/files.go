@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -274,7 +273,7 @@ func (s *Server) handleFilesContent(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	if mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath); ok {
+	if mediaType, ok := imagePreviewMediaType(sample[:n]); ok {
 		writeJSON(w, http.StatusOK, FileContent{
 			Path:      file.relPath,
 			Kind:      "image",
@@ -336,7 +335,7 @@ func (s *Server) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath)
+	mediaType, ok := imagePreviewMediaType(sample[:n])
 	if !ok {
 		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "raw preview is only supported for images")
 		return
@@ -352,8 +351,8 @@ func (s *Server) handleFilesRaw(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET or HEAD")
 		return
 	}
 
@@ -376,7 +375,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	mediaType, ok := imagePreviewMediaType(sample[:n], file.relPath)
+	mediaType, ok := imagePreviewMediaType(sample[:n])
 	if !ok {
 		writeErr(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "media is only supported for images")
 		return
@@ -522,14 +521,10 @@ func relativeInside(root, path string) (string, error) {
 	return rel, nil
 }
 
-func imagePreviewMediaType(data []byte, path string) (string, bool) {
+func imagePreviewMediaType(data []byte) (string, bool) {
 	detected := mediaTypeBase(http.DetectContentType(data))
 	if isSupportedImagePreviewType(detected) {
 		return detected, true
-	}
-	extType := mediaTypeBase(mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
-	if isSupportedImagePreviewType(extType) {
-		return extType, true
 	}
 	return "", false
 }

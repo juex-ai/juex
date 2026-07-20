@@ -15,7 +15,8 @@
 - Make message structure obvious at a glance: who said what, what tools ran,
   what the agent was thinking.
 - Render rich content properly — markdown, code blocks with syntax
-  highlighting, tables, lists, and image media references.
+  highlighting, tables, lists, image media references, and local images
+  referenced by assistant Markdown.
 - Honour OS dark/light mode automatically.
 - Adapt from desktop to tablet/mobile without horizontal page overflow.
 - Use the Juex Design System: forest `#064032`, gold `#f6d78e`, neutral

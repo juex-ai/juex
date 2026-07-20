@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -390,6 +391,56 @@ func TestFilesContentReturnsImageMetadata(t *testing.T) {
 	}
 }
 
+func TestFilesContentReturnsBMPMetadata(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.bmp"), tinyBMP)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files/content?path=screenshots%2Fpreview.bmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	var got FileContent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "image" || got.MediaType != "image/bmp" || got.Size != int64(len(tinyBMP)) {
+		t.Fatalf("content metadata = %+v", got)
+	}
+}
+
+func TestFilesContentDoesNotTrustImageExtension(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "not-an-image.png"), "plain text")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/files/content?path=screenshots%2Fnot-an-image.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+
+	var got FileContent
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != "text" || got.MediaType != "" || got.Content != "plain text" {
+		t.Fatalf("content metadata = %+v", got)
+	}
+}
+
 func TestFilesRawServesImage(t *testing.T) {
 	srv := newTestServer(t)
 	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
@@ -456,6 +507,46 @@ func TestMediaServesWorkDirImageWithRevalidationCache(t *testing.T) {
 	}
 }
 
+func TestMediaHeadReturnsImageMetadataWithoutBody(t *testing.T) {
+	srv := newTestServer(t)
+	mustWriteBytes(t, filepath.Join(srv.opts.Cfg.WorkDir, "screenshots", "preview.png"), tinyPNG)
+	mustWriteFile(t, filepath.Join(srv.opts.Cfg.WorkDir, "notes.txt"), "plain text")
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Head(ts.URL + "/api/media?path=screenshots%2Fpreview.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
+	}
+	if got := resp.Header.Get("Content-Length"); got != strconv.Itoa(len(tinyPNG)) {
+		t.Fatalf("content length = %q", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) != 0 {
+		t.Fatalf("HEAD body length = %d", len(body))
+	}
+
+	resp, err = http.Head(ts.URL + "/api/media?path=notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("non-image status = %d", resp.StatusCode)
+	}
+}
+
 func TestMediaServesArtifactImage(t *testing.T) {
 	srv := newTestServer(t)
 	digest := "1b56b50ac4e976f488f128cabdcdffb2fc9331d6974bb9968131a415d14ade24"
@@ -490,6 +581,7 @@ func TestMediaRejectsEscapesAndNonImages(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "secret.png")
 	mustWriteBytes(t, outside, tinyPNG)
 	mustWriteFile(t, filepath.Join(work, "notes.txt"), "hello")
+	mustWriteFile(t, filepath.Join(work, "not-an-image.png"), "plain text")
 	if err := os.Symlink(outside, filepath.Join(work, "secret-link")); err != nil {
 		t.Fatal(err)
 	}
@@ -506,6 +598,7 @@ func TestMediaRejectsEscapesAndNonImages(t *testing.T) {
 		{name: "absolute path", path: "/etc/passwd", want: http.StatusForbidden},
 		{name: "outside symlink", path: "secret-link", want: http.StatusForbidden},
 		{name: "text", path: "notes.txt", want: http.StatusUnsupportedMediaType},
+		{name: "misleading extension", path: "not-an-image.png", want: http.StatusUnsupportedMediaType},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -623,6 +716,7 @@ func TestFilesContentTruncatesLargeFiles(t *testing.T) {
 }
 
 var tinyPNG = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x00}
+var tinyBMP = []byte{'B', 'M', 0x00, 0x00, 0x00, 0x00}
 
 func mustWriteFile(t *testing.T, path, body string) {
 	t.Helper()

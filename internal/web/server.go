@@ -127,8 +127,8 @@ func NewReadOnlyAPIHandler(cfg config.Config) http.Handler {
 	})
 	mux.HandleFunc("/api/sessions/", server.dispatchReadOnlySession)
 	mux.HandleFunc("/api/media", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET or HEAD required")
 			return
 		}
 		server.handleMedia(w, r)

@@ -257,6 +257,33 @@ export async function getFileContent(
   );
 }
 
+export async function getMediaMetadata(
+  path: string,
+  signal?: AbortSignal,
+): Promise<MediaRef> {
+  const response = await fetch(getMediaURL(path), {
+    method: "HEAD",
+    signal,
+  });
+  if (!response.ok) {
+    throw new APIError(
+      response.status,
+      response.statusText || `HTTP ${response.status}`,
+    );
+  }
+
+  const contentLengthHeader = response.headers.get("Content-Length");
+  const contentLength =
+    contentLengthHeader === null ? Number.NaN : Number(contentLengthHeader);
+  return {
+    artifact_path: path,
+    media_type: response.headers.get("Content-Type") || undefined,
+    ...(Number.isFinite(contentLength) && contentLength >= 0
+      ? { original_bytes: contentLength }
+      : {}),
+  };
+}
+
 export function getFileRawURL(path: string): string {
   return agentAPIPath(`/api/files/raw?path=${encodeURIComponent(path)}`);
 }
