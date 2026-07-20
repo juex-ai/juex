@@ -156,8 +156,13 @@ func (f *fakeBackend) recordAction(action string) {
 
 func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 	stateDir := t.TempDir()
+	workspace := t.TempDir()
 	sessionsDir := filepath.Join(stateDir, "sessions")
 	historyPath := filepath.Join(stateDir, "history.json")
+	previewPNG := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0x00, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(filepath.Join(workspace, "preview.png"), previewPNG, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	persisted, err := session.NewWithOptions(sessionsDir, session.Options{
 		Alias:       "offline-session",
 		Active:      true,
@@ -179,7 +184,7 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 		readOnly: fleet.ReadOnlyAgentState{
 			ID:        "aaaaaaaa",
 			Name:      "alpha",
-			Workspace: t.TempDir(),
+			Workspace: workspace,
 			StateDir:  stateDir,
 		},
 	}
@@ -206,6 +211,26 @@ func TestStoppedAgentServesPersistedSessionHistory(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if !strings.Contains(response.Body.String(), "persisted while offline") {
 		t.Fatalf("offline transcript = %s", response.Body.String())
+	}
+
+	request = httptest.NewRequest(
+		http.MethodHead,
+		"/agents/aaaaaaaa/api/media?path=preview.png",
+		nil,
+	)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("offline media HEAD status = %d, body=%s", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("offline media content type = %q", got)
+	}
+	if got := response.Header().Get("Content-Length"); got != fmt.Sprint(len(previewPNG)) {
+		t.Fatalf("offline media content length = %q", got)
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("offline media HEAD body length = %d", response.Body.Len())
 	}
 }
 
