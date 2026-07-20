@@ -231,7 +231,10 @@ export function Session() {
   }, [controller]);
 
   useLayoutEffect(() => {
-    if (!composerOverlayNode) return;
+    if (!composerOverlayNode) {
+      setComposerOverlayHeight(0);
+      return;
+    }
     const measure = () => {
       setComposerOverlayHeight(
         Math.ceil(composerOverlayNode.getBoundingClientRect().height),

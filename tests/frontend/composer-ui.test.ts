@@ -117,6 +117,10 @@ test("active session composer floats without consuming conversation layout", () 
   assert.match(sessionSource, /new ResizeObserver/);
   assert.match(
     sessionSource,
+    /if \(!composerOverlayNode\) \{[\s\S]*setComposerOverlayHeight\(0\);[\s\S]*return;/,
+  );
+  assert.match(
+    sessionSource,
     /<ConversationContent[\s\S]*style=\{\{[\s\S]*paddingBottom:/,
   );
   assert.match(
