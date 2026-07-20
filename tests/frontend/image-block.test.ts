@@ -33,3 +33,45 @@ test("message images follow role alignment and consecutive images form a gallery
   assert.match(sessionSource, /grid-cols-2/);
   assert.match(sessionSource, /media\.push\(candidate\.block\.media \?\? null\)/);
 });
+
+test("user attachments lead the message as compact preview thumbnails", () => {
+  const messageGroup = sessionSource.match(
+    /function MessageGroupView[\s\S]*?\n}\n\nfunction MessageImageGallery/,
+  )?.[0];
+  assert.ok(messageGroup);
+  assert.match(messageGroup, /const userImageMedia =/);
+  assert.match(
+    messageGroup,
+    /\{userImageMedia\.length > 0[\s\S]*?<MessageImageGallery[\s\S]*?group\.units\.map/,
+  );
+  assert.match(
+    messageGroup,
+    /if \(group\.role === "user"\) return null;/,
+  );
+
+  const gallery = sessionSource.match(
+    /function MessageImageGallery[\s\S]*?\n}\n\nfunction AssistantPlainText/,
+  )?.[0];
+  assert.ok(gallery);
+  assert.match(gallery, /flex w-full flex-wrap justify-end gap-2/);
+  assert.match(gallery, /variant=\{role === "user" \? "thumbnail" : "card"\}/);
+  assert.match(gallery, /role === "user" \? "ml-auto" : "mr-auto"/);
+
+  assert.match(
+    imageBlockSource,
+    /variant\?: "card" \| "thumbnail"/,
+  );
+  assert.match(imageBlockSource, /variant = "card"/);
+  assert.match(imageBlockSource, /const isThumbnail = variant === "thumbnail"/);
+  assert.match(imageBlockSource, /isThumbnail\s*\?\s*"[^"]*\bsize-20\b/);
+  assert.match(imageBlockSource, /aria-label=\{isThumbnail \? `Preview \$\{name\}`/);
+  assert.match(
+    imageBlockSource,
+    /aria-describedby=\{isThumbnail \? undefined : captionID\}/,
+  );
+  assert.match(imageBlockSource, /\{!isThumbnail \? \(\s*<figcaption/);
+  assert.match(
+    sessionSource,
+    /\{result\.media \? <ImageBlock media=\{result\.media\} \/> : null\}/,
+  );
+});
