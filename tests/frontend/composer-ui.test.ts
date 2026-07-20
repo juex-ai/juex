@@ -121,6 +121,19 @@ test("blocked keyboard submissions preserve the composer draft", () => {
   );
 });
 
+test("disposed status subscriptions cannot clear a newer snapshot", () => {
+  assert.match(
+    sessionSource,
+    /onError: \(event\) => \{\s*if \(disposed\) return;\s*statusStore\.clearStatus/,
+    "an error from a closed status stream must not clear a replacement subscription",
+  );
+  assert.match(
+    sessionSource,
+    /\.catch\(\(error\) => \{\s*if \(disposed\) return;\s*statusStore\.clearStatus/,
+    "a stale initial status request must not clear a newer snapshot",
+  );
+});
+
 test("deferred submit keeps follow-up text and attachment counts authoritative", () => {
   assert.match(sessionSource, /settleSubmittedComposerText\(current, submittedText\)/);
   assert.doesNotMatch(sessionSource, /setAttachmentCount\(0\)/);
