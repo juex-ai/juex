@@ -14,9 +14,14 @@ import {
   useMatch,
   useNavigate,
 } from "react-router-dom";
-import { AlertTriangle, Plus } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, Plus } from "lucide-react";
 
-import { listAgents, runAgentAction, subscribeFleetEvents } from "@/api";
+import {
+  getSessionScratchpad,
+  listAgents,
+  runAgentAction,
+  subscribeFleetEvents,
+} from "@/api";
 import { FileTreePanel } from "@/components/FileTreePanel";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +31,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { FleetAgentProvider } from "@/components/fleet/FleetAgentContext";
 import { FleetSidebar } from "@/components/fleet/FleetSidebar";
 import { FleetStageHeader } from "@/components/fleet/FleetStageHeader";
@@ -43,6 +54,13 @@ const WORKSPACE_DOCK_QUERY = "(min-width: 1280px)";
 const MOBILE_SIDEBAR_QUERY = "(max-width: 759px)";
 const LAST_AGENT_KEY = "juex:fleet:last-agent";
 const SIDEBAR_COLLAPSED_KEY = "juex:fleet:sidebar-collapsed";
+
+type FilePanelMode = "workspace" | "scratchpad";
+
+type FilePanelState = {
+  mode: FilePanelMode;
+  route: string;
+};
 
 type ShellTitleContextValue = {
   setShellHeader: (header: ShellHeaderState) => void;
@@ -74,7 +92,9 @@ export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const agentMatch = useMatch("/agents/:agentId/*");
+  const sessionMatch = useMatch("/agents/:agentId/sessions/:sessionId");
   const agentId = agentMatch?.params.agentId ?? "";
+  const sessionID = sessionMatch?.params.sessionId ?? "";
   const settings = location.pathname === "/settings";
   const activeTab = agentTabFromPath(location.pathname);
   const workspaceDocked = useMediaQuery(WORKSPACE_DOCK_QUERY);
@@ -99,6 +119,14 @@ export function AppShell() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [workspaceDockOpen, setWorkspaceDockOpen] = useState(true);
   const [workspaceSheetOpen, setWorkspaceSheetOpen] = useState(false);
+  const [filePanelState, setFilePanelState] = useState<FilePanelState>(() => ({
+    mode: "workspace",
+    route: location.pathname,
+  }));
+  const filePanelMode =
+    filePanelState.route === location.pathname
+      ? filePanelState.mode
+      : "workspace";
   const currentAgent =
     agents.find((candidate) => candidate.id === agentId) ?? null;
   const invalidAgentRoute =
@@ -192,6 +220,19 @@ export function AppShell() {
     }
   }, [activeTab]);
 
+  useEffect(() => {
+    setFilePanelState((current) =>
+      current.route === location.pathname
+        ? current
+        : { route: location.pathname, mode: "workspace" },
+    );
+  }, [location.pathname]);
+
+  const loadScratchpadTree = useCallback(
+    (signal?: AbortSignal) => getSessionScratchpad(sessionID, signal),
+    [sessionID],
+  );
+
   const runLifecycle = useCallback(
     async (agent: AgentStatus) => {
       const action = nextAgentLifecycleAction(agent);
@@ -249,6 +290,31 @@ export function AppShell() {
   const workspaceOpen = workspaceDocked
     ? workspaceDockOpen && workspaceAvailable
     : workspaceSheetOpen && workspaceAvailable;
+  const scratchpadMode = filePanelMode === "scratchpad";
+  const filePanelTitle = scratchpadMode ? "Scratchpad" : "Workspace";
+  const filePanelKey = `${agentId}:${sessionID || "workspace"}:${filePanelMode}`;
+  const filePanelHeaderAction = sessionID ? (
+    <FilePanelModeToggle
+      mode={filePanelMode}
+      onToggle={() =>
+        setFilePanelState({
+          route: location.pathname,
+          mode: scratchpadMode ? "workspace" : "scratchpad",
+        })
+      }
+    />
+  ) : undefined;
+  const filePanelProps = {
+    emptyLabel: scratchpadMode
+      ? "No scratchpad files yet."
+      : "This directory is empty.",
+    headerAction: filePanelHeaderAction,
+    loadTree: scratchpadMode ? loadScratchpadTree : undefined,
+    refreshLabel: scratchpadMode
+      ? "Refresh scratchpad"
+      : "Refresh workspace",
+    title: filePanelTitle,
+  };
 
   const sidebar = (
     <FleetSidebar
@@ -294,6 +360,7 @@ export function AppShell() {
             <FleetStageHeader
               agent={currentAgent}
               activeTab={activeTab}
+              filePanelTitle={filePanelTitle}
               settings={settings}
               workspaceOpen={workspaceOpen}
               onOpenMobileSidebar={() => setMobileSidebarOpen(true)}
@@ -370,7 +437,11 @@ export function AppShell() {
               </div>
               {workspaceDockOpen && workspaceAvailable ? (
                 <div className="hidden h-full w-[clamp(16rem,22vw,20rem)] shrink-0 flex-col overflow-hidden border-l bg-card xl:flex">
-                  <FileTreePanel key={agentId} active={workspaceDocked} />
+                  <FileTreePanel
+                    active={workspaceDocked}
+                    rootKey={filePanelKey}
+                    {...filePanelProps}
+                  />
                 </div>
               ) : null}
             </div>
@@ -385,20 +456,51 @@ export function AppShell() {
               side="right"
             >
               <SheetHeader className="sr-only">
-                <SheetTitle>Workspace</SheetTitle>
+                <SheetTitle>{filePanelTitle}</SheetTitle>
                 <SheetDescription>
-                  Browse files in the current workspace.
+                  Browse files in the current {filePanelTitle.toLowerCase()}.
                 </SheetDescription>
               </SheetHeader>
               <FileTreePanel
-                key={agentId}
                 active={!workspaceDocked && workspaceSheetOpen}
+                rootKey={filePanelKey}
+                {...filePanelProps}
               />
             </SheetContent>
           </Sheet>
         </div>
       </FleetAgentProvider>
     </ShellTitleContext.Provider>
+  );
+}
+
+function FilePanelModeToggle({
+  mode,
+  onToggle,
+}: {
+  mode: FilePanelMode;
+  onToggle: () => void;
+}) {
+  const label = mode === "scratchpad" ? "Show workspace" : "Show scratchpad";
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-foreground"
+            onClick={onToggle}
+            aria-label={label}
+          >
+            <ArrowLeftRight className="size-3.5" aria-hidden="true" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

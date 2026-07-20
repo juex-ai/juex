@@ -227,9 +227,11 @@ narrower screens. Session history is opened from the stage header as
 - The stage header contains the agent name, a compact status pill, and the
   Chat/Runtime/Observables/Logs/Config tab strip. Existing route components and
   canonical deep links remain the source of page behavior.
-- Workspace docks as a right column at 1280px and wider. Below 1280px, the
-  same header button opens the workspace as a right-side `Sheet` so the
-  conversation column keeps its readable width.
+- The file browser docks as a right column at 1280px and wider. Below 1280px,
+  the same header button opens it as a right-side `Sheet` so the conversation
+  column keeps its readable width. On a concrete session route, an icon beside
+  the panel title switches between the agent Workspace and that session's
+  Scratchpad. Route changes reset the panel to Workspace.
 - File previews always open in a right-side sheet. On narrow screens the
   preview sheet uses the viewport width. Text previews wrap long paths/content;
   image previews fit inside the sheet without cropping.
@@ -287,11 +289,11 @@ context total, and current conversation token total. Active primary sessions
 support image paste, drag/drop, and picker upload in the composer, with a
 bounded thumbnail strip before sending.
 
-Both writable and read-only session controls expose an icon-only folder action
-for the session scratchpad. It opens a right-side `Sheet` containing the reused
-file tree, refresh and empty states, and existing text/image preview behavior.
-The browser is scoped to that session's scratchpad; the global Workspace tree
-continues to hide `.juex` runtime state.
+The shell file browser exposes the session scratchpad beside its title instead
+of adding an unrelated action to writable or read-only session controls. The
+shared panel keeps its refresh, empty, and text/image preview behavior while
+switching between the session-scoped Scratchpad and the agent Workspace. The
+Workspace tree continues to hide `.juex` runtime state.
 
 When an accepted image turn targets a model without vision capability, the turn
 response supplies a non-blocking warning. The session controller renders its
@@ -685,9 +687,10 @@ by model-owned Notes. Notes render as Markdown; when they contain task items,
 the tooltip shows completed/total counts and a thin progress indicator. The
 `notes.updated` event updates this state without waiting for a transcript
 refresh.
-The adjacent scratchpad folder action is a separate command rather than another
-state badge. It fetches `/api/sessions/<id>/scratchpad` only while its Sheet is
-open and delegates file preview to the existing workspace-bounded endpoints.
+The file-browser title action fetches `/api/sessions/<id>/scratchpad` only when
+Scratchpad is selected and delegates file preview to the existing
+workspace-bounded endpoints. It is available only on a concrete session route;
+changing routes restores Workspace mode.
 
 `src/lib/session-read-controller.ts` owns the session-detail effect interpreter:
 route guards, snapshot/context refresh, EventSource dispatch, turn polling,

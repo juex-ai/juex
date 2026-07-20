@@ -1,6 +1,5 @@
 import {
   type ReactNode,
-  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -44,13 +43,6 @@ import { AgentRuntimeStateBar } from "@/components/fleet/AgentRuntimeStateBar";
 import { useFleetAgent } from "@/components/fleet/FleetAgentContext";
 import { ImageBlock } from "@/components/ImageBlock";
 import { LoadingState } from "@/components/LoadingState";
-import { FileTreePanel } from "@/components/FileTreePanel";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   messagesToGroups,
   toolState,
@@ -135,7 +127,6 @@ import {
 import {
   getSession,
   getSessionContext,
-  getSessionScratchpad,
   getSessionStatus,
   getTurnStatus,
   interrupt,
@@ -153,7 +144,6 @@ import {
   ChevronUpIcon,
   CircleGaugeIcon,
   CopyIcon,
-  FolderOpenIcon,
   ImagePlusIcon,
   LoaderCircleIcon,
   RadioIcon,
@@ -465,7 +455,6 @@ export function Session() {
                       role="group"
                     >
                       <ComposerAttachmentButton />
-                      <ScratchpadButton sessionID={data.id} />
                     </div>
                     <Separator
                       className="h-4"
@@ -602,55 +591,6 @@ function SessionRuntimeStateBadges({ data }: { data: SessionShowResponse }) {
     >
       <SessionStateTooltip goal={data.goal} notes={data.notes} />
     </SessionStateBadge>
-  );
-}
-
-function ScratchpadButton({ sessionID }: { sessionID: string }) {
-  const [open, setOpen] = useState(false);
-  const loadTree = useCallback(
-    (signal?: AbortSignal) => getSessionScratchpad(sessionID, signal),
-    [sessionID],
-  );
-
-  return (
-    <>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="Browse session scratchpad"
-              className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
-              onClick={() => setOpen(true)}
-              size="icon"
-              type="button"
-              variant="ghost"
-            >
-              <FolderOpenIcon className="size-3.5" aria-hidden="true" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Browse session scratchpad</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent
-          className="flex !w-full !max-w-none flex-col gap-0 border-l bg-card p-0 sm:!max-w-xl"
-          side="right"
-        >
-          <SheetTitle className="sr-only">Session scratchpad</SheetTitle>
-          <SheetDescription className="sr-only">
-            Files saved as temporary working material for this session.
-          </SheetDescription>
-          <FileTreePanel
-            key={sessionID}
-            active={open}
-            emptyLabel="No scratchpad files yet."
-            loadTree={loadTree}
-            refreshLabel="Refresh scratchpad"
-            title="Scratchpad"
-          />
-        </SheetContent>
-      </Sheet>
-    </>
   );
 }
 
@@ -981,7 +921,6 @@ function ReadOnlySessionBar({ data }: { data: SessionShowResponse }) {
       <div className="min-w-0 flex-1 text-muted-foreground">
         {sessionReadOnlyMessage(data)}
       </div>
-      <ScratchpadButton sessionID={data.id} />
     </div>
   );
 }

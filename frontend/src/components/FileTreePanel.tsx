@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { getFileTree, getFileContent, getFileRawURL } from "@/api";
 import type { FileContentResponse, FileNode } from "@/types";
 import {
@@ -35,16 +42,20 @@ const WORKSPACE_REFRESH_INTERVAL_MS = 5_000;
 type FileTreePanelProps = {
   active?: boolean;
   emptyLabel?: string;
+  headerAction?: ReactNode;
   loadTree?: LoadFileTree;
   refreshLabel?: string;
+  rootKey?: string;
   title?: string;
 };
 
 export function FileTreePanel({
   active = true,
   emptyLabel = "This directory is empty.",
+  headerAction,
   loadTree = getFileTree,
   refreshLabel = "Refresh workspace",
+  rootKey = "workspace",
   title = "Workspace",
 }: FileTreePanelProps) {
   const [tree, setTree] = useState<FileNode | null>(null);
@@ -55,6 +66,19 @@ export function FileTreePanel({
   const treeRef = useRef<FileNode | null>(null);
   const refreshAbortRef = useRef<AbortController | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
+
+  useLayoutEffect(() => {
+    refreshAbortRef.current?.abort();
+    previewAbortRef.current?.abort();
+    refreshAbortRef.current = null;
+    previewAbortRef.current = null;
+    treeRef.current = null;
+    setTree(null);
+    setLoading(true);
+    setRefreshing(false);
+    setError(null);
+    setPreviewFile(null);
+  }, [rootKey]);
 
   const refreshWorkspace = useCallback(() => {
     if (!active) return;
@@ -100,7 +124,7 @@ export function FileTreePanel({
       refreshAbortRef.current = null;
       previewAbortRef.current?.abort();
     };
-  }, [active, refreshWorkspace]);
+  }, [active, refreshWorkspace, rootKey]);
 
   const handleRefreshClick = () => {
     refreshWorkspace();
@@ -132,7 +156,10 @@ export function FileTreePanel({
   return (
     <div className="flex h-full min-w-0 flex-col bg-card text-card-foreground">
       <div className="flex h-[var(--juex-header-height)] shrink-0 items-center justify-between gap-2 border-b px-4 pr-12 font-sans text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground xl:pr-4">
-        <span>{title}</span>
+        <div className="flex min-w-0 items-center gap-1">
+          <span className="truncate">{title}</span>
+          {headerAction}
+        </div>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
