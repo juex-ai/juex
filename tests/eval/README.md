@@ -121,7 +121,10 @@ binary through two live agent workflows. The capability workflow requires the
 model to use `read`, `write`, `edit`, `grep`, `exec_command`, and
 `write_stdin` against case-local files and a deterministic interactive
 installer command. The separate Schedule routing workflow asks for recurring
-six-hour timed work without naming a creation tool.
+six-hour timed work without naming a creation tool. A SHA-256 parity of the run
+id deterministically selects either an empty or seeded-equivalent variant for
+every provider/model row in that run; the selected variant is recorded in
+JSONL and summary artifacts.
 
 The smoke is intentionally stricter than a simple provider connectivity check.
 It parses the persisted `conversation.jsonl`, checks filesystem side effects,
@@ -142,12 +145,19 @@ passing run requires:
   token;
 - expected `write`/`edit` file side effects on disk.
 
-The Schedule routing subscenario must also:
+The Schedule routing subscenario always avoids the command-Observable route
+and competing scheduler commands. Its variant-specific contract is:
 
-- complete `observable_list` successfully before issuing `schedule_create`;
-- avoid the command-Observable route;
-- persist exactly one tagged `type: schedule` entry with `schedule_config`,
-  `interval.every_seconds: 21600`, and the requested observation content.
+- `empty`: complete `observable_list` successfully before every
+  `schedule_create`, then persist exactly one requested-id tagged
+  `type: schedule` entry with `schedule_config`,
+  `interval.every_seconds: 21600`, and the requested Observation content.
+- `seeded-equivalent`: begin with one different-id Schedule with the requested
+  interval and content; inspect a native `observable_list` result that exposes
+  the equivalent `schedule_config` with runtime state `running`; produce no
+  successful `schedule_create`, do not call `observable_create`,
+  `observable_delete`, or `observable_stop`; and leave exactly that one
+  equivalent Schedule available in final state.
 
 `skill_load` is advisory and is not part of this outcome contract. A run passes
 whether the guide is omitted, loaded in parallel with listing, or loaded later.
@@ -156,15 +166,23 @@ the exact persisted Schedule shape is the authoritative routing outcome.
 Shell loops, detached interval sleeps, `watch`, `crontab`, and `systemd-run`
 remain rejected because they create a competing recurring side effect.
 Additional `observable_list` calls, including post-create verification, are
-allowed as long as at least one successful list result preceded creation.
-Failed `schedule_create` attempts are also allowed when the model uses the
-failure hint to recover; exactly one create call must ultimately succeed.
+allowed. In the empty variant, at least one successful list result must precede
+every create attempt. Failed `schedule_create` attempts are allowed there when
+the model uses the failure hint to recover; exactly one create call must
+ultimately succeed. The seeded-equivalent variant is batching-independent: its
+completion token must follow the successful list result, while its mutation and
+final-state checks reject blind duplicate creation. A failed speculative
+`schedule_create` is tolerated in the seeded variant when the model recovers
+from the successful list result and leaves the seeded config unchanged.
 
 Each Schedule retry uses a new workspace and session. Its transcript, events,
-stdout, stderr, prompt, `observables.json`, and contract report are retained under
-`cases/<provider_model>/schedule-routing/attempt-N/`. A Schedule contract
-failure fails the provider:model result rather than adding another result or
-rotation target.
+stdout, stderr, prompt, final `observables.json`, and contract report are
+retained under `cases/<provider_model>/schedule-routing/attempt-N/`. Seeded
+attempts also retain `seed-observables.json` so the initial fixture cannot be
+confused with final state. Retryable turn failures and Schedule contract
+failures consume the same bounded `--retries` budget in fresh attempts.
+Persistent failures still fail the single provider:model result rather than
+adding another result or rotation target.
 
 A failed provider:model is not a skip; keep the report and explain whether the
 problem is configuration, provider capability, prompt-following, or a JueX

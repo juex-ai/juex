@@ -11,7 +11,9 @@ constraints, or examples. Correct tool calls do not require a prior guide load.
 ## Routing
 
 - Call `observable_list` before creating anything and reuse or update the
-  user's intent when an equivalent configuration already exists.
+  user's intent when an equivalent configuration already exists. Schedule
+  entries include read-only `schedule_config` alongside runtime status so
+  recurrence and Observation content can be compared directly.
 - Use `observable_create` only for a managed command whose stdout or stderr is
   parsed into durable Observations.
 - Use `schedule_create` for one-time, daily, or interval activation that emits

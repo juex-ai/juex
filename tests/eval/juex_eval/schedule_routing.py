@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 import re
@@ -15,6 +16,14 @@ except ImportError:  # pragma: no cover - direct script fallback.
 
 FORBIDDEN_TOOLS = {
     "observable_create",
+}
+
+EMPTY_VARIANT = "empty"
+SEEDED_EQUIVALENT_VARIANT = "seeded-equivalent"
+
+SEEDED_MUTATION_TOOLS = {
+    "observable_delete",
+    "observable_stop",
 }
 
 SHELL_COMMAND_FIELDS = {
@@ -70,6 +79,19 @@ class ScheduleRoutingExpectation:
     every_seconds: int
     content: str
     completion_token: str
+    existing_schedule_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.existing_schedule_id is None:
+            return
+        if not self.existing_schedule_id.strip():
+            raise ValueError("existing_schedule_id cannot be empty")
+        if self.existing_schedule_id == self.schedule_id:
+            raise ValueError("existing_schedule_id must differ from schedule_id")
+
+    @property
+    def variant(self) -> str:
+        return SEEDED_EQUIVALENT_VARIANT if self.existing_schedule_id is not None else EMPTY_VARIANT
 
 
 @dataclass(frozen=True)
@@ -85,13 +107,52 @@ class _ToolUse:
 class _ToolResult:
     tool_use_id: str
     is_error: bool
+    content: Any
     message_index: int
     block_index: int
+
+
+def variant_for_run_id(run_id: str) -> str:
+    if not run_id:
+        raise ValueError("run_id cannot be empty")
+    digest = hashlib.sha256(run_id.encode("utf-8")).digest()
+    return SEEDED_EQUIVALENT_VARIANT if digest[0] % 2 else EMPTY_VARIANT
+
+
+def seeded_observables_config(expectation: ScheduleRoutingExpectation) -> dict[str, Any]:
+    if expectation.existing_schedule_id is None:
+        raise ValueError("seeded Observables config requires existing_schedule_id")
+    return {
+        "observables": [
+            {
+                "id": expectation.existing_schedule_id,
+                "type": "schedule",
+                "schedule_config": {
+                    "interval": {"every_seconds": expectation.every_seconds},
+                    "observation": {"content": expectation.content},
+                },
+            }
+        ]
+    }
 
 
 def build_prompt(expectation: ScheduleRoutingExpectation) -> str:
     hours = expectation.every_seconds / 3600
     hours_text = str(int(hours)) if hours.is_integer() else f"{hours:g}"
+    if expectation.variant == SEEDED_EQUIVALENT_VARIANT:
+        return "\n".join(
+            [
+                "Ensure recurring timed work is available using JueX native scheduling.",
+                f"The requested work must run every {hours_text} hours; if creation is necessary, use the fixed id {expectation.schedule_id}.",
+                f"Each activation must emit observation content exactly: {expectation.content}",
+                "Inspect all currently configured timed sources first.",
+                "Treat an existing Schedule with the same cadence and observation content as equivalent even if its id differs.",
+                "Create the requested fixed id only if no equivalent timed source is already configured.",
+                "Use native scheduling for recurrence; do not implement it with shell polling, background loops, or a managed command source.",
+                "You may briefly reference an equivalent existing source, but after the timed work is available, "
+                f"finish with a final line exactly: {expectation.completion_token}",
+            ]
+        )
     return "\n".join(
         [
             "Create recurring timed work using JueX native scheduling.",
@@ -169,6 +230,7 @@ def _transcript_tools(messages: list[dict[str, Any]]) -> tuple[list[_ToolUse], l
                     _ToolResult(
                         tool_use_id=str(block.get("tool_use_id") or ""),
                         is_error=block.get("is_error") is True,
+                        content=block.get("content"),
                         message_index=message_index,
                         block_index=block_index,
                     )
@@ -187,6 +249,8 @@ def _validate_tool_contract(
     for use in uses:
         if use.name in FORBIDDEN_TOOLS:
             issues.append(f"forbidden tool_use: {use.name}")
+        if expectation.variant == SEEDED_EQUIVALENT_VARIANT and use.name in SEEDED_MUTATION_TOOLS:
+            issues.append(f"forbidden seeded-equivalent tool_use: {use.name}")
         if _is_shell_scheduling_command(use):
             issues.append(f"forbidden shell scheduling command: {use.name}")
 
@@ -194,14 +258,49 @@ def _validate_tool_contract(
     create_uses = [use for use in uses if use.name == "schedule_create"]
     if not list_uses:
         issues.append("expected at least one observable_list tool_use, saw 0")
-    if not create_uses:
-        issues.append("expected at least one schedule_create tool_use, saw 0")
-
+    successful_lists = [
+        (list_use, result)
+        for list_use in list_uses
+        if (result := _successful_result_after(list_use, results)) is not None
+    ]
     successful_creates = [
         (create_use, result)
         for create_use in create_uses
         if (result := _successful_result_after(create_use, results)) is not None
     ]
+
+    if expectation.variant == SEEDED_EQUIVALENT_VARIANT:
+        matching_lists = [
+            (list_use, result)
+            for list_use, result in successful_lists
+            if _list_result_contains_equivalent(result, expectation)
+        ]
+        if not matching_lists:
+            issues.append(
+                "expected a successful observable_list result exposing the running equivalent seeded schedule"
+            )
+        else:
+            _, matching_result = matching_lists[0]
+            completion_after = _position(matching_result)
+        if successful_creates:
+            issues.append(
+                "expected zero successful schedule_create tool_use in seeded-equivalent variant, "
+                f"saw {len(successful_creates)}"
+            )
+        if completion_after is None or not _has_exact_final_line_after(
+            messages,
+            expectation.completion_token,
+            completion_after,
+        ):
+            issues.append(
+                "exact completion token must appear after successful observable_list: "
+                + expectation.completion_token
+            )
+        return
+
+    if not create_uses:
+        issues.append("expected at least one schedule_create tool_use, saw 0")
+
     if len(successful_creates) != 1:
         issues.append(
             f"expected exactly one successful schedule_create tool_use, saw {len(successful_creates)}"
@@ -248,6 +347,34 @@ def _successful_result_after(use: _ToolUse, results: list[_ToolResult]) -> _Tool
         ):
             return None if result.is_error else result
     return None
+
+
+def _list_result_contains_equivalent(
+    result: _ToolResult,
+    expectation: ScheduleRoutingExpectation,
+) -> bool:
+    content = result.content
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except json.JSONDecodeError:
+            return False
+    if not isinstance(content, dict):
+        return False
+    observables = content.get("observables")
+    if not isinstance(observables, list):
+        return False
+    for entry in observables:
+        if not isinstance(entry, dict) or entry.get("id") != expectation.existing_schedule_id:
+            continue
+        if entry.get("source_type") != "schedule":
+            continue
+        if entry.get("state") != "running":
+            continue
+        schedule_config = entry.get("schedule_config")
+        if _schedule_config_matches(schedule_config, expectation):
+            return True
+    return False
 
 
 def _has_successful_list_before(
@@ -839,6 +966,31 @@ def _has_exact_completion_after(
     return False
 
 
+def _has_exact_final_line_after(
+    messages: list[dict[str, Any]],
+    token: str,
+    after: tuple[int, int],
+) -> bool:
+    for message_index, message in enumerate(messages):
+        if message.get("role") != "assistant":
+            continue
+        blocks = message.get("blocks")
+        if not isinstance(blocks, list):
+            continue
+        for block_index, block in enumerate(blocks):
+            if (
+                (message_index, block_index) <= after
+                or not isinstance(block, dict)
+                or block.get("type") != "text"
+                or not isinstance(block.get("text"), str)
+            ):
+                continue
+            lines = [line.strip() for line in block["text"].splitlines() if line.strip()]
+            if lines and lines[-1] == token:
+                return True
+    return False
+
+
 def _validate_persisted_config(
     path: pathlib.Path,
     expectation: ScheduleRoutingExpectation,
@@ -862,6 +1014,17 @@ def _validate_persisted_config(
     if not isinstance(observables, list):
         issues.append("observables config must contain an observables array")
         return
+    equivalent_count = sum(
+        1
+        for entry in observables
+        if isinstance(entry, dict)
+        and entry.get("type") == "schedule"
+        and _schedule_config_matches(entry.get("schedule_config"), expectation)
+    )
+    if equivalent_count != 1:
+        issues.append(
+            f"observables config must contain exactly one equivalent schedule, saw {equivalent_count}"
+        )
     if len(observables) != 1:
         issues.append(f"observables config must contain exactly one entry, saw {len(observables)}")
         return
@@ -869,8 +1032,9 @@ def _validate_persisted_config(
     if not isinstance(entry, dict):
         issues.append("persisted observable entry must be an object")
         return
-    if entry.get("id") != expectation.schedule_id:
-        issues.append(f"persisted id must equal {expectation.schedule_id!r}")
+    expected_id = expectation.existing_schedule_id or expectation.schedule_id
+    if entry.get("id") != expected_id:
+        issues.append(f"persisted id must equal {expected_id!r}")
     if entry.get("type") != "schedule":
         issues.append("persisted type must equal 'schedule'")
     allowed_fields = {"id", "name", "type", "schedule_config"}
@@ -887,3 +1051,16 @@ def _validate_persisted_config(
     observation = schedule_config.get("observation")
     if not isinstance(observation, dict) or observation.get("content") != expectation.content:
         issues.append(f"persisted schedule_config.observation.content must equal {expectation.content!r}")
+
+
+def _schedule_config_matches(value: Any, expectation: ScheduleRoutingExpectation) -> bool:
+    if not isinstance(value, dict):
+        return False
+    interval = value.get("interval")
+    observation = value.get("observation")
+    return (
+        isinstance(interval, dict)
+        and interval.get("every_seconds") == expectation.every_seconds
+        and isinstance(observation, dict)
+        and observation.get("content") == expectation.content
+    )
