@@ -180,7 +180,7 @@ func TestLoadFromFileFallbackModelsValidation(t *testing.T) {
 	}
 }
 
-func TestWorkspacePrimaryRemovesInheritedFallback(t *testing.T) {
+func TestWorkspacePrimaryDeduplicatesInheritedFallback(t *testing.T) {
 	home := prepareConfigTest(t)
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), fallbackModelsTestConfig(`
 model: openai:gpt-primary
@@ -201,6 +201,22 @@ fallback_models:
 	}
 	if got := modelChainRefs(chain); got != "anthropic:claude-backup,local:qwen-backup" {
 		t.Fatalf("model chain = %q", got)
+	}
+
+	cfg, err = LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ModelRef:   "openai:gpt-env",
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err = cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modelChainRefs(chain); got != "openai:gpt-env,anthropic:claude-backup,local:qwen-backup" {
+		t.Fatalf("override model chain = %q", got)
 	}
 }
 

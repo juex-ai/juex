@@ -1015,14 +1015,6 @@ func resolveSelectedProvider(cfg *Config) error {
 }
 
 func validateConfiguredFallbackModels(cfg *Config) error {
-	primary := strings.TrimSpace(cfg.modelRef)
-	if primary != "" {
-		ref, err := ParseModelRef(primary)
-		if err != nil {
-			return err
-		}
-		primary = ref.String()
-	}
 	seen := make(map[string]struct{}, len(cfg.FallbackModels))
 	normalized := make([]string, 0, len(cfg.FallbackModels))
 	for i, raw := range cfg.FallbackModels {
@@ -1035,9 +1027,6 @@ func validateConfiguredFallbackModels(cfg *Config) error {
 			return fmt.Errorf("config: duplicate fallback_models entry %q", canonical)
 		}
 		seen[canonical] = struct{}{}
-		if canonical == primary {
-			continue
-		}
 		if err := validateConfiguredModelRef(cfg, ref); err != nil {
 			return fmt.Errorf("config: fallback_models[%d]: %w", i, err)
 		}
