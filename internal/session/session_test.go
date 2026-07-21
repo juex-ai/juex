@@ -292,6 +292,48 @@ func TestAcquireSessionLockRemovesDeadPIDLock(t *testing.T) {
 	}
 }
 
+func TestAcquireSessionLockRemovesReusedPIDLock(t *testing.T) {
+	startedAt, err := processStartedAt(os.Getpid())
+	if err != nil {
+		t.Skipf("process start time unavailable: %v", err)
+	}
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "20260529T120000-reusedpid")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, sessionLockFile)
+	stale := LockInfo{
+		PID:       os.Getpid(),
+		Mode:      "serve",
+		SessionID: filepath.Base(dir),
+		StartedAt: startedAt.Add(-time.Minute),
+	}
+	data, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := AcquireSessionLock(dir, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lock.Close(); err != nil {
+			t.Fatalf("close lock: %v", err)
+		}
+	})
+
+	info := readLockInfo(path)
+	if info.PID != os.Getpid() || info.Mode != "resume" || info.SessionID != filepath.Base(dir) {
+		t.Fatalf("lock info = %+v, want current process resume lock", info)
+	}
+}
+
 func TestAcquireSessionLockStaleCleanupHasSingleWinner(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "20260529T120000-stalerace")

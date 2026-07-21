@@ -1024,6 +1024,7 @@ func validateConfiguredFallbackModels(cfg *Config) error {
 		primary = ref.String()
 	}
 	seen := make(map[string]struct{}, len(cfg.FallbackModels))
+	normalized := make([]string, 0, len(cfg.FallbackModels))
 	for i, raw := range cfg.FallbackModels {
 		ref, err := ParseModelRef(raw)
 		if err != nil {
@@ -1033,15 +1034,16 @@ func validateConfiguredFallbackModels(cfg *Config) error {
 		if _, ok := seen[canonical]; ok {
 			return fmt.Errorf("config: duplicate fallback_models entry %q", canonical)
 		}
+		seen[canonical] = struct{}{}
 		if canonical == primary {
-			return fmt.Errorf("config: fallback_models entry %q equals configured primary", canonical)
+			continue
 		}
 		if err := validateConfiguredModelRef(cfg, ref); err != nil {
 			return fmt.Errorf("config: fallback_models[%d]: %w", i, err)
 		}
-		seen[canonical] = struct{}{}
-		cfg.FallbackModels[i] = canonical
+		normalized = append(normalized, canonical)
 	}
+	cfg.FallbackModels = normalized
 	return nil
 }
 

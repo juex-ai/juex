@@ -12,6 +12,7 @@ const sessionLockFile = "session.lock"
 const sessionLockGuardFile = "session.lock.guard"
 
 const unreadableLockStaleAfter = 5 * time.Second
+const processStartTolerance = 2 * time.Second
 
 type Lock struct {
 	path string
@@ -98,10 +99,23 @@ func clearDeadProcessLock(path string) (bool, error) {
 		return clearUnreadableLockIfStale(path)
 	}
 	alive, err := processExists(info.PID)
-	if err != nil || alive {
+	if err != nil {
 		return false, nil
 	}
-	return removeLockFile(path)
+	if !alive {
+		return removeLockFile(path)
+	}
+	if info.StartedAt.IsZero() {
+		return false, nil
+	}
+	startedAt, err := processStartedAt(info.PID)
+	if err != nil {
+		return false, nil
+	}
+	if startedAt.After(info.StartedAt.Add(processStartTolerance)) {
+		return removeLockFile(path)
+	}
+	return false, nil
 }
 
 func clearUnreadableLockIfStale(path string) (bool, error) {
