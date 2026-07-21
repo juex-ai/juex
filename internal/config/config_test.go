@@ -164,7 +164,6 @@ func TestLoadFromFileFallbackModelsValidation(t *testing.T) {
 		want      string
 	}{
 		{name: "duplicate", fallbacks: "  - anthropic:claude-backup\n  - anthropic:claude-backup", want: "duplicate fallback_models"},
-		{name: "primary", fallbacks: "  - openai:gpt-primary", want: "equals configured primary"},
 		{name: "unknown provider", fallbacks: "  - missing:model", want: "unknown provider"},
 		{name: "unknown model", fallbacks: "  - local:missing", want: "unknown model"},
 	}
@@ -178,6 +177,30 @@ func TestLoadFromFileFallbackModelsValidation(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestWorkspacePrimaryRemovesInheritedFallback(t *testing.T) {
+	home := prepareConfigTest(t)
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), fallbackModelsTestConfig(`
+model: openai:gpt-primary
+fallback_models:
+  - anthropic:claude-backup
+  - local:qwen-backup
+`))
+	workDir := t.TempDir()
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), "model: anthropic:claude-backup\n")
+
+	cfg, err := LoadForWorkDir(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := cfg.ModelChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := modelChainRefs(chain); got != "anthropic:claude-backup,local:qwen-backup" {
+		t.Fatalf("model chain = %q", got)
 	}
 }
 

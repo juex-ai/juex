@@ -782,9 +782,11 @@ ids instead of duplicating those rules.
 App lifetimes acquire `sessions/<id>/session.lock` inside the agent home so two
 processes do not append to the same session concurrently. Startup serializes
 lock cleanup with a short-lived guard file. If a leftover lock names a PID that
-is no longer running, or an unreadable lock is old enough to rule out an
-in-progress write, startup removes that stale lock and retries the atomic
-acquire.
+is no longer running, names a PID reused by a process that started after the
+lock, or is unreadable and old enough to rule out an in-progress write, startup
+removes that stale lock and retries the atomic acquire. Platforms that cannot
+report process start time keep a live-PID lock rather than risk concurrent
+session writers.
 
 New web sessions are lazy for transcript files: `POST /api/sessions` allocates
 an in-memory primary session, records it as active, and only creates
@@ -1547,8 +1549,9 @@ provider:model after YAML merge and wins over `PROVIDER_API_ID`,
 such as `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_THINKING_EFFORT`,
 and `PROVIDER_CONTEXT_WINDOW` still apply. `.env` is no longer read by default.
 `PROVIDER_API_MODEL` remains a model-id-only override under the selected
-provider. Both primary override paths preserve `fallback_models`; an
-override-created duplicate is removed from the effective chain.
+provider. Primary overrides preserve `fallback_models`; any fallback selected
+as the primary by YAML layering, environment, or CLI override is removed from
+the effective chain.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider:model` or override a few fields while inheriting missing values
