@@ -292,6 +292,17 @@ func TestAcquireSessionLockRemovesDeadPIDLock(t *testing.T) {
 	}
 }
 
+func TestProcessStartedAtCurrentProcessIsPlausible(t *testing.T) {
+	startedAt, err := processStartedAt(os.Getpid())
+	if err != nil {
+		t.Skipf("process start time unavailable: %v", err)
+	}
+	now := time.Now().UTC()
+	if startedAt.After(now.Add(time.Second)) || startedAt.Before(now.Add(-24*time.Hour)) {
+		t.Fatalf("process start time = %v, want within the last 24 hours", startedAt)
+	}
+}
+
 func TestAcquireSessionLockRemovesReusedPIDLock(t *testing.T) {
 	startedAt, err := processStartedAt(os.Getpid())
 	if err != nil {
