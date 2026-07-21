@@ -294,14 +294,19 @@ export function Session() {
         statusStore.setStatus(agent.id, snapshot);
         unsubscribe = subscribeSessionStatus(id, {
           since: snapshot.cursor,
-          onStatus: (next) => statusStore.setStatus(agent.id, next),
+          onStatus: (next) => {
+            if (disposed) return;
+            statusStore.setStatus(agent.id, next);
+          },
           onError: (event) => {
+            if (disposed) return;
             statusStore.clearStatus(agent.id, id);
             console.error("session status stream failed", event);
           },
         });
       })
       .catch((error) => {
+        if (disposed) return;
         statusStore.clearStatus(agent.id, id);
         console.error("getSessionStatus failed", error);
       });
