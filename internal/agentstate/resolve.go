@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 const (
@@ -132,7 +134,7 @@ func Resolve(opts Options) (Resolution, error) {
 	if err := os.MkdirAll(filepath.Join(homeDir, "agents"), 0o755); err != nil {
 		return Resolution{}, fmt.Errorf("agentstate: create registry under %s: %w", homeDir, err)
 	}
-	workspaceLock, err := acquireLockGuard(workspaceLockPath(homeDir, workDir))
+	workspaceLock, err := homestore.AcquireLock(workspaceLockPath(homeDir, workDir), homestore.LockWait)
 	if err != nil {
 		return Resolution{}, fmt.Errorf("agentstate: lock workspace %s: %w", workDir, err)
 	}
@@ -381,12 +383,8 @@ func loadMarker(path string) (Marker, bool, error) {
 	return marker, true, nil
 }
 
-func acquireAgentLock(homeDir, agentID string) (*lockGuard, error) {
-	lockDir := filepath.Join(homeDir, ".locks", "agents")
-	if err := os.MkdirAll(lockDir, 0o700); err != nil {
-		return nil, fmt.Errorf("agentstate: create agent lock directory: %w", err)
-	}
-	guard, err := acquireLockGuard(filepath.Join(lockDir, agentID+".lock"))
+func acquireAgentLock(homeDir, agentID string) (*homestore.Lock, error) {
+	guard, err := homestore.New(homeDir).Lock(homestore.AgentLocks, agentID, homestore.LockWait)
 	if err != nil {
 		return nil, fmt.Errorf("agentstate: lock agent %q: %w", agentID, err)
 	}
@@ -475,5 +473,5 @@ func atomicWriteJSON(path string, value any, perm os.FileMode) error {
 		return err
 	}
 	data = append(data, '\n')
-	return atomicWriteFile(path, data, perm)
+	return homestore.WriteFileAtomic(path, data, perm, 0o755)
 }

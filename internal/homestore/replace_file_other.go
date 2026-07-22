@@ -1,6 +1,6 @@
 //go:build !windows
 
-package agentstate
+package homestore
 
 import "os"
 

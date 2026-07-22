@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 const (
@@ -20,8 +22,6 @@ const (
 	runtimeFileName = "runtime.json"
 	lockFileName    = "endpoint.lock"
 )
-
-var errLockBusy = errors.New("endpoint lock is already held")
 
 type Runtime struct {
 	AgentID       string    `json:"agent_id"`
@@ -51,7 +51,7 @@ func (e *AgentAlreadyRunningError) Error() string {
 type Binding struct {
 	mu             sync.Mutex
 	listener       net.Listener
-	lock           *lockGuard
+	lock           *homestore.Lock
 	runtime        Runtime
 	agentDir       string
 	socketPath     string
@@ -61,7 +61,7 @@ type Binding struct {
 }
 
 type Maintenance struct {
-	lock *lockGuard
+	lock *homestore.Lock
 }
 
 type listenDependencies struct {
@@ -73,7 +73,7 @@ type listenDependencies struct {
 	now        func() time.Time
 	pid        func() int
 	instanceID func() (string, error)
-	lock       func(string) (*lockGuard, error)
+	lock       func(string) (*homestore.Lock, error)
 }
 
 func defaultListenDependencies() listenDependencies {
@@ -95,7 +95,7 @@ func defaultListenDependencies() listenDependencies {
 			}
 			return fmt.Sprintf("%x", value[:]), nil
 		},
-		lock: acquireLockGuard,
+		lock: acquireEndpointLock,
 	}
 }
 
@@ -119,9 +119,9 @@ func listenWithDependencies(ctx context.Context, agentDir string, deps listenDep
 	if err := validateAgentDirectory(absoluteDir); err != nil {
 		return nil, err
 	}
-	lock, err := deps.lock(endpointLockPath(absoluteDir))
+	lock, err := deps.lock(absoluteDir)
 	if err != nil {
-		if errors.Is(err, errLockBusy) {
+		if errors.Is(err, homestore.ErrLockBusy) {
 			return nil, &AgentAlreadyRunningError{AgentDir: absoluteDir}
 		}
 		return nil, fmt.Errorf("endpoint: lock agent directory %s: %w", absoluteDir, err)
@@ -173,9 +173,9 @@ func AcquireMaintenance(agentDir string) (*Maintenance, error) {
 	if err := validateAgentDirectory(absoluteDir); err != nil {
 		return nil, err
 	}
-	lock, err := acquireLockGuard(endpointLockPath(absoluteDir))
+	lock, err := acquireEndpointLock(absoluteDir)
 	if err != nil {
-		if errors.Is(err, errLockBusy) {
+		if errors.Is(err, homestore.ErrLockBusy) {
 			return nil, &AgentAlreadyRunningError{AgentDir: absoluteDir}
 		}
 		return nil, fmt.Errorf("endpoint: lock agent directory %s for maintenance: %w", absoluteDir, err)
@@ -205,12 +205,12 @@ func validateAgentDirectory(agentDir string) error {
 	return nil
 }
 
-func endpointLockPath(agentDir string) string {
+func acquireEndpointLock(agentDir string) (*homestore.Lock, error) {
 	parent := filepath.Dir(agentDir)
 	if filepath.Base(parent) == "agents" {
-		return filepath.Join(filepath.Dir(parent), ".locks", "endpoints", filepath.Base(agentDir)+".lock")
+		parent = filepath.Dir(parent)
 	}
-	return filepath.Join(parent, ".locks", "endpoints", filepath.Base(agentDir)+".lock")
+	return homestore.New(parent).Lock(homestore.EndpointLocks, filepath.Base(agentDir), homestore.LockTry)
 }
 
 func listenPreferred(ctx context.Context, socketPath string, deps listenDependencies) (net.Listener, error, error) {
@@ -415,7 +415,7 @@ func RemoveRuntime(agentDir string, expected Runtime) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("endpoint: remove runtime %s: %w", path, err)
 	}
-	return syncDir(agentDir)
+	return homestore.SyncDir(agentDir)
 }
 
 func removeOwnedRuntime(path string, owner Runtime) error {
@@ -429,7 +429,7 @@ func removeOwnedRuntime(path string, owner Runtime) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("endpoint: remove owned runtime %s: %w", path, err)
 	}
-	return syncDir(filepath.Dir(path))
+	return homestore.SyncDir(filepath.Dir(path))
 }
 
 func sameRuntime(left, right Runtime) bool {

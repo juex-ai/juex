@@ -116,7 +116,7 @@ func (m *Manager) UpdateConfig(
 	if err != nil {
 		return AgentConfig{}, AgentStatus{}, err
 	}
-	guard, err := acquireLifecycleLock(m.homeDir, entry.ID)
+	guard, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
 		return AgentConfig{}, AgentStatus{}, err
 	}

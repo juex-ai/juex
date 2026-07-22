@@ -63,6 +63,7 @@ juex/
 │   │   ├── values.go             # resolved ProviderSelection, paths, and limits
 │   │   ├── shell.go
 │   │   └── codex_auth.go
+│   ├── homestore/                # crash-safe home locks, atomic replacement, directory sync
 │   ├── providerreadiness/        # provider selection, credentials, and hello-probe readiness checks
 │   ├── chunkedwrite/             # canonical chunked write lifecycle facts and derived state
 │   ├── bundle/                   # portable debug bundle tar.gz creation

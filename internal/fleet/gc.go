@@ -57,7 +57,7 @@ func (m *Manager) deleteOrphan(ctx context.Context, id string) error {
 	if entry.ID != id {
 		return &ConflictError{AgentID: entry.ID, Reason: "garbage collection requires an exact agent id"}
 	}
-	lifecycle, err := acquireLifecycleLock(m.homeDir, entry.ID)
+	lifecycle, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
 		return err
 	}

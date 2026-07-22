@@ -1,10 +1,10 @@
 //go:build windows
 
-package agentstate
+package homestore
 
-import (
-	"golang.org/x/sys/windows"
-)
+import "golang.org/x/sys/windows"
+
+var moveFileEx = windows.MoveFileEx
 
 func replaceFile(tempPath, targetPath string) error {
 	from, err := windows.UTF16PtrFromString(tempPath)
@@ -15,5 +15,5 @@ func replaceFile(tempPath, targetPath string) error {
 	if err != nil {
 		return err
 	}
-	return windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	return moveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }

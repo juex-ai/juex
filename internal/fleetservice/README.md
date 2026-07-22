@@ -21,8 +21,9 @@ native service manager. It does not manage individual agents.
   are appended.
 
 Service identities include a normalized `JUEX_HOME` slug and hash so multiple
-homes can be registered independently. Definition publication is atomic per
-file and transactional across the multi-file Termux definition. Termux writes
+homes can be registered independently. Definition publication delegates each
+crash-safe file replacement to `internal/homestore` and remains transactional
+across the multi-file Termux definition. Termux writes
 the `down` sentinel before exposing `log/run` and `run`, then enables and
 restarts the service so reinstallations adopt the updated command. CLI flags
 and output, stable address validation, and home-config persistence remain in

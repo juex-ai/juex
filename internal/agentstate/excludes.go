@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 func ensureGlobalExclude() error {
@@ -18,7 +20,7 @@ func ensureGlobalExclude() error {
 		return err
 	}
 	lockPath := globalExcludeLockPath(excludesPath)
-	guard, err := acquireLockGuard(lockPath)
+	guard, err := homestore.AcquireLock(lockPath, homestore.LockWait)
 	if err != nil {
 		return fmt.Errorf("agentstate: lock global Git excludes: %w", err)
 	}
@@ -43,7 +45,7 @@ func ensureGlobalExclude() error {
 	}
 	updated.WriteString(globalExclude)
 	updated.WriteByte('\n')
-	if err := atomicWriteFile(excludesPath, updated.Bytes(), 0o644); err != nil {
+	if err := homestore.WriteFileAtomic(excludesPath, updated.Bytes(), 0o644, 0o755); err != nil {
 		return fmt.Errorf("agentstate: update global Git excludes %s: %w", excludesPath, err)
 	}
 	return nil

@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 type RegistryEntry struct {
@@ -265,7 +266,7 @@ func DeleteRegistered(homeDir, agentID string) error {
 		return err
 	}
 
-	workspaceGuard, err := acquireLockGuard(workspaceLockPath(homeDir, preliminary.Agent.Workspace))
+	workspaceGuard, err := homestore.AcquireLock(workspaceLockPath(homeDir, preliminary.Agent.Workspace), homestore.LockWait)
 	if err != nil {
 		return fmt.Errorf("agentstate: lock workspace %s: %w", preliminary.Agent.Workspace, err)
 	}
@@ -428,13 +429,7 @@ func renameOrphanToTombstone(agentsDir, agentDir, agentID string) (string, error
 }
 
 func syncRegistryDir(path string) error {
-	err := syncDir(path)
-	if errors.Is(err, syscall.EINVAL) ||
-		errors.Is(err, syscall.ENOTSUP) ||
-		errors.Is(err, syscall.ENOSYS) {
-		return nil
-	}
-	return err
+	return homestore.SyncDir(path)
 }
 
 func loadRegistryEntry(agentsDir, id string) RegistryEntry {

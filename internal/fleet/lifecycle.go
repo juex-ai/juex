@@ -23,7 +23,7 @@ func (m *Manager) Start(ctx context.Context, selector string) (AgentStatus, erro
 	if err != nil {
 		return AgentStatus{}, err
 	}
-	guard, err := acquireLifecycleLock(m.homeDir, entry.ID)
+	guard, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
 		return AgentStatus{}, err
 	}
@@ -120,7 +120,7 @@ func (m *Manager) Stop(ctx context.Context, selector string) (AgentStatus, error
 	if err != nil {
 		return AgentStatus{}, err
 	}
-	guard, err := acquireLifecycleLock(m.homeDir, entry.ID)
+	guard, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
 		return AgentStatus{}, err
 	}
@@ -239,7 +239,7 @@ func (m *Manager) restart(
 	if err != nil {
 		return RestartResult{}, err
 	}
-	guard, err := acquireLifecycleLock(m.homeDir, entry.ID)
+	guard, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
 		return RestartResult{}, err
 	}
