@@ -99,6 +99,8 @@ juex/
 │   │   │   ├── utils.ts            # shadcn `cn` helper
 │   │   │   ├── display-units.ts    # folds Block[] into DisplayUnit[] for Tool pairing
 │   │   │   ├── assistant-work-groups.ts # projects consecutive assistant process work
+│   │   │   ├── session-read-controller.ts # route, transport, and status orchestration
+│   │   │   ├── session-transcript-renderers.ts # transcript renderer-key contract
 │   │   │   └── message-rendering.ts # message chrome and display-policy helpers
 │   │   ├── pages/
 │   │   │   ├── Fleet.tsx           # /
@@ -110,6 +112,7 @@ juex/
 │   │   │   └── AgentConfig.tsx     # /agents/:agentId/config
 │   │   └── components/
 │   │       ├── AppShell.tsx
+│   │       ├── session/             # composer, status panel, transcript registry
 │   │       ├── ai-elements/        # AI Elements primitives (copied via shadcn CLI)
 │   │       │   ├── _local-types.ts
 │   │       │   ├── conversation.tsx
@@ -543,10 +546,12 @@ keep the loader icon size unchanged. The chevron follows the tool name inline
 instead of aligning to the far right, with right/down directions for
 collapsed/expanded states. Live tool event projection happens in
 `src/lib/live-session-projection.ts`, using `src/lib/live-tool-events.ts` for
-the transcript block updates. The render layer in `pages/Session.tsx` calls
+the transcript block updates. The route adapter in `pages/Session.tsx` calls
 `messagesToGroups` from `src/lib/display-units.ts` to fold the two blocks into
 one display unit, then `assistantWorkItems` to project consecutive process
-groups for display (see §13).
+groups for display (see §13). `components/session/SessionTranscript.tsx`
+dispatches the resulting message groups through the typed `group.kind`
+renderer registry and owns the tool-row JSX.
 
 | `use` | `result` | `result.is_error` | state passed to `<ToolHeader>` |
 |---|---|---|---|
@@ -739,11 +744,12 @@ and prepends the returned page.
 Live facts from the JSON/SSE API are projected through
 `src/lib/live-session-projection.ts`. That module owns the browser-side read
 model for live messages, optimistic turns, pending input, compact progress,
-tool output deltas, assistant text/reasoning deltas, usage snapshots, active
-flags, and status. Assistant deltas accumulate in provisional blocks keyed by
-provider block index; `llm.responded` then replaces them with the canonical
-ordered blocks so retries or protocol-specific chunking cannot duplicate the
-final transcript.
+tool output deltas, and assistant text/reasoning deltas. Runtime status remains
+the authoritative snapshot attached to each BrowserEvent and is applied by the
+session read controller. Assistant deltas accumulate in provisional blocks
+keyed by provider block index; `llm.responded` then replaces them with the
+canonical ordered blocks so retries or protocol-specific chunking cannot
+duplicate the final transcript.
 The compact session-state control near the composer shows Goal first, followed
 by model-owned Notes. Notes render as Markdown; when they contain task items,
 the tooltip shows completed/total counts and a thin progress indicator. The
@@ -755,12 +761,15 @@ workspace-bounded endpoints. It is available only on a concrete session route;
 changing routes restores Workspace mode.
 
 `src/lib/session-read-controller.ts` owns the session-detail effect interpreter:
-route guards, snapshot/context refresh, EventSource dispatch, turn polling,
-transient timers, navigation effects, and refetching after terminal turn events.
-`pages/Session.tsx` remains the React route/view adapter and should render the
-projection instead of sequencing those effects directly. The composer reads
-projection state so the submit button can switch between send, queue, and stop
-behavior:
+route guards, snapshot/context refresh, EventSource dispatch, reconnect status
+calibration and snapshot application, stream cleanup, transient timers,
+navigation effects, and refetching after terminal turn events.
+`pages/Session.tsx` remains the React route/view adapter and renders the
+projection instead of sequencing those effects directly.
+`components/session/SessionTranscript.tsx` owns transcript row dispatch,
+`SessionComposer.tsx` owns composition and queue presentation, and
+`SessionStatusPanel.tsx` owns the status controls. The composer reads projection
+state so the submit button can switch between send, queue, and stop behavior:
 
 | Event | Effect |
 |---|---|

@@ -22,6 +22,18 @@ func TestBrowserEventTypesMatchGolden(t *testing.T) {
 	assertGoldenJSON(t, "browser-event-types.golden.json", browserEventTypes())
 }
 
+func TestMessageKindsMatchGolden(t *testing.T) {
+	assertGoldenJSON(t, "message-kinds.golden.json", []string{
+		llm.MessageKindMCPEvent,
+		llm.MessageKindObservation,
+		llm.MessageKindHookEvent,
+		llm.MessageKindCompact,
+		llm.MessageKindRuntimeContext,
+		llm.MessageKindModelFallback,
+		llm.MessageKindSystemNotice,
+	})
+}
+
 func TestBrowserEventFixturesMatchGolden(t *testing.T) {
 	fixtures, err := browserEventFixtures()
 	if err != nil {

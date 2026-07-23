@@ -94,12 +94,14 @@ test("live events replace canonical status from the requested cursor", () => {
   });
 
   controller.setRoute("s1");
-  controller.subscribeLiveEvents("s1", {
-    since: "snapshot-1",
-    onStatus: (status) => {
+  controller.configureLiveStatus({
+    load: async () => runtimeStatus("snapshot"),
+    apply: (_sessionID, status) => {
       projectedStatus = status;
     },
+    clear: () => {},
   });
+  controller.subscribeLiveEvents("s1", { since: "snapshot-1" });
   onEvent(turnStartedEvent("current"));
 
   assert.equal(subscribedSince, "snapshot-1");
@@ -120,13 +122,15 @@ test("subscription and stream reopen refresh status when no event arrives", asyn
   });
 
   controller.setRoute("s1");
-  controller.subscribeLiveEvents("s1", {
-    loadStatus: async () =>
+  controller.configureLiveStatus({
+    load: async () =>
       runtimeStatus(++refreshes === 1 ? "initial" : "reconnected"),
-    onStatus: (status) => {
+    apply: (_sessionID, status) => {
       projectedStatus = status;
     },
+    clear: () => {},
   });
+  controller.subscribeLiveEvents("s1");
   await Promise.resolve();
   assert.equal(projectedStatus?.cursor, "initial");
 
@@ -150,17 +154,19 @@ test("status refresh failure leaves the live event stream usable", async () => {
   });
 
   controller.setRoute("s1");
-  controller.subscribeLiveEvents("s1", {
-    loadStatus: async () => {
+  controller.configureLiveStatus({
+    load: async () => {
       throw new Error("temporary status failure");
     },
-    onStatus: (status) => {
+    apply: (_sessionID, status) => {
       projectedStatus = status;
     },
-    onStatusRefreshError: () => {
+    clear: () => {},
+    onRefreshError: () => {
       refreshErrors++;
     },
   });
+  controller.subscribeLiveEvents("s1");
   await Promise.resolve();
   onEvent(turnStartedEvent("after-failure"));
 
@@ -181,20 +187,79 @@ test("stream event wins over an older initial status request", async () => {
   });
 
   controller.setRoute("s1");
-  controller.subscribeLiveEvents("s1", {
-    loadStatus: () =>
+  controller.configureLiveStatus({
+    load: () =>
       new Promise((resolve) => {
         resolveStatus = resolve;
       }),
-    onStatus: (status) => {
+    apply: (_sessionID, status) => {
       projectedCursors.push(status.cursor);
     },
+    clear: () => {},
   });
+  controller.subscribeLiveEvents("s1");
   onEvent(turnStartedEvent("newer"));
   resolveStatus(runtimeStatus("older"));
   await Promise.resolve();
 
   assert.deepEqual(projectedCursors, ["event-newer"]);
+});
+
+test("subscription cleanup closes transport before clearing status", () => {
+  const lifecycle: string[] = [];
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: () => () => {
+      lifecycle.push("unsubscribe");
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.configureLiveStatus({
+    load: async () => runtimeStatus("initial"),
+    apply: () => {},
+    clear: (sessionID) => {
+      lifecycle.push(`clear:${sessionID}`);
+    },
+  });
+
+  controller.subscribeLiveEvents("s1")();
+
+  assert.deepEqual(lifecycle, ["unsubscribe", "clear:s1"]);
+});
+
+test("configured live status receives only current stream failures", () => {
+  let onError: ((event: Event) => void) | undefined;
+  let streamErrors = 0;
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      onError = opts.onError;
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.configureLiveStatus({
+    load: async () => runtimeStatus("initial"),
+    apply: () => {},
+    clear: () => {},
+    onStreamError: () => {
+      streamErrors++;
+    },
+  });
+  const cleanup = controller.subscribeLiveEvents("s1");
+  onError?.(new Event("error"));
+  assert.equal(streamErrors, 1);
+
+  controller.setRoute("s2");
+  onError?.(new Event("error"));
+  assert.equal(streamErrors, 1);
+
+  controller.setRoute("s1");
+  cleanup();
+  onError?.(new Event("error"));
+  assert.equal(streamErrors, 1);
 });
 
 test("submitPrompt ignores late startTurn results after route changes", async () => {

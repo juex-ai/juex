@@ -6,6 +6,27 @@ const sessionSource = readFileSync(
   new URL("../../frontend/src/pages/Session.tsx", import.meta.url),
   "utf8",
 );
+const composerSource = readFileSync(
+  new URL(
+    "../../frontend/src/components/session/SessionComposer.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const statusSource = readFileSync(
+  new URL(
+    "../../frontend/src/components/session/SessionStatusPanel.tsx",
+    import.meta.url,
+  ),
+  "utf8",
+);
+const controllerSource = readFileSync(
+  new URL(
+    "../../frontend/src/lib/session-read-controller.ts",
+    import.meta.url,
+  ),
+  "utf8",
+);
 const queuedSource = readFileSync(
   new URL("../../frontend/src/components/QueuedInputStack.tsx", import.meta.url),
   "utf8",
@@ -19,35 +40,35 @@ const promptInputSource = readFileSync(
 );
 
 test("composer groups utility actions before matching status controls", () => {
-  const actions = sessionSource.indexOf('aria-label="Composer actions"');
-  const separator = sessionSource.indexOf('orientation="vertical"');
-  const status = sessionSource.indexOf('aria-label="Session status"');
+  const actions = composerSource.indexOf('aria-label="Composer actions"');
+  const separator = composerSource.indexOf('orientation="vertical"');
+  const status = composerSource.indexOf('aria-label="Session status"');
   assert.ok(actions >= 0 && separator > actions && status > separator);
   assert.match(
-    sessionSource,
+    composerSource,
     /aria-label="Composer actions"\s+role="group"/,
   );
   assert.match(
-    sessionSource,
+    composerSource,
     /aria-label="Session status"\s+role="group"/,
   );
-  assert.match(sessionSource, /COMPOSER_STATUS_CONTROL_CLASS/);
-  assert.match(sessionSource, /<PopoverTrigger asChild>/);
+  assert.match(statusSource, /STATUS_CONTROL_CLASS/);
+  assert.match(statusSource, /<PopoverTrigger asChild>/);
   assert.doesNotMatch(
-    sessionSource,
+    statusSource,
     /ContextUsageLabel[\s\S]{0,600}<TooltipTrigger/,
   );
 });
 
 test("composer goal chip names the disclosed goal and notes content", () => {
   assert.match(
-    sessionSource,
+    statusSource,
     /aria-label=\{`Open goal and notes: \$\{label\}`\}/,
   );
 });
 
 test("composer stages image previews above draft text at the top-left", () => {
-  const composer = sessionSource.match(
+  const composer = composerSource.match(
     /<PromptInput\s[\s\S]*?<\/PromptInput>/,
   )?.[0];
   assert.ok(composer);
@@ -58,7 +79,7 @@ test("composer stages image previews above draft text at the top-left", () => {
     "attachment strip should render before the textarea",
   );
 
-  const strip = sessionSource.match(
+  const strip = composerSource.match(
     /function ComposerAttachmentStrip[\s\S]*?\n}\n\nfunction ComposerSubmitButton/,
   )?.[0];
   assert.ok(strip);
@@ -100,8 +121,8 @@ test("composer stages image previews above draft text at the top-left", () => {
 });
 
 test("composer feedback is announced and queued inputs stay bounded", () => {
-  assert.match(sessionSource, /role=\{tone === "error" \? "alert" : "status"\}/);
-  assert.match(sessionSource, /aria-live=/);
+  assert.match(composerSource, /role=\{tone === "error" \? "alert" : "status"\}/);
+  assert.match(composerSource, /aria-live=/);
   assert.match(queuedSource, /max-h-/);
   assert.match(queuedSource, /overflow-y-auto/);
   assert.match(queuedSource, /Queued.*items\.length/s);
@@ -110,45 +131,45 @@ test("composer feedback is announced and queued inputs stay bounded", () => {
 
 test("blocked keyboard submissions preserve the composer draft", () => {
   assert.match(
-    sessionSource,
+    composerSource,
     /submitAction === "loading"[\s\S]*?throw new Error\("Loading session status"\)/,
     "loading status must reject form submission so PromptInput does not clear the draft",
   );
   assert.match(
-    sessionSource,
+    composerSource,
     /submitAction === "queue-full"[\s\S]*?throw new Error\(QUEUE_FULL_SUBMIT_HINT\)/,
     "a full queue must reject form submission so PromptInput does not clear the draft",
   );
 });
 
-test("disposed status subscriptions cannot replace a newer snapshot", () => {
+test("controller owns status application and close-before-clear cleanup", () => {
   assert.match(
-    sessionSource,
-    /onStatus:\s*\(next\)\s*=>\s*\{[\s\S]*?if\s*\(disposed\)[\s\S]*?statusStore\.setStatus/,
-    "a queued frame from a closed status stream must not replace a newer snapshot",
+    controllerSource,
+    /if \(!subscribed \|\| !isLatestSessionRoute\(route, sessionID\)\) return;[\s\S]*status\.apply\(sessionID, event\.status\)/,
+    "the controller must reject disposed or stale frames before applying status",
   );
   assert.match(
-    sessionSource,
-    /onStatusRefreshError:\s*\(error\)\s*=>\s*\{[\s\S]*?if\s*\(disposed\)[\s\S]*?console\.error/,
-    "a stale status calibration failure must not affect a replacement subscription",
+    controllerSource,
+    /generation !== refreshGeneration \|\|[\s\S]*revision !== statusRevision/,
+    "a stale status calibration must not replace an event snapshot",
   );
   assert.match(
-    sessionSource,
-    /return\s*\(\)\s*=>\s*\{[\s\S]*?disposed\s*=\s*true;[\s\S]*?unsubscribe\(\);[\s\S]*?statusStore\.clearStatus/,
-    "effect cleanup must close the stream before clearing its canonical status",
+    controllerSource,
+    /subscribed = false;[\s\S]*unsubscribe\(\);[\s\S]*status\.clear\(sessionID\)/,
+    "controller cleanup must close the stream before clearing status",
   );
 });
 
 test("deferred submit keeps follow-up text and attachment counts authoritative", () => {
-  assert.match(sessionSource, /settleSubmittedComposerText\(current, submittedText\)/);
-  assert.doesNotMatch(sessionSource, /setAttachmentCount\(0\)/);
+  assert.match(composerSource, /settleSubmittedComposerText\(current, submittedText\)/);
+  assert.doesNotMatch(composerSource, /setAttachmentCount\(0\)/);
 });
 
 test("active session composer floats without consuming conversation layout", () => {
-  assert.match(sessionSource, /new ResizeObserver/);
+  assert.match(composerSource, /new ResizeObserver/);
   assert.match(
-    sessionSource,
-    /if \(!composerOverlayNode\) \{[\s\S]*setComposerOverlayHeight\(0\);[\s\S]*return;/,
+    composerSource,
+    /if \(!canSend \|\| !overlayNode\) \{[\s\S]*onClearanceChange\(0\);[\s\S]*return;/,
   );
   assert.match(
     sessionSource,
@@ -160,7 +181,7 @@ test("active session composer floats without consuming conversation layout", () 
   );
   assert.match(
     sessionSource,
-    /<ConversationClearanceFollower clearance=\{composerClearance\}/,
+    /<ConversationClearanceFollower clearance=\{effectiveClearance\}/,
   );
   assert.match(
     sessionSource,
@@ -168,7 +189,7 @@ test("active session composer floats without consuming conversation layout", () 
   );
   assert.match(
     sessionSource,
-    /canSend\s+\? sessionComposerClearance\(composerOverlayHeight\)\s+: 0/,
+    /canSend \? composerClearance : 0/,
   );
   assert.match(
     sessionSource,
@@ -176,25 +197,25 @@ test("active session composer floats without consuming conversation layout", () 
     "desktop transcript content bounds should align with the 760px composer after padding",
   );
   assert.match(
-    sessionSource,
+    composerSource,
     /data-testid="session-composer-overlay"/,
   );
   assert.match(
-    sessionSource,
+    composerSource,
     /pointer-events-none absolute inset-0[\s\S]*items-end/,
   );
   assert.match(
-    sessionSource,
+    composerSource,
     /className="flex max-h-full w-full flex-col overflow-visible px-4 md:px-6"/,
     "the composer frame must let the negative top fade render outside its measured height",
   );
-  assert.match(sessionSource, /data-testid="session-composer-obstruction"/);
+  assert.match(composerSource, /data-testid="session-composer-obstruction"/);
   assert.match(
-    sessionSource,
+    composerSource,
     /data-testid="session-composer-fade"[\s\S]*absolute[\s\S]*inset-x-0[\s\S]*-top-12[\s\S]*h-12[\s\S]*bg-linear-to-b/,
     "the fade should be local to the composer width and live only above it",
   );
-  const overlay = sessionSource.match(
+  const overlay = composerSource.match(
     /data-testid="session-composer-overlay"[\s\S]*?data-testid="session-composer-obstruction"/,
   )?.[0];
   assert.ok(overlay);
@@ -204,26 +225,26 @@ test("active session composer floats without consuming conversation layout", () 
     "the full-width overlay must not paint over the scrollbar or rounded prompt corners",
   );
   assert.match(
-    sessionSource,
+    composerSource,
     /pb-\[max\(0\.75rem,env\(safe-area-inset-bottom\)\)\][\s\S]*md:pb-\[max\(1\.25rem,env\(safe-area-inset-bottom\)\)\]/,
   );
-  assert.match(sessionSource, /data-testid="session-composer-stack"/);
+  assert.match(composerSource, /data-testid="session-composer-stack"/);
   assert.match(
-    sessionSource,
+    composerSource,
     /pointer-events-auto[\s\S]*min-h-0[\s\S]*overflow-hidden/,
   );
   assert.match(
-    sessionSource,
+    composerSource,
     /<PromptInputTextarea[\s\S]*className="max-h-\[min\(12rem,30dvh\)\]"/,
   );
-  assert.match(sessionSource, /safe-area-inset-bottom/);
+  assert.match(composerSource, /safe-area-inset-bottom/);
   assert.match(
-    sessionSource,
+    composerSource,
     /<Separator[\s\S]*className="h-4 self-center"[\s\S]*orientation="vertical"/,
   );
-  assert.doesNotMatch(sessionSource, /max-h-\[calc\(100dvh_/);
+  assert.doesNotMatch(composerSource, /max-h-\[calc\(100dvh_/);
   assert.doesNotMatch(
-    sessionSource,
+    composerSource,
     /shrink-0 border-t bg-background\/92/,
   );
 });
@@ -246,7 +267,7 @@ test("prompt input uses a floating surface and one border-only focus state", () 
     /has-\[\[data-slot=input-group-control\]:focus-visible\]:ring-offset-0/,
   );
   assert.doesNotMatch(
-    sessionSource,
+    composerSource,
     /variant=\{isStop \? "outline" : "default"\}/,
   );
 });
