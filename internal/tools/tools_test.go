@@ -37,7 +37,12 @@ func registerSandboxedTestBuiltins(r *Registry, workDir string, blockedPaths []s
 	policy := sandbox.DefaultPolicy()
 	policy.Enabled = true
 	policy.FileSystem.BlockedPaths = blockedPaths
-	RegisterBuiltins(r, BuiltinOptions{WorkDir: workDir, Shell: DefaultShellProfile(), Sandbox: policy})
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:       workDir,
+		Shell:         DefaultShellProfile(),
+		Sandbox:       policy,
+		SandboxRunner: &fakeSandboxRunner{},
+	})
 }
 
 func fakeShellProfile() ShellProfile {

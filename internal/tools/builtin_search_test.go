@@ -239,7 +239,7 @@ func TestRipgrepRunnerSearchesHiddenIgnoredFilesAndCapsGlobally(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fileWithPunctuation := filepath.Join(root, "- spaced:a.txt")
+	fileWithPunctuation := filepath.Join(root, "- spaced,a.txt")
 	if err := os.WriteFile(fileWithPunctuation, []byte("needle punctuation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestRipgrepRunnerSearchesHiddenIgnoredFilesAndCapsGlobally(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := formatGrepResult(result)
-	for _, want := range []string{".hidden.txt", "ignored.txt", "- spaced:a.txt"} {
+	for _, want := range []string{".hidden.txt", "ignored.txt", "- spaced,a.txt"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("search result missing %q:\n%s", want, joined)
 		}

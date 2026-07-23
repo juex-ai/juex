@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -105,13 +106,13 @@ func TestPrepareRipgrepPackageVerifiesAndBuildsLayout(t *testing.T) {
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "prepare-ripgrep.sh"),
 		"--target", "darwin_arm64",
 		"--juex-version", "1.2.3",
-		"--output", output,
+		"--output", gitBashPath(t, output),
 	)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
-		"JUEX_RIPGREP_ASSET_MANIFEST="+manifest,
-		"JUEX_RIPGREP_BASE_URL=file://"+work,
-		"JUEX_RIPGREP_CACHE="+filepath.Join(work, "cache"),
+		"JUEX_RIPGREP_ASSET_MANIFEST="+gitBashPath(t, manifest),
+		"JUEX_RIPGREP_BASE_URL=file://"+gitBashPath(t, work),
+		"JUEX_RIPGREP_CACHE="+gitBashPath(t, filepath.Join(work, "cache")),
 		"PATH="+escapedChecksumDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -407,6 +408,18 @@ printf '\\%s  %s\n' "$digest" "$1"
 	t.Setenv("JUEX_TEST_SHA256_TOOL", tool)
 	t.Setenv("JUEX_TEST_SHA256_MODE", mode)
 	return binDir
+}
+
+func gitBashPath(t *testing.T, path string) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	out, err := exec.Command("cygpath", "-u", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("convert path for Git Bash: %v\n%s", err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func writeTarGzEntries(t *testing.T, path string, entries map[string]tarFixture) {
