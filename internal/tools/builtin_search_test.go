@@ -84,6 +84,7 @@ func TestRipgrepArgsPreserveLegacyTraversalContract(t *testing.T) {
 	want := []string{
 		"--json",
 		"--no-config",
+		"--crlf",
 		"--hidden",
 		"--no-ignore",
 		"--color", "never",
@@ -445,6 +446,7 @@ func TestRipgrepRunnerPreservesGoRegexpDialect(t *testing.T) {
 		"ascii.txt":    "42abc\n",
 		"unicode.txt":  "٤abc\n",
 		"boundary.txt": "éfooé\n",
+		"crlf.txt":     "foo\r\n",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -473,6 +475,13 @@ func TestRipgrepRunnerPreservesGoRegexpDialect(t *testing.T) {
 	}
 	if output := formatGrepResult(boundary); !strings.Contains(output, "boundary.txt") {
 		t.Fatalf("Go ASCII word-boundary regexp output = %q", output)
+	}
+	crlf, err := runner.Grep(context.Background(), GrepRequest{Pattern: `foo$`, Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output := formatGrepResult(crlf); !strings.Contains(output, "crlf.txt") {
+		t.Fatalf("Go CRLF line-anchor regexp output = %q", output)
 	}
 }
 

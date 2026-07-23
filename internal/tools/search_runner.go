@@ -290,6 +290,7 @@ func ripgrepArgs(pattern, target string) []string {
 	return []string{
 		"--json",
 		"--no-config",
+		"--crlf",
 		"--hidden",
 		"--no-ignore",
 		"--color", "never",
