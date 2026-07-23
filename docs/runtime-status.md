@@ -70,6 +70,8 @@ transcript page is read. The browser uses this cursor for the initial transcript
 subscription, so events committed between the transcript and status requests
 are replayed rather than skipped. An explicit empty `?since=` requests replay
 from the journal beginning; an omitted `since` starts with live delivery only.
+Because the server subscribes before replay, it suppresses durable live frames
+already present in the replay tail before completing the ordered live handoff.
 
 ## Tool Calls
 

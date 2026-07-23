@@ -621,6 +621,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
 
+	var replayDeduper *browserReplayDeduplicator
 	since, replayRequested := sseResumeCursorWithPresence(r)
 	if replayRequested {
 		// Replay missed events from events.jsonl. The path comes from the
@@ -659,6 +660,7 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			if projectionErr != nil {
 				log.Printf("web: browser projection replay for %s: %v", id, projectionErr)
 			}
+			replayDeduper = newBrowserReplayDeduplicator(replayed)
 			for _, event := range replayed {
 				if err := writeBrowserSSEFrame(w, event); err != nil {
 					return
@@ -674,6 +676,9 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			if !ok {
 				return
 			}
+			if replayDeduper != nil && replayDeduper.skip(event) {
+				continue
+			}
 			if err := as.app.ReadSessionID(id, func(*session.Session) error { return nil }); err != nil {
 				return
 			}
@@ -686,6 +691,44 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 	}
+}
+
+type browserReplayDeduplicator struct {
+	durableIDs map[string]struct{}
+}
+
+func newBrowserReplayDeduplicator(replayed []BrowserEvent) *browserReplayDeduplicator {
+	if len(replayed) == 0 {
+		return nil
+	}
+	// The handler subscribes before replay, and the subscriber channel is the
+	// only place duplicates can wait. If more than this many visible events
+	// arrive during replay, the bounded broadcaster drops the subscriber.
+	start := max(0, len(replayed)-broadcasterBufferSize)
+	ids := make(map[string]struct{}, len(replayed)-start)
+	for _, event := range replayed[start:] {
+		if !event.transient && event.ID != "" {
+			ids[event.ID] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return &browserReplayDeduplicator{durableIDs: ids}
+}
+
+func (d *browserReplayDeduplicator) skip(event BrowserEvent) bool {
+	if d == nil || event.transient {
+		return false
+	}
+	if _, duplicate := d.durableIDs[event.ID]; duplicate {
+		delete(d.durableIDs, event.ID)
+		return true
+	}
+	// Broadcaster delivery is ordered. The first unseen durable event is past
+	// the replay tail, so no older duplicate can appear after it.
+	d.durableIDs = nil
+	return false
 }
 
 func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request, id string) {

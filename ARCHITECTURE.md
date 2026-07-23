@@ -1388,7 +1388,9 @@ by the transcript response, replaces status from each event, and then applies
 the transcript payload. Every EventSource open also refreshes the snapshot for
 restart recovery; an intervening streamed snapshot invalidates the older
 refresh response. The transcript cursor is captured before its message page is
-read so concurrent events may replay but cannot be skipped.
+read so concurrent events may replay but cannot be skipped. The server
+deduplicates queued durable frames already covered by the replay tail before
+continuing live delivery.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:

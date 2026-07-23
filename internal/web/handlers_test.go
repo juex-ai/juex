@@ -2892,6 +2892,47 @@ func TestSSEEvents_ExplicitEmptyCursorReplaysFromJournalStart(t *testing.T) {
 	}
 }
 
+func TestBrowserReplayDeduplicatorSkipsOnlyQueuedReplayTail(t *testing.T) {
+	replayed := make([]BrowserEvent, broadcasterBufferSize+2)
+	for index := range replayed {
+		replayed[index] = BrowserEvent{ID: fmt.Sprintf("evt-%d", index)}
+	}
+	deduper := newBrowserReplayDeduplicator(replayed)
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+
+	if deduper.skip(BrowserEvent{
+		ID:        "evt-transient",
+		transient: true,
+	}) {
+		t.Fatal("transient event was skipped")
+	}
+	if !deduper.skip(BrowserEvent{ID: "evt-2"}) {
+		t.Fatal("queued replay-tail duplicate was delivered")
+	}
+	if deduper.skip(BrowserEvent{ID: "evt-live"}) {
+		t.Fatal("first event after replay tail was skipped")
+	}
+	if deduper.skip(BrowserEvent{ID: "evt-3"}) {
+		t.Fatal("old replay id was skipped after live handoff completed")
+	}
+}
+
+func TestBrowserReplayDeduplicatorIgnoresEventsOutsideBoundedTail(t *testing.T) {
+	replayed := make([]BrowserEvent, broadcasterBufferSize+1)
+	for index := range replayed {
+		replayed[index] = BrowserEvent{ID: fmt.Sprintf("evt-%d", index)}
+	}
+	deduper := newBrowserReplayDeduplicator(replayed)
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+	if deduper.skip(BrowserEvent{ID: "evt-0"}) {
+		t.Fatal("event older than the subscriber buffer was treated as queued")
+	}
+}
+
 func TestAgentAPIHandlerDoesNotServeBrowserFallback(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.APIHandler())
