@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"sort"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/statusstream"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -139,23 +141,29 @@ type StatusSnapshot struct {
 }
 
 type StatusStore struct {
-	mu          sync.RWMutex
-	snapshot    StatusSnapshot
-	history     []StatusSnapshot
-	subscribers map[uint64]chan StatusSnapshot
-	nextID      uint64
+	projectionMu sync.Mutex
+	stream       *statusstream.Store[StatusSnapshot]
 }
 
-type StatusSubscription struct {
-	Snapshots []StatusSnapshot
-	Updates   <-chan StatusSnapshot
-	cancel    func()
+type StatusStreamOptions struct {
+	After  string
+	Follow bool
 }
 
-func (s *StatusSubscription) Unsubscribe() {
-	if s != nil && s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+type StatusStream struct {
+	stream *statusstream.Stream[StatusSnapshot]
+}
+
+func (s *StatusStream) Next(ctx context.Context) (StatusSnapshot, bool) {
+	if s == nil || s.stream == nil {
+		return StatusSnapshot{}, false
+	}
+	return s.stream.Next(ctx)
+}
+
+func (s *StatusStream) Close() {
+	if s != nil && s.stream != nil {
+		s.stream.Close()
 	}
 }
 
@@ -191,9 +199,14 @@ func newStatusStoreFromSnapshot(snapshot StatusSnapshot) *StatusStore {
 	snapshot = cloneStatusSnapshot(snapshot)
 	recomputeCanAcceptInput(&snapshot)
 	return &StatusStore{
-		snapshot:    snapshot,
-		history:     []StatusSnapshot{cloneStatusSnapshot(snapshot)},
-		subscribers: map[uint64]chan StatusSnapshot{},
+		stream: statusstream.New(snapshot, statusstream.Options[StatusSnapshot]{
+			Clone:  cloneStatusSnapshot,
+			Cursor: func(snapshot StatusSnapshot) string { return snapshot.Cursor },
+			Equal: func(left, right StatusSnapshot) bool {
+				return reflect.DeepEqual(left, right)
+			},
+			HistoryLimit: statusHistoryLimit,
+		}),
 	}
 }
 
@@ -204,15 +217,11 @@ func (s *StatusStore) Reset(seed StatusSeed, journal []events.Event) {
 		return
 	}
 	recovered := NewStatusStoreFromJournal(seed, journal)
+	current, history := recovered.stream.Values()
 
-	s.mu.Lock()
-	s.snapshot = recovered.snapshot
-	s.history = recovered.history
-	snapshot := cloneStatusSnapshot(s.snapshot)
-	for _, subscriber := range s.subscribers {
-		publishLatestStatus(subscriber, snapshot)
-	}
-	s.mu.Unlock()
+	s.projectionMu.Lock()
+	s.stream.Replace(current, history)
+	s.projectionMu.Unlock()
 }
 
 // RecoverAfterRestart closes an interrupted in-memory turn. The event cursor
@@ -222,12 +231,14 @@ func (s *StatusStore) RecoverAfterRestart() {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	if s.snapshot.Turn == nil ||
-		s.snapshot.Turn.State == TurnLifecycleCompleted ||
-		s.snapshot.Turn.State == TurnLifecycleErrored ||
-		s.snapshot.Turn.State == TurnLifecycleCancelled {
-		s.mu.Unlock()
+	s.projectionMu.Lock()
+	defer s.projectionMu.Unlock()
+
+	snapshot := s.stream.Snapshot()
+	if snapshot.Turn == nil ||
+		snapshot.Turn.State == TurnLifecycleCompleted ||
+		snapshot.Turn.State == TurnLifecycleErrored ||
+		snapshot.Turn.State == TurnLifecycleCancelled {
 		return
 	}
 	statusErr := &StatusError{
@@ -235,95 +246,42 @@ func (s *StatusStore) RecoverAfterRestart() {
 		Kind:      StatusErrorRuntimeRestart,
 		Cancelled: true,
 	}
-	s.snapshot.Turn.State = TurnLifecycleCancelled
-	s.snapshot.Turn.Streaming = false
-	s.snapshot.Turn.Error = statusErr
-	s.snapshot.Tools = []ToolCallStatus{}
-	s.snapshot.Session.State = SessionRuntimeFailed
-	s.snapshot.Session.PendingCount = 0
-	s.snapshot.LastError = statusErr
-	recomputeCanAcceptInput(&s.snapshot)
-	snapshot := cloneStatusSnapshot(s.snapshot)
-	s.history = append(s.history, snapshot)
-	for _, subscriber := range s.subscribers {
-		publishLatestStatus(subscriber, snapshot)
-	}
-	s.mu.Unlock()
+	snapshot.Turn.State = TurnLifecycleCancelled
+	snapshot.Turn.Streaming = false
+	snapshot.Turn.Error = statusErr
+	snapshot.Tools = []ToolCallStatus{}
+	snapshot.Session.State = SessionRuntimeFailed
+	snapshot.Session.PendingCount = 0
+	snapshot.LastError = statusErr
+	recomputeCanAcceptInput(&snapshot)
+	s.stream.Publish(snapshot, false)
 }
 
 func (s *StatusStore) Publish(event events.Event) {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	s.snapshot = ProjectStatus(s.snapshot, event)
-	snapshot := cloneStatusSnapshot(s.snapshot)
-	if !event.Transient {
-		s.history = append(s.history, snapshot)
-		if len(s.history) > statusHistoryLimit {
-			s.history = append([]StatusSnapshot(nil), s.history[len(s.history)-statusHistoryLimit:]...)
-		}
-	}
-	for _, subscriber := range s.subscribers {
-		publishLatestStatus(subscriber, snapshot)
-	}
-	s.mu.Unlock()
+	s.projectionMu.Lock()
+	snapshot := ProjectStatus(s.stream.Snapshot(), event)
+	s.stream.Publish(snapshot, !event.Transient)
+	s.projectionMu.Unlock()
 }
 
 func (s *StatusStore) Snapshot() StatusSnapshot {
 	if s == nil {
 		return StatusSnapshot{}
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return cloneStatusSnapshot(s.snapshot)
+	return s.stream.Snapshot()
 }
 
-func (s *StatusStore) SubscribeFrom(cursor string) *StatusSubscription {
+func (s *StatusStore) OpenStream(options StatusStreamOptions) *StatusStream {
 	if s == nil {
-		return &StatusSubscription{}
+		return &StatusStream{}
 	}
-	s.mu.Lock()
-	replay := s.replayAfterLocked(cursor)
-	updates := make(chan StatusSnapshot, 16)
-	s.nextID++
-	id := s.nextID
-	s.subscribers[id] = updates
-	s.mu.Unlock()
-
-	return &StatusSubscription{
-		Snapshots: replay,
-		Updates:   updates,
-		cancel: func() {
-			s.mu.Lock()
-			delete(s.subscribers, id)
-			s.mu.Unlock()
-		},
-	}
-}
-
-func (s *StatusStore) replayAfterLocked(cursor string) []StatusSnapshot {
-	if cursor == "" {
-		return []StatusSnapshot{cloneStatusSnapshot(s.snapshot)}
-	}
-	index := -1
-	for i := range s.history {
-		if s.history[i].Cursor == cursor {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
-		return []StatusSnapshot{cloneStatusSnapshot(s.snapshot)}
-	}
-	replay := make([]StatusSnapshot, 0, len(s.history)-index-1)
-	for _, snapshot := range s.history[index+1:] {
-		replay = append(replay, cloneStatusSnapshot(snapshot))
-	}
-	if len(replay) == 0 || !reflect.DeepEqual(replay[len(replay)-1], s.snapshot) {
-		replay = append(replay, cloneStatusSnapshot(s.snapshot))
-	}
-	return replay
+	return &StatusStream{stream: s.stream.Open(statusstream.OpenOptions{
+		After:  options.After,
+		Follow: options.Follow,
+	})}
 }
 
 func ProjectStatus(current StatusSnapshot, event events.Event) StatusSnapshot {
@@ -650,20 +608,4 @@ func recomputeCanAcceptInput(snapshot *StatusSnapshot) {
 		snapshot.Session.MaxPendingInputs = maxPending
 	}
 	snapshot.Session.CanAcceptInput = snapshot.Session.PendingCount < maxPending
-}
-
-func publishLatestStatus(channel chan StatusSnapshot, snapshot StatusSnapshot) {
-	select {
-	case channel <- snapshot:
-		return
-	default:
-	}
-	select {
-	case <-channel:
-	default:
-	}
-	select {
-	case channel <- snapshot:
-	default:
-	}
 }
