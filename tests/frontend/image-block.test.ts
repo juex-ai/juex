@@ -6,8 +6,11 @@ const imageBlockSource = readFileSync(
   new URL("../../frontend/src/components/ImageBlock.tsx", import.meta.url),
   "utf8",
 );
-const sessionSource = readFileSync(
-  new URL("../../frontend/src/pages/Session.tsx", import.meta.url),
+const transcriptSource = readFileSync(
+  new URL(
+    "../../frontend/src/components/session/SessionTranscript.tsx",
+    import.meta.url,
+  ),
   "utf8",
 );
 const assistantMarkdownSource = readFileSync(
@@ -32,28 +35,28 @@ test("image lightbox uses the modal dialog primitive", () => {
 test("message images follow role alignment and consecutive images form a gallery", () => {
   assert.match(imageBlockSource, /className\?: string/);
   assert.match(imageBlockSource, /className=\{cn\(/);
-  assert.match(sessionSource, /function MessageImageGallery/);
-  assert.match(sessionSource, /role === "user" \? "ml-auto" : "mr-auto"/);
-  assert.match(sessionSource, /grid-cols-2/);
-  assert.match(sessionSource, /media\.push\(candidate\.block\.media \?\? null\)/);
+  assert.match(transcriptSource, /function MessageImageGallery/);
+  assert.match(transcriptSource, /role === "user" \? "ml-auto" : "mr-auto"/);
+  assert.match(transcriptSource, /grid-cols-2/);
+  assert.match(transcriptSource, /media\.push\(candidate\.block\.media \?\? null\)/);
 });
 
 test("user attachments lead the message as compact preview thumbnails", () => {
   assert.match(
-    sessionSource,
-    /function MessageGroupView[\s\S]*?const userImageMedia =[\s\S]*?\{userImageMedia\.length > 0[\s\S]*?<MessageImageGallery[\s\S]*?group\.units\.map/,
+    transcriptSource,
+    /function DefaultMessageGroup[\s\S]*?const userImageMedia =[\s\S]*?\{userImageMedia\.length > 0[\s\S]*?<MessageImageGallery[\s\S]*?group\.units\.map/,
   );
   assert.match(
-    sessionSource,
+    transcriptSource,
     /if \(group\.role === "user"\) return null;/,
   );
 
   assert.match(
-    sessionSource,
+    transcriptSource,
     /function MessageImageGallery[\s\S]*?flex w-full flex-wrap justify-end gap-2/,
   );
   assert.match(
-    sessionSource,
+    transcriptSource,
     /function MessageImageGallery[\s\S]*?variant="thumbnail"/,
   );
 
@@ -83,18 +86,18 @@ test("user attachments lead the message as compact preview thumbnails", () => {
   assert.match(figure, /\{!isThumbnail \? \(\s*<figcaption/);
   assert.match(figure, /aria-label=\{`Download \$\{name\}`\}/);
   assert.match(
-    sessionSource,
+    transcriptSource,
     /\{result\.media \? \(\s*<ImageBlock media=\{result\.media\} variant="thumbnail" \/>\s*\) : null\}/,
   );
 });
 
 test("assistant markdown and direct transcript images use the same thumbnail lightbox", () => {
   assert.match(
-    sessionSource,
+    transcriptSource,
     /function MessageImageGallery[\s\S]*?<ImageBlock[\s\S]*?variant="thumbnail"/,
   );
   assert.doesNotMatch(
-    sessionSource,
+    transcriptSource,
     /variant=\{role === "user" \? "thumbnail" : "card"\}/,
   );
   assert.match(

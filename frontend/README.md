@@ -82,9 +82,9 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/runtime-display.ts` | pure runtime and session-state display formatting helpers |
 | `src/lib/runtime-tool-catalog.ts` | pure runtime tool group labels, timeout labels, parameter projection, and defensive schema formatting |
 | `src/lib/session-messages.ts` | pure helpers for merging paged transcript windows |
-| `src/lib/session-read-controller.ts` | session-detail effect interpreter for route guards, fetch/context refresh, authoritative-status replacement, reconnect-safe status calibration, transcript SSE dispatch, and navigation effects |
-| `src/lib/session-read-state.ts` | session read-model state, route-stable live-subscription cursor capture, and replay overlap suppression using persisted message IDs and tool-use IDs from both the initial transcript and current live projection |
-| `src/lib/session-read-state.ts` | pure session-detail controller state transitions and effect descriptors |
+| `src/lib/session-read-controller.ts` | session-detail effect interpreter for route guards, fetch/context refresh, transcript SSE dispatch, reconnect-safe status calibration/application/cleanup, and navigation effects |
+| `src/lib/session-read-state.ts` | pure session read-model transitions, effect descriptors, route-stable live-subscription cursor capture, and replay overlap suppression |
+| `src/lib/session-transcript-renderers.ts` | pure message-group renderer-key contract used by the typed transcript registry |
 | `src/lib/session-title.ts` | pure session preview display-title fallback helper |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |
 | `src/lib/tool-display.ts` | pure tool title, lifecycle label, and timeout display helpers |
@@ -97,6 +97,9 @@ into `internal/web/dist/` for Go embedding.
 | `src/components/` | app components |
 | `src/components/FileTreePanel.tsx` | collapsible workdir tree and file preview sheet |
 | `src/components/fleet/` | persistent agent rail, tabbed stage header, runtime state bar, and selected-agent context |
+| `src/components/session/SessionComposer.tsx` | session composer, attachment workflow, queued-input/read-only presentation, and overlay measurement |
+| `src/components/session/SessionStatusPanel.tsx` | context, goal, notes, and runtime-state controls shown in the composer |
+| `src/components/session/SessionTranscript.tsx` | typed transcript renderer registry and all message/process row renderers |
 | `src/components/LoadingState.tsx` | centered Juex logo loading state for full-page waits |
 | `src/components/QueuedInputStack.tsx` | pending input stack shown above the composer |
 | `src/components/AssistantMarkdown.tsx` | assistant Markdown rendering with backend-verified inline local image links |

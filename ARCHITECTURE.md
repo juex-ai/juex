@@ -1394,14 +1394,16 @@ On the browser side, `frontend/src/lib/live-session-projection.ts` owns the
 transcript read model for SSE `BrowserEvent` facts: optimistic messages,
 pending-input presentation, compact markers, tool output deltas, and final
 response assembly. It does not reconstruct turn, tool, usage, or session
-lifecycle. `frontend/src/pages/Session.tsx` opens the transcript stream from the
-earlier replay cursor returned by the transcript response, replaces status from
-each `BrowserEvent`, and starts an independent status snapshot calibration.
-Every EventSource open calibrates again for reconnect recovery. A failed
-calibration does not block the stream, a failed connection does not block
-status loading, and an intervening streamed snapshot invalidates an older
-refresh response. The transcript cursor is captured before its message page is
-read so concurrent events may replay but cannot be skipped. The server deduplicates
+lifecycle. `frontend/src/lib/session-read-controller.ts` opens the transcript
+stream from the earlier replay cursor returned by the transcript response,
+applies status from each `BrowserEvent`, and owns independent status snapshot
+calibration and cleanup through a configured live-status port.
+`frontend/src/pages/Session.tsx` only adapts that port to the selected fleet
+agent's status store. Every EventSource open calibrates again for reconnect
+recovery. A failed calibration does not block the stream, a failed connection
+does not block status loading, and an intervening streamed snapshot invalidates
+an older refresh response. The transcript cursor is captured before its message
+page is read so concurrent events may replay but cannot be skipped. The server deduplicates
 queued durable frames already covered by the replay tail before continuing live
 delivery. It captures an open journal descriptor and byte boundary behind the
 durable commit barrier, ensuring every event in the snapshot has completed

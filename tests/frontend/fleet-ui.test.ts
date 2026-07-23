@@ -21,6 +21,12 @@ const agentContextSource = source(
   "../../frontend/src/components/fleet/FleetAgentContext.tsx",
 );
 const sessionSource = source("../../frontend/src/pages/Session.tsx");
+const sessionComposerSource = source(
+  "../../frontend/src/components/session/SessionComposer.tsx",
+);
+const sessionControllerSource = source(
+  "../../frontend/src/lib/session-read-controller.ts",
+);
 const sessionsSource = source("../../frontend/src/pages/Sessions.tsx");
 const historySource = source("../../frontend/src/pages/History.tsx");
 const fleetSource = source("../../frontend/src/pages/Fleet.tsx");
@@ -140,7 +146,7 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     "the selected-agent retry control must keep start semantics for failed runtimes",
   );
   assert.match(stateBarSource, /data-testid="agent-runtime-state-bar"/);
-  assert.match(sessionSource, /<AgentRuntimeStateBar \/>/);
+  assert.match(sessionComposerSource, /<AgentRuntimeStateBar \/>/);
   assert.match(sessionsSource, /<AgentRuntimeStateBar \/>/);
   assert.match(historySource, /<AgentRuntimeStateBar \/>/);
   assert.match(
@@ -170,11 +176,11 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
-    /controller\.subscribeLiveEvents\(id,[\s\S]*loadStatus: \(\) => getSessionStatus\(id\)[\s\S]*onStatus:[\s\S]*statusStore\.setStatus/,
-    "the live stream must calibrate canonical status without making the connection depend on the snapshot request",
+    /controller\.configureLiveStatus\(\{[\s\S]*load: getSessionStatus[\s\S]*statusStore\.setStatus[\s\S]*controller\.subscribeLiveEvents\(id/,
+    "the live stream controller must calibrate canonical status without gating stream creation",
   );
   assert.match(
-    sessionSource,
+    sessionComposerSource,
     /composerSubmitAction\(\{[\s\S]*status: runtimeStatus/,
     "the composer must derive admission state from the shared runtime status",
   );
@@ -204,9 +210,14 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     "the transcript stream must capture the transcript response cursor once per session route",
   );
   assert.match(
-    sessionSource,
+    sessionComposerSource,
     /submitAction === "loading"/,
     "status-dependent submission must remain disabled before the snapshot loads",
+  );
+  assert.match(
+    sessionControllerSource,
+    /onOpen: \(\) => \{[\s\S]*void refreshStatus\(\)/,
+    "stream reconnects must trigger controller-owned status calibration",
   );
   assert.match(
     sessionSource,

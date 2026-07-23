@@ -60,6 +60,9 @@ const conversationClasses = classTokenSets(
   "../../frontend/src/components/ai-elements/conversation.tsx",
 );
 const sessionClasses = classTokenSets("../../frontend/src/pages/Session.tsx");
+const sessionComposerClasses = classTokenSets(
+  "../../frontend/src/components/session/SessionComposer.tsx",
+);
 const runtimeClasses = classTokenSets("../../frontend/src/pages/Runtime.tsx");
 
 test("the app shell owns an exact clipped viewport", () => {
@@ -83,11 +86,11 @@ test("the session keeps its conversation scroller behind a bounded composer over
     "relative flex min-h-0 flex-1 flex-col overflow-hidden",
   );
   assertHasClassTokens(
-    sessionClasses,
+    sessionComposerClasses,
     "pointer-events-none absolute inset-0 items-end",
   );
   assertHasClassTokens(
-    sessionClasses,
+    sessionComposerClasses,
     "pointer-events-auto min-h-0 overflow-hidden",
   );
 });

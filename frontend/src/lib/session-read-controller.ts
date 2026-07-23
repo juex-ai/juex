@@ -55,10 +55,6 @@ type SessionReadSubscribeEvents = (
 
 type SessionReadLiveOptions = {
   since?: string;
-  loadStatus?: () => Promise<AgentRuntimeStatusSnapshot>;
-  onStatus?: (status: AgentRuntimeStatusSnapshot) => void;
-  onStatusRefreshError?: (error: unknown) => void;
-  onError?: (event: Event) => void;
 };
 
 export type SessionReadControllerNavigation = {
@@ -68,6 +64,17 @@ export type SessionReadControllerNavigation = {
     sessionID: string,
     state: SessionInitialCommandState,
   ) => void;
+};
+
+export type SessionReadControllerLiveStatus = {
+  load: (sessionID: string) => Promise<AgentRuntimeStatusSnapshot>;
+  apply: (
+    sessionID: string,
+    status: AgentRuntimeStatusSnapshot,
+  ) => void;
+  clear: (sessionID: string) => void;
+  onRefreshError?: (error: unknown) => void;
+  onStreamError?: (event: Event) => void;
 };
 
 export type SessionReadControllerPorts = {
@@ -114,6 +121,7 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     ...noopNavigation,
     ...ports.navigation,
   };
+  let liveStatus: SessionReadControllerLiveStatus | null = null;
   let composerHintTimer: TimerHandle | null = null;
   let initialCommandKey: string | null = null;
 
@@ -132,6 +140,12 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     next: Partial<SessionReadControllerNavigation>,
   ) {
     navigation = { ...navigation, ...next };
+  }
+
+  function configureLiveStatus(
+    next: SessionReadControllerLiveStatus | null,
+  ) {
+    liveStatus = next;
   }
 
   function setRoute(id: string) {
@@ -222,14 +236,15 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     opts: SessionReadLiveOptions = {},
   ) {
     let subscribed = true;
+    const status = liveStatus;
     let statusRevision = 0;
     let refreshGeneration = 0;
     const refreshStatus = async () => {
-      if (!opts.loadStatus || !opts.onStatus) return;
+      if (!status) return;
       const generation = ++refreshGeneration;
       const revision = statusRevision;
       try {
-        const status = await opts.loadStatus();
+        const snapshot = await status.load(sessionID);
         if (
           !subscribed ||
           !isLatestSessionRoute(route, sessionID) ||
@@ -239,10 +254,10 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
           return;
         }
         statusRevision += 1;
-        opts.onStatus(status);
+        status.apply(sessionID, snapshot);
       } catch (error) {
         if (!subscribed || generation !== refreshGeneration) return;
-        opts.onStatusRefreshError?.(error);
+        status.onRefreshError?.(error);
       }
     };
     const unsubscribe = ports.subscribeEvents(sessionID, {
@@ -250,19 +265,24 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
       onEvent: (event) => {
         if (!subscribed || !isLatestSessionRoute(route, sessionID)) return;
         statusRevision += 1;
-        opts.onStatus?.(event.status);
+        if (status) {
+          status.apply(sessionID, event.status);
+        }
         runSessionReadResult(projectLiveBrowserEvent(state, event));
       },
       onOpen: () => {
         void refreshStatus();
       },
-      onError: opts.onError,
+      onError: status?.onStreamError,
     });
     void refreshStatus();
     return () => {
       subscribed = false;
       refreshGeneration += 1;
       unsubscribe();
+      if (status) {
+        status.clear(sessionID);
+      }
       clearTransientTimers();
     };
   }
@@ -341,6 +361,7 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
   }
 
   return {
+    configureLiveStatus,
     configureNavigation,
     currentRoute,
     currentState,

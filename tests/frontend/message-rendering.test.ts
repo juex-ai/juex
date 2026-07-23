@@ -7,8 +7,6 @@ import {
   externalEventRowClassName,
   messageContentBaseClassName,
   messageContentUserClassName,
-  messageGroupModelLabels,
-  messageGroupShouldShowModel,
   messageResponseClassName,
   processDisclosureChevronClassName,
   processDisclosureClassName,
@@ -18,8 +16,11 @@ import {
   thinkingDisclosureSummaryClassName,
 } from "../../frontend/src/lib/message-rendering.ts";
 
-const sessionSource = readFileSync(
-  new URL("../../frontend/src/pages/Session.tsx", import.meta.url),
+const transcriptSource = readFileSync(
+  new URL(
+    "../../frontend/src/components/session/SessionTranscript.tsx",
+    import.meta.url,
+  ),
   "utf8",
 );
 
@@ -40,128 +41,6 @@ test("user message chrome uses a weak card treatment", () => {
   assert.match(user, /group-\[\.is-user\]:rounded-tr-md/);
   assert.doesNotMatch(user, /bg-juex-user/);
   assert.doesNotMatch(user, /text-juex-user-foreground/);
-});
-
-test("message model labels only render for normal assistant messages", () => {
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "assistant-normal",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "gpt-test",
-    }),
-    true,
-  );
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "assistant-system",
-      role: "assistant",
-      kind: "system_status",
-      pending: false,
-      units: [],
-      model: "gpt-test",
-    }),
-    false,
-  );
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "user-with-model",
-      role: "user",
-      pending: false,
-      units: [],
-      model: "gpt-test",
-    }),
-    false,
-  );
-  assert.equal(
-    messageGroupShouldShowModel({
-      key: "assistant-no-model",
-      role: "assistant",
-      pending: false,
-      units: [],
-    }),
-    false,
-  );
-});
-
-test("messageGroupModelLabels labels assistant model run starts", () => {
-  const labels = messageGroupModelLabels([
-    {
-      key: "user-start",
-      role: "user",
-      pending: false,
-      units: [],
-    },
-    {
-      key: "assistant-a-1",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "model-a",
-    },
-    {
-      key: "assistant-a-2",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "model-a",
-    },
-    {
-      key: "assistant-b-1",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "model-b",
-    },
-    {
-      key: "assistant-b-2",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "model-b",
-    },
-    {
-      key: "user-break",
-      role: "user",
-      pending: false,
-      units: [],
-    },
-    {
-      key: "assistant-b-after-user",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "model-b",
-    },
-    {
-      key: "assistant-kind-break",
-      role: "assistant",
-      kind: "hook_event",
-      pending: false,
-      units: [],
-      model: "model-b",
-    },
-    {
-      key: "assistant-b-after-kind",
-      role: "assistant",
-      pending: false,
-      units: [],
-      model: "model-b",
-    },
-  ]);
-
-  assert.deepEqual(labels, [
-    undefined,
-    "model-a",
-    undefined,
-    "model-b",
-    undefined,
-    undefined,
-    "model-b",
-    undefined,
-    "model-b",
-  ]);
 });
 
 test("external event row renders as inline text instead of a bubble", () => {
@@ -225,14 +104,14 @@ test("nested process disclosures only rotate their own chevrons", () => {
 });
 
 test("all process disclosures start closed and only follow user toggles", () => {
-  const start = sessionSource.indexOf("function ProcessDisclosure(");
+  const start = transcriptSource.indexOf("function ProcessDisclosure(");
   assert.notEqual(start, -1);
-  const nextDeclaration = sessionSource
+  const nextDeclaration = transcriptSource
     .slice(start + 1)
     .search(/\n(?:export )?function /);
   assert.notEqual(nextDeclaration, -1);
   const end = start + 1 + nextDeclaration;
-  const disclosure = sessionSource.slice(start, end);
+  const disclosure = transcriptSource.slice(start, end);
 
   assert.match(disclosure, /const \[isOpen, setIsOpen\] = useState\(false\)/);
   assert.match(disclosure, /open=\{isOpen\}/);
@@ -246,26 +125,25 @@ test("all process disclosures start closed and only follow user toggles", () => 
 
 test("system notices render as automated notices instead of user messages", () => {
   assert.match(
-    sessionSource,
-    /group\.role === "user" && group\.kind === "system_notice"/,
+    transcriptSource,
+    /system_notice: SystemNoticeGroup/,
   );
-  assert.match(sessionSource, /<SystemNoticeGroup group=\{group\} \/>/);
 
-  const start = sessionSource.indexOf("function SystemNoticeGroup(");
-  const end = sessionSource.indexOf("\nfunction ", start + 1);
+  const start = transcriptSource.indexOf("function SystemNoticeGroup(");
+  const end = transcriptSource.indexOf("\nfunction ", start + 1);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
-  const notice = sessionSource.slice(start, end);
+  const notice = transcriptSource.slice(start, end);
   assert.match(notice, /Automated notice/);
   assert.doesNotMatch(notice, /<Message from="user">/);
 });
 
 test("assistant work disclosure owns process rows and leaves content outside", () => {
-  const start = sessionSource.indexOf("function AssistantWorkGroupView(");
-  const end = sessionSource.indexOf("function AssistantWorkContent(", start);
+  const start = transcriptSource.indexOf("function AssistantWorkGroupView(");
+  const end = transcriptSource.indexOf("function AssistantWorkContent(", start);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
-  const disclosure = sessionSource.slice(start, end);
+  const disclosure = transcriptSource.slice(start, end);
 
   assert.match(disclosure, /const \[isOpen, setIsOpen\] = useState\(false\)/);
   assert.match(disclosure, /assistantWorkTitle\(work\)/);

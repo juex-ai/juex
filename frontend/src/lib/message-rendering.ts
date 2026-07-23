@@ -1,5 +1,3 @@
-import type { MessageGroup } from "./display-units";
-
 const MESSAGE_RESPONSE_CLASS_NAME =
   "juex-markdown size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_code]:font-mono [&_p]:whitespace-pre-wrap [&_pre]:rounded-md";
 
@@ -56,33 +54,6 @@ export function messageContentBaseClassName() {
 
 export function messageContentUserClassName() {
   return MESSAGE_CONTENT_USER_CLASS_NAME;
-}
-
-export function messageGroupShouldShowModel(group: MessageGroup): boolean {
-  return group.role === "assistant" && !group.kind && Boolean(group.model);
-}
-
-export function messageGroupModelLabels(
-  groups: readonly MessageGroup[],
-): Array<string | undefined> {
-  let previousAssistantModel: string | undefined;
-  let inAssistantRun = false;
-
-  return groups.map((group) => {
-    if (!messageGroupShouldShowModel(group)) {
-      previousAssistantModel = undefined;
-      inAssistantRun = false;
-      return undefined;
-    }
-
-    const model = group.model;
-    if (inAssistantRun && previousAssistantModel === model) {
-      return undefined;
-    }
-    previousAssistantModel = model;
-    inAssistantRun = true;
-    return model;
-  });
 }
 
 export function externalEventRowClassName() {
