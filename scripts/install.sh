@@ -10,6 +10,8 @@
 #   JUEX_INSTALL_VERSION=0.0.1
 #   JUEX_INSTALL_OS=linux
 #   JUEX_INSTALL_ARCH=amd64
+#   JUEX_INSTALL_LIBC=glibc
+#   JUEX_INSTALL_PACKAGE_HOME=/custom/package/home
 #   INSTALL_FLEET_SERVICE=1
 
 set -euo pipefail
@@ -109,6 +111,11 @@ resolve_version() {
 }
 
 detect_os() {
+  if [[ -n "${ANDROID_ROOT:-}" ]] ||
+    [[ -n "${ANDROID_DATA:-}" ]] ||
+    [[ "${PREFIX:-}" == *com.termux* ]]; then
+    die "Termux/Android is not supported because this release has no compatible bundled ripgrep asset"
+  fi
   local raw="${JUEX_INSTALL_OS:-$(uname -s)}"
   case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
     darwin) printf 'darwin\n' ;;
@@ -126,6 +133,68 @@ detect_arch() {
     armv7|armv7l|armhf) printf 'armv7\n' ;;
     *) die "unsupported architecture: ${raw}" ;;
   esac
+}
+
+detect_linux_libc() {
+  local raw="${JUEX_INSTALL_LIBC:-}"
+  if [[ -n "$raw" ]]; then
+    case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
+      glibc|gnu) printf 'glibc\n' ;;
+      musl) printf 'musl\n' ;;
+      *) die "unsupported Linux libc override: ${raw}; expected glibc or musl" ;;
+    esac
+    return
+  fi
+
+  local version
+  if command -v getconf >/dev/null 2>&1; then
+    version=$(getconf GNU_LIBC_VERSION 2>/dev/null || true)
+    if [[ "$version" == glibc* ]]; then
+      printf 'glibc\n'
+      return
+    fi
+  fi
+
+  local ldd_output
+  if command -v ldd >/dev/null 2>&1; then
+    ldd_output=$(LC_ALL=C ldd --version 2>&1 || true)
+    case "$(printf '%s' "$ldd_output" | tr '[:upper:]' '[:lower:]')" in
+      *musl*) printf 'musl\n'; return ;;
+      *glibc*|*"gnu libc"*|*"gnu c library"*) printf 'glibc\n'; return ;;
+    esac
+  fi
+
+  local loader
+  for loader in \
+    /lib/ld-linux-aarch64.so.1 \
+    /lib64/ld-linux-aarch64.so.1 \
+    /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 \
+    /usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1; do
+    if [[ -e "$loader" ]]; then
+      printf 'glibc\n'
+      return
+    fi
+  done
+  for loader in /lib/ld-musl-*.so.1 /usr/lib/ld-musl-*.so.1; do
+    if [[ -e "$loader" ]]; then
+      printf 'musl\n'
+      return
+    fi
+  done
+  printf 'unknown\n'
+}
+
+require_release_runtime() {
+  local os_name="$1"
+  local arch="$2"
+  if [[ "$os_name" != "linux" || "$arch" != "arm64" ]]; then
+    return
+  fi
+  local libc
+  libc=$(detect_linux_libc)
+  if [[ "$libc" != "glibc" ]]; then
+    die "Linux arm64 release requires glibc because upstream ripgrep 15.1.0 publishes only a glibc asset; detected ${libc}. Use a source build with a compatible rg on PATH."
+  fi
 }
 
 archive_name() {
@@ -176,9 +245,9 @@ download_file() {
 compute_sha256() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$file" | awk '{print $1}'
+    sha256sum "$file" | awk '{sub(/^\\/, "", $1); print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$file" | awk '{print $1}'
+    shasum -a 256 "$file" | awk '{sub(/^\\/, "", $1); print $1}'
   else
     die "sha256sum or shasum is required to verify release assets"
   fi
@@ -202,10 +271,9 @@ verify_checksum() {
   printf 'checksum ok: %s\n' "$archive_base"
 }
 
-extract_binary() {
+extract_archive() {
   local archive="$1"
   local out_dir="$2"
-  local binary_name="$3"
   mkdir -p "$out_dir"
 
   case "$archive" in
@@ -220,11 +288,24 @@ extract_binary() {
       die "unsupported archive format: ${archive}"
       ;;
   esac
+}
 
+find_extracted_binary() {
+  local out_dir="$1"
+  local binary_name="$2"
   local extracted
   extracted=$(find "$out_dir" -type f -name "$binary_name" -print | sed -n '1p')
   [[ -n "$extracted" ]] || die "binary ${binary_name} not found in archive"
   printf '%s\n' "$extracted"
+}
+
+find_package_root() {
+  local out_dir="$1"
+  local manifest
+  manifest=$(find "$out_dir" -type f -name juex-package.json -print | sed -n '1p')
+  if [[ -n "$manifest" ]]; then
+    dirname "$manifest"
+  fi
 }
 
 install_binary() {
@@ -234,6 +315,54 @@ install_binary() {
   rm -f "$target"
   cp "$source" "$target"
   chmod +x "$target"
+}
+
+replace_symlink() {
+  local target="$1"
+  local link="$2"
+  local tmp="${link}.tmp.$$"
+  rm -f "$tmp"
+  ln -s "$target" "$tmp"
+  if mv -Tf "$tmp" "$link" 2>/dev/null; then
+    return
+  fi
+  if mv -hf "$tmp" "$link" 2>/dev/null; then
+    return
+  fi
+  rm -f "$tmp"
+  die "could not atomically replace symlink: $link"
+}
+
+install_managed_package() {
+  local source_root="$1"
+  local package_home="$2"
+  local release_key="$3"
+  local binary_name="$4"
+  local install_target="$5"
+  local rg_name="rg"
+  if [[ "$binary_name" == *.exe ]]; then
+    rg_name="rg.exe"
+  fi
+
+  [[ -f "$source_root/juex-package.json" ]] || die "managed release is missing juex-package.json"
+  [[ -f "$source_root/bin/$binary_name" ]] || die "managed release is missing bin/$binary_name"
+  [[ -f "$source_root/juex-path/$rg_name" ]] || die "managed release is missing juex-path/$rg_name"
+  [[ -f "$source_root/juex-resources/licenses/ripgrep/LICENSE-MIT" ]] || die "managed release is missing ripgrep LICENSE-MIT"
+  [[ -f "$source_root/juex-resources/licenses/ripgrep/UNLICENSE" ]] || die "managed release is missing ripgrep UNLICENSE"
+
+  local releases_dir release_dir release_name stage generation
+  releases_dir="${package_home%/}/releases"
+  mkdir -p "$releases_dir" "$(dirname "$install_target")"
+  stage=$(mktemp -d "${releases_dir}/.${release_key}.tmp.XXXXXX")
+  generation="${stage##*.tmp.}"
+  release_name="${release_key}-${generation}"
+  release_dir="${releases_dir}/${release_name}"
+  cp -R "$source_root/." "$stage/"
+  chmod +x "$stage/bin/$binary_name" "$stage/juex-path/$rg_name"
+  mv "$stage" "$release_dir"
+
+  replace_symlink "releases/$release_name" "${package_home%/}/current"
+  replace_symlink "${release_dir}/bin/$binary_name" "$install_target"
 }
 
 refresh_fleet_service() {
@@ -311,12 +440,13 @@ main() {
     esac
   done
 
-  local resolved_version version_for_asset tag os_name arch archive checksums_url asset_url install_dir binary_name install_target
+  local resolved_version version_for_asset tag os_name arch archive checksums_url asset_url install_dir binary_name install_target package_home release_key
   resolved_version=$(resolve_version "$requested_version")
   version_for_asset=$(asset_version "$resolved_version")
   tag=$(release_tag "$resolved_version")
   os_name=$(detect_os)
   arch=$(detect_arch)
+  require_release_runtime "$os_name" "$arch"
   archive=$(archive_name "$version_for_asset" "$os_name" "$arch")
   asset_url=$(release_asset_url "$tag" "$archive")
   checksums_url=$(release_asset_url "$tag" "checksums.txt")
@@ -326,6 +456,8 @@ main() {
     binary_name="juex.exe"
   fi
   install_target="${install_dir%/}/${binary_name}"
+  package_home="${JUEX_INSTALL_PACKAGE_HOME:-$(dirname "$install_dir")/lib/juex}"
+  release_key="${version_for_asset}-${os_name}-${arch}"
 
   cat <<EOF
 JueX release install plan
@@ -336,14 +468,20 @@ archive: ${archive}
 asset url: ${asset_url}
 checksum url: ${checksums_url}
 install target: ${install_target}
-uninstall: rm -f ${install_target}
+package home: ${package_home}
+uninstall: rm -f ${install_target}; rm -rf ${package_home}
 EOF
 
   if [[ "$dry_run" -eq 1 ]]; then
     return 0
   fi
 
-  local tmp archive_path checksums_path extract_dir extracted
+  mkdir -p "$install_dir" "$package_home"
+  install_dir=$(cd "$install_dir" && pwd -P)
+  package_home=$(cd "$package_home" && pwd -P)
+  install_target="${install_dir%/}/${binary_name}"
+
+  local tmp archive_path checksums_path extract_dir package_root extracted
   tmp=$(mktemp -d)
   _juex_install_tmp="$tmp"
   trap 'rm -rf "$_juex_install_tmp"' EXIT
@@ -355,8 +493,14 @@ EOF
   download_file "$asset_url" "$archive_path"
   download_file "$checksums_url" "$checksums_path"
   verify_checksum "$archive_path" "$checksums_path"
-  extracted=$(extract_binary "$archive_path" "$extract_dir" "$binary_name")
-  install_binary "$extracted" "$install_target"
+  extract_archive "$archive_path" "$extract_dir"
+  package_root=$(find_package_root "$extract_dir")
+  if [[ -n "$package_root" ]]; then
+    install_managed_package "$package_root" "$package_home" "$release_key" "$binary_name" "$install_target"
+  else
+    extracted=$(find_extracted_binary "$extract_dir" "$binary_name")
+    install_binary "$extracted" "$install_target"
+  fi
 
   printf 'Installed juex to %s\n' "$install_target"
   refresh_fleet_service "$install_target"

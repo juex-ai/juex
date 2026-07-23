@@ -4,11 +4,18 @@ version: 2
 before:
   hooks:
     - go mod tidy
+    - ./scripts/prepare-ripgrep.sh --target darwin_amd64 --juex-version {{ .Version }} --output .tmp/release/darwin_amd64
+    - ./scripts/prepare-ripgrep.sh --target darwin_arm64 --juex-version {{ .Version }} --output .tmp/release/darwin_arm64
+    - ./scripts/prepare-ripgrep.sh --target linux_amd64 --juex-version {{ .Version }} --output .tmp/release/linux_amd64
+    - ./scripts/prepare-ripgrep.sh --target linux_arm64 --juex-version {{ .Version }} --output .tmp/release/linux_arm64
+    - ./scripts/prepare-ripgrep.sh --target linux_armv7 --juex-version {{ .Version }} --output .tmp/release/linux_armv7
+    - ./scripts/prepare-ripgrep.sh --target windows_amd64 --juex-version {{ .Version }} --output .tmp/release/windows_amd64
+    - ./scripts/prepare-ripgrep.sh --target windows_arm64 --juex-version {{ .Version }} --output .tmp/release/windows_arm64
 
 builds:
   - id: juex
     main: ./cmd/juex
-    binary: juex
+    binary: bin/juex
     env: [CGO_ENABLED=0]
     flags: [-trimpath]
     ldflags:
@@ -37,10 +44,14 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    # GoReleaser adds README/LICENSE by default when files is empty.
-    # Use a glob that should not match anything so archives contain only juex.
+    wrap_in_directory: true
     files:
-      - none*
+      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-package.json
+        dst: juex-package.json
+      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-path/*
+        dst: juex-path
+      - src: .tmp/release/{{.Os}}_{{.Arch}}{{if .Arm}}v{{.Arm}}{{end}}/juex-resources/licenses/ripgrep/*
+        dst: juex-resources/licenses/ripgrep
 
 checksum:
   name_template: "checksums.txt"

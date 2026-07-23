@@ -1,0 +1,9 @@
+# target	ripgrep_version	asset	bytes	sha256
+# Source: https://github.com/BurntSushi/ripgrep/releases/tag/15.1.0
+darwin_amd64	15.1.0	ripgrep-15.1.0-x86_64-apple-darwin.tar.gz	1894127	64811cb24e77cac3057d6c40b63ac9becf9082eedd54ca411b475b755d334882
+darwin_arm64	15.1.0	ripgrep-15.1.0-aarch64-apple-darwin.tar.gz	1777930	378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715
+linux_amd64	15.1.0	ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz	2263077	1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599
+linux_arm64	15.1.0	ripgrep-15.1.0-aarch64-unknown-linux-gnu.tar.gz	1869959	2b661c6ef508e902f388e9098d9c4c5aca72c87b55922d94abdba830b4dc885e
+linux_armv7	15.1.0	ripgrep-15.1.0-armv7-unknown-linux-musleabihf.tar.gz	1844969	89c0230b8ad3c280460e0391f2ecb92f4a7c498b10f4a912540fc0f916336b08
+windows_amd64	15.1.0	ripgrep-15.1.0-x86_64-pc-windows-msvc.zip	1810687	124510b94b6baa3380d051fdf4650eaa80a302c876d611e9dba0b2e18d87493a
+windows_arm64	15.1.0	ripgrep-15.1.0-aarch64-pc-windows-msvc.zip	1675460	00d931fb5237c9696ca49308818edb76d8eb6fc132761cb2a1bd616b2df02f8e

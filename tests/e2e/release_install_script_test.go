@@ -22,6 +22,7 @@ func TestReleaseInstallScriptDryRunResolvesAssets(t *testing.T) {
 		name        string
 		osName      string
 		arch        string
+		libc        string
 		wantArchive string
 	}{
 		{
@@ -35,6 +36,13 @@ func TestReleaseInstallScriptDryRunResolvesAssets(t *testing.T) {
 			osName:      "linux",
 			arch:        "amd64",
 			wantArchive: "juex_0.0.1_linux_amd64.tar.gz",
+		},
+		{
+			name:        "linux arm64 glibc",
+			osName:      "linux",
+			arch:        "arm64",
+			libc:        "glibc",
+			wantArchive: "juex_0.0.1_linux_arm64.tar.gz",
 		},
 		{
 			name:        "linux armv7",
@@ -51,6 +59,7 @@ func TestReleaseInstallScriptDryRunResolvesAssets(t *testing.T) {
 			cmd.Env = append(os.Environ(),
 				"JUEX_INSTALL_OS="+tc.osName,
 				"JUEX_INSTALL_ARCH="+tc.arch,
+				"JUEX_INSTALL_LIBC="+tc.libc,
 				"HOME="+t.TempDir(),
 			)
 			out, err := cmd.CombinedOutput()

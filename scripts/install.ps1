@@ -231,6 +231,41 @@ function Install-Binary {
   Copy-Item -LiteralPath $Source -Destination $Target -Force
 }
 
+function Install-ManagedPackage {
+  param(
+    [string]$SourceRoot,
+    [string]$ManagedHome,
+    [string]$ReleaseKey,
+    [string]$InstallTarget
+  )
+
+  $required = @(
+    "juex-package.json",
+    "bin/juex.exe",
+    "juex-path/rg.exe",
+    "juex-resources/licenses/ripgrep/LICENSE-MIT",
+    "juex-resources/licenses/ripgrep/UNLICENSE"
+  )
+  foreach ($relative in $required) {
+    if (-not (Test-Path -LiteralPath (Join-Path $SourceRoot $relative) -PathType Leaf)) {
+      Die "managed release is missing $relative"
+    }
+  }
+
+  $releasesDir = Join-Path $ManagedHome "releases"
+  $generation = [Guid]::NewGuid().ToString("N")
+  $releaseName = "$ReleaseKey-$generation"
+  $releaseDir = Join-Path $releasesDir $releaseName
+  $stage = Join-Path $releasesDir ".$releaseName.tmp"
+  New-Item -ItemType Directory -Force -Path $releasesDir | Out-Null
+  Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force -Path $stage | Out-Null
+  Copy-Item -Path (Join-Path $SourceRoot "*") -Destination $stage -Recurse -Force
+  Move-Item -LiteralPath $stage -Destination $releaseDir
+  Install-Binary -Source (Join-Path $releaseDir "bin/juex.exe") -Target $InstallTarget
+  Set-Content -LiteralPath (Join-Path $ManagedHome "current.txt") -Value $releaseName -NoNewline
+}
+
 $resolvedVersion = Resolve-Version -RequestedVersion $Version
 $assetVersion = Get-AssetVersion -InputVersion $resolvedVersion
 $tag = Get-ReleaseTag -InputVersion $resolvedVersion
@@ -250,8 +285,11 @@ if (-not $Prefix) {
 if (-not $BinDir) {
   $BinDir = Join-Path $Prefix "bin"
 }
+$BinDir = [System.IO.Path]::GetFullPath($BinDir)
+$PackageHome = Join-Path (Split-Path -Parent $BinDir) "lib/juex"
 $binaryName = "juex.exe"
 $installTarget = Join-Path $BinDir $binaryName
+$releaseKey = "$assetVersion-$osName-$arch"
 
 Write-Host "JueX release install plan"
 Write-Host "version: $assetVersion"
@@ -261,7 +299,8 @@ Write-Host "archive: $archive"
 Write-Host "asset url: $assetUrl"
 Write-Host "checksum url: $checksumsUrl"
 Write-Host "install target: $installTarget"
-Write-Host "uninstall: Remove-Item -Force $installTarget"
+Write-Host "package home: $PackageHome"
+Write-Host "uninstall: Remove-Item -Force $installTarget; Remove-Item -Recurse -Force $PackageHome"
 
 if ($DryRun) {
   exit 0
@@ -280,7 +319,12 @@ try {
   Copy-Download -Url $checksumsUrl -OutFile $checksumsPath
   Verify-Checksum -Archive $archivePath -Checksums $checksumsPath
   $extracted = Expand-JuexBinary -Archive $archivePath -OutDir $extractDir -BinaryName $binaryName
-  Install-Binary -Source $extracted -Target $installTarget
+  $packageManifest = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter "juex-package.json" | Select-Object -First 1
+  if ($packageManifest) {
+    Install-ManagedPackage -SourceRoot $packageManifest.DirectoryName -ManagedHome $PackageHome -ReleaseKey $releaseKey -InstallTarget $installTarget
+  } else {
+    Install-Binary -Source $extracted -Target $installTarget
+  }
   Write-Host "Installed juex to $installTarget"
 } finally {
   if ($tmp) {

@@ -578,9 +578,13 @@ func TestFleetRosterPollingKeepsAgentConnectionsBounded(t *testing.T) {
 		if len(roster) != 1 || roster[0].Activity == nil || roster[0].Activity.State != "idle" {
 			t.Fatalf("roster = %+v", roster)
 		}
+		// Probe uses a one-shot connection whose close notification is
+		// asynchronous. Let it leave before the next zero-delay synthetic
+		// poll so the peak measures retained activity connections rather than
+		// scheduler lag between sequential probes.
+		waitForFleetConnectionCount(t, &connections.open, 1)
 	}
 
-	waitForFleetConnectionCount(t, &connections.open, 1)
 	if got := connections.maxOpen.Load(); got > 2 {
 		t.Fatalf("peak open agent connections = %d, want at most 2", got)
 	}

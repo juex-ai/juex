@@ -23,7 +23,8 @@ them only when they explain the feature you are changing.
 
 ## Project
 
-Juex is a single-binary Go agent runtime. It currently includes:
+Juex is a Go agent runtime. Published releases are managed packages containing
+the Juex binary plus a pinned ripgrep executable. It currently includes:
 
 - a CLI (`juex run`, `juex repl`, `juex sessions ...`)
 - a React web UI served by `juex serve`
