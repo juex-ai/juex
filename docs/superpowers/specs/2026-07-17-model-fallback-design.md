@@ -145,13 +145,15 @@ canonical reference, provider selection/profile, and context window. Config
 file layering replaces the fallback list when the key is present, including an
 empty list.
 
-Config retains both the raw configured primary reference and the ordered raw
-fallback references until configured-chain validation is complete. The
-configured primary/fallback equality check happens before CLI or environment
-primary overrides. Effective primary resolution then applies either a complete
-CLI reference or the legacy environment model ID under the selected provider.
-Effective-chain construction removes any override-created duplicate while
-preserving order.
+Config retains the ordered fallback references through configured-chain
+validation. Validation canonicalizes each reference, rejects duplicate
+fallback entries, and verifies that every referenced provider and model
+exists; it does not remove the configured primary because later YAML layers,
+environment overrides, or CLI overrides may select a different primary.
+Effective primary resolution then applies either a complete CLI reference or
+the legacy environment model ID under the selected provider. Effective-chain
+construction removes any fallback equal to the final primary while preserving
+the remaining order.
 
 ### Model Health Contract
 
