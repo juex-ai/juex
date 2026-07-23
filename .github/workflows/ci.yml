@@ -56,11 +56,11 @@ jobs:
             --target "${os_name}_${arch}" \
             --juex-version ci \
             --output .tmp/ci-ripgrep
-          rg_path="$PWD/.tmp/ci-ripgrep/juex-path/rg"
+          rg_dir="$PWD/.tmp/ci-ripgrep/juex-path"
           if [[ "$os_name" == "windows" ]]; then
-            rg_path="$(cygpath -w "${rg_path}.exe")"
+            rg_dir="$(cygpath -w "$rg_dir")"
           fi
-          printf 'JUEX_RG=%s\n' "$rg_path" >> "$GITHUB_ENV"
+          printf '%s\n' "$rg_dir" >> "$GITHUB_PATH"
       - run: go test ./... -race -count=1
         shell: bash
       - name: Test release installer
