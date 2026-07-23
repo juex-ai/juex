@@ -232,7 +232,32 @@ func normalizeGoRegexpForRipgrep(pattern string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	preserveScannerLineEndAnchors(parsed)
 	return enforceASCIIWordBoundaries(parsed.String()), nil
+}
+
+// The legacy scanner applied the Go regexp after ScanLines removed both LF and
+// an optional preceding CR. Keep ripgrep's ordinary LF splitting and let every
+// Go end anchor consume that optional CR before matching the line boundary.
+func preserveScannerLineEndAnchors(expr *syntax.Regexp) {
+	for _, sub := range expr.Sub {
+		preserveScannerLineEndAnchors(sub)
+	}
+	if expr.Op != syntax.OpEndLine && expr.Op != syntax.OpEndText {
+		return
+	}
+	anchor := &syntax.Regexp{Op: expr.Op, Flags: expr.Flags}
+	optionalCarriageReturn := &syntax.Regexp{
+		Op: syntax.OpQuest,
+		Sub: []*syntax.Regexp{{
+			Op:   syntax.OpLiteral,
+			Rune: []rune{'\r'},
+		}},
+	}
+	*expr = syntax.Regexp{
+		Op:  syntax.OpConcat,
+		Sub: []*syntax.Regexp{optionalCarriageReturn, anchor},
+	}
 }
 
 func enforceASCIIWordBoundaries(pattern string) string {
@@ -290,7 +315,6 @@ func ripgrepArgs(pattern, target string) []string {
 	return []string{
 		"--json",
 		"--no-config",
-		"--crlf",
 		"--sort", "path",
 		"--hidden",
 		"--no-ignore",

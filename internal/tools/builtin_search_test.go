@@ -84,7 +84,6 @@ func TestRipgrepArgsPreserveLegacyTraversalContract(t *testing.T) {
 	want := []string{
 		"--json",
 		"--no-config",
-		"--crlf",
 		"--sort", "path",
 		"--hidden",
 		"--no-ignore",
@@ -113,6 +112,23 @@ func TestNormalizeGoRegexpUsesASCIIWordBoundariesWithoutChangingLiterals(t *test
 	tests := map[string]string{
 		`\bfoo\B`: `(?-u:\b)foo(?-u:\B)`,
 		`\\b`:     `\\b`,
+	}
+	for input, want := range tests {
+		got, err := normalizeGoRegexpForRipgrep(input)
+		if err != nil {
+			t.Fatalf("normalize %q: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("normalize %q = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestNormalizeGoRegexpPreservesScannerLineEndAnchors(t *testing.T) {
+	tests := map[string]string{
+		`foo$`:  `(?-m:foo\r?$)`,
+		`^foo$`: `(?-m:\Afoo\r?$)`,
+		`foo\z`: `foo\r?\z`,
 	}
 	for input, want := range tests {
 		got, err := normalizeGoRegexpForRipgrep(input)
@@ -460,12 +476,14 @@ func TestRipgrepRunnerPreservesGoRegexpDialect(t *testing.T) {
 	}
 	root := t.TempDir()
 	for name, body := range map[string]string{
-		"quoted.txt":   "literal.*\n",
-		"expanded.txt": "literalXYZ\n",
-		"ascii.txt":    "42abc\n",
-		"unicode.txt":  "٤abc\n",
-		"boundary.txt": "éfooé\n",
-		"crlf.txt":     "foo\r\n",
+		"quoted.txt":       "literal.*\n",
+		"expanded.txt":     "literalXYZ\n",
+		"ascii.txt":        "42abc\n",
+		"unicode.txt":      "٤abc\n",
+		"boundary.txt":     "éfooé\n",
+		"lf.txt":           "before\nfoo\n",
+		"crlf.txt":         "before\r\nfoo\r\n",
+		"unterminated.txt": "before\nfoo",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -495,12 +513,20 @@ func TestRipgrepRunnerPreservesGoRegexpDialect(t *testing.T) {
 	if output := formatGrepResult(boundary); !strings.Contains(output, "boundary.txt") {
 		t.Fatalf("Go ASCII word-boundary regexp output = %q", output)
 	}
-	crlf, err := runner.Grep(context.Background(), GrepRequest{Pattern: `foo$`, Path: root})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if output := formatGrepResult(crlf); !strings.Contains(output, "crlf.txt") {
-		t.Fatalf("Go CRLF line-anchor regexp output = %q", output)
+	for _, pattern := range []string{`foo$`, `^foo$`, `foo\z`} {
+		lineEnds, err := runner.Grep(context.Background(), GrepRequest{Pattern: pattern, Path: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lineEndPaths := make(map[string]bool, len(lineEnds.Matches))
+		for _, match := range lineEnds.Matches {
+			lineEndPaths[match.Path] = true
+		}
+		for _, want := range []string{"lf.txt", "crlf.txt", "unterminated.txt"} {
+			if !lineEndPaths[want] {
+				t.Fatalf("Go line-anchor regexp %q matches missing %q: %+v", pattern, want, lineEnds.Matches)
+			}
+		}
 	}
 }
 
