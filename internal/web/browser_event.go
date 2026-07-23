@@ -190,6 +190,7 @@ func projectBrowserEvents(
 	seed juexruntime.StatusSeed,
 	journal []events.Event,
 	after string,
+	authoritative *juexruntime.StatusSnapshot,
 ) ([]BrowserEvent, error) {
 	status := juexruntime.NewStatusStore(seed)
 	projected := make([]BrowserEvent, 0, len(journal))
@@ -212,6 +213,12 @@ func projectBrowserEvents(
 		if visible {
 			projected = append(projected, browserEvent)
 		}
+	}
+	if authoritative != nil &&
+		len(journal) > 0 &&
+		len(projected) > 0 &&
+		authoritative.Cursor == journal[len(journal)-1].ID {
+		projected[len(projected)-1].Status = statusapi.FromRuntime(*authoritative)
 	}
 	return projected, nil
 }

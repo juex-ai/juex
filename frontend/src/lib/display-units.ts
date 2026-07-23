@@ -45,6 +45,11 @@ export type MessageGroup = {
   model?: string;
 };
 
+export type MessageGroupingOptions = {
+  runtimeStatusLoaded?: boolean;
+  activeTurnID?: string;
+};
+
 function normalizeTextBlock(block: TextBlock): TextBlock {
   // Older transcripts can contain {"type":"text"} for empty provider output.
   if (typeof block.text === "string") return block;
@@ -62,10 +67,12 @@ function normalizeTextBlock(block: TextBlock): TextBlock {
 export function messagesToGroups(
   messages: Message[] | null | undefined,
   toolStatuses: readonly RuntimeToolCallStatus[] = [],
+  options: MessageGroupingOptions = {},
 ): MessageGroup[] {
   if (!messages?.length) return [];
   const groups: MessageGroup[] = [];
   const toolById = new Map<string, ToolDisplayUnit>();
+  const toolTurnById = new Map<string, string | undefined>();
   const toolStateByID = new Map(
     toolStatuses.map((tool) => [tool.tool_use_id, tool.state]),
   );
@@ -92,7 +99,10 @@ export function messagesToGroups(
             state: toolStateByID.get(block.tool_use_id),
           };
           units.push(unit);
-          if (block.tool_use_id) toolById.set(block.tool_use_id, unit);
+          if (block.tool_use_id) {
+            toolById.set(block.tool_use_id, unit);
+            toolTurnById.set(block.tool_use_id, msg.turn_id);
+          }
           break;
         }
         case "tool_result": {
@@ -133,6 +143,19 @@ export function messagesToGroups(
       units: foldToolBatches(units),
       model: msg.model,
     });
+  }
+
+  if (options.runtimeStatusLoaded) {
+    for (const [toolUseID, unit] of toolById) {
+      if (
+        unit.state === undefined &&
+        unit.result === null &&
+        (!options.activeTurnID ||
+          toolTurnById.get(toolUseID) !== options.activeTurnID)
+      ) {
+        unit.state = "errored";
+      }
+    }
   }
 
   return groups;

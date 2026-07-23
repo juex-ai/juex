@@ -41,15 +41,9 @@ func TestBroadcaster_SlowSubscriberIsDropped(t *testing.T) {
 	for i := 0; i < broadcasterBufferSize+10; i++ {
 		b.publish(BrowserEvent{Type: "x"})
 	}
-	// Give the broadcaster time to drop the slow subscriber.
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if !slow.isLive() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	if slow.isLive() {
+		t.Fatal("slow subscriber was not dropped after overflow")
 	}
-	t.Fatalf("slow subscriber was not dropped after overflow")
 }
 
 func TestBroadcaster_UnsubscribeStopsDelivery(t *testing.T) {
@@ -109,5 +103,20 @@ func TestBroadcaster_CloseDoesNotPanicDuringSlowDelivery(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("publish did not return after close")
+	}
+}
+
+func TestBroadcaster_SubscribeAfterCloseIsAlreadyDropped(t *testing.T) {
+	b := newBroadcaster()
+	b.close()
+
+	s := b.subscribe()
+	if s.isLive() {
+		t.Fatal("subscriber created after close is live")
+	}
+	select {
+	case <-s.done:
+	default:
+		t.Fatal("subscriber created after close was not notified")
 	}
 }

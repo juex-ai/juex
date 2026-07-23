@@ -107,6 +107,112 @@ test("toolState prefers the authoritative runtime lifecycle", () => {
   assert.equal(toolState(null, null, "errored"), "output-error");
 });
 
+test("messagesToGroups marks historical orphan tools errored after status loads", () => {
+  const messages: Message[] = [
+    {
+      id: "interrupted-tool",
+      role: "assistant",
+      turn_id: "old-turn",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "tool-1",
+          tool_name: "exec_command",
+          input: { cmd: "sleep 10" },
+        },
+      ],
+    },
+  ];
+
+  const groups = messagesToGroups(messages, [], {
+    runtimeStatusLoaded: true,
+  });
+  const unit = groups[0].units[0];
+  assert.equal(unit.kind, "tool");
+  if (unit.kind !== "tool") return;
+  assert.equal(unit.state, "errored");
+  assert.equal(toolState(unit.use, unit.result, unit.state), "output-error");
+});
+
+test("messagesToGroups keeps an unresolved tool active only in the active turn", () => {
+  const messages: Message[] = [
+    {
+      id: "old-tool",
+      role: "assistant",
+      turn_id: "old-turn",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "tool-old",
+          tool_name: "exec_command",
+        },
+      ],
+    },
+    {
+      id: "current-tool",
+      role: "assistant",
+      turn_id: "active-turn",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "tool-current",
+          tool_name: "exec_command",
+        },
+      ],
+    },
+  ];
+
+  const groups = messagesToGroups(messages, [], {
+    runtimeStatusLoaded: true,
+    activeTurnID: "active-turn",
+  });
+  const oldUnit = groups[0].units[0];
+  const currentUnit = groups[1].units[0];
+  assert.equal(oldUnit.kind, "tool");
+  assert.equal(currentUnit.kind, "tool");
+  if (oldUnit.kind !== "tool" || currentUnit.kind !== "tool") return;
+  assert.equal(oldUnit.state, "errored");
+  assert.equal(currentUnit.state, undefined);
+});
+
+test("messagesToGroups does not override a delayed tool result", () => {
+  const messages: Message[] = [
+    {
+      id: "tool-use",
+      role: "assistant",
+      turn_id: "old-turn",
+      blocks: [
+        {
+          type: "tool_use",
+          tool_use_id: "tool-1",
+          tool_name: "exec_command",
+        },
+      ],
+    },
+    {
+      id: "tool-result",
+      role: "user",
+      turn_id: "old-turn",
+      blocks: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool-1",
+          content: "done",
+        },
+      ],
+    },
+  ];
+
+  const groups = messagesToGroups(messages, [], {
+    runtimeStatusLoaded: true,
+  });
+  const unit = groups[0].units[0];
+  assert.equal(unit.kind, "tool");
+  if (unit.kind !== "tool") return;
+  assert.equal(unit.state, undefined);
+  assert.equal(toolState(unit.use, unit.result, unit.state), "output-available");
+});
+
 test("messagesToGroups keeps image-only messages as image units", () => {
   const messages: Message[] = [
     {

@@ -2743,6 +2743,76 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 	t.Fatalf("did not receive turn.started with runtime status; collected:\n%s", collected)
 }
 
+func TestSSEEvents_ReplayPreservesAuthoritativeRestartRecovery(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-admitted",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+	active.app.Bus.Emit(events.Event{
+		ID:     "evt-started",
+		Type:   "turn.started",
+		TurnID: "turn-1",
+		Payload: juexruntime.TurnStartedPayload{
+			Input: "continue",
+			Kind:  "user",
+		},
+	})
+	active.app.Status.RecoverAfterRestart()
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		ts.URL+"/api/sessions/"+sessionID+"/events",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Last-Event-ID", "evt-admitted")
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 4096)
+	collected := ""
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			collected += string(buf[:n])
+			if strings.Contains(collected, "\n\n") {
+				break
+			}
+		}
+		if readErr != nil {
+			t.Fatalf("read replay frame: %v; collected:\n%s", readErr, collected)
+		}
+	}
+	for _, want := range []string{
+		`id: evt-started`,
+		`"state":"cancelled"`,
+		`"working":false`,
+		`"kind":"runtime_restart"`,
+	} {
+		if !strings.Contains(collected, want) {
+			t.Fatalf("replay frame missing %q:\n%s", want, collected)
+		}
+	}
+}
+
 func TestAgentAPIHandlerDoesNotServeBrowserFallback(t *testing.T) {
 	srv := newTestServer(t)
 	ts := httptest.NewServer(srv.APIHandler())

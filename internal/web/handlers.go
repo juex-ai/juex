@@ -639,7 +639,17 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			if replayErr != nil {
 				log.Printf("web: events replay for %s: %v", id, replayErr)
 			}
-			replayed, projectionErr := projectBrowserEvents(seed, journal, since)
+			var authoritative *runtime.StatusSnapshot
+			if as.app.Status != nil {
+				snapshot := as.app.Status.Snapshot()
+				authoritative = &snapshot
+			}
+			replayed, projectionErr := projectBrowserEvents(
+				seed,
+				journal,
+				since,
+				authoritative,
+			)
 			if projectionErr != nil {
 				log.Printf("web: browser projection replay for %s: %v", id, projectionErr)
 			}

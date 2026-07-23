@@ -175,11 +175,11 @@ func TestProjectBrowserEventsReplayMatchesUninterruptedProjection(t *testing.T) 
 		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
 	}
 	journal := browserEventFixtureEvents()
-	all, err := projectBrowserEvents(seed, journal, "")
+	all, err := projectBrowserEvents(seed, journal, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	replayed, err := projectBrowserEvents(seed, journal, "evt-tool-requested")
+	replayed, err := projectBrowserEvents(seed, journal, "evt-tool-requested", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +196,82 @@ func TestProjectBrowserEventsReplayMatchesUninterruptedProjection(t *testing.T) 
 	}
 	if !reflect.DeepEqual(replayed, all[start:]) {
 		t.Fatalf("replayed browser projection diverged from uninterrupted suffix")
+	}
+}
+
+func TestProjectBrowserEventsReplayEndsWithAuthoritativeRestartRecovery(t *testing.T) {
+	seed := juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}
+	journal := []events.Event{
+		{
+			ID:      "evt-admitted",
+			Type:    juexruntime.TurnAdmittedType,
+			TurnID:  "turn-1",
+			Payload: juexruntime.TurnAdmittedPayload{},
+		},
+		{
+			ID:     "evt-started",
+			Type:   "turn.started",
+			TurnID: "turn-1",
+			Payload: juexruntime.TurnStartedPayload{
+				Input: "continue",
+				Kind:  "user",
+			},
+		},
+	}
+	status := juexruntime.NewStatusStoreFromJournal(seed, journal)
+	status.RecoverAfterRestart()
+	authoritative := status.Snapshot()
+
+	replayed, err := projectBrowserEvents(
+		seed,
+		journal,
+		"evt-admitted",
+		&authoritative,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 {
+		t.Fatalf("replayed events = %d, want 1", len(replayed))
+	}
+	got := replayed[0].Status
+	if got.Cursor != "evt-started" ||
+		got.Turn == nil ||
+		got.Turn.State != statusapi.TurnCancelled ||
+		got.LastError == nil ||
+		got.LastError.Kind != statusapi.StatusErrorRuntimeRestart {
+		t.Fatalf("replayed recovered status = %+v", got)
+	}
+}
+
+func TestProjectBrowserEventsDoesNotApplyMismatchedAuthoritativeStatus(t *testing.T) {
+	seed := juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}
+	journal := []events.Event{{
+		ID:      "evt-admitted",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}}
+	authoritative := juexruntime.NewStatusStore(seed).Snapshot()
+	authoritative.Cursor = "evt-newer"
+
+	replayed, err := projectBrowserEvents(seed, journal, "", &authoritative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 {
+		t.Fatalf("replayed events = %d, want 1", len(replayed))
+	}
+	if replayed[0].Status.Cursor != "evt-admitted" ||
+		replayed[0].Status.Turn == nil ||
+		replayed[0].Status.Turn.State != statusapi.TurnAdmitted {
+		t.Fatalf("mismatched authoritative status was applied: %+v", replayed[0].Status)
 	}
 }
 

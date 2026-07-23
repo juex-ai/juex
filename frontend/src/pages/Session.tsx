@@ -356,8 +356,16 @@ export function Session() {
     [data?.messages, projection.messages],
   );
   const groups = useMemo(
-    () => messagesToGroups(messages, runtimeStatus?.tools),
-    [messages, runtimeStatus?.tools],
+    () =>
+      messagesToGroups(messages, runtimeStatus?.tools, {
+        runtimeStatusLoaded: runtimeStatus !== undefined,
+        activeTurnID:
+          runtimeStatus?.turn?.state === "admitted" ||
+          runtimeStatus?.turn?.state === "active"
+            ? runtimeStatus.turn.id
+            : undefined,
+      }),
+    [messages, runtimeStatus],
   );
   const runtimeTurnState = runtimeStatus?.turn?.state;
   const transcriptItems = useMemo(
