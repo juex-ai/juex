@@ -71,11 +71,13 @@ subscription, so events committed between the transcript and status requests
 are replayed rather than skipped. An explicit empty `?since=` requests replay
 from the journal beginning; an omitted `since` starts with live delivery only.
 Transcript-producing events carry the exact persisted message ID. If the
-initial transcript already contains that ID, the browser applies event metadata
-but suppresses the duplicate transcript projection. Tool replay uses the same
-rule with its globally unique tool-use ID. The replay cursor is captured once
-per Session route; later transcript refreshes may advance their response cursor
-without restarting the existing EventSource or clearing its latest status.
+initial transcript or current live projection already contains that ID, the
+browser applies event metadata but suppresses the duplicate transcript
+projection. Live user, assistant, hook, and queued-input state retain those
+persisted IDs. Tool replay uses the same rule with its globally unique tool-use
+ID. The replay cursor is captured once per Session route; later transcript
+refreshes may advance their response cursor without restarting the existing
+EventSource or clearing its latest status.
 Because the server subscribes before replay, it suppresses durable live frames
 already present in the replay tail before completing the ordered live handoff.
 An open journal descriptor and its byte boundary are captured behind the

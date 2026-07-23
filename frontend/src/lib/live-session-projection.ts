@@ -153,6 +153,7 @@ export function projectQueuedInput(
   kind: string | undefined,
   pendingCount: number,
   attachments: MediaRef[] = [],
+  messageID?: string,
 ): LiveSessionProjection {
   return {
     ...state,
@@ -162,6 +163,7 @@ export function projectQueuedInput(
       kind,
       pendingCount,
       attachments,
+      messageID,
     ),
   };
 }
@@ -237,6 +239,7 @@ export function projectLiveSessionEvent(
           event.payload.kind,
           "event",
           consumed.item?.attachments,
+          event.payload.message_id ?? consumed.item?.messageID,
         ),
       };
       break;
@@ -305,6 +308,8 @@ export function projectLiveSessionEvent(
         event.payload.input,
         event.payload.kind,
         event.payload.pending_count,
+        [],
+        event.payload.message_id,
       );
       break;
     case "pending_input.draining":
@@ -324,6 +329,7 @@ export function projectLiveSessionEvent(
               item.kind,
               "event",
               item.attachments,
+              item.messageID,
             )
           : next.messages,
       };
@@ -461,6 +467,7 @@ function appendDrainedInputs(
 ): Message[] {
   if (!items.length) return messages;
   const additions: Message[] = items.map((item) => ({
+    id: item.messageID,
     role: "user",
     turn_id: turnID,
     kind: item.kind || "pending_input",
@@ -488,22 +495,37 @@ function appendLiveTurnToMessages(
   kind: string | undefined,
   source: "event" | "optimistic",
   attachments: MediaRef[] = [],
+  messageID?: string,
 ): Message[] {
   const blocks = inputBlocks(input, attachments);
   if (!turnID || blocks.length === 0) return messages;
-  if (messages.some((message) => message.turn_id === turnID)) return messages;
+  if (messages.some((message) => message.turn_id === turnID)) {
+    if (source !== "event" || !messageID) return messages;
+    return messages.map((message) =>
+      message.turn_id === turnID && message.role === "user" && !message.id
+        ? { ...message, id: messageID }
+        : message,
+    );
+  }
   const existingTurnID = input
     ? findPendingTurnForInput(messages, input)
     : undefined;
   if (existingTurnID) {
     if (source === "optimistic") return messages;
     return messages.map((message) =>
-      message.turn_id === existingTurnID ? { ...message, turn_id: turnID } : message,
+      message.turn_id === existingTurnID
+        ? {
+            ...message,
+            turn_id: turnID,
+            id: message.role === "user" ? messageID : message.id,
+          }
+        : message,
     );
   }
   return [
     ...messages,
     {
+      id: messageID,
       role: "user",
       turn_id: turnID,
       kind,
@@ -578,6 +600,7 @@ function applyAssistantResponse(
     const messages = [...state.messages];
     messages[pendingIndex] = {
       ...messages[pendingIndex],
+      id: event.payload.message_id ?? messages[pendingIndex].id,
       pending: false,
       blocks,
       model,
@@ -600,6 +623,7 @@ function applyAssistantResponse(
       ...state.messages,
       ...appended,
       {
+        id: event.payload.message_id,
         role: "assistant",
         turn_id: event.turn_id,
         pending: false,
@@ -722,7 +746,7 @@ function appendHookTraceMessage(
 ): Message[] {
   const text = event.payload.text;
   if (!text) return messages;
-  const id = event.id ? `hook-${event.id}` : undefined;
+  const id = event.payload.message_id ?? (event.id ? `hook-${event.id}` : undefined);
   if (id && messages.some((message) => message.id === id)) return messages;
   return [
     ...messages,

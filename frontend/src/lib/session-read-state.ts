@@ -175,7 +175,13 @@ export function projectLiveBrowserEvent(
   event: BrowserEvent,
 ): SessionReadResult {
   const metadataState = projectSessionMetadataEvent(state, event);
-  if (eventTranscriptAlreadyLoaded(state.data?.messages ?? [], event)) {
+  if (
+    eventTranscriptAlreadyLoaded(
+      state.data?.messages ?? [],
+      state.projection,
+      event,
+    )
+  ) {
     return { state: metadataState, effects: [] };
   }
   const result = projectLiveSessionEvent(state.projection, event);
@@ -399,17 +405,31 @@ function projectSessionMetadataEvent(
 }
 
 function eventTranscriptAlreadyLoaded(
-  messages: SessionShowResponse["messages"],
+  persistedMessages: SessionShowResponse["messages"],
+  projection: LiveSessionProjection,
   event: BrowserEvent,
 ): boolean {
+  const messages = [...persistedMessages, ...projection.messages];
   switch (event.type) {
     case "turn.started":
     case "llm.responded":
     case "hook.trace":
-    case "pending_input.queued":
       return Boolean(
         event.payload.message_id &&
           messages.some((message) => message.id === event.payload.message_id),
+      );
+    case "pending_input.queued":
+      return Boolean(
+        event.payload.message_id &&
+          (messages.some(
+            (message) => message.id === event.payload.message_id,
+          ) ||
+            projection.queuedInput.items.some(
+              (item) => item.messageID === event.payload.message_id,
+            ) ||
+            projection.drainingQueuedInputs.some(
+              (item) => item?.messageID === event.payload.message_id,
+            )),
       );
     case "tool.requested":
       return Boolean(

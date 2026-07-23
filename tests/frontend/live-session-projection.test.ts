@@ -317,9 +317,10 @@ test("projectOptimisticTurn is replaced by the canonical turn.started event", ()
     type: "turn.started",
     ts: "2026-06-15T00:00:00Z",
     turn_id: "canonical-turn",
-    payload: { input: "hello" },
+    payload: { input: "hello", message_id: "msg-user" },
   });
   assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[0].id, "msg-user");
   assert.deepEqual(
     state.messages.map((message) => message.turn_id),
     ["canonical-turn", "canonical-turn"],
@@ -330,7 +331,7 @@ test("projectOptimisticTurn is replaced by the canonical turn.started event", ()
     type: "turn.started",
     ts: "2026-06-15T00:00:00Z",
     turn_id: "canonical-turn",
-    payload: { input: "hello" },
+    payload: { input: "hello", message_id: "msg-user" },
   });
   assert.equal(state.messages.length, 2);
 });

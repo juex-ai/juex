@@ -20,6 +20,7 @@ import {
   resetSessionReadState,
 } from "../../frontend/src/lib/session-read-state.ts";
 import type {
+  BrowserEvent,
   MediaRef,
   Message,
   SessionShowResponse,
@@ -268,6 +269,116 @@ test("replay skips transcript content already present in the initial session pag
 
   assert.deepEqual(state.projection.messages, []);
   assert.deepEqual(state.projection.queuedInput.items, []);
+});
+
+test("reconnect replay skips transcript content already projected live", () => {
+  let state = projectSessionLoaded(
+    createSessionReadState(),
+    session("s1", []),
+  );
+  const liveEvents: BrowserEvent[] = [
+    {
+      id: "evt-started",
+      type: "turn.started",
+      ts: "2026-07-23T14:00:00Z",
+      turn_id: "turn-1",
+      payload: {
+        input: "run command",
+        kind: "user",
+        message_id: "msg-user",
+      },
+    },
+    {
+      id: "evt-responded",
+      type: "llm.responded",
+      ts: "2026-07-23T14:00:01Z",
+      turn_id: "turn-1",
+      payload: {
+        message_id: "msg-assistant",
+        stop_reason: "tool_use",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        token_usage: { input_tokens: 1, output_tokens: 1 },
+        blocks: [{ type: "text", text: "done" }],
+        text: "done",
+        thinking: "",
+        tool_calls: [],
+        model: "gpt-test",
+      },
+    },
+    {
+      id: "evt-tool-requested",
+      type: "tool.requested",
+      ts: "2026-07-23T14:00:02Z",
+      turn_id: "turn-1",
+      payload: {
+        name: "exec_command",
+        tool_use_id: "tool-1",
+        timeout_seconds: 30,
+      },
+    },
+    {
+      id: "evt-tool-completed",
+      type: "tool.completed",
+      ts: "2026-07-23T14:00:03Z",
+      turn_id: "turn-1",
+      payload: {
+        name: "exec_command",
+        tool_use_id: "tool-1",
+        timeout_seconds: 30,
+        len: 2,
+        preview: "ok",
+      },
+    },
+    {
+      id: "evt-hook-trace",
+      type: "hook.trace",
+      ts: "2026-07-23T14:00:04Z",
+      turn_id: "turn-1",
+      payload: {
+        text: "hook completed",
+        message_id: "msg-hook",
+      },
+    },
+  ];
+  for (const event of liveEvents) {
+    state = projectLiveBrowserEvent(state, event).state;
+  }
+
+  const beforeReplay = structuredClone(state.projection);
+  for (const event of liveEvents) {
+    state = projectLiveBrowserEvent(state, event).state;
+  }
+  assert.deepEqual(state.projection, beforeReplay);
+
+  const queuedEvent: BrowserEvent = {
+    id: "evt-pending-queued",
+    type: "pending_input.queued",
+    ts: "2026-07-23T14:00:05Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "queued follow-up",
+      kind: "user",
+      message_id: "msg-pending",
+      pending_count: 1,
+      max_pending_inputs: 16,
+    },
+  };
+  state = projectLiveBrowserEvent(state, queuedEvent).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-pending-draining",
+    type: "pending_input.draining",
+    ts: "2026-07-23T14:00:06Z",
+    turn_id: "turn-1",
+    payload: {
+      count: 1,
+      pending_count: 0,
+      max_pending_inputs: 16,
+    },
+  }).state;
+
+  const beforeQueuedReplay = structuredClone(state.projection);
+  state = projectLiveBrowserEvent(state, queuedEvent).state;
+  assert.deepEqual(state.projection, beforeQueuedReplay);
 });
 
 test("projectLiveBrowserEvent refreshes session goal state", () => {
