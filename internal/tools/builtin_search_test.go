@@ -85,6 +85,7 @@ func TestRipgrepArgsPreserveLegacyTraversalContract(t *testing.T) {
 		"--json",
 		"--no-config",
 		"--crlf",
+		"--sort", "path",
 		"--hidden",
 		"--no-ignore",
 		"--color", "never",
@@ -411,6 +412,11 @@ func TestRipgrepRunnerSearchesHiddenIgnoredFilesAndCapsGlobally(t *testing.T) {
 	}
 	if len(result.Matches) != 200 || !result.Truncated {
 		t.Fatalf("result matches=%d truncated=%t, want 200/true", len(result.Matches), result.Truncated)
+	}
+	for i := 1; i < len(result.Matches); i++ {
+		if result.Matches[i-1].Path > result.Matches[i].Path {
+			t.Fatalf("capped result order is not deterministic: %q before %q", result.Matches[i-1].Path, result.Matches[i].Path)
+		}
 	}
 }
 
