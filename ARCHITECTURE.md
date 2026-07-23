@@ -2037,7 +2037,7 @@ notification targets.
 
 MCP stdio stdout is treated as the JSON-RPC protocol stream. Non-JSON output on
 stdout fails the connection as a protocol error; server logs must go to stderr.
-The app runtime status service assembles read-only facts for `/api/runtime`:
+The app runtime catalog service assembles read-only facts for `/api/runtime`:
 provider, shell, system prompt sections, hooks, skills, a fixed-order grouped
 builtin tool catalog, and configured MCP servers with their advertised tool
 details. Tool entries expose normalized schema plus semantic timeout metadata:

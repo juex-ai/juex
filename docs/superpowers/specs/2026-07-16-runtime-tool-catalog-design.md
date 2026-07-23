@@ -95,9 +95,9 @@ no subprocess calls and returns an empty map for a nil or closed manager. A
 successfully connected server remains present even when it advertises zero
 tools, so map membership is the connection fact.
 
-### Application status
+### Application catalog
 
-`RuntimeStatusService` owns two plain projections:
+`RuntimeCatalogService` owns two plain projections:
 
 ```go
 type RuntimeToolsStatus struct {
@@ -123,12 +123,12 @@ type RuntimeToolTimeout struct {
 }
 ```
 
-The service aggregates the same definitions consumed by `app.New`; it does
+The catalog service aggregates the same definitions consumed by `app.New`; it does
 not bind or dispatch handlers and therefore creates no shell manager, session,
 memory store, or observable manager. MCP definitions are excluded from this
 pass and supplied from the process manager descriptors.
 
-The service rebuilds the small builtin projection from immutable definitions
+The catalog service rebuilds the small builtin projection from immutable definitions
 for each Runtime status request. `internal/tools` resolves effective timeout
 metadata with the same normalization and cap used by registry calls.
 Ordinary tools use `mode=bounded` with seconds; `exec_command` and
@@ -145,7 +145,7 @@ therefore reports its real error with an empty tool list.
 
 `internal/web` extends the existing `GET /api/runtime` DTO. It does not add a
 route or regroup tools. The server passes cached MCP descriptors and errors to
-the app status service, then maps the returned plain types to JSON:
+the app catalog service, then maps the returned plain types to JSON:
 
 ```json
 {
