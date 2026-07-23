@@ -475,13 +475,27 @@ func TestPowerShellReleaseInstallerDryRunAcceptsRelativeBinDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("relative BinDir dry run failed: %v\n%s", err, out)
 	}
-	for _, want := range []string{
-		filepath.Join(work, "bin", "juex.exe"),
-		filepath.Join(work, "lib", "juex"),
-	} {
-		if !strings.Contains(string(out), want) {
-			t.Fatalf("relative BinDir dry run missing %q:\n%s", want, out)
+	values := make(map[string]string)
+	for _, line := range strings.Split(string(out), "\n") {
+		for _, label := range []string{"install target", "package home"} {
+			prefix := label + ": "
+			if strings.HasPrefix(line, prefix) {
+				values[label] = strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			}
 		}
+	}
+	installTarget := values["install target"]
+	packageHome := values["package home"]
+	if !filepath.IsAbs(installTarget) || filepath.Base(installTarget) != "juex.exe" || filepath.Base(filepath.Dir(installTarget)) != "bin" {
+		t.Fatalf("relative BinDir install target = %q, want absolute bin/juex.exe:\n%s", installTarget, out)
+	}
+	if !filepath.IsAbs(packageHome) || filepath.Base(packageHome) != "juex" || filepath.Base(filepath.Dir(packageHome)) != "lib" {
+		t.Fatalf("relative BinDir package home = %q, want absolute lib/juex:\n%s", packageHome, out)
+	}
+	installRoot := filepath.Dir(filepath.Dir(installTarget))
+	packageRoot := filepath.Dir(filepath.Dir(packageHome))
+	if !strings.EqualFold(installRoot, packageRoot) {
+		t.Fatalf("relative BinDir roots differ: install=%q package=%q\n%s", installRoot, packageRoot, out)
 	}
 }
 
