@@ -266,8 +266,8 @@ reports them with source `ext:<name>`. Work-local extension hooks must set
 `trusted: true`; JueX-home extension hooks are trusted by location.
 Extension MCP servers receive `JUEX_EXT_DIR` alongside `WORKDIR` and
 `JUEX_WORKDIR`. Identity-owned runtime state lives under
-`$JUEX_HOME/agents/<id>`; workspace artifacts and observable
-state remain under `.juex/`. User-global provider configuration lives
+`$JUEX_HOME/agents/<id>`; workspace artifacts and Observable
+definitions remain under `.juex/`. User-global provider configuration lives
 at `$JUEX_HOME/juex.yaml`. A serving agent prefers
 `unix://$JUEX_HOME/agents/<id>/api.sock` and falls back loudly to an ephemeral
 `tcp://127.0.0.1:<port>` endpoint when AF_UNIX is unavailable.
@@ -503,6 +503,7 @@ copies it into `internal/web/dist`, and embeds it into `dist/juex`.
 | File | Purpose |
 | --- | --- |
 | `AGENTS.md` | Working rules for agents in this repository. |
+| `DOMAIN.md` | Canonical product language, lifecycles, and domain invariants. |
 | `PHILOSOPHY.md` | Product and engineering principles. |
 | `ARCHITECTURE.md` | Implementation map: modules, interfaces, data flow, tests. |
 | `DESIGN.md` | Web UI design guide. |

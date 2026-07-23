@@ -1,9 +1,10 @@
 # Juex Architecture
 
-> Implementation guide. Read alongside `PHILOSOPHY.md` for product and
-> engineering principles, and `DESIGN.md` for the web UI design guide. This
-> document covers **how the code is structured**: module layout, interfaces,
-> data flow, storage, and test strategy.
+> Implementation guide. Read alongside `DOMAIN.md` for canonical product
+> language and invariants, `PHILOSOPHY.md` for product and engineering
+> principles, and `DESIGN.md` for the web UI design guide. This document
+> covers **how the code is structured**: module layout, interfaces, data flow,
+> storage, and test strategy.
 >
 > Principle: **simplest possible prototype that covers every v0.1 must-have**
 > listed in §9.1 of the design doc — packaged as the first released version.
@@ -45,8 +46,10 @@ juex/
 │   │   ├── slash.go
 │   │   ├── turn_admission.go
 │   │   └── turn_admission_queue.go
+│   ├── agentstate/               # resident/ephemeral identity, marker, registry, address, migration
 │   ├── artifact/                 # safe workspace artifact storage and integrity verification
 │   ├── usermedia/                # session-scoped image upload and media reference policy
+│   ├── eventmedia/               # external-event attachment validation and artifact admission
 │   ├── cli/                      # cobra-based CLI surface
 │   │   ├── bundle.go
 │   │   ├── root.go
@@ -63,6 +66,9 @@ juex/
 │   │   ├── values.go             # resolved ProviderSelection, paths, and limits
 │   │   ├── shell.go
 │   │   └── codex_auth.go
+│   ├── cancellation/             # typed user, signal, and runtime-restart cancellation causes
+│   ├── errorclass/               # shared runtime error classification and public wording
+│   ├── extensions/               # home/workspace extension discovery and resource references
 │   ├── homestore/                # crash-safe home locks, atomic replacement, directory sync
 │   ├── providerreadiness/        # provider selection, credentials, and hello-probe readiness checks
 │   ├── chunkedwrite/             # canonical chunked write lifecycle facts and derived state
@@ -71,6 +77,9 @@ juex/
 │   ├── hooks/                    # trusted lifecycle command hook execution
 │   ├── observable/               # Observable source adapters plus durable Observation lifecycle/store/tools
 │   ├── observability/            # session-local logs, traces, spans, tool summaries
+│   ├── fleet/                    # resident-agent registry health and lifecycle policy
+│   ├── fleetservice/             # launchd/systemd/Termux supervisor registration
+│   ├── fleetweb/                 # fleet HTTP API, SSE aggregation, reverse proxy, embedded SPA
 │   ├── llm/                      # canonical Message/Block + provider profiles/adapters
 │   │   ├── types.go
 │   │   ├── provider.go
@@ -85,6 +94,7 @@ juex/
 │   │   ├── openai_codex_responses.go
 │   │   └── stream_error.go
 │   ├── toolevents/               # live tool event names, payload contracts, and constructors
+│   ├── statusapi/                # transport contract projected from runtime status
 │   ├── tools/                    # tool registry + builtin tools
 │   │   ├── registry.go
 │   │   ├── builtin.go            # builtin provider composition
@@ -149,7 +159,7 @@ juex/
 ├── Makefile                      # test / lint / build / snapshot / integration / eval
 ├── pyproject.toml / uv.lock      # eval and fake-MCP Python dependencies
 ├── go.mod / go.sum
-├── README.md / PHILOSOPHY.md / ARCHITECTURE.md / DESIGN.md
+├── README.md / DOMAIN.md / PHILOSOPHY.md / ARCHITECTURE.md / DESIGN.md
 ├── AGENTS.md / CLAUDE.md→AGENTS.md
 └── juex.yaml.example
 ```
@@ -159,6 +169,92 @@ Product-level cross-package tests live in `tests/e2e/`; evaluation harness
 contract tests and live-evaluation helpers live in `tests/eval/`. Both
 directories are inside the same module, so they can import `internal/...`
 freely.
+
+---
+
+## 2.1 Module Ownership Map
+
+Juex is one bounded context. The entries below are implementation modules, not
+contexts. `DOMAIN.md` defines the concepts; this map names where their
+implementation decisions live.
+
+| Module | Owns | Does not own |
+| --- | --- | --- |
+| `internal/agentstate` | Resident and Ephemeral Agent identity, Workspace markers and registry records, Agent Address construction, workspace rebind/copy detection, legacy state migration, registry-boundary deletion | Home-store filesystem mechanics, runtime endpoint behavior, Fleet lifecycle, Session contents |
+| `internal/homestore` | Portable advisory locks, home lock-path layout, crash-safe atomic file replacement, directory sync | Agent identity, endpoint ownership, Fleet policy, multi-file service transactions |
+| `internal/endpoint` | Local endpoint binding, endpoint URI parsing/dialing, exact runtime identity publication/probing, instance-bound shutdown, endpoint maintenance guard | HTTP routes, Agent Address construction, Fleet registry state, process spawning |
+| `internal/fleet` | Registry-wide binding and health projection, per-Agent lifecycle locking, reconciliation, detached Agent start/stop/restart, logs, config replacement orchestration, intentional removal and GC policy | Browser routes/DTOs, native service registration, endpoint schemes, arbitrary user-authored Workspace content |
+| `internal/fleetservice` | Per-user launchd/systemd/Termux supervisor definitions and service-manager transactions | Individual Agent lifecycle, Fleet address policy, CLI presentation |
+| `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
+| `internal/extensions` | Home/Workspace extension discovery, source identity, duplicate-name rejection, resource references, trust requirement projection | Skill/MCP/hook parsing, runtime registration, extension execution |
+| `internal/config` | YAML/environment and user/Workspace config layering, Provider selection inputs, path and policy projection | Canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
+| `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
+| `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
+| `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
+| `internal/session` | Session identity and kind, transcript/Event persistence, metadata and history index, active metadata, usage snapshots, scratchpad path, single-writer locks | Prompt assembly, Provider calls, Tool dispatch, Session attachment orchestration |
+| `internal/cancellation` | Typed user, signal, and runtime-restart cancellation causes plus signal-aware contexts | Transport Stop admission, Turn reaction policy, user-facing status DTOs |
+| `internal/errorclass` | Shared timeout/cancellation/auth/permission/error classification and public error wording | Retry decisions, cancellation sources, transport rendering |
+| `internal/statusapi` | Transport-neutral runtime status DTOs and projection from runtime snapshots | Runtime state transitions, Session persistence, HTTP/SSE routing |
+| `internal/events` | Generic Event envelope, normalization, synchronous subscriptions, durable commit-before-delivery boundary | Producer-specific Event vocabulary, Session journal implementation, UI projection |
+| `internal/toolevents` | Stable Tool Event names, payloads, and constructors shared by producers and consumers | Tool execution, Event dispatch, observability storage |
+| `internal/observability` | Derived Session logs, traces, spans, and Tool summaries projected from Events | Authoritative transcript/Event state, runtime decisions, Web presentation |
+| `internal/tools` | Tool registry and dispatch, builtin file/shell/search adapters, Tool result normalization and output hygiene | Canonical chunked-write lifecycle, Provider wire quirks, Session persistence, Observable/MCP source lifecycles |
+| `internal/chunkedwrite` | Canonical chunked-write lifecycle facts and deterministic state derivation | Tool schemas/dispatch, filesystem execution, runtime Event transport |
+| `internal/hooks` | Trusted hook config, matching, bounded command execution, and hook result facts | Lifecycle phase ordering, interpretation of deny/continue results, Tool execution |
+| `internal/sandbox` | Command sandbox policy, platform backend selection, execution wrapping, structured availability errors | Shell Tool lifecycle, config parsing, runtime permission policy outside commands |
+| `internal/observable` | Tagged Command Observable/Schedule specs, source adapters, shared lifecycle, durable Observation state, delivery callback contract and state transitions | Active Session selection, pending-input/Turn admission, Provider Protocol, HTTP/frontend presentation |
+| `internal/eventmedia` | Workdir-confined external-event attachment validation, size gates, content-addressed admission | Observable scheduling, MCP transport, user-authored upload policy |
+| `internal/mcp` | MCP config normalization, stdio process/client lifecycle, Tool discovery, notification transport | Turn policy, active Session selection, Web ownership |
+| `internal/memory` | `AGENTS.md` hierarchy loading, Agent-owned Memory Entry storage, memory Tool registration | Final prompt-section ordering, Session history, Skill loading |
+| `internal/skills` | `SKILL.md` frontmatter loading, Skill metadata, catalog prompt rendering, compression, and budget selection | Final system-prompt section assembly, task execution policy, Tool dispatch |
+| `internal/prompt` | System-prompt section assembly from guidance, Skills, Memory, runtime metadata, and shell profile | Provider wire formatting, Session persistence, resource discovery policy |
+| `internal/artifact` | Workspace-rooted path safety, atomic byte storage, content addressing, bounded reads, integrity verification | Media format policy, Provider encoding, context preview policy, retention |
+| `internal/usermedia` | User image validation, per-turn limits, Session namespace policy, media-reference verification | Artifact filesystem mechanics, HTTP multipart parsing, Provider encoding |
+| `internal/app` | Process composition, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Cobra grammar, HTTP parsing, Provider SDK behavior, Observation state machine |
+| `internal/cli` | Cobra command grammar, flags, terminal/JSON presentation, CLI exit categories | Shared runtime policy, Session persistence, Fleet lifecycle |
+| `internal/web` | Single-Agent HTTP/SSE transport, browser DTOs, in-process Session cache, cancellation and read-only persisted views | Shared domain decisions, Provider Protocol, Fleet registry policy |
+| `frontend/` | Browser state projection, visual presentation, DTO handling, interaction behavior | Backend policy, storage, Provider/runtime decisions |
+
+### Dependency Rules
+
+1. **Shared decisions live below transports.** CLI and HTTP modules parse and
+   present; Session admission, Turn behavior, and pending-input policy stay
+   behind application/runtime/session interfaces, while shared error
+   classification stays in `internal/errorclass`.
+2. **Agentstate owns identity-to-location mapping.** Callers consume an Agent
+   Address or narrower view and never derive an Agent id or Juex-home path from
+   a directory basename.
+3. **Homestore owns home mutation mechanics.** Identity, endpoint, Fleet, and
+   service modules retain policy while delegating portable locks and atomic
+   publication.
+4. **Runtime speaks canonical Juex types.** Runtime may depend on canonical
+   LLM, Tool, Session, prompt, Event, and resolved config values, but not
+   provider SDK, Cobra, HTTP, frontend, or raw YAML types.
+5. **Provider adapters translate at the edge.** Wire structs and compatibility
+   details stay in adapter code; shared meanings belong in canonical LLM
+   values.
+6. **Config resolves; it does not govern.** Config produces explicit
+   selections, paths, and policy inputs. LLM owns canonical Provider Profile
+   semantics, and runtime receives resolved values instead of reaching into
+   parser structures.
+7. **App composes without absorbing module policy.** Cross-module
+   orchestration belongs in App; reusable identity, Session, runtime, or Fleet
+   decisions remain with their owning module.
+8. **Session owns persistence and active metadata.** Callers use Session/App
+   interfaces instead of copying transcript, activation, or lock rules into
+   CLI and Web code.
+9. **Events are facts, not repair commands.** Producers change authoritative
+   state first. Durable facts are committed before live delivery; explicitly
+   transient Events may bypass the journal.
+10. **Artifact safety has one boundary.** Media and projection modules retain
+    format policy but delegate workspace-rooted byte safety and integrity to
+    Artifact storage.
+11. **Frontend mirrors backend read models.** Rules required for correctness
+    stay on the server and are exposed as state rather than reimplemented in
+    React.
+12. **Retry boundaries stay explicit.** LLM adapters own retry of one
+    Provider transport/API/stream operation; runtime owns model-chain fallback,
+    pending-input continuation, and other Turn-level retry decisions.
 
 ---
 
@@ -1796,7 +1892,7 @@ $JUEX_HOME/
     ├── history.json              # session index + active primary object
     ├── logs/fleet.log            # detached child stdout + stderr
     ├── memory/
-    ├── observables/              # generated runs, observations, artifacts, and schedule state
+    ├── observables/              # generated runs, observations, oversized payload files, and schedule state
     └── sessions/<id>/            # conversation history and session sidecars
 
 <WorkDir>/                        # the agent's working directory (--cwd or $PWD)
@@ -1818,9 +1914,14 @@ The full session subtree beneath the agent home retains the existing
 `session.json`, transcript, event, lock, notes, scratchpad, goal, trace, span,
 tool, and per-session log files described in §3.5.
 
-`JUEX_HOME` scopes only JueX-owned config, extensions, and agent registry
-state. The existing `~/.agents` AGENTS.md, skill, and MCP resource tree remains
-at its current location.
+`JUEX_HOME` scopes JueX-owned config, extensions, supervisor/endpoint/Fleet
+locks, and Agent registry state. The existing `~/.agents` AGENTS.md, skill, and
+MCP resource tree remains at its current location.
+
+An Ephemeral Agent uses the same identity-owned `agents/<id>/` shape plus
+`.locks/endpoints/` under a private temporary root. That root is not the
+effective `JUEX_HOME`, is never scanned by Fleet, and is removed on exit unless
+the caller explicitly keeps it.
 
 ### 6.1 Artifact Storage
 
@@ -2150,6 +2251,7 @@ provider replay, or long-session behavior changes.
 ## 12. One-Sentence Summary
 
 **Juex is a Go binary with a cobra CLI, React web UI, builtin and MCP tools,
-AGENTS.md/skills/memory loading, a synchronous turn loop, work-local JSONL
-persistence, an event bus, cross-platform releases via goreleaser, and GitHub
-Actions CI.** Stdlib-first; modules stay small enough to test and explain.
+AGENTS.md/skills/memory loading, a synchronous turn loop, Agent-home JSONL
+persistence with Workspace-local artifacts and configuration, an event bus,
+cross-platform releases via goreleaser, and GitHub Actions CI.** Stdlib-first;
+modules stay small enough to test and explain.

@@ -23,13 +23,11 @@ state visible.
 
 ### Bind State To The Agent
 
-Each workspace has one explicit marker under `.juex/`; its sessions, memory,
-history, logs, and generated Observable state live together in the agent
-registry under `JUEX_HOME`. User-authored workspace config, Observable
-definitions, and agent guidance stay near the work. Workspace-rooted artifacts
-are the deliberate state exception because their references are relative to
-the work. This split lets identity-owned state survive a workspace move without
-hiding which workspace owns it.
+The canonical ownership split is defined in [DOMAIN.md](DOMAIN.md). Its
+purpose is to let identity-owned state survive a Workspace move without hiding
+which Workspace owns it: generated Agent state follows the Agent, while
+user-authored configuration/resources and Workspace-rooted artifacts stay near
+the work.
 
 ### Use Providers Behind One Model
 
