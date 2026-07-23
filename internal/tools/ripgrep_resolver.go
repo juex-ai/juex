@@ -131,6 +131,14 @@ func findPackageRoot(executable string) string {
 }
 
 func managedPackageRoot(executable string, opts ripgrepResolveOptions) (string, bool, error) {
+	// POSIX managed commands are symlinks into the versioned package, which
+	// findPackageRoot identifies above. Looking sideways from an unpackaged
+	// prefix/bin binary would mistake a stale lib/juex directory for proof
+	// that the binary itself belongs to that package.
+	if opts.RuntimeOS != "windows" {
+		return "", false, nil
+	}
+
 	binDir := filepath.Dir(executable)
 	prefix := filepath.Dir(binDir)
 	managedHome := filepath.Join(prefix, "lib", "juex")
@@ -145,6 +153,16 @@ func managedPackageRoot(executable string, opts ripgrepResolveOptions) (string, 
 		return "", true, fmt.Errorf("grep: managed package home %s is not a directory", managedHome)
 	}
 	key := packageReleaseKey(opts.JuexVersion, opts.RuntimeOS, opts.RuntimeArch)
+	current, err := os.ReadFile(filepath.Join(managedHome, "current.txt"))
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", true, fmt.Errorf("grep: read managed package pointer: %w", err)
+	}
+	if strings.TrimSpace(string(current)) != key {
+		return "", false, nil
+	}
 	root := filepath.Join(managedHome, "releases", key)
 	if _, err := os.Stat(filepath.Join(root, "juex-package.json")); err != nil {
 		return "", true, fmt.Errorf("grep: managed ripgrep package %s is missing: %w", root, err)

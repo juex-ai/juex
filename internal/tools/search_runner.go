@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+	"regexp/syntax"
 	"strings"
 	"sync"
 
@@ -81,7 +81,8 @@ func NewRipgrepRunner(opts RipgrepRunnerOptions) *RipgrepRunner {
 }
 
 func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, error) {
-	if _, err := regexp.Compile(req.Pattern); err != nil {
+	pattern, err := normalizeGoRegexpForRipgrep(req.Pattern)
+	if err != nil {
 		return GrepResult{}, fmt.Errorf("grep: bad pattern: %w", err)
 	}
 	info, err := os.Stat(req.Path)
@@ -101,7 +102,7 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 		return GrepResult{}, err
 	}
 
-	args := ripgrepArgs(req.Pattern, target)
+	args := ripgrepArgs(pattern, target)
 	insertAt := len(args) - 4
 	blockedArgs := blockedPathGlobArgs(cwd, r.opts.WorkDir, r.opts.Sandbox)
 	combinedArgs := make([]string, 0, len(args)+len(blockedArgs))
@@ -212,6 +213,14 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 		return result, fmt.Errorf("grep: ripgrep failed: %s", detail)
 	}
 	return result, fmt.Errorf("grep: ripgrep failed: %w", waitErr)
+}
+
+func normalizeGoRegexpForRipgrep(pattern string) (string, error) {
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return "", err
+	}
+	return parsed.String(), nil
 }
 
 func (r *RipgrepRunner) ripgrepPath() (string, error) {

@@ -156,6 +156,41 @@ func TestResolveRipgrepUsesSystemPathForSourceBuild(t *testing.T) {
 	}
 }
 
+func TestResolveRipgrepIgnoresStaleManagedHomeForSourceBuild(t *testing.T) {
+	prefix := t.TempDir()
+	executable := filepath.Join(prefix, "bin", "juex")
+	staleHome := filepath.Join(prefix, "lib", "juex", "releases", "0.0.1-linux-amd64")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(staleHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("source build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(t.TempDir(), "rg")
+	if err := os.WriteFile(want, []byte("system rg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveRipgrep(ripgrepResolveOptions{
+		ExecutablePath: executable,
+		RuntimeOS:      "linux",
+		RuntimeArch:    "amd64",
+		JuexVersion:    "dev",
+		LookPath: func(string) (string, error) {
+			return want, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Path != want || got.Source != RipgrepSourceSystem {
+		t.Fatalf("resolved = %+v, want stale package ignored", got)
+	}
+}
+
 func TestResolveRipgrepValidatesPackagedBinaryDigest(t *testing.T) {
 	packageRoot := t.TempDir()
 	executable := filepath.Join(packageRoot, "bin", "juex")
@@ -211,6 +246,62 @@ func TestResolveRipgrepValidatesPackagedBinaryDigest(t *testing.T) {
 	}
 	if !os.SameFile(resolvedInfo, wantInfo) || resolved.Version != "15.1.0" || resolved.Source != RipgrepSourcePackage {
 		t.Fatalf("resolved = %+v", resolved)
+	}
+}
+
+func TestResolveRipgrepUsesWindowsManagedPackagePointer(t *testing.T) {
+	prefix := t.TempDir()
+	executable := filepath.Join(prefix, "bin", "juex.exe")
+	releaseKey := "1.2.3-windows-amd64"
+	packageRoot := filepath.Join(prefix, "lib", "juex", "releases", releaseKey)
+	rgPath := filepath.Join(packageRoot, "juex-path", "rg.exe")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(rgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("copied package binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rgPath, []byte("pinned windows rg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := fileSHA256(rgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"schema_version":1,"juex_version":"1.2.3","platform":{"os":"windows","arch":"amd64"},"ripgrep":{"version":"15.1.0","path":"juex-path/rg.exe","sha256":"` + digest + `"}}`
+	if err := os.WriteFile(filepath.Join(packageRoot, "juex-package.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "lib", "juex", "current.txt"), []byte(releaseKey), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := resolveRipgrep(ripgrepResolveOptions{
+		ExecutablePath: executable,
+		RuntimeOS:      "windows",
+		RuntimeArch:    "amd64",
+		JuexVersion:    "1.2.3",
+		LookPath: func(string) (string, error) {
+			t.Fatal("system PATH fallback should not run")
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedInfo, err := os.Stat(resolved.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInfo, err := os.Stat(rgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(resolvedInfo, wantInfo) || resolved.Version != "15.1.0" || resolved.Source != RipgrepSourcePackage {
+		t.Fatalf("resolved = %+v, want Windows managed package", resolved)
 	}
 }
 
@@ -297,6 +388,41 @@ func TestRipgrepRunnerPreservesSingleFileOutputPath(t *testing.T) {
 	}
 	if len(result.Matches) != 1 || result.Matches[0].Path != "." {
 		t.Fatalf("single-file matches = %+v, want legacy path .", result.Matches)
+	}
+}
+
+func TestRipgrepRunnerPreservesGoRegexpDialect(t *testing.T) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("system rg is unavailable")
+	}
+	root := t.TempDir()
+	for name, body := range map[string]string{
+		"quoted.txt":   "literal.*\n",
+		"expanded.txt": "literalXYZ\n",
+		"ascii.txt":    "42abc\n",
+		"unicode.txt":  "٤abc\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := NewRipgrepRunner(RipgrepRunnerOptions{RipgrepPath: rg, WorkDir: root})
+	quoted, err := runner.Grep(context.Background(), GrepRequest{Pattern: `\Qliteral.*\E`, Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotedOutput := formatGrepResult(quoted)
+	if !strings.Contains(quotedOutput, "quoted.txt") || strings.Contains(quotedOutput, "expanded.txt") {
+		t.Fatalf("quoted Go regexp output = %q", quotedOutput)
+	}
+	digits, err := runner.Grep(context.Background(), GrepRequest{Pattern: `^\d+`, Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digitOutput := formatGrepResult(digits)
+	if !strings.Contains(digitOutput, "ascii.txt") || strings.Contains(digitOutput, "unicode.txt") {
+		t.Fatalf("Go ASCII digit regexp output = %q", digitOutput)
 	}
 }
 
