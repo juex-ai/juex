@@ -62,6 +62,37 @@ func TestRipgrepRunnerKeepsReadableMatchesWhenDescendantIsUnreadable(t *testing.
 	}
 }
 
+func TestRipgrepRunnerSearchesSymlinkedFiles(t *testing.T) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("system rg is unavailable")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	shared := filepath.Join(parent, "shared.txt")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shared, []byte("needle shared\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, filepath.Join(root, "config.link")); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRipgrepRunner(RipgrepRunnerOptions{
+		RipgrepPath: rg,
+		WorkDir:     root,
+		Sandbox:     sandbox.DefaultPolicy(),
+	})
+	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output := formatGrepResult(result); !strings.Contains(output, "config.link") {
+		t.Fatalf("symlinked file grep output = %q", output)
+	}
+}
+
 func TestRipgrepRunnerReportsFatalExitWithoutJSONSummary(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "broken-rg.sh")

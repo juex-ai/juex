@@ -246,8 +246,10 @@ func (r *RipgrepRunner) ripgrepPath() (string, error) {
 func ripgrepArgs(pattern, target string) []string {
 	return []string{
 		"--json",
+		"--no-config",
 		"--hidden",
 		"--no-ignore",
+		"--follow",
 		"--color", "never",
 		"--line-number",
 		"--glob", "!**/.git/**",
@@ -278,10 +280,22 @@ func blockedPathGlobArgs(searchRoot, workDir string, policy sandbox.Policy) []st
 		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue
 		}
-		glob := filepath.ToSlash(rel)
+		glob := escapeRipgrepGlobPath(filepath.ToSlash(rel))
 		args = append(args, "--glob", "!"+glob, "--glob", "!"+glob+"/**")
 	}
 	return args
+}
+
+func escapeRipgrepGlobPath(path string) string {
+	return strings.NewReplacer(
+		`\`, `\\`,
+		`*`, `\*`,
+		`?`, `\?`,
+		`[`, `\[`,
+		`]`, `\]`,
+		`{`, `\{`,
+		`}`, `\}`,
+	).Replace(path)
 }
 
 func formatGrepResult(result GrepResult) string {

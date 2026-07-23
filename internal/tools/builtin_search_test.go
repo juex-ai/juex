@@ -83,8 +83,10 @@ func TestRipgrepArgsPreserveLegacyTraversalContract(t *testing.T) {
 	got := ripgrepArgs("a.*b", ".")
 	want := []string{
 		"--json",
+		"--no-config",
 		"--hidden",
 		"--no-ignore",
+		"--follow",
 		"--color", "never",
 		"--line-number",
 		"--glob", "!**/.git/**",
@@ -95,6 +97,14 @@ func TestRipgrepArgsPreserveLegacyTraversalContract(t *testing.T) {
 	}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("rg args = %#v, want %#v", got, want)
+	}
+}
+
+func TestEscapeRipgrepGlobPathTreatsFilesystemNamesLiterally(t *testing.T) {
+	got := escapeRipgrepGlobPath(`private[*?]{old}\name`)
+	want := `private\[\*\?\]\{old\}\\name`
+	if got != want {
+		t.Fatalf("escaped glob path = %q, want %q", got, want)
 	}
 }
 
@@ -311,6 +321,11 @@ func TestRipgrepRunnerSearchesHiddenIgnoredFilesAndCapsGlobally(t *testing.T) {
 		t.Skip("system rg is unavailable")
 	}
 	root := t.TempDir()
+	configPath := filepath.Join(t.TempDir(), "ripgreprc")
+	if err := os.WriteFile(configPath, []byte("--glob=!*.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RIPGREP_CONFIG_PATH", configPath)
 	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.txt\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +450,7 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, "public.txt"), []byte("needle public\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	blocked := filepath.Join(root, "private")
+	blocked := filepath.Join(root, "private[")
 	if err := os.MkdirAll(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +459,7 @@ func TestRipgrepRunnerUsesSandboxRunnerAndExcludesBlockedDescendant(t *testing.T
 	}
 	policy := sandbox.DefaultPolicy()
 	policy.Enabled = true
-	policy.FileSystem.BlockedPaths = []string{"private"}
+	policy.FileSystem.BlockedPaths = []string{"private["}
 	sandboxRunner := &fakeSandboxRunner{}
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
 		RipgrepPath:   rg,
