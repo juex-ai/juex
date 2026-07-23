@@ -23,7 +23,7 @@ func (m *Manager) GCCandidates(ctx context.Context) ([]GCCandidate, error) {
 		if binding.Kind != agentstate.WorkspaceOrphaned {
 			continue
 		}
-		size, lastActivity, err := treeActivity(entry.Dir)
+		size, lastActivity, err := treeActivity(entry.Address.StateDir())
 		if err != nil {
 			return nil, fmt.Errorf("fleet: inspect orphan %q: %w", entry.ID, err)
 		}
@@ -73,13 +73,13 @@ func (m *Manager) deleteOrphan(ctx context.Context, id string) error {
 			Reason:  fmt.Sprintf("workspace binding is %s: %s", binding.Kind, binding.Reason),
 		}
 	}
-	maintenance, err := m.deps.acquireMaintenance(entry.Dir)
+	maintenance, err := m.deps.acquireMaintenance(entry.Address)
 	if err != nil {
 		return &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("endpoint is running or changing: %v", err)}
 	}
 	defer func() { _ = maintenance.Close() }()
 
-	runtimeState, err := m.deps.readRuntime(entry.Dir)
+	runtimeState, err := m.deps.readRuntime(entry.Address)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:
@@ -95,7 +95,7 @@ func (m *Manager) deleteOrphan(ctx context.Context, id string) error {
 		if probeErr == nil || probeErrorProvesReachable(probeErr) {
 			return &ConflictError{AgentID: entry.ID, Reason: "recorded endpoint remains reachable"}
 		}
-		if err := m.deps.removeRuntime(entry.Dir, runtimeState); err != nil {
+		if err := m.deps.removeRuntime(entry.Address, runtimeState); err != nil {
 			return &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("remove stale runtime: %v", err)}
 		}
 	}

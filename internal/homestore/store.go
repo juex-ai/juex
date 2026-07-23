@@ -63,16 +63,25 @@ func New(homeDir string) Store {
 }
 
 func (s Store) Lock(scope LockScope, id string, mode LockMode) (*Lock, error) {
+	path, err := s.LockPath(scope, id)
+	if err != nil {
+		return nil, err
+	}
+	return AcquireLock(path, mode)
+}
+
+// LockPath returns the canonical path for one home-scoped lock.
+func (s Store) LockPath(scope LockScope, id string) (string, error) {
 	if s.homeDir == "" {
-		return nil, errors.New("homestore: home directory is required")
+		return "", errors.New("homestore: home directory is required")
 	}
 	if !validLockScope(scope) {
-		return nil, fmt.Errorf("homestore: invalid lock scope %q", scope)
+		return "", fmt.Errorf("homestore: invalid lock scope %q", scope)
 	}
 	if !validLockID(id) {
-		return nil, fmt.Errorf("homestore: invalid lock id %q", id)
+		return "", fmt.Errorf("homestore: invalid lock id %q", id)
 	}
-	return AcquireLock(filepath.Join(s.homeDir, ".locks", string(scope), id+".lock"), mode)
+	return filepath.Join(s.homeDir, ".locks", string(scope), id+".lock"), nil
 }
 
 func AcquireLock(path string, mode LockMode) (*Lock, error) {

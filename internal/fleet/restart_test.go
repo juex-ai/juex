@@ -288,8 +288,8 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 
 	manager, events := restartTestManager(t, entries)
 	readRuntime := manager.deps.readRuntime
-	manager.deps.readRuntime = func(agentDir string) (endpoint.Runtime, error) {
-		id := agentIDFromDir(agentDir)
+	manager.deps.readRuntime = func(address agentstate.AgentAddress) (endpoint.Runtime, error) {
+		id := address.ID()
 		switch id {
 		case "bbbbbbbb":
 			return endpoint.Runtime{}, os.ErrNotExist
@@ -299,7 +299,7 @@ func TestRestartRunningAgentsFiltersAndContinuesAfterFailure(t *testing.T) {
 				Endpoint: "tcp://127.0.0.1:43123", StartedAt: time.Now().UTC(),
 			}, nil
 		default:
-			return readRuntime(agentDir)
+			return readRuntime(address)
 		}
 	}
 	manager.deps.inspectBinding = func(entry agentstate.RegistryEntry) agentstate.WorkspaceBinding {
@@ -395,12 +395,12 @@ func TestRestartRunningAgentsRechecksEligibilityUnderLifecycleLock(t *testing.T)
 	})
 	readRuntime := manager.deps.readRuntime
 	reads := 0
-	manager.deps.readRuntime = func(agentDir string) (endpoint.Runtime, error) {
+	manager.deps.readRuntime = func(address agentstate.AgentAddress) (endpoint.Runtime, error) {
 		reads++
 		if reads > 1 {
 			return endpoint.Runtime{}, os.ErrNotExist
 		}
-		return readRuntime(agentDir)
+		return readRuntime(address)
 	}
 
 	result, err := manager.RestartRunningAgents(context.Background())
@@ -441,8 +441,8 @@ func restartTestManager(
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(agentDir string) (endpoint.Runtime, error) {
-		id := agentIDFromDir(agentDir)
+	deps.readRuntime = func(address agentstate.AgentAddress) (endpoint.Runtime, error) {
+		id := address.ID()
 		if !running[id] {
 			return endpoint.Runtime{}, os.ErrNotExist
 		}
@@ -455,7 +455,7 @@ func restartTestManager(
 			BinaryVersion: "test",
 		}, nil
 	}
-	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 		return noopGuard{}, nil
 	}
 	deps.processAlive = func(pid int) (bool, error) {
@@ -496,9 +496,4 @@ func restartTestManager(
 		probeTimeout: time.Second,
 		deps:         deps,
 	}, &events
-}
-
-func agentIDFromDir(agentDir string) string {
-	parts := strings.Split(strings.TrimRight(agentDir, string(os.PathSeparator)), string(os.PathSeparator))
-	return parts[len(parts)-1]
 }

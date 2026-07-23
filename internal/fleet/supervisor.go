@@ -39,7 +39,7 @@ func (m *Manager) Serve(ctx context.Context, report func(Action)) error {
 				report(Action{AgentID: entry.ID, Kind: "failed", Err: lockErr})
 				continue
 			}
-			runtimeState, readErr := m.deps.readRuntime(entry.Dir)
+			runtimeState, readErr := m.deps.readRuntime(entry.Address)
 			if readErr == nil {
 				readErr = m.cleanStaleRuntime(ctx, entry, runtimeState)
 			}

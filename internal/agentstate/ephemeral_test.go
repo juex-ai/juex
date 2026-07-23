@@ -33,7 +33,7 @@ func TestResolveExistingReadsIdentityWithoutMaintenanceWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentPath := filepath.Join(resolved.AgentDir, agentFileName)
+	agentPath := filepath.Join(resolved.Address.StateDir(), agentFileName)
 	agentBefore, err := os.ReadFile(agentPath)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestResolveExistingReadsIdentityWithoutMaintenanceWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if existing.Agent.ID != resolved.Agent.ID || existing.AgentDir != resolved.AgentDir || existing.Created {
+	if existing.Agent.ID != resolved.Agent.ID || existing.Address.StateDir() != resolved.Address.StateDir() || existing.Created {
 		t.Fatalf("existing resolution = %+v, durable = %+v", existing, resolved)
 	}
 	assertFileBytes(t, resolved.MarkerPath, markerBefore)
@@ -63,7 +63,7 @@ func TestResolveExistingReadsIdentityWithoutMaintenanceWrites(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".locks")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read-only resolution created locks: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(resolved.AgentDir, "sessions", "legacy")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(resolved.Address.StateDir(), "sessions", "legacy")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read-only resolution migrated legacy state: %v", err)
 	}
 }
@@ -74,7 +74,7 @@ func TestResolveExistingRequiresStatefulRebind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentPath := filepath.Join(resolved.AgentDir, agentFileName)
+	agentPath := filepath.Join(resolved.Address.StateDir(), agentFileName)
 	agentBefore, err := os.ReadFile(agentPath)
 	if err != nil {
 		t.Fatal(err)
@@ -115,19 +115,19 @@ func TestCreateEphemeralOwnsIsolatedRemovableState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Resolution.Agent.ID == "" || state.Resolution.AgentDir == "" {
+	if state.Resolution.Agent.ID == "" || state.Resolution.Address.StateDir() == "" {
 		t.Fatalf("ephemeral resolution = %+v", state.Resolution)
 	}
-	if filepath.Dir(filepath.Dir(state.Resolution.AgentDir)) != state.RootDir {
-		t.Fatalf("agent dir = %q, root = %q", state.Resolution.AgentDir, state.RootDir)
+	if filepath.Dir(filepath.Dir(state.Resolution.Address.StateDir())) != state.RootDir {
+		t.Fatalf("agent dir = %q, root = %q", state.Resolution.Address.StateDir(), state.RootDir)
 	}
-	if filepath.Base(filepath.Dir(state.Resolution.AgentDir)) != "agents" {
-		t.Fatalf("agent dir = %q, want <root>/agents/<id>", state.Resolution.AgentDir)
+	if filepath.Base(filepath.Dir(state.Resolution.Address.StateDir())) != "agents" {
+		t.Fatalf("agent dir = %q, want <root>/agents/<id>", state.Resolution.Address.StateDir())
 	}
-	if strings.HasPrefix(state.Resolution.AgentDir, filepath.Join(home, "agents")+string(os.PathSeparator)) {
-		t.Fatalf("ephemeral state leaked into durable registry: %s", state.Resolution.AgentDir)
+	if strings.HasPrefix(state.Resolution.Address.StateDir(), filepath.Join(home, "agents")+string(os.PathSeparator)) {
+		t.Fatalf("ephemeral state leaked into durable registry: %s", state.Resolution.Address.StateDir())
 	}
-	assertDir(t, state.Resolution.AgentDir)
+	assertDir(t, state.Resolution.Address.StateDir())
 	if _, err := os.Stat(filepath.Join(home, "agents")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("durable registry created: %v", err)
 	}

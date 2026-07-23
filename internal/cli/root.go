@@ -390,11 +390,12 @@ func loadRuntimeConfigForCommand(cmd *cobra.Command, flags *persistentFlags, kee
 	}
 	cfg.AgentID = state.Resolution.Agent.ID
 	cfg.AgentName = state.Resolution.Agent.Name
-	cfg.AgentStateDir = state.Resolution.AgentDir
+	cfg.AgentStateDir = state.Resolution.Address.StateDir()
+	cfg.AgentAddress = state.Resolution.Address
 	return cfg, &runtimeConfigLifecycle{
 		state: state,
 		keep:  keep,
-		path:  state.Resolution.AgentDir,
+		path:  state.Resolution.Address.StateDir(),
 	}, nil
 }
 

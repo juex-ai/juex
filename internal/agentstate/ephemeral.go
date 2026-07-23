@@ -23,6 +23,12 @@ func CreateEphemeral(workDir string) (*Ephemeral, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agentstate: create ephemeral root: %w", err)
 	}
+	createdRootDir := rootDir
+	rootDir, err = canonicalPath(rootDir)
+	if err != nil {
+		_ = os.RemoveAll(createdRootDir)
+		return nil, fmt.Errorf("agentstate: resolve ephemeral root: %w", err)
+	}
 	cleanup := func() {
 		_ = os.RemoveAll(rootDir)
 	}
@@ -36,8 +42,12 @@ func CreateEphemeral(workDir string) (*Ephemeral, error) {
 		cleanup()
 		return nil, fmt.Errorf("agentstate: generated invalid ephemeral agent id %q", agentID)
 	}
-	agentDir := filepath.Join(rootDir, "agents", agentID)
-	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+	address, err := NewAgentAddress(rootDir, agentID)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("agentstate: create ephemeral agent state: %w", err)
 	}
@@ -51,10 +61,9 @@ func CreateEphemeral(workDir string) (*Ephemeral, error) {
 	}
 	return &Ephemeral{
 		Resolution: Resolution{
-			Agent:    agent,
-			HomeDir:  rootDir,
-			AgentDir: agentDir,
-			Created:  true,
+			Agent:   agent,
+			Address: address,
+			Created: true,
 		},
 		RootDir: rootDir,
 	}, nil

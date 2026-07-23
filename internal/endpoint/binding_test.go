@@ -10,15 +10,139 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 )
 
+type testAddress struct {
+	id       string
+	stateDir string
+	lockPath string
+}
+
+func (a testAddress) ID() string               { return a.id }
+func (a testAddress) StateDir() string         { return a.stateDir }
+func (a testAddress) EndpointLockPath() string { return a.lockPath }
+
+func TestEndpointUsesExplicitAgentAddress(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state", "not-the-agent-id")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	address := testAddress{
+		id:       "abcdefghijklmnop",
+		stateDir: stateDir,
+		lockPath: filepath.Join(root, "unrelated-guards", "resident.guard"),
+	}
+
+	binding, err := Listen(context.Background(), address, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := binding.Publish(); err != nil {
+		t.Fatal(err)
+	}
+	runtimeState, err := ReadRuntime(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtimeState.AgentID != address.id {
+		t.Fatalf("runtime agent id = %q, want %q", runtimeState.AgentID, address.id)
+	}
+	if _, err := AcquireMaintenance(address); err == nil {
+		t.Fatal("maintenance acquired while binding owns explicit lock")
+	}
+	if _, err := os.Stat(address.lockPath); err != nil {
+		t.Fatalf("explicit lock path: %v", err)
+	}
+	if err := RemoveRuntime(address, runtimeState); err != nil {
+		t.Fatal(err)
+	}
+	if err := binding.Close(); err != nil {
+		t.Fatal(err)
+	}
+	maintenance, err := AcquireMaintenance(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := maintenance.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSnapshotAddressRequiresExplicitAbsolutePaths(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name    string
+		address testAddress
+	}{
+		{
+			name: "missing id",
+			address: testAddress{
+				stateDir: filepath.Join(root, "state"),
+				lockPath: filepath.Join(root, "guard"),
+			},
+		},
+		{
+			name: "relative state directory",
+			address: testAddress{
+				id:       "abcdefghijklmnop",
+				stateDir: "relative-state",
+				lockPath: filepath.Join(root, "guard"),
+			},
+		},
+		{
+			name: "relative endpoint lock",
+			address: testAddress{
+				id:       "abcdefghijklmnop",
+				stateDir: filepath.Join(root, "state"),
+				lockPath: "relative-guard",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := snapshotAddress(test.address); err == nil {
+				t.Fatal("snapshotAddress() succeeded, want validation error")
+			}
+		})
+	}
+}
+
+func TestReadRuntimeChecksExplicitAddressIdentity(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	address := testAddress{
+		id:       "abcdefghijklmnop",
+		stateDir: stateDir,
+		lockPath: filepath.Join(root, "guard"),
+	}
+	runtimeState := Runtime{
+		AgentID:    "ponmlkjihgfedcba",
+		InstanceID: "instance",
+		PID:        42,
+		Endpoint:   "tcp://127.0.0.1:43123",
+		StartedAt:  time.Now().UTC(),
+	}
+	if err := writeRuntime(filepath.Join(stateDir, runtimeFileName), runtimeState); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRuntime(address); err == nil || !strings.Contains(err.Error(), "mismatched agent identity") {
+		t.Fatalf("ReadRuntime() error = %v, want mismatched agent identity", err)
+	}
+}
+
 func TestListenPublishesReachableRuntime(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
-	binding, err := Listen(context.Background(), agentDir, "1.2.3")
+	address := addressForAgentDir(agentDir)
+	binding, err := Listen(context.Background(), address, "1.2.3")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +197,7 @@ func TestListenPublishesReachableRuntime(t *testing.T) {
 	if err := binding.Publish(); err != nil {
 		t.Fatal(err)
 	}
-	runtimeState, err := ReadRuntime(agentDir)
+	runtimeState, err := ReadRuntime(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +264,7 @@ func TestListenFallsBackToLoopbackTCP(t *testing.T) {
 		}
 		return net.Listen(network, address)
 	}
-	binding, err := listenWithDependencies(context.Background(), newEndpointAgentDir(t), deps)
+	binding, err := listenWithDependencies(context.Background(), addressForAgentDir(newEndpointAgentDir(t)), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +315,7 @@ func TestListenRemovesConfirmedStaleSocketOnce(t *testing.T) {
 	}
 	deps.chmod = func(string, os.FileMode) error { return nil }
 
-	binding, err := listenWithDependencies(context.Background(), newEndpointAgentDir(t), deps)
+	binding, err := listenWithDependencies(context.Background(), addressForAgentDir(newEndpointAgentDir(t)), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +374,7 @@ func TestListenRejectsLiveOrUnsafeSocketOccupants(t *testing.T) {
 				return nil
 			}
 
-			_, err := listenWithDependencies(context.Background(), newEndpointAgentDir(t), deps)
+			_, err := listenWithDependencies(context.Background(), addressForAgentDir(newEndpointAgentDir(t)), deps)
 			if err == nil {
 				t.Fatal("listen succeeded, want error")
 			}
@@ -264,6 +388,7 @@ func TestListenRejectsLiveOrUnsafeSocketOccupants(t *testing.T) {
 
 func TestFallbackBindingKeepsExclusiveAgentLock(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
+	address := addressForAgentDir(agentDir)
 	deps := defaultListenDependencies()
 	deps.listen = func(network, address string) (net.Listener, error) {
 		if network == "unix" {
@@ -271,7 +396,7 @@ func TestFallbackBindingKeepsExclusiveAgentLock(t *testing.T) {
 		}
 		return net.Listen(network, address)
 	}
-	first, err := listenWithDependencies(context.Background(), agentDir, deps)
+	first, err := listenWithDependencies(context.Background(), address, deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +406,7 @@ func TestFallbackBindingKeepsExclusiveAgentLock(t *testing.T) {
 		}
 	})
 
-	_, err = Listen(context.Background(), agentDir, "test")
+	_, err = Listen(context.Background(), address, "test")
 	var running *AgentAlreadyRunningError
 	if !errors.As(err, &running) {
 		t.Fatalf("second listen error = %T %v, want AgentAlreadyRunningError", err, err)
@@ -290,7 +415,8 @@ func TestFallbackBindingKeepsExclusiveAgentLock(t *testing.T) {
 
 func TestCloseDoesNotRemoveReplacedRuntime(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
-	binding, err := Listen(context.Background(), agentDir, "test")
+	address := addressForAgentDir(agentDir)
+	binding, err := Listen(context.Background(), address, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +432,7 @@ func TestCloseDoesNotRemoveReplacedRuntime(t *testing.T) {
 	if err := binding.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ReadRuntime(agentDir)
+	got, err := ReadRuntime(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,11 +468,12 @@ func TestRuntimeOwnershipIgnoresMonotonicClockRepresentation(t *testing.T) {
 
 func TestListenDoesNotRecreateMissingAgentDirectory(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
+	address := addressForAgentDir(agentDir)
 	if err := os.Remove(agentDir); err != nil {
 		t.Fatal(err)
 	}
 
-	if _, err := Listen(context.Background(), agentDir, "test"); err == nil {
+	if _, err := Listen(context.Background(), address, "test"); err == nil {
 		t.Fatal("Listen succeeded for a missing agent directory")
 	}
 	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
@@ -356,7 +483,8 @@ func TestListenDoesNotRecreateMissingAgentDirectory(t *testing.T) {
 
 func TestMaintenanceAndListenShareExternalLock(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
-	maintenance, err := AcquireMaintenance(agentDir)
+	address := addressForAgentDir(agentDir)
+	maintenance, err := AcquireMaintenance(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,23 +494,23 @@ func TestMaintenanceAndListenShareExternalLock(t *testing.T) {
 		}
 	}()
 
-	_, err = Listen(context.Background(), agentDir, "test")
+	_, err = Listen(context.Background(), address, "test")
 	var running *AgentAlreadyRunningError
 	if !errors.As(err, &running) {
 		t.Fatalf("Listen error = %T %v, want AgentAlreadyRunningError", err, err)
 	}
-	lockPath := filepath.Join(filepath.Dir(filepath.Dir(agentDir)), ".locks", "endpoints", filepath.Base(agentDir)+".lock")
-	if _, err := os.Stat(lockPath); err != nil {
+	if _, err := os.Stat(address.lockPath); err != nil {
 		t.Fatalf("external endpoint lock: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(agentDir, lockFileName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agentDir, "endpoint.lock")); !os.IsNotExist(err) {
 		t.Fatalf("lock exists inside agent directory: %v", err)
 	}
 }
 
 func TestActiveBindingBlocksMaintenance(t *testing.T) {
 	agentDir := newEndpointAgentDir(t)
-	binding, err := Listen(context.Background(), agentDir, "test")
+	address := addressForAgentDir(agentDir)
+	binding, err := Listen(context.Background(), address, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +520,7 @@ func TestActiveBindingBlocksMaintenance(t *testing.T) {
 		}
 	}()
 
-	_, err = AcquireMaintenance(agentDir)
+	_, err = AcquireMaintenance(address)
 	var running *AgentAlreadyRunningError
 	if !errors.As(err, &running) {
 		t.Fatalf("AcquireMaintenance error = %T %v, want AgentAlreadyRunningError", err, err)
@@ -406,6 +534,16 @@ func newEndpointAgentDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return agentDir
+}
+
+func addressForAgentDir(agentDir string) testAddress {
+	id := filepath.Base(agentDir)
+	home := filepath.Dir(filepath.Dir(agentDir))
+	return testAddress{
+		id:       id,
+		stateDir: agentDir,
+		lockPath: filepath.Join(home, ".locks", "endpoints", id+".lock"),
+	}
 }
 
 type stubListener struct {

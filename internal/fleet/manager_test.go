@@ -47,7 +47,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	}
 	tests := []struct {
 		name           string
-		readRuntime    func(string) (endpoint.Runtime, error)
+		readRuntime    func(agentstate.AgentAddress) (endpoint.Runtime, error)
 		processAlive   func(int) (bool, error)
 		probe          func(context.Context, endpoint.Runtime) error
 		maintenanceErr error
@@ -56,18 +56,18 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 	}{
 		{
 			name:        "missing runtime and free endpoint guard",
-			readRuntime: func(string) (endpoint.Runtime, error) { return endpoint.Runtime{}, os.ErrNotExist },
+			readRuntime: func(agentstate.AgentAddress) (endpoint.Runtime, error) { return endpoint.Runtime{}, os.ErrNotExist },
 			want:        RuntimeStopped,
 		},
 		{
 			name:           "missing runtime while endpoint guard is busy",
-			readRuntime:    func(string) (endpoint.Runtime, error) { return endpoint.Runtime{}, os.ErrNotExist },
-			maintenanceErr: &endpoint.AgentAlreadyRunningError{AgentDir: "agent"},
+			readRuntime:    func(agentstate.AgentAddress) (endpoint.Runtime, error) { return endpoint.Runtime{}, os.ErrNotExist },
+			maintenanceErr: &endpoint.AgentAlreadyRunningError{StateDir: "agent"},
 			want:           RuntimeAmbiguous,
 		},
 		{
 			name:        "matching live runtime",
-			readRuntime: func(string) (endpoint.Runtime, error) { return runtimeState, nil },
+			readRuntime: func(agentstate.AgentAddress) (endpoint.Runtime, error) { return runtimeState, nil },
 			processAlive: func(int) (bool, error) {
 				return true, nil
 			},
@@ -77,7 +77,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 		},
 		{
 			name:        "confirmed stale runtime",
-			readRuntime: func(string) (endpoint.Runtime, error) { return runtimeState, nil },
+			readRuntime: func(agentstate.AgentAddress) (endpoint.Runtime, error) { return runtimeState, nil },
 			processAlive: func(int) (bool, error) {
 				return false, nil
 			},
@@ -87,7 +87,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 		},
 		{
 			name:        "live pid with mismatched endpoint identity",
-			readRuntime: func(string) (endpoint.Runtime, error) { return runtimeState, nil },
+			readRuntime: func(agentstate.AgentAddress) (endpoint.Runtime, error) { return runtimeState, nil },
 			processAlive: func(int) (bool, error) {
 				return true, nil
 			},
@@ -101,9 +101,11 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			wantVersion: "1.2.3",
 		},
 		{
-			name:        "malformed runtime",
-			readRuntime: func(string) (endpoint.Runtime, error) { return endpoint.Runtime{}, errors.New("bad json") },
-			want:        RuntimeAmbiguous,
+			name: "malformed runtime",
+			readRuntime: func(agentstate.AgentAddress) (endpoint.Runtime, error) {
+				return endpoint.Runtime{}, errors.New("bad json")
+			},
+			want: RuntimeAmbiguous,
 		},
 	}
 	for _, test := range tests {
@@ -116,7 +118,7 @@ func TestInspectStatusRuntimeMatrix(t *testing.T) {
 			if test.probe != nil {
 				deps.probe = test.probe
 			}
-			deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+			deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 				if test.maintenanceErr != nil {
 					return nil, test.maintenanceErr
 				}
@@ -148,7 +150,7 @@ func TestStartRetriesTransientRuntimeReadErrors(t *testing.T) {
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(string) (endpoint.Runtime, error) {
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 		switch reads.Add(1) {
 		case 1:
 			return endpoint.Runtime{}, os.ErrNotExist
@@ -162,7 +164,7 @@ func TestStartRetriesTransientRuntimeReadErrors(t *testing.T) {
 			return runtimeState, nil
 		}
 	}
-	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 		return noopGuard{}, nil
 	}
 	deps.processAlive = func(int) (bool, error) { return true, nil }
@@ -208,7 +210,7 @@ func TestStopNeverRequestsShutdownForMismatchedIdentity(t *testing.T) {
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(string) (endpoint.Runtime, error) { return runtimeState, nil }
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) { return runtimeState, nil }
 	deps.processAlive = func(int) (bool, error) { return true, nil }
 	deps.probe = func(context.Context, endpoint.Runtime) error {
 		return &endpoint.IdentityMismatchError{
@@ -253,7 +255,7 @@ func TestStopRequestsExactIdentityAndWaitsForExit(t *testing.T) {
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(string) (endpoint.Runtime, error) {
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 		if stopped.Load() {
 			return endpoint.Runtime{}, os.ErrNotExist
 		}
@@ -268,7 +270,7 @@ func TestStopRequestsExactIdentityAndWaitsForExit(t *testing.T) {
 		stopped.Store(true)
 		return nil
 	}
-	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 		return noopGuard{}, nil
 	}
 	manager := &Manager{
@@ -314,7 +316,7 @@ func TestStartAndRestartRejectHealthyAgentsThatCannotBeStarted(t *testing.T) {
 			deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 				return agentstate.WorkspaceBinding{Kind: test.binding, Reason: "test binding"}
 			}
-			deps.readRuntime = func(string) (endpoint.Runtime, error) { return runtimeState, nil }
+			deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) { return runtimeState, nil }
 			deps.processAlive = func(int) (bool, error) { return true, nil }
 			deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
 			shutdownRequests := 0
@@ -428,9 +430,8 @@ func TestLogsExplainsUnavailableFleetOwnedLog(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			entry := registryEntry("aaaaaaaa", "adopted")
-			entry.Dir = t.TempDir()
-			path := fleetLogPath(entry.Dir)
+			entry := registryEntryAtHome(t.TempDir(), "aaaaaaaa", "adopted")
+			path := fleetLogPath(entry.Address.StateDir())
 			if test.prepare != nil {
 				test.prepare(t, path)
 			}
@@ -475,17 +476,24 @@ func TestLogsExplainsUnavailableFleetOwnedLog(t *testing.T) {
 }
 
 func TestLogsPreservesNonMissingIOErrors(t *testing.T) {
-	entry := registryEntry("aaaaaaaa", "broken-log")
-	entry.Dir = "invalid\x00agent-dir"
+	entry := registryEntryAtHome(t.TempDir(), "aaaaaaaa", "broken-log")
+	sentinel := &os.PathError{
+		Op:   "open",
+		Path: fleetLogPath(entry.Address.StateDir()),
+		Err:  os.ErrPermission,
+	}
 	manager := &Manager{homeDir: t.TempDir(), deps: defaultDependencies()}
 	manager.deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
 		return []agentstate.RegistryEntry{entry}, nil
 	}
+	manager.deps.readLog = func(string, int) ([]byte, error) {
+		return nil, sentinel
+	}
 
 	_, err := manager.Logs(entry.ID, 20)
 
-	if err == nil {
-		t.Fatal("Logs succeeded with a NUL byte in the log path")
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error = %v, want sentinel %v", err, sentinel)
 	}
 	var unavailable *LogUnavailableError
 	if errors.As(err, &unavailable) {
@@ -493,11 +501,40 @@ func TestLogsPreservesNonMissingIOErrors(t *testing.T) {
 	}
 }
 
+func TestLogsRejectsInvalidRegistryEntryWithoutAddress(t *testing.T) {
+	entry := agentstate.RegistryEntry{
+		ID:      "invalid-slot",
+		Problem: "invalid registry agent id",
+	}
+	manager := &Manager{homeDir: t.TempDir(), deps: defaultDependencies()}
+	manager.deps.listRegistry = func(string) ([]agentstate.RegistryEntry, error) {
+		return []agentstate.RegistryEntry{entry}, nil
+	}
+
+	_, err := manager.Logs(entry.ID, 20)
+
+	var conflict *ConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("error = %T %v, want ConflictError", err, err)
+	}
+	if conflict.AgentID != entry.ID || !strings.Contains(conflict.Reason, entry.Problem) {
+		t.Fatalf("conflict = %+v, want invalid registry details", conflict)
+	}
+}
+
 func registryEntry(id, name string) agentstate.RegistryEntry {
+	return registryEntryAtHome(filepath.Join(os.TempDir(), "fleet-home"), id, name)
+}
+
+func registryEntryAtHome(home, id, name string) agentstate.RegistryEntry {
 	workspace := filepath.Join(os.TempDir(), "fleet-test-"+id)
+	address, err := agentstate.NewAgentAddress(home, id)
+	if err != nil {
+		panic(err)
+	}
 	return agentstate.RegistryEntry{
-		ID:  id,
-		Dir: filepath.Join(os.TempDir(), "fleet-home", "agents", id),
+		ID:      id,
+		Address: address,
 		Agent: agentstate.Agent{
 			ID:        id,
 			Name:      name,

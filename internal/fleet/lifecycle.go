@@ -45,7 +45,7 @@ func (m *Manager) startEntry(ctx context.Context, entry agentstate.RegistryEntry
 	}
 	switch status.RuntimeHealth {
 	case RuntimeUnhealthy:
-		runtimeState, err := m.deps.readRuntime(entry.Dir)
+		runtimeState, err := m.deps.readRuntime(entry.Address)
 		if err != nil {
 			return status, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("re-read stale runtime: %v", err)}
 		}
@@ -75,7 +75,7 @@ func (m *Manager) startEntry(ctx context.Context, entry agentstate.RegistryEntry
 		case <-deadline.C:
 			return status, fmt.Errorf("fleet: agent %q did not become ready within %s (log: %s)", entry.ID, m.startTimeout, process.LogPath)
 		case <-ticker.C:
-			runtimeState, err := m.deps.readRuntime(entry.Dir)
+			runtimeState, err := m.deps.readRuntime(entry.Address)
 			if errors.Is(err, os.ErrNotExist) {
 				runtimeReadFailureSince = time.Time{}
 				continue
@@ -154,7 +154,7 @@ func (m *Manager) stopEntryMode(
 	case RuntimeStopped:
 		return status, false, nil
 	case RuntimeUnhealthy:
-		runtimeState, err := m.deps.readRuntime(entry.Dir)
+		runtimeState, err := m.deps.readRuntime(entry.Address)
 		if err != nil {
 			return status, false, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("re-read stale runtime: %v", err)}
 		}
@@ -167,7 +167,7 @@ func (m *Manager) stopEntryMode(
 		return status, false, &ConflictError{AgentID: entry.ID, Reason: "runtime identity is not verified; refusing shutdown"}
 	}
 
-	runtimeState, err := m.deps.readRuntime(entry.Dir)
+	runtimeState, err := m.deps.readRuntime(entry.Address)
 	if err != nil {
 		return status, false, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("re-read runtime before shutdown: %v", err)}
 	}
@@ -197,7 +197,7 @@ func (m *Manager) stopEntryMode(
 				Reason:  fmt.Sprintf("verified process did not stop within %s", m.stopTimeout),
 			}
 		case <-ticker.C:
-			current, readErr := m.deps.readRuntime(entry.Dir)
+			current, readErr := m.deps.readRuntime(entry.Address)
 			alive, aliveErr := m.deps.processAlive(runtimeState.PID)
 			if aliveErr != nil {
 				return status, restartAcknowledged, &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("check stopping process: %v", aliveErr)}
@@ -260,7 +260,7 @@ func (m *Manager) restart(
 	}
 	var interrupted *restartActivity
 	if status.RuntimeHealth == RuntimeHealthy {
-		runtimeState, readErr := m.deps.readRuntime(entry.Dir)
+		runtimeState, readErr := m.deps.readRuntime(entry.Address)
 		if readErr != nil {
 			result.Resume.Error = fmt.Sprintf("detect interrupted turn: read runtime: %v", readErr)
 		} else {
@@ -293,7 +293,7 @@ func (m *Manager) restart(
 		result.Resume.Error = "confirm interrupted turn: runtime restart intent was not acknowledged"
 		return result, nil
 	}
-	runtimeState, readErr := m.deps.readRuntime(entry.Dir)
+	runtimeState, readErr := m.deps.readRuntime(entry.Address)
 	if readErr != nil {
 		result.Resume.Error = fmt.Sprintf("confirm interrupted turn: read runtime: %v", readErr)
 		return result, nil
@@ -416,12 +416,12 @@ func (m *Manager) cleanStaleRuntime(
 	entry agentstate.RegistryEntry,
 	expected endpoint.Runtime,
 ) error {
-	maintenance, err := m.deps.acquireMaintenance(entry.Dir)
+	maintenance, err := m.deps.acquireMaintenance(entry.Address)
 	if err != nil {
 		return &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("acquire endpoint maintenance guard: %v", err)}
 	}
 	defer func() { _ = maintenance.Close() }()
-	current, err := m.deps.readRuntime(entry.Dir)
+	current, err := m.deps.readRuntime(entry.Address)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -441,7 +441,7 @@ func (m *Manager) cleanStaleRuntime(
 	if probeErr == nil || probeErrorProvesReachable(probeErr) {
 		return &ConflictError{AgentID: entry.ID, Reason: "recorded endpoint remains reachable"}
 	}
-	if err := m.deps.removeRuntime(entry.Dir, current); err != nil {
+	if err := m.deps.removeRuntime(entry.Address, current); err != nil {
 		return &ConflictError{AgentID: entry.ID, Reason: fmt.Sprintf("remove stale runtime: %v", err)}
 	}
 	return nil

@@ -1212,8 +1212,17 @@ func TestLoadForWorkDirUsesJUEXHomeForAgentState(t *testing.T) {
 	if cfg.HomeJuexDir != juexHome {
 		t.Fatalf("HomeJuexDir = %q, want %q", cfg.HomeJuexDir, juexHome)
 	}
-	if cfg.AgentID == "" || cfg.AgentStateDir != filepath.Join(juexHome, "agents", cfg.AgentID) {
+	canonicalHome, err := filepath.EvalSymlinks(juexHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AgentID == "" || cfg.AgentStateDir != filepath.Join(canonicalHome, "agents", cfg.AgentID) {
 		t.Fatalf("agent identity paths = id %q state %q", cfg.AgentID, cfg.AgentStateDir)
+	}
+	if cfg.AgentAddress.ID() != cfg.AgentID ||
+		cfg.AgentAddress.StateDir() != cfg.AgentStateDir ||
+		cfg.AgentAddress.EndpointLockPath() != filepath.Join(canonicalHome, ".locks", "endpoints", cfg.AgentID+".lock") {
+		t.Fatalf("agent address = id %q state %q endpoint lock %q", cfg.AgentAddress.ID(), cfg.AgentAddress.StateDir(), cfg.AgentAddress.EndpointLockPath())
 	}
 	if cfg.MemoryDir() != filepath.Join(cfg.AgentStateDir, "memory") ||
 		cfg.SessionsDir() != filepath.Join(cfg.AgentStateDir, "sessions") ||
@@ -1266,8 +1275,8 @@ func TestLoadWithOptionsAgentStateNoneDoesNotUseWorkspaceFallback(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AgentID != "" || cfg.AgentStateDir != "" || cfg.RuntimePaths().StateDir != "" {
-		t.Fatalf("state-free config resolved runtime state: id=%q dir=%q paths=%+v", cfg.AgentID, cfg.AgentStateDir, cfg.RuntimePaths())
+	if cfg.AgentID != "" || cfg.AgentStateDir != "" || cfg.AgentAddress.ID() != "" || cfg.RuntimePaths().StateDir != "" {
+		t.Fatalf("state-free config resolved runtime state: id=%q dir=%q address=%q paths=%+v", cfg.AgentID, cfg.AgentStateDir, cfg.AgentAddress.ID(), cfg.RuntimePaths())
 	}
 	if _, err := os.Stat(filepath.Join(workDir, ".juex")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("state-free load wrote workspace: %v", err)

@@ -63,7 +63,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			home := t.TempDir()
 			workspace := t.TempDir()
 			agentID := "aaaaaaaa"
-			agentDir := writeFleetE2EAgent(t, home, workspace, agentID)
+			agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 			writeFleetProviderConfig(t, workspace, provider.URL)
 			environment := fleetE2EEnvironmentForProvider(
 				home,
@@ -73,7 +73,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 				"chat-test",
 			)
 			t.Cleanup(func() {
-				shutdownFleetAgent(t, agentDir)
+				shutdownFleetAgent(t, agentAddress)
 			})
 
 			if stdout, stderr, err := runFleetE2E(
@@ -85,7 +85,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			); err != nil {
 				t.Fatalf("fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 			}
-			oldRuntime := waitFleetRuntimeVersion(t, agentDir, "", "0.0.1-old")
+			oldRuntime := waitFleetRuntimeVersion(t, agentAddress, "", "0.0.1-old")
 			sessionID, originalTurnID := startFleetBlockingTurn(t, oldRuntime)
 			select {
 			case <-firstRequestStarted:
@@ -93,9 +93,9 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 				t.Fatalf("provider request: %v", err)
 			case <-time.After(5 * time.Second):
 				eventsBody, _ := os.ReadFile(
-					filepath.Join(agentDir, "sessions", sessionID, "events.jsonl"),
+					filepath.Join(agentAddress.StateDir(), "sessions", sessionID, "events.jsonl"),
 				)
-				logBody, _ := os.ReadFile(filepath.Join(agentDir, "logs", "fleet.log"))
+				logBody, _ := os.ReadFile(filepath.Join(agentAddress.StateDir(), "logs", "fleet.log"))
 				t.Fatalf(
 					"original provider request did not start\nevents:\n%s\nfleet log:\n%s",
 					eventsBody,
@@ -139,7 +139,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 
 			newRuntime := waitFleetRuntimeVersion(
 				t,
-				agentDir,
+				agentAddress,
 				oldRuntime.InstanceID,
 				"0.0.2-new",
 			)
@@ -165,7 +165,7 @@ func TestFleetRestartResumesInterruptedTurnOnNewBinary(t *testing.T) {
 			}
 			waitFleetInterruptedAndContinuationEvents(
 				t,
-				filepath.Join(agentDir, "sessions", sessionID, "events.jsonl"),
+				filepath.Join(agentAddress.StateDir(), "sessions", sessionID, "events.jsonl"),
 				originalTurnID,
 			)
 		})
@@ -179,10 +179,10 @@ func TestFleetStatusReportsRunningBinaryVersionSkew(t *testing.T) {
 	binary := buildJuex(t)
 	home := t.TempDir()
 	workspace := t.TempDir()
-	agentDir := writeFleetE2EAgent(t, home, workspace, "aaaaaaaa")
+	agentAddress := writeFleetE2EAgent(t, home, workspace, "aaaaaaaa")
 	environment := fleetE2EEnvironment(home)
 
-	binding, err := endpoint.Listen(context.Background(), agentDir, "0.0.0-old")
+	binding, err := endpoint.Listen(context.Background(), agentAddress, "0.0.0-old")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	agentID := "aaaaaaaa"
-	agentDir := writeFleetE2EAgent(t, home, workspace, agentID)
+	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 	environment := fleetE2EEnvironment(home)
 
 	standaloneOutput, err := os.Create(filepath.Join(t.TempDir(), "standalone.log"))
@@ -292,7 +292,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	standaloneDone := make(chan error, 1)
 	go func() { standaloneDone <- standalone.Wait() }()
 	t.Cleanup(func() {
-		runtimeState, readErr := endpoint.ReadRuntime(agentDir)
+		runtimeState, readErr := endpoint.ReadRuntime(agentAddress)
 		if readErr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			_ = endpoint.RequestShutdown(ctx, runtimeState)
@@ -306,7 +306,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 		}
 	})
 
-	runtimeState := waitFleetRuntime(t, agentDir)
+	runtimeState := waitFleetRuntime(t, agentAddress)
 	probeFleetRuntime(t, runtimeState)
 	supervisor := startFleetSupervisor(t, binary, environment)
 	t.Cleanup(func() {
@@ -317,7 +317,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	})
 	waitSupervisorReady(t, supervisor, "adopted")
 	killSupervisor(t, supervisor)
-	if _, err := os.Stat(filepath.Join(agentDir, "logs", "fleet.log")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agentAddress.StateDir(), "logs", "fleet.log")); !os.IsNotExist(err) {
 		t.Fatalf("standalone serve unexpectedly created fleet.log: %v", err)
 	}
 
@@ -345,7 +345,7 @@ func TestFleetLogsExplainsMissingLogForAdoptedAgent(t *testing.T) {
 	if stdout != "" {
 		t.Fatalf("fleet logs stdout = %q, want empty", stdout)
 	}
-	if _, err := os.Stat(filepath.Join(agentDir, "logs", "fleet.log")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(agentAddress.StateDir(), "logs", "fleet.log")); !os.IsNotExist(err) {
 		t.Fatalf("fleet logs command created fleet.log: %v", err)
 	}
 }
@@ -358,11 +358,11 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	agentID := "aaaaaaaa"
-	agentDir := writeFleetE2EAgent(t, home, workspace, agentID)
+	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 	environment := fleetE2EEnvironment(home)
 
 	t.Cleanup(func() {
-		runtimeState, err := endpoint.ReadRuntime(agentDir)
+		runtimeState, err := endpoint.ReadRuntime(agentAddress)
 		if err != nil {
 			return
 		}
@@ -376,7 +376,7 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	if stdout, stderr, err := runFleetE2E(binary, environment, "", "start", agentID); err != nil {
 		t.Fatalf("fleet start: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	firstRuntime := waitFleetRuntime(t, agentDir)
+	firstRuntime := waitFleetRuntime(t, agentAddress)
 	probeFleetRuntime(t, firstRuntime)
 	waitFleetHealth(t, binary, environment, agentID, fleet.RuntimeHealthy)
 
@@ -391,7 +391,7 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	if stdout, stderr, err := runFleetE2E(binary, environment, "", "restart", agentID); err != nil {
 		t.Fatalf("fleet restart: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	secondRuntime := waitFleetRuntime(t, agentDir)
+	secondRuntime := waitFleetRuntime(t, agentAddress)
 	if secondRuntime.InstanceID == firstRuntime.InstanceID {
 		t.Fatalf("restart reused runtime instance id %q", secondRuntime.InstanceID)
 	}
@@ -404,14 +404,14 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 
 	firstSupervisor := startFleetSupervisor(t, binary, environment)
 	waitSupervisorReady(t, firstSupervisor, "started")
-	supervisedRuntime := waitFleetRuntime(t, agentDir)
+	supervisedRuntime := waitFleetRuntime(t, agentAddress)
 	probeFleetRuntime(t, supervisedRuntime)
 	killSupervisor(t, firstSupervisor)
 	probeFleetRuntime(t, supervisedRuntime)
 
 	secondSupervisor := startFleetSupervisor(t, binary, environment)
 	waitSupervisorReady(t, secondSupervisor, "adopted")
-	adoptedRuntime := waitFleetRuntime(t, agentDir)
+	adoptedRuntime := waitFleetRuntime(t, agentAddress)
 	if !adoptedRuntime.Matches(supervisedRuntime) {
 		t.Fatalf("supervisor restart replaced adopted runtime: before=%+v after=%+v", supervisedRuntime, adoptedRuntime)
 	}
@@ -434,14 +434,14 @@ func TestFleetLifecycleAndSupervisorAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fleet gc deny: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if _, err := os.Stat(agentDir); err != nil {
+	if _, err := os.Stat(agentAddress.StateDir()); err != nil {
 		t.Fatalf("denied GC removed agent directory: %v", err)
 	}
 	stdout, stderr, err = runFleetE2E(binary, environment, "", "gc", "--yes")
 	if err != nil {
 		t.Fatalf("fleet gc --yes: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if _, err := os.Stat(agentDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(agentAddress.StateDir()); !os.IsNotExist(err) {
 		t.Fatalf("confirmed GC preserved agent directory: %v", err)
 	}
 }
@@ -553,23 +553,23 @@ func killSupervisor(t *testing.T, supervisor *fleetSupervisor) {
 	}
 }
 
-func waitFleetRuntime(t *testing.T, agentDir string) endpoint.Runtime {
+func waitFleetRuntime(t *testing.T, agentAddress agentstate.AgentAddress) endpoint.Runtime {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		runtimeState, err := endpoint.ReadRuntime(agentDir)
+		runtimeState, err := endpoint.ReadRuntime(agentAddress)
 		if err == nil {
 			return runtimeState
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("runtime metadata did not appear under %s", agentDir)
+	t.Fatalf("runtime metadata did not appear under %s", agentAddress.StateDir())
 	return endpoint.Runtime{}
 }
 
 func waitFleetRuntimeVersion(
 	t *testing.T,
-	agentDir string,
+	agentAddress agentstate.AgentAddress,
 	previousInstanceID string,
 	wantVersion string,
 ) endpoint.Runtime {
@@ -577,7 +577,7 @@ func waitFleetRuntimeVersion(
 	deadline := time.Now().Add(15 * time.Second)
 	var last endpoint.Runtime
 	for time.Now().Before(deadline) {
-		runtimeState, err := endpoint.ReadRuntime(agentDir)
+		runtimeState, err := endpoint.ReadRuntime(agentAddress)
 		if err == nil {
 			last = runtimeState
 			if runtimeState.InstanceID != previousInstanceID &&
@@ -696,10 +696,13 @@ func fleetE2EEnvironmentForProvider(
 	)
 }
 
-func writeFleetE2EAgent(t *testing.T, home, workspace, id string) string {
+func writeFleetE2EAgent(t *testing.T, home, workspace, id string) agentstate.AgentAddress {
 	t.Helper()
-	agentDir := filepath.Join(home, "agents", id)
-	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+	agentAddress, err := agentstate.NewAgentAddress(home, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agentAddress.StateDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	agent := agentstate.Agent{
@@ -710,7 +713,7 @@ func writeFleetE2EAgent(t *testing.T, home, workspace, id string) string {
 		Autostart: true,
 		CreatedAt: time.Now().UTC(),
 	}
-	writeFleetE2EJSON(t, filepath.Join(agentDir, "agent.json"), agent)
+	writeFleetE2EJSON(t, filepath.Join(agentAddress.StateDir(), "agent.json"), agent)
 	if err := os.MkdirAll(filepath.Join(workspace, ".juex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +722,7 @@ func writeFleetE2EAgent(t *testing.T, home, workspace, id string) string {
 		filepath.Join(workspace, ".juex", "juex.local.json"),
 		agentstate.Marker{AgentID: id},
 	)
-	return agentDir
+	return agentAddress
 }
 
 func writeFleetE2EJSON(t *testing.T, path string, value any) {
@@ -844,9 +847,9 @@ func waitFleetInterruptedAndContinuationEvents(
 	t.Fatalf("restart events did not settle in %s:\n%s", path, body)
 }
 
-func shutdownFleetAgent(t *testing.T, agentDir string) {
+func shutdownFleetAgent(t *testing.T, agentAddress agentstate.AgentAddress) {
 	t.Helper()
-	runtimeState, err := endpoint.ReadRuntime(agentDir)
+	runtimeState, err := endpoint.ReadRuntime(agentAddress)
 	if err != nil {
 		return
 	}
@@ -856,7 +859,7 @@ func shutdownFleetAgent(t *testing.T, agentDir string) {
 	if err == nil {
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
-			if _, readErr := endpoint.ReadRuntime(agentDir); os.IsNotExist(readErr) {
+			if _, readErr := endpoint.ReadRuntime(agentAddress); os.IsNotExist(readErr) {
 				return
 			}
 			time.Sleep(50 * time.Millisecond)

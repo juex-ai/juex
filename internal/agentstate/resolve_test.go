@@ -35,16 +35,16 @@ func TestResolveCreatesAndReusesWorkspaceIdentity(t *testing.T) {
 		t.Fatalf("agent defaults = %+v", first.Agent)
 	}
 	for _, path := range []string{
-		first.AgentDir,
-		filepath.Join(first.AgentDir, "sessions"),
-		filepath.Join(first.AgentDir, "memory"),
-		filepath.Join(first.AgentDir, "logs"),
+		first.Address.StateDir(),
+		filepath.Join(first.Address.StateDir(), "sessions"),
+		filepath.Join(first.Address.StateDir(), "memory"),
+		filepath.Join(first.Address.StateDir(), "logs"),
 	} {
 		assertDir(t, path)
 	}
 	for _, path := range []string{
-		filepath.Join(first.AgentDir, "agent.json"),
-		filepath.Join(first.AgentDir, "history.json"),
+		filepath.Join(first.Address.StateDir(), "agent.json"),
+		filepath.Join(first.Address.StateDir(), "history.json"),
 		first.MarkerPath,
 	} {
 		assertFile(t, path)
@@ -124,7 +124,7 @@ func TestResolveRebindsMovedWorkspace(t *testing.T) {
 		t.Fatalf("move notices = %v", moved.Notices)
 	}
 	var persisted Agent
-	readJSONTest(t, filepath.Join(first.AgentDir, "agent.json"), &persisted)
+	readJSONTest(t, filepath.Join(first.Address.StateDir(), "agent.json"), &persisted)
 	if persisted.Workspace != movedDir {
 		t.Fatalf("persisted workspace = %q, want %q", persisted.Workspace, movedDir)
 	}
@@ -184,7 +184,7 @@ func TestResolveMigratesLegacyStateAndPreservesWorkspaceConfig(t *testing.T) {
 		filepath.Join("observables", "observations.jsonl"):    observationBody,
 		filepath.Join("observables", "artifacts", legacyObservation.ObservableID, legacyObservation.ID+".txt"): artifactBody,
 	} {
-		assertText(t, filepath.Join(resolved.AgentDir, rel), want)
+		assertText(t, filepath.Join(resolved.Address.StateDir(), rel), want)
 		if _, err := os.Lstat(filepath.Join(legacyDir, rel)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("legacy %s still exists or stat failed: %v", rel, err)
 		}
@@ -196,7 +196,7 @@ func TestResolveMigratesLegacyStateAndPreservesWorkspaceConfig(t *testing.T) {
 		t.Fatalf("migration notices = %v", resolved.Notices)
 	}
 
-	wantArtifact := filepath.Join(resolved.AgentDir, "observables", "artifacts", legacyObservation.ObservableID, legacyObservation.ID+".txt")
+	wantArtifact := filepath.Join(resolved.Address.StateDir(), "observables", "artifacts", legacyObservation.ObservableID, legacyObservation.ID+".txt")
 	assertText(t, wantArtifact, artifactBody)
 }
 
@@ -223,7 +223,7 @@ func TestResolveMigratesLegacyStateForExistingIdentity(t *testing.T) {
 	}
 	assertFile(t, filepath.Join(workDir, ".juex", "observables.json"))
 	var got legacyObservationRecord
-	data, err := os.ReadFile(filepath.Join(first.AgentDir, "observables", "observations.jsonl"))
+	data, err := os.ReadFile(filepath.Join(first.Address.StateDir(), "observables", "observations.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestResolveMigratesLegacyStateForExistingIdentity(t *testing.T) {
 	if got.ID != record.ID || got.SourceEventID != record.SourceEventID || got.State != "delivered" {
 		t.Fatalf("migrated observation = %+v", got)
 	}
-	assertText(t, filepath.Join(first.AgentDir, "observables", "artifacts", record.ObservableID, record.ID+".txt"), artifactBody)
+	assertText(t, filepath.Join(first.Address.StateDir(), "observables", "artifacts", record.ObservableID, record.ID+".txt"), artifactBody)
 
 	repeated, err := Resolve(Options{HomeDir: home, WorkDir: workDir})
 	if err != nil {
@@ -251,7 +251,7 @@ func TestResolvePreservesConflictingLegacyStateForExistingIdentity(t *testing.T)
 		t.Fatal(err)
 	}
 	legacyPath := filepath.Join(workDir, ".juex", "observables", "observations.jsonl")
-	agentPath := filepath.Join(first.AgentDir, "observables", "observations.jsonl")
+	agentPath := filepath.Join(first.Address.StateDir(), "observables", "observations.jsonl")
 	writeText(t, legacyPath, "{\"id\":\"legacy\"}\n")
 	writeText(t, agentPath, "{\"id\":\"agent\"}\n")
 
@@ -271,7 +271,7 @@ func TestResolveBlocksExistingIdentityMigrationWhileAgentIsRunning(t *testing.T)
 	}
 	legacyPath := filepath.Join(workDir, ".juex", "observables", "observations.jsonl")
 	writeText(t, legacyPath, "{\"id\":\"legacy\"}\n")
-	binding, err := endpoint.Listen(context.Background(), first.AgentDir, "test")
+	binding, err := endpoint.Listen(context.Background(), first.Address, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestResolveBlocksExistingIdentityMigrationWhileAgentIsRunning(t *testing.T)
 		t.Fatalf("Resolve error = %T %v, want AgentAlreadyRunningError", err, err)
 	}
 	assertText(t, legacyPath, "{\"id\":\"legacy\"}\n")
-	if _, err := os.Stat(filepath.Join(first.AgentDir, "observables")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(first.Address.StateDir(), "observables")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("agent observable state exists after blocked migration: %v", err)
 	}
 }
@@ -308,7 +308,7 @@ func TestResolveMigratesSymlinkWithoutFollowingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	migratedLink := filepath.Join(resolved.AgentDir, "memory", "shared.md")
+	migratedLink := filepath.Join(resolved.Address.StateDir(), "memory", "shared.md")
 	info, err := os.Lstat(migratedLink)
 	if err != nil {
 		t.Fatal(err)
@@ -342,7 +342,7 @@ func TestResolveMigratesReadOnlyDirectoryAndPreservesMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	migratedDir := filepath.Join(resolved.AgentDir, "memory", "readonly")
+	migratedDir := filepath.Join(resolved.Address.StateDir(), "memory", "readonly")
 	t.Cleanup(func() { _ = os.Chmod(migratedDir, 0o755) })
 	assertText(t, filepath.Join(migratedDir, "note.md"), "# retained\n")
 	info, err := os.Stat(migratedDir)

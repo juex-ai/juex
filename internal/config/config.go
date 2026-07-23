@@ -57,6 +57,7 @@ type Config struct {
 	AgentID             string
 	AgentName           string
 	AgentStateDir       string
+	AgentAddress        agentstate.AgentAddress
 	AgentStateNotices   []string
 	DeprecationWarnings []string
 	agentStateLoaded    bool
@@ -562,7 +563,8 @@ func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentSta
 	}
 	cfg.AgentID = resolution.Agent.ID
 	cfg.AgentName = resolution.Agent.Name
-	cfg.AgentStateDir = resolution.AgentDir
+	cfg.AgentStateDir = resolution.Address.StateDir()
+	cfg.AgentAddress = resolution.Address
 	cfg.AgentStateNotices = append([]string(nil), resolution.Notices...)
 	return nil
 }

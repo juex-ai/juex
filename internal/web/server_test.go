@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/app"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/config"
@@ -46,6 +47,21 @@ func newTestServer(t *testing.T) *Server {
 	})
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func setTestAgentAddress(t *testing.T, cfg *config.Config) agentstate.AgentAddress {
+	t.Helper()
+	address, err := agentstate.NewAgentAddress(t.TempDir(), "abcdefghijklmnop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(address.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentID = address.ID()
+	cfg.AgentStateDir = address.StateDir()
+	cfg.AgentAddress = address
+	return address
 }
 
 func TestServer_HealthzReturnsOK(t *testing.T) {
@@ -190,6 +206,7 @@ func TestServerSessionsShareProcessModelHealth(t *testing.T) {
 
 func TestRunEnsuresActivePrimarySession(t *testing.T) {
 	srv := newTestServer(t)
+	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -229,6 +246,7 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 	srv := NewServer(Options{
 		Cfg: config.Config{WorkDir: t.TempDir()},
 	})
+	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
 	t.Cleanup(srv.Close)
 
@@ -263,7 +281,7 @@ func TestRunDoesNotRequireProviderConfigAtStartup(t *testing.T) {
 
 func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	srv := newTestServer(t)
-	srv.opts.Cfg.AgentStateDir = t.TempDir()
+	address := setTestAgentAddress(t, &srv.opts.Cfg)
 	ready := make(chan ReadyInfo, 1)
 	srv.opts.OnReady = func(info ReadyInfo) { ready <- info }
 
@@ -286,7 +304,7 @@ func TestRunPublishesAPIOnlyAgentEndpointByDefault(t *testing.T) {
 	if info.TCPAddress != "" {
 		t.Fatalf("default ready info has TCP address: %+v", info)
 	}
-	runtimeState, err := endpoint.ReadRuntime(srv.opts.Cfg.AgentStateDir)
+	runtimeState, err := endpoint.ReadRuntime(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +420,7 @@ func TestRestartShutdownAcknowledgesAndPersistsRuntimeRestartCause(t *testing.T)
 func TestRunPublishesExplicitTCPAPI(t *testing.T) {
 	srv := newTestServer(t)
 	srv.opts.Addr = "127.0.0.1:0"
-	srv.opts.Cfg.AgentStateDir = t.TempDir()
+	setTestAgentAddress(t, &srv.opts.Cfg)
 	ready := make(chan ReadyInfo, 1)
 	srv.opts.OnReady = func(info ReadyInfo) { ready <- info }
 

@@ -13,8 +13,11 @@ This package owns how local processes address one running agent:
 
 The guard lives at
 `$JUEX_HOME/.locks/endpoints/<agent-id>.lock`, outside the deletable registry
-entry. `Listen` requires the agent directory to exist before and after locking
-and never recreates it.
+entry. `internal/agentstate` owns the `AgentAddress` value that binds the
+stored agent id, state directory, and guard path. This package consumes only
+that explicit address projection; it does not infer identity or home layout
+from directory names. `Listen` requires the addressed state directory to exist
+before and after locking and never recreates it.
 
 It does not own HTTP route registration, SPA behavior, fleet registry state,
 process spawning, or authentication. `internal/web` serves handlers over the

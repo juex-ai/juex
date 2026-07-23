@@ -10,8 +10,8 @@ import (
 )
 
 func spawnDetached(executable, homeDir string, entry agentstate.RegistryEntry) (spawnedProcess, error) {
-	logPath := fleetLogPath(entry.Dir)
-	if err := os.MkdirAll(logsDir(entry.Dir), 0o700); err != nil {
+	logPath := fleetLogPath(entry.Address.StateDir())
+	if err := os.MkdirAll(logsDir(entry.Address.StateDir()), 0o700); err != nil {
 		return spawnedProcess{}, fmt.Errorf("fleet: create logs for agent %q: %w", entry.ID, err)
 	}
 	if err := rotateFleetLog(logPath); err != nil {
