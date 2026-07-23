@@ -30,11 +30,16 @@ type DurableSink struct {
 	cond     *sync.Cond
 	journal  Journal
 
-	projections map[uint64]Delivery
-	deliveries  map[uint64]Delivery
+	projections []registeredDelivery
+	deliveries  []registeredDelivery
 	nextID      uint64
 	closed      bool
 	queue       []deliveryBatch
+}
+
+type registeredDelivery struct {
+	id       uint64
+	delivery Delivery
 }
 
 type deliveryBatch struct {
@@ -44,9 +49,7 @@ type deliveryBatch struct {
 
 func NewDurableSink(journal Journal) *DurableSink {
 	s := &DurableSink{
-		journal:     journal,
-		projections: map[uint64]Delivery{},
-		deliveries:  map[uint64]Delivery{},
+		journal: journal,
 	}
 	s.cond = sync.NewCond(&s.mu)
 	go s.runDeliveries()
@@ -103,11 +106,14 @@ func (s *DurableSink) AddProjection(projection Delivery) func() {
 	}
 	s.nextID++
 	id := s.nextID
-	s.projections[id] = projection
+	s.projections = append(s.projections, registeredDelivery{
+		id:       id,
+		delivery: projection,
+	})
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		delete(s.projections, id)
+		s.projections = removeRegisteredDelivery(s.projections, id)
 	}
 }
 
@@ -122,11 +128,14 @@ func (s *DurableSink) AddDelivery(delivery Delivery) func() {
 	}
 	s.nextID++
 	id := s.nextID
-	s.deliveries[id] = delivery
+	s.deliveries = append(s.deliveries, registeredDelivery{
+		id:       id,
+		delivery: delivery,
+	})
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		delete(s.deliveries, id)
+		s.deliveries = removeRegisteredDelivery(s.deliveries, id)
 	}
 }
 
@@ -167,11 +176,11 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 	s.mu.Lock()
 	projections := make([]Delivery, 0, len(s.projections))
 	for _, projection := range s.projections {
-		projections = append(projections, projection)
+		projections = append(projections, projection.delivery)
 	}
 	deliveries := make([]Delivery, 0, len(s.deliveries))
 	for _, delivery := range s.deliveries {
-		deliveries = append(deliveries, delivery)
+		deliveries = append(deliveries, delivery.delivery)
 	}
 	s.mu.Unlock()
 
@@ -201,7 +210,22 @@ func (s *DurableSink) Close() {
 		return
 	}
 	s.closed = true
-	s.projections = map[uint64]Delivery{}
-	s.deliveries = map[uint64]Delivery{}
+	s.projections = nil
+	s.deliveries = nil
 	s.cond.Signal()
+}
+
+func removeRegisteredDelivery(
+	registered []registeredDelivery,
+	id uint64,
+) []registeredDelivery {
+	for index := range registered {
+		if registered[index].id != id {
+			continue
+		}
+		copy(registered[index:], registered[index+1:])
+		registered[len(registered)-1] = registeredDelivery{}
+		return registered[:len(registered)-1]
+	}
+	return registered
 }

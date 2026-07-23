@@ -545,7 +545,10 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 		workCancel: workCancel,
 	}
 	as.turns = newWebTurnTransport(a)
-	a.AddEventDelivery(as.bcast)
+	a.AddEventProjection(browserEventProjection{
+		status: a.Status,
+		stream: as.bcast,
+	})
 	identity, ok := a.SessionIdentity()
 	if !ok {
 		_ = a.CloseAndWait()

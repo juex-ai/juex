@@ -4,6 +4,8 @@ import type {
   Message,
   ReasoningBlock,
   Role,
+  RuntimeToolCallState,
+  RuntimeToolCallStatus,
   TextBlock,
   ToolResultBlock,
   ToolUseBlock,
@@ -14,6 +16,7 @@ export type ToolDisplayUnit = {
   kind: "tool";
   use: ToolUseBlock | null;
   result: ToolResultBlock | null;
+  state?: RuntimeToolCallState;
 };
 
 export type ToolBatchDisplayUnit = {
@@ -58,10 +61,14 @@ function normalizeTextBlock(block: TextBlock): TextBlock {
 // stay where they appear, as standalone output-only Tool cards.
 export function messagesToGroups(
   messages: Message[] | null | undefined,
+  toolStatuses: readonly RuntimeToolCallStatus[] = [],
 ): MessageGroup[] {
   if (!messages?.length) return [];
   const groups: MessageGroup[] = [];
   const toolById = new Map<string, ToolDisplayUnit>();
+  const toolStateByID = new Map(
+    toolStatuses.map((tool) => [tool.tool_use_id, tool.state]),
+  );
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -78,7 +85,12 @@ export function messagesToGroups(
           units.push({ kind: "reasoning", block });
           break;
         case "tool_use": {
-          const unit = { kind: "tool" as const, use: block, result: null };
+          const unit = {
+            kind: "tool" as const,
+            use: block,
+            result: null,
+            state: toolStateByID.get(block.tool_use_id),
+          };
           units.push(unit);
           if (block.tool_use_id) toolById.set(block.tool_use_id, unit);
           break;
@@ -93,7 +105,14 @@ export function messagesToGroups(
             // exactly one result per use today).
             existing.result = block;
           } else {
-            units.push({ kind: "tool", use: null, result: block });
+            units.push({
+              kind: "tool",
+              use: null,
+              result: block,
+              state: block.tool_use_id
+                ? toolStateByID.get(block.tool_use_id)
+                : undefined,
+            });
           }
           break;
         }
@@ -148,7 +167,19 @@ function foldToolBatches(units: UnbatchedDisplayUnit[]): DisplayUnit[] {
 export function toolState(
   use: ToolUseBlock | null,
   result: ToolResultBlock | null,
+  runtimeState?: RuntimeToolCallState,
 ): ToolUIPartState {
+  switch (runtimeState) {
+    case "requested":
+      return "input-streaming";
+    case "running":
+    case "streaming":
+      return "input-available";
+    case "completed":
+      return "output-available";
+    case "errored":
+      return "output-error";
+  }
   if (result?.is_error) return "output-error";
   if (result?.streaming) return "input-available";
   if (result) return "output-available";

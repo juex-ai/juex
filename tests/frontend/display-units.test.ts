@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { messagesToGroups } from "../../frontend/src/lib/display-units.ts";
+import {
+  messagesToGroups,
+  toolState,
+} from "../../frontend/src/lib/display-units.ts";
 import {
   messageGroupCanCopy,
   messageGroupCopyText,
@@ -66,7 +69,15 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
     },
   ];
 
-  const groups = messagesToGroups(messages);
+  const groups = messagesToGroups(messages, [
+    {
+      tool_use_id: "tool-1",
+      name: "memory_write",
+      state: "errored",
+      started_at: "",
+      updated_at: "",
+    },
+  ]);
 
   assert.equal(groups.length, 1);
   assert.equal(groups[0].units.length, 1);
@@ -78,13 +89,22 @@ test("messagesToGroups folds contiguous assistant tools into a batch paired by i
       tool.use?.tool_use_id,
       tool.use?.tool_name,
       tool.result?.content,
+      tool.state,
     ]),
     [
-      ["tool-1", "memory_write", "first"],
-      ["tool-2", "memory_write", "second"],
-      ["tool-3", "update_goal", "third"],
+      ["tool-1", "memory_write", "first", "errored"],
+      ["tool-2", "memory_write", "second", undefined],
+      ["tool-3", "update_goal", "third", undefined],
     ],
   );
+});
+
+test("toolState prefers the authoritative runtime lifecycle", () => {
+  assert.equal(toolState(null, null, "requested"), "input-streaming");
+  assert.equal(toolState(null, null, "running"), "input-available");
+  assert.equal(toolState(null, null, "streaming"), "input-available");
+  assert.equal(toolState(null, null, "completed"), "output-available");
+  assert.equal(toolState(null, null, "errored"), "output-error");
 });
 
 test("messagesToGroups keeps image-only messages as image units", () => {

@@ -619,20 +619,32 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	if since != "" {
 		// Replay missed events from events.jsonl. The path comes from the
 		// session record so we never read outside the sessions dir.
-		var f *os.File
+		var (
+			f    *os.File
+			seed runtime.StatusSeed
+		)
 		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
 			var openErr error
 			f, openErr = os.Open(filepath.Join(sess.Dir, "events.jsonl"))
+			seed = runtime.StatusSeed{
+				SessionID:        sess.ID,
+				SessionAlias:     sess.Alias,
+				MaxPendingInputs: runtime.DefaultMaxPendingInput,
+			}
 			return openErr
 		})
 		if err == nil {
-			replayed, replayErr := replaySince(f, since)
+			journal, replayErr := replaySince(f, "")
 			f.Close()
 			if replayErr != nil {
 				log.Printf("web: events replay for %s: %v", id, replayErr)
 			}
-			for _, e := range replayed {
-				if err := writeSSEFrame(w, e); err != nil {
+			replayed, projectionErr := projectBrowserEvents(seed, journal, since)
+			if projectionErr != nil {
+				log.Printf("web: browser projection replay for %s: %v", id, projectionErr)
+			}
+			for _, event := range replayed {
+				if err := writeBrowserSSEFrame(w, event); err != nil {
 					return
 				}
 			}
@@ -642,14 +654,14 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	ctx := r.Context()
 	for {
 		select {
-		case e, ok := <-sub.ch:
+		case event, ok := <-sub.ch:
 			if !ok {
 				return
 			}
 			if err := as.app.ReadSessionID(id, func(*session.Session) error { return nil }); err != nil {
 				return
 			}
-			if err := writeSSEFrame(w, e); err != nil {
+			if err := writeBrowserSSEFrame(w, event); err != nil {
 				return
 			}
 		case <-sub.done:

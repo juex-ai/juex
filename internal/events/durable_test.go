@@ -110,6 +110,26 @@ func TestDurableSink_ProjectsSynchronouslyAfterJournalCommit(t *testing.T) {
 	}
 }
 
+func TestDurableSink_ProjectsInRegistrationOrder(t *testing.T) {
+	sink := NewDurableSink(&recordingJournal{})
+	t.Cleanup(sink.Close)
+
+	var projected []string
+	sink.AddProjection(DeliveryFunc(func(Event) {
+		projected = append(projected, "status")
+	}))
+	sink.AddProjection(DeliveryFunc(func(Event) {
+		projected = append(projected, "browser")
+	}))
+
+	if _, err := sink.Commit(Event{ID: "evt-1", Type: "turn.admitted"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"status", "browser"}; !reflect.DeepEqual(projected, want) {
+		t.Fatalf("projection order = %v, want %v", projected, want)
+	}
+}
+
 func TestDurableSink_DoesNotProjectFailedJournalCommit(t *testing.T) {
 	sink := NewDurableSink(&recordingJournal{err: errors.New("disk full")})
 	t.Cleanup(sink.Close)

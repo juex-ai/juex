@@ -166,12 +166,14 @@ export async function getSessionContext(
 export interface SubscribeOptions {
   since?: string;
   onEvent: (e: BrowserEvent) => void;
+  onOpen?: () => void;
   onError?: (err: Event) => void;
 }
 
 // subscribeEvents opens an EventSource for the given session and invokes
 // onEvent for each parsed BrowserEvent. Returns a function that closes the
-// connection. Auto-reconnect is the caller's responsibility.
+// connection. EventSource reconnects automatically with the last durable SSE
+// event ID; transient frames deliberately do not advance that cursor.
 export function subscribeEvents(
   id: string,
   opts: SubscribeOptions,
@@ -187,6 +189,9 @@ export function subscribeEvents(
       /* ignore malformed frames */
     }
   });
+  if (opts.onOpen) {
+    es.addEventListener("open", opts.onOpen);
+  }
   if (opts.onError) {
     es.addEventListener("error", opts.onError);
   }
@@ -199,31 +204,6 @@ export async function getSessionStatus(
   return jsonOrThrow(
     await fetch(agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/status`)),
   );
-}
-
-export function subscribeSessionStatus(
-  id: string,
-  opts: {
-    since?: string;
-    onStatus: (status: AgentRuntimeStatusSnapshot) => void;
-    onError?: (err: Event) => void;
-  },
-): () => void {
-  const qs = opts.since ? `?since=${encodeURIComponent(opts.since)}` : "";
-  const es = new EventSource(
-    agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/status/events${qs}`),
-  );
-  es.addEventListener("message", (event) => {
-    try {
-      opts.onStatus(
-        JSON.parse((event as MessageEvent).data) as AgentRuntimeStatusSnapshot,
-      );
-    } catch {
-      /* ignore malformed frames */
-    }
-  });
-  if (opts.onError) es.addEventListener("error", opts.onError);
-  return () => es.close();
 }
 
 export async function getFileTree(signal?: AbortSignal): Promise<FileNode> {

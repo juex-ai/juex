@@ -215,7 +215,7 @@ implementation decisions live.
 | `internal/app` | Process composition, Session attachment, Turn admission, external input Session selection/delivery, application slash commands | Cobra grammar, HTTP parsing, Provider SDK behavior, Observation state machine |
 | `internal/cli` | Cobra command grammar, flags, terminal/JSON presentation, CLI exit categories | Shared runtime policy, Session persistence, Fleet lifecycle |
 | `internal/web` | Single-Agent HTTP/SSE transport, browser DTOs, in-process Session cache, cancellation and read-only persisted views | Shared domain decisions, Provider Protocol, Fleet registry policy |
-| `frontend/` | Browser state projection, visual presentation, DTO handling, interaction behavior | Backend policy, storage, Provider/runtime decisions |
+| `frontend/` | Transcript assembly, visual presentation, DTO mirroring, interaction behavior | Runtime-status projection, backend policy, storage, Provider/runtime decisions |
 
 ### Dependency Rules
 
@@ -769,13 +769,16 @@ generic through `Payload any`.
 Durable browser-visible runtime facts flow through `events.DurableSink`.
 `internal/app` subscribes one sink to the app bus, using the session as the
 journal adapter. The sink normalizes each event once, appends it to
-`events.jsonl`, then publishes the committed event to registered live delivery
-adapters such as the web broadcaster. If journal append fails, live delivery is
-skipped. Events marked `Transient` bypass the journal and are delivered only to
-current subscribers; `llm.output_delta` uses this path and its SSE frame omits
-an `id` so the browser retains the last durable replay cursor. The public SSE
-cursor remains the durable event ID; replay order is the JSONL line order after
-that ID.
+`events.jsonl`, then runs registered projections in deterministic order before
+handing their results to asynchronous delivery adapters. The runtime-status
+projection runs first; the web projection then combines the committed event
+with that exact resulting status snapshot in a `BrowserEvent`. If journal
+append fails, projection and live delivery are skipped. Events marked
+`Transient` bypass the journal and are delivered only to current subscribers;
+`llm.output_delta` uses this path and its SSE frame omits an `id` so the browser
+retains the last durable replay cursor. The public SSE cursor remains the
+durable event ID; replay rebuilds status in JSONL line order before filtering
+events after that ID.
 
 ### 3.4 Memory
 
@@ -1368,16 +1371,22 @@ turn admission and runtime turn execution remain outside the web layer.
 layered tool, turn, and session state machines documented in
 `docs/runtime-status.md`. `GET /api/sessions/<id>/status` returns a snapshot
 with the durable event cursor, and `GET /api/sessions/<id>/status/events`
-resumes full status snapshots after that cursor. The existing session event
-stream remains the conversation-content transport. `GET /api/status/events`
-exposes agent-level status snapshots for Fleet aggregation. Projection runs
-after durable journal append and before asynchronous live delivery.
+resumes full status snapshots after that cursor for non-browser consumers. The
+session event stream carries each normalized conversation event together with
+the authoritative status snapshot resulting from that event. `GET
+/api/status/events` exposes agent-level status snapshots for Fleet aggregation.
+Projection runs after durable journal append and before asynchronous live
+delivery.
 
 On the browser side, `frontend/src/lib/live-session-projection.ts` owns the
-live-session read model for SSE `BusEvent` facts, optimistic turns, pending
-input, compact markers, tool output deltas, usage snapshots, and turn-status
-reconciliation. `frontend/src/pages/Session.tsx` remains the route adapter for
-fetching, EventSource subscription, timers, navigation, and rendering.
+transcript read model for SSE `BrowserEvent` facts: optimistic messages,
+pending-input presentation, compact markers, tool output deltas, and final
+response assembly. It does not reconstruct turn, tool, usage, or session
+lifecycle. `frontend/src/pages/Session.tsx` fetches the initial authoritative
+snapshot, opens the transcript stream from its cursor, replaces status from
+each event, and then applies the transcript payload. Every EventSource open
+also refreshes the snapshot for restart recovery; an intervening streamed
+snapshot invalidates the older refresh response.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
@@ -1419,7 +1428,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/status` | authoritative layered runtime-status snapshot with event cursor |
 | GET | `/api/sessions/<id>/status/events` | resumable full runtime-status snapshot SSE stream after a cursor |
-| GET | `/api/sessions/<id>/events` | SSE stream (`?since=` replays from events.jsonl) |
+| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=` replays transcript events with resulting status) |
 | GET | `/api/observables` | list workspace Observables with runtime status |
 | POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |

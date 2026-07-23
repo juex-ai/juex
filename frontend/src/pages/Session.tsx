@@ -143,7 +143,6 @@ import {
   interrupt,
   startTurn,
   subscribeEvents,
-  subscribeSessionStatus,
   uploadSessionAttachment,
 } from "@/api";
 import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
@@ -256,14 +255,11 @@ export function Session() {
   }, [composerOverlayNode]);
 
   useEffect(() => {
-    const state = location.state as InitialCommandState;
-    const activeTurnID = state?.activeTurnID;
     controller.setRoute(id);
-    controller.resetForRoute({ activeTurnID });
+    controller.resetForRoute();
     setDraft("");
     // location.state is read only on session entry; clearing it later must not
     // reset live projection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controller, id]);
 
   useEffect(() => {
@@ -274,7 +270,7 @@ export function Session() {
     });
   }, [controller, id]);
 
-  const canSubscribeSessionStatus = data ? sessionCanSend(data) : false;
+  const canSubscribeLiveSession = data ? sessionCanSend(data) : false;
 
   useEffect(() => {
     if (
@@ -282,7 +278,7 @@ export function Session() {
       !agent?.id ||
       !statusStore ||
       !agentRuntimeHealthy ||
-      !canSubscribeSessionStatus
+      !canSubscribeLiveSession
     ) {
       return;
     }
@@ -292,16 +288,20 @@ export function Session() {
       .then((snapshot) => {
         if (disposed) return;
         statusStore.setStatus(agent.id, snapshot);
-        unsubscribe = subscribeSessionStatus(id, {
+        unsubscribe = controller.subscribeLiveEvents(id, {
           since: snapshot.cursor,
+          loadStatus: () => getSessionStatus(id),
           onStatus: (next) => {
             if (disposed) return;
             statusStore.setStatus(agent.id, next);
           },
+          onStatusRefreshError: (error) => {
+            if (disposed) return;
+            console.error("refresh session status failed", error);
+          },
           onError: (event) => {
             if (disposed) return;
-            statusStore.clearStatus(agent.id, id);
-            console.error("session status stream failed", event);
+            console.error("session event stream failed", event);
           },
         });
       })
@@ -318,7 +318,8 @@ export function Session() {
   }, [
     agent?.id,
     agentRuntimeHealthy,
-    canSubscribeSessionStatus,
+    canSubscribeLiveSession,
+    controller,
     id,
     statusStore,
   ]);
@@ -329,15 +330,6 @@ export function Session() {
     if (!state?.command || !state.commandInput) return;
     controller.projectInitialCommandOnce(id, state.commandInput, state.command);
   }, [controller, data, id, location.state]);
-
-  // SSE subscription.
-  useEffect(() => {
-    if (!id || !data || !sessionCanSend(data) || !agentRuntimeHealthy) return;
-    return controller.subscribeLiveEvents(id);
-    // Keep this tied to send-access fields so projection-only data changes do
-    // not reopen the EventSource during active turns.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentRuntimeHealthy, controller, data?.kind, data?.active, id]);
 
   async function handleSend(
     prompt: string,
@@ -363,7 +355,10 @@ export function Session() {
     () => [...(data?.messages ?? []), ...projection.messages],
     [data?.messages, projection.messages],
   );
-  const groups = useMemo(() => messagesToGroups(messages), [messages]);
+  const groups = useMemo(
+    () => messagesToGroups(messages, runtimeStatus?.tools),
+    [messages, runtimeStatus?.tools],
+  );
   const runtimeTurnState = runtimeStatus?.turn?.state;
   const transcriptItems = useMemo(
     () =>
@@ -1471,7 +1466,7 @@ function ThinkingProcessRow({
 function ToolBatchProcessRow({ tools }: { tools: ToolDisplayUnit[] }) {
   const title = formatToolBatchTitle(tools.map(toolProcessName));
   const status = aggregateToolProcessStatus(
-    tools.map((tool) => toolState(tool.use, tool.result)),
+    tools.map((tool) => toolState(tool.use, tool.result, tool.state)),
   );
 
   return (
@@ -1499,7 +1494,7 @@ function ToolProcessRow({
   nested?: boolean;
   tool: ToolDisplayUnit;
 }) {
-  const state = toolState(tool.use, tool.result);
+  const state = toolState(tool.use, tool.result, tool.state);
   const status = toolProcessStatus(state);
   const name = toolProcessName(tool);
   const hasContent = Boolean(tool.use || tool.result);

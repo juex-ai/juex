@@ -31,11 +31,14 @@ test("frontend projects backend browser event fixture stream", () => {
     effects.push(...result.effects);
   }
 
-  assert.equal(state.tokenUsage?.input_tokens, 10);
-  assert.equal(state.contextUsage?.total_tokens, 40);
-  assert.equal(state.compactActive, false);
+  assert.equal(events.at(-1)?.status.token_usage.input_tokens, 10);
+  assert.equal(events.at(-1)?.status.context_usage?.total_tokens, 40);
+  assert.equal(events.at(-1)?.status.turn?.phase, "tool_batch");
 
-  const groups = messagesToGroups(state.messages);
+  const groups = messagesToGroups(
+    state.messages,
+    events.find((event) => event.type === "tool.completed")?.status.tools,
+  );
   const toolUnit = groups
     .flatMap((group) => group.units)
     .find(
@@ -46,6 +49,7 @@ test("frontend projects backend browser event fixture stream", () => {
   if (toolUnit?.kind === "tool") {
     assert.equal(toolUnit.use?.tool_name, "exec_command");
     assert.equal(toolUnit.result?.content, "hi\n");
+    assert.equal(toolUnit.state, "completed");
   }
 
   assert.ok(
@@ -94,7 +98,6 @@ test("pending promotion removes the queued item and starts its live turn", () =>
   );
 
   assert.equal(result.state.queuedInput.items.length, 0);
-  assert.equal(result.state.turnActive, true);
   assert.ok(
     result.state.messages.some(
       (message) =>
@@ -153,21 +156,9 @@ test("promoted turn start does not consume an identical next queued item", () =>
   );
 });
 
-test("compact completion projects the post-compaction context usage", () => {
-  const initial = {
-    ...createLiveSessionProjection(),
-    contextUsage: {
-      model: "model",
-      context_window: 1000,
-      input_tokens: 900,
-      output_tokens: 0,
-      total_tokens: 900,
-    },
-    compactActive: true,
-  };
-
+test("compact completion leaves runtime state to the attached backend snapshot", () => {
   const result = projectLiveSessionEvent(
-    initial,
+    createLiveSessionProjection(),
     {
       id: "compact-completed-1",
       type: "context.compact.completed",
@@ -197,8 +188,11 @@ test("compact completion projects the post-compaction context usage", () => {
     },
   );
 
-  assert.equal(result.state.contextUsage?.total_tokens, 40);
-  assert.equal(result.state.compactActive, false);
+  assert.equal("contextUsage" in result.state, false);
+  assert.equal("compactActive" in result.state, false);
+  assert.deepEqual(result.effects, [
+    { type: "refresh", preserveLiveMessages: true },
+  ]);
 });
 
 function readJSON(name: string): unknown {

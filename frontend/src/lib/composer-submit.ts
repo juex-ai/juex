@@ -38,11 +38,9 @@ export function composerSubmitAction({
 }): ComposerSubmitAction {
   if (!status) return "loading";
   const hasInput = text.trim().length > 0 || attachmentCount > 0;
-  const turnActive =
-    status?.turn?.state === "admitted" ||
-    status?.turn?.state === "active";
+  const working = status.session.working;
   const canInterrupt = status?.turn?.can_interrupt !== false;
-  if (!hasInput) return turnActive && canInterrupt ? "stop" : "empty";
+  if (!hasInput) return working && canInterrupt ? "stop" : "empty";
   if (status && !status.session.can_accept_input) return "queue-full";
-  return turnActive ? "queue" : "send";
+  return working ? "queue" : "send";
 }

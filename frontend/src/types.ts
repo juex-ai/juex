@@ -358,6 +358,7 @@ interface BrowserEventBase<TType extends BrowserEventType> {
   type: TType;
   ts: string;
   turn_id?: string;
+  status: AgentRuntimeStatusSnapshot;
 }
 
 export interface TurnStartedPayload {

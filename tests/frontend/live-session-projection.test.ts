@@ -27,7 +27,6 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
     turn_id: "turn-1",
     payload: { input: "run command" },
   });
-  assert.equal(state.turnActive, true);
   assert.equal(state.messages.length, 2);
 
   state = apply(state, {
@@ -51,8 +50,6 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
       },
     },
   });
-  assert.deepEqual(state.tokenUsage, { input_tokens: 10, output_tokens: 5 });
-  assert.equal(state.contextUsage?.total_tokens, 15);
   assert.equal(state.messages[1].pending, false);
   assert.equal(state.messages[1].created_at, "2026-06-15T00:00:01Z");
 
@@ -68,8 +65,6 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
       timeout_seconds: 30,
     },
   });
-  assert.deepEqual(state.status, { kind: "tool", name: "exec_command" });
-
   state = apply(state, {
     id: "e4",
     type: "tool.output_delta",
@@ -104,7 +99,6 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
       preview: "hi",
     },
   });
-  assert.deepEqual(state.status, { kind: "running" });
   liveResult = state.messages.at(-1)?.blocks?.[0];
   if (liveResult?.type === "tool_result") {
     assert.equal(liveResult.content, "hi");
@@ -130,12 +124,7 @@ test("projectLiveSessionEvent projects a live turn with tool deltas and completi
       token_usage: { input_tokens: 10, output_tokens: 5 },
     },
   });
-  assert.equal(completed.state.turnActive, false);
-  assert.deepEqual(completed.state.status, { kind: "done" });
-  assert.deepEqual(completed.effects, [
-    { type: "refresh" },
-    { type: "scheduleIdleStatus" },
-  ]);
+  assert.deepEqual(completed.effects, [{ type: "refresh" }]);
 });
 
 test("projectLiveSessionEvent accumulates LLM deltas and reconciles the final response", () => {
@@ -636,8 +625,6 @@ test("projectLiveSessionEvent keeps drained input visible after the turn errors"
   });
 
   assert.equal(state.queuedInput.items.length, 0);
-  assert.equal(state.turnActive, false);
-  assert.deepEqual(state.status, { kind: "error", detail: "cancelled by user" });
   assert.equal(
     state.messages.some(
       (message) =>
@@ -666,7 +653,6 @@ test("projectLiveSessionEvent projects compact start and completion", () => {
       tail_turns: 2,
     },
   });
-  assert.equal(state.compactActive, true);
   assert.equal(state.messages.length, 1);
   assert.equal(state.messages[0].pending, true);
   state = apply(state, {
@@ -684,9 +670,6 @@ test("projectLiveSessionEvent projects compact start and completion", () => {
       will_retry: true,
     },
   });
-  assert.equal(state.compactActive, true);
-  assert.equal(state.turnActive, false);
-
   state = apply(state, {
     id: "e-summary-retry",
     type: "context.compact.summary_retry",
@@ -700,9 +683,6 @@ test("projectLiveSessionEvent projects compact start and completion", () => {
       max_output_tokens: 4096,
     },
   });
-  assert.equal(state.compactActive, true);
-  assert.equal(state.turnActive, false);
-
   const completed = projectLiveSessionEvent(state, {
     id: "e2",
     type: "context.compact.completed",
@@ -722,12 +702,9 @@ test("projectLiveSessionEvent projects compact start and completion", () => {
       keep_recent_tokens: 100,
     },
   });
-  assert.equal(completed.state.compactActive, false);
   assert.equal(completed.state.messages.length, 0);
-  assert.deepEqual(completed.state.status, { kind: "done" });
   assert.deepEqual(completed.effects, [
     { type: "refresh", preserveLiveMessages: true },
-    { type: "scheduleIdleStatus" },
   ]);
 });
 
@@ -776,13 +753,9 @@ test("projectLiveSessionEvent keeps duplicate tool.requested and queue drops sta
     payload: { count: 1, pending_count: 0, max_pending_inputs: 4 },
   });
   assert.equal(state.queuedInput.items.length, 0);
-  assert.deepEqual(state.status, {
-    kind: "error",
-    detail: "1 pending input(s) dropped",
-  });
 });
 
-test("projectLiveSessionEvent uses pending_input.rejected reason", () => {
+test("projectLiveSessionEvent leaves pending rejection status to the backend", () => {
   const state = apply(createLiveSessionProjection(), {
     id: "e1",
     type: "pending_input.rejected",
@@ -796,11 +769,7 @@ test("projectLiveSessionEvent uses pending_input.rejected reason", () => {
     },
   });
 
-  assert.equal(state.turnActive, true);
-  assert.deepEqual(state.status, {
-    kind: "error",
-    detail: "queue disabled for this session",
-  });
+  assert.deepEqual(state, createLiveSessionProjection());
 });
 
 test("projectLiveSessionEvent accepts errored tool contract fields", () => {
@@ -846,7 +815,6 @@ test("projectLiveSessionEvent accepts errored tool contract fields", () => {
   assert.equal(result?.tool_use_id, "tool-1");
   assert.equal(result?.content, "exit status 7");
   assert.equal(result?.is_error, true);
-  assert.deepEqual(state.status, { kind: "running" });
 });
 
 test("projectLiveSessionEvent projects hook.trace as weak messages", () => {

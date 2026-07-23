@@ -22,39 +22,23 @@ import {
 import type {
   BrowserEvent,
   Block,
-  ContextUsage,
   MediaRef,
   Message,
-  TokenUsage,
 } from "../types.ts";
-
-export type LiveSessionStatus =
-  | { kind: "idle" }
-  | { kind: "running" }
-  | { kind: "pending"; count: number }
-  | { kind: "tool"; name: string }
-  | { kind: "done" }
-  | { kind: "error"; detail?: string };
 
 export type LiveSessionProjection = {
   messages: Message[];
-  tokenUsage: TokenUsage | null;
-  contextUsage: ContextUsage | null;
   queuedInput: QueuedInputState;
   // Empty slots reserve announced drain positions missing from local queue state.
   drainingQueuedInputs: Array<QueuedInput | undefined>;
   compactAdmissionTurnID: string | null;
-  turnActive: boolean;
-  activeTurnID: string | null;
-  settledTurnID: string | null;
-  compactActive: boolean;
   compactCommandInputs: Record<string, string>;
-  status: LiveSessionStatus;
 };
 
-export type LiveSessionProjectionEffect =
-  | { type: "refresh"; preserveLiveMessages?: boolean }
-  | { type: "scheduleIdleStatus" };
+export type LiveSessionProjectionEffect = {
+  type: "refresh";
+  preserveLiveMessages?: boolean;
+};
 
 export type LiveSessionProjectionResult = {
   state: LiveSessionProjection;
@@ -64,35 +48,21 @@ export type LiveSessionProjectionResult = {
 export function createLiveSessionProjection(): LiveSessionProjection {
   return {
     messages: [],
-    tokenUsage: null,
-    contextUsage: null,
     queuedInput: createQueuedInputState(),
     drainingQueuedInputs: [],
     compactAdmissionTurnID: null,
-    turnActive: false,
-    activeTurnID: null,
-    settledTurnID: null,
-    compactActive: false,
     compactCommandInputs: {},
-    status: { kind: "idle" },
   };
 }
 
-export function resetLiveSessionProjection(opts?: {
-  activeTurnID?: string;
-}): LiveSessionProjection {
-  return {
-    ...createLiveSessionProjection(),
-    turnActive: Boolean(opts?.activeTurnID),
-    activeTurnID: opts?.activeTurnID ?? null,
-    status: opts?.activeTurnID ? { kind: "running" } : { kind: "idle" },
-  };
+export function resetLiveSessionProjection(): LiveSessionProjection {
+  return createLiveSessionProjection();
 }
 
 export function clearLiveSessionTranscript(
   state: LiveSessionProjection,
 ): LiveSessionProjection {
-  return { ...state, messages: [], tokenUsage: null, contextUsage: null };
+  return { ...state, messages: [] };
 }
 
 export function clearQueuedInputs(
@@ -120,25 +90,6 @@ export function clearLocalCompactMessages(
     ...state,
     messages: state.messages.filter((message) => !isLocalCompactMessage(message)),
   };
-}
-
-export function markProjectionDone(
-  state: LiveSessionProjection,
-): LiveSessionProjection {
-  return { ...state, status: { kind: "done" } };
-}
-
-export function markProjectionIdle(
-  state: LiveSessionProjection,
-): LiveSessionProjection {
-  return { ...state, status: { kind: "idle" } };
-}
-
-export function markProjectionError(
-  state: LiveSessionProjection,
-  detail?: string,
-): LiveSessionProjection {
-  return { ...state, status: { kind: "error", detail } };
 }
 
 export function projectCompactCommand(
@@ -193,9 +144,6 @@ export function projectOptimisticTurn(
       "optimistic",
       attachments,
     ),
-    turnActive: true,
-    activeTurnID: turnID ?? state.activeTurnID,
-    status: { kind: "running" },
   };
 }
 
@@ -215,8 +163,6 @@ export function projectQueuedInput(
       pendingCount,
       attachments,
     ),
-    turnActive: true,
-    status: { kind: "pending", count: pendingCount },
   };
 }
 
@@ -254,8 +200,6 @@ export function projectPendingCompact(
   return {
     ...state,
     messages,
-    compactActive: true,
-    status: { kind: "running" },
   };
 }
 
@@ -294,38 +238,25 @@ export function projectLiveSessionEvent(
           "event",
           consumed.item?.attachments,
         ),
-        turnActive: true,
-        status: { kind: "running" },
       };
       break;
     }
     case "llm.requested":
-      next = { ...next, turnActive: true, status: { kind: "running" } };
       break;
     case "llm.output_delta":
-      next = {
-        ...applyAssistantOutputDelta(next, event),
-        turnActive: true,
-        status: { kind: "running" },
-      };
+      next = applyAssistantOutputDelta(next, event);
       break;
     case "llm.responded":
-      next = {
-        ...applyAssistantResponse(next, event),
-        tokenUsage: tokenUsageFromEvent(event) ?? next.tokenUsage,
-        contextUsage: event.payload.context_usage ?? next.contextUsage,
-        turnActive: true,
-        status: { kind: "running" },
-      };
+      next = applyAssistantResponse(next, event);
       break;
     case "llm.retry":
-      next = event.payload.purpose === "compaction"
-        ? { ...next, compactActive: true, status: { kind: "running" } }
-        : {
-            ...resetPendingAssistantOutput(next, event.turn_id, event.payload.will_retry),
-            turnActive: true,
-            status: { kind: "running" },
-          };
+      if (event.payload.purpose !== "compaction") {
+        next = resetPendingAssistantOutput(
+          next,
+          event.turn_id,
+          event.payload.will_retry,
+        );
+      }
       break;
     case "tool.requested": {
       const name = event.payload.name || "?";
@@ -338,17 +269,11 @@ export function projectLiveSessionEvent(
           input: event.payload.input ?? undefined,
           timeoutSeconds: event.payload.timeout_seconds,
         }),
-        turnActive: true,
-        status: { kind: "tool", name },
       };
       break;
     }
     case "tool.completed":
-      next = {
-        ...appendToolResult(next, event, false),
-        turnActive: true,
-        status: { kind: "running" },
-      };
+      next = appendToolResult(next, event, false);
       break;
     case "tool.output_delta":
       next = {
@@ -359,30 +284,19 @@ export function projectLiveSessionEvent(
           toolName: event.payload.name || "exec_command",
           text: event.payload.text,
         }),
-        turnActive: true,
-        status: { kind: "tool", name: event.payload.name || "exec_command" },
       };
       break;
     case "tool.errored":
-      next = {
-        ...appendToolResult(next, event, true),
-        turnActive: true,
-        status: { kind: "running" },
-      };
+      next = appendToolResult(next, event, true);
       break;
     case "hook.started":
-      next = { ...next, turnActive: true, status: { kind: "running" } };
-      break;
     case "hook.completed":
     case "hook.errored":
-      next = { ...next, turnActive: true, status: { kind: "running" } };
       break;
     case "hook.trace":
       next = {
         ...next,
         messages: appendHookTraceMessage(next.messages, event),
-        turnActive: true,
-        status: { kind: "running" },
       };
       break;
     case "pending_input.queued":
@@ -395,11 +309,6 @@ export function projectLiveSessionEvent(
       break;
     case "pending_input.draining":
       next = reserveDrainingQueuedInputs(next, event.payload.count);
-      next = {
-        ...next,
-        turnActive: true,
-        status: { kind: "pending", count: event.payload.pending_count },
-      };
       break;
     case "pending_input.promoted": {
       const promoted = drainQueuedInputState(next.queuedInput, 1);
@@ -417,74 +326,34 @@ export function projectLiveSessionEvent(
               item.attachments,
             )
           : next.messages,
-        turnActive: true,
-        status: { kind: "running" },
       };
       break;
     }
     case "pending_input.drained":
       next = drainQueuedInputs(next, event.payload.count, event.turn_id);
-      next = { ...next, turnActive: true, status: { kind: "running" } };
       break;
     case "pending_input.dropped":
       next = dropQueuedInputs(next, event.payload.count);
-      next = markProjectionError(
-        next,
-        `${event.payload.count} pending input(s) dropped`,
-      );
       break;
     case "pending_input.rejected":
-      next = {
-        ...markProjectionError(
-          next,
-          event.payload.reason || "pending input queue full",
-        ),
-        turnActive: true,
-      };
       break;
     case "turn.completed":
       next = settleTerminalQueuedInputs(next, event.turn_id);
-      next = {
-        ...markProjectionDone(next),
-        turnActive: false,
-        activeTurnID: null,
-        settledTurnID: event.turn_id ?? next.settledTurnID,
-      };
-      effects.push({ type: "refresh" }, { type: "scheduleIdleStatus" });
+      effects.push({ type: "refresh" });
       break;
     case "turn.errored":
       next = settleTerminalQueuedInputs(next, event.turn_id);
-      next = {
-        ...markProjectionError(next, event.payload.error),
-        turnActive: false,
-        activeTurnID: null,
-        settledTurnID: event.turn_id ?? next.settledTurnID,
-      };
       effects.push({ type: "refresh" });
       break;
     case "context.compact.started":
       next = projectPendingCompact(next);
       break;
     case "context.compact.completed":
-      next = {
-        ...clearLocalCompactMessages(next),
-        contextUsage: event.payload.context_usage ?? next.contextUsage,
-        compactActive: false,
-      };
+      next = clearLocalCompactMessages(next);
       effects.push({ type: "refresh", preserveLiveMessages: true });
-      if (!next.turnActive && next.queuedInput.items.length === 0) {
-        next = markProjectionDone(next);
-        effects.push({ type: "scheduleIdleStatus" });
-      }
       break;
     case "context.compact.errored":
-      next = {
-        ...markProjectionError(
-          clearLocalCompactMessages(next),
-          event.payload.error,
-        ),
-        compactActive: false,
-      };
+      next = clearLocalCompactMessages(next);
       effects.push({ type: "refresh", preserveLiveMessages: true });
       break;
     case "context.compact.summary_retry":
@@ -494,9 +363,6 @@ export function projectLiveSessionEvent(
       break;
   }
 
-  if (next.turnActive && event.turn_id) {
-    next = { ...next, activeTurnID: event.turn_id };
-  }
   return { state: next, effects };
 }
 
@@ -868,12 +734,4 @@ function appendHookTraceMessage(
       blocks: [{ type: "text", text }],
     },
   ];
-}
-
-function tokenUsageFromEvent(
-  event: Extract<BrowserEvent, { type: "llm.responded" }>,
-): TokenUsage | null {
-  const usage = event.payload.token_usage ?? event.payload.usage;
-  if (!usage) return null;
-  return usage;
 }

@@ -2721,7 +2721,8 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 		}
 	}()
 
-	// Read until we see one full SSE frame containing turn.started.
+	// Read until we see one full SSE frame containing turn.started and its
+	// authoritative resulting status.
 	buf := make([]byte, 4096)
 	deadline := time.Now().Add(2 * time.Second)
 	collected := ""
@@ -2729,7 +2730,9 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			collected += string(buf[:n])
-			if strings.Contains(collected, "turn.started") {
+			if strings.Contains(collected, "turn.started") &&
+				strings.Contains(collected, `"status":`) &&
+				strings.Contains(collected, `"working":true`) {
 				return
 			}
 		}
@@ -2737,7 +2740,7 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 			break
 		}
 	}
-	t.Fatalf("did not receive turn.started; collected:\n%s", collected)
+	t.Fatalf("did not receive turn.started with runtime status; collected:\n%s", collected)
 }
 
 func TestAgentAPIHandlerDoesNotServeBrowserFallback(t *testing.T) {

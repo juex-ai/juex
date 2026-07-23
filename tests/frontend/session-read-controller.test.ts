@@ -12,6 +12,7 @@ import {
 } from "../../frontend/src/lib/session-read-state.ts";
 import type {
   ActiveContextSnapshot,
+  AgentRuntimeStatusSnapshot,
   BrowserEvent,
   MediaRef,
   Message,
@@ -79,6 +80,89 @@ test("live events are ignored after route changes or subscription cleanup", () =
   assert.equal(latestState.projection.messages.length, 0);
 });
 
+test("live events replace canonical status from the requested cursor", () => {
+  let onEvent: (event: BrowserEvent) => void = () => {};
+  let subscribedSince: string | undefined;
+  let projectedStatus: AgentRuntimeStatusSnapshot | undefined;
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      subscribedSince = opts.since;
+      onEvent = opts.onEvent;
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.subscribeLiveEvents("s1", {
+    since: "snapshot-1",
+    onStatus: (status) => {
+      projectedStatus = status;
+    },
+  });
+  onEvent(turnStartedEvent("current"));
+
+  assert.equal(subscribedSince, "snapshot-1");
+  assert.equal(projectedStatus?.cursor, "event-current");
+  assert.equal(projectedStatus?.session.working, true);
+});
+
+test("stream reopen refreshes status when no newer event arrives", async () => {
+  let onOpen: () => void = () => {};
+  let projectedStatus: AgentRuntimeStatusSnapshot | undefined;
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      onOpen = opts.onOpen ?? (() => {});
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.subscribeLiveEvents("s1", {
+    loadStatus: async () => runtimeStatus("reconnected"),
+    onStatus: (status) => {
+      projectedStatus = status;
+    },
+  });
+  onOpen();
+  await Promise.resolve();
+
+  assert.equal(projectedStatus?.cursor, "reconnected");
+});
+
+test("stream event wins over an older reopen status request", async () => {
+  let onOpen: () => void = () => {};
+  let onEvent: (event: BrowserEvent) => void = () => {};
+  let resolveStatus: (status: AgentRuntimeStatusSnapshot) => void = () => {};
+  const projectedCursors: Array<string | undefined> = [];
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      onOpen = opts.onOpen ?? (() => {});
+      onEvent = opts.onEvent;
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.subscribeLiveEvents("s1", {
+    loadStatus: () =>
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      }),
+    onStatus: (status) => {
+      projectedCursors.push(status.cursor);
+    },
+  });
+  onOpen();
+  onEvent(turnStartedEvent("newer"));
+  resolveStatus(runtimeStatus("older"));
+  await Promise.resolve();
+
+  assert.deepEqual(projectedCursors, ["event-newer"]);
+});
+
 test("submitPrompt ignores late startTurn results after route changes", async () => {
   let latestState = createSessionReadState();
   let resolveStart: (value: StartTurnResponse) => void = () => {};
@@ -127,7 +211,7 @@ test("submitPrompt ignores late startTurn failures after route changes", async (
 
   assert.equal(await submit, false);
   assert.equal(loggedErrors, 0);
-  assert.equal(latestState.projection.status.kind, "idle");
+  assert.equal(latestState.projection.messages.length, 0);
 });
 
 test("submitPrompt forwards attachments and projects optimistic image blocks", async () => {
@@ -271,12 +355,39 @@ function activeContext(): ActiveContextSnapshot {
 }
 
 function turnStartedEvent(input: string): BrowserEvent {
+  const cursor = `event-${input}`;
   return {
-    id: `event-${input}`,
+    id: cursor,
     type: "turn.started",
     ts: "2026-06-15T00:00:00Z",
     turn_id: `turn-${input}`,
     payload: { input },
+    status: runtimeStatus(cursor),
+  };
+}
+
+function runtimeStatus(cursor: string): AgentRuntimeStatusSnapshot {
+  return {
+    cursor,
+    session: {
+      id: "s1",
+      state: "turn_active",
+      working: true,
+      pending_count: 0,
+      max_pending_inputs: 4,
+      can_accept_input: true,
+    },
+    turn: {
+      id: "turn-1",
+      state: "active",
+      phase: "provider_iteration",
+      streaming: true,
+      can_interrupt: true,
+      started_at: "",
+      updated_at: "",
+    },
+    tools: [],
+    token_usage: { input_tokens: 0, output_tokens: 0 },
   };
 }
 

@@ -26,14 +26,14 @@ status cursor.
 
 ## Snapshot And Stream
 
-Session consumers use this sequence:
+General session-status consumers use this sequence:
 
 1. `GET /api/sessions/<id>/status`
 2. read the snapshot `cursor`
 3. subscribe to `GET /api/sessions/<id>/status/events?since=<cursor>`
 4. replace local state with every later full snapshot
 
-The Web SSE adapter resolves `Last-Event-ID` before `since` on reconnect and
+The status SSE adapter resolves `Last-Event-ID` before `since` on reconnect and
 opens the runtime stream after that single cursor. The stream presents replay
 and live updates through one sequential `Next` operation. A same-cursor
 subscription may receive the current snapshot again because transient
@@ -57,8 +57,13 @@ Fleet's aggregate stream keeps its separate
 semantics cover a roster of Agents and are not delegated to the single-value
 status stream.
 
-`GET /api/sessions/<id>/events` remains the transcript stream. It does not
-provide runtime status.
+`GET /api/sessions/<id>/events` is the browser transcript stream. Each
+`BrowserEvent` carries both the normalized transcript event and the full
+runtime-status snapshot that results from applying that event. Durable replay
+rebuilds the status projection from the journal before filtering by `since`, so
+replayed and uninterrupted delivery produce the same snapshots. The status is
+still projected by `internal/runtime.StatusStore`; the browser event adapter
+only reads and transports that authoritative result.
 
 ## Tool Calls
 
@@ -155,14 +160,25 @@ aggregate Fleet SSE stream.
 ## Browser Consumption
 
 The browser uses one `AgentViewModelStore` for Fleet rows and per-session
-runtime snapshots. The Session page fetches a canonical snapshot before
-opening its status stream. Status-dependent submission remains disabled until
-that snapshot is available.
+runtime snapshots. The Session page fetches a canonical snapshot, reads its
+cursor, and then opens the transcript stream from that cursor. Every
+`BrowserEvent` atomically replaces the local runtime snapshot before its
+transcript payload is applied. Status-dependent submission remains disabled
+until the initial snapshot is available.
+
+Native `EventSource` reconnects automatically. Each successful stream open
+also refreshes the status snapshot so an out-of-band restart recovery is
+visible even when no new transcript event exists. If a `BrowserEvent` arrives
+while that refresh is in flight, the event wins and the older refresh result is
+discarded. A transient stream error retains the last usable snapshot until the
+connection recovers or Agent health marks the runtime unavailable.
 
 The composer derives send, queue, stop, and queue-full behavior only from the
 canonical snapshot. The transcript projection may optimistically render
-submitted messages and apply transcript SSE events, but it is not a fallback
-runtime-status source.
+submitted messages and assemble transcript SSE events, but it never derives
+runtime status. Tool rendering reads the authoritative tool lifecycle from the
+same snapshot and falls back to persisted transcript results only for
+historical entries no longer present in current runtime state.
 
 Runtime `last_error` is the preferred visible failure. A local request failure
 is shown only when the runtime did not publish an error.

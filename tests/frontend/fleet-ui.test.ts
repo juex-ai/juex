@@ -170,8 +170,8 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
-    /getSessionStatus\(id\)[\s\S]*subscribeSessionStatus\(id,[\s\S]*statusStore\.setStatus/,
-    "session runtime state must restore from a snapshot before subscribing",
+    /getSessionStatus\(id\)[\s\S]*controller\.subscribeLiveEvents\(id,[\s\S]*onStatus:[\s\S]*statusStore\.setStatus/,
+    "session runtime state must restore from a snapshot before transcript events replace it",
   );
   assert.match(
     sessionSource,
@@ -195,8 +195,8 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
-    /getSessionStatus\(id\)[\s\S]*subscribeSessionStatus\(id/,
-    "the session must load a canonical snapshot before opening its status stream",
+    /getSessionStatus\(id\)[\s\S]*controller\.subscribeLiveEvents\(id/,
+    "the session must load a canonical snapshot before opening its projected transcript stream",
   );
   assert.match(
     sessionSource,

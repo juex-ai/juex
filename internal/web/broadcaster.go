@@ -3,8 +3,6 @@ package web
 import (
 	"sync"
 	"time"
-
-	"github.com/juex-ai/juex/internal/events"
 )
 
 // broadcasterBufferSize bounds how far behind a single SSE client can
@@ -19,7 +17,7 @@ const slowClientTimeout = 5 * time.Second
 
 // subscriber is one connected SSE consumer.
 type subscriber struct {
-	ch     chan events.Event
+	ch     chan BrowserEvent
 	done   chan struct{}
 	parent *broadcaster
 	mu     sync.Mutex
@@ -50,21 +48,26 @@ func (s *subscriber) drop() {
 // subscriber is dropped instead of stalling everyone else.
 type broadcaster struct {
 	mu     sync.Mutex
+	cond   *sync.Cond
 	subs   map[*subscriber]struct{}
+	queue  []BrowserEvent
+	done   chan struct{}
 	closed bool
 }
 
 func newBroadcaster() *broadcaster {
-	return &broadcaster{subs: map[*subscriber]struct{}{}}
-}
-
-func (b *broadcaster) Publish(e events.Event) {
-	b.publish(e)
+	b := &broadcaster{
+		subs: map[*subscriber]struct{}{},
+		done: make(chan struct{}),
+	}
+	b.cond = sync.NewCond(&b.mu)
+	go b.run()
+	return b
 }
 
 func (b *broadcaster) subscribe() *subscriber {
 	s := &subscriber{
-		ch:     make(chan events.Event, broadcasterBufferSize),
+		ch:     make(chan BrowserEvent, broadcasterBufferSize),
 		done:   make(chan struct{}),
 		parent: b,
 		live:   true,
@@ -75,11 +78,9 @@ func (b *broadcaster) subscribe() *subscriber {
 	return s
 }
 
-// unsubscribe removes s from the broadcaster. The subscriber's channel
-// is intentionally NOT closed here — only (*broadcaster).close closes
-// channels, so publish goroutines never panic on send-to-closed.
-// Consumers must observe s.isLive() or their request ctx.Done() to
-// detect they've been dropped (e.g. by the slow-client path).
+// unsubscribe removes s from the broadcaster. The data channel is
+// intentionally never closed, so publish goroutines cannot panic on a
+// send-to-closed race. Consumers observe s.done or their request context.
 func (b *broadcaster) unsubscribe(s *subscriber) {
 	b.mu.Lock()
 	delete(b.subs, s)
@@ -87,7 +88,39 @@ func (b *broadcaster) unsubscribe(s *subscriber) {
 	s.drop()
 }
 
-func (b *broadcaster) publish(e events.Event) {
+func (b *broadcaster) enqueue(event BrowserEvent) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
+	b.queue = append(b.queue, event)
+	b.cond.Signal()
+}
+
+func (b *broadcaster) run() {
+	defer close(b.done)
+	for {
+		b.mu.Lock()
+		for len(b.queue) == 0 && !b.closed {
+			b.cond.Wait()
+		}
+		if b.closed {
+			b.mu.Unlock()
+			return
+		}
+		event := b.queue[0]
+		b.queue[0] = BrowserEvent{}
+		b.queue = b.queue[1:]
+		if len(b.queue) == 0 {
+			b.queue = nil
+		}
+		b.mu.Unlock()
+		b.publish(event)
+	}
+}
+
+func (b *broadcaster) publish(e BrowserEvent) {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -108,7 +141,7 @@ func (b *broadcaster) publish(e events.Event) {
 
 // deliver tries to push e to s.ch with a short timeout. Returns false
 // if the subscriber is too slow.
-func (b *broadcaster) deliver(s *subscriber, e events.Event) bool {
+func (b *broadcaster) deliver(s *subscriber, e BrowserEvent) bool {
 	select {
 	case s.ch <- e:
 		return true
@@ -135,10 +168,13 @@ func (b *broadcaster) close() {
 		return
 	}
 	b.closed = true
+	b.queue = nil
 	subs := b.subs
 	b.subs = map[*subscriber]struct{}{}
+	b.cond.Signal()
 	b.mu.Unlock()
 	for s := range subs {
 		s.drop()
 	}
+	<-b.done
 }

@@ -4,8 +4,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/juex-ai/juex/internal/events"
 )
 
 func TestBroadcaster_FansEventsToAllSubscribers(t *testing.T) {
@@ -16,8 +14,8 @@ func TestBroadcaster_FansEventsToAllSubscribers(t *testing.T) {
 	c := b.subscribe()
 	defer c.unsubscribe()
 
-	b.publish(events.Event{Type: "turn.started"})
-	b.publish(events.Event{Type: "turn.completed"})
+	b.publish(BrowserEvent{Type: "turn.started"})
+	b.publish(BrowserEvent{Type: "turn.completed"})
 
 	for _, ch := range []*subscriber{a, c} {
 		got := []string{}
@@ -41,7 +39,7 @@ func TestBroadcaster_SlowSubscriberIsDropped(t *testing.T) {
 	slow := b.subscribe()
 	// never read from slow.ch
 	for i := 0; i < broadcasterBufferSize+10; i++ {
-		b.publish(events.Event{Type: "x"})
+		b.publish(BrowserEvent{Type: "x"})
 	}
 	// Give the broadcaster time to drop the slow subscriber.
 	deadline := time.Now().Add(time.Second)
@@ -59,7 +57,7 @@ func TestBroadcaster_UnsubscribeStopsDelivery(t *testing.T) {
 	defer b.close()
 	s := b.subscribe()
 	s.unsubscribe()
-	b.publish(events.Event{Type: "after-unsub"})
+	b.publish(BrowserEvent{Type: "after-unsub"})
 	select {
 	case e := <-s.ch:
 		t.Errorf("received after unsubscribe: %+v", e)
@@ -95,12 +93,12 @@ func TestBroadcaster_CloseDoesNotPanicDuringSlowDelivery(t *testing.T) {
 	b := newBroadcaster()
 	s := b.subscribe()
 	for i := 0; i < broadcasterBufferSize; i++ {
-		s.ch <- events.Event{Type: "buffered"}
+		s.ch <- BrowserEvent{Type: "buffered"}
 	}
 	panicCh := make(chan any, 1)
 	go func() {
 		defer func() { panicCh <- recover() }()
-		b.publish(events.Event{Type: "after-full"})
+		b.publish(BrowserEvent{Type: "after-full"})
 	}()
 	time.Sleep(10 * time.Millisecond)
 	b.close()

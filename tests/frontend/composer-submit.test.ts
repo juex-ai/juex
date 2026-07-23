@@ -25,6 +25,7 @@ function status(
     session: {
       id: "session-1",
       state,
+      working: active,
       pending_count: pendingCount,
       max_pending_inputs: maxPendingInputs,
       can_accept_input: pendingCount < maxPendingInputs,
