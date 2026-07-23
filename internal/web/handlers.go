@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -625,41 +624,20 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	var replayDeduper *browserReplayDeduplicator
 	since, replayRequested := sseResumeCursorWithPresence(r)
 	if replayRequested {
-		// Replay missed events from events.jsonl. The path comes from the
-		// session record so we never read outside the sessions dir.
-		var (
-			journalData []byte
-			seed        runtime.StatusSeed
-		)
-		err := as.app.ReadCommittedEvents(func() error {
-			return as.app.ReadSessionID(id, func(sess *session.Session) error {
-				var readErr error
-				journalData, readErr = os.ReadFile(
-					filepath.Join(sess.Dir, "events.jsonl"),
-				)
-				seed = runtime.StatusSeed{
-					SessionID:        sess.ID,
-					SessionAlias:     sess.Alias,
-					MaxPendingInputs: runtime.DefaultMaxPendingInput,
-				}
-				return readErr
-			})
-		})
+		replay, err := captureCommittedEventReplay(as.app, id)
 		if err == nil {
-			journal, replayErr := replaySince(bytes.NewReader(journalData), "")
+			journal, replayErr := replay.readJournal()
+			if closeErr := replay.Close(); closeErr != nil {
+				log.Printf("web: close events replay for %s: %v", id, closeErr)
+			}
 			if replayErr != nil {
 				log.Printf("web: events replay for %s: %v", id, replayErr)
 			}
-			var authoritative *runtime.StatusSnapshot
-			if as.app.Status != nil {
-				snapshot := as.app.Status.Snapshot()
-				authoritative = &snapshot
-			}
 			replayed, projectionErr := projectBrowserEvents(
-				seed,
+				replay.seed,
 				journal,
 				since,
-				authoritative,
+				replay.authoritative,
 			)
 			if projectionErr != nil {
 				log.Printf("web: browser projection replay for %s: %v", id, projectionErr)

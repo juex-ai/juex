@@ -779,11 +779,12 @@ append fails, projection and live delivery are skipped. Events marked
 retains the last durable replay cursor. The public SSE cursor remains the
 durable event ID; replay rebuilds status in JSONL line order before filtering
 events after that ID.
-Replay captures the journal bytes through `DurableSink.ReadCommitted`, which
-waits for every earlier synchronous projection and briefly blocks new commits.
-JSON decoding happens after releasing that barrier. This makes the replay
-snapshot and browser publish sequence comparable without holding the commit
-path during projection reconstruction.
+Replay opens the journal and captures its byte length through
+`DurableSink.ReadCommitted`, which waits for every earlier synchronous
+projection and briefly blocks new commits. Reading and JSON decoding use that
+fixed prefix after releasing the barrier. This makes the replay snapshot and
+browser publish sequence comparable without holding the commit path during
+disk reads or projection reconstruction.
 
 ### 3.4 Memory
 
@@ -1396,10 +1397,11 @@ status loading, and an intervening streamed snapshot invalidates an older
 refresh response. The transcript cursor is captured before its message page is
 read so concurrent events may replay but cannot be skipped. The server deduplicates
 queued durable frames already covered by the replay tail before continuing live
-delivery. It captures journal bytes behind the durable commit barrier, ensuring
-every event in the snapshot has completed browser projection. Private
-broadcaster publish sequences then define the handoff boundary from durable
-replay events actually queued after this subscriber joined.
+delivery. It captures an open journal descriptor and byte boundary behind the
+durable commit barrier, ensuring every event in the snapshot has completed
+browser projection, then reads that fixed prefix after releasing the barrier.
+Private broadcaster publish sequences then define the handoff boundary from
+durable replay events actually queued after this subscriber joined.
 Transient frames before those duplicates are dropped, while events outside the
 replay snapshot pass immediately. This prevents an older streaming snapshot
 from following a replayed terminal event without stalling fresh output behind

@@ -78,9 +78,11 @@ per Session route; later transcript refreshes may advance their response cursor
 without restarting the existing EventSource or clearing its latest status.
 Because the server subscribes before replay, it suppresses durable live frames
 already present in the replay tail before completing the ordered live handoff.
-The journal byte snapshot is captured behind the durable commit barrier, after
-all earlier synchronous projections finish, so a replayed event cannot still be
-waiting to enter the subscriber queue when the handoff boundary is calculated.
+An open journal descriptor and its byte boundary are captured behind the
+durable commit barrier, after all earlier synchronous projections finish, so a
+replayed event cannot still be waiting to enter the subscriber queue when the
+handoff boundary is calculated. The fixed journal prefix is read after
+releasing the barrier, so large replays do not stall new runtime commits.
 The broadcaster records private monotonic publish sequences and calculates the
 handoff boundary from durable replay events actually published after this
 subscriber joined. Transient frames at or below that boundary are dropped so an

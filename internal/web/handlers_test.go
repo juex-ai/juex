@@ -2892,6 +2892,65 @@ func TestSSEEvents_ExplicitEmptyCursorReplaysFromJournalStart(t *testing.T) {
 	}
 }
 
+func TestCaptureCommittedEventReplayBoundsJournalWithoutHoldingCommitBarrier(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-first",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+
+	replay, err := captureCommittedEventReplay(active.app, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := replay.Close(); err != nil {
+			t.Errorf("close captured replay: %v", err)
+		}
+	})
+
+	commitDone := make(chan struct{})
+	go func() {
+		active.app.Bus.Emit(events.Event{
+			ID:     "evt-later",
+			Type:   "turn.started",
+			TurnID: "turn-1",
+			Payload: juexruntime.TurnStartedPayload{
+				Input: "continue",
+				Kind:  "user",
+			},
+		})
+		close(commitDone)
+	}()
+	select {
+	case <-commitDone:
+	case <-time.After(time.Second):
+		t.Fatal("new commit blocked while captured replay remained unread")
+	}
+
+	journal, err := replay.readJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal) != 1 || journal[0].ID != "evt-first" {
+		t.Fatalf("captured journal = %+v, want only evt-first", journal)
+	}
+	if replay.authoritative == nil || replay.authoritative.Cursor != "evt-first" {
+		t.Fatalf("captured authoritative status = %+v, want cursor evt-first", replay.authoritative)
+	}
+}
+
 func TestBrowserReplayDeduplicatorSkipsOnlyQueuedReplayTail(t *testing.T) {
 	replayed := make([]BrowserEvent, broadcasterBufferSize+2)
 	for index := range replayed {
