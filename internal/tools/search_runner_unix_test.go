@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +17,71 @@ import (
 
 	"github.com/juex-ai/juex/internal/sandbox"
 )
+
+func TestRipgrepRunnerKeepsReadableMatchesWhenDescendantIsUnreadable(t *testing.T) {
+	rg, err := exec.LookPath("rg")
+	if err != nil {
+		t.Skip("system rg is unavailable")
+	}
+	root := t.TempDir()
+	readable := filepath.Join(root, "readable")
+	blocked := filepath.Join(root, "blocked")
+	if err := os.MkdirAll(readable, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(readable, "match.txt"), []byte("needle readable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "match.txt"), []byte("needle blocked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chmod(blocked, 0o755); err != nil {
+			t.Errorf("restore blocked directory permissions: %v", err)
+		}
+	}()
+
+	runner := NewRipgrepRunner(RipgrepRunnerOptions{
+		RipgrepPath: rg,
+		WorkDir:     root,
+		Sandbox:     sandbox.DefaultPolicy(),
+	})
+	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
+	if err != nil {
+		t.Fatalf("grep readable descendants: %v", err)
+	}
+	output := formatGrepResult(result)
+	if !strings.Contains(output, "readable/match.txt") || strings.Contains(output, "blocked/match.txt") {
+		t.Fatalf("accessible grep output = %q", output)
+	}
+}
+
+func TestRipgrepRunnerReportsFatalExitWithoutJSONSummary(t *testing.T) {
+	root := t.TempDir()
+	script := filepath.Join(root, "broken-rg.sh")
+	body := `#!/bin/sh
+printf '%s\n' 'unsupported invocation' >&2
+exit 2
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRipgrepRunner(RipgrepRunnerOptions{
+		RipgrepPath: script,
+		WorkDir:     root,
+		Sandbox:     sandbox.DefaultPolicy(),
+	})
+	result, err := runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: root})
+	if err == nil || !strings.Contains(err.Error(), "unsupported invocation") {
+		t.Fatalf("result=%+v err=%v, want fatal ripgrep diagnostic", result, err)
+	}
+}
 
 func TestRipgrepRunnerCancellationKillsProcessGroup(t *testing.T) {
 	root := t.TempDir()

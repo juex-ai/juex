@@ -192,8 +192,20 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 		return result, nil
 	}
 	var exitErr *exec.ExitError
-	if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == 1 {
-		return result, nil
+	if errors.As(waitErr, &exitErr) {
+		switch exitErr.ExitCode() {
+		case 1:
+			return result, nil
+		case 2:
+			// A completed JSON stream proves that ripgrep accepted the
+			// invocation and searched every readable descendant. It can still
+			// exit 2 for an unreadable sibling; preserve those accessible
+			// matches as the former in-process walker did. Argument/startup
+			// failures do not emit a summary and remain fatal below.
+			if parsed.summary {
+				return result, nil
+			}
+		}
 	}
 	detail := strings.TrimSpace(diagnostics.text)
 	if detail != "" {
@@ -307,6 +319,7 @@ func (s *searchStop) reason() string {
 
 type ripgrepParseResult struct {
 	matches []GrepMatch
+	summary bool
 	err     error
 }
 
@@ -377,6 +390,9 @@ func parseRipgrepJSON(src io.Reader, maxBytes, maxRecord, maxMatches int, stop *
 					_, _ = io.Copy(io.Discard, reader)
 					return result
 				}
+			}
+			if event.Type == "summary" {
+				result.summary = true
 			}
 			record = record[:0]
 		}
