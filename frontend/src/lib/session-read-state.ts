@@ -2,9 +2,6 @@ import {
   clearLiveSessionTranscript,
   clearLocalCompactMessages,
   createLiveSessionProjection,
-  markProjectionDone,
-  markProjectionError,
-  markProjectionIdle,
   projectCommandResult,
   projectCompactCommand,
   projectLiveSessionEvent,
@@ -27,7 +24,6 @@ import type {
 } from "../types.ts";
 
 export type SessionInitialCommandState = {
-  activeTurnID?: string;
   commandInput?: string;
   command?: SlashCommandResponse;
 } | null;
@@ -59,6 +55,19 @@ export type SessionReadResult = {
   effects: SessionReadEffect[];
 };
 
+export type SessionLiveSubscription = {
+  sessionID: string;
+  cursor: string;
+};
+
+export function captureSessionLiveSubscription(
+  current: SessionLiveSubscription | null,
+  data: SessionShowResponse,
+): SessionLiveSubscription {
+  if (current?.sessionID === data.id) return current;
+  return { sessionID: data.id, cursor: data.event_cursor };
+}
+
 export function createSessionReadState(): SessionReadState {
   return {
     data: null,
@@ -74,13 +83,12 @@ export function createSessionReadState(): SessionReadState {
 
 export function resetSessionReadState(
   state: SessionReadState,
-  opts?: { activeTurnID?: string },
 ): SessionReadState {
   return {
     ...state,
     data: null,
     loadError: null,
-    projection: resetLiveSessionProjection(opts),
+    projection: resetLiveSessionProjection(),
     activeContext: null,
     composerHint: null,
     submitError: null,
@@ -166,9 +174,19 @@ export function projectLiveBrowserEvent(
   state: SessionReadState,
   event: BrowserEvent,
 ): SessionReadResult {
+  const metadataState = projectSessionMetadataEvent(state, event);
+  if (
+    eventTranscriptAlreadyLoaded(
+      state.data?.messages ?? [],
+      state.projection,
+      event,
+    )
+  ) {
+    return { state: metadataState, effects: [] };
+  }
   const result = projectLiveSessionEvent(state.projection, event);
   return withProjectionResult(
-    projectSessionMetadataEvent(state, event),
+    metadataState,
     result.state,
     result.effects,
   );
@@ -187,7 +205,7 @@ export function projectInitialCommand(
   } else {
     next = projectCommandResult(next, commandInput, command.text ?? "");
   }
-  return markProjectionDoneSoon({ ...state, projection: next }, effects);
+  return { state: { ...state, projection: next }, effects };
 }
 
 export function projectPromptInputChanged(
@@ -196,9 +214,6 @@ export function projectPromptInputChanged(
   let next = state.submitError ? { ...state, submitError: null } : state;
   if (next.composerHint) {
     next = { ...next, composerHint: null };
-  }
-  if (next.projection.status.kind === "error") {
-    next = { ...next, projection: markProjectionIdle(next.projection) };
   }
   return next;
 }
@@ -300,28 +315,16 @@ export function projectStartTurnFailed(
   const detail = errorMessage(error, "Failed to start turn.");
   let projection = state.projection;
   if (compactCommand) {
-    projection = {
-      ...clearLocalCompactMessages(projection),
-      compactActive: false,
-    };
+    projection = clearLocalCompactMessages(projection);
   }
   return {
     state: {
       ...state,
       submitError: detail,
-      projection: markProjectionError(
-        projection,
-        detail,
-      ),
+      projection,
     },
     effects: [],
   };
-}
-
-export function markSessionProjectionIdle(
-  state: SessionReadState,
-): SessionReadState {
-  return { ...state, projection: markProjectionIdle(state.projection) };
 }
 
 function projectCommandTurnSucceeded(
@@ -341,18 +344,15 @@ function projectCommandTurnSucceeded(
         {
           type: "navigateToSession",
           sessionID: command.status.session_id,
-          state: turn.turn_id
-            ? { activeTurnID: turn.turn_id }
-            : { commandInput: prompt, command },
+          state: turn.turn_id ? null : { commandInput: prompt, command },
         },
       ],
     };
   }
   if (command.name === "/compact") {
-    let projection: LiveSessionProjection = {
-      ...clearLocalCompactMessages(state.projection),
-      compactActive: false,
-    };
+    let projection: LiveSessionProjection = clearLocalCompactMessages(
+      state.projection,
+    );
     const effects: SessionReadEffect[] = [
       { type: "refresh", preserveLiveMessages: true },
     ];
@@ -365,28 +365,18 @@ function projectCommandTurnSucceeded(
     } else {
       projection = projectCommandResult(projection, prompt, command.text ?? "");
     }
-    const next = { ...state, projection };
-    if (!projection.turnActive && projection.queuedInput.items.length === 0) {
-      return markProjectionDoneSoon(next, effects);
-    }
-    return { state: next, effects };
+    return { state: { ...state, projection }, effects };
   }
-  return markProjectionDoneSoon(
-    {
-      ...state,
-      projection: projectCommandResult(state.projection, prompt, command.text ?? ""),
-    },
-    [],
-  );
-}
-
-function markProjectionDoneSoon(
-  state: SessionReadState,
-  effects: SessionReadEffect[],
-): SessionReadResult {
   return {
-    state: { ...state, projection: markProjectionDone(state.projection) },
-    effects: [...effects, { type: "scheduleIdleStatus" }],
+    state: {
+      ...state,
+      projection: projectCommandResult(
+        state.projection,
+        prompt,
+        command.text ?? "",
+      ),
+    },
+    effects: [],
   };
 }
 
@@ -412,6 +402,61 @@ function projectSessionMetadataEvent(
       notes: event.payload,
     },
   };
+}
+
+function eventTranscriptAlreadyLoaded(
+  persistedMessages: SessionShowResponse["messages"],
+  projection: LiveSessionProjection,
+  event: BrowserEvent,
+): boolean {
+  const messages = [...persistedMessages, ...projection.messages];
+  switch (event.type) {
+    case "turn.started":
+    case "llm.responded":
+    case "hook.trace":
+      return Boolean(
+        event.payload.message_id &&
+          messages.some((message) => message.id === event.payload.message_id),
+      );
+    case "pending_input.queued":
+      return Boolean(
+        event.payload.message_id &&
+          (messages.some(
+            (message) => message.id === event.payload.message_id,
+          ) ||
+            projection.queuedInput.items.some(
+              (item) => item.messageID === event.payload.message_id,
+            ) ||
+            projection.drainingQueuedInputs.some(
+              (item) => item?.messageID === event.payload.message_id,
+            )),
+      );
+    case "tool.requested":
+      return Boolean(
+        event.payload.tool_use_id &&
+          messages.some((message) =>
+            message.blocks?.some(
+              (block) =>
+                block.type === "tool_use" &&
+                block.tool_use_id === event.payload.tool_use_id,
+            ),
+          ),
+      );
+    case "tool.completed":
+    case "tool.errored":
+      return Boolean(
+        event.payload.tool_use_id &&
+          messages.some((message) =>
+            message.blocks?.some(
+              (block) =>
+                block.type === "tool_result" &&
+                block.tool_use_id === event.payload.tool_use_id,
+            ),
+          ),
+      );
+    default:
+      return false;
+  }
 }
 
 function errorMessage(

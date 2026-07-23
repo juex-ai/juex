@@ -54,7 +54,7 @@ into `internal/web/dist/` for Go embedding.
 | Path | Purpose |
 | --- | --- |
 | `src/api.ts` | typed fleet and selected-agent fetch helpers, including lifecycle/config/log operations, Schedule manual Run, session message pagination, composer image upload, workspace/media preview URLs, and SSE subscription |
-| `src/types.ts` | TypeScript mirror of fleet, agent, session, and message API shapes, including the tagged Command Observable/Schedule create union, transcript paging metadata, and the browser event contract from `internal/web` |
+| `src/types.ts` | TypeScript mirror of fleet, agent, session, and message API shapes, including the tagged Command Observable/Schedule create union, transcript paging and replay-cursor metadata, and the browser event contract from `internal/web` |
 | `src/lib/agent-config.ts` | pure config-save reconciliation for distinguishing persisted updates from restart failures |
 | `src/lib/fleet-directories.ts` | pure Add agent directory validation, stale-request isolation, listing merge, keyboard, and path-tail behavior |
 | `src/lib/fleet-routes.ts` | pure route helpers for fleet and selected-agent navigation |
@@ -69,7 +69,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/history-sessions.ts` | pure history-list title, badge, and canonical session route helpers |
 | `src/lib/home-route.ts` | pure helper for choosing the web root redirect target |
 | `src/lib/light-code-highlight.ts` | lightweight synchronous JSON/log highlighting for tool payloads |
-| `src/lib/live-session-projection.ts` | pure live-session read model for SSE events, optimistic turns, provisional assistant deltas, pending input, compact state, and final-response reconciliation |
+| `src/lib/live-session-projection.ts` | pure transcript read model for SSE BrowserEvents, optimistic messages, provisional assistant deltas, pending-input presentation, compact markers, and final-response assembly; runtime status comes from each event snapshot |
 | `src/lib/live-tool-events.ts` | pure live transcript updates for tool requested/output-delta events |
 | `src/lib/loading-state.ts` | pure loading-state display text helpers |
 | `src/lib/mcp-events.ts` | pure helpers for MCP event labels and collapsed previews |
@@ -82,7 +82,8 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/runtime-display.ts` | pure runtime and session-state display formatting helpers |
 | `src/lib/runtime-tool-catalog.ts` | pure runtime tool group labels, timeout labels, parameter projection, and defensive schema formatting |
 | `src/lib/session-messages.ts` | pure helpers for merging paged transcript windows |
-| `src/lib/session-read-controller.ts` | session-detail read-model effect interpreter for route guards, fetch/context refresh, transcript SSE dispatch, timers, and navigation effects |
+| `src/lib/session-read-controller.ts` | session-detail effect interpreter for route guards, fetch/context refresh, authoritative-status replacement, reconnect-safe status calibration, transcript SSE dispatch, and navigation effects |
+| `src/lib/session-read-state.ts` | session read-model state, route-stable live-subscription cursor capture, and replay overlap suppression using persisted message IDs and tool-use IDs from both the initial transcript and current live projection |
 | `src/lib/session-read-state.ts` | pure session-detail controller state transitions and effect descriptors |
 | `src/lib/session-title.ts` | pure session preview display-title fallback helper |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |

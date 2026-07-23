@@ -6,16 +6,17 @@ import (
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
+	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
 func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
 	var buf bytes.Buffer
-	err := writeSSEFrame(&buf, events.Event{
+	err := writeBrowserSSEFrame(&buf, mustBrowserEvent(t, events.Event{
 		ID:     "evt-1",
 		Type:   "turn.started",
 		TurnID: "t-7",
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +36,7 @@ func TestWriteSSEFrame_FormatsExpectedFields(t *testing.T) {
 
 func TestWriteSSEFrame_DataIsOneLine(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeSSEFrame(&buf, events.Event{ID: "x1", Type: "hook.trace", Payload: map[string]any{"text": "line1\nline2"}}); err != nil {
+	if err := writeBrowserSSEFrame(&buf, mustBrowserEvent(t, events.Event{ID: "x1", Type: "hook.trace", Payload: map[string]any{"text": "line1\nline2"}})); err != nil {
 		t.Fatal(err)
 	}
 	body := buf.String()
@@ -52,12 +53,12 @@ func TestWriteSSEFrame_DataIsOneLine(t *testing.T) {
 
 func TestWriteSSEFrame_TransientEventOmitsReplayCursor(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeSSEFrame(&buf, events.Event{
+	if err := writeBrowserSSEFrame(&buf, mustBrowserEvent(t, events.Event{
 		ID:        "transient-1",
 		Type:      "llm.output_delta",
 		Transient: true,
 		Payload:   map[string]any{"kind": "text", "text": "hello"},
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	got := buf.String()
@@ -66,19 +67,9 @@ func TestWriteSSEFrame_TransientEventOmitsReplayCursor(t *testing.T) {
 	}
 }
 
-func TestWriteSSEFrame_SkipsRuntimeOnlyEvents(t *testing.T) {
-	var buf bytes.Buffer
-	if err := writeSSEFrame(&buf, events.Event{ID: "internal-1", Type: "tool.failure.recorded", Payload: map[string]any{"name": "exec_command"}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := buf.String(); got != "" {
-		t.Fatalf("runtime-only event wrote frame:\n%s", got)
-	}
-}
-
 func TestWriteSSEFrame_MarshalsTypedPayload(t *testing.T) {
 	var buf bytes.Buffer
-	if err := writeSSEFrame(&buf, events.Event{
+	if err := writeBrowserSSEFrame(&buf, mustBrowserEvent(t, events.Event{
 		ID:   "tool-1",
 		Type: toolevents.CompletedType,
 		Payload: toolevents.CompletedPayload{
@@ -88,7 +79,7 @@ func TestWriteSSEFrame_MarshalsTypedPayload(t *testing.T) {
 			Len:            12,
 			Preview:        "hello",
 		},
-	}); err != nil {
+	})); err != nil {
 		t.Fatal(err)
 	}
 	got := buf.String()
@@ -103,4 +94,16 @@ func TestWriteSSEFrame_MarshalsTypedPayload(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
+}
+
+func mustBrowserEvent(t *testing.T, event events.Event) BrowserEvent {
+	t.Helper()
+	projected, visible, err := browserEventFromRuntime(event, statusapi.Snapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !visible {
+		t.Fatalf("event %q is not browser-visible", event.Type)
+	}
+	return projected
 }

@@ -142,6 +142,7 @@ export interface SessionInfo {
 export interface SessionShowResponse extends SessionInfo {
   messages: Message[];
   model?: string;
+  event_cursor: string;
   has_more_before?: boolean;
   oldest_message_id?: string;
   goal?: GoalStatusSnapshot;
@@ -358,11 +359,13 @@ interface BrowserEventBase<TType extends BrowserEventType> {
   type: TType;
   ts: string;
   turn_id?: string;
+  status: AgentRuntimeStatusSnapshot;
 }
 
 export interface TurnStartedPayload {
   input: string;
   kind?: string;
+  message_id?: string;
 }
 
 export interface TurnAdmittedPayload {
@@ -445,6 +448,7 @@ export interface LLMRespondedPayload {
   model: string;
   context_usage?: ContextUsage;
   notice?: Message;
+  message_id?: string;
 }
 
 export interface ToolRequestedPayload {
@@ -527,11 +531,13 @@ export interface HookErroredPayload extends HookStartedPayload {
 
 export interface HookTracePayload {
   text: string;
+  message_id?: string;
 }
 
 export interface PendingInputQueuedPayload {
   input: string;
   kind: string;
+  message_id?: string;
   pending_count: number;
   max_pending_inputs: number;
 }

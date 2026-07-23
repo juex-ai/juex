@@ -7,18 +7,29 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 func sseResumeCursor(r *http.Request) string {
+	cursor, _ := sseResumeCursorWithPresence(r)
+	return cursor
+}
+
+func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if r == nil {
-		return ""
+		return "", false
 	}
 	if cursor := strings.TrimSpace(r.Header.Get("Last-Event-ID")); cursor != "" {
-		return cursor
+		return cursor, true
 	}
-	return strings.TrimSpace(r.URL.Query().Get("since"))
+	values, ok := r.URL.Query()["since"]
+	if !ok {
+		return "", false
+	}
+	if len(values) == 0 {
+		return "", true
+	}
+	return strings.TrimSpace(values[0]), true
 }
 
 // writeSSEFrame writes one SSE frame to w using the documented shape:
@@ -37,24 +48,17 @@ func sseResumeCursor(r *http.Request) string {
 // We deliberately omit the "event:" line so EventSource routes every
 // frame to the default "message" listener — the type is in the JSON
 // payload (e.type) and the client switches on that.
-func writeSSEFrame(w io.Writer, e events.Event) error {
-	browserEvent, visible, err := browserEventFromRuntime(e)
+func writeBrowserSSEFrame(w io.Writer, event BrowserEvent) error {
+	body, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
-	if !visible {
-		return nil
-	}
-	body, err := json.Marshal(browserEvent)
-	if err != nil {
-		return err
-	}
-	if e.Transient {
+	if event.transient {
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", body); err != nil {
 			return err
 		}
 	} else {
-		if _, err := fmt.Fprintf(w, "id: %s\ndata: %s\n\n", e.ID, body); err != nil {
+		if _, err := fmt.Fprintf(w, "id: %s\ndata: %s\n\n", event.ID, body); err != nil {
 			return err
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -33,7 +35,7 @@ func TestBrowserEventFromRuntimeSkipsRuntimeOnlyEvents(t *testing.T) {
 		ID:      "internal-1",
 		Type:    "tool.failure.recorded",
 		Payload: map[string]any{"name": "exec_command"},
-	})
+	}, statusapi.Snapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +53,7 @@ func TestBrowserEventFromRuntimeExposesPendingInputPromotion(t *testing.T) {
 			PendingCount:     0,
 			MaxPendingInputs: 16,
 		},
-	})
+	}, statusapi.Snapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +70,7 @@ func TestBrowserEventFromRuntimeValidatesKnownPayload(t *testing.T) {
 		ID:      "bad-1",
 		Type:    "turn.started",
 		Payload: map[string]any{"input": 123},
-	})
+	}, statusapi.Snapshot{})
 	if !visible {
 		t.Fatal("known event should be browser-visible")
 	}
@@ -98,7 +100,7 @@ func TestBrowserEventFromRuntimeNormalizesReplayPayload(t *testing.T) {
 			"input":      "hello",
 			"kind":       "user",
 		},
-	})
+	}, statusapi.Snapshot{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,6 +116,162 @@ func TestBrowserEventFromRuntimeNormalizesReplayPayload(t *testing.T) {
 	}
 	if bytes.Contains(got.Payload, []byte("debug_only")) {
 		t.Fatalf("replay payload was not normalized: %s", got.Payload)
+	}
+}
+
+func TestBrowserEventProjectionCapturesEachResultingStatus(t *testing.T) {
+	status := juexruntime.NewStatusStore(juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	})
+	stream := newBroadcaster()
+	t.Cleanup(stream.close)
+	sub := stream.subscribe()
+	t.Cleanup(sub.unsubscribe)
+
+	sink := events.NewDurableSink(browserProjectionJournal{})
+	t.Cleanup(sink.Close)
+	sink.AddProjection(status)
+	sink.AddProjection(browserEventProjection{status: status, stream: stream})
+
+	for _, event := range []events.Event{
+		{
+			ID:      "evt-admitted",
+			Type:    juexruntime.TurnAdmittedType,
+			TurnID:  "turn-1",
+			Payload: juexruntime.TurnAdmittedPayload{},
+		},
+		{
+			ID:     "evt-phase",
+			Type:   juexruntime.TurnPhaseType,
+			TurnID: "turn-1",
+			Payload: juexruntime.TurnPhasePayload{
+				Phase: juexruntime.TurnPhaseToolBatch,
+			},
+		},
+	} {
+		if _, err := sink.Commit(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := receiveBrowserEvent(t, sub)
+	second := receiveBrowserEvent(t, sub)
+	if first.Status.Cursor != "evt-admitted" ||
+		first.Status.Turn == nil ||
+		first.Status.Turn.State != statusapi.TurnAdmitted {
+		t.Fatalf("first projected status = %+v", first.Status)
+	}
+	if second.Status.Cursor != "evt-phase" ||
+		second.Status.Turn == nil ||
+		second.Status.Turn.Phase != statusapi.TurnPhaseToolBatch {
+		t.Fatalf("second projected status = %+v", second.Status)
+	}
+}
+
+func TestProjectBrowserEventsReplayMatchesUninterruptedProjection(t *testing.T) {
+	seed := juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}
+	journal := browserEventFixtureEvents()
+	all, err := projectBrowserEvents(seed, journal, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := projectBrowserEvents(seed, journal, "evt-tool-requested", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := -1
+	for index, event := range all {
+		if event.ID == "evt-tool-requested" {
+			start = index + 1
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatal("fixture cursor not found")
+	}
+	if !reflect.DeepEqual(replayed, all[start:]) {
+		t.Fatalf("replayed browser projection diverged from uninterrupted suffix")
+	}
+}
+
+func TestProjectBrowserEventsReplayEndsWithAuthoritativeRestartRecovery(t *testing.T) {
+	seed := juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}
+	journal := []events.Event{
+		{
+			ID:      "evt-admitted",
+			Type:    juexruntime.TurnAdmittedType,
+			TurnID:  "turn-1",
+			Payload: juexruntime.TurnAdmittedPayload{},
+		},
+		{
+			ID:     "evt-started",
+			Type:   "turn.started",
+			TurnID: "turn-1",
+			Payload: juexruntime.TurnStartedPayload{
+				Input: "continue",
+				Kind:  "user",
+			},
+		},
+	}
+	status := juexruntime.NewStatusStoreFromJournal(seed, journal)
+	status.RecoverAfterRestart()
+	authoritative := status.Snapshot()
+
+	replayed, err := projectBrowserEvents(
+		seed,
+		journal,
+		"evt-admitted",
+		&authoritative,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 {
+		t.Fatalf("replayed events = %d, want 1", len(replayed))
+	}
+	got := replayed[0].Status
+	if got.Cursor != "evt-started" ||
+		got.Turn == nil ||
+		got.Turn.State != statusapi.TurnCancelled ||
+		got.LastError == nil ||
+		got.LastError.Kind != statusapi.StatusErrorRuntimeRestart {
+		t.Fatalf("replayed recovered status = %+v", got)
+	}
+}
+
+func TestProjectBrowserEventsDoesNotApplyMismatchedAuthoritativeStatus(t *testing.T) {
+	seed := juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	}
+	journal := []events.Event{{
+		ID:      "evt-admitted",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	}}
+	authoritative := juexruntime.NewStatusStore(seed).Snapshot()
+	authoritative.Cursor = "evt-newer"
+
+	replayed, err := projectBrowserEvents(seed, journal, "", &authoritative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 {
+		t.Fatalf("replayed events = %d, want 1", len(replayed))
+	}
+	if replayed[0].Status.Cursor != "evt-admitted" ||
+		replayed[0].Status.Turn == nil ||
+		replayed[0].Status.Turn.State != statusapi.TurnAdmitted {
+		t.Fatalf("mismatched authoritative status was applied: %+v", replayed[0].Status)
 	}
 }
 
@@ -171,7 +329,11 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "turn.started",
 			Timestamp: ts,
 			TurnID:    "turn-1",
-			Payload:   juexruntime.TurnStartedPayload{Input: "run command", Kind: "user"},
+			Payload: juexruntime.TurnStartedPayload{
+				Input:     "run command",
+				Kind:      "user",
+				MessageID: "msg-user-1",
+			},
 		},
 		{
 			ID:        "evt-turn-provider-phase",
@@ -196,6 +358,7 @@ func browserEventFixtureEvents() []events.Event {
 				Text:       "I'll run it.",
 				ToolCalls:  []toolevents.ToolCallPayload{},
 				Model:      "gpt-test",
+				MessageID:  "msg-assistant-1",
 				ContextUsage: &llm.ContextUsage{
 					InputTokens:  10,
 					OutputTokens: 5,
@@ -308,7 +471,10 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "hook.trace",
 			Timestamp: ts.Add(5 * time.Second),
 			TurnID:    "turn-1",
-			Payload:   juexruntime.HookTracePayload{Text: "hook extract-state allow UserPromptSubmit in 12ms"},
+			Payload: juexruntime.HookTracePayload{
+				Text:      "hook extract-state allow UserPromptSubmit in 12ms",
+				MessageID: "msg-hook-1",
+			},
 		},
 		{
 			ID:        "evt-pending-queued",
@@ -318,6 +484,7 @@ func browserEventFixtureEvents() []events.Event {
 			Payload: juexruntime.PendingInputQueuedPayload{
 				Input:            "queued follow-up",
 				Kind:             "user",
+				MessageID:        "pending-message-1",
 				PendingCount:     1,
 				MaxPendingInputs: 4,
 			},
@@ -513,8 +680,16 @@ func testIntPtr(v int) *int {
 func browserEventFixtures() ([]BrowserEvent, error) {
 	events := browserEventFixtureEvents()
 	out := make([]BrowserEvent, 0, len(events))
+	status := juexruntime.NewStatusStore(juexruntime.StatusSeed{
+		SessionID:        "session-1",
+		MaxPendingInputs: juexruntime.DefaultMaxPendingInput,
+	})
 	for _, event := range events {
-		browserEvent, visible, err := browserEventFromRuntime(event)
+		status.Publish(event)
+		browserEvent, visible, err := browserEventFromRuntime(
+			event,
+			statusapi.FromRuntime(status.Snapshot()),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -523,4 +698,21 @@ func browserEventFixtures() ([]BrowserEvent, error) {
 		}
 	}
 	return out, nil
+}
+
+type browserProjectionJournal struct{}
+
+func (browserProjectionJournal) AppendEvent(events.Event) error {
+	return nil
+}
+
+func receiveBrowserEvent(t *testing.T, sub *subscriber) BrowserEvent {
+	t.Helper()
+	select {
+	case event := <-sub.ch:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for browser event")
+		return BrowserEvent{}
+	}
 }

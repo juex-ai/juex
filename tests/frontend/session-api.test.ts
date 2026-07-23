@@ -6,6 +6,7 @@ import {
   getSession,
   listSessions,
   startTurn,
+  subscribeEvents,
   uploadSessionAttachment,
 } from "../../frontend/src/api.ts";
 
@@ -140,6 +141,95 @@ test("startTurn includes uploaded attachments", async () => {
       },
     ],
   });
+});
+
+test("subscribeEvents forwards open and browser event callbacks", () => {
+  const originalEventSource = globalThis.EventSource;
+  let source: FakeEventSource | undefined;
+  let opened = 0;
+  let eventID = "";
+  class FakeEventSource {
+    readonly listeners = new Map<string, Array<(event: Event) => void>>();
+    readonly url: string;
+    closed = false;
+
+    constructor(url: string) {
+      this.url = url;
+      source = this;
+    }
+
+    addEventListener(type: string, listener: (event: Event) => void) {
+      const listeners = this.listeners.get(type) ?? [];
+      listeners.push(listener);
+      this.listeners.set(type, listeners);
+    }
+
+    emit(type: string, event: Event) {
+      for (const listener of this.listeners.get(type) ?? []) listener(event);
+    }
+
+    close() {
+      this.closed = true;
+    }
+  }
+  globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+
+  try {
+    const unsubscribe = subscribeEvents("session one", {
+      since: "cursor/1",
+      onOpen: () => {
+        opened += 1;
+      },
+      onEvent: (event) => {
+        eventID = event.id;
+      },
+    });
+    assert.equal(
+      source?.url,
+      "/api/sessions/session%20one/events?since=cursor%2F1",
+    );
+    source?.emit("open", new Event("open"));
+    source?.emit(
+      "message",
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          id: "evt-1",
+          type: "turn.started",
+          ts: "2026-07-23T00:00:00Z",
+          payload: { input: "hello" },
+          status: {
+            session: {
+              id: "session one",
+              state: "turn_active",
+              working: true,
+              pending_count: 0,
+              max_pending_inputs: 4,
+              can_accept_input: true,
+            },
+            tools: [],
+            token_usage: { input_tokens: 0, output_tokens: 0 },
+          },
+        }),
+      }),
+    );
+    unsubscribe();
+
+    assert.equal(opened, 1);
+    assert.equal(eventID, "evt-1");
+    assert.equal(source?.closed, true);
+
+    const emptyCursorUnsubscribe = subscribeEvents("empty cursor", {
+      since: "",
+      onEvent: () => {},
+    });
+    assert.equal(
+      source?.url,
+      "/api/sessions/empty%20cursor/events?since=",
+    );
+    emptyCursorUnsubscribe();
+  } finally {
+    globalThis.EventSource = originalEventSource;
+  }
 });
 
 test("uploadSessionAttachment posts multipart file data", async () => {

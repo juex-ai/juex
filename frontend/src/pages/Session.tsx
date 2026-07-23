@@ -128,8 +128,10 @@ import {
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
 import {
+  captureSessionLiveSubscription,
   createSessionReadState,
   type SessionInitialCommandState,
+  type SessionLiveSubscription,
   type SessionReadState,
 } from "@/lib/session-read-state";
 import {
@@ -143,7 +145,6 @@ import {
   interrupt,
   startTurn,
   subscribeEvents,
-  subscribeSessionStatus,
   uploadSessionAttachment,
 } from "@/api";
 import { sessionCanSend, sessionReadOnlyMessage } from "@/lib/session-access";
@@ -202,6 +203,8 @@ export function Session() {
   );
   const [draft, setDraft] = useState("");
   const [attachmentCount, setAttachmentCount] = useState(0);
+  const [sessionLiveSubscription, setSessionLiveSubscription] =
+    useState<SessionLiveSubscription | null>(null);
   const [composerOverlayNode, setComposerOverlayNode] =
     useState<HTMLDivElement | null>(null);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
@@ -256,14 +259,12 @@ export function Session() {
   }, [composerOverlayNode]);
 
   useEffect(() => {
-    const state = location.state as InitialCommandState;
-    const activeTurnID = state?.activeTurnID;
     controller.setRoute(id);
-    controller.resetForRoute({ activeTurnID });
+    controller.resetForRoute();
+    setSessionLiveSubscription(null);
     setDraft("");
     // location.state is read only on session entry; clearing it later must not
     // reset live projection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [controller, id]);
 
   useEffect(() => {
@@ -274,42 +275,43 @@ export function Session() {
     });
   }, [controller, id]);
 
-  const canSubscribeSessionStatus = data ? sessionCanSend(data) : false;
+  useEffect(() => {
+    if (!data || data.id !== id) return;
+    setSessionLiveSubscription((current) =>
+      captureSessionLiveSubscription(current, data),
+    );
+  }, [data, id]);
+
+  const canSubscribeLiveSession = data ? sessionCanSend(data) : false;
 
   useEffect(() => {
     if (
       !id ||
+      sessionLiveSubscription?.sessionID !== id ||
       !agent?.id ||
       !statusStore ||
       !agentRuntimeHealthy ||
-      !canSubscribeSessionStatus
+      !canSubscribeLiveSession
     ) {
       return;
     }
     let disposed = false;
-    let unsubscribe = () => {};
-    void getSessionStatus(id)
-      .then((snapshot) => {
+    const unsubscribe = controller.subscribeLiveEvents(id, {
+      since: sessionLiveSubscription.cursor,
+      loadStatus: () => getSessionStatus(id),
+      onStatus: (next) => {
         if (disposed) return;
-        statusStore.setStatus(agent.id, snapshot);
-        unsubscribe = subscribeSessionStatus(id, {
-          since: snapshot.cursor,
-          onStatus: (next) => {
-            if (disposed) return;
-            statusStore.setStatus(agent.id, next);
-          },
-          onError: (event) => {
-            if (disposed) return;
-            statusStore.clearStatus(agent.id, id);
-            console.error("session status stream failed", event);
-          },
-        });
-      })
-      .catch((error) => {
+        statusStore.setStatus(agent.id, next);
+      },
+      onStatusRefreshError: (error) => {
         if (disposed) return;
-        statusStore.clearStatus(agent.id, id);
-        console.error("getSessionStatus failed", error);
-      });
+        console.error("refresh session status failed", error);
+      },
+      onError: (event) => {
+        if (disposed) return;
+        console.error("session event stream failed", event);
+      },
+    });
     return () => {
       disposed = true;
       unsubscribe();
@@ -318,8 +320,10 @@ export function Session() {
   }, [
     agent?.id,
     agentRuntimeHealthy,
-    canSubscribeSessionStatus,
+    canSubscribeLiveSession,
+    controller,
     id,
+    sessionLiveSubscription,
     statusStore,
   ]);
 
@@ -329,15 +333,6 @@ export function Session() {
     if (!state?.command || !state.commandInput) return;
     controller.projectInitialCommandOnce(id, state.commandInput, state.command);
   }, [controller, data, id, location.state]);
-
-  // SSE subscription.
-  useEffect(() => {
-    if (!id || !data || !sessionCanSend(data) || !agentRuntimeHealthy) return;
-    return controller.subscribeLiveEvents(id);
-    // Keep this tied to send-access fields so projection-only data changes do
-    // not reopen the EventSource during active turns.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentRuntimeHealthy, controller, data?.kind, data?.active, id]);
 
   async function handleSend(
     prompt: string,
@@ -363,7 +358,18 @@ export function Session() {
     () => [...(data?.messages ?? []), ...projection.messages],
     [data?.messages, projection.messages],
   );
-  const groups = useMemo(() => messagesToGroups(messages), [messages]);
+  const groups = useMemo(
+    () =>
+      messagesToGroups(messages, runtimeStatus?.tools, {
+        runtimeStatusLoaded: runtimeStatus !== undefined,
+        activeTurnID:
+          runtimeStatus?.turn?.state === "admitted" ||
+          runtimeStatus?.turn?.state === "active"
+            ? runtimeStatus.turn.id
+            : undefined,
+      }),
+    [messages, runtimeStatus],
+  );
   const runtimeTurnState = runtimeStatus?.turn?.state;
   const transcriptItems = useMemo(
     () =>
@@ -1471,7 +1477,7 @@ function ThinkingProcessRow({
 function ToolBatchProcessRow({ tools }: { tools: ToolDisplayUnit[] }) {
   const title = formatToolBatchTitle(tools.map(toolProcessName));
   const status = aggregateToolProcessStatus(
-    tools.map((tool) => toolState(tool.use, tool.result)),
+    tools.map((tool) => toolState(tool.use, tool.result, tool.state)),
   );
 
   return (
@@ -1499,7 +1505,7 @@ function ToolProcessRow({
   nested?: boolean;
   tool: ToolDisplayUnit;
 }) {
-  const state = toolState(tool.use, tool.result);
+  const state = toolState(tool.use, tool.result, tool.state);
   const status = toolProcessStatus(state);
   const name = toolProcessName(tool);
   const hasContent = Boolean(tool.use || tool.result);

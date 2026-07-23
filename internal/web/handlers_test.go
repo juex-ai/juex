@@ -430,6 +430,40 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	}
 }
 
+func TestGetSessionShow_ReturnsReplayCursorFromBeforeTranscriptRead(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-before-show",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		EventCursor string `json:"event_cursor"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.EventCursor != "evt-before-show" {
+		t.Fatalf("event cursor = %q, want evt-before-show", parsed.EventCursor)
+	}
+}
+
 func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	srv := newTestServer(t)
 	id := "20260507T101010-state1"
@@ -2721,7 +2755,8 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 		}
 	}()
 
-	// Read until we see one full SSE frame containing turn.started.
+	// Read until we see one full SSE frame containing turn.started and its
+	// authoritative resulting status.
 	buf := make([]byte, 4096)
 	deadline := time.Now().Add(2 * time.Second)
 	collected := ""
@@ -2729,7 +2764,9 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			collected += string(buf[:n])
-			if strings.Contains(collected, "turn.started") {
+			if strings.Contains(collected, "turn.started") &&
+				strings.Contains(collected, `"status":`) &&
+				strings.Contains(collected, `"working":true`) {
 				return
 			}
 		}
@@ -2737,7 +2774,277 @@ func TestSSEEvents_ReceivesPublished(t *testing.T) {
 			break
 		}
 	}
-	t.Fatalf("did not receive turn.started; collected:\n%s", collected)
+	t.Fatalf("did not receive turn.started with runtime status; collected:\n%s", collected)
+}
+
+func TestSSEEvents_ReplayPreservesAuthoritativeRestartRecovery(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-admitted",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+	active.app.Bus.Emit(events.Event{
+		ID:     "evt-started",
+		Type:   "turn.started",
+		TurnID: "turn-1",
+		Payload: juexruntime.TurnStartedPayload{
+			Input: "continue",
+			Kind:  "user",
+		},
+	})
+	active.app.Status.RecoverAfterRestart()
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		ts.URL+"/api/sessions/"+sessionID+"/events",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Last-Event-ID", "evt-admitted")
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 4096)
+	collected := ""
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			collected += string(buf[:n])
+			if strings.Contains(collected, "\n\n") {
+				break
+			}
+		}
+		if readErr != nil {
+			t.Fatalf("read replay frame: %v; collected:\n%s", readErr, collected)
+		}
+	}
+	for _, want := range []string{
+		`id: evt-started`,
+		`"state":"cancelled"`,
+		`"working":false`,
+		`"kind":"runtime_restart"`,
+	} {
+		if !strings.Contains(collected, want) {
+			t.Fatalf("replay frame missing %q:\n%s", want, collected)
+		}
+	}
+}
+
+func TestSSEEvents_ExplicitEmptyCursorReplaysFromJournalStart(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-first",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		ts.URL+"/api/sessions/"+sessionID+"/events?since=",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 4096)
+	n, err := resp.Body.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := string(buf[:n])
+	if !strings.Contains(frame, "id: evt-first") ||
+		!strings.Contains(frame, `"type":"turn.admitted"`) {
+		t.Fatalf("initial replay frame = %q", frame)
+	}
+}
+
+func TestCaptureCommittedEventReplayBoundsJournalWithoutHoldingCommitBarrier(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-first",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+
+	replay, err := captureCommittedEventReplay(active.app, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := replay.Close(); err != nil {
+			t.Errorf("close captured replay: %v", err)
+		}
+	})
+
+	commitDone := make(chan struct{})
+	go func() {
+		active.app.Bus.Emit(events.Event{
+			ID:     "evt-later",
+			Type:   "turn.started",
+			TurnID: "turn-1",
+			Payload: juexruntime.TurnStartedPayload{
+				Input: "continue",
+				Kind:  "user",
+			},
+		})
+		close(commitDone)
+	}()
+	select {
+	case <-commitDone:
+	case <-time.After(time.Second):
+		t.Fatal("new commit blocked while captured replay remained unread")
+	}
+
+	journal, err := replay.readJournal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journal) != 1 || journal[0].ID != "evt-first" {
+		t.Fatalf("captured journal = %+v, want only evt-first", journal)
+	}
+	if replay.authoritative == nil || replay.authoritative.Cursor != "evt-first" {
+		t.Fatalf("captured authoritative status = %+v, want cursor evt-first", replay.authoritative)
+	}
+}
+
+func TestBrowserReplayDeduplicatorSkipsOnlyQueuedReplayTail(t *testing.T) {
+	replayed := make([]BrowserEvent, broadcasterBufferSize+2)
+	for index := range replayed {
+		replayed[index] = BrowserEvent{ID: fmt.Sprintf("evt-%d", index)}
+	}
+	deduper := newBrowserReplayDeduplicator(replayed, 20)
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+
+	if !deduper.skip(BrowserEvent{
+		ID:        "evt-transient",
+		transient: true,
+		sequence:  20,
+	}) {
+		t.Fatal("pre-tail transient event was delivered")
+	}
+	if !deduper.skip(BrowserEvent{ID: "evt-2"}) {
+		t.Fatal("queued replay-tail duplicate was delivered")
+	}
+	if deduper.skip(BrowserEvent{ID: "evt-live"}) {
+		t.Fatal("first event after replay tail was skipped")
+	}
+	if deduper.skip(BrowserEvent{ID: "evt-3"}) {
+		t.Fatal("old replay id was skipped after live handoff completed")
+	}
+}
+
+func TestBrowserReplayDeduplicatorDropsTransientBeforeTerminalDuplicate(t *testing.T) {
+	deduper := newBrowserReplayDeduplicator([]BrowserEvent{{
+		ID:   "evt-terminal",
+		Type: "turn.completed",
+	}}, 10)
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+	if !deduper.skip(BrowserEvent{
+		Type:      "llm.output_delta",
+		transient: true,
+		sequence:  10,
+	}) {
+		t.Fatal("transient frame before terminal duplicate was delivered")
+	}
+	if !deduper.skip(BrowserEvent{
+		ID:   "evt-terminal",
+		Type: "turn.completed",
+	}) {
+		t.Fatal("terminal replay duplicate was delivered")
+	}
+	if deduper.skip(BrowserEvent{
+		Type:      "llm.output_delta",
+		transient: true,
+		sequence:  11,
+	}) {
+		t.Fatal("transient frame after completed handoff was skipped")
+	}
+}
+
+func TestBrowserReplayDeduplicatorAllowsFreshTransientPastReplayWatermark(t *testing.T) {
+	deduper := newBrowserReplayDeduplicator([]BrowserEvent{{
+		ID:   "evt-before-subscribe",
+		Type: "turn.completed",
+	}}, 10)
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+
+	if deduper.skip(BrowserEvent{
+		Type:      "llm.output_delta",
+		transient: true,
+		sequence:  11,
+	}) {
+		t.Fatal("fresh transient frame after replay watermark was skipped")
+	}
+	if !deduper.skip(BrowserEvent{
+		ID:   "evt-before-subscribe",
+		Type: "turn.completed",
+	}) {
+		t.Fatal("durable replay duplicate was delivered")
+	}
+}
+
+func TestBrowserReplayDeduplicatorIgnoresEventsOutsideBoundedTail(t *testing.T) {
+	replayed := make([]BrowserEvent, broadcasterBufferSize+1)
+	for index := range replayed {
+		replayed[index] = BrowserEvent{ID: fmt.Sprintf("evt-%d", index)}
+	}
+	deduper := newBrowserReplayDeduplicator(replayed, 10)
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+	if deduper.skip(BrowserEvent{ID: "evt-0"}) {
+		t.Fatal("event older than the subscriber buffer was treated as queued")
+	}
 }
 
 func TestAgentAPIHandlerDoesNotServeBrowserFallback(t *testing.T) {

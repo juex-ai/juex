@@ -3,12 +3,14 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"reflect"
 	"time"
 
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
+	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/toolevents"
 )
 
@@ -16,11 +18,14 @@ import (
 // Runtime may persist more event facts than the browser consumes; this DTO is
 // the web transport contract for browser-visible read-model updates.
 type BrowserEvent struct {
-	ID        string          `json:"id"`
-	Type      string          `json:"type"`
-	Timestamp time.Time       `json:"ts"`
-	TurnID    string          `json:"turn_id,omitempty"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
+	ID        string             `json:"id"`
+	Type      string             `json:"type"`
+	Timestamp time.Time          `json:"ts"`
+	TurnID    string             `json:"turn_id,omitempty"`
+	Payload   json.RawMessage    `json:"payload,omitempty"`
+	Status    statusapi.Snapshot `json:"status"`
+	transient bool
+	sequence  uint64
 }
 
 type browserPayloadFactory struct {
@@ -102,7 +107,10 @@ func browserEventTypes() []string {
 	return out
 }
 
-func browserEventFromRuntime(e events.Event) (BrowserEvent, bool, error) {
+func browserEventFromRuntime(
+	e events.Event,
+	status statusapi.Snapshot,
+) (BrowserEvent, bool, error) {
 	factory, ok := browserPayloadFactoryByType[e.Type]
 	if !ok {
 		return BrowserEvent{}, false, nil
@@ -117,7 +125,31 @@ func browserEventFromRuntime(e events.Event) (BrowserEvent, bool, error) {
 		Timestamp: e.Timestamp,
 		TurnID:    e.TurnID,
 		Payload:   payload,
+		Status:    status,
+		transient: e.Transient,
 	}, true, nil
+}
+
+type browserEventProjection struct {
+	status *juexruntime.StatusStore
+	stream *broadcaster
+}
+
+func (p browserEventProjection) Publish(event events.Event) {
+	if p.status == nil || p.stream == nil {
+		return
+	}
+	projected, visible, err := browserEventFromRuntime(
+		event,
+		statusapi.FromRuntime(p.status.Snapshot()),
+	)
+	if err != nil {
+		log.Printf("web: project browser event %q: %v", event.Type, err)
+		return
+	}
+	if visible {
+		p.stream.enqueue(projected)
+	}
 }
 
 func browserPayloadJSON(eventType string, payload any, factory func() any) (json.RawMessage, error) {
@@ -153,4 +185,41 @@ func browserPayloadTypeMatchesTarget(payloadType, targetType reflect.Type) bool 
 		return true
 	}
 	return targetType.Kind() == reflect.Pointer && payloadType == targetType.Elem()
+}
+
+func projectBrowserEvents(
+	seed juexruntime.StatusSeed,
+	journal []events.Event,
+	after string,
+	authoritative *juexruntime.StatusSnapshot,
+) ([]BrowserEvent, error) {
+	status := juexruntime.NewStatusStore(seed)
+	projected := make([]BrowserEvent, 0, len(journal))
+	emit := after == ""
+	for _, event := range journal {
+		status.Publish(event)
+		if !emit {
+			if event.ID == after {
+				emit = true
+			}
+			continue
+		}
+		browserEvent, visible, err := browserEventFromRuntime(
+			event,
+			statusapi.FromRuntime(status.Snapshot()),
+		)
+		if err != nil {
+			return projected, err
+		}
+		if visible {
+			projected = append(projected, browserEvent)
+		}
+	}
+	if authoritative != nil &&
+		len(journal) > 0 &&
+		len(projected) > 0 &&
+		authoritative.Cursor == journal[len(journal)-1].ID {
+		projected[len(projected)-1].Status = statusapi.FromRuntime(*authoritative)
+	}
+	return projected, nil
 }

@@ -128,14 +128,31 @@ func NewWithOptions(rootDir string, opts Options) (*Session, error) {
 
 // Append adds m to the in-memory history and writes it to conversation.jsonl.
 func (s *Session) Append(m llm.Message) error {
-	return s.AppendBatch([]llm.Message{m})
+	_, err := s.AppendAssigned(m)
+	return err
+}
+
+// AppendAssigned adds m and returns the normalized message that was persisted.
+func (s *Session) AppendAssigned(m llm.Message) (llm.Message, error) {
+	messages, err := s.AppendBatchAssigned([]llm.Message{m})
+	if len(messages) == 0 {
+		return llm.Message{}, err
+	}
+	return messages[0], err
 }
 
 // AppendBatch atomically adds messages to the conversation transcript. A
 // failed encode or write leaves both the file and in-memory indexes unchanged.
 func (s *Session) AppendBatch(messages []llm.Message) error {
+	_, err := s.AppendBatchAssigned(messages)
+	return err
+}
+
+// AppendBatchAssigned appends a batch and returns the normalized messages,
+// including generated IDs, in their persisted order.
+func (s *Session) AppendBatchAssigned(messages []llm.Message) ([]llm.Message, error) {
 	if len(messages) == 0 {
-		return nil
+		return nil, nil
 	}
 	s.mu.Lock()
 	prepared := make([]llm.Message, len(messages))
@@ -146,19 +163,19 @@ func (s *Session) AppendBatch(messages []llm.Message) error {
 		line, err := marshalJSONLine(prepared[i])
 		if err != nil {
 			s.mu.Unlock()
-			return err
+			return nil, err
 		}
 		lines[i] = line
 		data = append(data, line...)
 	}
 	if err := s.ensureFilesLocked(); err != nil {
 		s.mu.Unlock()
-		return err
+		return nil, err
 	}
 	offset, err := s.convFD.Seek(0, io.SeekEnd)
 	if err != nil {
 		s.mu.Unlock()
-		return err
+		return nil, err
 	}
 	written, writeErr := s.convFD.Write(data)
 	if writeErr == nil && written != len(data) {
@@ -171,9 +188,9 @@ func (s *Session) AppendBatch(messages []llm.Message) error {
 		}
 		s.mu.Unlock()
 		if rollbackErr != nil {
-			return errors.Join(writeErr, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
+			return nil, errors.Join(writeErr, fmt.Errorf("session: rollback conversation batch: %w", rollbackErr))
 		}
-		return writeErr
+		return nil, writeErr
 	}
 	entryOffset := offset
 	for i, message := range prepared {
@@ -185,12 +202,12 @@ func (s *Session) AppendBatch(messages []llm.Message) error {
 	historyPath := s.historyPath
 	s.mu.Unlock()
 	if !ok {
-		return nil
+		return prepared, nil
 	}
 	if s.recordActive && info.Kind == KindPrimary {
-		return SetActive(historyPath, info)
+		return prepared, SetActive(historyPath, info)
 	}
-	return RecordSession(historyPath, info)
+	return prepared, RecordSession(historyPath, info)
 }
 
 // AppendEvent persists e to events.jsonl. Unlike Append, the event itself

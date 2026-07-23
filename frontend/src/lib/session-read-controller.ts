@@ -1,7 +1,6 @@
 import {
   clearComposerHint,
   createSessionReadState,
-  markSessionProjectionIdle,
   projectActiveContextFailed,
   projectActiveContextLoaded,
   projectComposerHint,
@@ -25,6 +24,7 @@ import {
 import { isCompactCommandInput } from "./compact-ui.ts";
 import type {
   ActiveContextSnapshot,
+  AgentRuntimeStatusSnapshot,
   BrowserEvent,
   MediaRef,
   SessionShowResponse,
@@ -45,8 +45,21 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 
 type SessionReadSubscribeEvents = (
   id: string,
-  opts: { onEvent: (event: BrowserEvent) => void },
+  opts: {
+    since?: string;
+    onEvent: (event: BrowserEvent) => void;
+    onOpen?: () => void;
+    onError?: (event: Event) => void;
+  },
 ) => () => void;
+
+type SessionReadLiveOptions = {
+  since?: string;
+  loadStatus?: () => Promise<AgentRuntimeStatusSnapshot>;
+  onStatus?: (status: AgentRuntimeStatusSnapshot) => void;
+  onStatusRefreshError?: (error: unknown) => void;
+  onError?: (event: Event) => void;
+};
 
 export type SessionReadControllerNavigation = {
   clearRouteState: () => void;
@@ -79,7 +92,6 @@ export type SessionReadControllerPorts = {
 
 export type SessionReadController = ReturnType<typeof createSessionReadController>;
 
-const IDLE_STATUS_DELAY_MS = 1500;
 const COMPOSER_HINT_DELAY_MS = 1800;
 
 const noopNavigation: SessionReadControllerNavigation = {
@@ -102,7 +114,6 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     ...noopNavigation,
     ...ports.navigation,
   };
-  let idleTimer: TimerHandle | null = null;
   let composerHintTimer: TimerHandle | null = null;
   let initialCommandKey: string | null = null;
 
@@ -127,10 +138,10 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     route = { id };
   }
 
-  function resetForRoute(opts?: { activeTurnID?: string }) {
+  function resetForRoute() {
     clearTransientTimers();
     initialCommandKey = null;
-    setSessionReadState(resetSessionReadState(state, opts));
+    setSessionReadState(resetSessionReadState(state));
   }
 
   function setSessionReadState(next: SessionReadState) {
@@ -171,9 +182,6 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
         navigation.navigateToSession(effect.sessionID, effect.state);
         continue;
       }
-      if (effect.type === "scheduleIdleStatus") {
-        scheduleIdleStatus();
-      }
     }
   }
 
@@ -209,16 +217,51 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     }
   }
 
-  function subscribeLiveEvents(sessionID = route.id) {
+  function subscribeLiveEvents(
+    sessionID = route.id,
+    opts: SessionReadLiveOptions = {},
+  ) {
     let subscribed = true;
+    let statusRevision = 0;
+    let refreshGeneration = 0;
+    const refreshStatus = async () => {
+      if (!opts.loadStatus || !opts.onStatus) return;
+      const generation = ++refreshGeneration;
+      const revision = statusRevision;
+      try {
+        const status = await opts.loadStatus();
+        if (
+          !subscribed ||
+          !isLatestSessionRoute(route, sessionID) ||
+          generation !== refreshGeneration ||
+          revision !== statusRevision
+        ) {
+          return;
+        }
+        statusRevision += 1;
+        opts.onStatus(status);
+      } catch (error) {
+        if (!subscribed || generation !== refreshGeneration) return;
+        opts.onStatusRefreshError?.(error);
+      }
+    };
     const unsubscribe = ports.subscribeEvents(sessionID, {
+      since: opts.since,
       onEvent: (event) => {
         if (!subscribed || !isLatestSessionRoute(route, sessionID)) return;
+        statusRevision += 1;
+        opts.onStatus?.(event.status);
         runSessionReadResult(projectLiveBrowserEvent(state, event));
       },
+      onOpen: () => {
+        void refreshStatus();
+      },
+      onError: opts.onError,
     });
+    void refreshStatus();
     return () => {
       subscribed = false;
+      refreshGeneration += 1;
       unsubscribe();
       clearTransientTimers();
     };
@@ -279,11 +322,6 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
     runSessionReadResult(projectComposerHint(state, message));
   }
 
-  function scheduleIdleStatus() {
-    if (idleTimer !== null) clearTimer(idleTimer);
-    idleTimer = setTimer(() => updateReadState(markSessionProjectionIdle), IDLE_STATUS_DELAY_MS);
-  }
-
   function scheduleComposerHintClear() {
     if (composerHintTimer !== null) {
       clearTimer(composerHintTimer);
@@ -292,10 +330,6 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
   }
 
   function clearTransientTimers() {
-    if (idleTimer !== null) {
-      clearTimer(idleTimer);
-      idleTimer = null;
-    }
     if (composerHintTimer !== null) {
       clearTimer(composerHintTimer);
       composerHintTimer = null;

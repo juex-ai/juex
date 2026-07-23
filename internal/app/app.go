@@ -678,6 +678,20 @@ func (a *App) AddEventDelivery(delivery events.Delivery) func() {
 	return a.eventSink.AddDelivery(delivery)
 }
 
+func (a *App) AddEventProjection(projection events.Delivery) func() {
+	if a == nil || a.eventSink == nil {
+		return func() {}
+	}
+	return a.eventSink.AddProjection(projection)
+}
+
+func (a *App) ReadCommittedEvents(read func() error) error {
+	if a == nil || a.eventSink == nil {
+		return events.ErrDurableSinkClosed
+	}
+	return a.eventSink.ReadCommitted(read)
+}
+
 func (a *App) attachObservability(sess *session.Session) error {
 	if a == nil || a.Bus == nil || sess == nil {
 		return nil

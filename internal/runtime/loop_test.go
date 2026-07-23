@@ -1055,10 +1055,9 @@ func TestTurn_PlainResponse(t *testing.T) {
 		},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	var eventUsage llm.Usage
+	var responded LLMRespondedPayload
 	bus.Subscribe("llm.responded", func(e events.Event) {
-		payload := e.Payload.(LLMRespondedPayload)
-		eventUsage = payload.TokenUsage
+		responded = e.Payload.(LLMRespondedPayload)
 	})
 	out, err := eng.Turn(context.Background(), "hi")
 	if err != nil {
@@ -1073,8 +1072,11 @@ func TestTurn_PlainResponse(t *testing.T) {
 	if got := eng.Session.Info(time.Now()).TokenUsage; got != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
 		t.Fatalf("session token usage = %+v", got)
 	}
-	if eventUsage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
-		t.Fatalf("event usage = %+v", eventUsage)
+	if responded.TokenUsage != (llm.Usage{InputTokens: 10, OutputTokens: 5}) {
+		t.Fatalf("event usage = %+v", responded.TokenUsage)
+	}
+	if responded.MessageID == "" || responded.MessageID != eng.Session.History[1].ID {
+		t.Fatalf("responded message id = %q, history id = %q", responded.MessageID, eng.Session.History[1].ID)
 	}
 }
 
@@ -1239,10 +1241,9 @@ func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {
 		{Message: llm.TextMessage(llm.RoleAssistant, "received"), StopReason: llm.StopEndTurn},
 	}}
 	eng, bus := newEngine(t, prov, false)
-	var payloadKind string
+	var started TurnStartedPayload
 	bus.Subscribe("turn.started", func(e events.Event) {
-		payload := e.Payload.(TurnStartedPayload)
-		payloadKind = payload.Kind
+		started = e.Payload.(TurnStartedPayload)
 	})
 
 	msg := llm.TextMessage(llm.RoleUser, "local:message:hello")
@@ -1257,8 +1258,11 @@ func TestTurnMessage_PreservesUserMessageKind(t *testing.T) {
 	if got := eng.Session.History[0].Kind; got != llm.MessageKindMCPEvent {
 		t.Fatalf("history kind = %q", got)
 	}
-	if payloadKind != llm.MessageKindMCPEvent {
-		t.Fatalf("turn.started kind = %q", payloadKind)
+	if started.Kind != llm.MessageKindMCPEvent {
+		t.Fatalf("turn.started kind = %q", started.Kind)
+	}
+	if started.MessageID == "" || started.MessageID != eng.Session.History[0].ID {
+		t.Fatalf("turn.started message id = %q, history id = %q", started.MessageID, eng.Session.History[0].ID)
 	}
 }
 

@@ -2,9 +2,9 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 
 import {
+  captureSessionLiveSubscription,
   clearComposerHint,
   createSessionReadState,
-  markSessionProjectionIdle,
   projectComposerHint,
   projectInitialCommand,
   projectLiveBrowserEvent,
@@ -20,6 +20,7 @@ import {
   resetSessionReadState,
 } from "../../frontend/src/lib/session-read-state.ts";
 import type {
+  BrowserEvent,
   MediaRef,
   Message,
   SessionShowResponse,
@@ -31,15 +32,31 @@ const imageMedia: MediaRef = {
   sha256: "abc",
 };
 
-test("resetSessionReadState starts active turn reconciliation", () => {
-  const state = resetSessionReadState(createSessionReadState(), {
-    activeTurnID: "turn-1",
-  });
+test("resetSessionReadState clears route-local transcript state", () => {
+  const state = resetSessionReadState(createSessionReadState());
 
-  assert.equal(state.projection.turnActive, true);
-  assert.deepEqual(state.projection.status, { kind: "running" });
+  assert.equal(state.projection.messages.length, 0);
   assert.equal(state.composerHint, null);
   assert.equal(state.loadingOlderMessages, false);
+});
+
+test("live subscription keeps its bootstrap cursor across transcript refreshes", () => {
+  const initial = captureSessionLiveSubscription(
+    null,
+    session("s1", []),
+  );
+  const refreshed = captureSessionLiveSubscription(
+    initial,
+    { ...session("s1", []), event_cursor: "cursor-2" },
+  );
+  const switched = captureSessionLiveSubscription(
+    refreshed,
+    { ...session("s2", []), event_cursor: "cursor-3" },
+  );
+
+  assert.deepEqual(initial, { sessionID: "s1", cursor: "" });
+  assert.equal(refreshed, initial);
+  assert.deepEqual(switched, { sessionID: "s2", cursor: "cursor-3" });
 });
 
 test("session load failure leaves loading and route reset clears stale data", () => {
@@ -91,18 +108,10 @@ test("session transient failures extract plain API error objects", () => {
     error: "turn rejected",
   });
 
-  assert.deepEqual(result.state.projection.status, {
-    kind: "error",
-    detail: "turn rejected",
-  });
   assert.equal(result.state.submitError, "turn rejected");
 
   const fallbackResult = projectStartTurnFailed(createSessionReadState(), false, {});
 
-  assert.deepEqual(fallbackResult.state.projection.status, {
-    kind: "error",
-    detail: "Failed to start turn.",
-  });
   assert.equal(fallbackResult.state.submitError, "Failed to start turn.");
 });
 
@@ -117,21 +126,14 @@ test("projectLiveBrowserEvent carries projection effects through controller", ()
     },
   });
 
-  assert.equal(result.state.projection.turnActive, false);
-  assert.deepEqual(result.state.projection.status, { kind: "done" });
-  assert.deepEqual(result.effects, [
-    { type: "refresh" },
-    { type: "scheduleIdleStatus" },
-  ]);
+  assert.deepEqual(result.effects, [{ type: "refresh" }]);
 });
 
-test("terminal live event settles the optimistic active turn", () => {
-  const initial = resetSessionReadState(
-    projectSessionLoaded(createSessionReadState(), session("running", [])),
-    { activeTurnID: "turn-1" },
+test("terminal live event refreshes the persisted transcript", () => {
+  const initial = projectSessionLoaded(
+    createSessionReadState(),
+    session("running", []),
   );
-
-  assert.equal(initial.projection.activeTurnID, "turn-1");
   const result = projectLiveBrowserEvent(initial, {
     id: "evt-error",
     type: "turn.errored",
@@ -140,10 +142,243 @@ test("terminal live event settles the optimistic active turn", () => {
     payload: { error: "cancelled", error_kind: "cancelled" },
   });
 
-  assert.equal(result.state.projection.turnActive, false);
-  assert.equal(result.state.projection.activeTurnID, null);
-  assert.equal(result.state.projection.settledTurnID, "turn-1");
   assert.deepEqual(result.effects, [{ type: "refresh" }]);
+});
+
+test("replay skips transcript content already present in the initial session page", () => {
+  let state = projectSessionLoaded(
+    createSessionReadState(),
+    session("s1", [
+      {
+        id: "msg-user",
+        role: "user",
+        blocks: [{ type: "text", text: "run command" }],
+      },
+      {
+        id: "msg-assistant",
+        role: "assistant",
+        model: "gpt-test",
+        blocks: [
+          { type: "text", text: "done" },
+          {
+            type: "tool_use",
+            tool_use_id: "tool-1",
+            tool_name: "exec_command",
+          },
+        ],
+      },
+      {
+        id: "msg-tool-result",
+        role: "user",
+        blocks: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-1",
+            content: "ok",
+          },
+        ],
+      },
+      {
+        id: "msg-hook",
+        role: "system",
+        kind: "hook_event",
+        blocks: [{ type: "text", text: "hook completed" }],
+      },
+      {
+        id: "pending-message-1",
+        role: "user",
+        blocks: [{ type: "text", text: "queued follow-up" }],
+      },
+    ]),
+  );
+
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-started",
+    type: "turn.started",
+    ts: "2026-07-23T11:00:00Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "run command",
+      message_id: "msg-user",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-responded",
+    type: "llm.responded",
+    ts: "2026-07-23T11:00:01Z",
+    turn_id: "turn-1",
+    payload: {
+      message_id: "msg-assistant",
+      stop_reason: "tool_use",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      token_usage: { input_tokens: 1, output_tokens: 1 },
+      blocks: [{ type: "text", text: "done" }],
+      text: "done",
+      thinking: "",
+      tool_calls: [],
+      model: "gpt-test",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-tool-requested",
+    type: "tool.requested",
+    ts: "2026-07-23T11:00:02Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      timeout_seconds: 30,
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-tool-completed",
+    type: "tool.completed",
+    ts: "2026-07-23T11:00:03Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      timeout_seconds: 30,
+      len: 2,
+      preview: "ok",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-hook-trace",
+    type: "hook.trace",
+    ts: "2026-07-23T11:00:04Z",
+    turn_id: "turn-1",
+    payload: {
+      text: "hook completed",
+      message_id: "msg-hook",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-pending-queued",
+    type: "pending_input.queued",
+    ts: "2026-07-23T11:00:05Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "queued follow-up",
+      kind: "user",
+      message_id: "pending-message-1",
+      pending_count: 1,
+      max_pending_inputs: 16,
+    },
+  }).state;
+
+  assert.deepEqual(state.projection.messages, []);
+  assert.deepEqual(state.projection.queuedInput.items, []);
+});
+
+test("reconnect replay skips transcript content already projected live", () => {
+  let state = projectSessionLoaded(
+    createSessionReadState(),
+    session("s1", []),
+  );
+  const liveEvents: BrowserEvent[] = [
+    {
+      id: "evt-started",
+      type: "turn.started",
+      ts: "2026-07-23T14:00:00Z",
+      turn_id: "turn-1",
+      payload: {
+        input: "run command",
+        kind: "user",
+        message_id: "msg-user",
+      },
+    },
+    {
+      id: "evt-responded",
+      type: "llm.responded",
+      ts: "2026-07-23T14:00:01Z",
+      turn_id: "turn-1",
+      payload: {
+        message_id: "msg-assistant",
+        stop_reason: "tool_use",
+        usage: { input_tokens: 1, output_tokens: 1 },
+        token_usage: { input_tokens: 1, output_tokens: 1 },
+        blocks: [{ type: "text", text: "done" }],
+        text: "done",
+        thinking: "",
+        tool_calls: [],
+        model: "gpt-test",
+      },
+    },
+    {
+      id: "evt-tool-requested",
+      type: "tool.requested",
+      ts: "2026-07-23T14:00:02Z",
+      turn_id: "turn-1",
+      payload: {
+        name: "exec_command",
+        tool_use_id: "tool-1",
+        timeout_seconds: 30,
+      },
+    },
+    {
+      id: "evt-tool-completed",
+      type: "tool.completed",
+      ts: "2026-07-23T14:00:03Z",
+      turn_id: "turn-1",
+      payload: {
+        name: "exec_command",
+        tool_use_id: "tool-1",
+        timeout_seconds: 30,
+        len: 2,
+        preview: "ok",
+      },
+    },
+    {
+      id: "evt-hook-trace",
+      type: "hook.trace",
+      ts: "2026-07-23T14:00:04Z",
+      turn_id: "turn-1",
+      payload: {
+        text: "hook completed",
+        message_id: "msg-hook",
+      },
+    },
+  ];
+  for (const event of liveEvents) {
+    state = projectLiveBrowserEvent(state, event).state;
+  }
+
+  const beforeReplay = structuredClone(state.projection);
+  for (const event of liveEvents) {
+    state = projectLiveBrowserEvent(state, event).state;
+  }
+  assert.deepEqual(state.projection, beforeReplay);
+
+  const queuedEvent: BrowserEvent = {
+    id: "evt-pending-queued",
+    type: "pending_input.queued",
+    ts: "2026-07-23T14:00:05Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "queued follow-up",
+      kind: "user",
+      message_id: "msg-pending",
+      pending_count: 1,
+      max_pending_inputs: 16,
+    },
+  };
+  state = projectLiveBrowserEvent(state, queuedEvent).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-pending-draining",
+    type: "pending_input.draining",
+    ts: "2026-07-23T14:00:06Z",
+    turn_id: "turn-1",
+    payload: {
+      count: 1,
+      pending_count: 0,
+      max_pending_inputs: 16,
+    },
+  }).state;
+
+  const beforeQueuedReplay = structuredClone(state.projection);
+  state = projectLiveBrowserEvent(state, queuedEvent).state;
+  assert.deepEqual(state.projection, beforeQueuedReplay);
 });
 
 test("projectLiveBrowserEvent refreshes session goal state", () => {
@@ -180,7 +415,6 @@ test("projectLiveBrowserEvent refreshes session goal state", () => {
   });
   assert.equal(result.state.data?.id, "s1");
   assert.deepEqual(result.effects, []);
-  assert.deepEqual(result.state.projection.status, { kind: "idle" });
 });
 
 test("projectLiveBrowserEvent refreshes session notes", () => {
@@ -219,12 +453,10 @@ test("projectStartTurnSucceeded records queued and optimistic turns", () => {
   });
   state = result.state;
   assert.equal(state.projection.queuedInput.items.length, 1);
-  assert.deepEqual(state.projection.status, { kind: "pending", count: 1 });
 
   result = projectStartTurnSucceeded(state, "new prompt", {
     turn_id: "turn-2",
   });
-  assert.equal(result.state.projection.turnActive, true);
   assert.equal(result.state.projection.messages.at(-2)?.turn_id, "turn-2");
   assert.deepEqual(result.effects, []);
 });
@@ -239,7 +471,6 @@ test("projectStartTurnSucceeded records optimistic image attachments", () => {
 
   const user = result.state.projection.messages.at(-2);
   assert.deepEqual(user?.blocks, [{ type: "image", media: imageMedia }]);
-  assert.equal(result.state.projection.turnActive, true);
 });
 
 test("projectStartTurnSucceeded surfaces attachment capability warnings", () => {
@@ -282,14 +513,14 @@ test("projectStartTurnSucceeded emits navigation effect for /new", () => {
     {
       type: "navigateToSession",
       sessionID: "session-2",
-      state: { activeTurnID: "turn-new" },
+      state: null,
     },
   ]);
 });
 
 test("projectStartTurnSucceeded settles compact command with refresh effect", () => {
   let state = projectPendingSubmit(createSessionReadState(), "/compact");
-  assert.equal(state.projection.compactActive, true);
+  assert.equal(state.projection.messages.at(-1)?.pending, true);
 
   const result = projectStartTurnSucceeded(state, "/compact", {
     command: {
@@ -299,14 +530,12 @@ test("projectStartTurnSucceeded settles compact command with refresh effect", ()
     },
   });
 
-  assert.equal(result.state.projection.compactActive, false);
   assert.equal(
     result.state.projection.compactCommandInputs["compact-1"],
     "/compact",
   );
   assert.deepEqual(result.effects, [
     { type: "refresh", preserveLiveMessages: true },
-    { type: "scheduleIdleStatus" },
   ]);
 });
 
@@ -317,10 +546,7 @@ test("projectInitialCommand projects slash command and clears route state", () =
   });
 
   assert.equal(result.state.projection.messages.length, 2);
-  assert.deepEqual(result.effects, [
-    { type: "clearRouteState" },
-    { type: "scheduleIdleStatus" },
-  ]);
+  assert.deepEqual(result.effects, [{ type: "clearRouteState" }]);
 });
 
 test("projectInitialCommand preserves compact command input across refresh", () => {
@@ -337,7 +563,6 @@ test("projectInitialCommand preserves compact command input across refresh", () 
   assert.deepEqual(result.effects, [
     { type: "refresh", preserveLiveMessages: true },
     { type: "clearRouteState" },
-    { type: "scheduleIdleStatus" },
   ]);
 });
 
@@ -400,14 +625,10 @@ test("composer hint and input changes are controller state", () => {
   assert.equal(state.composerHint, null);
 
   state = projectStartTurnFailed(state, false, new Error("failed")).state;
-  assert.deepEqual(state.projection.status, { kind: "error", detail: "failed" });
+  assert.equal(state.submitError, "failed");
 
   state = projectPromptInputChanged(state);
-  assert.deepEqual(state.projection.status, { kind: "idle" });
   assert.equal(state.submitError, null);
-
-  state = markSessionProjectionIdle(state);
-  assert.deepEqual(state.projection.status, { kind: "idle" });
 });
 
 function session(id: string, messages: Message[]): SessionShowResponse {
@@ -421,6 +642,7 @@ function session(id: string, messages: Message[]): SessionShowResponse {
     turns: 1,
     preview: "preview",
     token_usage: { input_tokens: 1, output_tokens: 1 },
+    event_cursor: "",
     messages,
   };
 }

@@ -48,6 +48,9 @@ func TestHookTraceMessageIsUIOnly(t *testing.T) {
 	if !strings.Contains(traceEvent.Text, "hook fake completed UserPromptSubmit") {
 		t.Fatalf("hook trace event = %+v", traceEvent)
 	}
+	if traceEvent.MessageID == "" || traceEvent.MessageID != trace.ID {
+		t.Fatalf("hook trace message id = %q, history id = %q", traceEvent.MessageID, trace.ID)
+	}
 	for _, history := range prov.histories {
 		for _, message := range history {
 			if message.Kind == llm.MessageKindHookEvent {

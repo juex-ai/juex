@@ -139,6 +139,37 @@ func TestSessionAppendBatchPersistsAdjacentMessages(t *testing.T) {
 	}
 }
 
+func TestSessionAppendAssignedReturnsPersistedMessageIDs(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	user, err := s.AppendAssigned(llm.TextMessage(llm.RoleUser, "hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := s.AppendBatchAssigned([]llm.Message{
+		llm.TextMessage(llm.RoleUser, "model switched"),
+		llm.TextMessage(llm.RoleAssistant, "continuing"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if user.ID == "" || len(batch) != 2 || batch[0].ID == "" || batch[1].ID == "" {
+		t.Fatalf("assigned messages = user:%+v batch:%+v", user, batch)
+	}
+	got := s.History
+	if got[0].ID != user.ID || got[1].ID != batch[0].ID || got[2].ID != batch[1].ID {
+		t.Fatalf("history ids = [%q %q %q], assigned = [%q %q %q]",
+			got[0].ID, got[1].ID, got[2].ID,
+			user.ID, batch[0].ID, batch[1].ID,
+		)
+	}
+}
+
 func TestSystemNoticeRetainsUserTurnSummarySemantics(t *testing.T) {
 	s, err := New(t.TempDir())
 	if err != nil {

@@ -2,6 +2,7 @@ import type { MediaRef } from "../types.ts";
 
 export type QueuedInput = {
   id: string;
+  messageID?: string;
   input: string;
   kind?: string;
   attachments?: MediaRef[];
@@ -22,18 +23,24 @@ export function enqueueQueuedInput(
   kind: string | undefined,
   pendingCount: number,
   attachments: MediaRef[] = [],
+  messageID?: string,
 ): QueuedInputState {
   const hasInput = Boolean(input) || attachments.length > 0;
   if (!hasInput) return state;
   const current = state.items;
   let nextSeq = state.nextSeq;
-  const makeItem = (existing?: QueuedInput): QueuedInput => ({
-    id: existing?.id ?? `queued-${nextSeq++}`,
-    input: input ?? "",
-    kind,
-    attachments:
-      attachments.length > 0 ? attachments : (existing?.attachments ?? []),
-  });
+  const makeItem = (existing?: QueuedInput): QueuedInput => {
+    const item: QueuedInput = {
+      id: existing?.id ?? messageID ?? `queued-${nextSeq++}`,
+      input: input ?? "",
+      kind,
+      attachments:
+        attachments.length > 0 ? attachments : (existing?.attachments ?? []),
+    };
+    const persistedID = messageID ?? existing?.messageID;
+    if (persistedID) item.messageID = persistedID;
+    return item;
+  };
 
   if (pendingCount > 0) {
     if (current.length > pendingCount) return state;
@@ -44,6 +51,7 @@ export function enqueueQueuedInput(
       if (
         existing?.input === nextItem.input &&
         existing.kind === nextItem.kind &&
+        existing.messageID === nextItem.messageID &&
         sameAttachments(existing.attachments, nextItem.attachments ?? [])
       ) {
         return state;

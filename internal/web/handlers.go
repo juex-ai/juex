@@ -118,6 +118,7 @@ type sessionShowResponse struct {
 	session.Info
 	Messages        []sessionMessageResponse    `json:"messages"`
 	Model           string                      `json:"model,omitempty"`
+	EventCursor     string                      `json:"event_cursor"`
 	HasMoreBefore   bool                        `json:"has_more_before"`
 	OldestMessageID string                      `json:"oldest_message_id,omitempty"`
 	Goal            *runtime.GoalStatusSnapshot `json:"goal,omitempty"`
@@ -163,12 +164,16 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
 		var (
-			info  session.Info
-			page  session.MessagePage
-			goal  *runtime.GoalStatusSnapshot
-			notes *runtime.NotesSnapshot
+			info   session.Info
+			page   session.MessagePage
+			cursor string
+			goal   *runtime.GoalStatusSnapshot
+			notes  *runtime.NotesSnapshot
 		)
 		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
+			if as.app.Status != nil {
+				cursor = as.app.Status.Snapshot().Cursor
+			}
 			info = sess.Info(time.Now().UTC())
 			var err error
 			page, err = sess.TranscriptMessagePage(window.Before, window.Limit)
@@ -188,6 +193,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 				Info:            info,
 				Messages:        messagesForSessionResponse(page.Messages),
 				Model:           s.opts.Cfg.Model,
+				EventCursor:     cursor,
 				HasMoreBefore:   page.HasMoreBefore,
 				OldestMessageID: page.OldestMessageID,
 				Goal:            goal,
@@ -615,24 +621,31 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
 
-	since := sseResumeCursor(r)
-	if since != "" {
-		// Replay missed events from events.jsonl. The path comes from the
-		// session record so we never read outside the sessions dir.
-		var f *os.File
-		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
-			var openErr error
-			f, openErr = os.Open(filepath.Join(sess.Dir, "events.jsonl"))
-			return openErr
-		})
+	var replayDeduper *browserReplayDeduplicator
+	since, replayRequested := sseResumeCursorWithPresence(r)
+	if replayRequested {
+		replay, err := captureCommittedEventReplay(as.app, id)
 		if err == nil {
-			replayed, replayErr := replaySince(f, since)
-			f.Close()
+			journal, replayErr := replay.readJournal()
+			if closeErr := replay.Close(); closeErr != nil {
+				log.Printf("web: close events replay for %s: %v", id, closeErr)
+			}
 			if replayErr != nil {
 				log.Printf("web: events replay for %s: %v", id, replayErr)
 			}
-			for _, e := range replayed {
-				if err := writeSSEFrame(w, e); err != nil {
+			replayed, projectionErr := projectBrowserEvents(
+				replay.seed,
+				journal,
+				since,
+				replay.authoritative,
+			)
+			if projectionErr != nil {
+				log.Printf("web: browser projection replay for %s: %v", id, projectionErr)
+			}
+			replayBoundary := as.bcast.replayBoundary(sub, replayed)
+			replayDeduper = newBrowserReplayDeduplicator(replayed, replayBoundary)
+			for _, event := range replayed {
+				if err := writeBrowserSSEFrame(w, event); err != nil {
 					return
 				}
 			}
@@ -642,14 +655,17 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	ctx := r.Context()
 	for {
 		select {
-		case e, ok := <-sub.ch:
+		case event, ok := <-sub.ch:
 			if !ok {
 				return
+			}
+			if replayDeduper != nil && replayDeduper.skip(event) {
+				continue
 			}
 			if err := as.app.ReadSessionID(id, func(*session.Session) error { return nil }); err != nil {
 				return
 			}
-			if err := writeSSEFrame(w, e); err != nil {
+			if err := writeBrowserSSEFrame(w, event); err != nil {
 				return
 			}
 		case <-sub.done:
@@ -658,6 +674,57 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 	}
+}
+
+type browserReplayDeduplicator struct {
+	durableIDs     map[string]struct{}
+	replayBoundary uint64
+}
+
+func newBrowserReplayDeduplicator(
+	replayed []BrowserEvent,
+	replayBoundary uint64,
+) *browserReplayDeduplicator {
+	if len(replayed) == 0 {
+		return nil
+	}
+	// The handler subscribes before replay, and the subscriber channel is the
+	// only place duplicates can wait. If more than this many visible events
+	// arrive during replay, the bounded broadcaster drops the subscriber.
+	start := max(0, len(replayed)-broadcasterBufferSize)
+	ids := make(map[string]struct{}, len(replayed)-start)
+	for _, event := range replayed[start:] {
+		if !event.transient && event.ID != "" {
+			ids[event.ID] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return &browserReplayDeduplicator{
+		durableIDs:     ids,
+		replayBoundary: replayBoundary,
+	}
+}
+
+func (d *browserReplayDeduplicator) skip(event BrowserEvent) bool {
+	if d == nil || len(d.durableIDs) == 0 {
+		return false
+	}
+	// A queued transient may predate a durable terminal event already emitted
+	// by replay. Drop it until the durable handoff boundary is known, otherwise
+	// its older status could roll the browser back after terminal replay.
+	if event.transient {
+		return event.sequence <= d.replayBoundary
+	}
+	if _, duplicate := d.durableIDs[event.ID]; duplicate {
+		delete(d.durableIDs, event.ID)
+		return true
+	}
+	// Broadcaster delivery is ordered. The first unseen durable event is past
+	// the replay tail, so no older duplicate can appear after it.
+	d.durableIDs = nil
+	return false
 }
 
 func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request, id string) {
