@@ -85,9 +85,18 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 	if err != nil {
 		return GrepResult{}, fmt.Errorf("grep: bad pattern: %w", err)
 	}
-	info, err := os.Stat(req.Path)
+	info, err := os.Lstat(req.Path)
 	if err != nil {
 		return GrepResult{}, fmt.Errorf("grep: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		info, err = os.Stat(req.Path)
+		if err != nil {
+			return GrepResult{}, fmt.Errorf("grep: %w", err)
+		}
+		if info.IsDir() {
+			return GrepResult{}, nil
+		}
 	}
 	if info.IsDir() && isFixedExcludedDirectory(req.Path) {
 		return GrepResult{}, nil

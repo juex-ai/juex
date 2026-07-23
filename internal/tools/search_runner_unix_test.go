@@ -90,7 +90,8 @@ func TestRipgrepRunnerDoesNotTraverseDirectorySymlinksAndAllowsExplicitFileSymli
 	if err := os.Symlink(sharedFile, fileLink); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(sharedDir, filepath.Join(root, "deps")); err != nil {
+	directoryLink := filepath.Join(root, "deps")
+	if err := os.Symlink(sharedDir, directoryLink); err != nil {
 		t.Fatal(err)
 	}
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
@@ -105,6 +106,14 @@ func TestRipgrepRunnerDoesNotTraverseDirectorySymlinksAndAllowsExplicitFileSymli
 	output := formatGrepResult(result)
 	if !strings.Contains(output, "local.txt") || strings.Contains(output, "config.link") || strings.Contains(output, "deps/inside.txt") {
 		t.Fatalf("directory grep symlink boundary output = %q", output)
+	}
+
+	result, err = runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: directoryLink})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Matches) != 0 {
+		t.Fatalf("explicit symlinked-directory matches = %+v, want none", result.Matches)
 	}
 
 	result, err = runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: fileLink})
