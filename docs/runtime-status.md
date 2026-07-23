@@ -8,6 +8,10 @@ the CLI, single-agent web API, browser UI, and Fleet.
 `internal/runtime.StatusStore` projects committed runtime events into one
 `StatusSnapshot`. It owns turn lifecycle, execution phase, tool-call state,
 pending-input state, token/context usage, and presentation errors.
+`internal/statusstream` owns the transport-neutral distribution mechanism:
+current snapshot storage, optional bounded cursor replay, replay-to-live
+sequencing, latest-value coalescing, and subscription cleanup. It does not
+interpret runtime Events.
 
 Other concerns keep separate owners:
 
@@ -29,18 +33,29 @@ Session consumers use this sequence:
 3. subscribe to `GET /api/sessions/<id>/status/events?since=<cursor>`
 4. replace local state with every later full snapshot
 
-`Last-Event-ID` takes precedence over `since` on reconnect. A same-cursor
+The Web SSE adapter resolves `Last-Event-ID` before `since` on reconnect and
+opens the runtime stream after that single cursor. The stream presents replay
+and live updates through one sequential `Next` operation. A same-cursor
 subscription may receive the current snapshot again because transient
 presentation changes and restart recovery do not advance the durable cursor.
-Replacement is idempotent.
+Replacement is idempotent. If a cursor occurs more than once in retained
+history, replay begins after its latest occurrence.
 
 The active session uses its in-memory store. A historical session builds a
-read-only store from its journal, emits its available snapshots, and closes
-without activating that session.
+read-only store from its journal, emits its available snapshots through a
+non-following stream, and closes without activating that session.
 
 The agent-level equivalents are `GET /api/status` and
 `GET /api/status/events`. Fleet consumes these routes and publishes aggregate
-`agent.status` updates on `GET /api/fleet/events`.
+`agent.status` updates on `GET /api/fleet/events`. Agent Activity distribution
+is current-only: its SSE id remains the selected Session cursor for wire
+compatibility, but that cursor can repeat, move backwards, or become empty as
+selection changes, so it is not used for aggregate history replay.
+
+Fleet's aggregate stream keeps its separate
+`stream-id:generation:sequence` cursor and per-Agent coalescing policy. Those
+semantics cover a roster of Agents and are not delegated to the single-value
+status stream.
 
 `GET /api/sessions/<id>/events` remains the transcript stream. It does not
 provide runtime status.

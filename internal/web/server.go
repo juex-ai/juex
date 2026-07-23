@@ -19,7 +19,9 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
+	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/statusapi"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -45,12 +47,12 @@ type ReadyInfo struct {
 
 // Server is a long-running HTTP server for one WorkDir.
 type Server struct {
-	opts        Options
-	modelHealth *llm.ModelHealth
-	sessions    sync.Map // session id (string) → *activeSession
-	nextTurn    atomic.Uint64
-	startedAt   time.Time
-	statusHub   *agentStatusHub
+	opts         Options
+	modelHealth  *llm.ModelHealth
+	sessions     sync.Map // session id (string) → *activeSession
+	nextTurn     atomic.Uint64
+	startedAt    time.Time
+	statusStream *statusapi.ActivityStore
 
 	createMu sync.Mutex // serialises POST /api/sessions
 	closeMu  sync.Mutex
@@ -79,7 +81,7 @@ type activeSession struct {
 	StartedAt time.Time
 
 	turns             *webTurnTransport
-	statusUnsubscribe func()
+	statusStreamClose func()
 	workCtx           context.Context
 	workCancel        context.CancelFunc
 	workWG            sync.WaitGroup
@@ -91,7 +93,7 @@ func NewServer(opts Options) *Server {
 		opts:          opts,
 		modelHealth:   llm.NewModelHealth(llm.ModelHealthOptions{}),
 		startedAt:     time.Now().UTC(),
-		statusHub:     newAgentStatusHub(),
+		statusStream:  statusapi.NewActivityStore(),
 		runtimeMCPErr: map[string]string{},
 		runtimeSkills: app.NewRuntimeStatusSkillCache(),
 	}
@@ -384,9 +386,9 @@ func (as *activeSession) close() {
 	}
 	as.closeOnce.Do(func() {
 		as.cancelWork()
-		if as.statusUnsubscribe != nil {
-			as.statusUnsubscribe()
-			as.statusUnsubscribe = nil
+		if as.statusStreamClose != nil {
+			as.statusStreamClose()
+			as.statusStreamClose = nil
 		}
 		if as.turns != nil {
 			as.turns.close()
@@ -451,7 +453,7 @@ func (s *Server) closeActiveSession(id string) bool {
 		return false
 	}
 	v.(*activeSession).close()
-	s.statusHub.publish(s.agentActivity())
+	s.statusStream.Publish(s.agentActivity())
 	return true
 }
 
@@ -552,25 +554,28 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	s.sessions.Store(identity.ID, as)
 	if a.Status != nil {
 		snapshot := a.Status.Snapshot()
-		subscription := a.Status.SubscribeFrom(snapshot.Cursor)
-		as.statusUnsubscribe = subscription.Unsubscribe
+		stream := a.Status.OpenStream(runtime.StatusStreamOptions{
+			After:  snapshot.Cursor,
+			Follow: true,
+		})
+		as.statusStreamClose = stream.Close
 		as.workWG.Add(1)
 		go func() {
 			defer as.workWG.Done()
+			first := true
 			for {
-				select {
-				case _, ok := <-subscription.Updates:
-					if !ok {
-						return
-					}
-					s.statusHub.publish(s.agentActivity())
-				case <-as.workCtx.Done():
+				if _, ok := stream.Next(as.workCtx); !ok {
 					return
 				}
+				if first {
+					first = false
+					continue
+				}
+				s.statusStream.Publish(s.agentActivity())
 			}
 		}()
 	}
-	s.statusHub.publish(s.agentActivity())
+	s.statusStream.Publish(s.agentActivity())
 	if session.NormalizeKind(identity.Kind) == session.KindPrimary {
 		s.closeOtherPrimarySessions(identity.ID)
 	}

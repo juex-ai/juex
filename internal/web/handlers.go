@@ -671,45 +671,28 @@ func (s *Server) handleSessionStatus(w http.ResponseWriter, r *http.Request, id 
 
 func (s *Server) handleSessionStatusEvents(w http.ResponseWriter, r *http.Request, id string) {
 	since := sseResumeCursor(r)
-	subscription, live, err := s.statusSubscriptionForSession(id, since)
+	stream, err := s.statusStreamForSession(id, since)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "session not found: "+id)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	defer stream.Close()
+	if _, ok := w.(http.Flusher); !ok {
 		writeErr(w, http.StatusInternalServerError, "general_error", "streaming not supported")
 		return
 	}
-	defer subscription.Unsubscribe()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	for _, snapshot := range subscription.Snapshots {
+	for {
+		snapshot, ok := stream.Next(r.Context())
+		if !ok {
+			return
+		}
 		if snapshot.Session.ID != id {
 			return
 		}
 		if err := writeStatusSSE(w, statusapi.FromRuntime(snapshot)); err != nil {
-			return
-		}
-	}
-	flusher.Flush()
-	if !live {
-		return
-	}
-	for {
-		select {
-		case snapshot, ok := <-subscription.Updates:
-			if !ok {
-				return
-			}
-			if snapshot.Session.ID != id {
-				return
-			}
-			if err := writeStatusSSE(w, statusapi.FromRuntime(snapshot)); err != nil {
-				return
-			}
-		case <-r.Context().Done():
 			return
 		}
 	}
@@ -744,33 +727,36 @@ func (s *Server) statusSnapshotForSession(id string) (runtime.StatusSnapshot, er
 	return status.Snapshot(), nil
 }
 
-func (s *Server) statusSubscriptionForSession(id, since string) (*runtime.StatusSubscription, bool, error) {
+func (s *Server) statusStreamForSession(id, since string) (*runtime.StatusStream, error) {
 	if id == "" || filepath.Base(id) != id {
-		return nil, false, os.ErrNotExist
+		return nil, os.ErrNotExist
 	}
 	if value, ok := s.sessions.Load(id); ok {
 		active := value.(*activeSession)
 		if active.app == nil || active.app.Status == nil {
-			return nil, false, os.ErrNotExist
+			return nil, os.ErrNotExist
 		}
-		var subscription *runtime.StatusSubscription
+		var stream *runtime.StatusStream
 		err := active.app.ReadSessionID(id, func(*session.Session) error {
-			subscription = active.app.Status.SubscribeFrom(since)
+			stream = active.app.Status.OpenStream(runtime.StatusStreamOptions{
+				After:  since,
+				Follow: true,
+			})
 			return nil
 		})
 		if err == nil {
-			return subscription, true, nil
+			return stream, nil
 		}
 		if !errors.Is(err, app.ErrSessionChanged) && !errors.Is(err, app.ErrSessionUnavailable) {
-			return nil, false, err
+			return nil, err
 		}
 	}
 
 	status, err := s.historicalStatusStore(id)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return status.SubscribeFrom(since), false, nil
+	return status.OpenStream(runtime.StatusStreamOptions{After: since}), nil
 }
 
 func (s *Server) historicalStatusStore(id string) (*runtime.StatusStore, error) {

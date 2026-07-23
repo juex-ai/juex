@@ -1,11 +1,12 @@
 package web
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
-	"github.com/juex-ai/juex/internal/statusapi"
 )
 
 func TestAgentStatusReportsRunningSession(t *testing.T) {
@@ -126,8 +126,8 @@ func TestLegacyAgentActivityRouteReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestAgentStatusHubSameCursorSubscriptionReturnsCurrentSnapshot(t *testing.T) {
-	hub := newAgentStatusHub()
+func TestAgentStatusStreamReturnsCurrentSnapshotOnSameCursorReconnect(t *testing.T) {
+	server := NewServer(Options{})
 	status := runtime.NewStatusStore(runtime.StatusSeed{SessionID: "session-1"})
 	status.Publish(events.Event{
 		ID:        "cursor-1",
@@ -135,85 +135,65 @@ func TestAgentStatusHubSameCursorSubscriptionReturnsCurrentSnapshot(t *testing.T
 		TurnID:    "turn-1",
 		Timestamp: time.Now().UTC(),
 	})
-	snapshot := status.Snapshot()
-	publicStatus := statusapi.FromRuntime(snapshot)
-	hub.publish(agentActivityResponse{
-		State:          agentActivityWorking,
-		SelectedStatus: &publicStatus,
+	server.sessions.Store("session-1", &activeSession{
+		app: &app.App{
+			Session: &session.Session{ID: "session-1"},
+			Status:  status,
+		},
+		StartedAt: time.Now().UTC(),
 	})
+	server.statusStream.Publish(server.agentActivity())
 
-	subscription := hub.subscribe("cursor-1")
-	defer subscription.cancel()
-	if len(subscription.initial) != 1 ||
-		subscription.initial[0].SelectedStatus == nil ||
-		subscription.initial[0].SelectedStatus.Cursor != "cursor-1" {
-		t.Fatalf("initial = %+v", subscription.initial)
+	httpServer := httptest.NewServer(server.APIHandler())
+	defer httpServer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		httpServer.URL+"/api/status/events?since=older-cursor",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestAgentStatusHubInitialSubscriptionIsIdle(t *testing.T) {
-	hub := newAgentStatusHub()
-	subscription := hub.subscribe("")
-	defer subscription.cancel()
-
-	if len(subscription.initial) != 1 || subscription.initial[0].State != agentActivityIdle {
-		t.Fatalf("initial = %+v, want idle activity", subscription.initial)
+	request.Header.Set("Last-Event-ID", "cursor-1")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
+	defer response.Body.Close()
 
-func TestAgentStatusHubConcurrentPublishDeliversCurrentStatusLast(t *testing.T) {
-	hub := newAgentStatusHub()
-	subscriptions := make([]agentStatusSubscription, 64)
-	for i := range subscriptions {
-		subscriptions[i] = hub.subscribe("")
-		defer subscriptions[i].cancel()
-	}
-
-	const publishCount = 256
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(publishCount)
-	for i := 1; i <= publishCount; i++ {
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			hub.publish(agentActivityResponse{
-				SelectedStatus: &statusapi.Snapshot{
-					Session: statusapi.SessionStatus{ID: strconv.Itoa(i)},
-				},
-			})
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-
-	hub.mu.Lock()
-	want := hub.current
-	hub.mu.Unlock()
-	for i, subscription := range subscriptions {
-		var last agentActivityResponse
-		for {
-			select {
-			case last = <-subscription.updates:
-			default:
-				if selectedSessionID(last) != selectedSessionID(want) {
-					t.Fatalf(
-						"subscription %d last session = %q, want %q",
-						i,
-						selectedSessionID(last),
-						selectedSessionID(want),
-					)
-				}
-				goto nextSubscription
+	scanner := bufio.NewScanner(response.Body)
+	var (
+		eventID string
+		event   agentStatusStreamEvent
+	)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "id:"):
+			eventID = strings.TrimSpace(strings.TrimPrefix(line, "id:"))
+		case strings.HasPrefix(line, "data:"):
+			if err := json.Unmarshal(
+				[]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))),
+				&event,
+			); err != nil {
+				t.Fatal(err)
 			}
+			cancel()
 		}
-	nextSubscription:
+		if event.Type != "" {
+			break
+		}
 	}
-}
-
-func selectedSessionID(activity agentActivityResponse) string {
-	if activity.SelectedStatus == nil {
-		return ""
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
 	}
-	return activity.SelectedStatus.Session.ID
+	if eventID != "cursor-1" ||
+		event.Type != "agent.status" ||
+		event.Activity.SelectedStatus == nil ||
+		event.Activity.SelectedStatus.Session.ID != "session-1" {
+		t.Fatalf("event id/body = %q/%+v", eventID, event)
+	}
 }

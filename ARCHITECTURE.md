@@ -95,6 +95,7 @@ juex/
 │   │   └── stream_error.go
 │   ├── toolevents/               # live tool event names, payload contracts, and constructors
 │   ├── statusapi/                # transport contract projected from runtime status
+│   ├── statusstream/             # current snapshot, cursor replay, and latest-value fan-out
 │   ├── tools/                    # tool registry + builtin tools
 │   │   ├── registry.go
 │   │   ├── builtin.go            # builtin provider composition
@@ -194,7 +195,8 @@ implementation decisions live.
 | `internal/session` | Session identity and kind, transcript/Event persistence, metadata and history index, active metadata, usage snapshots, scratchpad path, single-writer locks | Prompt assembly, Provider calls, Tool dispatch, Session attachment orchestration |
 | `internal/cancellation` | Typed user, signal, and runtime-restart cancellation causes plus signal-aware contexts | Transport Stop admission, Turn reaction policy, user-facing status DTOs |
 | `internal/errorclass` | Shared timeout/cancellation/auth/permission/error classification and public error wording | Retry decisions, cancellation sources, transport rendering |
-| `internal/statusapi` | Transport-neutral runtime status DTOs and projection from runtime snapshots | Runtime state transitions, Session persistence, HTTP/SSE routing |
+| `internal/statusapi` | Transport-neutral runtime status DTOs, projection from runtime snapshots, and the current-only Agent Activity stream adapter | Runtime state transitions, Session persistence, HTTP/SSE routing, multi-Agent Fleet replay |
+| `internal/statusstream` | Replaceable snapshot storage, optional bounded cursor replay, sequential replay-to-live streams, latest-value coalescing, and subscription cleanup | Runtime projection rules, HTTP cursor extraction, SSE framing, Fleet roster/generation semantics |
 | `internal/events` | Generic Event envelope, normalization, synchronous subscriptions, durable commit-before-delivery boundary | Producer-specific Event vocabulary, Session journal implementation, UI projection |
 | `internal/toolevents` | Stable Tool Event names, payloads, and constructors shared by producers and consumers | Tool execution, Event dispatch, observability storage |
 | `internal/observability` | Derived Session logs, traces, spans, and Tool summaries projected from Events | Authoritative transcript/Event state, runtime decisions, Web presentation |

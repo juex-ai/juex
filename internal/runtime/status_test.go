@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"strconv"
@@ -346,7 +347,7 @@ func TestStatusSnapshotResumeIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestStatusSubscriptionReturnsTransientStateAtSameDurableCursor(t *testing.T) {
+func TestStatusStreamReturnsTransientStateAtSameDurableCursor(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
 	store.Publish(statusEvent("1", TurnAdmittedType, "turn-1", TurnAdmittedPayload{}))
 	cursor := store.Snapshot().Cursor
@@ -359,14 +360,18 @@ func TestStatusSubscriptionReturnsTransientStateAtSameDurableCursor(t *testing.T
 	transient.Transient = true
 	store.Publish(transient)
 
-	subscription := store.SubscribeFrom(cursor)
-	defer subscription.Unsubscribe()
-	if len(subscription.Snapshots) != 1 {
-		t.Fatalf("replay snapshots = %d, want current transient snapshot", len(subscription.Snapshots))
+	stream := store.OpenStream(StatusStreamOptions{After: cursor})
+	defer stream.Close()
+	snapshot, ok := stream.Next(context.Background())
+	if !ok {
+		t.Fatal("stream omitted current transient snapshot")
 	}
-	assertToolStatus(t, subscription.Snapshots[0], "tool-1", ToolCallStreaming)
-	if subscription.Snapshots[0].Cursor != cursor {
-		t.Fatalf("cursor = %q, want durable cursor %q", subscription.Snapshots[0].Cursor, cursor)
+	assertToolStatus(t, snapshot, "tool-1", ToolCallStreaming)
+	if snapshot.Cursor != cursor {
+		t.Fatalf("cursor = %q, want durable cursor %q", snapshot.Cursor, cursor)
+	}
+	if _, ok := stream.Next(context.Background()); ok {
+		t.Fatal("stream returned more than the current transient snapshot")
 	}
 }
 
@@ -386,20 +391,30 @@ func TestStatusReplayKeepsTransientStateWithEqualTimestamp(t *testing.T) {
 	transient.Transient = true
 	store.Publish(transient)
 
-	subscription := store.SubscribeFrom(admitted.ID)
-	defer subscription.Unsubscribe()
-	if len(subscription.Snapshots) != 2 {
-		t.Fatalf("replay snapshots = %d, want durable update plus current transient state", len(subscription.Snapshots))
+	stream := store.OpenStream(StatusStreamOptions{After: admitted.ID})
+	defer stream.Close()
+	var snapshots []StatusSnapshot
+	for {
+		snapshot, ok := stream.Next(context.Background())
+		if !ok {
+			break
+		}
+		snapshots = append(snapshots, snapshot)
 	}
-	assertToolStatus(t, subscription.Snapshots[1], "tool-1", ToolCallStreaming)
+	if len(snapshots) != 2 {
+		t.Fatalf("replay snapshots = %d, want durable update plus current transient state", len(snapshots))
+	}
+	assertToolStatus(t, snapshots[1], "tool-1", ToolCallStreaming)
 }
 
 func TestStatusStoreConcurrentPublishDeliversFinalSnapshotLast(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1", MaxPendingInputs: 1024})
-	subscriptions := make([]*StatusSubscription, 64)
-	for i := range subscriptions {
-		subscriptions[i] = store.SubscribeFrom("")
-		defer subscriptions[i].Unsubscribe()
+	streams := make([]*StatusStream, 64)
+	for i := range streams {
+		streams[i] = store.OpenStream(StatusStreamOptions{Follow: true})
+		if _, ok := streams[i].Next(context.Background()); !ok {
+			t.Fatalf("stream %d omitted initial snapshot", i)
+		}
 	}
 
 	const publishCount = 256
@@ -422,19 +437,20 @@ func TestStatusStoreConcurrentPublishDeliversFinalSnapshotLast(t *testing.T) {
 	wg.Wait()
 
 	want := store.Snapshot()
-	for i, subscription := range subscriptions {
+	for i, stream := range streams {
 		var last StatusSnapshot
 		for {
-			select {
-			case last = <-subscription.Updates:
-			default:
-				if !reflect.DeepEqual(last, want) {
-					t.Fatalf("subscription %d last snapshot = %#v, want %#v", i, last, want)
-				}
-				goto nextSubscription
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			snapshot, ok := stream.Next(ctx)
+			cancel()
+			if !ok {
+				break
 			}
+			last = snapshot
 		}
-	nextSubscription:
+		if !reflect.DeepEqual(last, want) {
+			t.Fatalf("stream %d last snapshot = %#v, want %#v", i, last, want)
+		}
 	}
 }
 
@@ -634,6 +650,28 @@ func TestStatusStoreResetAndRecoverAfterRestart(t *testing.T) {
 	}
 	if len(snapshot.Tools) != 0 {
 		t.Fatalf("recovered tools = %+v, want none", snapshot.Tools)
+	}
+}
+
+func TestStatusStreamSurvivesStoreReset(t *testing.T) {
+	store := NewStatusStore(StatusSeed{SessionID: "old"})
+	stream := store.OpenStream(StatusStreamOptions{Follow: true})
+	defer stream.Close()
+	initial, ok := stream.Next(context.Background())
+	if !ok || initial.Session.ID != "old" {
+		t.Fatalf("initial snapshot = %+v, %t", initial, ok)
+	}
+
+	store.Reset(StatusSeed{SessionID: "new"}, []events.Event{
+		statusEvent("6", TurnAdmittedType, "turn-new", TurnAdmittedPayload{}),
+	})
+	replaced, ok := stream.Next(context.Background())
+	if !ok ||
+		replaced.Session.ID != "new" ||
+		replaced.Cursor != "6" ||
+		replaced.Turn == nil ||
+		replaced.Turn.ID != "turn-new" {
+		t.Fatalf("replacement snapshot = %+v, %t", replaced, ok)
 	}
 }
 

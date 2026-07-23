@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 
 	"github.com/juex-ai/juex/internal/statusapi"
 )
@@ -21,70 +20,6 @@ type agentStatusStreamEvent struct {
 	Activity agentActivityResponse `json:"activity"`
 }
 
-type agentStatusHub struct {
-	mu          sync.Mutex
-	current     agentActivityResponse
-	subscribers map[uint64]chan agentActivityResponse
-	nextID      uint64
-}
-
-type agentStatusSubscription struct {
-	initial []agentActivityResponse
-	updates <-chan agentActivityResponse
-	cancel  func()
-}
-
-func newAgentStatusHub() *agentStatusHub {
-	return &agentStatusHub{
-		current:     agentActivityResponse{State: agentActivityIdle},
-		subscribers: map[uint64]chan agentActivityResponse{},
-	}
-}
-
-func (h *agentStatusHub) publish(status agentActivityResponse) {
-	if h == nil {
-		return
-	}
-	h.mu.Lock()
-	h.current = status
-	for _, channel := range h.subscribers {
-		select {
-		case channel <- status:
-		default:
-			select {
-			case <-channel:
-			default:
-			}
-			select {
-			case channel <- status:
-			default:
-			}
-		}
-	}
-	h.mu.Unlock()
-}
-
-func (h *agentStatusHub) subscribe(_ string) agentStatusSubscription {
-	h.mu.Lock()
-	h.nextID++
-	id := h.nextID
-	updates := make(chan agentActivityResponse, 16)
-	h.subscribers[id] = updates
-	// Presentation can change without advancing the durable event cursor, so a
-	// same-cursor reconnect still receives the current full snapshot.
-	initial := []agentActivityResponse{h.current}
-	h.mu.Unlock()
-	return agentStatusSubscription{
-		initial: initial,
-		updates: updates,
-		cancel: func() {
-			h.mu.Lock()
-			delete(h.subscribers, id)
-			h.mu.Unlock()
-		},
-	}
-}
-
 func (s *Server) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
@@ -98,33 +33,25 @@ func (s *Server) handleAgentStatusEvents(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		writeErr(w, http.StatusInternalServerError, "general_error", "streaming not supported")
 		return
 	}
 	since := sseResumeCursor(r)
-	subscription := s.statusHub.subscribe(since)
-	defer subscription.cancel()
+	stream := s.statusStream.OpenStream(statusapi.ActivityStreamOptions{
+		After:  since,
+		Follow: true,
+	})
+	defer stream.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	for _, status := range subscription.initial {
-		if err := writeAgentStatusSSE(w, status); err != nil {
+	for {
+		status, ok := stream.Next(r.Context())
+		if !ok {
 			return
 		}
-	}
-	flusher.Flush()
-	for {
-		select {
-		case status, ok := <-subscription.updates:
-			if !ok {
-				return
-			}
-			if err := writeAgentStatusSSE(w, status); err != nil {
-				return
-			}
-		case <-r.Context().Done():
+		if err := writeAgentStatusSSE(w, status); err != nil {
 			return
 		}
 	}
