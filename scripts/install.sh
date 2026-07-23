@@ -254,6 +254,22 @@ install_binary() {
   chmod +x "$target"
 }
 
+replace_symlink() {
+  local target="$1"
+  local link="$2"
+  local tmp="${link}.tmp.$$"
+  rm -f "$tmp"
+  ln -s "$target" "$tmp"
+  if mv -Tf "$tmp" "$link" 2>/dev/null; then
+    return
+  fi
+  if mv -hf "$tmp" "$link" 2>/dev/null; then
+    return
+  fi
+  rm -f "$tmp"
+  die "could not atomically replace symlink: $link"
+}
+
 install_managed_package() {
   local source_root="$1"
   local package_home="$2"
@@ -271,7 +287,7 @@ install_managed_package() {
   [[ -f "$source_root/juex-resources/licenses/ripgrep/LICENSE-MIT" ]] || die "managed release is missing ripgrep LICENSE-MIT"
   [[ -f "$source_root/juex-resources/licenses/ripgrep/UNLICENSE" ]] || die "managed release is missing ripgrep UNLICENSE"
 
-  local releases_dir release_dir stage current_tmp target_tmp
+  local releases_dir release_dir stage
   releases_dir="${package_home%/}/releases"
   release_dir="${releases_dir}/${release_key}"
   stage="${releases_dir}/.${release_key}.tmp.$$"
@@ -283,15 +299,8 @@ install_managed_package() {
   rm -rf "$release_dir"
   mv "$stage" "$release_dir"
 
-  current_tmp="${package_home%/}/.current.$$"
-  rm -f "$current_tmp"
-  ln -s "releases/$release_key" "$current_tmp"
-  mv -f "$current_tmp" "${package_home%/}/current"
-
-  target_tmp="${install_target}.tmp.$$"
-  rm -f "$target_tmp"
-  ln -s "${package_home%/}/current/bin/$binary_name" "$target_tmp"
-  mv -f "$target_tmp" "$install_target"
+  replace_symlink "releases/$release_key" "${package_home%/}/current"
+  replace_symlink "${package_home%/}/current/bin/$binary_name" "$install_target"
 }
 
 refresh_fleet_service() {
@@ -403,6 +412,11 @@ EOF
   if [[ "$dry_run" -eq 1 ]]; then
     return 0
   fi
+
+  mkdir -p "$install_dir" "$package_home"
+  install_dir=$(cd "$install_dir" && pwd -P)
+  package_home=$(cd "$package_home" && pwd -P)
+  install_target="${install_dir%/}/${binary_name}"
 
   local tmp archive_path checksums_path extract_dir package_root extracted
   tmp=$(mktemp -d)

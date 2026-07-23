@@ -165,43 +165,59 @@ func TestReleaseInstallScriptInstallsManagedPackage(t *testing.T) {
 	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(releaseDir, "juex_0.0.1_linux_amd64.tar.gz")
-	rgBody := []byte("fake packaged rg")
-	rgDigest := fmt.Sprintf("%x", sha256.Sum256(rgBody))
-	manifest := fmt.Sprintf(`{"schema_version":1,"juex_version":"0.0.1","platform":{"os":"linux","arch":"amd64"},"ripgrep":{"version":"15.1.0","path":"juex-path/rg","sha256":"%s"}}`, rgDigest)
-	binary := []byte(`#!/bin/sh
+	writeRelease := func(version string) (string, []byte) {
+		archive := filepath.Join(releaseDir, "juex_"+version+"_linux_amd64.tar.gz")
+		rgBody := []byte("fake packaged rg " + version)
+		rgDigest := fmt.Sprintf("%x", sha256.Sum256(rgBody))
+		manifest := fmt.Sprintf(`{"schema_version":1,"juex_version":"%s","platform":{"os":"linux","arch":"amd64"},"ripgrep":{"version":"15.1.0","path":"juex-path/rg","sha256":"%s"}}`, version, rgDigest)
+		binary := []byte(fmt.Sprintf(`#!/bin/sh
 if [ "${1:-} ${2:-}" = "fleet service-installed" ]; then
   echo false
   exit 0
 fi
-echo juex package fixture
-`)
-	root := "juex_0.0.1_linux_amd64"
-	writeTarGzEntries(t, archive, map[string]tarFixture{
-		root + "/juex-package.json":                           {body: []byte(manifest), mode: 0o644},
-		root + "/bin/juex":                                    {body: binary, mode: 0o755},
-		root + "/juex-path/rg":                                {body: rgBody, mode: 0o755},
-		root + "/juex-resources/licenses/ripgrep/LICENSE-MIT": {body: []byte("MIT"), mode: 0o644},
-		root + "/juex-resources/licenses/ripgrep/UNLICENSE":   {body: []byte("Unlicense"), mode: 0o644},
-	})
-	if err := os.WriteFile(filepath.Join(releaseDir, "checksums.txt"), []byte(fmt.Sprintf("%s  %s\n", sha256File(t, archive), filepath.Base(archive))), 0o644); err != nil {
+echo juex package fixture %s
+`, version))
+		root := "juex_" + version + "_linux_amd64"
+		writeTarGzEntries(t, archive, map[string]tarFixture{
+			root + "/juex-package.json":                           {body: []byte(manifest), mode: 0o644},
+			root + "/bin/juex":                                    {body: binary, mode: 0o755},
+			root + "/juex-path/rg":                                {body: rgBody, mode: 0o755},
+			root + "/juex-resources/licenses/ripgrep/LICENSE-MIT": {body: []byte("MIT"), mode: 0o644},
+			root + "/juex-resources/licenses/ripgrep/UNLICENSE":   {body: []byte("Unlicense"), mode: 0o644},
+		})
+		return archive, rgBody
+	}
+	archiveV1, _ := writeRelease("0.0.1")
+	archiveV2, rgV2 := writeRelease("0.0.2")
+	checksums := fmt.Sprintf(
+		"%s  %s\n%s  %s\n",
+		sha256File(t, archiveV1),
+		filepath.Base(archiveV1),
+		sha256File(t, archiveV2),
+		filepath.Base(archiveV2),
+	)
+	if err := os.WriteFile(filepath.Join(releaseDir, "checksums.txt"), []byte(checksums), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	prefix := filepath.Join(work, "prefix")
 	escapedChecksumDir := installEscapedSHA256SumFixture(t, work)
-	cmd := exec.Command("bash", script, "--version", "0.0.1", "--prefix", prefix)
-	cmd.Dir = work
-	cmd.Env = append(os.Environ(),
-		"JUEX_INSTALL_OS=linux",
-		"JUEX_INSTALL_ARCH=amd64",
-		"JUEX_INSTALL_RELEASE_BASE_URL=release",
-		"HOME="+filepath.Join(work, "home"),
-		"PATH="+escapedChecksumDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("managed install failed: %v\n%s", err, out)
+	runInstall := func(version string) {
+		t.Helper()
+		cmd := exec.Command("bash", script, "--version", version, "--prefix", "relative-prefix")
+		cmd.Dir = work
+		cmd.Env = append(os.Environ(),
+			"JUEX_INSTALL_OS=linux",
+			"JUEX_INSTALL_ARCH=amd64",
+			"JUEX_INSTALL_RELEASE_BASE_URL=release",
+			"HOME="+filepath.Join(work, "home"),
+			"PATH="+escapedChecksumDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("managed install %s failed: %v\n%s", version, err, out)
+		}
 	}
+	runInstall("0.0.1")
+
+	prefix := filepath.Join(work, "relative-prefix")
 	current := filepath.Join(prefix, "lib", "juex", "current")
 	if target, err := os.Readlink(current); err != nil || target != filepath.Join("releases", "0.0.1-linux-amd64") {
 		t.Fatalf("current symlink = %q, %v", target, err)
@@ -210,13 +226,25 @@ echo juex package fixture
 	if info, err := os.Lstat(installed); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("installed command is not a symlink: %v %v", info, err)
 	}
-	packagedRG := filepath.Join(current, "juex-path", "rg")
-	if got, err := os.ReadFile(packagedRG); err != nil || string(got) != string(rgBody) {
-		t.Fatalf("packaged rg = %q, %v", got, err)
+	if target, err := os.Readlink(installed); err != nil || !filepath.IsAbs(target) {
+		t.Fatalf("installed command target = %q, %v; want absolute path", target, err)
 	}
 	versionOut, err := exec.Command(installed, "version").CombinedOutput()
-	if err != nil || !strings.Contains(string(versionOut), "juex package fixture") {
+	if err != nil || !strings.Contains(string(versionOut), "juex package fixture 0.0.1") {
 		t.Fatalf("installed command failed: %v\n%s", err, versionOut)
+	}
+
+	runInstall("0.0.2")
+	if target, err := os.Readlink(current); err != nil || target != filepath.Join("releases", "0.0.2-linux-amd64") {
+		t.Fatalf("upgraded current symlink = %q, %v", target, err)
+	}
+	packagedRG := filepath.Join(current, "juex-path", "rg")
+	if got, err := os.ReadFile(packagedRG); err != nil || string(got) != string(rgV2) {
+		t.Fatalf("upgraded packaged rg = %q, %v", got, err)
+	}
+	versionOut, err = exec.Command(installed, "version").CombinedOutput()
+	if err != nil || !strings.Contains(string(versionOut), "juex package fixture 0.0.2") {
+		t.Fatalf("upgraded command failed: %v\n%s", err, versionOut)
 	}
 }
 
@@ -262,6 +290,12 @@ func TestReleasePackagingIncludesManagedRipgrepPayload(t *testing.T) {
 			"lib/juex",
 			"juex-path/rg",
 			"Termux/Android",
+			"replace_symlink",
+			"pwd -P",
+		},
+		"scripts/install.sh": {
+			"replace_symlink",
+			"pwd -P",
 		},
 		"scripts/install.ps1": {
 			"Install-ManagedPackage",

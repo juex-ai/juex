@@ -11,6 +11,27 @@
 
 set -euo pipefail
 
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+replace_symlink() {
+  local target="$1"
+  local link="$2"
+  local tmp="${link}.tmp.$$"
+  rm -f "$tmp"
+  ln -s "$target" "$tmp"
+  if mv -Tf "$tmp" "$link" 2>/dev/null; then
+    return
+  fi
+  if mv -hf "$tmp" "$link" 2>/dev/null; then
+    return
+  fi
+  rm -f "$tmp"
+  die "could not atomically replace symlink: $link"
+}
+
 refresh_fleet_service() {
   local binary="$1"
   local installed
@@ -97,10 +118,13 @@ VERSION_KEY="${VERSION_KEY//\//-}"
 VERSION_KEY="${VERSION_KEY//\\/-}"
 VERSION_KEY="${VERSION_KEY//:/-}"
 RELEASE_KEY="${VERSION_KEY}-${GOOS}-${GOARCH}"
+mkdir -p "${PACKAGE_HOME}/releases" "$INSTALL_DIR"
+INSTALL_DIR=$(cd "$INSTALL_DIR" && pwd -P)
+PACKAGE_HOME=$(cd "$PACKAGE_HOME" && pwd -P)
+INSTALL_TARGET="${INSTALL_DIR}/juex"
 RELEASES_DIR="${PACKAGE_HOME}/releases"
 RELEASE_DIR="${RELEASES_DIR}/${RELEASE_KEY}"
 STAGE="${RELEASES_DIR}/.${RELEASE_KEY}.tmp.$$"
-mkdir -p "$RELEASES_DIR" "$INSTALL_DIR"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp -R "$PACKAGE_ROOT/." "$STAGE/"
@@ -108,16 +132,10 @@ chmod +x "$STAGE/bin/juex" "$STAGE/juex-path/rg"
 rm -rf "$RELEASE_DIR"
 mv "$STAGE" "$RELEASE_DIR"
 
-CURRENT_TMP="${PACKAGE_HOME}/.current.$$"
-rm -f "$CURRENT_TMP"
-ln -s "releases/$RELEASE_KEY" "$CURRENT_TMP"
-mv -f "$CURRENT_TMP" "${PACKAGE_HOME}/current"
+replace_symlink "releases/$RELEASE_KEY" "${PACKAGE_HOME}/current"
 
 # Swap a new symlink into place so a running daemon keeps its current inode.
-INSTALL_TMP="${INSTALL_TARGET}.tmp.$$"
-rm -f "$INSTALL_TMP"
-ln -s "${PACKAGE_HOME}/current/bin/juex" "$INSTALL_TMP"
-mv -f "$INSTALL_TMP" "$INSTALL_TARGET"
+replace_symlink "${PACKAGE_HOME}/current/bin/juex" "$INSTALL_TARGET"
 
 "$INSTALL_TARGET" version
 refresh_fleet_service "$INSTALL_TARGET"
