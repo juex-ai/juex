@@ -25,9 +25,8 @@ type OpenOptions struct {
 }
 
 type entry[T any] struct {
-	value    T
-	cursor   string
-	sequence uint64
+	value  T
+	cursor string
 }
 
 // Store owns one current snapshot, optional replay history, and live
@@ -45,7 +44,6 @@ type Store[T any] struct {
 	history     []entry[T]
 	subscribers map[uint64]chan entry[T]
 	nextID      uint64
-	sequence    uint64
 }
 
 // Stream presents replay and live updates as one sequential source. It has one
@@ -79,9 +77,8 @@ func New[T any](initial T, options Options[T]) *Store[T] {
 
 	current := options.Clone(initial)
 	initialEntry := entry[T]{
-		value:    current,
-		cursor:   options.Cursor(current),
-		sequence: 1,
+		value:  current,
+		cursor: options.Cursor(current),
 	}
 	store := &Store[T]{
 		clone:        options.Clone,
@@ -90,7 +87,6 @@ func New[T any](initial T, options Options[T]) *Store[T] {
 		historyLimit: options.HistoryLimit,
 		current:      initialEntry,
 		subscribers:  map[uint64]chan entry[T]{},
-		sequence:     1,
 	}
 	if options.HistoryLimit > 0 {
 		store.history = []entry[T]{initialEntry}
@@ -144,11 +140,9 @@ func (s *Store[T]) Publish(next T, record bool) {
 	cursor := s.cursor(stored)
 
 	s.mu.Lock()
-	s.sequence++
 	nextEntry := entry[T]{
-		value:    stored,
-		cursor:   cursor,
-		sequence: s.sequence,
+		value:  stored,
+		cursor: cursor,
 	}
 	s.current = nextEntry
 	if record && s.historyLimit > 0 {
@@ -178,14 +172,11 @@ func (s *Store[T]) Replace(current T, history []T) {
 	defer s.publishMu.Unlock()
 
 	entries := make([]entry[T], 0, len(history))
-	var sequence uint64
 	for _, value := range history {
-		sequence++
 		cloned := s.clone(value)
 		entries = append(entries, entry[T]{
-			value:    cloned,
-			cursor:   s.cursor(cloned),
-			sequence: sequence,
+			value:  cloned,
+			cursor: s.cursor(cloned),
 		})
 	}
 	if s.historyLimit == 0 {
@@ -199,21 +190,15 @@ func (s *Store[T]) Replace(current T, history []T) {
 	if len(entries) > 0 && s.equal(entries[len(entries)-1].value, clonedCurrent) {
 		currentEntry = entries[len(entries)-1]
 	} else {
-		sequence++
 		currentEntry = entry[T]{
-			value:    clonedCurrent,
-			cursor:   s.cursor(clonedCurrent),
-			sequence: sequence,
+			value:  clonedCurrent,
+			cursor: s.cursor(clonedCurrent),
 		}
-	}
-	if sequence == 0 {
-		sequence = currentEntry.sequence
 	}
 
 	s.mu.Lock()
 	s.current = currentEntry
 	s.history = entries
-	s.sequence = sequence
 	subscribers := make([]chan entry[T], 0, len(s.subscribers))
 	for _, subscriber := range s.subscribers {
 		subscribers = append(subscribers, subscriber)
@@ -221,7 +206,7 @@ func (s *Store[T]) Replace(current T, history []T) {
 	s.mu.Unlock()
 
 	for _, subscriber := range subscribers {
-		publishLatest(subscriber, currentEntry)
+		replacePending(subscriber, currentEntry)
 	}
 }
 
@@ -234,7 +219,7 @@ func (s *Store[T]) Open(options OpenOptions) *Stream[T] {
 
 	after := strings.TrimSpace(options.After)
 	s.mu.Lock()
-	replayEntries := s.replayAfterLocked(after)
+	replayEntries, compareCurrent, current := s.replayAfterLocked(after)
 	var (
 		id      uint64
 		updates chan entry[T]
@@ -247,6 +232,11 @@ func (s *Store[T]) Open(options OpenOptions) *Stream[T] {
 	}
 	s.mu.Unlock()
 
+	if compareCurrent &&
+		(len(replayEntries) == 0 ||
+			!s.equal(replayEntries[len(replayEntries)-1].value, current.value)) {
+		replayEntries = append(replayEntries, current)
+	}
 	replay := make([]T, len(replayEntries))
 	for index := range replayEntries {
 		replay[index] = s.clone(replayEntries[index].value)
@@ -269,9 +259,9 @@ func (s *Store[T]) Open(options OpenOptions) *Stream[T] {
 	return stream
 }
 
-func (s *Store[T]) replayAfterLocked(after string) []entry[T] {
+func (s *Store[T]) replayAfterLocked(after string) ([]entry[T], bool, entry[T]) {
 	if after == "" || s.historyLimit == 0 {
-		return []entry[T]{s.current}
+		return []entry[T]{s.current}, false, s.current
 	}
 	index := -1
 	for candidate := len(s.history) - 1; candidate >= 0; candidate-- {
@@ -281,13 +271,10 @@ func (s *Store[T]) replayAfterLocked(after string) []entry[T] {
 		}
 	}
 	if index < 0 {
-		return []entry[T]{s.current}
+		return []entry[T]{s.current}, false, s.current
 	}
 	replay := append([]entry[T](nil), s.history[index+1:]...)
-	if len(replay) == 0 || replay[len(replay)-1].sequence != s.current.sequence {
-		replay = append(replay, s.current)
-	}
-	return replay
+	return replay, true, s.current
 }
 
 // Next returns the next replay or live value. It closes the stream when ctx is
@@ -350,6 +337,21 @@ func publishLatest[T any](channel chan entry[T], update entry[T]) {
 	select {
 	case <-channel:
 	default:
+	}
+	select {
+	case channel <- update:
+	default:
+	}
+}
+
+func replacePending[T any](channel chan entry[T], update entry[T]) {
+	for {
+		select {
+		case <-channel:
+			continue
+		default:
+		}
+		break
 	}
 	select {
 	case channel <- update:
