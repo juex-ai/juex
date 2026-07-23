@@ -5,18 +5,17 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
-var errLockBusy = errors.New("fleet lock is already held")
-
-func acquireLifecycleLock(homeDir, agentID string) (maintenanceGuard, error) {
+func acquireLifecycleLock(store homestore.Store, agentID string) (maintenanceGuard, error) {
 	if agentID == "" || filepath.Base(agentID) != agentID ||
 		strings.ContainsAny(agentID, `/\`) || strings.HasPrefix(agentID, ".") {
 		return nil, &ConflictError{AgentID: agentID, Reason: "invalid registry identity cannot be locked"}
 	}
-	path := filepath.Join(homeDir, ".locks", "fleet", agentID+".lock")
-	guard, err := acquireLockGuard(path)
-	if errors.Is(err, errLockBusy) {
+	guard, err := store.Lock(homestore.FleetLocks, agentID, homestore.LockTry)
+	if errors.Is(err, homestore.ErrLockBusy) {
 		return nil, &ConflictError{AgentID: agentID, Reason: "another lifecycle operation is in progress"}
 	}
 	if err != nil {
@@ -26,8 +25,8 @@ func acquireLifecycleLock(homeDir, agentID string) (maintenanceGuard, error) {
 }
 
 func acquireSupervisorLock(homeDir string) (maintenanceGuard, error) {
-	guard, err := acquireLockGuard(filepath.Join(homeDir, "fleet.lock"))
-	if errors.Is(err, errLockBusy) {
+	guard, err := homestore.AcquireLock(filepath.Join(homeDir, "fleet.lock"), homestore.LockTry)
+	if errors.Is(err, homestore.ErrLockBusy) {
 		return nil, &ConflictError{Reason: "another fleet supervisor is already running for this home"}
 	}
 	if err != nil {

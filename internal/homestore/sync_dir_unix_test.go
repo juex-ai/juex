@@ -1,6 +1,6 @@
 //go:build darwin || linux || freebsd || netbsd || openbsd || dragonfly || solaris
 
-package endpoint
+package homestore
 
 import (
 	"errors"

@@ -49,7 +49,7 @@ func (m *Manager) Add(ctx context.Context, opts AddOptions) (AddResult, error) {
 		return AddResult{}, registrationError(err)
 	}
 
-	guard, err := acquireLifecycleLock(m.homeDir, resolved.Agent.ID)
+	guard, err := acquireLifecycleLock(m.store(), resolved.Agent.ID)
 	if err != nil {
 		return AddResult{}, err
 	}
@@ -88,7 +88,7 @@ func (m *Manager) SetEnabled(
 	if err != nil {
 		return AgentStatus{}, err
 	}
-	guard, err := acquireLifecycleLock(m.homeDir, entry.ID)
+	guard, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
 		return AgentStatus{}, err
 	}
@@ -126,7 +126,7 @@ func (m *Manager) Remove(
 	if err != nil {
 		return RemovedAgent{}, err
 	}
-	guard, err := acquireLifecycleLock(m.homeDir, entry.ID)
+	guard, err := acquireLifecycleLock(m.store(), entry.ID)
 	if err != nil {
 		return RemovedAgent{}, err
 	}

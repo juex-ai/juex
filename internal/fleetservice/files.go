@@ -6,9 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 func publishFiles(files []definitionFile) error {
+	return publishFilesWith(files, publishDefinitionFile)
+}
+
+func publishFilesWith(files []definitionFile, publish func(string, []byte, os.FileMode) error) error {
 	snapshots := make([]fileSnapshot, len(files))
 	missingDirs := make(map[string]struct{})
 	for i, file := range files {
@@ -26,8 +32,12 @@ func publishFiles(files []definitionFile) error {
 		}
 	}
 	for i, file := range files {
-		if err := writeFileAtomic(file.path, file.data, file.mode); err != nil {
-			return errors.Join(err, rollbackFiles(snapshots[:i]), rollbackDirectories(missingDirs))
+		if err := publish(file.path, file.data, file.mode); err != nil {
+			rollbackCount := i
+			if homestore.ReplacementOccurred(err) {
+				rollbackCount++
+			}
+			return errors.Join(err, rollbackFiles(snapshots[:rollbackCount]), rollbackDirectories(missingDirs))
 		}
 	}
 	return nil
@@ -63,10 +73,10 @@ func rollbackFiles(snapshots []fileSnapshot) error {
 	for i := len(snapshots) - 1; i >= 0; i-- {
 		snapshot := snapshots[i]
 		if snapshot.existed {
-			rollbackErr = errors.Join(rollbackErr, writeFileAtomic(snapshot.path, snapshot.data, snapshot.mode))
+			rollbackErr = errors.Join(rollbackErr, publishDefinitionFile(snapshot.path, snapshot.data, snapshot.mode))
 			continue
 		}
-		if err := os.Remove(snapshot.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeDurably(snapshot.path); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("fleet service: roll back definition %s: %w", snapshot.path, err))
 		}
 	}
@@ -99,45 +109,29 @@ func rollbackDirectories(missing map[string]struct{}) error {
 	slices.SortFunc(dirs, func(a, b string) int { return len(b) - len(a) })
 	var rollbackErr error
 	for _, dir := range dirs {
-		if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeDurably(dir); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("fleet service: roll back definition directory %s: %w", dir, err))
 		}
 	}
 	return rollbackErr
 }
 
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("fleet service: create definition directory %s: %w", dir, err)
+func removeDurably(path string) error {
+	return removeDurablyWith(path, os.Remove, homestore.SyncDir)
+}
+
+func removeDurablyWith(path string, remove, syncDir func(string) error) error {
+	if err := remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
 	}
-	temp, err := os.CreateTemp(dir, ".juex-fleet-service-*")
-	if err != nil {
-		return fmt.Errorf("fleet service: create temporary definition: %w", err)
-	}
-	tempPath := temp.Name()
-	cleanup := func() {
-		_ = temp.Close()
-		_ = os.Remove(tempPath)
-	}
-	if err := temp.Chmod(mode); err != nil {
-		cleanup()
-		return fmt.Errorf("fleet service: chmod temporary definition: %w", err)
-	}
-	if _, err := temp.Write(data); err != nil {
-		cleanup()
-		return fmt.Errorf("fleet service: write temporary definition: %w", err)
-	}
-	if err := temp.Sync(); err != nil {
-		cleanup()
-		return fmt.Errorf("fleet service: sync temporary definition: %w", err)
-	}
-	if err := temp.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("fleet service: close temporary definition: %w", err)
-	}
-	if err := os.Rename(tempPath, path); err != nil {
-		_ = os.Remove(tempPath)
+	return syncDir(filepath.Dir(path))
+}
+
+func publishDefinitionFile(path string, data []byte, mode os.FileMode) error {
+	if err := homestore.WriteFileAtomic(path, data, mode, 0o700); err != nil {
 		return fmt.Errorf("fleet service: publish definition %s: %w", path, err)
 	}
 	return nil

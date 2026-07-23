@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/homestore"
 )
 
 var legacyStateEntries = []string{"sessions", "memory", "history.json", "logs", "observables"}
@@ -64,7 +65,7 @@ func publishNewAgent(homeDir, workDir string, agent Agent) (agentDir string, mig
 	}
 	historyPath := filepath.Join(stageDir, "history.json")
 	if _, statErr := os.Stat(historyPath); errors.Is(statErr, os.ErrNotExist) {
-		if err := atomicWriteFile(historyPath, []byte("{\"sessions\":[]}\n"), 0o644); err != nil {
+		if err := homestore.WriteFileAtomic(historyPath, []byte("{\"sessions\":[]}\n"), 0o644, 0o755); err != nil {
 			return "", false, err
 		}
 	} else if statErr != nil {
@@ -73,15 +74,15 @@ func publishNewAgent(homeDir, workDir string, agent Agent) (agentDir string, mig
 	if err := atomicWriteJSON(filepath.Join(stageDir, agentFileName), agent, 0o644); err != nil {
 		return "", false, err
 	}
-	if err := syncDir(stageDir); err != nil {
+	if err := homestore.SyncDir(stageDir); err != nil {
 		return "", false, fmt.Errorf("agentstate: sync staging directory: %w", err)
 	}
 	if err := os.Rename(stageDir, agentDir); err != nil {
 		return "", false, fmt.Errorf("agentstate: publish agent directory %s: %w", agentDir, err)
 	}
-	if err := syncDir(agentsDir); err != nil {
+	if err := homestore.SyncDir(agentsDir); err != nil {
 		_ = os.RemoveAll(agentDir)
-		_ = syncDir(agentsDir)
+		_ = homestore.SyncDir(agentsDir)
 		return "", false, fmt.Errorf("agentstate: sync agent registry: %w", err)
 	}
 	return agentDir, migrated, nil
@@ -149,7 +150,7 @@ func publishLegacyEntry(source, destination string) (err error) {
 	if err := verifyCopiedTree(source, staged); err != nil {
 		return fmt.Errorf("agentstate: verify legacy state %s: %w", source, err)
 	}
-	if err := syncDir(stageDir); err != nil {
+	if err := homestore.SyncDir(stageDir); err != nil {
 		return fmt.Errorf("agentstate: sync migration stage for %s: %w", destination, err)
 	}
 	if _, err := os.Lstat(destination); err == nil {
@@ -163,7 +164,7 @@ func publishLegacyEntry(source, destination string) (err error) {
 	if err := os.Rename(staged, destination); err != nil {
 		return fmt.Errorf("agentstate: publish migrated state %s: %w", destination, err)
 	}
-	if err := syncDir(parent); err != nil {
+	if err := homestore.SyncDir(parent); err != nil {
 		return fmt.Errorf("agentstate: sync migrated state directory %s: %w", parent, err)
 	}
 	return nil
@@ -180,7 +181,7 @@ func removeLegacyState(workDir string) error {
 			return err
 		}
 	}
-	return syncDir(legacyDir)
+	return homestore.SyncDir(legacyDir)
 }
 
 func makeDirectoriesRemovable(root string) error {
@@ -227,7 +228,7 @@ func copyTree(source, destination string) error {
 		if err := os.Chmod(destination, info.Mode().Perm()); err != nil {
 			return err
 		}
-		return syncDir(destination)
+		return homestore.SyncDir(destination)
 	case info.Mode()&os.ModeSymlink != 0:
 		target, err := os.Readlink(source)
 		if err != nil {
@@ -360,35 +361,4 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer func() { _ = os.Remove(tempPath) }()
-	if _, err := temp.Write(data); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Chmod(perm); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		_ = temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := replaceFile(tempPath, path); err != nil {
-		return err
-	}
-	return syncDir(filepath.Dir(path))
 }

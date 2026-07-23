@@ -34,7 +34,7 @@ func (m *Manager) Serve(ctx context.Context, report func(Action)) error {
 			})
 			continue
 		case RuntimeUnhealthy:
-			lifecycle, lockErr := acquireLifecycleLock(m.homeDir, entry.ID)
+			lifecycle, lockErr := acquireLifecycleLock(m.store(), entry.ID)
 			if lockErr != nil {
 				report(Action{AgentID: entry.ID, Kind: "failed", Err: lockErr})
 				continue

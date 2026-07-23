@@ -11,6 +11,7 @@ import (
 
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
+	"github.com/juex-ai/juex/internal/homestore"
 	"github.com/juex-ai/juex/internal/statusapi"
 )
 
@@ -264,6 +265,7 @@ func defaultDependencies() dependencies {
 
 type Manager struct {
 	homeDir      string
+	homeStore    *homestore.Store
 	executable   string
 	startTimeout time.Duration
 	stopTimeout  time.Duration
@@ -303,14 +305,23 @@ func New(opts Options) (*Manager, error) {
 	if opts.ProbeTimeout <= 0 {
 		opts.ProbeTimeout = time.Second
 	}
+	store := homestore.New(homeDir)
 	return &Manager{
 		homeDir:      homeDir,
+		homeStore:    &store,
 		executable:   executable,
 		startTimeout: opts.StartTimeout,
 		stopTimeout:  opts.StopTimeout,
 		probeTimeout: opts.ProbeTimeout,
 		deps:         defaultDependencies(),
 	}, nil
+}
+
+func (m *Manager) store() homestore.Store {
+	if m.homeStore != nil {
+		return *m.homeStore
+	}
+	return homestore.New(m.homeDir)
 }
 
 func resolveSelector(entries []agentstate.RegistryEntry, selector string) (agentstate.RegistryEntry, error) {
