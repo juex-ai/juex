@@ -65,6 +65,12 @@ replayed and uninterrupted delivery produce the same snapshots. The status is
 still projected by `internal/runtime.StatusStore`; the browser event adapter
 only reads and transports that authoritative result.
 
+`GET /api/sessions/<id>` returns an `event_cursor` captured before its
+transcript page is read. The browser uses this cursor for the initial transcript
+subscription, so events committed between the transcript and status requests
+are replayed rather than skipped. An explicit empty `?since=` requests replay
+from the journal beginning; an omitted `since` starts with live delivery only.
+
 ## Tool Calls
 
 Tool-call states are:
@@ -160,11 +166,11 @@ aggregate Fleet SSE stream.
 ## Browser Consumption
 
 The browser uses one `AgentViewModelStore` for Fleet rows and per-session
-runtime snapshots. The Session page fetches a canonical snapshot, reads its
-cursor, and then opens the transcript stream from that cursor. Every
-`BrowserEvent` atomically replaces the local runtime snapshot before its
-transcript payload is applied. Status-dependent submission remains disabled
-until the initial snapshot is available.
+runtime snapshots. The Session page loads the transcript and its replay cursor,
+fetches a canonical status snapshot, and then opens the transcript stream from
+the transcript-owned cursor. Every `BrowserEvent` atomically replaces the local
+runtime snapshot before its transcript payload is applied. Status-dependent
+submission remains disabled until the initial snapshot is available.
 
 Native `EventSource` reconnects automatically. Each successful stream open
 also refreshes the status snapshot so an out-of-band restart recovery is

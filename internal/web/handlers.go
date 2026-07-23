@@ -118,6 +118,7 @@ type sessionShowResponse struct {
 	session.Info
 	Messages        []sessionMessageResponse    `json:"messages"`
 	Model           string                      `json:"model,omitempty"`
+	EventCursor     string                      `json:"event_cursor"`
 	HasMoreBefore   bool                        `json:"has_more_before"`
 	OldestMessageID string                      `json:"oldest_message_id,omitempty"`
 	Goal            *runtime.GoalStatusSnapshot `json:"goal,omitempty"`
@@ -163,12 +164,16 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 	if v, ok := s.sessions.Load(id); ok {
 		as := v.(*activeSession)
 		var (
-			info  session.Info
-			page  session.MessagePage
-			goal  *runtime.GoalStatusSnapshot
-			notes *runtime.NotesSnapshot
+			info   session.Info
+			page   session.MessagePage
+			cursor string
+			goal   *runtime.GoalStatusSnapshot
+			notes  *runtime.NotesSnapshot
 		)
 		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
+			if as.app.Status != nil {
+				cursor = as.app.Status.Snapshot().Cursor
+			}
 			info = sess.Info(time.Now().UTC())
 			var err error
 			page, err = sess.TranscriptMessagePage(window.Before, window.Limit)
@@ -188,6 +193,7 @@ func (s *Server) handleSessionShow(w http.ResponseWriter, r *http.Request, id st
 				Info:            info,
 				Messages:        messagesForSessionResponse(page.Messages),
 				Model:           s.opts.Cfg.Model,
+				EventCursor:     cursor,
 				HasMoreBefore:   page.HasMoreBefore,
 				OldestMessageID: page.OldestMessageID,
 				Goal:            goal,
@@ -615,8 +621,8 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 	w.Header().Set("Connection", "keep-alive")
 	flusher.Flush()
 
-	since := sseResumeCursor(r)
-	if since != "" {
+	since, replayRequested := sseResumeCursorWithPresence(r)
+	if replayRequested {
 		// Replay missed events from events.jsonl. The path comes from the
 		// session record so we never read outside the sessions dir.
 		var (

@@ -1383,10 +1383,12 @@ transcript read model for SSE `BrowserEvent` facts: optimistic messages,
 pending-input presentation, compact markers, tool output deltas, and final
 response assembly. It does not reconstruct turn, tool, usage, or session
 lifecycle. `frontend/src/pages/Session.tsx` fetches the initial authoritative
-snapshot, opens the transcript stream from its cursor, replaces status from
-each event, and then applies the transcript payload. Every EventSource open
-also refreshes the snapshot for restart recovery; an intervening streamed
-snapshot invalidates the older refresh response.
+snapshot, opens the transcript stream from the earlier replay cursor returned
+by the transcript response, replaces status from each event, and then applies
+the transcript payload. Every EventSource open also refreshes the snapshot for
+restart recovery; an intervening streamed snapshot invalidates the older
+refresh response. The transcript cursor is captured before its message page is
+read so concurrent events may replay but cannot be skipped.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
@@ -1417,7 +1419,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/api/status` | Authoritative selected-agent runtime-status snapshot |
 | GET | `/api/status/events` | Resumable selected-agent runtime-status SSE stream |
 | POST | `/api/sessions` | create active primary session |
-| GET | `/api/sessions/<id>` | JSON transcript window (`?before=&limit=` for older pages) |
+| GET | `/api/sessions/<id>` | JSON transcript window plus safe `event_cursor` replay boundary (`?before=&limit=` for older pages) |
 | DELETE | `/api/sessions/<id>` | delete session and remove it from history |
 | POST | `/api/sessions/<id>/activate` | make a primary session active |
 | GET | `/api/sessions/<id>/context` | active provider context for one session |
@@ -1428,7 +1430,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | POST | `/api/sessions/<id>/interrupt` | cancel current turn |
 | GET | `/api/sessions/<id>/status` | authoritative layered runtime-status snapshot with event cursor |
 | GET | `/api/sessions/<id>/status/events` | resumable full runtime-status snapshot SSE stream after a cursor |
-| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=` replays transcript events with resulting status) |
+| GET | `/api/sessions/<id>/events` | BrowserEvent SSE (`?since=<cursor>` resumes; explicit empty `?since=` replays from journal start) |
 | GET | `/api/observables` | list workspace Observables with runtime status |
 | POST | `/api/observables` | create and start a tagged Command Observable or Schedule |
 | GET | `/api/observables/<id>` | Observable status plus recent Observations |

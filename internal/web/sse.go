@@ -11,13 +11,25 @@ import (
 )
 
 func sseResumeCursor(r *http.Request) string {
+	cursor, _ := sseResumeCursorWithPresence(r)
+	return cursor
+}
+
+func sseResumeCursorWithPresence(r *http.Request) (string, bool) {
 	if r == nil {
-		return ""
+		return "", false
 	}
 	if cursor := strings.TrimSpace(r.Header.Get("Last-Event-ID")); cursor != "" {
-		return cursor
+		return cursor, true
 	}
-	return strings.TrimSpace(r.URL.Query().Get("since"))
+	values, ok := r.URL.Query()["since"]
+	if !ok {
+		return "", false
+	}
+	if len(values) == 0 {
+		return "", true
+	}
+	return strings.TrimSpace(values[0]), true
 }
 
 // writeSSEFrame writes one SSE frame to w using the documented shape:

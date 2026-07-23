@@ -200,6 +200,11 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
+    /sessionEventCursor = data\?\.event_cursor[\s\S]*controller\.subscribeLiveEvents\(id,[\s\S]*since: sessionEventCursor/,
+    "the transcript stream must resume from the transcript response cursor instead of a newer status cursor",
+  );
+  assert.match(
+    sessionSource,
     /submitAction === "loading"/,
     "status-dependent submission must remain disabled before the snapshot loads",
   );

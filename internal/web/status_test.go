@@ -226,6 +226,14 @@ func TestSSEResumeCursorPrefersLastEventIDOnReconnect(t *testing.T) {
 	}
 }
 
+func TestSSEResumeCursorPreservesExplicitEmptySince(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/events?since=", nil)
+	cursor, present := sseResumeCursorWithPresence(request)
+	if cursor != "" || !present {
+		t.Fatalf("resume cursor = %q, present = %v; want empty and present", cursor, present)
+	}
+}
+
 func TestHistoricalSessionStatusDoesNotActivateIt(t *testing.T) {
 	srv := newTestServer(t)
 	historical, err := srv.openSession(context.Background(), "", app.SessionModeNewPrimary)

@@ -271,10 +271,12 @@ export function Session() {
   }, [controller, id]);
 
   const canSubscribeLiveSession = data ? sessionCanSend(data) : false;
+  const sessionEventCursor = data?.event_cursor;
 
   useEffect(() => {
     if (
       !id ||
+      sessionEventCursor === undefined ||
       !agent?.id ||
       !statusStore ||
       !agentRuntimeHealthy ||
@@ -289,7 +291,7 @@ export function Session() {
         if (disposed) return;
         statusStore.setStatus(agent.id, snapshot);
         unsubscribe = controller.subscribeLiveEvents(id, {
-          since: snapshot.cursor,
+          since: sessionEventCursor,
           loadStatus: () => getSessionStatus(id),
           onStatus: (next) => {
             if (disposed) return;
@@ -321,6 +323,7 @@ export function Session() {
     canSubscribeLiveSession,
     controller,
     id,
+    sessionEventCursor,
     statusStore,
   ]);
 

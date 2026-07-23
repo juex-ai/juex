@@ -217,6 +217,16 @@ test("subscribeEvents forwards open and browser event callbacks", () => {
     assert.equal(opened, 1);
     assert.equal(eventID, "evt-1");
     assert.equal(source?.closed, true);
+
+    const emptyCursorUnsubscribe = subscribeEvents("empty cursor", {
+      since: "",
+      onEvent: () => {},
+    });
+    assert.equal(
+      source?.url,
+      "/api/sessions/empty%20cursor/events?since=",
+    );
+    emptyCursorUnsubscribe();
   } finally {
     globalThis.EventSource = originalEventSource;
   }

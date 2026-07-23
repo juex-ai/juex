@@ -430,6 +430,40 @@ func TestGetSessionShow_ReturnsTranscript(t *testing.T) {
 	}
 }
 
+func TestGetSessionShow_ReturnsReplayCursorFromBeforeTranscriptRead(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-before-show",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		EventCursor string `json:"event_cursor"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.EventCursor != "evt-before-show" {
+		t.Fatalf("event cursor = %q, want evt-before-show", parsed.EventCursor)
+	}
+}
+
 func TestGetSessionShow_ReturnsSessionRuntimeState(t *testing.T) {
 	srv := newTestServer(t)
 	id := "20260507T101010-state1"
@@ -2810,6 +2844,51 @@ func TestSSEEvents_ReplayPreservesAuthoritativeRestartRecovery(t *testing.T) {
 		if !strings.Contains(collected, want) {
 			t.Fatalf("replay frame missing %q:\n%s", want, collected)
 		}
+	}
+}
+
+func TestSSEEvents_ExplicitEmptyCursorReplaysFromJournalStart(t *testing.T) {
+	srv := newTestServer(t)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createTestSession(t, ts.URL)
+	value, ok := srv.sessions.Load(sessionID)
+	if !ok {
+		t.Fatalf("active session %q not found", sessionID)
+	}
+	active := value.(*activeSession)
+	active.app.Bus.Emit(events.Event{
+		ID:      "evt-first",
+		Type:    juexruntime.TurnAdmittedType,
+		TurnID:  "turn-1",
+		Payload: juexruntime.TurnAdmittedPayload{},
+	})
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		ts.URL+"/api/sessions/"+sessionID+"/events?since=",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, 4096)
+	n, err := resp.Body.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := string(buf[:n])
+	if !strings.Contains(frame, "id: evt-first") ||
+		!strings.Contains(frame, `"type":"turn.admitted"`) {
+		t.Fatalf("initial replay frame = %q", frame)
 	}
 }
 

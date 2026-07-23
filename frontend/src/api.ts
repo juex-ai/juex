@@ -178,7 +178,10 @@ export function subscribeEvents(
   id: string,
   opts: SubscribeOptions,
 ): () => void {
-  const qs = opts.since ? `?since=${encodeURIComponent(opts.since)}` : "";
+  const qs =
+    opts.since !== undefined
+      ? `?since=${encodeURIComponent(opts.since)}`
+      : "";
   const url = agentAPIPath(`/api/sessions/${encodeURIComponent(id)}/events${qs}`);
   const es = new EventSource(url);
   es.addEventListener("message", (ev) => {
