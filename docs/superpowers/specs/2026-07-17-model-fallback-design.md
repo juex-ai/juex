@@ -22,8 +22,7 @@ fallback_models:
 ```
 
 - Resolve every entry to a configured provider profile at load time.
-- Reject unresolved entries, duplicate fallback entries, and a configured
-  fallback equal to the configured primary model.
+- Reject unresolved entries and duplicate fallback entries.
 - `--model provider:model` replaces the complete effective primary reference.
   `PROVIDER_API_MODEL` keeps its existing compatibility behavior: it is a
   model ID only and replaces the model under the already selected provider;
@@ -257,9 +256,10 @@ before presentation.
   half-open reservation under concurrency, neutral release, stale success and
   stale failure completion, and race tests.
 - `internal/config`: parsing and file-layer replacement, empty clearing,
-  unresolved/duplicate/configured-primary errors, CLI and environment primary
-  override preservation (including legacy environment model-ID semantics),
-  and effective duplicate removal.
+  unresolved/duplicate errors, configured-primary retention across layered
+  overrides, CLI and environment primary override preservation (including
+  legacy environment model-ID semantics), and effective-primary duplicate
+  removal.
 - `internal/runtime`: transient and deterministic degradation, excluded
   failures, request-local no-repeat, chain exhaustion, actual model/delta
   attribution, notice timing, cross-session cooldown notice, successful
