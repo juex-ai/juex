@@ -2050,8 +2050,11 @@ Tag pushes trigger the release workflow on GitHub Actions.
 detects platform archives, works when piped into `bash`, verifies the archive
 against `checksums.txt`, installs immutable versioned packages under
 `<prefix>/lib/juex/releases`, and atomically switches `current` plus the command
-symlink. Legacy binary-only archives remain installable. Windows keeps the same
-versioned package layout but copies `juex.exe` into the bin directory. Both
+symlink. Every install gets a unique generation suffix; previous generations
+remain intact so a same-version reinstall cannot invalidate the package root
+of a running process. Legacy binary-only archives remain installable. Windows
+keeps the same generated package layout but copies `juex.exe` into the bin
+directory and records the active generation in `current.txt`. Both
 POSIX installers use the newly installed binary to detect and refresh an
 existing per-user fleet service. A missing service is only installed when
 `INSTALL_FLEET_SERVICE=1`. The released-binary installer leaves detached agents

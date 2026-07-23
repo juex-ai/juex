@@ -160,10 +160,14 @@ func managedPackageRoot(executable string, opts ripgrepResolveOptions) (string, 
 	if err != nil {
 		return "", true, fmt.Errorf("grep: read managed package pointer: %w", err)
 	}
-	if strings.TrimSpace(string(current)) != key {
+	releaseName := strings.TrimSpace(string(current))
+	if releaseName != key && !strings.HasPrefix(releaseName, key+"-") {
 		return "", false, nil
 	}
-	root := filepath.Join(managedHome, "releases", key)
+	if releaseName == "" || strings.ContainsAny(releaseName, `/\`) {
+		return "", true, fmt.Errorf("grep: managed package pointer %q is not a release name", releaseName)
+	}
+	root := filepath.Join(managedHome, "releases", releaseName)
 	if _, err := os.Stat(filepath.Join(root, "juex-package.json")); err != nil {
 		return "", true, fmt.Errorf("grep: managed ripgrep package %s is missing: %w", root, err)
 	}

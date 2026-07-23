@@ -18,7 +18,9 @@
 ### Compatibility
 
 - Release installers now use versioned package directories under
-  `<prefix>/lib/juex`; existing binary-only archives remain installable.
+  `<prefix>/lib/juex`; each install creates a new immutable generation and
+  preserves older generations used by running processes. Existing binary-only
+  archives remain installable.
   Termux/Android release installation is rejected until upstream provides a
   compatible pinned ripgrep asset. The Linux arm64 release requires glibc
   because that is the only upstream arm64 asset; the installer rejects musl or

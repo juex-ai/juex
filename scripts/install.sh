@@ -350,19 +350,18 @@ install_managed_package() {
   [[ -f "$source_root/juex-resources/licenses/ripgrep/LICENSE-MIT" ]] || die "managed release is missing ripgrep LICENSE-MIT"
   [[ -f "$source_root/juex-resources/licenses/ripgrep/UNLICENSE" ]] || die "managed release is missing ripgrep UNLICENSE"
 
-  local releases_dir release_dir stage
+  local releases_dir release_dir release_name stage generation
   releases_dir="${package_home%/}/releases"
-  release_dir="${releases_dir}/${release_key}"
-  stage="${releases_dir}/.${release_key}.tmp.$$"
   mkdir -p "$releases_dir" "$(dirname "$install_target")"
-  rm -rf "$stage"
-  mkdir -p "$stage"
+  stage=$(mktemp -d "${releases_dir}/.${release_key}.tmp.XXXXXX")
+  generation="${stage##*.tmp.}"
+  release_name="${release_key}-${generation}"
+  release_dir="${releases_dir}/${release_name}"
   cp -R "$source_root/." "$stage/"
   chmod +x "$stage/bin/$binary_name" "$stage/juex-path/$rg_name"
-  rm -rf "$release_dir"
   mv "$stage" "$release_dir"
 
-  replace_symlink "releases/$release_key" "${package_home%/}/current"
+  replace_symlink "releases/$release_name" "${package_home%/}/current"
   replace_symlink "${package_home%/}/current/bin/$binary_name" "$install_target"
 }
 

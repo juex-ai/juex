@@ -253,15 +253,16 @@ function Install-ManagedPackage {
   }
 
   $releasesDir = Join-Path $ManagedHome "releases"
-  $releaseDir = Join-Path $releasesDir $ReleaseKey
-  $stage = Join-Path $releasesDir ".$ReleaseKey.tmp.$PID"
+  $generation = [Guid]::NewGuid().ToString("N")
+  $releaseName = "$ReleaseKey-$generation"
+  $releaseDir = Join-Path $releasesDir $releaseName
+  $stage = Join-Path $releasesDir ".$releaseName.tmp"
   New-Item -ItemType Directory -Force -Path $releasesDir | Out-Null
   Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   Copy-Item -Path (Join-Path $SourceRoot "*") -Destination $stage -Recurse -Force
-  Remove-Item -LiteralPath $releaseDir -Recurse -Force -ErrorAction SilentlyContinue
   Move-Item -LiteralPath $stage -Destination $releaseDir
-  Set-Content -LiteralPath (Join-Path $ManagedHome "current.txt") -Value $ReleaseKey -NoNewline
+  Set-Content -LiteralPath (Join-Path $ManagedHome "current.txt") -Value $releaseName -NoNewline
   Install-Binary -Source (Join-Path $releaseDir "bin/juex.exe") -Target $InstallTarget
 }
 

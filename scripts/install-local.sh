@@ -123,16 +123,15 @@ INSTALL_DIR=$(cd "$INSTALL_DIR" && pwd -P)
 PACKAGE_HOME=$(cd "$PACKAGE_HOME" && pwd -P)
 INSTALL_TARGET="${INSTALL_DIR}/juex"
 RELEASES_DIR="${PACKAGE_HOME}/releases"
-RELEASE_DIR="${RELEASES_DIR}/${RELEASE_KEY}"
-STAGE="${RELEASES_DIR}/.${RELEASE_KEY}.tmp.$$"
-rm -rf "$STAGE"
-mkdir -p "$STAGE"
+STAGE=$(mktemp -d "${RELEASES_DIR}/.${RELEASE_KEY}.tmp.XXXXXX")
+GENERATION="${STAGE##*.tmp.}"
+RELEASE_NAME="${RELEASE_KEY}-${GENERATION}"
+RELEASE_DIR="${RELEASES_DIR}/${RELEASE_NAME}"
 cp -R "$PACKAGE_ROOT/." "$STAGE/"
 chmod +x "$STAGE/bin/juex" "$STAGE/juex-path/rg"
-rm -rf "$RELEASE_DIR"
 mv "$STAGE" "$RELEASE_DIR"
 
-replace_symlink "releases/$RELEASE_KEY" "${PACKAGE_HOME}/current"
+replace_symlink "releases/$RELEASE_NAME" "${PACKAGE_HOME}/current"
 
 # Swap a new symlink into place so a running daemon keeps its current inode.
 replace_symlink "${PACKAGE_HOME}/current/bin/juex" "$INSTALL_TARGET"

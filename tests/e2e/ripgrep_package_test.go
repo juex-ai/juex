@@ -188,7 +188,7 @@ echo juex package fixture %s
 		})
 		return archive, rgBody
 	}
-	archiveV1, _ := writeRelease("0.0.1")
+	archiveV1, rgV1 := writeRelease("0.0.1")
 	archiveV2, rgV2 := writeRelease("0.0.2")
 	checksums := fmt.Sprintf(
 		"%s  %s\n%s  %s\n",
@@ -220,8 +220,9 @@ echo juex package fixture %s
 
 	prefix := filepath.Join(work, "relative-prefix")
 	current := filepath.Join(prefix, "lib", "juex", "current")
-	if target, err := os.Readlink(current); err != nil || target != filepath.Join("releases", "0.0.1-linux-amd64") {
-		t.Fatalf("current symlink = %q, %v", target, err)
+	firstTarget, err := os.Readlink(current)
+	if err != nil || !strings.HasPrefix(firstTarget, filepath.Join("releases", "0.0.1-linux-amd64-")) {
+		t.Fatalf("current symlink = %q, %v", firstTarget, err)
 	}
 	installed := filepath.Join(prefix, "bin", "juex")
 	if info, err := os.Lstat(installed); err != nil || info.Mode()&os.ModeSymlink == 0 {
@@ -235,8 +236,21 @@ echo juex package fixture %s
 		t.Fatalf("installed command failed: %v\n%s", err, versionOut)
 	}
 
+	runInstall("0.0.1")
+	secondTarget, err := os.Readlink(current)
+	if err != nil || !strings.HasPrefix(secondTarget, filepath.Join("releases", "0.0.1-linux-amd64-")) {
+		t.Fatalf("reinstalled current symlink = %q, %v", secondTarget, err)
+	}
+	if secondTarget == firstTarget {
+		t.Fatalf("same-version reinstall reused mutable release directory %q", secondTarget)
+	}
+	oldPackagedRG := filepath.Join(prefix, "lib", "juex", firstTarget, "juex-path", "rg")
+	if got, err := os.ReadFile(oldPackagedRG); err != nil || string(got) != string(rgV1) {
+		t.Fatalf("previous release generation was not preserved: %q, %v", got, err)
+	}
+
 	runInstall("0.0.2")
-	if target, err := os.Readlink(current); err != nil || target != filepath.Join("releases", "0.0.2-linux-amd64") {
+	if target, err := os.Readlink(current); err != nil || !strings.HasPrefix(target, filepath.Join("releases", "0.0.2-linux-amd64-")) {
 		t.Fatalf("upgraded current symlink = %q, %v", target, err)
 	}
 	packagedRG := filepath.Join(current, "juex-path", "rg")
@@ -315,16 +329,22 @@ func TestReleasePackagingIncludesManagedRipgrepPayload(t *testing.T) {
 			"juex-path/rg",
 			"Termux/Android",
 			"replace_symlink",
+			`mktemp -d "${RELEASES_DIR}/.${RELEASE_KEY}.tmp.XXXXXX"`,
+			"RELEASE_NAME=",
 			"pwd -P",
 		},
 		"scripts/install.sh": {
 			"replace_symlink",
+			`mktemp -d "${releases_dir}/.${release_key}.tmp.XXXXXX"`,
+			"release_name=",
 			"pwd -P",
 		},
 		"scripts/install.ps1": {
 			"Install-ManagedPackage",
+			`[Guid]::NewGuid().ToString("N")`,
 			"juex-path/rg.exe",
 			"current.txt",
+			"$releaseName",
 		},
 	}
 	for rel, wants := range checks {
@@ -336,6 +356,19 @@ func TestReleasePackagingIncludesManagedRipgrepPayload(t *testing.T) {
 			if !strings.Contains(string(body), want) {
 				t.Errorf("%s missing %q", rel, want)
 			}
+		}
+	}
+	for rel, forbidden := range map[string]string{
+		"scripts/install-local.sh": `rm -rf "$RELEASE_DIR"`,
+		"scripts/install.sh":       `rm -rf "$release_dir"`,
+		"scripts/install.ps1":      `Remove-Item -LiteralPath $releaseDir`,
+	} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), forbidden) {
+			t.Errorf("%s still mutates an installed release generation with %q", rel, forbidden)
 		}
 	}
 }
@@ -382,14 +415,14 @@ func TestPowerShellReleaseInstallerInstallsManagedPackage(t *testing.T) {
 	if err != nil || string(installed) != string(binary) {
 		t.Fatalf("installed juex.exe = %q, %v", installed, err)
 	}
-	releaseRoot := filepath.Join(prefix, "lib", "juex", "releases", "0.0.1-windows-amd64")
+	current, err := os.ReadFile(filepath.Join(prefix, "lib", "juex", "current.txt"))
+	if err != nil || !strings.HasPrefix(string(current), "0.0.1-windows-amd64-") {
+		t.Fatalf("current.txt = %q, %v", current, err)
+	}
+	releaseRoot := filepath.Join(prefix, "lib", "juex", "releases", string(current))
 	packagedRG, err := os.ReadFile(filepath.Join(releaseRoot, "juex-path", "rg.exe"))
 	if err != nil || string(packagedRG) != string(rgBody) {
 		t.Fatalf("packaged rg.exe = %q, %v", packagedRG, err)
-	}
-	current, err := os.ReadFile(filepath.Join(prefix, "lib", "juex", "current.txt"))
-	if err != nil || string(current) != "0.0.1-windows-amd64" {
-		t.Fatalf("current.txt = %q, %v", current, err)
 	}
 }
 

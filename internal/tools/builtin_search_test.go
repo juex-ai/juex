@@ -277,10 +277,23 @@ func TestResolveRipgrepValidatesPackagedBinaryDigest(t *testing.T) {
 }
 
 func TestResolveRipgrepUsesWindowsManagedPackagePointer(t *testing.T) {
+	t.Run("legacy release key", func(t *testing.T) {
+		testResolveRipgrepUsesWindowsManagedPackagePointer(t, false)
+	})
+	t.Run("immutable generation", func(t *testing.T) {
+		testResolveRipgrepUsesWindowsManagedPackagePointer(t, true)
+	})
+}
+
+func testResolveRipgrepUsesWindowsManagedPackagePointer(t *testing.T, generated bool) {
 	prefix := t.TempDir()
 	executable := filepath.Join(prefix, "bin", "juex.exe")
 	releaseKey := "1.2.3-windows-amd64"
-	packageRoot := filepath.Join(prefix, "lib", "juex", "releases", releaseKey)
+	releaseName := releaseKey
+	if generated {
+		releaseName += "-generation"
+	}
+	packageRoot := filepath.Join(prefix, "lib", "juex", "releases", releaseName)
 	rgPath := filepath.Join(packageRoot, "juex-path", "rg.exe")
 	if err := os.MkdirAll(filepath.Dir(executable), 0o755); err != nil {
 		t.Fatal(err)
@@ -302,7 +315,7 @@ func TestResolveRipgrepUsesWindowsManagedPackagePointer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(packageRoot, "juex-package.json"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(prefix, "lib", "juex", "current.txt"), []byte(releaseKey), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(prefix, "lib", "juex", "current.txt"), []byte(releaseName), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

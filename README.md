@@ -20,7 +20,10 @@ curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.s
 The POSIX installer refreshes an existing per-user fleet service after replacing
 the active package. Release packages include the pinned `rg` executable used by
 the builtin `grep` tool and install under `~/.local/lib/juex` by default, with a
-stable command symlink in `~/.local/bin`. Post-install service-manager failures
+stable command symlink in `~/.local/bin`. Each install writes a new immutable
+release generation before switching the active pointer, so reinstalling the
+same version does not remove files still used by a running Juex process.
+Post-install service-manager failures
 are reported as warnings without invalidating the package installation. The installer does not install a
 new service unless `INSTALL_FLEET_SERVICE=1` is set, and it never restarts
 detached agents.
