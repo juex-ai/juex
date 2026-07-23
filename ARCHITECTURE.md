@@ -2033,7 +2033,8 @@ Config (`.goreleaser.yml`, schema v2) produces 7 binaries:
 The `linux/armv7` build (`GOARM=7`) covers Pi 2+, BeagleBone, and similar
 systems. The pinned amd64 and armv7 ripgrep assets are musl builds; upstream
 only publishes a GNU/glibc ripgrep asset for Linux arm64, so the release
-installer rejects arm64 musl or an unverified libc before download.
+and local managed-package installers reject arm64 musl or an unverified libc
+before downloading or packaging that asset.
 Termux/Android is rejected because the pinned upstream release has no
 compatible Android asset.
 Pi 1 / Pi Zero (ARMv6) are not covered; users with that hardware must build
@@ -2054,7 +2055,8 @@ symlink. Every install gets a unique generation suffix; previous generations
 remain intact so a same-version reinstall cannot invalidate the package root
 of a running process. Legacy binary-only archives remain installable. Windows
 keeps the same generated package layout but copies `juex.exe` into the bin
-directory and records the active generation in `current.txt`. Both
+directory, then records the active generation in `current.txt` only after the
+copy succeeds. Both
 POSIX installers use the newly installed binary to detect and refresh an
 existing per-user fleet service. A missing service is only installed when
 `INSTALL_FLEET_SERVICE=1`. The released-binary installer leaves detached agents

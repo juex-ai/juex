@@ -262,8 +262,8 @@ function Install-ManagedPackage {
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   Copy-Item -Path (Join-Path $SourceRoot "*") -Destination $stage -Recurse -Force
   Move-Item -LiteralPath $stage -Destination $releaseDir
-  Set-Content -LiteralPath (Join-Path $ManagedHome "current.txt") -Value $releaseName -NoNewline
   Install-Binary -Source (Join-Path $releaseDir "bin/juex.exe") -Target $InstallTarget
+  Set-Content -LiteralPath (Join-Path $ManagedHome "current.txt") -Value $releaseName -NoNewline
 }
 
 $resolvedVersion = Resolve-Version -RequestedVersion $Version

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
@@ -305,6 +306,49 @@ func TestReleaseInstallScriptRejectsLinuxArm64WithoutGlibcBeforeDownload(t *test
 	}
 }
 
+func TestLocalInstallScriptRejectsLinuxArm64WithoutGlibcBeforePackaging(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	stubDir := filepath.Join(work, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goStub := `#!/bin/sh
+if [ "${1:-}" = "env" ]; then
+  case "${2:-}" in
+    GOOS) echo linux; exit 0 ;;
+    GOARCH) echo arm64; exit 0 ;;
+  esac
+fi
+exit 97
+`
+	if err := os.WriteFile(filepath.Join(stubDir, "go"), []byte(goStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join(root, "scripts", "install-local.sh"))
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_LIBC=musl",
+		"JUEX_RIPGREP_BASE_URL=file://"+filepath.Join(work, "missing"),
+		"JUEX_RIPGREP_CACHE_DIR="+filepath.Join(work, "cache"),
+		"PREFIX="+filepath.Join(work, "prefix"),
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("local Linux arm64 musl install unexpectedly succeeded\n%s", out)
+	}
+	body := string(out)
+	for _, want := range []string{"Linux arm64", "glibc", "ripgrep", "source build"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("local Linux arm64 compatibility error missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestReleasePackagingIncludesManagedRipgrepPayload(t *testing.T) {
 	root, err := findRepoRoot()
 	if err != nil {
@@ -370,6 +414,22 @@ func TestReleasePackagingIncludesManagedRipgrepPayload(t *testing.T) {
 		if strings.Contains(string(body), forbidden) {
 			t.Errorf("%s still mutates an installed release generation with %q", rel, forbidden)
 		}
+	}
+}
+
+func TestPowerShellReleaseInstallerSwitchesPointerAfterBinaryCopy(t *testing.T) {
+	_, script := powerShellInstallScript(t)
+	body, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyCall := bytes.Index(body, []byte(`Install-Binary -Source (Join-Path $releaseDir "bin/juex.exe") -Target $InstallTarget`))
+	pointerWrite := bytes.Index(body, []byte(`Set-Content -LiteralPath (Join-Path $ManagedHome "current.txt") -Value $releaseName -NoNewline`))
+	if copyCall < 0 || pointerWrite < 0 {
+		t.Fatalf("PowerShell managed install is missing copy or pointer update")
+	}
+	if pointerWrite < copyCall {
+		t.Fatalf("PowerShell managed install switches current.txt before the binary copy can succeed")
 	}
 }
 

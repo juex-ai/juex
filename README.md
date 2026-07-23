@@ -28,9 +28,10 @@ are reported as warnings without invalidating the package installation. The inst
 new service unless `INSTALL_FLEET_SERVICE=1` is set, and it never restarts
 detached agents.
 Linux arm64 release packages require glibc because ripgrep 15.1.0 has no
-upstream arm64 musl asset. The installer rejects musl or an unverified libc
-before download; those systems must build Juex from source and provide a
-compatible `rg` through `PATH` or `JUEX_RG`.
+upstream arm64 musl asset. Release and local managed-package installers reject
+musl or an unverified libc before packaging; those systems must use an
+unpackaged source build and provide a compatible `rg` through `PATH` or
+`JUEX_RG`.
 
 On Windows PowerShell:
 
