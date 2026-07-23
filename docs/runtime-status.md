@@ -73,7 +73,9 @@ from the journal beginning; an omitted `since` starts with live delivery only.
 Transcript-producing events carry the exact persisted message ID. If the
 initial transcript already contains that ID, the browser applies event metadata
 but suppresses the duplicate transcript projection. Tool replay uses the same
-rule with its globally unique tool-use ID.
+rule with its globally unique tool-use ID. The replay cursor is captured once
+per Session route; later transcript refreshes may advance their response cursor
+without restarting the existing EventSource or clearing its latest status.
 Because the server subscribes before replay, it suppresses durable live frames
 already present in the replay tail before completing the ordered live handoff.
 Transient frames are also dropped while that boundary is unresolved so an

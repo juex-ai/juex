@@ -128,8 +128,10 @@ import {
 import { QueuedInputStack } from "@/components/QueuedInputStack";
 import { Separator } from "@/components/ui/separator";
 import {
+  captureSessionLiveSubscription,
   createSessionReadState,
   type SessionInitialCommandState,
+  type SessionLiveSubscription,
   type SessionReadState,
 } from "@/lib/session-read-state";
 import {
@@ -201,6 +203,8 @@ export function Session() {
   );
   const [draft, setDraft] = useState("");
   const [attachmentCount, setAttachmentCount] = useState(0);
+  const [sessionLiveSubscription, setSessionLiveSubscription] =
+    useState<SessionLiveSubscription | null>(null);
   const [composerOverlayNode, setComposerOverlayNode] =
     useState<HTMLDivElement | null>(null);
   const [composerOverlayHeight, setComposerOverlayHeight] = useState(0);
@@ -257,6 +261,7 @@ export function Session() {
   useEffect(() => {
     controller.setRoute(id);
     controller.resetForRoute();
+    setSessionLiveSubscription(null);
     setDraft("");
     // location.state is read only on session entry; clearing it later must not
     // reset live projection.
@@ -270,13 +275,19 @@ export function Session() {
     });
   }, [controller, id]);
 
+  useEffect(() => {
+    if (!data || data.id !== id) return;
+    setSessionLiveSubscription((current) =>
+      captureSessionLiveSubscription(current, data),
+    );
+  }, [data, id]);
+
   const canSubscribeLiveSession = data ? sessionCanSend(data) : false;
-  const sessionEventCursor = data?.event_cursor;
 
   useEffect(() => {
     if (
       !id ||
-      sessionEventCursor === undefined ||
+      sessionLiveSubscription?.sessionID !== id ||
       !agent?.id ||
       !statusStore ||
       !agentRuntimeHealthy ||
@@ -291,7 +302,7 @@ export function Session() {
         if (disposed) return;
         statusStore.setStatus(agent.id, snapshot);
         unsubscribe = controller.subscribeLiveEvents(id, {
-          since: sessionEventCursor,
+          since: sessionLiveSubscription.cursor,
           loadStatus: () => getSessionStatus(id),
           onStatus: (next) => {
             if (disposed) return;
@@ -323,7 +334,7 @@ export function Session() {
     canSubscribeLiveSession,
     controller,
     id,
-    sessionEventCursor,
+    sessionLiveSubscription,
     statusStore,
   ]);
 

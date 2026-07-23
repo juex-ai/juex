@@ -83,7 +83,7 @@ into `internal/web/dist/` for Go embedding.
 | `src/lib/runtime-tool-catalog.ts` | pure runtime tool group labels, timeout labels, parameter projection, and defensive schema formatting |
 | `src/lib/session-messages.ts` | pure helpers for merging paged transcript windows |
 | `src/lib/session-read-controller.ts` | session-detail effect interpreter for route guards, fetch/context refresh, authoritative-status replacement, reconnect-safe status calibration, transcript SSE dispatch, and navigation effects |
-| `src/lib/session-read-state.ts` | session read-model state and replay overlap suppression using persisted message IDs and tool-use IDs from the initial transcript |
+| `src/lib/session-read-state.ts` | session read-model state, route-stable live-subscription cursor capture, and replay overlap suppression using persisted message IDs and tool-use IDs from the initial transcript |
 | `src/lib/session-read-state.ts` | pure session-detail controller state transitions and effect descriptors |
 | `src/lib/session-title.ts` | pure session preview display-title fallback helper |
 | `src/lib/shell-header.ts` | pure shell header helpers for runtime badges and session timestamps |

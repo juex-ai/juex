@@ -55,6 +55,19 @@ export type SessionReadResult = {
   effects: SessionReadEffect[];
 };
 
+export type SessionLiveSubscription = {
+  sessionID: string;
+  cursor: string;
+};
+
+export function captureSessionLiveSubscription(
+  current: SessionLiveSubscription | null,
+  data: SessionShowResponse,
+): SessionLiveSubscription {
+  if (current?.sessionID === data.id) return current;
+  return { sessionID: data.id, cursor: data.event_cursor };
+}
+
 export function createSessionReadState(): SessionReadState {
   return {
     data: null,

@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 
 import {
+  captureSessionLiveSubscription,
   clearComposerHint,
   createSessionReadState,
   projectComposerHint,
@@ -36,6 +37,25 @@ test("resetSessionReadState clears route-local transcript state", () => {
   assert.equal(state.projection.messages.length, 0);
   assert.equal(state.composerHint, null);
   assert.equal(state.loadingOlderMessages, false);
+});
+
+test("live subscription keeps its bootstrap cursor across transcript refreshes", () => {
+  const initial = captureSessionLiveSubscription(
+    null,
+    session("s1", []),
+  );
+  const refreshed = captureSessionLiveSubscription(
+    initial,
+    { ...session("s1", []), event_cursor: "cursor-2" },
+  );
+  const switched = captureSessionLiveSubscription(
+    refreshed,
+    { ...session("s2", []), event_cursor: "cursor-3" },
+  );
+
+  assert.deepEqual(initial, { sessionID: "s1", cursor: "" });
+  assert.equal(refreshed, initial);
+  assert.deepEqual(switched, { sessionID: "s2", cursor: "cursor-3" });
 });
 
 test("session load failure leaves loading and route reset clears stale data", () => {
@@ -511,6 +531,7 @@ function session(id: string, messages: Message[]): SessionShowResponse {
     turns: 1,
     preview: "preview",
     token_usage: { input_tokens: 1, output_tokens: 1 },
+    event_cursor: "",
     messages,
   };
 }

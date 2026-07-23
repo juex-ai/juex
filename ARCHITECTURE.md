@@ -1395,7 +1395,9 @@ boundary is unresolved, preventing an older streaming snapshot from following
 a replayed terminal event. Runtime transcript events include the persisted
 message ID, allowing the browser to suppress replay content already represented
 by the initial transcript without relying on text equality. Tool replay uses
-the globally unique tool-use ID for the same overlap check.
+the globally unique tool-use ID for the same overlap check. The initial replay
+cursor is stable for the lifetime of the Session route, so a cursor-only
+transcript refresh does not tear down the live stream or clear canonical status.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:

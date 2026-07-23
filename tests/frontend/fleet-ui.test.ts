@@ -200,8 +200,8 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
-    /sessionEventCursor = data\?\.event_cursor[\s\S]*controller\.subscribeLiveEvents\(id,[\s\S]*since: sessionEventCursor/,
-    "the transcript stream must resume from the transcript response cursor instead of a newer status cursor",
+    /captureSessionLiveSubscription\(current, data\)[\s\S]*controller\.subscribeLiveEvents\(id,[\s\S]*since: sessionLiveSubscription\.cursor/,
+    "the transcript stream must capture the transcript response cursor once per session route",
   );
   assert.match(
     sessionSource,
