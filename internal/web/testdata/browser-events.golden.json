@@ -39,7 +39,8 @@
     "turn_id": "turn-1",
     "payload": {
       "input": "run command",
-      "kind": "user"
+      "kind": "user",
+      "message_id": "msg-user-1"
     },
     "status": {
       "cursor": "evt-turn-started",
@@ -133,7 +134,8 @@
         "input_tokens": 10,
         "output_tokens": 5,
         "total_tokens": 15
-      }
+      },
+      "message_id": "msg-assistant-1"
     },
     "status": {
       "cursor": "evt-llm-responded",
@@ -548,7 +550,8 @@
     "ts": "2026-06-15T00:00:05Z",
     "turn_id": "turn-1",
     "payload": {
-      "text": "hook extract-state allow UserPromptSubmit in 12ms"
+      "text": "hook extract-state allow UserPromptSubmit in 12ms",
+      "message_id": "msg-hook-1"
     },
     "status": {
       "cursor": "evt-hook-trace",
@@ -598,6 +601,7 @@
     "payload": {
       "input": "queued follow-up",
       "kind": "user",
+      "message_id": "pending-message-1",
       "pending_count": 1,
       "max_pending_inputs": 4
     },

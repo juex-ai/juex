@@ -124,6 +124,132 @@ test("terminal live event refreshes the persisted transcript", () => {
   assert.deepEqual(result.effects, [{ type: "refresh" }]);
 });
 
+test("replay skips transcript content already present in the initial session page", () => {
+  let state = projectSessionLoaded(
+    createSessionReadState(),
+    session("s1", [
+      {
+        id: "msg-user",
+        role: "user",
+        blocks: [{ type: "text", text: "run command" }],
+      },
+      {
+        id: "msg-assistant",
+        role: "assistant",
+        model: "gpt-test",
+        blocks: [
+          { type: "text", text: "done" },
+          {
+            type: "tool_use",
+            tool_use_id: "tool-1",
+            tool_name: "exec_command",
+          },
+        ],
+      },
+      {
+        id: "msg-tool-result",
+        role: "user",
+        blocks: [
+          {
+            type: "tool_result",
+            tool_use_id: "tool-1",
+            content: "ok",
+          },
+        ],
+      },
+      {
+        id: "msg-hook",
+        role: "system",
+        kind: "hook_event",
+        blocks: [{ type: "text", text: "hook completed" }],
+      },
+      {
+        id: "pending-message-1",
+        role: "user",
+        blocks: [{ type: "text", text: "queued follow-up" }],
+      },
+    ]),
+  );
+
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-started",
+    type: "turn.started",
+    ts: "2026-07-23T11:00:00Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "run command",
+      message_id: "msg-user",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-responded",
+    type: "llm.responded",
+    ts: "2026-07-23T11:00:01Z",
+    turn_id: "turn-1",
+    payload: {
+      message_id: "msg-assistant",
+      stop_reason: "tool_use",
+      usage: { input_tokens: 1, output_tokens: 1 },
+      token_usage: { input_tokens: 1, output_tokens: 1 },
+      blocks: [{ type: "text", text: "done" }],
+      text: "done",
+      thinking: "",
+      tool_calls: [],
+      model: "gpt-test",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-tool-requested",
+    type: "tool.requested",
+    ts: "2026-07-23T11:00:02Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      timeout_seconds: 30,
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-tool-completed",
+    type: "tool.completed",
+    ts: "2026-07-23T11:00:03Z",
+    turn_id: "turn-1",
+    payload: {
+      name: "exec_command",
+      tool_use_id: "tool-1",
+      timeout_seconds: 30,
+      len: 2,
+      preview: "ok",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-hook-trace",
+    type: "hook.trace",
+    ts: "2026-07-23T11:00:04Z",
+    turn_id: "turn-1",
+    payload: {
+      text: "hook completed",
+      message_id: "msg-hook",
+    },
+  }).state;
+  state = projectLiveBrowserEvent(state, {
+    id: "evt-pending-queued",
+    type: "pending_input.queued",
+    ts: "2026-07-23T11:00:05Z",
+    turn_id: "turn-1",
+    payload: {
+      input: "queued follow-up",
+      kind: "user",
+      message_id: "pending-message-1",
+      pending_count: 1,
+      max_pending_inputs: 16,
+    },
+  }).state;
+
+  assert.deepEqual(state.projection.messages, []);
+  assert.deepEqual(state.projection.queuedInput.items, []);
+});
+
 test("projectLiveBrowserEvent refreshes session goal state", () => {
   const initial = projectSessionLoaded(
     createSessionReadState(),

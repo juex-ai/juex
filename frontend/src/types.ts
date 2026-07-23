@@ -365,6 +365,7 @@ interface BrowserEventBase<TType extends BrowserEventType> {
 export interface TurnStartedPayload {
   input: string;
   kind?: string;
+  message_id?: string;
 }
 
 export interface TurnAdmittedPayload {
@@ -447,6 +448,7 @@ export interface LLMRespondedPayload {
   model: string;
   context_usage?: ContextUsage;
   notice?: Message;
+  message_id?: string;
 }
 
 export interface ToolRequestedPayload {
@@ -529,11 +531,13 @@ export interface HookErroredPayload extends HookStartedPayload {
 
 export interface HookTracePayload {
   text: string;
+  message_id?: string;
 }
 
 export interface PendingInputQueuedPayload {
   input: string;
   kind: string;
+  message_id?: string;
   pending_count: number;
   max_pending_inputs: number;
 }

@@ -1392,7 +1392,10 @@ read so concurrent events may replay but cannot be skipped. The server
 deduplicates queued durable frames already covered by the replay tail before
 continuing live delivery. It also drops transient frames while that handoff
 boundary is unresolved, preventing an older streaming snapshot from following
-a replayed terminal event.
+a replayed terminal event. Runtime transcript events include the persisted
+message ID, allowing the browser to suppress replay content already represented
+by the initial transcript without relying on text equality. Tool replay uses
+the globally unique tool-use ID for the same overlap check.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:

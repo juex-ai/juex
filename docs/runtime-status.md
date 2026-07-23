@@ -70,6 +70,10 @@ transcript page is read. The browser uses this cursor for the initial transcript
 subscription, so events committed between the transcript and status requests
 are replayed rather than skipped. An explicit empty `?since=` requests replay
 from the journal beginning; an omitted `since` starts with live delivery only.
+Transcript-producing events carry the exact persisted message ID. If the
+initial transcript already contains that ID, the browser applies event metadata
+but suppresses the duplicate transcript projection. Tool replay uses the same
+rule with its globally unique tool-use ID.
 Because the server subscribes before replay, it suppresses durable live frames
 already present in the replay tail before completing the ordered live handoff.
 Transient frames are also dropped while that boundary is unresolved so an

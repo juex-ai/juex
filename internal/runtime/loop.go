@@ -253,6 +253,7 @@ func (e *Engine) EnqueuePendingMessageWithOptions(ctx context.Context, userMsg l
 	event := events.Event{Type: "pending_input.queued", TurnID: turnID, Payload: PendingInputQueuedPayload{
 		Input:            userMsg.FirstText(),
 		Kind:             userMsg.Kind,
+		MessageID:        userMsg.ID,
 		PendingCount:     status.PendingCount,
 		MaxPendingInputs: status.MaxPendingInputs,
 	}}
@@ -429,15 +430,17 @@ func (e *Engine) prepareTurnContextLocked(ctx context.Context, turnID string, us
 }
 
 func (e *Engine) recordTurnStartLocked(turnID string, userMsg llm.Message) error {
-	if err := e.currentSession().Append(userMsg); err != nil {
+	persisted, err := e.currentSession().AppendAssigned(userMsg)
+	if err != nil {
 		return fmt.Errorf("session append user: %w", err)
 	}
-	if err := e.markPendingInputMessageProcessed(userMsg); err != nil {
+	if err := e.markPendingInputMessageProcessed(persisted); err != nil {
 		return fmt.Errorf("mark pending input user processed: %w", err)
 	}
 	e.emit(events.Event{Type: "turn.started", TurnID: turnID, Payload: TurnStartedPayload{
-		Input: userMsg.FirstText(),
-		Kind:  userMsg.Kind,
+		Input:     persisted.FirstText(),
+		Kind:      persisted.Kind,
+		MessageID: persisted.ID,
 	}})
 	return nil
 }
@@ -640,8 +643,14 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 	}
 	messages = append(messages, msg)
 	sess := e.currentSession()
-	if err := sess.AppendBatch(messages); err != nil {
+	persisted, err := sess.AppendBatchAssigned(messages)
+	if err != nil {
 		return recordedProviderResponse{}, fmt.Errorf("session append provider response: %w", err)
+	}
+	msg = persisted[len(persisted)-1]
+	var notice *llm.Message
+	if len(persisted) > 1 {
+		notice = &persisted[0]
 	}
 	e.updateTokenEstimateCalibration(resp.Usage.InputTokens, request.estimatedInputTokens)
 	totalUsage := sess.RecordResponseUsage(resp.Usage, contextUsage)
@@ -661,7 +670,8 @@ func (e *Engine) recordProviderResponseLocked(turnID string, prepared preparedTu
 		ToolCalls:    responseToolCalls(msg),
 		Model:        msg.Model,
 		ContextUsage: contextUsage,
-		Notice:       result.notice,
+		Notice:       notice,
+		MessageID:    msg.ID,
 	}
 	e.emit(events.Event{Type: "llm.responded", TurnID: turnID, Payload: payload})
 

@@ -26,8 +26,9 @@ type TurnPhasePayload struct {
 }
 
 type TurnStartedPayload struct {
-	Input string `json:"input"`
-	Kind  string `json:"kind,omitempty"`
+	Input     string `json:"input"`
+	Kind      string `json:"kind,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
 }
 
 type TurnCompletedPayload struct {
@@ -98,7 +99,8 @@ type HookErroredPayload struct {
 }
 
 type HookTracePayload struct {
-	Text string `json:"text"`
+	Text      string `json:"text"`
+	MessageID string `json:"message_id,omitempty"`
 }
 
 type LLMRequestedPayload struct {
@@ -120,6 +122,7 @@ type LLMRespondedPayload struct {
 	Model        string                       `json:"model"`
 	ContextUsage *llm.ContextUsage            `json:"context_usage,omitempty"`
 	Notice       *llm.Message                 `json:"notice,omitempty"`
+	MessageID    string                       `json:"message_id,omitempty"`
 }
 
 type LLMOutputDeltaPayload struct {
@@ -235,6 +238,7 @@ type GoalContinuedPayload struct {
 type PendingInputQueuedPayload struct {
 	Input            string `json:"input"`
 	Kind             string `json:"kind"`
+	MessageID        string `json:"message_id,omitempty"`
 	PendingCount     int    `json:"pending_count"`
 	MaxPendingInputs int    `json:"max_pending_inputs"`
 }

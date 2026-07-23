@@ -161,9 +161,13 @@ export function projectLiveBrowserEvent(
   state: SessionReadState,
   event: BrowserEvent,
 ): SessionReadResult {
+  const metadataState = projectSessionMetadataEvent(state, event);
+  if (eventTranscriptAlreadyLoaded(state.data?.messages ?? [], event)) {
+    return { state: metadataState, effects: [] };
+  }
   const result = projectLiveSessionEvent(state.projection, event);
   return withProjectionResult(
-    projectSessionMetadataEvent(state, event),
+    metadataState,
     result.state,
     result.effects,
   );
@@ -379,6 +383,47 @@ function projectSessionMetadataEvent(
       notes: event.payload,
     },
   };
+}
+
+function eventTranscriptAlreadyLoaded(
+  messages: SessionShowResponse["messages"],
+  event: BrowserEvent,
+): boolean {
+  switch (event.type) {
+    case "turn.started":
+    case "llm.responded":
+    case "hook.trace":
+    case "pending_input.queued":
+      return Boolean(
+        event.payload.message_id &&
+          messages.some((message) => message.id === event.payload.message_id),
+      );
+    case "tool.requested":
+      return Boolean(
+        event.payload.tool_use_id &&
+          messages.some((message) =>
+            message.blocks?.some(
+              (block) =>
+                block.type === "tool_use" &&
+                block.tool_use_id === event.payload.tool_use_id,
+            ),
+          ),
+      );
+    case "tool.completed":
+    case "tool.errored":
+      return Boolean(
+        event.payload.tool_use_id &&
+          messages.some((message) =>
+            message.blocks?.some(
+              (block) =>
+                block.type === "tool_result" &&
+                block.tool_use_id === event.payload.tool_use_id,
+            ),
+          ),
+      );
+    default:
+      return false;
+  }
 }
 
 function errorMessage(

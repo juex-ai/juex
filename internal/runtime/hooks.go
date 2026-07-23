@@ -267,8 +267,14 @@ func (e *Engine) appendHookTraceMessage(turnID, text string) {
 	}
 	msg := llm.TextMessage(llm.RoleSystem, text)
 	msg.Kind = llm.MessageKindHookEvent
-	_ = sess.Append(msg)
-	e.emit(events.Event{Type: "hook.trace", TurnID: turnID, Payload: HookTracePayload{Text: text}})
+	persisted, err := sess.AppendAssigned(msg)
+	if err != nil {
+		return
+	}
+	e.emit(events.Event{Type: "hook.trace", TurnID: turnID, Payload: HookTracePayload{
+		Text:      text,
+		MessageID: persisted.ID,
+	}})
 }
 
 func hookCompletedTraceText(payload HookCompletedPayload, includeBuiltin bool) string {

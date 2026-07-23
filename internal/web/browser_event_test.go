@@ -329,7 +329,11 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "turn.started",
 			Timestamp: ts,
 			TurnID:    "turn-1",
-			Payload:   juexruntime.TurnStartedPayload{Input: "run command", Kind: "user"},
+			Payload: juexruntime.TurnStartedPayload{
+				Input:     "run command",
+				Kind:      "user",
+				MessageID: "msg-user-1",
+			},
 		},
 		{
 			ID:        "evt-turn-provider-phase",
@@ -354,6 +358,7 @@ func browserEventFixtureEvents() []events.Event {
 				Text:       "I'll run it.",
 				ToolCalls:  []toolevents.ToolCallPayload{},
 				Model:      "gpt-test",
+				MessageID:  "msg-assistant-1",
 				ContextUsage: &llm.ContextUsage{
 					InputTokens:  10,
 					OutputTokens: 5,
@@ -466,7 +471,10 @@ func browserEventFixtureEvents() []events.Event {
 			Type:      "hook.trace",
 			Timestamp: ts.Add(5 * time.Second),
 			TurnID:    "turn-1",
-			Payload:   juexruntime.HookTracePayload{Text: "hook extract-state allow UserPromptSubmit in 12ms"},
+			Payload: juexruntime.HookTracePayload{
+				Text:      "hook extract-state allow UserPromptSubmit in 12ms",
+				MessageID: "msg-hook-1",
+			},
 		},
 		{
 			ID:        "evt-pending-queued",
@@ -476,6 +484,7 @@ func browserEventFixtureEvents() []events.Event {
 			Payload: juexruntime.PendingInputQueuedPayload{
 				Input:            "queued follow-up",
 				Kind:             "user",
+				MessageID:        "pending-message-1",
 				PendingCount:     1,
 				MaxPendingInputs: 4,
 			},
