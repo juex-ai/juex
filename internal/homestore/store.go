@@ -27,6 +27,30 @@ const (
 
 var ErrLockBusy = errors.New("home store lock is already held")
 
+// AtomicWriteError reports whether the target was replaced before publication
+// failed. Callers can use that fact to decide whether rollback owns the target.
+type AtomicWriteError struct {
+	Operation string
+	Path      string
+	Replaced  bool
+	Err       error
+}
+
+func (e *AtomicWriteError) Error() string {
+	return fmt.Sprintf("homestore: %s %s: %v", e.Operation, e.Path, e.Err)
+}
+
+func (e *AtomicWriteError) Unwrap() error {
+	return e.Err
+}
+
+// ReplacementOccurred reports whether an atomic write error happened after
+// the destination had been replaced.
+func ReplacementOccurred(err error) bool {
+	var writeErr *AtomicWriteError
+	return errors.As(err, &writeErr) && writeErr.Replaced
+}
+
 type Store struct {
 	homeDir string
 }
@@ -76,24 +100,37 @@ func validLockID(id string) bool {
 }
 
 func WriteFileAtomic(path string, data []byte, fileMode, parentMode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, parentMode); err != nil {
-		return fmt.Errorf("homestore: create parent directory %s: %w", dir, err)
-	}
-	return writeFileAtomic(path, data, fileMode)
+	return writeFileAtomicWith(path, data, fileMode, parentMode, true, SyncDir)
 }
 
 // WriteFileAtomicExisting publishes a file without creating its parent. It is
 // used when recreating a removed state directory would violate ownership.
 func WriteFileAtomicExisting(path string, data []byte, fileMode os.FileMode) error {
-	return writeFileAtomic(path, data, fileMode)
+	return writeFileAtomicWith(path, data, fileMode, 0, false, SyncDir)
 }
 
-func writeFileAtomic(path string, data []byte, fileMode os.FileMode) error {
+func writeFileAtomicWith(
+	path string,
+	data []byte,
+	fileMode, parentMode os.FileMode,
+	createParent bool,
+	syncDir func(string) error,
+) error {
 	dir := filepath.Dir(path)
+	var missingDirs []string
+	if createParent {
+		var err error
+		missingDirs, err = missingParentDirectories(dir)
+		if err != nil {
+			return atomicWriteError("inspect parent directory", dir, false, err)
+		}
+		if err := os.MkdirAll(dir, parentMode); err != nil {
+			return atomicWriteError("create parent directory", dir, false, err)
+		}
+	}
 	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
-		return fmt.Errorf("homestore: create temporary file for %s: %w", path, err)
+		return atomicWriteError("create temporary file for", path, false, err)
 	}
 	tempPath := temp.Name()
 	cleanup := func() {
@@ -102,26 +139,57 @@ func writeFileAtomic(path string, data []byte, fileMode os.FileMode) error {
 	}
 	if err := temp.Chmod(fileMode); err != nil {
 		cleanup()
-		return fmt.Errorf("homestore: set temporary file mode for %s: %w", path, err)
+		return atomicWriteError("set temporary file mode for", path, false, err)
 	}
 	if _, err := temp.Write(data); err != nil {
 		cleanup()
-		return fmt.Errorf("homestore: write temporary file for %s: %w", path, err)
+		return atomicWriteError("write temporary file for", path, false, err)
 	}
 	if err := temp.Sync(); err != nil {
 		cleanup()
-		return fmt.Errorf("homestore: sync temporary file for %s: %w", path, err)
+		return atomicWriteError("sync temporary file for", path, false, err)
 	}
 	if err := temp.Close(); err != nil {
 		_ = os.Remove(tempPath)
-		return fmt.Errorf("homestore: close temporary file for %s: %w", path, err)
+		return atomicWriteError("close temporary file for", path, false, err)
 	}
 	if err := replaceFile(tempPath, path); err != nil {
 		_ = os.Remove(tempPath)
-		return fmt.Errorf("homestore: replace %s: %w", path, err)
+		return atomicWriteError("replace", path, false, err)
 	}
-	if err := SyncDir(dir); err != nil {
-		return fmt.Errorf("homestore: sync parent directory %s: %w", dir, err)
+	if err := syncDir(dir); err != nil {
+		return atomicWriteError("sync parent directory", dir, true, err)
+	}
+	for _, created := range missingDirs {
+		parent := filepath.Dir(created)
+		if err := syncDir(parent); err != nil {
+			return atomicWriteError("sync created directory parent", parent, true, err)
+		}
 	}
 	return nil
+}
+
+func missingParentDirectories(path string) ([]string, error) {
+	var missing []string
+	for dir := filepath.Clean(path); ; dir = filepath.Dir(dir) {
+		info, err := os.Stat(dir)
+		if err == nil {
+			if !info.IsDir() {
+				return nil, fmt.Errorf("%s is not a directory", dir)
+			}
+			return missing, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		missing = append(missing, dir)
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return missing, nil
+		}
+	}
+}
+
+func atomicWriteError(operation, path string, replaced bool, err error) error {
+	return &AtomicWriteError{Operation: operation, Path: path, Replaced: replaced, Err: err}
 }

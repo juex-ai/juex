@@ -33,8 +33,11 @@ func publishFilesWith(files []definitionFile, publish func(string, []byte, os.Fi
 	}
 	for i, file := range files {
 		if err := publish(file.path, file.data, file.mode); err != nil {
-			// Publication may fail after replacement while syncing the parent.
-			return errors.Join(err, rollbackFiles(snapshots[:i+1]), rollbackDirectories(missingDirs))
+			rollbackCount := i
+			if homestore.ReplacementOccurred(err) {
+				rollbackCount++
+			}
+			return errors.Join(err, rollbackFiles(snapshots[:rollbackCount]), rollbackDirectories(missingDirs))
 		}
 	}
 	return nil
@@ -73,7 +76,7 @@ func rollbackFiles(snapshots []fileSnapshot) error {
 			rollbackErr = errors.Join(rollbackErr, publishDefinitionFile(snapshot.path, snapshot.data, snapshot.mode))
 			continue
 		}
-		if err := os.Remove(snapshot.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeDurably(snapshot.path); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("fleet service: roll back definition %s: %w", snapshot.path, err))
 		}
 	}
@@ -106,11 +109,25 @@ func rollbackDirectories(missing map[string]struct{}) error {
 	slices.SortFunc(dirs, func(a, b string) int { return len(b) - len(a) })
 	var rollbackErr error
 	for _, dir := range dirs {
-		if err := os.Remove(dir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeDurably(dir); err != nil {
 			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("fleet service: roll back definition directory %s: %w", dir, err))
 		}
 	}
 	return rollbackErr
+}
+
+func removeDurably(path string) error {
+	return removeDurablyWith(path, os.Remove, homestore.SyncDir)
+}
+
+func removeDurablyWith(path string, remove, syncDir func(string) error) error {
+	if err := remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return syncDir(filepath.Dir(path))
 }
 
 func publishDefinitionFile(path string, data []byte, mode os.FileMode) error {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -113,5 +114,38 @@ func TestWriteFileAtomicExistingDoesNotRecreateParent(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Dir(path)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("missing parent was recreated: %v", statErr)
+	}
+}
+
+func TestWriteFileAtomicSyncsCreatedParentChain(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "new", "nested")
+	path := filepath.Join(dir, "state.json")
+	var synced []string
+	err := writeFileAtomicWith(path, []byte("state\n"), 0o600, 0o700, true, func(path string) error {
+		synced = append(synced, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{dir, filepath.Join(root, "new"), root}
+	if !reflect.DeepEqual(synced, want) {
+		t.Fatalf("synced directories = %v, want %v", synced, want)
+	}
+}
+
+func TestWriteFileAtomicReportsPostReplaceFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	want := errors.New("sync failed")
+	err := writeFileAtomicWith(path, []byte("new\n"), 0o600, 0, false, func(string) error {
+		return want
+	})
+	if !errors.Is(err, want) || !ReplacementOccurred(err) {
+		t.Fatalf("write error = %v, replaced=%t; want post-replace failure", err, ReplacementOccurred(err))
+	}
+	body, readErr := os.ReadFile(path)
+	if readErr != nil || string(body) != "new\n" {
+		t.Fatalf("published body = %q, %v", body, readErr)
 	}
 }
