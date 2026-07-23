@@ -2051,12 +2051,15 @@ Tag pushes trigger the release workflow on GitHub Actions.
 detects platform archives, works when piped into `bash`, verifies the archive
 against `checksums.txt`, installs immutable versioned packages under
 `<prefix>/lib/juex/releases`, and atomically switches `current` plus the command
-symlink. Every install gets a unique generation suffix; previous generations
+symlink. The command symlink points directly at the immutable generation;
+`current` is operator metadata and never sits in the executable path. Every
+install gets a unique generation suffix; previous generations
 remain intact so a same-version reinstall cannot invalidate the package root
 of a running process. Legacy binary-only archives remain installable. Windows
 keeps the same generated package layout but copies `juex.exe` into the bin
 directory, then records the active generation in `current.txt` only after the
-copy succeeds. Both
+copy succeeds. A relative Windows bin directory is normalized before deriving
+the managed package home. Both
 POSIX installers use the newly installed binary to detect and refresh an
 existing per-user fleet service. A missing service is only installed when
 `INSTALL_FLEET_SERVICE=1`. The released-binary installer leaves detached agents

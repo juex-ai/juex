@@ -229,8 +229,14 @@ echo juex package fixture %s
 	if info, err := os.Lstat(installed); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("installed command is not a symlink: %v %v", info, err)
 	}
-	if target, err := os.Readlink(installed); err != nil || !filepath.IsAbs(target) {
-		t.Fatalf("installed command target = %q, %v; want absolute path", target, err)
+	packageHome, err := filepath.EvalSymlinks(filepath.Join(prefix, "lib", "juex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLauncherTarget, err := os.Readlink(installed)
+	firstReleaseRoot := filepath.Join(packageHome, firstTarget)
+	if err != nil || firstLauncherTarget != filepath.Join(firstReleaseRoot, "bin", "juex") {
+		t.Fatalf("installed command target = %q, %v; want immutable release %q", firstLauncherTarget, err, firstReleaseRoot)
 	}
 	versionOut, err := exec.Command(installed, "version").CombinedOutput()
 	if err != nil || !strings.Contains(string(versionOut), "juex package fixture 0.0.1") {
@@ -244,6 +250,11 @@ echo juex package fixture %s
 	}
 	if secondTarget == firstTarget {
 		t.Fatalf("same-version reinstall reused mutable release directory %q", secondTarget)
+	}
+	secondLauncherTarget, err := os.Readlink(installed)
+	secondReleaseRoot := filepath.Join(packageHome, secondTarget)
+	if err != nil || secondLauncherTarget != filepath.Join(secondReleaseRoot, "bin", "juex") {
+		t.Fatalf("reinstalled command target = %q, %v; want immutable release %q", secondLauncherTarget, err, secondReleaseRoot)
 	}
 	oldPackagedRG := filepath.Join(prefix, "lib", "juex", firstTarget, "juex-path", "rg")
 	if got, err := os.ReadFile(oldPackagedRG); err != nil || string(got) != string(rgV1) {
@@ -430,6 +441,47 @@ func TestPowerShellReleaseInstallerSwitchesPointerAfterBinaryCopy(t *testing.T) 
 	}
 	if pointerWrite < copyCall {
 		t.Fatalf("PowerShell managed install switches current.txt before the binary copy can succeed")
+	}
+	normalizeBinDir := bytes.Index(body, []byte(`[System.IO.Path]::GetFullPath($BinDir)`))
+	derivePackageHome := bytes.Index(body, []byte(`$PackageHome = Join-Path (Split-Path -Parent $BinDir) "lib/juex"`))
+	if normalizeBinDir < 0 || derivePackageHome < 0 || normalizeBinDir > derivePackageHome {
+		t.Fatalf("PowerShell installer must normalize BinDir before deriving package home")
+	}
+}
+
+func TestPowerShellReleaseInstallerDryRunAcceptsRelativeBinDir(t *testing.T) {
+	powerShell, ok := findPowerShell()
+	if !ok {
+		t.Skip("PowerShell not found; relative BinDir contract is checked statically")
+	}
+	_, script := powerShellInstallScript(t)
+	work := t.TempDir()
+	cmd := exec.Command(
+		powerShell,
+		"-NoProfile",
+		"-ExecutionPolicy", "Bypass",
+		"-File", script,
+		"-DryRun",
+		"-Version", "0.0.1",
+		"-BinDir", "bin",
+	)
+	cmd.Dir = work
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_OS=windows",
+		"JUEX_INSTALL_ARCH=amd64",
+		"USERPROFILE="+filepath.Join(work, "home"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("relative BinDir dry run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		filepath.Join(work, "bin", "juex.exe"),
+		filepath.Join(work, "lib", "juex"),
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("relative BinDir dry run missing %q:\n%s", want, out)
+		}
 	}
 }
 

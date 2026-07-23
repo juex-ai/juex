@@ -362,7 +362,7 @@ install_managed_package() {
   mv "$stage" "$release_dir"
 
   replace_symlink "releases/$release_name" "${package_home%/}/current"
-  replace_symlink "${package_home%/}/current/bin/$binary_name" "$install_target"
+  replace_symlink "${release_dir}/bin/$binary_name" "$install_target"
 }
 
 refresh_fleet_service() {

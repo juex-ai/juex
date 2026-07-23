@@ -196,8 +196,9 @@ mv "$STAGE" "$RELEASE_DIR"
 
 replace_symlink "releases/$RELEASE_NAME" "${PACKAGE_HOME}/current"
 
-# Swap a new symlink into place so a running daemon keeps its current inode.
-replace_symlink "${PACKAGE_HOME}/current/bin/juex" "$INSTALL_TARGET"
+# Point at the immutable generation so executable-path discovery cannot follow
+# a later current switch away from the package that owns the running process.
+replace_symlink "${RELEASE_DIR}/bin/juex" "$INSTALL_TARGET"
 
 "$INSTALL_TARGET" version
 refresh_fleet_service "$INSTALL_TARGET"

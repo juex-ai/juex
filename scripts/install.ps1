@@ -285,6 +285,7 @@ if (-not $Prefix) {
 if (-not $BinDir) {
   $BinDir = Join-Path $Prefix "bin"
 }
+$BinDir = [System.IO.Path]::GetFullPath($BinDir)
 $PackageHome = Join-Path (Split-Path -Parent $BinDir) "lib/juex"
 $binaryName = "juex.exe"
 $installTarget = Join-Path $BinDir $binaryName
