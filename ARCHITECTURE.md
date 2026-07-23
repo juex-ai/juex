@@ -1390,7 +1390,9 @@ restart recovery; an intervening streamed snapshot invalidates the older
 refresh response. The transcript cursor is captured before its message page is
 read so concurrent events may replay but cannot be skipped. The server
 deduplicates queued durable frames already covered by the replay tail before
-continuing live delivery.
+continuing live delivery. It also drops transient frames while that handoff
+boundary is unresolved, preventing an older streaming snapshot from following
+a replayed terminal event.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:

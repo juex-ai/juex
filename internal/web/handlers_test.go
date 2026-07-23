@@ -2902,11 +2902,11 @@ func TestBrowserReplayDeduplicatorSkipsOnlyQueuedReplayTail(t *testing.T) {
 		t.Fatal("deduplicator is nil")
 	}
 
-	if deduper.skip(BrowserEvent{
+	if !deduper.skip(BrowserEvent{
 		ID:        "evt-transient",
 		transient: true,
 	}) {
-		t.Fatal("transient event was skipped")
+		t.Fatal("pre-tail transient event was delivered")
 	}
 	if !deduper.skip(BrowserEvent{ID: "evt-2"}) {
 		t.Fatal("queued replay-tail duplicate was delivered")
@@ -2916,6 +2916,34 @@ func TestBrowserReplayDeduplicatorSkipsOnlyQueuedReplayTail(t *testing.T) {
 	}
 	if deduper.skip(BrowserEvent{ID: "evt-3"}) {
 		t.Fatal("old replay id was skipped after live handoff completed")
+	}
+}
+
+func TestBrowserReplayDeduplicatorDropsTransientBeforeTerminalDuplicate(t *testing.T) {
+	deduper := newBrowserReplayDeduplicator([]BrowserEvent{{
+		ID:   "evt-terminal",
+		Type: "turn.completed",
+	}})
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+	if !deduper.skip(BrowserEvent{
+		Type:      "llm.output_delta",
+		transient: true,
+	}) {
+		t.Fatal("transient frame before terminal duplicate was delivered")
+	}
+	if !deduper.skip(BrowserEvent{
+		ID:   "evt-terminal",
+		Type: "turn.completed",
+	}) {
+		t.Fatal("terminal replay duplicate was delivered")
+	}
+	if deduper.skip(BrowserEvent{
+		Type:      "llm.output_delta",
+		transient: true,
+	}) {
+		t.Fatal("transient frame after completed handoff was skipped")
 	}
 }
 

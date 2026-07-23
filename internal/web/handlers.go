@@ -718,8 +718,14 @@ func newBrowserReplayDeduplicator(replayed []BrowserEvent) *browserReplayDedupli
 }
 
 func (d *browserReplayDeduplicator) skip(event BrowserEvent) bool {
-	if d == nil || event.transient {
+	if d == nil || len(d.durableIDs) == 0 {
 		return false
+	}
+	// A queued transient may predate a durable terminal event already emitted
+	// by replay. Drop it until the durable handoff boundary is known, otherwise
+	// its older status could roll the browser back after terminal replay.
+	if event.transient {
+		return true
 	}
 	if _, duplicate := d.durableIDs[event.ID]; duplicate {
 		delete(d.durableIDs, event.ID)

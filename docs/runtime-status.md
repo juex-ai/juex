@@ -72,6 +72,8 @@ are replayed rather than skipped. An explicit empty `?since=` requests replay
 from the journal beginning; an omitted `since` starts with live delivery only.
 Because the server subscribes before replay, it suppresses durable live frames
 already present in the replay tail before completing the ordered live handoff.
+Transient frames are also dropped while that boundary is unresolved so an
+older streaming snapshot cannot roll back a replayed terminal state.
 
 ## Tool Calls
 
