@@ -121,7 +121,7 @@ test("blocked keyboard submissions preserve the composer draft", () => {
   );
 });
 
-test("disposed status subscriptions cannot clear a newer snapshot", () => {
+test("disposed status subscriptions cannot replace a newer snapshot", () => {
   assert.match(
     sessionSource,
     /onStatus:\s*\(next\)\s*=>\s*\{[\s\S]*?if\s*\(disposed\)[\s\S]*?statusStore\.setStatus/,
@@ -129,13 +129,13 @@ test("disposed status subscriptions cannot clear a newer snapshot", () => {
   );
   assert.match(
     sessionSource,
-    /onError:\s*\(event\)\s*=>\s*\{[\s\S]*?if\s*\(disposed\)[\s\S]*?statusStore\.clearStatus/,
-    "an error from a closed status stream must not clear a replacement subscription",
+    /onStatusRefreshError:\s*\(error\)\s*=>\s*\{[\s\S]*?if\s*\(disposed\)[\s\S]*?console\.error/,
+    "a stale status calibration failure must not affect a replacement subscription",
   );
   assert.match(
     sessionSource,
-    /\.catch\(\s*\(error\)\s*=>\s*\{[\s\S]*?if\s*\(disposed\)[\s\S]*?statusStore\.clearStatus/,
-    "a stale initial status request must not clear a newer snapshot",
+    /return\s*\(\)\s*=>\s*\{[\s\S]*?disposed\s*=\s*true;[\s\S]*?unsubscribe\(\);[\s\S]*?statusStore\.clearStatus/,
+    "effect cleanup must close the stream before clearing its canonical status",
   );
 });
 

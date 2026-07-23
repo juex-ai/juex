@@ -2897,7 +2897,7 @@ func TestBrowserReplayDeduplicatorSkipsOnlyQueuedReplayTail(t *testing.T) {
 	for index := range replayed {
 		replayed[index] = BrowserEvent{ID: fmt.Sprintf("evt-%d", index)}
 	}
-	deduper := newBrowserReplayDeduplicator(replayed)
+	deduper := newBrowserReplayDeduplicator(replayed, 20)
 	if deduper == nil {
 		t.Fatal("deduplicator is nil")
 	}
@@ -2905,6 +2905,7 @@ func TestBrowserReplayDeduplicatorSkipsOnlyQueuedReplayTail(t *testing.T) {
 	if !deduper.skip(BrowserEvent{
 		ID:        "evt-transient",
 		transient: true,
+		sequence:  20,
 	}) {
 		t.Fatal("pre-tail transient event was delivered")
 	}
@@ -2923,13 +2924,14 @@ func TestBrowserReplayDeduplicatorDropsTransientBeforeTerminalDuplicate(t *testi
 	deduper := newBrowserReplayDeduplicator([]BrowserEvent{{
 		ID:   "evt-terminal",
 		Type: "turn.completed",
-	}})
+	}}, 10)
 	if deduper == nil {
 		t.Fatal("deduplicator is nil")
 	}
 	if !deduper.skip(BrowserEvent{
 		Type:      "llm.output_delta",
 		transient: true,
+		sequence:  10,
 	}) {
 		t.Fatal("transient frame before terminal duplicate was delivered")
 	}
@@ -2942,8 +2944,33 @@ func TestBrowserReplayDeduplicatorDropsTransientBeforeTerminalDuplicate(t *testi
 	if deduper.skip(BrowserEvent{
 		Type:      "llm.output_delta",
 		transient: true,
+		sequence:  11,
 	}) {
 		t.Fatal("transient frame after completed handoff was skipped")
+	}
+}
+
+func TestBrowserReplayDeduplicatorAllowsFreshTransientPastReplayWatermark(t *testing.T) {
+	deduper := newBrowserReplayDeduplicator([]BrowserEvent{{
+		ID:   "evt-before-subscribe",
+		Type: "turn.completed",
+	}}, 10)
+	if deduper == nil {
+		t.Fatal("deduplicator is nil")
+	}
+
+	if deduper.skip(BrowserEvent{
+		Type:      "llm.output_delta",
+		transient: true,
+		sequence:  11,
+	}) {
+		t.Fatal("fresh transient frame after replay watermark was skipped")
+	}
+	if !deduper.skip(BrowserEvent{
+		ID:   "evt-before-subscribe",
+		Type: "turn.completed",
+	}) {
+		t.Fatal("durable replay duplicate was delivered")
 	}
 }
 
@@ -2952,7 +2979,7 @@ func TestBrowserReplayDeduplicatorIgnoresEventsOutsideBoundedTail(t *testing.T) 
 	for index := range replayed {
 		replayed[index] = BrowserEvent{ID: fmt.Sprintf("evt-%d", index)}
 	}
-	deduper := newBrowserReplayDeduplicator(replayed)
+	deduper := newBrowserReplayDeduplicator(replayed, 10)
 	if deduper == nil {
 		t.Fatal("deduplicator is nil")
 	}

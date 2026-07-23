@@ -11,11 +11,12 @@ const broadcasterBufferSize = 64
 
 // subscriber is one connected SSE consumer.
 type subscriber struct {
-	ch     chan BrowserEvent
-	done   chan struct{}
-	parent *broadcaster
-	mu     sync.Mutex
-	live   bool
+	ch            chan BrowserEvent
+	done          chan struct{}
+	parent        *broadcaster
+	startSequence uint64
+	mu            sync.Mutex
+	live          bool
 }
 
 func (s *subscriber) unsubscribe() {
@@ -55,19 +56,27 @@ func (s *subscriber) deliver(event BrowserEvent) bool {
 // broadcaster fans an event stream out to N subscribers. A slow
 // subscriber is dropped instead of stalling everyone else.
 type broadcaster struct {
-	mu sync.Mutex
+	publishMu sync.Mutex
+	mu        sync.Mutex
 
-	subs   map[*subscriber]struct{}
-	closed bool
+	subs          map[*subscriber]struct{}
+	closed        bool
+	nextSequence  uint64
+	recentDurable map[string]uint64
+	durableOrder  []string
 }
 
 func newBroadcaster() *broadcaster {
 	return &broadcaster{
-		subs: map[*subscriber]struct{}{},
+		subs:          map[*subscriber]struct{}{},
+		recentDurable: map[string]uint64{},
 	}
 }
 
 func (b *broadcaster) subscribe() *subscriber {
+	b.publishMu.Lock()
+	defer b.publishMu.Unlock()
+
 	s := &subscriber{
 		ch:     make(chan BrowserEvent, broadcasterBufferSize),
 		done:   make(chan struct{}),
@@ -80,6 +89,7 @@ func (b *broadcaster) subscribe() *subscriber {
 		s.drop()
 		return s
 	}
+	s.startSequence = b.nextSequence
 	b.subs[s] = struct{}{}
 	b.mu.Unlock()
 	return s
@@ -100,10 +110,27 @@ func (b *broadcaster) enqueue(event BrowserEvent) {
 }
 
 func (b *broadcaster) publish(e BrowserEvent) {
+	b.publishMu.Lock()
+	defer b.publishMu.Unlock()
+
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		return
+	}
+	b.nextSequence++
+	e.sequence = b.nextSequence
+	if !e.transient && e.ID != "" {
+		if _, exists := b.recentDurable[e.ID]; !exists {
+			b.durableOrder = append(b.durableOrder, e.ID)
+		}
+		b.recentDurable[e.ID] = e.sequence
+		if len(b.durableOrder) > broadcasterBufferSize {
+			oldest := b.durableOrder[0]
+			b.durableOrder[0] = ""
+			b.durableOrder = b.durableOrder[1:]
+			delete(b.recentDurable, oldest)
+		}
 	}
 	subs := make([]*subscriber, 0, len(b.subs))
 	for s := range b.subs {
@@ -116,6 +143,26 @@ func (b *broadcaster) publish(e BrowserEvent) {
 			b.unsubscribe(s)
 		}
 	}
+}
+
+// replayBoundary returns the latest durable replay event that was actually
+// published after this subscriber joined. Transients through that sequence may
+// precede a durable frame already emitted by replay; later transients are live.
+func (b *broadcaster) replayBoundary(
+	s *subscriber,
+	replayed []BrowserEvent,
+) uint64 {
+	b.publishMu.Lock()
+	defer b.publishMu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	boundary := s.startSequence
+	for _, event := range replayed {
+		if sequence := b.recentDurable[event.ID]; sequence > boundary {
+			boundary = sequence
+		}
+	}
+	return boundary
 }
 
 func (b *broadcaster) close() {

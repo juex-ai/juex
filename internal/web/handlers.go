@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -627,22 +628,25 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 		// Replay missed events from events.jsonl. The path comes from the
 		// session record so we never read outside the sessions dir.
 		var (
-			f    *os.File
-			seed runtime.StatusSeed
+			journalData []byte
+			seed        runtime.StatusSeed
 		)
-		err := as.app.ReadSessionID(id, func(sess *session.Session) error {
-			var openErr error
-			f, openErr = os.Open(filepath.Join(sess.Dir, "events.jsonl"))
-			seed = runtime.StatusSeed{
-				SessionID:        sess.ID,
-				SessionAlias:     sess.Alias,
-				MaxPendingInputs: runtime.DefaultMaxPendingInput,
-			}
-			return openErr
+		err := as.app.ReadCommittedEvents(func() error {
+			return as.app.ReadSessionID(id, func(sess *session.Session) error {
+				var readErr error
+				journalData, readErr = os.ReadFile(
+					filepath.Join(sess.Dir, "events.jsonl"),
+				)
+				seed = runtime.StatusSeed{
+					SessionID:        sess.ID,
+					SessionAlias:     sess.Alias,
+					MaxPendingInputs: runtime.DefaultMaxPendingInput,
+				}
+				return readErr
+			})
 		})
 		if err == nil {
-			journal, replayErr := replaySince(f, "")
-			f.Close()
+			journal, replayErr := replaySince(bytes.NewReader(journalData), "")
 			if replayErr != nil {
 				log.Printf("web: events replay for %s: %v", id, replayErr)
 			}
@@ -660,7 +664,8 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 			if projectionErr != nil {
 				log.Printf("web: browser projection replay for %s: %v", id, projectionErr)
 			}
-			replayDeduper = newBrowserReplayDeduplicator(replayed)
+			replayBoundary := as.bcast.replayBoundary(sub, replayed)
+			replayDeduper = newBrowserReplayDeduplicator(replayed, replayBoundary)
 			for _, event := range replayed {
 				if err := writeBrowserSSEFrame(w, event); err != nil {
 					return
@@ -694,10 +699,14 @@ func (s *Server) handleEventsSSE(w http.ResponseWriter, r *http.Request, id stri
 }
 
 type browserReplayDeduplicator struct {
-	durableIDs map[string]struct{}
+	durableIDs     map[string]struct{}
+	replayBoundary uint64
 }
 
-func newBrowserReplayDeduplicator(replayed []BrowserEvent) *browserReplayDeduplicator {
+func newBrowserReplayDeduplicator(
+	replayed []BrowserEvent,
+	replayBoundary uint64,
+) *browserReplayDeduplicator {
 	if len(replayed) == 0 {
 		return nil
 	}
@@ -714,7 +723,10 @@ func newBrowserReplayDeduplicator(replayed []BrowserEvent) *browserReplayDedupli
 	if len(ids) == 0 {
 		return nil
 	}
-	return &browserReplayDeduplicator{durableIDs: ids}
+	return &browserReplayDeduplicator{
+		durableIDs:     ids,
+		replayBoundary: replayBoundary,
+	}
 }
 
 func (d *browserReplayDeduplicator) skip(event BrowserEvent) bool {
@@ -725,7 +737,7 @@ func (d *browserReplayDeduplicator) skip(event BrowserEvent) bool {
 	// by replay. Drop it until the durable handoff boundary is known, otherwise
 	// its older status could roll the browser back after terminal replay.
 	if event.transient {
-		return true
+		return event.sequence <= d.replayBoundary
 	}
 	if _, duplicate := d.durableIDs[event.ID]; duplicate {
 		delete(d.durableIDs, event.ID)

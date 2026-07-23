@@ -25,6 +25,7 @@ type BrowserEvent struct {
 	Payload   json.RawMessage    `json:"payload,omitempty"`
 	Status    statusapi.Snapshot `json:"status"`
 	transient bool
+	sequence  uint64
 }
 
 type browserPayloadFactory struct {

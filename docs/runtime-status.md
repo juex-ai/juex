@@ -78,8 +78,15 @@ per Session route; later transcript refreshes may advance their response cursor
 without restarting the existing EventSource or clearing its latest status.
 Because the server subscribes before replay, it suppresses durable live frames
 already present in the replay tail before completing the ordered live handoff.
-Transient frames are also dropped while that boundary is unresolved so an
-older streaming snapshot cannot roll back a replayed terminal state.
+The journal byte snapshot is captured behind the durable commit barrier, after
+all earlier synchronous projections finish, so a replayed event cannot still be
+waiting to enter the subscriber queue when the handoff boundary is calculated.
+The broadcaster records private monotonic publish sequences and calculates the
+handoff boundary from durable replay events actually published after this
+subscriber joined. Transient frames at or below that boundary are dropped so an
+older streaming snapshot cannot roll back a replayed terminal state. Frames
+outside the replay snapshot pass immediately, and replay IDs from before the
+subscription do not extend the boundary.
 
 ## Tool Calls
 
@@ -177,10 +184,14 @@ aggregate Fleet SSE stream.
 
 The browser uses one `AgentViewModelStore` for Fleet rows and per-session
 runtime snapshots. The Session page loads the transcript and its replay cursor,
-fetches a canonical status snapshot, and then opens the transcript stream from
-the transcript-owned cursor. Every `BrowserEvent` atomically replaces the local
-runtime snapshot before its transcript payload is applied. Status-dependent
-submission remains disabled until the initial snapshot is available.
+then opens the transcript stream from the transcript-owned cursor and starts an
+independent canonical status calibration request. Every successful stream open
+calibrates again for reconnect recovery. Every `BrowserEvent` atomically
+replaces the local runtime snapshot before its transcript payload is applied.
+Status-dependent submission remains disabled until either a calibration
+snapshot or a streamed event is available. A failed status request does not
+prevent the stream from opening, and a failed stream connection does not
+prevent status loading.
 
 Native `EventSource` reconnects automatically. Each successful stream open
 also refreshes the status snapshot so an out-of-band restart recovery is

@@ -33,6 +33,67 @@ func TestBroadcaster_FansEventsToAllSubscribers(t *testing.T) {
 	}
 }
 
+func TestBroadcaster_AssignsOrderedSequence(t *testing.T) {
+	b := newBroadcaster()
+	defer b.close()
+	s := b.subscribe()
+	defer s.unsubscribe()
+
+	b.publish(BrowserEvent{Type: "turn.started"})
+	b.publish(BrowserEvent{Type: "turn.completed"})
+
+	first := <-s.ch
+	second := <-s.ch
+	if first.sequence != 1 || second.sequence != 2 {
+		t.Fatalf("event sequences = %d, %d; want 1, 2", first.sequence, second.sequence)
+	}
+}
+
+func TestBroadcaster_ReplayBoundaryIncludesOnlyQueuedReplayEvents(t *testing.T) {
+	b := newBroadcaster()
+	defer b.close()
+
+	b.publish(BrowserEvent{ID: "before-subscribe", Type: "turn.started"})
+	s := b.subscribe()
+	defer s.unsubscribe()
+	b.publish(BrowserEvent{
+		ID:        "queued-transient",
+		Type:      "llm.output_delta",
+		transient: true,
+	})
+	b.publish(BrowserEvent{ID: "queued-replay", Type: "turn.completed"})
+	b.publish(BrowserEvent{
+		ID:        "fresh-transient",
+		Type:      "llm.output_delta",
+		transient: true,
+	})
+
+	boundary := b.replayBoundary(s, []BrowserEvent{
+		{ID: "before-subscribe", Type: "turn.started"},
+		{ID: "queued-replay", Type: "turn.completed"},
+	})
+	if boundary != 3 {
+		t.Fatalf("replay boundary = %d; want queued replay sequence 3", boundary)
+	}
+
+	queuedTransient := <-s.ch
+	queuedReplay := <-s.ch
+	freshTransient := <-s.ch
+	deduper := newBrowserReplayDeduplicator(
+		[]BrowserEvent{{ID: "queued-replay", Type: "turn.completed"}},
+		boundary,
+	)
+	if !deduper.skip(queuedTransient) {
+		t.Fatal("transient before queued replay duplicate was delivered")
+	}
+	if !deduper.skip(queuedReplay) {
+		t.Fatal("queued replay duplicate was delivered")
+	}
+	if deduper.skip(freshTransient) {
+		t.Fatal("transient outside the replay snapshot was skipped")
+	}
+}
+
 func TestBroadcaster_SlowSubscriberIsDropped(t *testing.T) {
 	b := newBroadcaster()
 	defer b.close()

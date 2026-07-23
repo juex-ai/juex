@@ -779,6 +779,11 @@ append fails, projection and live delivery are skipped. Events marked
 retains the last durable replay cursor. The public SSE cursor remains the
 durable event ID; replay rebuilds status in JSONL line order before filtering
 events after that ID.
+Replay captures the journal bytes through `DurableSink.ReadCommitted`, which
+waits for every earlier synchronous projection and briefly blocks new commits.
+JSON decoding happens after releasing that barrier. This makes the replay
+snapshot and browser publish sequence comparable without holding the commit
+path during projection reconstruction.
 
 ### 3.4 Memory
 
@@ -1382,22 +1387,29 @@ On the browser side, `frontend/src/lib/live-session-projection.ts` owns the
 transcript read model for SSE `BrowserEvent` facts: optimistic messages,
 pending-input presentation, compact markers, tool output deltas, and final
 response assembly. It does not reconstruct turn, tool, usage, or session
-lifecycle. `frontend/src/pages/Session.tsx` fetches the initial authoritative
-snapshot, opens the transcript stream from the earlier replay cursor returned
-by the transcript response, replaces status from each event, and then applies
-the transcript payload. Every EventSource open also refreshes the snapshot for
-restart recovery; an intervening streamed snapshot invalidates the older
+lifecycle. `frontend/src/pages/Session.tsx` opens the transcript stream from the
+earlier replay cursor returned by the transcript response, replaces status from
+each `BrowserEvent`, and starts an independent status snapshot calibration.
+Every EventSource open calibrates again for reconnect recovery. A failed
+calibration does not block the stream, a failed connection does not block
+status loading, and an intervening streamed snapshot invalidates an older
 refresh response. The transcript cursor is captured before its message page is
-read so concurrent events may replay but cannot be skipped. The server
-deduplicates queued durable frames already covered by the replay tail before
-continuing live delivery. It also drops transient frames while that handoff
-boundary is unresolved, preventing an older streaming snapshot from following
-a replayed terminal event. Runtime transcript events include the persisted
-message ID, allowing the browser to suppress replay content already represented
-by the initial transcript without relying on text equality. Tool replay uses
-the globally unique tool-use ID for the same overlap check. The initial replay
-cursor is stable for the lifetime of the Session route, so a cursor-only
-transcript refresh does not tear down the live stream or clear canonical status.
+read so concurrent events may replay but cannot be skipped. The server deduplicates
+queued durable frames already covered by the replay tail before continuing live
+delivery. It captures journal bytes behind the durable commit barrier, ensuring
+every event in the snapshot has completed browser projection. Private
+broadcaster publish sequences then define the handoff boundary from durable
+replay events actually queued after this subscriber joined.
+Transient frames before those duplicates are dropped, while events outside the
+replay snapshot pass immediately. This prevents an older streaming snapshot
+from following a replayed terminal event without stalling fresh output behind
+replay IDs that predate the subscription. Runtime transcript events include the
+persisted message ID, allowing the browser to suppress replay content already
+represented by the initial transcript without relying on text equality. Tool
+replay uses the globally unique tool-use ID for the same overlap check. The
+initial replay cursor is stable for the lifetime of the Session route, so a
+cursor-only transcript refresh does not tear down the live stream or clear
+canonical status.
 
 Agent API routes are available directly as `/api/...` and through the fleet
 proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:

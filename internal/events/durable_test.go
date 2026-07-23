@@ -130,6 +130,55 @@ func TestDurableSink_ProjectsInRegistrationOrder(t *testing.T) {
 	}
 }
 
+func TestDurableSink_ReadCommittedWaitsForSynchronousProjection(t *testing.T) {
+	sink := NewDurableSink(&recordingJournal{})
+	t.Cleanup(sink.Close)
+	projectionStarted := make(chan struct{})
+	releaseProjection := make(chan struct{})
+	sink.AddProjection(DeliveryFunc(func(Event) {
+		close(projectionStarted)
+		<-releaseProjection
+	}))
+
+	commitDone := make(chan error, 1)
+	go func() {
+		_, err := sink.Commit(Event{ID: "evt-1", Type: "turn.completed"})
+		commitDone <- err
+	}()
+	select {
+	case <-projectionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("projection did not start")
+	}
+
+	readStarted := make(chan struct{})
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- sink.ReadCommitted(func() error {
+			close(readStarted)
+			return nil
+		})
+	}()
+	select {
+	case <-readStarted:
+		t.Fatal("committed read crossed an incomplete projection")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseProjection)
+	if err := <-commitDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("committed read did not resume")
+	}
+}
+
 func TestDurableSink_DoesNotProjectFailedJournalCommit(t *testing.T) {
 	sink := NewDurableSink(&recordingJournal{err: errors.New("disk full")})
 	t.Cleanup(sink.Close)

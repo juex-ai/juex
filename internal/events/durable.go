@@ -198,6 +198,29 @@ func (s *DurableSink) Commit(e Event) (Event, error) {
 	return e, nil
 }
 
+// ReadCommitted runs read after every earlier commit has finished its
+// synchronous projections and prevents a new commit from starting until read
+// returns. Callers should capture a bounded snapshot here and do expensive
+// decoding after releasing the barrier.
+func (s *DurableSink) ReadCommitted(read func() error) error {
+	if s == nil {
+		return ErrDurableSinkClosed
+	}
+	s.commitMu.Lock()
+	defer s.commitMu.Unlock()
+
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return ErrDurableSinkClosed
+	}
+	if read == nil {
+		return nil
+	}
+	return read()
+}
+
 func (s *DurableSink) Close() {
 	if s == nil {
 		return

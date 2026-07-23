@@ -107,9 +107,10 @@ test("live events replace canonical status from the requested cursor", () => {
   assert.equal(projectedStatus?.session.working, true);
 });
 
-test("stream reopen refreshes status when no newer event arrives", async () => {
+test("subscription and stream reopen refresh status when no event arrives", async () => {
   let onOpen: () => void = () => {};
   let projectedStatus: AgentRuntimeStatusSnapshot | undefined;
+  let refreshes = 0;
   const controller = createSessionReadController({
     ...ports(),
     subscribeEvents: (_id, opts) => {
@@ -120,26 +121,60 @@ test("stream reopen refreshes status when no newer event arrives", async () => {
 
   controller.setRoute("s1");
   controller.subscribeLiveEvents("s1", {
-    loadStatus: async () => runtimeStatus("reconnected"),
+    loadStatus: async () =>
+      runtimeStatus(++refreshes === 1 ? "initial" : "reconnected"),
     onStatus: (status) => {
       projectedStatus = status;
     },
   });
+  await Promise.resolve();
+  assert.equal(projectedStatus?.cursor, "initial");
+
   onOpen();
   await Promise.resolve();
 
+  assert.equal(refreshes, 2);
   assert.equal(projectedStatus?.cursor, "reconnected");
 });
 
-test("stream event wins over an older reopen status request", async () => {
-  let onOpen: () => void = () => {};
+test("status refresh failure leaves the live event stream usable", async () => {
+  let onEvent: (event: BrowserEvent) => void = () => {};
+  let refreshErrors = 0;
+  let projectedStatus: AgentRuntimeStatusSnapshot | undefined;
+  const controller = createSessionReadController({
+    ...ports(),
+    subscribeEvents: (_id, opts) => {
+      onEvent = opts.onEvent;
+      return () => {};
+    },
+  });
+
+  controller.setRoute("s1");
+  controller.subscribeLiveEvents("s1", {
+    loadStatus: async () => {
+      throw new Error("temporary status failure");
+    },
+    onStatus: (status) => {
+      projectedStatus = status;
+    },
+    onStatusRefreshError: () => {
+      refreshErrors++;
+    },
+  });
+  await Promise.resolve();
+  onEvent(turnStartedEvent("after-failure"));
+
+  assert.equal(refreshErrors, 1);
+  assert.equal(projectedStatus?.cursor, "event-after-failure");
+});
+
+test("stream event wins over an older initial status request", async () => {
   let onEvent: (event: BrowserEvent) => void = () => {};
   let resolveStatus: (status: AgentRuntimeStatusSnapshot) => void = () => {};
   const projectedCursors: Array<string | undefined> = [];
   const controller = createSessionReadController({
     ...ports(),
     subscribeEvents: (_id, opts) => {
-      onOpen = opts.onOpen ?? (() => {});
       onEvent = opts.onEvent;
       return () => {};
     },
@@ -155,7 +190,6 @@ test("stream event wins over an older reopen status request", async () => {
       projectedCursors.push(status.cursor);
     },
   });
-  onOpen();
   onEvent(turnStartedEvent("newer"));
   resolveStatus(runtimeStatus("older"));
   await Promise.resolve();

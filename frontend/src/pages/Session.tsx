@@ -296,33 +296,22 @@ export function Session() {
       return;
     }
     let disposed = false;
-    let unsubscribe = () => {};
-    void getSessionStatus(id)
-      .then((snapshot) => {
+    const unsubscribe = controller.subscribeLiveEvents(id, {
+      since: sessionLiveSubscription.cursor,
+      loadStatus: () => getSessionStatus(id),
+      onStatus: (next) => {
         if (disposed) return;
-        statusStore.setStatus(agent.id, snapshot);
-        unsubscribe = controller.subscribeLiveEvents(id, {
-          since: sessionLiveSubscription.cursor,
-          loadStatus: () => getSessionStatus(id),
-          onStatus: (next) => {
-            if (disposed) return;
-            statusStore.setStatus(agent.id, next);
-          },
-          onStatusRefreshError: (error) => {
-            if (disposed) return;
-            console.error("refresh session status failed", error);
-          },
-          onError: (event) => {
-            if (disposed) return;
-            console.error("session event stream failed", event);
-          },
-        });
-      })
-      .catch((error) => {
+        statusStore.setStatus(agent.id, next);
+      },
+      onStatusRefreshError: (error) => {
         if (disposed) return;
-        statusStore.clearStatus(agent.id, id);
-        console.error("getSessionStatus failed", error);
-      });
+        console.error("refresh session status failed", error);
+      },
+      onError: (event) => {
+        if (disposed) return;
+        console.error("session event stream failed", event);
+      },
+    });
     return () => {
       disposed = true;
       unsubscribe();

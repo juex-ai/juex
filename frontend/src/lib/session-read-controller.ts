@@ -258,6 +258,7 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
       },
       onError: opts.onError,
     });
+    void refreshStatus();
     return () => {
       subscribed = false;
       refreshGeneration += 1;

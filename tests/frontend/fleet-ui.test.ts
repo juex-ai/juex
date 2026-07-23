@@ -170,8 +170,8 @@ test("stage remounts existing pages through tabs and gates offline composers", (
   );
   assert.match(
     sessionSource,
-    /getSessionStatus\(id\)[\s\S]*controller\.subscribeLiveEvents\(id,[\s\S]*onStatus:[\s\S]*statusStore\.setStatus/,
-    "session runtime state must restore from a snapshot before transcript events replace it",
+    /controller\.subscribeLiveEvents\(id,[\s\S]*loadStatus: \(\) => getSessionStatus\(id\)[\s\S]*onStatus:[\s\S]*statusStore\.setStatus/,
+    "the live stream must calibrate canonical status without making the connection depend on the snapshot request",
   );
   assert.match(
     sessionSource,
@@ -193,10 +193,10 @@ test("stage remounts existing pages through tabs and gates offline composers", (
     /useSyncExternalStore\(/,
     "the canonical session selector must subscribe to the shared status store",
   );
-  assert.match(
+  assert.doesNotMatch(
     sessionSource,
-    /getSessionStatus\(id\)[\s\S]*controller\.subscribeLiveEvents\(id/,
-    "the session must load a canonical snapshot before opening its projected transcript stream",
+    /void getSessionStatus\(id\)[\s\S]*\.then\([\s\S]*controller\.subscribeLiveEvents\(id/,
+    "a transient status request failure must not prevent the projected transcript stream from opening",
   );
   assert.match(
     sessionSource,
