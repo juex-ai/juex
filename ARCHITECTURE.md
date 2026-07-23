@@ -528,6 +528,10 @@ append to `tools.DefaultBuiltinProviders()` and pass the result through
 `apply_patch` resolve relative paths against the agent workspace, and
 `exec_command` / `grep` fall back to it when the model does not pass an
 explicit `workdir` / `path`.
+Directory `grep` searches do not follow file or directory symlinks, keeping
+recursive traversal inside the selected tree. Passing a symlinked file as the
+explicit `path` still searches its target and preserves the single-file output
+contract.
 The chunked write manager is in-memory per registry instance, with active
 state restored from the attached session transcript when canonical lifecycle
 facts and matching chunk tool-use inputs are available. Successful lifecycle

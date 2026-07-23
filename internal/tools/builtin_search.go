@@ -30,7 +30,7 @@ func grepToolDefinition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "grep",
 		Group:       ToolGroupSearch,
-		Description: "Recursively search for a Go-regexp pattern under `path` (file or directory). Output: `relative_path:line:content` (max 200 hits).",
+		Description: "Recursively search for a Go-regexp pattern under `path` (file or directory). Directory searches do not follow symlinks; pass a symlinked file directly to search it. Output: `relative_path:line:content` (max 200 hits).",
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

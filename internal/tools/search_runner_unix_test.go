@@ -62,21 +62,35 @@ func TestRipgrepRunnerKeepsReadableMatchesWhenDescendantIsUnreadable(t *testing.
 	}
 }
 
-func TestRipgrepRunnerSearchesSymlinkedFiles(t *testing.T) {
+func TestRipgrepRunnerDoesNotTraverseDirectorySymlinksAndAllowsExplicitFileSymlink(t *testing.T) {
 	rg, err := exec.LookPath("rg")
 	if err != nil {
 		t.Skip("system rg is unavailable")
 	}
 	parent := t.TempDir()
 	root := filepath.Join(parent, "workspace")
-	shared := filepath.Join(parent, "shared.txt")
+	sharedFile := filepath.Join(parent, "shared.txt")
+	sharedDir := filepath.Join(parent, "shared")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(shared, []byte("needle shared\n"), 0o644); err != nil {
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(shared, filepath.Join(root, "config.link")); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "local.txt"), []byte("needle local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sharedFile, []byte("needle shared file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedDir, "inside.txt"), []byte("needle shared directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileLink := filepath.Join(root, "config.link")
+	if err := os.Symlink(sharedFile, fileLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sharedDir, filepath.Join(root, "deps")); err != nil {
 		t.Fatal(err)
 	}
 	runner := NewRipgrepRunner(RipgrepRunnerOptions{
@@ -88,8 +102,17 @@ func TestRipgrepRunnerSearchesSymlinkedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output := formatGrepResult(result); !strings.Contains(output, "config.link") {
-		t.Fatalf("symlinked file grep output = %q", output)
+	output := formatGrepResult(result)
+	if !strings.Contains(output, "local.txt") || strings.Contains(output, "config.link") || strings.Contains(output, "deps/inside.txt") {
+		t.Fatalf("directory grep symlink boundary output = %q", output)
+	}
+
+	result, err = runner.Grep(context.Background(), GrepRequest{Pattern: "needle", Path: fileLink})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output := formatGrepResult(result); !strings.Contains(output, ".:1:needle shared file") {
+		t.Fatalf("explicit symlinked-file grep output = %q", output)
 	}
 }
 

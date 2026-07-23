@@ -249,7 +249,6 @@ func ripgrepArgs(pattern, target string) []string {
 		"--no-config",
 		"--hidden",
 		"--no-ignore",
-		"--follow",
 		"--color", "never",
 		"--line-number",
 		"--glob", "!**/.git/**",

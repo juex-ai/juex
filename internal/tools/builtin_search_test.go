@@ -86,7 +86,6 @@ func TestRipgrepArgsPreserveLegacyTraversalContract(t *testing.T) {
 		"--no-config",
 		"--hidden",
 		"--no-ignore",
-		"--follow",
 		"--color", "never",
 		"--line-number",
 		"--glob", "!**/.git/**",
