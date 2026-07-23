@@ -182,9 +182,9 @@ download_file() {
 compute_sha256() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$file" | awk '{print $1}'
+    sha256sum "$file" | awk '{sub(/^\\/, "", $1); print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$file" | awk '{print $1}'
+    shasum -a 256 "$file" | awk '{sub(/^\\/, "", $1); print $1}'
   else
     die "sha256sum or shasum is required to verify release assets"
   fi

@@ -26,9 +26,9 @@ repo_root() {
 compute_sha256() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$file" | awk '{print $1}'
+    sha256sum "$file" | awk '{sub(/^\\/, "", $1); print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$file" | awk '{print $1}'
+    shasum -a 256 "$file" | awk '{sub(/^\\/, "", $1); print $1}'
   else
     die "sha256sum or shasum is required to verify ripgrep"
   fi
@@ -164,8 +164,13 @@ mkdir -p "$extract_dir" "$stage/juex-path" "$stage/juex-resources/licenses/ripgr
 case "$asset" in
   *.tar.gz) tar -xzf "$asset_path" -C "$extract_dir" ;;
   *.zip)
-    command -v unzip >/dev/null 2>&1 || die "unzip is required to extract $asset"
-    unzip -q "$asset_path" -d "$extract_dir"
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -q "$asset_path" -d "$extract_dir"
+    elif tar -tf "$asset_path" >/dev/null 2>&1; then
+      tar -xf "$asset_path" -C "$extract_dir"
+    else
+      die "unzip or a zip-capable tar is required to extract $asset"
+    fi
     ;;
   *) die "unsupported ripgrep archive format: $asset" ;;
 esac

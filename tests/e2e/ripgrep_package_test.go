@@ -101,6 +101,7 @@ func TestPrepareRipgrepPackageVerifiesAndBuildsLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	output := filepath.Join(work, "package")
+	escapedChecksumDir := installEscapedSHA256SumFixture(t, work)
 	cmd := exec.Command("bash", filepath.Join(root, "scripts", "prepare-ripgrep.sh"),
 		"--target", "darwin_arm64",
 		"--juex-version", "1.2.3",
@@ -111,6 +112,7 @@ func TestPrepareRipgrepPackageVerifiesAndBuildsLayout(t *testing.T) {
 		"JUEX_RIPGREP_ASSET_MANIFEST="+manifest,
 		"JUEX_RIPGREP_BASE_URL=file://"+work,
 		"JUEX_RIPGREP_CACHE="+filepath.Join(work, "cache"),
+		"PATH="+escapedChecksumDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("prepare-ripgrep failed: %v\n%s", err, out)
@@ -186,6 +188,7 @@ echo juex package fixture
 		t.Fatal(err)
 	}
 	prefix := filepath.Join(work, "prefix")
+	escapedChecksumDir := installEscapedSHA256SumFixture(t, work)
 	cmd := exec.Command("bash", script, "--version", "0.0.1", "--prefix", prefix)
 	cmd.Dir = work
 	cmd.Env = append(os.Environ(),
@@ -193,6 +196,7 @@ echo juex package fixture
 		"JUEX_INSTALL_ARCH=amd64",
 		"JUEX_INSTALL_RELEASE_BASE_URL=release",
 		"HOME="+filepath.Join(work, "home"),
+		"PATH="+escapedChecksumDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -334,6 +338,41 @@ func TestPowerShellReleaseInstallerInstallsManagedPackage(t *testing.T) {
 type tarFixture struct {
 	body []byte
 	mode int64
+}
+
+func installEscapedSHA256SumFixture(t *testing.T, work string) string {
+	t.Helper()
+
+	tool, mode := "", ""
+	if path, err := exec.LookPath("sha256sum"); err == nil {
+		tool, mode = path, "sha256sum"
+	} else if path, err := exec.LookPath("shasum"); err == nil {
+		tool, mode = path, "shasum"
+	} else {
+		t.Skip("sha256sum or shasum is required")
+	}
+
+	binDir := filepath.Join(work, "escaped-checksum-bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+set -eu
+if [ "$JUEX_TEST_SHA256_MODE" = "shasum" ]; then
+  raw=$("$JUEX_TEST_SHA256_TOOL" -a 256 "$@")
+else
+  raw=$("$JUEX_TEST_SHA256_TOOL" "$@")
+fi
+digest=$(printf '%s\n' "$raw" | awk '{sub(/^\\/, "", $1); print $1}')
+printf '\\%s  %s\n' "$digest" "$1"
+`
+	path := filepath.Join(binDir, "sha256sum")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JUEX_TEST_SHA256_TOOL", tool)
+	t.Setenv("JUEX_TEST_SHA256_MODE", mode)
+	return binDir
 }
 
 func writeTarGzEntries(t *testing.T, path string, entries map[string]tarFixture) {

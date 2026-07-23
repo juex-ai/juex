@@ -46,6 +46,21 @@ jobs:
           mkdir -p internal/web/dist
           printf '<!doctype html><html><body></body></html>' > internal/web/dist/index.html
         shell: bash
+      - name: Prepare pinned ripgrep
+        shell: bash
+        run: |
+          set -euo pipefail
+          os_name="$(go env GOOS)"
+          arch="$(go env GOARCH)"
+          scripts/prepare-ripgrep.sh \
+            --target "${os_name}_${arch}" \
+            --juex-version ci \
+            --output .tmp/ci-ripgrep
+          rg_path="$PWD/.tmp/ci-ripgrep/juex-path/rg"
+          if [[ "$os_name" == "windows" ]]; then
+            rg_path="$(cygpath -w "${rg_path}.exe")"
+          fi
+          printf 'JUEX_RG=%s\n' "$rg_path" >> "$GITHUB_ENV"
       - run: go test ./... -race -count=1
         shell: bash
       - name: Test release installer
