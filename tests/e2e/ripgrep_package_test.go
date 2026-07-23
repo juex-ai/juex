@@ -268,6 +268,29 @@ func TestReleaseInstallScriptRejectsTermuxBeforeDownload(t *testing.T) {
 	}
 }
 
+func TestReleaseInstallScriptRejectsLinuxArm64WithoutGlibcBeforeDownload(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	root, script := releaseInstallScript(t)
+	cmd := exec.Command("bash", script, "--dry-run", "--version", "0.0.1")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_OS=linux",
+		"JUEX_INSTALL_ARCH=arm64",
+		"JUEX_INSTALL_LIBC=musl",
+		"HOME="+t.TempDir(),
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("Linux arm64 musl dry-run unexpectedly succeeded\n%s", out)
+	}
+	body := string(out)
+	for _, want := range []string{"Linux arm64", "glibc", "ripgrep", "source build"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Linux arm64 compatibility error missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestReleasePackagingIncludesManagedRipgrepPayload(t *testing.T) {
 	root, err := findRepoRoot()
 	if err != nil {

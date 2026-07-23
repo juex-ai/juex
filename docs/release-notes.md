@@ -21,8 +21,9 @@
   `<prefix>/lib/juex`; existing binary-only archives remain installable.
   Termux/Android release installation is rejected until upstream provides a
   compatible pinned ripgrep asset. The Linux arm64 release requires glibc
-  because that is the only upstream arm64 asset. Unpackaged source builds
-  require `rg` on `PATH` or an explicit `JUEX_RG` path.
+  because that is the only upstream arm64 asset; the installer rejects musl or
+  an unverified libc before download. Unpackaged source builds require `rg` on
+  `PATH` or an explicit `JUEX_RG` path.
 - `juex serve` no longer opens `http://127.0.0.1:8080` by default. It
   publishes only the canonical local agent endpoint unless `--addr` is passed.
   Scripts that call the agent JSON/SSE API over TCP must now pass an explicit

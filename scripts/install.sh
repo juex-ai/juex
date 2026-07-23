@@ -10,6 +10,7 @@
 #   JUEX_INSTALL_VERSION=0.0.1
 #   JUEX_INSTALL_OS=linux
 #   JUEX_INSTALL_ARCH=amd64
+#   JUEX_INSTALL_LIBC=glibc
 #   JUEX_INSTALL_PACKAGE_HOME=/custom/package/home
 #   INSTALL_FLEET_SERVICE=1
 
@@ -132,6 +133,68 @@ detect_arch() {
     armv7|armv7l|armhf) printf 'armv7\n' ;;
     *) die "unsupported architecture: ${raw}" ;;
   esac
+}
+
+detect_linux_libc() {
+  local raw="${JUEX_INSTALL_LIBC:-}"
+  if [[ -n "$raw" ]]; then
+    case "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')" in
+      glibc|gnu) printf 'glibc\n' ;;
+      musl) printf 'musl\n' ;;
+      *) die "unsupported Linux libc override: ${raw}; expected glibc or musl" ;;
+    esac
+    return
+  fi
+
+  local version
+  if command -v getconf >/dev/null 2>&1; then
+    version=$(getconf GNU_LIBC_VERSION 2>/dev/null || true)
+    if [[ "$version" == glibc* ]]; then
+      printf 'glibc\n'
+      return
+    fi
+  fi
+
+  local ldd_output
+  if command -v ldd >/dev/null 2>&1; then
+    ldd_output=$(LC_ALL=C ldd --version 2>&1 || true)
+    case "$(printf '%s' "$ldd_output" | tr '[:upper:]' '[:lower:]')" in
+      *musl*) printf 'musl\n'; return ;;
+      *glibc*|*"gnu libc"*|*"gnu c library"*) printf 'glibc\n'; return ;;
+    esac
+  fi
+
+  local loader
+  for loader in \
+    /lib/ld-linux-aarch64.so.1 \
+    /lib64/ld-linux-aarch64.so.1 \
+    /lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 \
+    /usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1; do
+    if [[ -e "$loader" ]]; then
+      printf 'glibc\n'
+      return
+    fi
+  done
+  for loader in /lib/ld-musl-*.so.1 /usr/lib/ld-musl-*.so.1; do
+    if [[ -e "$loader" ]]; then
+      printf 'musl\n'
+      return
+    fi
+  done
+  printf 'unknown\n'
+}
+
+require_release_runtime() {
+  local os_name="$1"
+  local arch="$2"
+  if [[ "$os_name" != "linux" || "$arch" != "arm64" ]]; then
+    return
+  fi
+  local libc
+  libc=$(detect_linux_libc)
+  if [[ "$libc" != "glibc" ]]; then
+    die "Linux arm64 release requires glibc because upstream ripgrep 15.1.0 publishes only a glibc asset; detected ${libc}. Use a source build with a compatible rg on PATH."
+  fi
 }
 
 archive_name() {
@@ -384,6 +447,7 @@ main() {
   tag=$(release_tag "$resolved_version")
   os_name=$(detect_os)
   arch=$(detect_arch)
+  require_release_runtime "$os_name" "$arch"
   archive=$(archive_name "$version_for_asset" "$os_name" "$arch")
   asset_url=$(release_asset_url "$tag" "$archive")
   checksums_url=$(release_asset_url "$tag" "checksums.txt")

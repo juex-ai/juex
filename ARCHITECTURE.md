@@ -2032,8 +2032,10 @@ Config (`.goreleaser.yml`, schema v2) produces 7 binaries:
 
 The `linux/armv7` build (`GOARM=7`) covers Pi 2+, BeagleBone, and similar
 systems. The pinned amd64 and armv7 ripgrep assets are musl builds; upstream
-only publishes a GNU/glibc ripgrep asset for Linux arm64. Termux/Android is
-rejected because the pinned upstream release has no compatible Android asset.
+only publishes a GNU/glibc ripgrep asset for Linux arm64, so the release
+installer rejects arm64 musl or an unverified libc before download.
+Termux/Android is rejected because the pinned upstream release has no
+compatible Android asset.
 Pi 1 / Pi Zero (ARMv6) are not covered; users with that hardware must build
 JueX and ripgrep themselves.
 
