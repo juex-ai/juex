@@ -11,8 +11,9 @@ Start with the documents that match the task instead of loading everything:
 | File | Read when |
 | --- | --- |
 | `README.md` | You need the project map, common commands, or document roles. |
+| `DOMAIN.md` | You touch product language, Agent/Session/Turn lifecycles, or domain invariants. |
 | `PHILOSOPHY.md` | You touch product direction, scope, or trade-offs. |
-| `ARCHITECTURE.md` | You touch modules, interfaces, data flow, storage, CLI, or API routes. |
+| `ARCHITECTURE.md` | You touch module ownership, interfaces, dependencies, data flow, storage, CLI, or API routes. |
 | `DESIGN.md` | You touch the web UI, layout, styling, interaction, or visible copy. |
 | `frontend/README.md` | You work inside `frontend/`. |
 | Module docs | You work inside a module with its own README or design note. |
@@ -31,10 +32,12 @@ Juex is a single-binary Go agent runtime. It currently includes:
   `exec_command`, `write_stdin`, chunked write tools, and memory tools
 - an MCP stdio client that registers tools as `mcp__<server>__<tool>`
 - skills loaded from `.agents/skills/<name>/SKILL.md`
-- work-local runtime state under `.juex/`
+- Agent-owned runtime state under `$JUEX_HOME/agents/<id>`
+- work-local identity, configuration, extensions, Observable definitions, and
+  artifacts under `.juex/`
 - an in-process event bus and JSONL conversation/event history
 
-## Agent skills
+## Project Guidance
 
 ### Issue tracker
 
@@ -44,9 +47,16 @@ Work is tracked in Taskline under the `juex` project. See `docs/agents/issue-tra
 
 Use Taskline task labels for the five canonical triage roles. See `docs/agents/triage-labels.md`.
 
-### Domain docs
+### Domain and architecture
 
-This is a single-context repo. See `docs/agents/domain.md`.
+`DOMAIN.md` is the canonical Juex domain model. Keep domain meanings independent
+of Go package paths. `ARCHITECTURE.md` maps those meanings to modules,
+interfaces, dependencies, and storage.
+
+Use an ADR only for a durable decision that changes or supersedes these stable
+contracts, has meaningful alternatives or compatibility consequences, and
+cannot be explained by updating the canonical docs alone. Put new ADRs under
+`docs/adr/`; do not create one for routine implementation choices.
 
 ## Core Rules
 
@@ -92,6 +102,7 @@ the failure and investigate before merging.
 
 - Root docs hold stable project guidance.
 - Module docs hold module-specific guidance.
+- ADRs hold durable decisions and their alternatives, not implementation logs.
 - Keep docs concise and current; do not use docs as a changelog.
 - If current docs would mislead the next worker, update them in the same change.
 - All documentation is English.

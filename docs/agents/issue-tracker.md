@@ -29,3 +29,15 @@ Create or update a Taskline task in the `juex` project. If the work is not ready
 ## When a skill says "fetch the relevant ticket"
 
 Use `taskline task get <id>`.
+
+## Architecture tasks
+
+For an architecture or refactor task, keep the description concrete:
+
+- name the Juex decision whose ownership is unclear or duplicated;
+- identify the current modules and the leak between them;
+- describe the proposed ownership or interface change without prescribing
+  incidental implementation;
+- state what future changes become local, what callers no longer need to know,
+  and the tests that should prove the boundary;
+- label the recommendation `Strong`, `Worth exploring`, or `Speculative`.

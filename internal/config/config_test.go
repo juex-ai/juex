@@ -72,7 +72,7 @@ func TestLoadFromFileSkillsConfig(t *testing.T) {
 	configPath := filepath.Join(dir, "juex.yaml")
 	body := `model: openai:gpt-4
 skills:
-  include: [" taskline-management ", "", taskline-management, juex-ddd]
+  include: [" taskline-management ", "", taskline-management, juex-localtest]
   exclude: [ignored-when-include-is-set]
   prompt_budget_chars: 4096
 providers:
@@ -87,7 +87,7 @@ providers:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(cfg.Skills.Include, ","); got != "taskline-management,juex-ddd" {
+	if got := strings.Join(cfg.Skills.Include, ","); got != "taskline-management,juex-localtest" {
 		t.Fatalf("include = %q", got)
 	}
 	if got := strings.Join(cfg.Skills.Exclude, ","); got != "ignored-when-include-is-set" {

@@ -9,11 +9,13 @@ implemented V2 details, see `docs/compaction/design.md`.
 
 ## Current Juex Baseline
 
-Juex keeps local session state recoverable under `.juex/`: ordinary transcript
-rows live in `.juex/sessions/<id>/conversation.jsonl`, while oversized user
-inputs and tool results are materialized under `.juex/artifacts/` before they
-reach provider context. Compaction appends a `MessageKindCompact` marker with
-typed metadata, then active provider context is assembled as:
+Juex keeps local state recoverable across its ownership split: ordinary
+transcript rows live in
+`$JUEX_HOME/agents/<agent-id>/sessions/<session-id>/conversation.jsonl`, while
+oversized user inputs and tool results are materialized under the Workspace's
+`.juex/artifacts/` before they reach provider context. Compaction appends a
+`MessageKindCompact` marker with typed metadata, then active provider context
+is assembled as:
 
 ```text
 latest compact summary
