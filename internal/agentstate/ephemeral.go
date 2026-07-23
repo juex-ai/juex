@@ -23,6 +23,12 @@ func CreateEphemeral(workDir string) (*Ephemeral, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agentstate: create ephemeral root: %w", err)
 	}
+	createdRootDir := rootDir
+	rootDir, err = canonicalPath(rootDir)
+	if err != nil {
+		_ = os.RemoveAll(createdRootDir)
+		return nil, fmt.Errorf("agentstate: resolve ephemeral root: %w", err)
+	}
 	cleanup := func() {
 		_ = os.RemoveAll(rootDir)
 	}
