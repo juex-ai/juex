@@ -84,6 +84,24 @@ func TestStoreOpenUsesLastMatchingCursor(t *testing.T) {
 	}
 }
 
+func TestStoreReplayDoesNotDuplicateIdenticalUnrecordedCurrent(t *testing.T) {
+	store := testStore(8)
+	store.Publish(testSnapshot{Cursor: "1", State: "one"}, true)
+	current := testSnapshot{Cursor: "2", State: "two"}
+	store.Publish(current, true)
+	store.Publish(current, false)
+
+	stream := store.Open(OpenOptions{After: "1"})
+	defer stream.Close()
+	snapshot, ok := stream.Next(context.Background())
+	if !ok || snapshot.State != "two" {
+		t.Fatalf("first replay = %+v, %t; want two", snapshot, ok)
+	}
+	if _, ok := stream.Next(context.Background()); ok {
+		t.Fatal("stream duplicated an unchanged unrecorded current value")
+	}
+}
+
 func TestCurrentOnlyStoreIgnoresCursorHistory(t *testing.T) {
 	store := testStore(0)
 	store.Publish(testSnapshot{Cursor: "same", State: "session-one"}, true)
@@ -98,6 +116,25 @@ func TestCurrentOnlyStoreIgnoresCursorHistory(t *testing.T) {
 	}
 	if _, ok := stream.Next(context.Background()); ok {
 		t.Fatal("current-only store returned historical values")
+	}
+}
+
+func TestStoreReplaceDropsPendingOldValues(t *testing.T) {
+	store := testStore(8)
+	stream := store.Open(OpenOptions{Follow: true})
+	defer stream.Close()
+	if _, ok := stream.Next(context.Background()); !ok {
+		t.Fatal("stream omitted initial snapshot")
+	}
+
+	store.Publish(testSnapshot{Cursor: "old-1", State: "old-one"}, true)
+	store.Publish(testSnapshot{Cursor: "old-2", State: "old-two"}, true)
+	replacement := testSnapshot{Cursor: "new-1", State: "replacement"}
+	store.Replace(replacement, []testSnapshot{replacement})
+
+	snapshot, ok := stream.Next(context.Background())
+	if !ok || snapshot.State != "replacement" {
+		t.Fatalf("first value after Replace = %+v, %t; want replacement", snapshot, ok)
 	}
 }
 

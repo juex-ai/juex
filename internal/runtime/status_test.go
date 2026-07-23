@@ -661,6 +661,7 @@ func TestStatusStreamSurvivesStoreReset(t *testing.T) {
 	if !ok || initial.Session.ID != "old" {
 		t.Fatalf("initial snapshot = %+v, %t", initial, ok)
 	}
+	store.Publish(statusEvent("5", TurnAdmittedType, "turn-old", TurnAdmittedPayload{}))
 
 	store.Reset(StatusSeed{SessionID: "new"}, []events.Event{
 		statusEvent("6", TurnAdmittedType, "turn-new", TurnAdmittedPayload{}),
