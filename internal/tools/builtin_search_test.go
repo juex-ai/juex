@@ -107,6 +107,22 @@ func TestEscapeRipgrepGlobPathTreatsFilesystemNamesLiterally(t *testing.T) {
 	}
 }
 
+func TestNormalizeGoRegexpUsesASCIIWordBoundariesWithoutChangingLiterals(t *testing.T) {
+	tests := map[string]string{
+		`\bfoo\B`: `(?-u:\b)foo(?-u:\B)`,
+		`\\b`:     `\\b`,
+	}
+	for input, want := range tests {
+		got, err := normalizeGoRegexpForRipgrep(input)
+		if err != nil {
+			t.Fatalf("normalize %q: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("normalize %q = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestResolveRipgrepPrefersPackageAndRejectsMissingManagedBinary(t *testing.T) {
 	packageRoot := t.TempDir()
 	executable := filepath.Join(packageRoot, "bin", "juex")
@@ -368,6 +384,18 @@ func TestRipgrepRunnerSearchesHiddenIgnoredFilesAndCapsGlobally(t *testing.T) {
 			t.Fatalf("excluded search result contains %q:\n%s", forbidden, joined)
 		}
 	}
+	for _, dir := range []string{".git", "node_modules", ".agents"} {
+		result, err := runner.Grep(context.Background(), GrepRequest{
+			Pattern: "needle",
+			Path:    filepath.Join(root, dir),
+		})
+		if err != nil {
+			t.Fatalf("search excluded root %s: %v", dir, err)
+		}
+		if len(result.Matches) != 0 {
+			t.Fatalf("excluded root %s matches = %+v, want none", dir, result.Matches)
+		}
+	}
 
 	capRoot := t.TempDir()
 	for i := 0; i < 205; i++ {
@@ -416,6 +444,7 @@ func TestRipgrepRunnerPreservesGoRegexpDialect(t *testing.T) {
 		"expanded.txt": "literalXYZ\n",
 		"ascii.txt":    "42abc\n",
 		"unicode.txt":  "٤abc\n",
+		"boundary.txt": "éfooé\n",
 	} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -437,6 +466,13 @@ func TestRipgrepRunnerPreservesGoRegexpDialect(t *testing.T) {
 	digitOutput := formatGrepResult(digits)
 	if !strings.Contains(digitOutput, "ascii.txt") || strings.Contains(digitOutput, "unicode.txt") {
 		t.Fatalf("Go ASCII digit regexp output = %q", digitOutput)
+	}
+	boundary, err := runner.Grep(context.Background(), GrepRequest{Pattern: `\bfoo\b`, Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output := formatGrepResult(boundary); !strings.Contains(output, "boundary.txt") {
+		t.Fatalf("Go ASCII word-boundary regexp output = %q", output)
 	}
 }
 

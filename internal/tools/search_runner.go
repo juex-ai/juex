@@ -89,6 +89,9 @@ func (r *RipgrepRunner) Grep(ctx context.Context, req GrepRequest) (GrepResult, 
 	if err != nil {
 		return GrepResult{}, fmt.Errorf("grep: %w", err)
 	}
+	if info.IsDir() && isFixedExcludedDirectory(req.Path) {
+		return GrepResult{}, nil
+	}
 	cwd := req.Path
 	target := "."
 	singleFile := !info.IsDir()
@@ -220,7 +223,38 @@ func normalizeGoRegexpForRipgrep(pattern string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return parsed.String(), nil
+	return enforceASCIIWordBoundaries(parsed.String()), nil
+}
+
+func enforceASCIIWordBoundaries(pattern string) string {
+	var out strings.Builder
+	out.Grow(len(pattern))
+	for index := 0; index < len(pattern); {
+		if pattern[index] != '\\' {
+			out.WriteByte(pattern[index])
+			index++
+			continue
+		}
+		start := index
+		for index < len(pattern) && pattern[index] == '\\' {
+			index++
+		}
+		count := index - start
+		if index >= len(pattern) || (pattern[index] != 'b' && pattern[index] != 'B') {
+			out.WriteString(pattern[start:index])
+			continue
+		}
+		out.WriteString(pattern[start : start+(count/2)*2])
+		if count%2 == 1 {
+			out.WriteString(`(?-u:\`)
+			out.WriteByte(pattern[index])
+			out.WriteByte(')')
+		} else {
+			out.WriteByte(pattern[index])
+		}
+		index++
+	}
+	return out.String()
 }
 
 func (r *RipgrepRunner) ripgrepPath() (string, error) {
@@ -256,6 +290,15 @@ func ripgrepArgs(pattern, target string) []string {
 		"--glob", "!**/.agents/**",
 		"-e", pattern,
 		"--", target,
+	}
+}
+
+func isFixedExcludedDirectory(path string) bool {
+	switch filepath.Base(filepath.Clean(path)) {
+	case ".git", "node_modules", ".agents":
+		return true
+	default:
+		return false
 	}
 }
 
