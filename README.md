@@ -1,6 +1,6 @@
 # Juex
 
-Juex is a small Go agent runtime packaged as one binary. It provides a CLI,
+Juex is a small Go agent runtime distributed as a managed CLI package. It provides a CLI,
 a local web UI, Anthropic and OpenAI-compatible providers, builtin file/shell
 tools, workspace Observables, MCP stdio tools, skills and hooks from local resource bundles,
 agent-home memory, and resumable session history.
@@ -18,8 +18,10 @@ curl -fsSL https://raw.githubusercontent.com/juex-ai/juex/main/scripts/install.s
 ```
 
 The POSIX installer refreshes an existing per-user fleet service after replacing
-the binary. Post-install service-manager failures are reported as warnings
-without invalidating the binary installation. The installer does not install a
+the active package. Release packages include the pinned `rg` executable used by
+the builtin `grep` tool and install under `~/.local/lib/juex` by default, with a
+stable command symlink in `~/.local/bin`. Post-install service-manager failures
+are reported as warnings without invalidating the package installation. The installer does not install a
 new service unless `INSTALL_FLEET_SERVICE=1` is set, and it never restarts
 detached agents.
 
@@ -85,7 +87,9 @@ while retaining the completed response as the persisted transcript. Set
 blocking responses.
 
 If you built from source without installing, use `./dist/juex` instead of
-`juex`.
+`juex`. Source builds resolve `rg` from `JUEX_RG` and then `PATH`; `juex doctor`
+reports the active path, source, and bundled version. Published release packages
+do not fall back to `PATH` when their pinned `rg` payload is missing or invalid.
 
 `juex serve` publishes the current agent's JSON/SSE API through its canonical
 local endpoint without opening a separate TCP port. Pass `--addr` explicitly

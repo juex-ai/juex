@@ -2,8 +2,8 @@
 # Build juex for every supported (GOOS, GOARCH) combination.
 #
 # Output:
-#   dist/juex_<version>_<os>_<arch>/juex[.exe]  raw binary
-#   dist/juex_<version>_<os>_<arch>.tar.gz      binary-only archive (zip on windows)
+#   dist/juex_<version>_<os>_<arch>/            managed JueX package
+#   dist/juex_<version>_<os>_<arch>.tar.gz      package archive (zip on windows)
 #   dist/checksums.txt                          sha256 of each archive
 #
 # Usage:
@@ -37,8 +37,8 @@ PLATFORMS=(
   "windows arm64"
 )
 
-# GOARM applies only when GOARCH=arm. v7 covers Pi 2+, modern 32-bit
-# Android, BeagleBone, etc. (matches goreleaser config).
+# GOARM applies only when GOARCH=arm. v7 covers Pi 2+, BeagleBone, and
+# similar Linux systems (matches goreleaser config).
 ARM_VERSION=7
 
 DIST=dist
@@ -54,10 +54,15 @@ for entry in "${PLATFORMS[@]}"; do
   arch_label="$GOARCH"
   if [ "$GOARCH" = "arm" ]; then arch_label="armv${ARM_VERSION}"; fi
   base="juex_${VERSION}_${GOOS}_${arch_label}"
-  bin="${DIST}/${base}/juex${ext}"
-  mkdir -p "${DIST}/${base}"
+  package="${DIST}/${base}"
 
   echo "  → ${GOOS}/${arch_label}"
+  scripts/prepare-ripgrep.sh \
+    --target "${GOOS}_${arch_label}" \
+    --juex-version "$VERSION" \
+    --output "$package"
+  bin="${package}/bin/juex${ext}"
+  mkdir -p "${package}/bin"
   if [ "$GOARCH" = "arm" ]; then
     CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" GOARM="$ARM_VERSION" \
       go build -trimpath -ldflags "$LDFLAGS" -o "$bin" ./cmd/juex

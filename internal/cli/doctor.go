@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/providerreadiness"
 	"github.com/juex-ai/juex/internal/skills"
+	toolruntime "github.com/juex-ai/juex/internal/tools"
 )
 
 type doctorStatus string
@@ -136,6 +137,7 @@ func runDoctor(cmd *cobra.Command, flags *persistentFlags, offline bool) doctorR
 	checks = append(checks, doctorCredentialsCheck(cfg))
 	checks = append(checks, doctorConnectivityCheck(ctx, cfg, offline))
 	checks = append(checks, doctorShellCheck(cfg))
+	checks = append(checks, doctorRipgrepCheck(toolruntime.ResolveRipgrep))
 	checks = append(checks, doctorWorkdirCheck(workDir))
 	checks = append(checks, doctorMCPCheck(cfg))
 	checks = append(checks, doctorSkillsCheck(cfg))
@@ -221,6 +223,32 @@ func doctorShellCheck(cfg config.Config) doctorCheck {
 			"profile": cfg.Shell.Profile,
 			"family":  cfg.Shell.Family,
 			"binary":  cfg.Shell.Binary,
+		},
+	}
+}
+
+func doctorRipgrepCheck(resolve func() (toolruntime.ResolvedRipgrep, error)) doctorCheck {
+	resolved, err := resolve()
+	if err != nil {
+		return doctorCheck{
+			Name:       "ripgrep",
+			Status:     doctorStatusWarn,
+			Message:    err.Error(),
+			Suggestion: "install JueX from a release package, set JUEX_RG, or install rg for source development",
+		}
+	}
+	version := resolved.Version
+	if version == "" {
+		version = "unmanaged"
+	}
+	return doctorCheck{
+		Name:    "ripgrep",
+		Status:  doctorStatusOK,
+		Message: fmt.Sprintf("%s ripgrep %s at %s", resolved.Source, version, resolved.Path),
+		Details: map[string]any{
+			"path":    resolved.Path,
+			"source":  string(resolved.Source),
+			"version": resolved.Version,
 		},
 	}
 }

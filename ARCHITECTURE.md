@@ -144,7 +144,9 @@ juex/
 │   └── plans/                    # implementation plans
 ├── .goreleaser.yml               # 7-platform cross-compile
 ├── scripts/install.sh / scripts/install.ps1
-│                                # GitHub Release installers
+│                                # managed GitHub Release installers
+├── scripts/prepare-ripgrep.sh   # verified pinned-ripgrep package payload
+├── release/ripgrep-assets.tsv  # release target asset/size/SHA-256 pins
 ├── Makefile                      # test / lint / build / snapshot / integration / eval
 ├── pyproject.toml / uv.lock      # eval and fake-MCP Python dependencies
 ├── go.mod / go.sum
@@ -508,7 +510,7 @@ error rather than mixing guidance into diagnostics.
 | `exec_command` | run a command through the resolved workspace shell (workdir defaults to WorkDir; optional bounded yield and `tty: true` for long-running or interactive sessions) |
 | `write_stdin` | poll a running command session, write `chars` to a TTY session, or send Ctrl-C (`\x03`) to interrupt a non-TTY session using the numeric `session_id` returned by `exec_command` |
 | `list_shell_sessions` | recover Juex-managed shell session ids and status after forgotten state, compaction, or background commands; defaults to running sessions |
-| `grep` | content search; `path:line:content` (defaults to WorkDir) |
+| `grep` | killable ripgrep subprocess; bounded `path:line:content` output (defaults to WorkDir) |
 | `skill_search` | search loaded skill metadata, including entries omitted from the prompt budget |
 | `skill_load` | load one skill's full SKILL.md, source, and path by name; filesystem paths are sandbox-validated and authenticated builtin content uses a virtual path |
 | `memory_write` | persist a memory entry |
@@ -516,7 +518,7 @@ error rather than mixing guidance into diagnostics.
 | `memory_delete` | remove an entry by name |
 
 `tools.RegisterBuiltins` receives `BuiltinOptions` fields for `WorkDir`,
-`Shell`, `ShellSessions`, `Sandbox`, `ToolTimeoutSeconds`, and
+`Shell`, `ShellSessions`, `SearchRunner`, `Sandbox`, `ToolTimeoutSeconds`, and
 `DisableApplyPatch`, then
 registers a declarative list of builtin providers for file, chunked write,
 shell, and search tool families. Callers that need custom composition can
@@ -2024,19 +2026,26 @@ Config (`.goreleaser.yml`, schema v2) produces 7 binaries:
 - `linux/amd64` `linux/arm64` `linux/armv7`
 - `windows/amd64` `windows/arm64`
 
-The `linux/armv7` build (`GOARM=7`) covers Pi 2+, modern 32-bit Android
-(notably Termux on older devices), BeagleBone, and similar. Pi 1 / Pi
-Zero (ARMv6) are not covered; users with that hardware should build
-locally with `GOARM=6`.
+The `linux/armv7` build (`GOARM=7`) covers Pi 2+, BeagleBone, and similar
+systems. The pinned amd64 and armv7 ripgrep assets are musl builds; upstream
+only publishes a GNU/glibc ripgrep asset for Linux arm64. Termux/Android is
+rejected because the pinned upstream release has no compatible Android asset.
+Pi 1 / Pi Zero (ARMv6) are not covered; users with that hardware must build
+JueX and ripgrep themselves.
 
-Each binary is stamped with the same ldflags as `make build`. Archives are
-binary-only `tar.gz` files (Linux + Mac) or `zip` files (Windows); a
-`checksums.txt` accompanies them. Triggered on `v*` tag push via the release
-workflow; runs entirely on GitHub Actions.
+Each JueX binary is stamped with the same ldflags as `make build`. Every
+`tar.gz` (Linux + Mac) or `zip` (Windows) archive also contains a target-specific
+ripgrep 15.1.0 binary, its license files, and `juex-package.json`. The asset
+size and SHA-256 pins live in `release/ripgrep-assets.tsv`; packaging verifies
+them before extraction. A `checksums.txt` covers the completed JueX archives.
+Tag pushes trigger the release workflow on GitHub Actions.
 
 `scripts/install.sh` is the POSIX released-binary installer for macOS/Linux. It
 detects platform archives, works when piped into `bash`, verifies the archive
-against `checksums.txt`, and installs into a user-writable bin directory. Both
+against `checksums.txt`, installs immutable versioned packages under
+`<prefix>/lib/juex/releases`, and atomically switches `current` plus the command
+symlink. Legacy binary-only archives remain installable. Windows keeps the same
+versioned package layout but copies `juex.exe` into the bin directory. Both
 POSIX installers use the newly installed binary to detect and refresh an
 existing per-user fleet service. A missing service is only installed when
 `INSTALL_FLEET_SERVICE=1`. The released-binary installer leaves detached agents
@@ -2046,13 +2055,16 @@ eligible running agents adopt the newly built binary; first installation
 remains non-disruptive. Service-manager probe, refresh, or status failures are
 post-install warnings and do not invalidate a successfully installed binary.
 `scripts/install.ps1` is the Windows PowerShell installer for released `zip`
-archives. `scripts/install-local.sh` remains the source-build installer for
-this checkout.
+archives. `scripts/install-local.sh` builds and installs the same managed
+package layout for this checkout. At runtime, `JUEX_RG` wins explicitly;
+managed packages then resolve and verify their pinned payload without a system
+fallback, while unpackaged source binaries may use `rg` from `PATH`. `juex
+doctor` exposes the selected source, version, and path.
 
 ### CI Workflows
 
-- `ci.yml` — push + PR, three jobs:
-  - `lint`: golangci-lint (default preset).
+- `ci.yml` — push + PR, two jobs:
+  - `lint`: golangci-lint (default preset) plus `goreleaser check`.
   - `test`: matrix on `ubuntu-latest`, `macos-latest`, `windows-latest`;
     runs `go test ./... -race -count=1`. Generic command execution behavior runs on
     Windows; Unix process-group timeout coverage lives in `!windows` test files.

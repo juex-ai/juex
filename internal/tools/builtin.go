@@ -12,6 +12,7 @@ type BuiltinOptions struct {
 	WorkDir            string
 	Shell              ShellProfile
 	ShellSessions      *ShellSessionManager
+	SearchRunner       SearchRunner
 	Sandbox            sandbox.Policy
 	SandboxRunner      sandbox.Runner
 	ToolTimeoutSeconds int
@@ -46,6 +47,7 @@ type BuiltinProviderContext struct {
 	WorkDir            string
 	Shell              ShellProfile
 	ShellSessions      *ShellSessionManager
+	SearchRunner       SearchRunner
 	Sandbox            sandbox.Policy
 	SandboxRunner      sandbox.Runner
 	ToolTimeoutSeconds int
@@ -119,6 +121,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 		WorkDir:            workDir,
 		Shell:              shell,
 		ShellSessions:      shellSessions,
+		SearchRunner:       opts.SearchRunner,
 		Sandbox:            opts.Sandbox,
 		SandboxRunner:      opts.SandboxRunner,
 		ToolTimeoutSeconds: toolTimeoutSeconds,

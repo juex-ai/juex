@@ -21,6 +21,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/providerreadiness"
+	toolruntime "github.com/juex-ai/juex/internal/tools"
 	"github.com/juex-ai/juex/internal/version"
 	"github.com/juex-ai/juex/internal/web"
 )
@@ -1380,7 +1381,7 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 			skillsMessage, _ = row["message"].(string)
 		}
 	}
-	for _, want := range []string{"config", "credentials", "connectivity", "shell", "workdir", "mcp", "skills"} {
+	for _, want := range []string{"config", "credentials", "connectivity", "shell", "ripgrep", "workdir", "mcp", "skills"} {
 		if !seen[want] {
 			t.Fatalf("missing check %q in:\n%s", want, out.String())
 		}
@@ -1425,6 +1426,29 @@ func TestDoctorWorkdirCheckMissingJuexIsHealthy(t *testing.T) {
 	check := doctorWorkdirCheck(t.TempDir())
 	if check.Status != doctorStatusOK {
 		t.Fatalf("workdir status = %s, want ok: %+v", check.Status, check)
+	}
+}
+
+func TestDoctorRipgrepCheckReportsResolvedRuntime(t *testing.T) {
+	check := doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
+		return toolruntime.ResolvedRipgrep{
+			Path:    "/managed/juex-path/rg",
+			Version: "15.1.0",
+			Source:  toolruntime.RipgrepSourcePackage,
+		}, nil
+	})
+	if check.Status != doctorStatusOK || check.Name != "ripgrep" {
+		t.Fatalf("check = %+v", check)
+	}
+	if check.Details["path"] != "/managed/juex-path/rg" || check.Details["version"] != "15.1.0" || check.Details["source"] != "package" {
+		t.Fatalf("details = %+v", check.Details)
+	}
+
+	missing := doctorRipgrepCheck(func() (toolruntime.ResolvedRipgrep, error) {
+		return toolruntime.ResolvedRipgrep{}, errors.New("not found")
+	})
+	if missing.Status != doctorStatusWarn || !strings.Contains(missing.Suggestion, "release package") {
+		t.Fatalf("missing check = %+v", missing)
 	}
 }
 

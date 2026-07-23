@@ -20,6 +20,10 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: check
 
   test:
     runs-on: ${{ matrix.os }}

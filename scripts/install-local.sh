@@ -51,9 +51,15 @@ refresh_fleet_service() {
 
 cd "$(dirname "$0")/.."
 
+if [[ -n "${ANDROID_ROOT:-}" || -n "${ANDROID_DATA:-}" || "${PREFIX:-}" == *com.termux* ]]; then
+  printf 'error: Termux/Android is not supported because this build has no compatible bundled ripgrep asset\n' >&2
+  exit 1
+fi
+
 PREFIX=${PREFIX:-"$HOME/.local"}
 INSTALL_DIR="${PREFIX}/bin"
 INSTALL_TARGET="${INSTALL_DIR}/juex"
+PACKAGE_HOME="${JUEX_INSTALL_PACKAGE_HOME:-${PREFIX}/lib/juex}"
 
 CLI_CONFIG_VERSION=$(awk -F= '/^VERSION=/{print $2}' CLI_CONFIG)
 VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "${CLI_CONFIG_VERSION}-dev")}
@@ -67,25 +73,50 @@ LDFLAGS="-s -w \
 
 GOOS=$(go env GOOS)
 GOARCH=$(go env GOARCH)
+TARGET_ARCH="$GOARCH"
+if [[ "$GOARCH" == "arm" ]]; then
+  TARGET_ARCH="armv$(go env GOARM)"
+fi
 
 DIST=dist
-BUILD_TARGET="${DIST}/juex"
-mkdir -p "$DIST"
+PACKAGE_ROOT="${DIST}/juex-package"
+BUILD_TARGET="${PACKAGE_ROOT}/bin/juex"
+
+scripts/prepare-ripgrep.sh \
+  --target "${GOOS}_${TARGET_ARCH}" \
+  --juex-version "$VERSION" \
+  --output "$PACKAGE_ROOT"
+mkdir -p "$(dirname "$BUILD_TARGET")"
 
 echo "Building juex ${VERSION} for ${GOOS}/${GOARCH} → ${BUILD_TARGET} ..."
 CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" -o "$BUILD_TARGET" ./cmd/juex
 
-echo "Installing → ${INSTALL_TARGET}"
-mkdir -p "$INSTALL_DIR"
-# Install via write-then-rename rather than overwriting the target in place:
-# on macOS, truncating an executable's bytes while a process still has it
-# mapped (e.g. a running fleet daemon) corrupts code-signing/text-page state
-# for that inode and the kernel SIGKILLs anything touching it, including the
-# `version` check below. Rename swaps the directory entry to a fresh inode,
-# leaving any already-running process on its old inode untouched.
+echo "Installing managed package → ${PACKAGE_HOME}"
+VERSION_KEY="${VERSION#v}"
+VERSION_KEY="${VERSION_KEY//\//-}"
+VERSION_KEY="${VERSION_KEY//\\/-}"
+VERSION_KEY="${VERSION_KEY//:/-}"
+RELEASE_KEY="${VERSION_KEY}-${GOOS}-${GOARCH}"
+RELEASES_DIR="${PACKAGE_HOME}/releases"
+RELEASE_DIR="${RELEASES_DIR}/${RELEASE_KEY}"
+STAGE="${RELEASES_DIR}/.${RELEASE_KEY}.tmp.$$"
+mkdir -p "$RELEASES_DIR" "$INSTALL_DIR"
+rm -rf "$STAGE"
+mkdir -p "$STAGE"
+cp -R "$PACKAGE_ROOT/." "$STAGE/"
+chmod +x "$STAGE/bin/juex" "$STAGE/juex-path/rg"
+rm -rf "$RELEASE_DIR"
+mv "$STAGE" "$RELEASE_DIR"
+
+CURRENT_TMP="${PACKAGE_HOME}/.current.$$"
+rm -f "$CURRENT_TMP"
+ln -s "releases/$RELEASE_KEY" "$CURRENT_TMP"
+mv -f "$CURRENT_TMP" "${PACKAGE_HOME}/current"
+
+# Swap a new symlink into place so a running daemon keeps its current inode.
 INSTALL_TMP="${INSTALL_TARGET}.tmp.$$"
-cp "$BUILD_TARGET" "$INSTALL_TMP"
-chmod +x "$INSTALL_TMP"
+rm -f "$INSTALL_TMP"
+ln -s "${PACKAGE_HOME}/current/bin/juex" "$INSTALL_TMP"
 mv -f "$INSTALL_TMP" "$INSTALL_TARGET"
 
 "$INSTALL_TARGET" version
