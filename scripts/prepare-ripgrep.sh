@@ -120,6 +120,7 @@ asset=""
 asset_size=""
 asset_sha=""
 while IFS=$'\t' read -r row_target row_version row_asset row_size row_sha; do
+  row_sha=${row_sha%$'\r'}
   [[ -n "$row_target" && "${row_target#\#}" == "$row_target" ]] || continue
   if [[ "$row_target" == "$target" ]]; then
     rg_version="$row_version"

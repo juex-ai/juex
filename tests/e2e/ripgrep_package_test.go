@@ -96,7 +96,7 @@ func TestPrepareRipgrepPackageVerifiesAndBuildsLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := filepath.Join(work, "assets.tsv")
-	line := fmt.Sprintf("darwin_arm64\t15.1.0\t%s\t%d\t%s\n", assetName, assetInfo.Size(), sha256File(t, assetPath))
+	line := fmt.Sprintf("darwin_arm64\t15.1.0\t%s\t%d\t%s\r\n", assetName, assetInfo.Size(), sha256File(t, assetPath))
 	if err := os.WriteFile(manifest, []byte(line), 0o644); err != nil {
 		t.Fatal(err)
 	}
