@@ -42,7 +42,7 @@ func (m *Manager) Logs(selector string, lines int) ([]byte, error) {
 		}
 	}
 	path := fleetLogPath(entry.Address.StateDir())
-	body, err := tailLog(path, lines)
+	body, err := m.deps.readLog(path, lines)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, &LogUnavailableError{AgentID: entry.ID, Path: path}
 	}
