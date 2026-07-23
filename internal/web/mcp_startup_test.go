@@ -32,6 +32,7 @@ func TestMain(m *testing.M) {
 
 func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
 	srv := newTestServer(t)
+	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
 	work := srv.opts.Cfg.WorkDir
 	mustWriteWebFakeMCPConfig(t, work, true)
@@ -51,6 +52,7 @@ func TestServeMCPNotificationTargetsLastWrittenSession(t *testing.T) {
 
 func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
 	srv := newTestServer(t)
+	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
 	work := srv.opts.Cfg.WorkDir
 	mustWriteWebFakeMCPConfig(t, work, true)
@@ -67,6 +69,7 @@ func TestServeMCPNotificationCreatesActivePrimarySession(t *testing.T) {
 
 func TestServeMCPNotificationPreservesAttachmentImageBlock(t *testing.T) {
 	srv := newTestServer(t)
+	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = "127.0.0.1:0"
 	work := srv.opts.Cfg.WorkDir
 	relPath := ".juex/inbox/mcp-notification.png"
@@ -94,6 +97,7 @@ func TestServeMCPNotificationPreservesAttachmentImageBlock(t *testing.T) {
 func TestRunServesHTTPBeforeDrainingStartupMCPNotifications(t *testing.T) {
 	provider := newBlockingWebProvider()
 	srv := newTestServer(t)
+	setTestAgentAddress(t, &srv.opts.Cfg)
 	srv.opts.Addr = freeLoopbackAddr(t)
 	srv.opts.Provider = provider
 	work := srv.opts.Cfg.WorkDir

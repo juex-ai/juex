@@ -54,12 +54,12 @@ func TestEndpointReturnsOnlyBoundHealthyRuntime(t *testing.T) {
 			deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 				return agentstate.WorkspaceBinding{Kind: test.binding, Reason: "test binding"}
 			}
-			deps.readRuntime = func(string) (endpoint.Runtime, error) {
+			deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 				return runtimeState, test.runtimeErr
 			}
 			deps.processAlive = func(int) (bool, error) { return test.alive, nil }
 			deps.probe = func(context.Context, endpoint.Runtime) error { return test.probeErr }
-			deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+			deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 				return noopGuard{}, nil
 			}
 			manager := &Manager{
@@ -109,7 +109,7 @@ func TestReadOnlyStateRequiresBoundWorkspace(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got.ID != entry.ID || got.Workspace != entry.Agent.Workspace || got.StateDir != entry.Dir {
+				if got.ID != entry.ID || got.Workspace != entry.Agent.Workspace || got.StateDir != entry.Address.StateDir() {
 					t.Fatalf("ReadOnlyState = %+v", got)
 				}
 				return
@@ -229,7 +229,7 @@ func TestUpdateConfigWritesThenRestartsAgent(t *testing.T) {
 	}
 	var state atomic.Int32
 	deps := configTestDependencies(entry, oldRuntime)
-	deps.readRuntime = func(string) (endpoint.Runtime, error) {
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 		switch state.Load() {
 		case 0:
 			return oldRuntime, nil
@@ -306,8 +306,7 @@ func prepareFleetConfigTest(t *testing.T) (string, string, agentstate.RegistryEn
 	if err := os.MkdirAll(filepath.Join(workspace, ".juex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	entry := registryEntry("aaaaaaaa", "agent")
-	entry.Dir = filepath.Join(home, "agents", entry.ID)
+	entry := registryEntryAtHome(home, "aaaaaaaa", "agent")
 	entry.Agent.Workspace = workspace
 	entry.Agent.Autostart = false
 	return home, workspace, entry
@@ -321,10 +320,10 @@ func configTestDependencies(entry agentstate.RegistryEntry, runtimeState endpoin
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(string) (endpoint.Runtime, error) { return runtimeState, nil }
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) { return runtimeState, nil }
 	deps.processAlive = func(int) (bool, error) { return true, nil }
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
-	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 		return noopGuard{}, nil
 	}
 	return deps

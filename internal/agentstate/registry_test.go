@@ -49,13 +49,18 @@ func TestListRegistryReturnsSortedEntriesAndKeepsProblemsVisible(t *testing.T) {
 	if len(entries) != 4 {
 		t.Fatalf("ListRegistry() returned %d entries, want 4: %+v", len(entries), entries)
 	}
+	canonicalHome, err := canonicalPath(home)
+	if err != nil {
+		t.Fatal(err)
+	}
 	wantIDs := []string{symlinkID, validID, malformedID, invalidID}
 	for i, want := range wantIDs {
 		if entries[i].ID != want {
 			t.Fatalf("entries[%d].ID = %q, want %q", i, entries[i].ID, want)
 		}
-		if entries[i].Dir != filepath.Join(agentsDir, want) {
-			t.Fatalf("entries[%d].Dir = %q, want registry path", i, entries[i].Dir)
+		if entries[i].Address.ID() != "" &&
+			entries[i].Address.StateDir() != filepath.Join(canonicalHome, "agents", want) {
+			t.Fatalf("entries[%d] state dir = %q, want registry path", i, entries[i].Address.StateDir())
 		}
 	}
 	if entries[1].Problem != "" || entries[1].Agent.ID != validID {
@@ -225,9 +230,13 @@ func TestInspectBindingClassifiesWorkspaceBindings(t *testing.T) {
 }
 
 func validRegistryEntry(id, workspace string) RegistryEntry {
+	address, err := NewAgentAddress(filepath.Dir(workspace), id)
+	if err != nil {
+		panic(err)
+	}
 	return RegistryEntry{
-		ID:  id,
-		Dir: filepath.Join(filepath.Dir(workspace), "agents", id),
+		ID:      id,
+		Address: address,
 		Agent: Agent{
 			ID:        id,
 			Name:      "agent",
@@ -387,7 +396,7 @@ func TestDeleteRegisteredRemovesStateAndMatchingMarker(t *testing.T) {
 	if err := DeleteRegistered(home, resolved.Agent.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(resolved.AgentDir); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(resolved.Address.StateDir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("agent directory still exists: %v", err)
 	}
 	if _, err := os.Lstat(resolved.MarkerPath); !errors.Is(err, os.ErrNotExist) {
@@ -436,7 +445,7 @@ func TestDeleteRegisteredRejectsCorruptOrSymlinkedWorkspaceWithoutMutation(t *te
 		if err := DeleteRegistered(home, resolved.Agent.ID); err == nil {
 			t.Fatal("DeleteRegistered accepted a corrupt marker")
 		}
-		assertDir(t, resolved.AgentDir)
+		assertDir(t, resolved.Address.StateDir())
 		assertFile(t, resolved.MarkerPath)
 	})
 
@@ -456,7 +465,7 @@ func TestDeleteRegisteredRejectsCorruptOrSymlinkedWorkspaceWithoutMutation(t *te
 		if err := DeleteRegistered(home, resolved.Agent.ID); err == nil {
 			t.Fatal("DeleteRegistered followed a workspace symlink")
 		}
-		assertDir(t, resolved.AgentDir)
+		assertDir(t, resolved.Address.StateDir())
 		assertFile(t, filepath.Join(target, ".juex", markerName))
 	})
 }
@@ -475,7 +484,7 @@ func TestDeleteRegisteredRestoresRegistryWhenMarkerRemovalFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "injected marker removal failure") {
 		t.Fatalf("DeleteRegistered error = %v", err)
 	}
-	assertDir(t, resolved.AgentDir)
+	assertDir(t, resolved.Address.StateDir())
 	assertFile(t, resolved.MarkerPath)
 	entries, listErr := ListRegistry(home)
 	if listErr != nil {

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
 )
 
@@ -383,7 +384,11 @@ func waitForEphemeralRuntime(t *testing.T, tempParent string, timeout time.Durat
 			root := filepath.Join(tempParent, rootEntry.Name())
 			agents, _ := os.ReadDir(filepath.Join(root, "agents"))
 			for _, agentEntry := range agents {
-				runtimeState, err := endpoint.ReadRuntime(filepath.Join(root, "agents", agentEntry.Name()))
+				address, err := agentstate.NewAgentAddress(root, agentEntry.Name())
+				if err != nil {
+					continue
+				}
+				runtimeState, err := endpoint.ReadRuntime(address)
 				if err == nil {
 					return root, runtimeState
 				}

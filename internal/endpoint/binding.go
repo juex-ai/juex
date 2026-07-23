@@ -20,8 +20,21 @@ import (
 const (
 	socketFileName  = "api.sock"
 	runtimeFileName = "runtime.json"
-	lockFileName    = "endpoint.lock"
 )
+
+// AddressView is the endpoint-facing projection of an agentstate-owned
+// Resident Agent address.
+type AddressView interface {
+	ID() string
+	StateDir() string
+	EndpointLockPath() string
+}
+
+type addressSnapshot struct {
+	id               string
+	stateDir         string
+	endpointLockPath string
+}
 
 type Runtime struct {
 	AgentID       string    `json:"agent_id"`
@@ -37,7 +50,7 @@ func (r Runtime) Matches(other Runtime) bool {
 }
 
 type AgentAlreadyRunningError struct {
-	AgentDir string
+	StateDir string
 	Endpoint string
 }
 
@@ -45,7 +58,7 @@ func (e *AgentAlreadyRunningError) Error() string {
 	if e.Endpoint != "" {
 		return fmt.Sprintf("endpoint: agent already running at %s", e.Endpoint)
 	}
-	return fmt.Sprintf("endpoint: agent already running or starting in %s", e.AgentDir)
+	return fmt.Sprintf("endpoint: agent already running or starting in %s", e.StateDir)
 }
 
 type Binding struct {
@@ -53,7 +66,7 @@ type Binding struct {
 	listener       net.Listener
 	lock           *homestore.Lock
 	runtime        Runtime
-	agentDir       string
+	address        addressSnapshot
 	socketPath     string
 	fallbackReason error
 	published      bool
@@ -99,8 +112,8 @@ func defaultListenDependencies() listenDependencies {
 	}
 }
 
-func Listen(ctx context.Context, agentDir, binaryVersion string) (*Binding, error) {
-	binding, err := listenWithDependencies(ctx, agentDir, defaultListenDependencies())
+func Listen(ctx context.Context, address AddressView, binaryVersion string) (*Binding, error) {
+	binding, err := listenWithDependencies(ctx, address, defaultListenDependencies())
 	if err != nil {
 		return nil, err
 	}
@@ -108,30 +121,30 @@ func Listen(ctx context.Context, agentDir, binaryVersion string) (*Binding, erro
 	return binding, nil
 }
 
-func listenWithDependencies(ctx context.Context, agentDir string, deps listenDependencies) (*Binding, error) {
+func listenWithDependencies(ctx context.Context, address AddressView, deps listenDependencies) (*Binding, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	absoluteDir, err := filepath.Abs(filepath.Clean(agentDir))
+	resolved, err := snapshotAddress(address)
 	if err != nil {
-		return nil, fmt.Errorf("endpoint: resolve agent directory: %w", err)
-	}
-	if err := validateAgentDirectory(absoluteDir); err != nil {
 		return nil, err
 	}
-	lock, err := deps.lock(absoluteDir)
+	if err := validateAgentDirectory(resolved.stateDir); err != nil {
+		return nil, err
+	}
+	lock, err := deps.lock(resolved.endpointLockPath)
 	if err != nil {
 		if errors.Is(err, homestore.ErrLockBusy) {
-			return nil, &AgentAlreadyRunningError{AgentDir: absoluteDir}
+			return nil, &AgentAlreadyRunningError{StateDir: resolved.stateDir}
 		}
-		return nil, fmt.Errorf("endpoint: lock agent directory %s: %w", absoluteDir, err)
+		return nil, fmt.Errorf("endpoint: lock agent directory %s: %w", resolved.stateDir, err)
 	}
-	if err := validateAgentDirectory(absoluteDir); err != nil {
+	if err := validateAgentDirectory(resolved.stateDir); err != nil {
 		_ = lock.Close()
 		return nil, err
 	}
 
-	socketPath := filepath.Join(absoluteDir, socketFileName)
+	socketPath := filepath.Join(resolved.stateDir, socketFileName)
 	listener, fallbackReason, err := listenPreferred(ctx, socketPath, deps)
 	if err != nil {
 		_ = lock.Close()
@@ -153,34 +166,34 @@ func listenWithDependencies(ctx context.Context, agentDir string, deps listenDep
 		listener: listener,
 		lock:     lock,
 		runtime: Runtime{
-			AgentID:    filepath.Base(absoluteDir),
+			AgentID:    resolved.id,
 			InstanceID: instanceID,
 			PID:        deps.pid(),
 			Endpoint:   target.URI(),
 			StartedAt:  deps.now().UTC().Round(0),
 		},
-		agentDir:       absoluteDir,
+		address:        resolved,
 		socketPath:     socketPath,
 		fallbackReason: fallbackReason,
 	}, nil
 }
 
-func AcquireMaintenance(agentDir string) (*Maintenance, error) {
-	absoluteDir, err := filepath.Abs(filepath.Clean(agentDir))
+func AcquireMaintenance(address AddressView) (*Maintenance, error) {
+	resolved, err := snapshotAddress(address)
 	if err != nil {
-		return nil, fmt.Errorf("endpoint: resolve agent directory: %w", err)
-	}
-	if err := validateAgentDirectory(absoluteDir); err != nil {
 		return nil, err
 	}
-	lock, err := acquireEndpointLock(absoluteDir)
+	if err := validateAgentDirectory(resolved.stateDir); err != nil {
+		return nil, err
+	}
+	lock, err := acquireEndpointLock(resolved.endpointLockPath)
 	if err != nil {
 		if errors.Is(err, homestore.ErrLockBusy) {
-			return nil, &AgentAlreadyRunningError{AgentDir: absoluteDir}
+			return nil, &AgentAlreadyRunningError{StateDir: resolved.stateDir}
 		}
-		return nil, fmt.Errorf("endpoint: lock agent directory %s for maintenance: %w", absoluteDir, err)
+		return nil, fmt.Errorf("endpoint: lock agent directory %s for maintenance: %w", resolved.stateDir, err)
 	}
-	if err := validateAgentDirectory(absoluteDir); err != nil {
+	if err := validateAgentDirectory(resolved.stateDir); err != nil {
 		_ = lock.Close()
 		return nil, err
 	}
@@ -205,12 +218,38 @@ func validateAgentDirectory(agentDir string) error {
 	return nil
 }
 
-func acquireEndpointLock(agentDir string) (*homestore.Lock, error) {
-	parent := filepath.Dir(agentDir)
-	if filepath.Base(parent) == "agents" {
-		parent = filepath.Dir(parent)
+func snapshotAddress(address AddressView) (addressSnapshot, error) {
+	if address == nil {
+		return addressSnapshot{}, errors.New("endpoint: agent address is required")
 	}
-	return homestore.New(parent).Lock(homestore.EndpointLocks, filepath.Base(agentDir), homestore.LockTry)
+	id := strings.TrimSpace(address.ID())
+	if id == "" {
+		return addressSnapshot{}, errors.New("endpoint: agent address id is required")
+	}
+	stateDir, err := explicitAbsolutePath("agent state directory", address.StateDir())
+	if err != nil {
+		return addressSnapshot{}, err
+	}
+	lockPath, err := explicitAbsolutePath("endpoint lock path", address.EndpointLockPath())
+	if err != nil {
+		return addressSnapshot{}, err
+	}
+	return addressSnapshot{id: id, stateDir: stateDir, endpointLockPath: lockPath}, nil
+}
+
+func explicitAbsolutePath(label, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("endpoint: %s is required", label)
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("endpoint: %s %q is not absolute", label, path)
+	}
+	return filepath.Clean(path), nil
+}
+
+func acquireEndpointLock(lockPath string) (*homestore.Lock, error) {
+	return homestore.AcquireLock(lockPath, homestore.LockTry)
 }
 
 func listenPreferred(ctx context.Context, socketPath string, deps listenDependencies) (net.Listener, error, error) {
@@ -334,7 +373,7 @@ func (b *Binding) Publish() error {
 	if b.published {
 		return nil
 	}
-	if err := writeRuntime(filepath.Join(b.agentDir, runtimeFileName), b.runtime); err != nil {
+	if err := writeRuntime(filepath.Join(b.address.stateDir, runtimeFileName), b.runtime); err != nil {
 		return fmt.Errorf("endpoint: publish runtime: %w", err)
 	}
 	b.published = true
@@ -354,7 +393,7 @@ func (b *Binding) Close() error {
 
 	var errs []error
 	if b.published {
-		if err := removeOwnedRuntime(filepath.Join(b.agentDir, runtimeFileName), b.runtime); err != nil {
+		if err := removeOwnedRuntime(b.address, b.runtime); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -378,8 +417,16 @@ func (b *Binding) Close() error {
 	return errors.Join(errs...)
 }
 
-func ReadRuntime(agentDir string) (Runtime, error) {
-	path := filepath.Join(agentDir, runtimeFileName)
+func ReadRuntime(address AddressView) (Runtime, error) {
+	resolved, err := snapshotAddress(address)
+	if err != nil {
+		return Runtime{}, err
+	}
+	return readRuntime(resolved)
+}
+
+func readRuntime(address addressSnapshot) (Runtime, error) {
+	path := filepath.Join(address.stateDir, runtimeFileName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Runtime{}, err
@@ -391,7 +438,7 @@ func ReadRuntime(agentDir string) (Runtime, error) {
 	if state.AgentID == "" || state.InstanceID == "" || state.PID <= 0 || state.StartedAt.IsZero() {
 		return Runtime{}, fmt.Errorf("endpoint: %s contains invalid process metadata", path)
 	}
-	if state.AgentID != filepath.Base(filepath.Clean(agentDir)) {
+	if state.AgentID != address.id {
 		return Runtime{}, fmt.Errorf("endpoint: %s contains mismatched agent identity", path)
 	}
 	if _, err := Parse(state.Endpoint); err != nil {
@@ -400,8 +447,12 @@ func ReadRuntime(agentDir string) (Runtime, error) {
 	return state, nil
 }
 
-func RemoveRuntime(agentDir string, expected Runtime) error {
-	current, err := ReadRuntime(agentDir)
+func RemoveRuntime(address AddressView, expected Runtime) error {
+	resolved, err := snapshotAddress(address)
+	if err != nil {
+		return err
+	}
+	current, err := readRuntime(resolved)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -411,25 +462,26 @@ func RemoveRuntime(agentDir string, expected Runtime) error {
 	if !sameRuntime(current, expected) {
 		return &IdentityMismatchError{Expected: expected, Actual: current}
 	}
-	path := filepath.Join(agentDir, runtimeFileName)
+	path := filepath.Join(resolved.stateDir, runtimeFileName)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("endpoint: remove runtime %s: %w", path, err)
 	}
-	return homestore.SyncDir(agentDir)
+	return homestore.SyncDir(resolved.stateDir)
 }
 
-func removeOwnedRuntime(path string, owner Runtime) error {
-	current, err := ReadRuntime(filepath.Dir(path))
+func removeOwnedRuntime(address addressSnapshot, owner Runtime) error {
+	current, err := readRuntime(address)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil || !sameRuntime(current, owner) {
 		return nil
 	}
+	path := filepath.Join(address.stateDir, runtimeFileName)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("endpoint: remove owned runtime %s: %w", path, err)
 	}
-	return homestore.SyncDir(filepath.Dir(path))
+	return homestore.SyncDir(address.stateDir)
 }
 
 func sameRuntime(left, right Runtime) bool {

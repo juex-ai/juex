@@ -229,9 +229,9 @@ type dependencies struct {
 	resolveAgent        func(agentstate.Options) (agentstate.Resolution, error)
 	updateAgent         func(string, string, agentstate.AgentUpdate) (agentstate.Agent, error)
 	deleteRegistered    func(string, string) error
-	readRuntime         func(string) (endpoint.Runtime, error)
-	removeRuntime       func(string, endpoint.Runtime) error
-	acquireMaintenance  func(string) (maintenanceGuard, error)
+	readRuntime         func(agentstate.AgentAddress) (endpoint.Runtime, error)
+	removeRuntime       func(agentstate.AgentAddress, endpoint.Runtime) error
+	acquireMaintenance  func(agentstate.AgentAddress) (maintenanceGuard, error)
 	processAlive        func(int) (bool, error)
 	probe               func(context.Context, endpoint.Runtime) error
 	requestShutdown     func(context.Context, endpoint.Runtime) error
@@ -248,10 +248,14 @@ func defaultDependencies() dependencies {
 		resolveAgent:     agentstate.Resolve,
 		updateAgent:      agentstate.UpdateAgent,
 		deleteRegistered: agentstate.DeleteRegistered,
-		readRuntime:      endpoint.ReadRuntime,
-		removeRuntime:    endpoint.RemoveRuntime,
-		acquireMaintenance: func(agentDir string) (maintenanceGuard, error) {
-			return endpoint.AcquireMaintenance(agentDir)
+		readRuntime: func(address agentstate.AgentAddress) (endpoint.Runtime, error) {
+			return endpoint.ReadRuntime(address)
+		},
+		removeRuntime: func(address agentstate.AgentAddress, runtimeState endpoint.Runtime) error {
+			return endpoint.RemoveRuntime(address, runtimeState)
+		},
+		acquireMaintenance: func(address agentstate.AgentAddress) (maintenanceGuard, error) {
+			return endpoint.AcquireMaintenance(address)
 		},
 		processAlive:        processExists,
 		probe:               endpoint.Probe,

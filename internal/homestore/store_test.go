@@ -31,6 +31,23 @@ func TestStoreLockUsesCanonicalLayout(t *testing.T) {
 	}
 }
 
+func TestStoreLockPathUsesCanonicalLayout(t *testing.T) {
+	home := t.TempDir()
+	store := New(home)
+	for _, scope := range []LockScope{AgentLocks, EndpointLocks, FleetLocks} {
+		t.Run(string(scope), func(t *testing.T) {
+			got, err := store.LockPath(scope, "agent-id")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(home, ".locks", string(scope), "agent-id.lock")
+			if got != want {
+				t.Fatalf("LockPath() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestStoreLockRejectsInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name  string

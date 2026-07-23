@@ -41,8 +41,7 @@ type Agent struct {
 
 type Resolution struct {
 	Agent      Agent
-	HomeDir    string
-	AgentDir   string
+	Address    AgentAddress
 	MarkerPath string
 	Created    bool
 	Notices    []string
@@ -231,6 +230,10 @@ func createIdentity(homeDir, workDir, markerPath string) (Resolution, error) {
 	if agentID == "" {
 		return Resolution{}, errors.New("agentstate: could not allocate a unique agent id")
 	}
+	address, err := NewAgentAddress(homeDir, agentID)
+	if err != nil {
+		return Resolution{}, err
+	}
 
 	agentLock, err := acquireAgentLock(homeDir, agentID)
 	if err != nil {
@@ -246,14 +249,14 @@ func createIdentity(homeDir, workDir, markerPath string) (Resolution, error) {
 		Autostart: false,
 		CreatedAt: now().UTC(),
 	}
-	agentDir, migrated, err := publishNewAgent(homeDir, workDir, agent)
+	migrated, err := publishNewAgent(address, workDir, agent)
 	if err != nil {
 		return Resolution{}, err
 	}
 	if err := atomicWriteJSON(markerPath, Marker{AgentID: agentID}, 0o644); err != nil {
 		var persisted Marker
 		if readErr := readJSON(markerPath, &persisted); readErr != nil || persisted.AgentID != agentID {
-			_ = os.RemoveAll(agentDir)
+			_ = os.RemoveAll(address.StateDir())
 		}
 		return Resolution{}, fmt.Errorf("agentstate: write marker %s: %w", markerPath, err)
 	}
@@ -264,14 +267,13 @@ func createIdentity(homeDir, workDir, markerPath string) (Resolution, error) {
 	}
 	result := Resolution{
 		Agent:      agent,
-		HomeDir:    homeDir,
-		AgentDir:   agentDir,
+		Address:    address,
 		MarkerPath: markerPath,
 		Created:    true,
 	}
 	if migrated {
 		result.Notices = append(result.Notices,
-			fmt.Sprintf("migrated workspace runtime state from %s to %s", filepath.Join(workDir, ".juex"), agentDir))
+			fmt.Sprintf("migrated workspace runtime state from %s to %s", filepath.Join(workDir, ".juex"), address.StateDir()))
 	}
 	return result, nil
 }
@@ -300,19 +302,19 @@ func resolveExistingIdentity(homeDir, workDir, markerPath string, marker Marker)
 		}
 		old := result.Agent.Workspace
 		result.Agent.Workspace = workDir
-		if err := atomicWriteJSON(filepath.Join(result.AgentDir, agentFileName), result.Agent, 0o644); err != nil {
-			return Resolution{}, fmt.Errorf("agentstate: rebind moved workspace in %s: %w", filepath.Join(result.AgentDir, agentFileName), err)
+		if err := atomicWriteJSON(filepath.Join(result.Address.StateDir(), agentFileName), result.Agent, 0o644); err != nil {
+			return Resolution{}, fmt.Errorf("agentstate: rebind moved workspace in %s: %w", filepath.Join(result.Address.StateDir(), agentFileName), err)
 		}
 		result.Notices = append(result.Notices,
 			fmt.Sprintf("workspace for agent %q moved from %s to %s", result.Agent.ID, old, workDir))
 	}
-	cleaned, err := migratePublishedLegacyState(workDir, result.AgentDir)
+	cleaned, err := migratePublishedLegacyState(workDir, result.Address)
 	if err != nil {
 		return Resolution{}, err
 	}
 	if cleaned {
 		result.Notices = append(result.Notices,
-			fmt.Sprintf("migrated remaining workspace runtime state from %s to %s", filepath.Join(workDir, ".juex"), result.AgentDir))
+			fmt.Sprintf("migrated remaining workspace runtime state from %s to %s", filepath.Join(workDir, ".juex"), result.Address.StateDir()))
 	}
 	return result, nil
 }
@@ -327,7 +329,11 @@ func inspectExistingIdentity(homeDir, workDir, markerPath string, marker Marker)
 	if !validAgentID.MatchString(marker.AgentID) {
 		return existingIdentityInspection{}, fmt.Errorf("agentstate: marker %s contains invalid agent_id %q", markerPath, marker.AgentID)
 	}
-	agentDir := filepath.Join(homeDir, "agents", marker.AgentID)
+	address, err := NewAgentAddress(homeDir, marker.AgentID)
+	if err != nil {
+		return existingIdentityInspection{}, err
+	}
+	agentDir := address.StateDir()
 	agentFile := filepath.Join(agentDir, agentFileName)
 	info, statErr := os.Stat(agentDir)
 	if errors.Is(statErr, os.ErrNotExist) {
@@ -360,7 +366,7 @@ func inspectExistingIdentity(homeDir, workDir, markerPath string, marker Marker)
 		return existingIdentityInspection{}, fmt.Errorf("agentstate: %s contains an empty created_at", agentFile)
 	}
 
-	result := Resolution{Agent: agent, HomeDir: homeDir, AgentDir: agentDir, MarkerPath: markerPath}
+	result := Resolution{Agent: agent, Address: address, MarkerPath: markerPath}
 	same, recordedExists, err := sameWorkspace(agent.Workspace, workDir)
 	if err != nil {
 		return existingIdentityInspection{}, fmt.Errorf("agentstate: compare workspace binding for agent %q: %w", agent.ID, err)

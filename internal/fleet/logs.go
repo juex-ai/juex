@@ -35,7 +35,13 @@ func (m *Manager) Logs(selector string, lines int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	path := fleetLogPath(entry.Dir)
+	if entry.Problem != "" {
+		return nil, &ConflictError{
+			AgentID: entry.ID,
+			Reason:  "invalid registry entry: " + entry.Problem,
+		}
+	}
+	path := fleetLogPath(entry.Address.StateDir())
 	body, err := tailLog(path, lines)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, &LogUnavailableError{AgentID: entry.ID, Path: path}

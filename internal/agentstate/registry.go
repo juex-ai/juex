@@ -13,7 +13,7 @@ import (
 
 type RegistryEntry struct {
 	ID      string
-	Dir     string
+	Address AgentAddress
 	Agent   Agent
 	Problem string
 }
@@ -97,7 +97,7 @@ func UpdateAgent(homeDir, agentID string, update AgentUpdate) (Agent, error) {
 	if update.Autostart != nil {
 		agent.Autostart = *update.Autostart
 	}
-	if err := atomicWriteJSON(filepath.Join(entry.Dir, agentFileName), agent, 0o644); err != nil {
+	if err := atomicWriteJSON(filepath.Join(entry.Address.StateDir(), agentFileName), agent, 0o644); err != nil {
 		return Agent{}, fmt.Errorf("agentstate: update agent %q: %w", agentID, err)
 	}
 	return agent, nil
@@ -238,7 +238,7 @@ func DeleteOrphan(homeDir, agentID string) error {
 		)
 	}
 
-	tombstone, err := renameOrphanToTombstone(agentsDir, entry.Dir, agentID)
+	tombstone, err := renameOrphanToTombstone(agentsDir, entry.Address.StateDir(), agentID)
 	if err != nil {
 		return err
 	}
@@ -296,12 +296,12 @@ func DeleteRegistered(homeDir, agentID string) error {
 		return err
 	}
 	agentsDir := filepath.Join(homeDir, "agents")
-	tombstone, err := renameOrphanToTombstone(agentsDir, entry.Dir, agentID)
+	tombstone, err := renameOrphanToTombstone(agentsDir, entry.Address.StateDir(), agentID)
 	if err != nil {
 		return err
 	}
 	if err := syncRegistryDir(agentsDir); err != nil {
-		restoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Dir)
+		restoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Address.StateDir())
 		return errors.Join(
 			fmt.Errorf(
 				"agentstate: agent %q was renamed to tombstone %s but registry sync failed: %w",
@@ -315,7 +315,7 @@ func DeleteRegistered(homeDir, agentID string) error {
 
 	if removeMarker {
 		if err := removeWorkspaceMarker(markerPath); err != nil {
-			restoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Dir)
+			restoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Address.StateDir())
 			return errors.Join(
 				fmt.Errorf("agentstate: remove workspace marker %s: %w", markerPath, err),
 				restoreErr,
@@ -323,7 +323,7 @@ func DeleteRegistered(homeDir, agentID string) error {
 		}
 		if err := syncRegistryDir(filepath.Dir(markerPath)); err != nil {
 			markerRestoreErr := atomicWriteJSON(markerPath, Marker{AgentID: agentID}, 0o644)
-			registryRestoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Dir)
+			registryRestoreErr := restoreRegistryTombstone(agentsDir, tombstone, entry.Address.StateDir())
 			return errors.Join(
 				fmt.Errorf("agentstate: sync workspace marker directory %s: %w", filepath.Dir(markerPath), err),
 				markerRestoreErr,
@@ -433,16 +433,20 @@ func syncRegistryDir(path string) error {
 }
 
 func loadRegistryEntry(agentsDir, id string) RegistryEntry {
-	entry := RegistryEntry{
-		ID:  id,
-		Dir: filepath.Join(agentsDir, id),
-	}
+	entry := RegistryEntry{ID: id}
+	stateDir := filepath.Join(agentsDir, id)
 	if !validAgentID.MatchString(id) {
 		entry.Problem = fmt.Sprintf("invalid registry agent id %q", id)
 		return entry
 	}
+	address, err := NewAgentAddress(filepath.Dir(agentsDir), id)
+	if err != nil {
+		entry.Problem = fmt.Sprintf("resolve agent address: %v", err)
+		return entry
+	}
+	entry.Address = address
 
-	info, err := os.Lstat(entry.Dir)
+	info, err := os.Lstat(stateDir)
 	if err != nil {
 		entry.Problem = fmt.Sprintf("inspect agent directory: %v", err)
 		return entry
@@ -456,7 +460,7 @@ func loadRegistryEntry(agentsDir, id string) RegistryEntry {
 		return entry
 	}
 
-	agentFile := filepath.Join(entry.Dir, agentFileName)
+	agentFile := filepath.Join(stateDir, agentFileName)
 	fileInfo, err := os.Lstat(agentFile)
 	if err != nil {
 		entry.Problem = fmt.Sprintf("inspect %s: %v", agentFileName, err)

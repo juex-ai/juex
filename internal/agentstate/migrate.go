@@ -19,12 +19,12 @@ var legacyStateEntries = []string{"sessions", "memory", "history.json", "logs", 
 
 var verifyCopiedTree = compareTree
 
-func publishNewAgent(homeDir, workDir string, agent Agent) (agentDir string, migrated bool, err error) {
-	agentsDir := filepath.Join(homeDir, "agents")
-	agentDir = filepath.Join(agentsDir, agent.ID)
+func publishNewAgent(address AgentAddress, workDir string, agent Agent) (migrated bool, err error) {
+	agentDir := address.StateDir()
+	agentsDir := filepath.Dir(agentDir)
 	stageDir, err := os.MkdirTemp(agentsDir, "."+agent.ID+".creating-")
 	if err != nil {
-		return "", false, fmt.Errorf("agentstate: create staging directory: %w", err)
+		return false, fmt.Errorf("agentstate: create staging directory: %w", err)
 	}
 	defer func() {
 		if err != nil {
@@ -34,7 +34,7 @@ func publishNewAgent(homeDir, workDir string, agent Agent) (agentDir string, mig
 
 	for _, name := range []string{"sessions", "memory", "logs"} {
 		if err := os.MkdirAll(filepath.Join(stageDir, name), 0o755); err != nil {
-			return "", false, err
+			return false, err
 		}
 	}
 	legacyDir := filepath.Join(workDir, ".juex")
@@ -44,51 +44,51 @@ func publishNewAgent(homeDir, workDir string, agent Agent) (agentDir string, mig
 			if errors.Is(statErr, os.ErrNotExist) {
 				continue
 			}
-			return "", false, fmt.Errorf("agentstate: inspect legacy state %s: %w", source, statErr)
+			return false, fmt.Errorf("agentstate: inspect legacy state %s: %w", source, statErr)
 		}
 		migrated = true
 		destination := filepath.Join(stageDir, name)
 		if err := os.RemoveAll(destination); err != nil {
-			return "", false, err
+			return false, err
 		}
 		if err := copyTree(source, destination); err != nil {
-			return "", false, fmt.Errorf("agentstate: copy legacy state %s: %w", source, err)
+			return false, fmt.Errorf("agentstate: copy legacy state %s: %w", source, err)
 		}
 		if err := verifyCopiedTree(source, destination); err != nil {
-			return "", false, fmt.Errorf("agentstate: verify legacy state %s: %w", source, err)
+			return false, fmt.Errorf("agentstate: verify legacy state %s: %w", source, err)
 		}
 	}
 	for _, name := range []string{"sessions", "memory", "logs"} {
 		if err := os.MkdirAll(filepath.Join(stageDir, name), 0o755); err != nil {
-			return "", false, err
+			return false, err
 		}
 	}
 	historyPath := filepath.Join(stageDir, "history.json")
 	if _, statErr := os.Stat(historyPath); errors.Is(statErr, os.ErrNotExist) {
 		if err := homestore.WriteFileAtomic(historyPath, []byte("{\"sessions\":[]}\n"), 0o644, 0o755); err != nil {
-			return "", false, err
+			return false, err
 		}
 	} else if statErr != nil {
-		return "", false, statErr
+		return false, statErr
 	}
 	if err := atomicWriteJSON(filepath.Join(stageDir, agentFileName), agent, 0o644); err != nil {
-		return "", false, err
+		return false, err
 	}
 	if err := homestore.SyncDir(stageDir); err != nil {
-		return "", false, fmt.Errorf("agentstate: sync staging directory: %w", err)
+		return false, fmt.Errorf("agentstate: sync staging directory: %w", err)
 	}
 	if err := os.Rename(stageDir, agentDir); err != nil {
-		return "", false, fmt.Errorf("agentstate: publish agent directory %s: %w", agentDir, err)
+		return false, fmt.Errorf("agentstate: publish agent directory %s: %w", agentDir, err)
 	}
 	if err := homestore.SyncDir(agentsDir); err != nil {
 		_ = os.RemoveAll(agentDir)
 		_ = homestore.SyncDir(agentsDir)
-		return "", false, fmt.Errorf("agentstate: sync agent registry: %w", err)
+		return false, fmt.Errorf("agentstate: sync agent registry: %w", err)
 	}
-	return agentDir, migrated, nil
+	return migrated, nil
 }
 
-func migratePublishedLegacyState(workDir, agentDir string) (bool, error) {
+func migratePublishedLegacyState(workDir string, address AgentAddress) (bool, error) {
 	legacyDir := filepath.Join(workDir, ".juex")
 	var entries []string
 	for _, name := range legacyStateEntries {
@@ -105,7 +105,7 @@ func migratePublishedLegacyState(workDir, agentDir string) (bool, error) {
 		return false, nil
 	}
 
-	maintenance, err := endpoint.AcquireMaintenance(agentDir)
+	maintenance, err := endpoint.AcquireMaintenance(address)
 	if err != nil {
 		return false, fmt.Errorf("agentstate: acquire maintenance guard before migrating workspace runtime state: %w", err)
 	}
@@ -113,7 +113,7 @@ func migratePublishedLegacyState(workDir, agentDir string) (bool, error) {
 
 	for _, name := range entries {
 		source := filepath.Join(legacyDir, name)
-		destination := filepath.Join(agentDir, name)
+		destination := filepath.Join(address.StateDir(), name)
 		if _, err := os.Lstat(destination); errors.Is(err, os.ErrNotExist) {
 			if err := publishLegacyEntry(source, destination); err != nil {
 				return false, err

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/fleetweb"
@@ -103,8 +104,12 @@ func TestFleetRegistrationLifecycleThroughAPIAndCLI(t *testing.T) {
 		added.Agent.RuntimeHealth != fleet.RuntimeHealthy {
 		t.Fatalf("created agent = %+v", added)
 	}
-	agentDir := filepath.Join(home, "agents", added.Agent.ID)
-	runtimeState := waitFleetRuntime(t, agentDir)
+	agentAddress, err := agentstate.NewAgentAddress(home, added.Agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentDir := agentAddress.StateDir()
+	runtimeState := waitFleetRuntime(t, agentAddress)
 	removedSuccessfully := false
 	t.Cleanup(func() {
 		if removedSuccessfully {
@@ -272,10 +277,10 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	workspace := t.TempDir()
 	agentID := "aaaaaaaa"
-	agentDir := writeFleetE2EAgent(t, home, workspace, agentID)
+	agentAddress := writeFleetE2EAgent(t, home, workspace, agentID)
 	secondWorkspace := t.TempDir()
 	secondAgentID := "bbbbbbbb"
-	secondAgentDir := writeFleetE2EAgent(
+	secondAgentAddress := writeFleetE2EAgent(
 		t,
 		home,
 		secondWorkspace,
@@ -296,8 +301,8 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	environment := fleetWebEnvironment(home)
 
 	t.Cleanup(func() {
-		for _, dir := range []string{agentDir, secondAgentDir} {
-			runtimeState, err := endpoint.ReadRuntime(dir)
+		for _, address := range []agentstate.AgentAddress{agentAddress, secondAgentAddress} {
+			runtimeState, err := endpoint.ReadRuntime(address)
 			if err == nil {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				_ = endpoint.RequestShutdown(ctx, runtimeState)
@@ -313,9 +318,9 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 			t.Fatalf("fleet start %s: %v\nstdout:\n%s\nstderr:\n%s", id, err, stdout, stderr)
 		}
 	}
-	firstRuntime := waitFleetRuntime(t, agentDir)
+	firstRuntime := waitFleetRuntime(t, agentAddress)
 	probeFleetRuntime(t, firstRuntime)
-	probeFleetRuntime(t, waitFleetRuntime(t, secondAgentDir))
+	probeFleetRuntime(t, waitFleetRuntime(t, secondAgentAddress))
 	if runtime.GOOS != "windows" && !strings.HasPrefix(firstRuntime.Endpoint, "unix://") {
 		t.Fatalf("headless agent endpoint = %q, want Unix socket", firstRuntime.Endpoint)
 	}
@@ -416,7 +421,7 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	if string(afterInvalid) != string(initialConfig) {
 		t.Fatalf("invalid update changed config:\n%s", afterInvalid)
 	}
-	unchangedRuntime := waitFleetRuntime(t, agentDir)
+	unchangedRuntime := waitFleetRuntime(t, agentAddress)
 	if !unchangedRuntime.Matches(firstRuntime) {
 		t.Fatalf("invalid update restarted runtime: before=%+v after=%+v", firstRuntime, unchangedRuntime)
 	}
@@ -445,7 +450,7 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		update.Agent.RuntimeHealth != fleet.RuntimeHealthy {
 		t.Fatalf("config update response = %+v", update)
 	}
-	secondRuntime := waitFleetRuntime(t, agentDir)
+	secondRuntime := waitFleetRuntime(t, agentAddress)
 	if secondRuntime.InstanceID == firstRuntime.InstanceID {
 		t.Fatalf("config update reused runtime instance %q", secondRuntime.InstanceID)
 	}

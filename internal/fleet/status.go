@@ -49,9 +49,9 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 		return status
 	}
 
-	runtimeState, err := m.deps.readRuntime(entry.Dir)
+	runtimeState, err := m.deps.readRuntime(entry.Address)
 	if errors.Is(err, os.ErrNotExist) {
-		guard, guardErr := m.deps.acquireMaintenance(entry.Dir)
+		guard, guardErr := m.deps.acquireMaintenance(entry.Address)
 		if guardErr == nil {
 			_ = guard.Close()
 			status.RuntimeHealth = RuntimeStopped

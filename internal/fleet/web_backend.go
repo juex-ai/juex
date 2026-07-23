@@ -44,7 +44,7 @@ func (m *Manager) Endpoint(ctx context.Context, selector string) (endpoint.Runti
 		}
 	}
 
-	runtimeState, err := m.deps.readRuntime(entry.Dir)
+	runtimeState, err := m.deps.readRuntime(entry.Address)
 	if err != nil {
 		return endpoint.Runtime{}, &ConflictError{
 			AgentID: entry.ID,
@@ -88,7 +88,7 @@ func (m *Manager) ReadOnlyState(selector string) (ReadOnlyAgentState, error) {
 		ID:        entry.ID,
 		Name:      entry.Agent.Name,
 		Workspace: entry.Agent.Workspace,
-		StateDir:  entry.Dir,
+		StateDir:  entry.Address.StateDir(),
 	}, nil
 }
 

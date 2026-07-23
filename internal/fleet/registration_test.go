@@ -157,7 +157,7 @@ func TestSetEnabledPreservesEnabledFlagWhenStopFails(t *testing.T) {
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(string) (endpoint.Runtime, error) { return runtimeState, nil }
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) { return runtimeState, nil }
 	deps.processAlive = func(int) (bool, error) { return true, nil }
 	deps.probe = func(context.Context, endpoint.Runtime) error { return nil }
 	deps.requestShutdown = func(context.Context, endpoint.Runtime) error {
@@ -238,10 +238,10 @@ func TestRemoveUnnamedAgentRequiresIDConfirmation(t *testing.T) {
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(string) (endpoint.Runtime, error) {
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 		return endpoint.Runtime{}, os.ErrNotExist
 	}
-	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 		return noopGuard{}, nil
 	}
 	deleteCalls := 0
@@ -293,7 +293,7 @@ func TestRemoveStopsThenAcquiresMaintenanceBeforeDeleting(t *testing.T) {
 	deps.inspectBinding = func(agentstate.RegistryEntry) agentstate.WorkspaceBinding {
 		return agentstate.WorkspaceBinding{Kind: agentstate.WorkspaceBound}
 	}
-	deps.readRuntime = func(string) (endpoint.Runtime, error) {
+	deps.readRuntime = func(agentstate.AgentAddress) (endpoint.Runtime, error) {
 		if stopped {
 			return endpoint.Runtime{}, os.ErrNotExist
 		}
@@ -306,7 +306,7 @@ func TestRemoveStopsThenAcquiresMaintenanceBeforeDeleting(t *testing.T) {
 		stopped = true
 		return nil
 	}
-	deps.acquireMaintenance = func(string) (maintenanceGuard, error) {
+	deps.acquireMaintenance = func(agentstate.AgentAddress) (maintenanceGuard, error) {
 		calls = append(calls, "maintenance")
 		return noopGuard{}, nil
 	}

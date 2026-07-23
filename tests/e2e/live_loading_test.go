@@ -404,7 +404,7 @@ func TestLiveBinary_BundleCreatesRedactedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := filepath.Join(resolution.AgentDir, "sessions", sessionID)
+	sessionDir := filepath.Join(resolution.Address.StateDir(), "sessions", sessionID)
 	for name, body := range map[string]string{
 		"session.json":       `{"kind":"primary"}`,
 		"conversation.jsonl": `{"role":"user","blocks":[{"type":"text","text":"api_key=sk-e2e-secret"}]}` + "\n",
@@ -831,7 +831,11 @@ func startLiveServe(t *testing.T, bin string, serveArgs ...string) *liveServePro
 				AgentID string `json:"agent_id"`
 			}
 			if json.Unmarshal(markerData, &marker) == nil && marker.AgentID != "" {
-				runtimeState, err = endpoint.ReadRuntime(filepath.Join(home, "agents", marker.AgentID))
+				address, addressErr := agentstate.NewAgentAddress(home, marker.AgentID)
+				if addressErr != nil {
+					t.Fatal(addressErr)
+				}
+				runtimeState, err = endpoint.ReadRuntime(address)
 				if err == nil {
 					break
 				}

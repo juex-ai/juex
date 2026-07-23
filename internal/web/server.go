@@ -251,11 +251,11 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	agentDir := s.opts.Cfg.RuntimePaths().StateDir
-	if agentDir == "" {
-		return errors.New("juex serve: agent state directory is empty")
+	address := s.opts.Cfg.AgentAddress
+	if address.ID() == "" {
+		return errors.New("juex serve: agent address is empty")
 	}
-	binding, err := endpoint.Listen(ctx, agentDir, version.Version)
+	binding, err := endpoint.Listen(ctx, address, version.Version)
 	if err != nil {
 		return err
 	}

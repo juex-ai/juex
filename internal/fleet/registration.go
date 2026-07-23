@@ -148,7 +148,7 @@ func (m *Manager) Remove(
 	if _, err := m.stopEntry(ctx, entry); err != nil {
 		return RemovedAgent{}, err
 	}
-	maintenance, err := m.deps.acquireMaintenance(entry.Dir)
+	maintenance, err := m.deps.acquireMaintenance(entry.Address)
 	if err != nil {
 		return RemovedAgent{}, &ConflictError{
 			AgentID: entry.ID,

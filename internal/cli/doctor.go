@@ -152,7 +152,7 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Details: map[string]any{
 				"id":        resolution.Agent.ID,
 				"name":      resolution.Agent.Name,
-				"state_dir": resolution.AgentDir,
+				"state_dir": resolution.Address.StateDir(),
 			},
 		}
 	}
