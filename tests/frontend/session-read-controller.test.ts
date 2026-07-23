@@ -228,7 +228,7 @@ test("subscription cleanup closes transport before clearing status", () => {
   assert.deepEqual(lifecycle, ["unsubscribe", "clear:s1"]);
 });
 
-test("configured live status receives stream failures", () => {
+test("configured live status receives only current stream failures", () => {
   let onError: ((event: Event) => void) | undefined;
   let streamErrors = 0;
   const controller = createSessionReadController({
@@ -248,9 +248,17 @@ test("configured live status receives stream failures", () => {
       streamErrors++;
     },
   });
-  controller.subscribeLiveEvents("s1");
+  const cleanup = controller.subscribeLiveEvents("s1");
   onError?.(new Event("error"));
+  assert.equal(streamErrors, 1);
 
+  controller.setRoute("s2");
+  onError?.(new Event("error"));
+  assert.equal(streamErrors, 1);
+
+  controller.setRoute("s1");
+  cleanup();
+  onError?.(new Event("error"));
   assert.equal(streamErrors, 1);
 });
 

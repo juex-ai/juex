@@ -273,7 +273,10 @@ export function createSessionReadController(ports: SessionReadControllerPorts) {
       onOpen: () => {
         void refreshStatus();
       },
-      onError: status?.onStreamError,
+      onError: (event) => {
+        if (!subscribed || !isLatestSessionRoute(route, sessionID)) return;
+        status?.onStreamError?.(event);
+      },
     });
     void refreshStatus();
     return () => {
