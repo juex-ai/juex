@@ -17,6 +17,17 @@ jobs:
         with:
           go-version: stable
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # The juex binary embeds the built web UI via //go:embed all:dist, and
+      # internal/web/dist is a gitignored build artifact. goreleaser only builds
+      # the Go binary, so the frontend must be built into internal/web/dist
+      # before it runs, otherwise every target fails on an empty embed.
+      - name: Build embedded web frontend
+        run: |
+          npm install -g pnpm
+          make web
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: latest
