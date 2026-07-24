@@ -22,8 +22,7 @@ fallback_models:
 ```
 
 - Resolve every entry to a configured provider profile at load time.
-- Reject unresolved entries, duplicate fallback entries, and a configured
-  fallback equal to the configured primary model.
+- Reject unresolved entries and duplicate fallback entries.
 - `--model provider:model` replaces the complete effective primary reference.
   `PROVIDER_API_MODEL` keeps its existing compatibility behavior: it is a
   model ID only and replaces the model under the already selected provider;
@@ -145,13 +144,15 @@ canonical reference, provider selection/profile, and context window. Config
 file layering replaces the fallback list when the key is present, including an
 empty list.
 
-Config retains both the raw configured primary reference and the ordered raw
-fallback references until configured-chain validation is complete. The
-configured primary/fallback equality check happens before CLI or environment
-primary overrides. Effective primary resolution then applies either a complete
-CLI reference or the legacy environment model ID under the selected provider.
-Effective-chain construction removes any override-created duplicate while
-preserving order.
+Config retains the ordered fallback references through configured-chain
+validation. Validation canonicalizes each reference, rejects duplicate
+fallback entries, and verifies that every referenced provider and model
+exists; it does not remove the configured primary because later YAML layers,
+environment overrides, or CLI overrides may select a different primary.
+Effective primary resolution then applies either a complete CLI reference or
+the legacy environment model ID under the selected provider. Effective-chain
+construction removes any fallback equal to the final primary while preserving
+the remaining order.
 
 ### Model Health Contract
 
@@ -255,9 +256,10 @@ before presentation.
   half-open reservation under concurrency, neutral release, stale success and
   stale failure completion, and race tests.
 - `internal/config`: parsing and file-layer replacement, empty clearing,
-  unresolved/duplicate/configured-primary errors, CLI and environment primary
-  override preservation (including legacy environment model-ID semantics),
-  and effective duplicate removal.
+  unresolved/duplicate errors, configured-primary retention across layered
+  overrides, CLI and environment primary override preservation (including
+  legacy environment model-ID semantics), and effective-primary duplicate
+  removal.
 - `internal/runtime`: transient and deterministic degradation, excluded
   failures, request-local no-repeat, chain exhaustion, actual model/delta
   attribution, notice timing, cross-session cooldown notice, successful
