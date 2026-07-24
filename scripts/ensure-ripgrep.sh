@@ -32,6 +32,11 @@ rg_bin="$cache_dir/juex-path/rg"
 if [ ! -x "$rg_bin" ]; then
   os="$(go env GOOS)"
   arch="$(go env GOARCH)"
+  # GOARCH=arm names the 32-bit ARM family; prepare-ripgrep.sh keys the pinned
+  # asset by GOARM level (e.g. linux_armv7), so fold GOARM in before the call.
+  if [ "$arch" = "arm" ]; then
+    arch="armv$(go env GOARM)"
+  fi
   # prepare-ripgrep.sh downloads and sha256-verifies the pinned release asset.
   # Its progress goes to stderr so stdout stays a clean path for callers.
   "$repo_root/scripts/prepare-ripgrep.sh" \
