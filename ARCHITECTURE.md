@@ -16,7 +16,7 @@
 The layered runtime-status state machines and snapshot-plus-cursor boundary
 are specified in [`docs/runtime-status.md`](docs/runtime-status.md).
 
-`juex` is a single binary that completes the following loop:
+The `juex` runtime executable completes the following loop:
 
 ```
 user types a prompt in the CLI
