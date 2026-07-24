@@ -10,12 +10,16 @@
 #   scripts/build.sh             # uses CLI_CONFIG VERSION + git describe
 #   VERSION=v0.0.1 scripts/build.sh
 #
-# This is the dependency-free path (only requires `go`); for the canonical
-# release build run `make snapshot` or push a `v*` tag to trigger goreleaser.
+# This path does not require goreleaser, but it does require the same Go,
+# Node.js, and pnpm toolchain as `make build` so every binary embeds the real
+# web frontend. For the canonical release build run `make snapshot` or push a
+# `v*` tag to trigger goreleaser.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+make web
 
 CLI_CONFIG_VERSION=$(awk -F= '/^VERSION=/{print $2}' CLI_CONFIG)
 VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "${CLI_CONFIG_VERSION}-dev")}

@@ -3,6 +3,7 @@ version: 2
 
 before:
   hooks:
+    - make web
     - go mod tidy
     - ./scripts/prepare-ripgrep.sh --target darwin_amd64 --juex-version {{ .Version }} --output .tmp/release/darwin_amd64
     - ./scripts/prepare-ripgrep.sh --target darwin_arm64 --juex-version {{ .Version }} --output .tmp/release/darwin_arm64

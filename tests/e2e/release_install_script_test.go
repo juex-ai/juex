@@ -160,6 +160,31 @@ func TestMakefileDoesNotExposeReleaseInstaller(t *testing.T) {
 	}
 }
 
+func TestMakeRaceProvisionsRipgrep(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	makePath, err := exec.LookPath("make")
+	if err != nil {
+		t.Skip("make is required")
+	}
+	cmd := exec.Command(makePath, "-n", "race")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("make race dry-run failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"scripts/ensure-ripgrep.sh",
+		"go test ./... -race -count=1",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("make race dry-run missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestInstallerDryRunIsInternalOnly(t *testing.T) {
 	root, err := findRepoRoot()
 	if err != nil {

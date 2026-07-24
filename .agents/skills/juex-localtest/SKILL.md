@@ -22,7 +22,7 @@ the system PATH. The package source never matches under `go test` (the test
 binary lives in the Go build cache, not a release package), so local runs need
 `rg` on `PATH` (or a `JUEX_RG` override).
 
-`make test`, `make integration`, and `make ripgrep` provision this
+`make test`, `make race`, `make integration`, and `make ripgrep` provision this
 automatically: they run `scripts/ensure-ripgrep.sh`, which prints the directory
 of a usable `rg` (a system one if present, otherwise the pinned ripgrep
 downloaded into `.tmp/dev-ripgrep`, cached and gitignored) and prepend it to
@@ -30,8 +30,8 @@ downloaded into `.tmp/dev-ripgrep`, cached and gitignored) and prepend it to
 setting `JUEX_RG`. Provision via `PATH`, not `JUEX_RG`: `JUEX_RG` is an override
 that short-circuits every other resolver source, so exporting it for the whole
 `go test` process would also override the resolver's own unit tests that read
-the ambient environment. When invoking a bare `go test ...` that touches grep
-(for example the race command below), prefix it the same way:
+the ambient environment. When invoking another bare `go test ...` command that
+touches grep, prefix it the same way:
 `PATH="$(scripts/ensure-ripgrep.sh):$PATH" go test ...`.
 
 ## Execution Steps
@@ -52,8 +52,7 @@ Run commands directly from the repository root.
    repo-local configs from `.juex/qwen.juex.yaml` and
    `.juex/minimax.juex.yaml`; missing or incomplete configs should skip the
    affected live cases, not be replaced with fake credentials.
-5. **Race parity when risky** - run
-   `go test ./... -race -count=1` after changes to concurrency,
+5. **Race parity when risky** - run `make race` after changes to concurrency,
    server shutdown, runtime turn loops, MCP, tools, events, sessions, web
    request handling, or shared mutable state.
 

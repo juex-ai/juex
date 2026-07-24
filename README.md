@@ -505,7 +505,7 @@ make integration
 make provider-smoke
 make development-eval
 make build
-go test ./... -race -count=1
+make race
 ```
 
 The frontend lives in `frontend/`; `make build` runs the frontend build,
