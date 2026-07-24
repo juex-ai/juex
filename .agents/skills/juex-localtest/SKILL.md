@@ -11,6 +11,29 @@ After completing any code change, run the affected tests first, then finish
 with the repository-level verification that matches this project. Do NOT ask
 the user before running these commands; they are non-destructive.
 
+## Prerequisites - ripgrep
+
+The `grep` builtin shells out to ripgrep, so any test that exercises it
+(`internal/tools` grep cases, `tests/e2e`, `tests/eval` file-search) fails
+without a resolvable `rg`. The runtime resolver
+(`internal/tools/ripgrep_resolver.go`) checks three sources in order:
+`JUEX_RG` override, a release-package layout beside the running binary, then
+the system PATH. The package source never matches under `go test` (the test
+binary lives in the Go build cache, not a release package), so local runs need
+`rg` on `PATH` (or a `JUEX_RG` override).
+
+`make test`, `make integration`, and `make ripgrep` provision this
+automatically: they run `scripts/ensure-ripgrep.sh`, which prints the directory
+of a usable `rg` (a system one if present, otherwise the pinned ripgrep
+downloaded into `.tmp/dev-ripgrep`, cached and gitignored) and prepend it to
+`PATH` for that run. This mirrors CI, which adds ripgrep to `PATH` rather than
+setting `JUEX_RG`. Provision via `PATH`, not `JUEX_RG`: `JUEX_RG` is an override
+that short-circuits every other resolver source, so exporting it for the whole
+`go test` process would also override the resolver's own unit tests that read
+the ambient environment. When invoking a bare `go test ...` that touches grep
+(for example the race command below), prefix it the same way:
+`PATH="$(scripts/ensure-ripgrep.sh):$PATH" go test ...`.
+
 ## Execution Steps
 
 Run commands directly from the repository root.
