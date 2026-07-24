@@ -506,7 +506,8 @@ func TestReleaseBuildEntrypointsPrepareEmbeddedWebFrontend(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(body), want) {
+		normalized := strings.ReplaceAll(string(body), "\r\n", "\n")
+		if !strings.Contains(normalized, want) {
 			t.Errorf("%s does not prepare the embedded web frontend with %q", rel, want)
 		}
 	}
