@@ -34,18 +34,30 @@ compute_sha256() {
   fi
 }
 
+is_transient_http_status() {
+  case "$1" in
+    408|429|500|502|503|504|522|524) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 download_with_curl() {
   local url="$1"
   local out="$2"
   local attempt=1
   local status
+  local http_status
   while true; do
-    if curl -fsSL -C - "$url" -o "$out"; then
+    http_status=""
+    if http_status=$(curl -fsSL -C - -w '%{http_code}' "$url" -o "$out"); then
       return 0
     else
       status=$?
     fi
-    if [[ "$status" -eq 22 || "$attempt" -ge 6 ]]; then
+    if [[ "$attempt" -ge 6 ]]; then
+      return "$status"
+    fi
+    if [[ "$status" -eq 22 ]] && ! is_transient_http_status "$http_status"; then
       return "$status"
     fi
     if [[ "$status" -eq 33 ]]; then

@@ -799,6 +799,81 @@ func TestReleaseInstallScriptDownloadDoesNotRetryHTTPError(t *testing.T) {
 	}
 }
 
+func TestReleaseInstallScriptDownloadRetriesTransientHTTPError(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	payload := []byte("release payload")
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) < 3 {
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	outPath := filepath.Join(t.TempDir(), "release.tar.gz")
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+outPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("download_file did not recover from transient HTTP errors: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded payload = %q, want %q", got, payload)
+	}
+	if attempts.Load() != 3 {
+		t.Fatalf("HTTP attempts = %d, want 3", attempts.Load())
+	}
+}
+
+func TestReleaseInstallScriptTransientHTTPRetriesAreBounded(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+filepath.Join(t.TempDir(), "release.tar.gz"),
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("download_file unexpectedly accepted exhausted transient HTTP retries\n%s", out)
+	}
+	if attempts.Load() != 6 {
+		t.Fatalf("HTTP attempts = %d, want 6", attempts.Load())
+	}
+}
+
 func TestReleaseInstallScriptDownloadRestartsWhenResumeIsUnsupported(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	if _, err := exec.LookPath("curl"); err != nil {
@@ -1089,9 +1164,12 @@ func TestPOSIXReleaseDownloadsShareRetryResumePolicy(t *testing.T) {
 		}
 		text := string(body)
 		for _, want := range []string{
+			"is_transient_http_status()",
+			"408|429|500|502|503|504|522|524",
 			"download_with_curl()",
-			`curl -fsSL -C - "$url" -o "$out"`,
-			`[[ "$status" -eq 22 || "$attempt" -ge 6 ]]`,
+			`curl -fsSL -C - -w '%{http_code}' "$url" -o "$out"`,
+			`[[ "$status" -eq 22 ]] && ! is_transient_http_status "$http_status"`,
+			`[[ "$attempt" -ge 6 ]]`,
 			`[[ "$status" -eq 33 ]]`,
 			"download_with_wget()",
 			`[[ "$wget_help" == *"--tries="* ]]`,
