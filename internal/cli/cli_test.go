@@ -49,6 +49,68 @@ func TestVersionCmd_ShortForm(t *testing.T) {
 	}
 }
 
+func TestRootVersionFlagsMatchVersionSubcommand(t *testing.T) {
+	run := func(t *testing.T, args ...string) string {
+		t.Helper()
+		root := newRootCmd()
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("juex %s: %v\n%s", strings.Join(args, " "), err, out.String())
+		}
+		return out.String()
+	}
+
+	want := run(t, "version")
+	for _, args := range [][]string{{"--version"}, {"-v"}} {
+		if got := run(t, args...); got != want {
+			t.Errorf("juex %s output = %q, want %q", strings.Join(args, " "), got, want)
+		}
+	}
+}
+
+func TestRootVersionFlagIsLocalAndDiscoverable(t *testing.T) {
+	root := newRootCmd()
+	flag := root.LocalFlags().Lookup("version")
+	if flag == nil {
+		t.Fatal("root local --version flag is missing")
+	}
+	if flag.Shorthand != "v" {
+		t.Fatalf("--version shorthand = %q, want v", flag.Shorthand)
+	}
+	if root.PersistentFlags().Lookup("version") != nil {
+		t.Fatal("--version must remain root-local so version -v keeps its meaning")
+	}
+
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "-v, --version") {
+		t.Fatalf("root help missing version aliases:\n%s", out.String())
+	}
+
+	tree := dumpCommand(newRootCmd())
+	var schemaFlag *schemaFlag
+	for i := range tree.Flags {
+		if tree.Flags[i].Name == "version" {
+			schemaFlag = &tree.Flags[i]
+			break
+		}
+	}
+	if schemaFlag == nil {
+		t.Fatal("root schema missing version flag")
+	}
+	if schemaFlag.Shorthand != "v" || schemaFlag.Persistent {
+		t.Fatalf("root schema version flag = %+v, want local shorthand v", *schemaFlag)
+	}
+}
+
 func TestVersionCmd_VerboseForm(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer

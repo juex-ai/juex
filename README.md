@@ -156,6 +156,7 @@ continuation.
 
 | Command | Purpose |
 | --- | --- |
+| `juex --version` / `juex -v` | Print the short build version; equivalent to `juex version`. |
 | `juex init` | Create or merge a first-run runtime config in `$JUEX_HOME/juex.yaml` or the workspace. |
 | `juex doctor` | Run read-only checks for workspace identity, config, credentials, connectivity, shell, MCP, and skills. |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |

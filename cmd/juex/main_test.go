@@ -24,6 +24,22 @@ func TestCLI_BuildAndVersion(t *testing.T) {
 			t.Fatalf("unexpected: %s", out)
 		}
 	})
+	for _, args := range [][]string{{"--version"}, {"-v"}} {
+		name := "rootVersion" + strings.TrimLeft(args[0], "-")
+		t.Run(name, func(t *testing.T) {
+			want, err := exec.Command(bin, "version").CombinedOutput()
+			if err != nil {
+				t.Fatalf("juex version: %v\n%s", err, want)
+			}
+			got, err := exec.Command(bin, args...).CombinedOutput()
+			if err != nil {
+				t.Fatalf("juex %s: %v\n%s", strings.Join(args, " "), err, got)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("juex %s output = %q, want %q", strings.Join(args, " "), got, want)
+			}
+		})
+	}
 	t.Run("versionVerbose", func(t *testing.T) {
 		out, err := exec.Command(bin, "version", "-v").CombinedOutput()
 		if err != nil {

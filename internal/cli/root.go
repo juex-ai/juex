@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/observability"
 	"github.com/juex-ai/juex/internal/session"
+	"github.com/juex-ai/juex/internal/version"
 )
 
 // Exit code conventions (principle 6 from the agent-CLI guide). Stable
@@ -211,12 +212,17 @@ func commandAgentStatePolicy(cmd *cobra.Command) (agentStatePolicy, error) {
 
 func newRootCmd() *cobra.Command {
 	flags := &persistentFlags{}
+	var showVersion bool
 	cmd := &cobra.Command{
 		Use:           "juex",
 		Short:         "Juex agent runtime",
 		SilenceUsage:  true,
 		SilenceErrors: true, // Execute() prints errors itself so it can suppress dry-run sentinels
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if showVersion {
+				cmdPrintln(cmd, version.String())
+				return nil
+			}
 			return cmd.Help()
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -244,6 +250,7 @@ func newRootCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVarP(&showVersion, "version", "v", false, "print version and exit")
 	cmd.PersistentFlags().StringVar(&flags.configPath, "config", "", "path to juex.yaml override")
 	cmd.PersistentFlags().StringVarP(&flags.cwd, "cwd", "C", "", "working directory (default $PWD)")
 	cmd.PersistentFlags().StringVar(&flags.model, "model", "", "model override in provider:model form")
