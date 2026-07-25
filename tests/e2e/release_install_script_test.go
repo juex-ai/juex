@@ -2,15 +2,19 @@ package e2e
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -688,6 +692,417 @@ func TestReleaseInstallScriptVerifyChecksum(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "checksum mismatch") {
 		t.Fatalf("verify_checksum mismatch output = %q", out)
+	}
+}
+
+func TestReleaseInstallScriptDownloadRetriesAndResumesCurl(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	payload := bytes.Repeat([]byte("resilient-release-download\n"), 4096)
+	split := len(payload) / 2
+	var attempts atomic.Int32
+	var resumed atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = fmt.Fprintf(
+				rw,
+				"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+				len(payload),
+			)
+			_, _ = rw.Write(payload[:split])
+			_ = rw.Flush()
+			_ = conn.Close()
+			return
+		}
+
+		if r.Header.Get("Range") == fmt.Sprintf("bytes=%d-", split) {
+			resumed.Store(true)
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.Header().Set(
+				"Content-Range",
+				fmt.Sprintf("bytes %d-%d/%d", split, len(payload)-1, len(payload)),
+			)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)-split))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(payload[split:])
+			return
+		}
+
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	outPath := filepath.Join(t.TempDir(), "release.tar.gz")
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+outPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("download_file failed: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded payload = %d bytes, want %d", len(got), len(payload))
+	}
+	if attempts.Load() < 2 {
+		t.Fatalf("download attempts = %d, want at least 2", attempts.Load())
+	}
+	if !resumed.Load() {
+		t.Fatal("retry did not resume from the partial output")
+	}
+}
+
+func TestReleaseInstallScriptDownloadDoesNotRetryHTTPError(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cmd := exec.Command("bash", "-c", `source "$SCRIPT"; download_file "$URL" "$OUT"`)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/missing.tar.gz",
+		"OUT="+filepath.Join(t.TempDir(), "release.tar.gz"),
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("download_file unexpectedly accepted a 404\n%s", out)
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("404 attempts = %d, want 1", attempts.Load())
+	}
+}
+
+func TestReleaseInstallScriptDownloadRestartsWhenResumeIsUnsupported(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	payload := bytes.Repeat([]byte("restart-release-download\n"), 4096)
+	split := len(payload) / 2
+	var attempts atomic.Int32
+	var resumeAttempted atomic.Bool
+	var restarted atomic.Bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch attempts.Add(1) {
+		case 1:
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = fmt.Fprintf(
+				rw,
+				"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+				len(payload),
+			)
+			_, _ = rw.Write(payload[:split])
+			_ = rw.Flush()
+			_ = conn.Close()
+		case 2:
+			if r.Header.Get("Range") == fmt.Sprintf("bytes=%d-", split) {
+				resumeAttempted.Store(true)
+			}
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			_, _ = w.Write(payload)
+		default:
+			if r.Header.Get("Range") == "" {
+				restarted.Store(true)
+			}
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+			_, _ = w.Write(payload)
+		}
+	}))
+	defer server.Close()
+
+	outPath := filepath.Join(t.TempDir(), "release.tar.gz")
+	cmd := exec.Command("bash", "-c", `source "$SCRIPT"; download_file "$URL" "$OUT"`)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+outPath,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("download_file failed: %v\n%s", err, out)
+	}
+	got, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded payload = %d bytes, want %d", len(got), len(payload))
+	}
+	if !resumeAttempted.Load() || !restarted.Load() {
+		t.Fatalf(
+			"resume attempted = %v, restarted = %v, attempts = %d",
+			resumeAttempted.Load(),
+			restarted.Load(),
+			attempts.Load(),
+		)
+	}
+}
+
+func TestReleaseInstallScriptWgetFallbackUsesBoundedResume(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	wgetStub := `#!/bin/sh
+if [ "${1:-}" = "--help" ]; then
+  printf '%s\n' "$WGET_HELP"
+  exit 0
+fi
+printf '%s\n' "$@" > "$WGET_LOG"
+count=0
+if [ -f "$WGET_COUNT" ]; then
+  count=$(/bin/cat "$WGET_COUNT")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$WGET_COUNT"
+out=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -O) out=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ "$count" -lt 3 ]; then
+  printf 'partial' > "$out"
+  exit 1
+fi
+/bin/cp "$WGET_PAYLOAD" "$out"
+`
+
+	for _, tc := range []struct {
+		name         string
+		help         string
+		singleTryArg bool
+	}{
+		{
+			name:         "GNU Wget disables built-in retries",
+			help:         "-t,  --tries=NUMBER set number of retries",
+			singleTryArg: true,
+		},
+		{
+			name: "BusyBox keeps its supported option set",
+			help: "Usage: wget [-cqS] [-O FILE] URL",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			work := t.TempDir()
+			stubDir := filepath.Join(work, "bin")
+			if err := os.MkdirAll(stubDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(stubDir, "wget"), []byte(wgetStub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			payloadPath := filepath.Join(work, "payload")
+			payload := []byte("wget payload")
+			if err := os.WriteFile(payloadPath, payload, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			logPath := filepath.Join(work, "wget.log")
+			countPath := filepath.Join(work, "wget.count")
+			outPath := filepath.Join(work, "release.tar.gz")
+			url := "https://example.invalid/release.tar.gz"
+			cmd := exec.Command(
+				"bash",
+				"-c",
+				`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+			)
+			cmd.Env = append(os.Environ(),
+				"PATH="+stubDir,
+				"SCRIPT="+script,
+				"URL="+url,
+				"OUT="+outPath,
+				"WGET_HELP="+tc.help,
+				"WGET_LOG="+logPath,
+				"WGET_COUNT="+countPath,
+				"WGET_PAYLOAD="+payloadPath,
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("wget download_file failed: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(outPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("downloaded payload = %q, want %q", got, payload)
+			}
+			count, err := os.ReadFile(countPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(count)); got != "3" {
+				t.Fatalf("wget attempts = %s, want 3", got)
+			}
+			logged, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantArgs := []string{"-q", "-c"}
+			if tc.singleTryArg {
+				wantArgs = append(wantArgs, "-t", "1")
+			}
+			wantArgs = append(wantArgs, url, "-O", outPath)
+			want := strings.Join(wantArgs, "\n") + "\n"
+			if string(logged) != want {
+				t.Fatalf("wget args:\n%s\nwant:\n%s", logged, want)
+			}
+		})
+	}
+}
+
+func TestReleaseInstallScriptWgetServerErrorsAreNotRetried(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	work := t.TempDir()
+	stubDir := filepath.Join(work, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	countPath := filepath.Join(work, "wget.count")
+	wgetStub := `#!/bin/sh
+if [ "${1:-}" = "--help" ]; then
+  printf '%s\n' '-t,  --tries=NUMBER set number of retries'
+  exit 0
+fi
+count=0
+if [ -f "$WGET_COUNT" ]; then
+  count=$(/bin/cat "$WGET_COUNT")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$WGET_COUNT"
+exit 8
+`
+	if err := os.WriteFile(filepath.Join(stubDir, "wget"), []byte(wgetStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir,
+		"SCRIPT="+script,
+		"URL=https://example.invalid/missing.tar.gz",
+		"OUT="+filepath.Join(work, "release.tar.gz"),
+		"WGET_COUNT="+countPath,
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("download_file unexpectedly accepted wget server error\n%s", out)
+	}
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(count)); got != "1" {
+		t.Fatalf("wget attempts = %s, want 1", got)
+	}
+}
+
+func TestReleaseInstallScriptCurlRetriesAreBounded(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	work := t.TempDir()
+	stubDir := filepath.Join(work, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	countPath := filepath.Join(work, "curl.count")
+	curlStub := `#!/bin/sh
+count=0
+if [ -f "$CURL_COUNT" ]; then
+  count=$(/bin/cat "$CURL_COUNT")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$CURL_COUNT"
+exit 7
+`
+	if err := os.WriteFile(filepath.Join(stubDir, "curl"), []byte(curlStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir,
+		"SCRIPT="+script,
+		"URL=https://example.invalid/release.tar.gz",
+		"OUT="+filepath.Join(work, "release.tar.gz"),
+		"CURL_COUNT="+countPath,
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("download_file unexpectedly accepted exhausted retries\n%s", out)
+	}
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(count)); got != "6" {
+		t.Fatalf("curl attempts = %s, want 6", got)
+	}
+}
+
+func TestPOSIXReleaseDownloadsShareRetryResumePolicy(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"scripts/install.sh", "scripts/prepare-ripgrep.sh"} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		for _, want := range []string{
+			"download_with_curl()",
+			`curl -fsSL -C - "$url" -o "$out"`,
+			`[[ "$status" -eq 22 || "$attempt" -ge 6 ]]`,
+			`[[ "$status" -eq 33 ]]`,
+			"download_with_wget()",
+			`[[ "$wget_help" == *"--tries="* ]]`,
+			`wget_args+=(-t 1)`,
+			`wget "${wget_args[@]}" "$url" -O "$out"`,
+			`[[ "$status" -eq 8 || "$attempt" -ge 6 ]]`,
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing download policy %q", rel, want)
+			}
+		}
 	}
 }
 
