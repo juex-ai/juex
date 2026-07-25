@@ -1071,7 +1071,7 @@ data and are not replayed automatically.
 ### 3.7 CLI (cobra)
 
 ```
-juex
+juex [--version | -v]
 ├── init [--scope user|workspace] [--provider <id>] [--model <id>]
 ├── doctor [--format text|table|json] [--offline]
 ├── run ["<prompt>"] [flags] [--attach <path>]... [--new | --side] [--alias <name>]
@@ -1096,6 +1096,11 @@ juex
 ├── schema
 └── version [-v]
 ```
+
+The root-local `--version` and `-v` flags print the same short build line as
+`juex version` without loading runtime state. They are intentionally not
+persistent: `juex version -v` retains its existing subcommand-local meaning of
+verbose build and runtime context.
 
 `init` and `doctor` are CLI-only onboarding commands. `init` writes or merges
 `juex.yaml` using conservative YAML node edits and validates the file through
