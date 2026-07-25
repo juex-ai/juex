@@ -220,15 +220,56 @@ release_asset_url() {
   printf '%s/releases/download/%s/%s\n' "${repo_url%/}" "$tag" "$asset"
 }
 
+download_with_curl() {
+  local url="$1"
+  local out="$2"
+  local attempt=1
+  local status
+  while true; do
+    if curl -fsSL -C - "$url" -o "$out"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "$status" -eq 22 || "$attempt" -ge 6 ]]; then
+      return "$status"
+    fi
+    if [[ "$status" -eq 33 ]]; then
+      rm -f "$out"
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
+download_with_wget() {
+  local url="$1"
+  local out="$2"
+  local attempt=1
+  local status
+  while true; do
+    if wget -q -c "$url" -O "$out"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "$attempt" -ge 6 ]]; then
+      return "$status"
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
 download_file() {
   local url="$1"
   local out="$2"
   case "$url" in
     http://*|https://*)
       if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$out"
+        download_with_curl "$url" "$out"
       elif command -v wget >/dev/null 2>&1; then
-        wget -q "$url" -O "$out"
+        download_with_wget "$url" "$out"
       else
         die "curl or wget is required to download release assets"
       fi

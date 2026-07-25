@@ -34,15 +34,56 @@ compute_sha256() {
   fi
 }
 
+download_with_curl() {
+  local url="$1"
+  local out="$2"
+  local attempt=1
+  local status
+  while true; do
+    if curl -fsSL -C - "$url" -o "$out"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "$status" -eq 22 || "$attempt" -ge 6 ]]; then
+      return "$status"
+    fi
+    if [[ "$status" -eq 33 ]]; then
+      rm -f "$out"
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
+download_with_wget() {
+  local url="$1"
+  local out="$2"
+  local attempt=1
+  local status
+  while true; do
+    if wget -q -c "$url" -O "$out"; then
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "$attempt" -ge 6 ]]; then
+      return "$status"
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+}
+
 download_file() {
   local url="$1"
   local out="$2"
   case "$url" in
     http://*|https://*)
       if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$out"
+        download_with_curl "$url" "$out"
       elif command -v wget >/dev/null 2>&1; then
-        wget -q "$url" -O "$out"
+        download_with_wget "$url" "$out"
       else
         die "curl or wget is required to download ripgrep"
       fi
@@ -148,12 +189,14 @@ fi
 if [[ "$asset_valid" -ne 1 ]]; then
   download_tmp="${asset_path}.tmp.$$"
   rm -f "$download_tmp"
+  trap 'rm -f "${download_tmp:-}"' EXIT
   download_file "${base_url%/}/$asset" "$download_tmp"
   actual_size=$(wc -c < "$download_tmp" | tr -d '[:space:]')
   [[ "$actual_size" == "$asset_size" ]] || die "ripgrep asset size mismatch for $asset: expected $asset_size, got $actual_size"
   actual_sha=$(compute_sha256 "$download_tmp")
   [[ "$actual_sha" == "$asset_sha" ]] || die "ripgrep asset checksum mismatch for $asset: expected $asset_sha, got $actual_sha"
   mv -f "$download_tmp" "$asset_path"
+  download_tmp=""
 fi
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/juex-ripgrep.XXXXXX")
