@@ -74,6 +74,8 @@ retry_after_delay() {
   fi
   if epoch=$(LC_ALL=C date -d "$value" +%s 2>/dev/null); then
     :
+  elif epoch=$(TZ=UTC LC_ALL=C date -u -D '%a, %d %b %Y %H:%M:%S GMT' -d "$value" +%s 2>/dev/null); then
+    :
   elif epoch=$(TZ=UTC LC_ALL=C date -j -f '%a, %d %b %Y %H:%M:%S GMT' "$value" +%s 2>/dev/null); then
     :
   else

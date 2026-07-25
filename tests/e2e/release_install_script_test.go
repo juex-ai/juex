@@ -899,6 +899,67 @@ func TestReleaseInstallScriptHonorsRetryAfterHTTPDate(t *testing.T) {
 	}
 }
 
+func TestReleaseInstallScriptParsesRetryAfterHTTPDateWithBusyBoxDate(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	work := t.TempDir()
+	stubDir := filepath.Join(work, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dateStub := `#!/bin/sh
+printf '%s\n' "$*" >> "$DATE_LOG"
+if [ "${1:-}" = "-d" ]; then
+  exit 1
+fi
+if [ "${1:-}" = "-u" ] && [ "${2:-}" = "-D" ]; then
+  printf '200\n'
+  exit 0
+fi
+if [ "${1:-}" = "+%s" ]; then
+  printf '140\n'
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(stubDir, "date"), []byte(dateStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	headers := filepath.Join(work, "headers")
+	if err := os.WriteFile(
+		headers,
+		[]byte("HTTP/1.1 503 Service Unavailable\r\nRetry-After: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	dateLog := filepath.Join(work, "date.log")
+	cmd := exec.Command("bash", "-c", `source "$SCRIPT"; retry_after_delay "$HEADERS"`)
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"SCRIPT="+script,
+		"HEADERS="+headers,
+		"DATE_LOG="+dateLog,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("retry_after_delay failed with BusyBox date: %v\n%s", err, out)
+	}
+	if got, want := strings.TrimSpace(string(out)), "60"; got != want {
+		t.Fatalf("BusyBox Retry-After delay = %q, want %q", got, want)
+	}
+	logged, err := os.ReadFile(dateLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(
+		string(logged),
+		"-u -D %a, %d %b %Y %H:%M:%S GMT -d Sun, 06 Nov 1994 08:49:37 GMT +%s",
+	) {
+		t.Fatalf("BusyBox date parser was not used:\n%s", logged)
+	}
+}
+
 func TestReleaseInstallScriptTransientHTTPRetriesAreBounded(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	if _, err := exec.LookPath("curl"); err != nil {
@@ -1237,6 +1298,7 @@ func TestPOSIXReleaseDownloadsShareRetryResumePolicy(t *testing.T) {
 			`[[ "$status" -eq 22 ]] && ! is_transient_http_status "$http_status"`,
 			`[[ "$attempt" -ge 6 ]]`,
 			`[[ "$status" -eq 33 ]]`,
+			`date -u -D '%a, %d %b %Y %H:%M:%S GMT' -d "$value" +%s`,
 			`sleep "$retry_delay"`,
 			"download_with_wget()",
 			`[[ "$wget_help" == *"--tries="* ]]`,
