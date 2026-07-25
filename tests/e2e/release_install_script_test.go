@@ -874,19 +874,11 @@ func TestReleaseInstallScriptDownloadRestartsWhenResumeIsUnsupported(t *testing.
 func TestReleaseInstallScriptWgetFallbackUsesBoundedResume(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	_, script := releaseInstallScript(t)
-	work := t.TempDir()
-	stubDir := filepath.Join(work, "bin")
-	if err := os.MkdirAll(stubDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	payloadPath := filepath.Join(work, "payload")
-	payload := []byte("wget payload")
-	if err := os.WriteFile(payloadPath, payload, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	logPath := filepath.Join(work, "wget.log")
-	countPath := filepath.Join(work, "wget.count")
 	wgetStub := `#!/bin/sh
+if [ "${1:-}" = "--help" ]; then
+  printf '%s\n' "$WGET_HELP"
+  exit 0
+fi
 printf '%s\n' "$@" > "$WGET_LOG"
 count=0
 if [ -f "$WGET_COUNT" ]; then
@@ -907,50 +899,87 @@ if [ "$count" -lt 3 ]; then
 fi
 /bin/cp "$WGET_PAYLOAD" "$out"
 `
-	if err := os.WriteFile(filepath.Join(stubDir, "wget"), []byte(wgetStub), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	outPath := filepath.Join(work, "release.tar.gz")
-	url := "https://example.invalid/release.tar.gz"
-	cmd := exec.Command(
-		"bash",
-		"-c",
-		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
-	)
-	cmd.Env = append(os.Environ(),
-		"PATH="+stubDir,
-		"SCRIPT="+script,
-		"URL="+url,
-		"OUT="+outPath,
-		"WGET_LOG="+logPath,
-		"WGET_COUNT="+countPath,
-		"WGET_PAYLOAD="+payloadPath,
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("wget download_file failed: %v\n%s", err, out)
-	}
-	got, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, payload) {
-		t.Fatalf("downloaded payload = %q, want %q", got, payload)
-	}
-	count, err := os.ReadFile(countPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.TrimSpace(string(count)); got != "3" {
-		t.Fatalf("wget attempts = %s, want 3", got)
-	}
-	logged, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantArgs := strings.Join([]string{"-q", "-c", url, "-O", outPath}, "\n") + "\n"
-	if string(logged) != wantArgs {
-		t.Fatalf("wget args:\n%s\nwant:\n%s", logged, wantArgs)
+
+	for _, tc := range []struct {
+		name         string
+		help         string
+		singleTryArg bool
+	}{
+		{
+			name:         "GNU Wget disables built-in retries",
+			help:         "-t,  --tries=NUMBER set number of retries",
+			singleTryArg: true,
+		},
+		{
+			name: "BusyBox keeps its supported option set",
+			help: "Usage: wget [-cqS] [-O FILE] URL",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			work := t.TempDir()
+			stubDir := filepath.Join(work, "bin")
+			if err := os.MkdirAll(stubDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(stubDir, "wget"), []byte(wgetStub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			payloadPath := filepath.Join(work, "payload")
+			payload := []byte("wget payload")
+			if err := os.WriteFile(payloadPath, payload, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			logPath := filepath.Join(work, "wget.log")
+			countPath := filepath.Join(work, "wget.count")
+			outPath := filepath.Join(work, "release.tar.gz")
+			url := "https://example.invalid/release.tar.gz"
+			cmd := exec.Command(
+				"bash",
+				"-c",
+				`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+			)
+			cmd.Env = append(os.Environ(),
+				"PATH="+stubDir,
+				"SCRIPT="+script,
+				"URL="+url,
+				"OUT="+outPath,
+				"WGET_HELP="+tc.help,
+				"WGET_LOG="+logPath,
+				"WGET_COUNT="+countPath,
+				"WGET_PAYLOAD="+payloadPath,
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("wget download_file failed: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(outPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatalf("downloaded payload = %q, want %q", got, payload)
+			}
+			count, err := os.ReadFile(countPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(count)); got != "3" {
+				t.Fatalf("wget attempts = %s, want 3", got)
+			}
+			logged, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantArgs := []string{"-q", "-c"}
+			if tc.singleTryArg {
+				wantArgs = append(wantArgs, "-t", "1")
+			}
+			wantArgs = append(wantArgs, url, "-O", outPath)
+			want := strings.Join(wantArgs, "\n") + "\n"
+			if string(logged) != want {
+				t.Fatalf("wget args:\n%s\nwant:\n%s", logged, want)
+			}
+		})
 	}
 }
 
@@ -1016,7 +1045,9 @@ func TestPOSIXReleaseDownloadsShareRetryResumePolicy(t *testing.T) {
 			`[[ "$status" -eq 22 || "$attempt" -ge 6 ]]`,
 			`[[ "$status" -eq 33 ]]`,
 			"download_with_wget()",
-			`wget -q -c "$url" -O "$out"`,
+			`[[ "$wget_help" == *"--tries="* ]]`,
+			`wget_args+=(-t 1)`,
+			`wget "${wget_args[@]}" "$url" -O "$out"`,
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing download policy %q", rel, want)

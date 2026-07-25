@@ -247,8 +247,14 @@ download_with_wget() {
   local out="$2"
   local attempt=1
   local status
+  local wget_help
+  local wget_args=(-q -c)
+  wget_help=$(wget --help 2>&1 || true)
+  if [[ "$wget_help" == *"--tries="* ]]; then
+    wget_args+=(-t 1)
+  fi
   while true; do
-    if wget -q -c "$url" -O "$out"; then
+    if wget "${wget_args[@]}" "$url" -O "$out"; then
       return 0
     else
       status=$?
