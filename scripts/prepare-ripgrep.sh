@@ -73,7 +73,7 @@ download_with_wget() {
     else
       status=$?
     fi
-    if [[ "$attempt" -ge 6 ]]; then
+    if [[ "$status" -eq 8 || "$attempt" -ge 6 ]]; then
       return "$status"
     fi
     sleep 2

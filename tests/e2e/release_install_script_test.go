@@ -983,6 +983,55 @@ fi
 	}
 }
 
+func TestReleaseInstallScriptWgetServerErrorsAreNotRetried(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	_, script := releaseInstallScript(t)
+	work := t.TempDir()
+	stubDir := filepath.Join(work, "bin")
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	countPath := filepath.Join(work, "wget.count")
+	wgetStub := `#!/bin/sh
+if [ "${1:-}" = "--help" ]; then
+  printf '%s\n' '-t,  --tries=NUMBER set number of retries'
+  exit 0
+fi
+count=0
+if [ -f "$WGET_COUNT" ]; then
+  count=$(/bin/cat "$WGET_COUNT")
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$WGET_COUNT"
+exit 8
+`
+	if err := os.WriteFile(filepath.Join(stubDir, "wget"), []byte(wgetStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"PATH="+stubDir,
+		"SCRIPT="+script,
+		"URL=https://example.invalid/missing.tar.gz",
+		"OUT="+filepath.Join(work, "release.tar.gz"),
+		"WGET_COUNT="+countPath,
+	)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("download_file unexpectedly accepted wget server error\n%s", out)
+	}
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(count)); got != "1" {
+		t.Fatalf("wget attempts = %s, want 1", got)
+	}
+}
+
 func TestReleaseInstallScriptCurlRetriesAreBounded(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	_, script := releaseInstallScript(t)
@@ -1048,6 +1097,7 @@ func TestPOSIXReleaseDownloadsShareRetryResumePolicy(t *testing.T) {
 			`[[ "$wget_help" == *"--tries="* ]]`,
 			`wget_args+=(-t 1)`,
 			`wget "${wget_args[@]}" "$url" -O "$out"`,
+			`[[ "$status" -eq 8 || "$attempt" -ge 6 ]]`,
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing download policy %q", rel, want)
