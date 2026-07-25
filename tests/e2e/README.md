@@ -81,7 +81,8 @@ Use the smallest run set that still covers the changed behavior:
 
 | Layer | Case set | When to run |
 | --- | --- | --- |
-| Go unit/package tests | `go test ./... -count=1` | Every production code change. |
+| Go unit/package tests | `make test` | Every production code change. |
+| Race suite | `make race` | Concurrency, shutdown, runtime, MCP, tool, event, session, or web changes. |
 | Non-live e2e | `go test ./tests/e2e -count=1` | CLI/runtime/session/provider/web behavior that crosses package boundaries. |
 | Live integration build tag | `make integration` | Manual credential-backed checks against the repo-local `.juex/*.yaml` fixtures. |
 

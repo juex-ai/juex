@@ -79,6 +79,71 @@ func TestRipgrepAssetManifestPinsEveryReleaseTarget(t *testing.T) {
 	}
 }
 
+func TestEnsureRipgrepReusesCachedWindowsExecutable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses POSIX shell executables to isolate PATH")
+	}
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is required")
+	}
+
+	work := t.TempDir()
+	scriptsDir := filepath.Join(work, "scripts")
+	binDir := filepath.Join(work, "fixture-bin")
+	cachedDir := filepath.Join(work, ".tmp", "dev-ripgrep", "juex-path")
+	for _, dir := range []string{scriptsDir, binDir, cachedDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ensureBody, err := os.ReadFile(filepath.Join(root, "scripts", "ensure-ripgrep.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scriptsDir, "ensure-ripgrep.sh"), ensureBody, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(scriptsDir, "prepare-ripgrep.sh"),
+		[]byte("#!"+bashPath+"\nexit 97\n"),
+		0o755,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(binDir, "go"),
+		[]byte("#!"+bashPath+"\ncase \"$2\" in GOOS) echo windows ;; GOARCH) echo amd64 ;; GOARM) echo 7 ;; *) exit 98 ;; esac\n"),
+		0o755,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(binDir, "dirname"),
+		[]byte("#!"+bashPath+"\nvalue=${1%/}; case \"$value\" in */*) echo \"${value%/*}\" ;; *) echo . ;; esac\n"),
+		0o755,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cachedDir, "rg.exe"), []byte("cached rg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bashPath, filepath.Join(scriptsDir, "ensure-ripgrep.sh"))
+	cmd.Env = []string{"PATH=" + binDir}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("ensure-ripgrep did not reuse cached rg.exe: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != cachedDir {
+		t.Fatalf("ensure-ripgrep path = %q, want %q", got, cachedDir)
+	}
+}
+
 func TestPrepareRipgrepPackageVerifiesAndBuildsLayout(t *testing.T) {
 	root, err := findRepoRoot()
 	if err != nil {
@@ -424,6 +489,26 @@ func TestReleasePackagingIncludesManagedRipgrepPayload(t *testing.T) {
 		}
 		if strings.Contains(string(body), forbidden) {
 			t.Errorf("%s still mutates an installed release generation with %q", rel, forbidden)
+		}
+	}
+}
+
+func TestReleaseBuildEntrypointsPrepareEmbeddedWebFrontend(t *testing.T) {
+	root, err := findRepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]string{
+		".goreleaser.yml":  "- make web",
+		"scripts/build.sh": "\nmake web\n",
+	} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		normalized := strings.ReplaceAll(string(body), "\r\n", "\n")
+		if !strings.Contains(normalized, want) {
+			t.Errorf("%s does not prepare the embedded web frontend with %q", rel, want)
 		}
 	}
 }

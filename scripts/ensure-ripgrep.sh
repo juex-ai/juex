@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Ensure ripgrep is resolvable for local test runs, and print the directory to
 # prepend to PATH. This mirrors the CI provisioning step so a fresh checkout can
-# run `make test` / `make integration` without a system-installed ripgrep:
+# run `make test` / `make race` / `make integration` without a system-installed
+# ripgrep:
 #
 #   export PATH="$(scripts/ensure-ripgrep.sh):$PATH"
 #
@@ -28,9 +29,13 @@ if system_rg="$(type -P rg 2>/dev/null)" && [ -n "$system_rg" ]; then
 fi
 
 cache_dir="$repo_root/.tmp/dev-ripgrep"
-rg_bin="$cache_dir/juex-path/rg"
+os="$(go env GOOS)"
+binary_name="rg"
+if [ "$os" = "windows" ]; then
+  binary_name="rg.exe"
+fi
+rg_bin="$cache_dir/juex-path/$binary_name"
 if [ ! -x "$rg_bin" ]; then
-  os="$(go env GOOS)"
   arch="$(go env GOARCH)"
   # GOARCH=arm names the 32-bit ARM family; prepare-ripgrep.sh keys the pinned
   # asset by GOARM level (e.g. linux_armv7), so fold GOARM in before the call.

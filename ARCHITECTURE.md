@@ -2154,12 +2154,15 @@ automatic activation; the model loads a selected guide explicitly.
 
 | Target | Effect |
 |---|---|
-| `make test` | `go test ./... -count=1` |
+| `make test` | provision ripgrep on `PATH`, then run `go test ./... -count=1` |
+| `make race` | provision ripgrep on `PATH`, then run `go test ./... -race -count=1` |
+| `make ripgrep` | resolve system ripgrep or cache the verified pinned binary for local tests |
 | `make lint` | `golangci-lint run` |
 | `make build` | `dist/juex` with `git describe`-derived version, commit, build time embedded via `-ldflags -X internal/version.*` |
-| `make snapshot` | `goreleaser release --snapshot --clean` (7 archives in `dist/`) |
-| `make release-dry` | `goreleaser release --skip=publish --clean` |
-| `make integration` | `go test -tags=integration ./tests/e2e/...` |
+| `make cross` | build the frontend, then produce all 7 managed archives without GoReleaser |
+| `make snapshot` | build the frontend through the GoReleaser before hook, then produce 7 snapshot archives in `dist/` |
+| `make release-dry` | build the frontend through the GoReleaser before hook, then run a non-publishing release |
+| `make integration` | provision ripgrep on `PATH`, then run `go test -tags=integration ./tests/e2e/...` |
 | `make provider-smoke` | build-dependent rotating live capability and Schedule-routing smoke for model refs in `tests/eval/live-models.yaml` using `~/.juex/juex.yaml` credentials |
 | `make development-eval` | deterministic tests, build, rotating live provider:model smoke, and a redacted validation record |
 | `make clean` | `rm -rf dist` |
@@ -2186,7 +2189,11 @@ Each JueX binary is stamped with the same ldflags as `make build`. Every
 ripgrep 15.1.0 binary, its license files, and `juex-package.json`. The asset
 size and SHA-256 pins live in `release/ripgrep-assets.tsv`; packaging verifies
 them before extraction. A `checksums.txt` covers the completed JueX archives.
-Tag pushes trigger the release workflow on GitHub Actions.
+Tag pushes trigger the release workflow on GitHub Actions. Release assembly is
+owned by `.goreleaser.yml`; its before hook builds the frontend before any Go
+binary is compiled. The workflow supplies Node.js and pnpm, while
+`scripts/build.sh` performs the same frontend prerequisite for the
+non-GoReleaser cross-build path.
 
 `scripts/install.sh` is the POSIX released-binary installer for macOS/Linux. It
 detects platform archives, works when piped into `bash`, verifies the archive
@@ -2235,8 +2242,9 @@ doctor` exposes the selected source, version, and path.
   PROVIDER_API_BASE_OPENAI
   PROVIDER_API_KEY_OPENAI       PROVIDER_API_MODEL_OPENAI
   ```
-- `release.yml` — `push: tags: ["v*"]`. Runs `goreleaser release --clean`
-  and publishes the GitHub Release.
+- `release.yml` — `push: tags: ["v*"]`. Supplies the frontend toolchain, then
+  runs `goreleaser release --clean`; the GoReleaser before hook builds the
+  embedded UI before publishing the GitHub Release.
 
 ---
 
@@ -2265,7 +2273,7 @@ and `tests/eval/` covers the local evaluation harness.
 | `tests/e2e` | full-stack tempdir scenario, apply_patch builtin flow, resume round-trip, debug observability artifacts, compiled-binary skill/MCP loading, compiled-binary provider protocol/thinking matrix, compiled-binary exec_command debug run, web turn persistence, web pending input, live provider smoke (build-tag) |
 | `tests/eval` | deterministic capability harness for tools, permission-style denial, and hooks; eval contract oracles for conversation/event/tool and Schedule persistence artifacts; retry-isolated live Schedule routing; live-model rotation; eval shell wrappers; development step flags; report directory defaults |
 
-Run the deterministic suite with `go test ./... -count=1`.
+Run the deterministic suite with `make test`.
 Provider-quality smoke tests remain explicit because they use credentials.
 There are two live layers:
 

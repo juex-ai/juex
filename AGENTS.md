@@ -88,7 +88,7 @@ make integration
 make provider-smoke
 make development-eval
 make build
-go test ./... -race -count=1
+make race
 ```
 
 Before declaring feature work complete, run the relevant deterministic tests and

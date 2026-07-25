@@ -1,4 +1,4 @@
-.PHONY: test lint build snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-dev ripgrep
+.PHONY: test race lint build snapshot release-dry integration provider-smoke development-eval clean help install-local cross web web-dev ripgrep
 
 web:
 	cd frontend && pnpm install && pnpm build
@@ -26,6 +26,7 @@ LDFLAGS := -X github.com/juex-ai/juex/internal/version.Version=$(VERSION) \
 help:
 	@echo "Targets:"
 	@echo "  test          go test ./... (auto-provisions ripgrep)"
+	@echo "  race          go test ./... -race (auto-provisions ripgrep)"
 	@echo "  ripgrep       ensure a resolvable ripgrep and print its path"
 	@echo "  lint          golangci-lint run"
 	@echo "  build         produce $(DIST_BIN) with embedded version metadata"
@@ -40,6 +41,9 @@ help:
 
 test:
 	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test ./... -count=1
+
+race:
+	PATH="$$(scripts/ensure-ripgrep.sh):$$PATH" go test ./... -race -count=1
 
 ripgrep:
 	@scripts/ensure-ripgrep.sh
