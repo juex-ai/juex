@@ -41,29 +41,87 @@ is_transient_http_status() {
   esac
 }
 
+retry_after_delay() {
+  local headers="$1"
+  local value
+  local epoch
+  local now
+  value=$(
+    awk '
+      {
+        line = $0
+        sub(/\r$/, "", line)
+        if (tolower(substr(line, 1, 5)) == "http/") {
+          value = ""
+          next
+        }
+        if (tolower(substr(line, 1, 12)) == "retry-after:") {
+          sub(/^[^:]*:[[:space:]]*/, "", line)
+          sub(/[[:space:]]+$/, "", line)
+          value = line
+        }
+      }
+      END { print value }
+    ' "$headers"
+  )
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+    return
+  fi
+  if [[ -z "$value" ]]; then
+    printf '2\n'
+    return
+  fi
+  if epoch=$(LC_ALL=C date -d "$value" +%s 2>/dev/null); then
+    :
+  elif epoch=$(TZ=UTC LC_ALL=C date -j -f '%a, %d %b %Y %H:%M:%S GMT' "$value" +%s 2>/dev/null); then
+    :
+  else
+    printf '2\n'
+    return
+  fi
+  now=$(date +%s)
+  if [[ "$epoch" -gt "$now" ]]; then
+    printf '%s\n' "$((epoch - now))"
+  else
+    printf '0\n'
+  fi
+}
+
 download_with_curl() {
   local url="$1"
   local out="$2"
   local attempt=1
   local status
   local http_status
+  local headers="${out}.headers.$$"
+  local retry_delay
   while true; do
     http_status=""
-    if http_status=$(curl -fsSL -C - -w '%{http_code}' "$url" -o "$out"); then
+    : >"$headers"
+    if http_status=$(curl -fsSL -C - -D "$headers" -w '%{http_code}' "$url" -o "$out"); then
+      rm -f "$headers"
       return 0
     else
       status=$?
     fi
     if [[ "$attempt" -ge 6 ]]; then
+      rm -f "$headers"
       return "$status"
     fi
     if [[ "$status" -eq 22 ]] && ! is_transient_http_status "$http_status"; then
+      rm -f "$headers"
       return "$status"
     fi
+    retry_delay=2
+    if [[ "$status" -eq 22 ]]; then
+      retry_delay=$(retry_after_delay "$headers")
+    fi
+    rm -f "$headers"
     if [[ "$status" -eq 33 ]]; then
       rm -f "$out"
     fi
-    sleep 2
+    sleep "$retry_delay"
     attempt=$((attempt + 1))
   done
 }

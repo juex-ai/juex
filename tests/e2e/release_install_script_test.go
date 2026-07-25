@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestReleaseInstallScriptDryRunResolvesAssets(t *testing.T) {
@@ -809,6 +810,7 @@ func TestReleaseInstallScriptDownloadRetriesTransientHTTPError(t *testing.T) {
 	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if attempts.Add(1) < 3 {
+			w.Header().Set("Retry-After", "60")
 			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -816,16 +818,18 @@ func TestReleaseInstallScriptDownloadRetriesTransientHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
+	sleepLog := filepath.Join(t.TempDir(), "sleep.log")
 	outPath := filepath.Join(t.TempDir(), "release.tar.gz")
 	cmd := exec.Command(
 		"bash",
 		"-c",
-		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+		`source "$SCRIPT"; sleep() { printf '%s\n' "$1" >> "$SLEEP_LOG"; }; download_file "$URL" "$OUT"`,
 	)
 	cmd.Env = append(os.Environ(),
 		"SCRIPT="+script,
 		"URL="+server.URL+"/release.tar.gz",
 		"OUT="+outPath,
+		"SLEEP_LOG="+sleepLog,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -840,6 +844,58 @@ func TestReleaseInstallScriptDownloadRetriesTransientHTTPError(t *testing.T) {
 	}
 	if attempts.Load() != 3 {
 		t.Fatalf("HTTP attempts = %d, want 3", attempts.Load())
+	}
+	sleepCalls, err := os.ReadFile(sleepLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(sleepCalls), "60\n60\n"; got != want {
+		t.Fatalf("retry delays = %q, want %q", got, want)
+	}
+}
+
+func TestReleaseInstallScriptHonorsRetryAfterHTTPDate(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl is required")
+	}
+	_, script := releaseInstallScript(t)
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.Header().Set("Retry-After", time.Now().UTC().Add(time.Minute).Format(http.TimeFormat))
+			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("release payload"))
+	}))
+	defer server.Close()
+
+	sleepLog := filepath.Join(t.TempDir(), "sleep.log")
+	cmd := exec.Command(
+		"bash",
+		"-c",
+		`source "$SCRIPT"; sleep() { printf '%s\n' "$1" > "$SLEEP_LOG"; }; download_file "$URL" "$OUT"`,
+	)
+	cmd.Env = append(os.Environ(),
+		"SCRIPT="+script,
+		"URL="+server.URL+"/release.tar.gz",
+		"OUT="+filepath.Join(t.TempDir(), "release.tar.gz"),
+		"SLEEP_LOG="+sleepLog,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("download_file did not recover after Retry-After HTTP date: %v\n%s", err, out)
+	}
+	delayBody, err := os.ReadFile(sleepLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delay int
+	if _, err := fmt.Sscanf(string(delayBody), "%d", &delay); err != nil {
+		t.Fatalf("parse retry delay %q: %v", delayBody, err)
+	}
+	if delay < 58 || delay > 60 {
+		t.Fatalf("Retry-After HTTP-date delay = %d, want 58..60", delay)
 	}
 }
 
@@ -856,21 +912,30 @@ func TestReleaseInstallScriptTransientHTTPRetriesAreBounded(t *testing.T) {
 	}))
 	defer server.Close()
 
+	sleepLog := filepath.Join(t.TempDir(), "sleep.log")
 	cmd := exec.Command(
 		"bash",
 		"-c",
-		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
+		`source "$SCRIPT"; sleep() { printf '%s\n' "$1" >> "$SLEEP_LOG"; }; download_file "$URL" "$OUT"`,
 	)
 	cmd.Env = append(os.Environ(),
 		"SCRIPT="+script,
 		"URL="+server.URL+"/release.tar.gz",
 		"OUT="+filepath.Join(t.TempDir(), "release.tar.gz"),
+		"SLEEP_LOG="+sleepLog,
 	)
 	if out, err := cmd.CombinedOutput(); err == nil {
 		t.Fatalf("download_file unexpectedly accepted exhausted transient HTTP retries\n%s", out)
 	}
 	if attempts.Load() != 6 {
 		t.Fatalf("HTTP attempts = %d, want 6", attempts.Load())
+	}
+	sleepCalls, err := os.ReadFile(sleepLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(sleepCalls), strings.Repeat("2\n", 5); got != want {
+		t.Fatalf("fallback retry delays = %q, want %q", got, want)
 	}
 }
 
@@ -1134,7 +1199,7 @@ exit 7
 		`source "$SCRIPT"; sleep() { :; }; download_file "$URL" "$OUT"`,
 	)
 	cmd.Env = append(os.Environ(),
-		"PATH="+stubDir,
+		"PATH="+stubDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"SCRIPT="+script,
 		"URL=https://example.invalid/release.tar.gz",
 		"OUT="+filepath.Join(work, "release.tar.gz"),
@@ -1165,12 +1230,14 @@ func TestPOSIXReleaseDownloadsShareRetryResumePolicy(t *testing.T) {
 		text := string(body)
 		for _, want := range []string{
 			"is_transient_http_status()",
+			"retry_after_delay()",
 			"408|429|500|502|503|504|522|524",
 			"download_with_curl()",
-			`curl -fsSL -C - -w '%{http_code}' "$url" -o "$out"`,
+			`curl -fsSL -C - -D "$headers" -w '%{http_code}' "$url" -o "$out"`,
 			`[[ "$status" -eq 22 ]] && ! is_transient_http_status "$http_status"`,
 			`[[ "$attempt" -ge 6 ]]`,
 			`[[ "$status" -eq 33 ]]`,
+			`sleep "$retry_delay"`,
 			"download_with_wget()",
 			`[[ "$wget_help" == *"--tries="* ]]`,
 			`wget_args+=(-t 1)`,
