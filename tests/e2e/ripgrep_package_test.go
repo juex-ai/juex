@@ -340,22 +340,204 @@ echo juex package fixture %s
 	}
 }
 
-func TestReleaseInstallScriptRejectsTermuxBeforeDownload(t *testing.T) {
+func TestReleaseInstallScriptTermuxDryRunUsesLinuxArchiveAndSystemRipgrep(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+	root, script := releaseInstallScript(t)
+
+	for _, tc := range []struct {
+		arch        string
+		wantArchive string
+	}{
+		{arch: "arm64", wantArchive: "juex_0.0.1_linux_arm64.tar.gz"},
+		{arch: "armv7", wantArchive: "juex_0.0.1_linux_armv7.tar.gz"},
+	} {
+		t.Run(tc.arch, func(t *testing.T) {
+			work := t.TempDir()
+			prefix := filepath.Join(work, "usr")
+			pkgLog := filepath.Join(work, "pkg.log")
+			cmd := exec.Command("bash", script, "--dry-run", "--version", "0.0.1")
+			cmd.Dir = root
+			cmd.Env = append(os.Environ(),
+				"ANDROID_ROOT=/system",
+				"PREFIX="+prefix,
+				"JUEX_INSTALL_ARCH="+tc.arch,
+				"JUEX_INSTALL_LIBC=musl",
+				"TERMUX_TEST_PKG_LOG="+pkgLog,
+				"HOME="+filepath.Join(work, "home"),
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("Termux dry-run failed: %v\n%s", err, out)
+			}
+			body := string(out)
+			for _, want := range []string{
+				"platform: linux/" + tc.arch,
+				"archive: " + tc.wantArchive,
+				"install mode: Termux bare binary",
+				"ripgrep: system PATH",
+				"install target: " + filepath.Join(prefix, "bin", "juex"),
+				"uninstall: rm -f " + filepath.Join(prefix, "bin", "juex"),
+			} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("Termux dry-run output missing %q:\n%s", want, out)
+				}
+			}
+			if strings.Contains(body, "package home:") || strings.Contains(body, "rm -rf") {
+				t.Fatalf("Termux dry-run describes a managed package:\n%s", out)
+			}
+			if _, err := os.Stat(pkgLog); !os.IsNotExist(err) {
+				t.Fatalf("Termux dry-run invoked pkg: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(prefix, "bin", "juex")); !os.IsNotExist(err) {
+				t.Fatalf("Termux dry-run wrote the Juex binary: %v", err)
+			}
+		})
+	}
+}
+
+func TestReleaseInstallScriptTermuxRejectsUnsupportedArchitectureBeforeDownload(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	root, script := releaseInstallScript(t)
 	cmd := exec.Command("bash", script, "--dry-run", "--version", "0.0.1")
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
 		"ANDROID_ROOT=/system",
-		"PREFIX=/data/data/com.termux/files/usr",
+		"PREFIX="+filepath.Join(t.TempDir(), "usr"),
+		"JUEX_INSTALL_ARCH=amd64",
+		"JUEX_INSTALL_RELEASE_BASE_URL="+filepath.Join(t.TempDir(), "missing-release"),
 		"HOME="+t.TempDir(),
 	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("Termux dry-run unexpectedly succeeded\n%s", out)
+		t.Fatalf("unsupported Termux architecture unexpectedly succeeded\n%s", out)
 	}
-	if !strings.Contains(string(out), "Termux/Android") || !strings.Contains(string(out), "bundled ripgrep") {
-		t.Fatalf("Termux error is not actionable:\n%s", out)
+	body := string(out)
+	for _, want := range []string{"Termux/Android", "arm64", "armv7"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("unsupported Termux error missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestReleaseInstallScriptTermuxInstallsBareBinaryWithSystemRipgrep(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+
+	for _, tc := range []struct {
+		name       string
+		existingRG bool
+		pkgBody    string
+		wantPkg    bool
+	}{
+		{
+			name:       "reuses existing rg",
+			existingRG: true,
+			pkgBody:    "#!/bin/sh\nexit 91\n",
+		},
+		{
+			name:    "installs missing rg with pkg",
+			wantPkg: true,
+			pkgBody: `#!/bin/sh
+set -eu
+printf '%s\n' "$*" > "$TERMUX_TEST_PKG_LOG"
+printf '#!/bin/sh\nprintf "ripgrep 15.1.0 fixture\\n"\n' > "$TERMUX_TEST_BIN/rg"
+chmod +x "$TERMUX_TEST_BIN/rg"
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newTermuxInstallFixture(t)
+			if tc.existingRG {
+				writeExecutableFixture(t, filepath.Join(fixture.binDir, "rg"), "#!/bin/sh\nprintf 'ripgrep 15.1.0 fixture\\n'\n")
+			}
+			writeExecutableFixture(t, filepath.Join(fixture.binDir, "pkg"), tc.pkgBody)
+
+			out, err := fixture.run(t)
+			if err != nil {
+				t.Fatalf("Termux install failed: %v\n%s", err, out)
+			}
+			if tc.wantPkg {
+				pkgCall, err := os.ReadFile(fixture.pkgLog)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := strings.TrimSpace(string(pkgCall)); got != "install -y ripgrep" {
+					t.Fatalf("pkg arguments = %q, want %q", got, "install -y ripgrep")
+				}
+			} else if _, err := os.Stat(fixture.pkgLog); !os.IsNotExist(err) {
+				t.Fatalf("existing rg still invoked pkg: %v", err)
+			}
+
+			installed := filepath.Join(fixture.prefix, "bin", "juex")
+			info, err := os.Lstat(installed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonicalPrefix, err := filepath.EvalSymlinks(fixture.prefix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonicalInstalled := filepath.Join(canonicalPrefix, "bin", "juex")
+			if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+				t.Fatalf("Termux install mode = %v, want executable regular file", info.Mode())
+			}
+			if _, err := os.Stat(filepath.Join(fixture.prefix, "lib", "juex")); !os.IsNotExist(err) {
+				t.Fatalf("Termux install created managed package home: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(fixture.prefix, "bin", "juex-package.json")); !os.IsNotExist(err) {
+				t.Fatalf("Termux install copied the package manifest: %v", err)
+			}
+			for _, want := range []string{
+				"install mode: Termux bare binary",
+				"ripgrep: system PATH",
+				"Installed juex to " + canonicalInstalled,
+			} {
+				if !strings.Contains(string(out), want) {
+					t.Fatalf("Termux install output missing %q:\n%s", want, out)
+				}
+			}
+		})
+	}
+}
+
+func TestReleaseInstallScriptTermuxFailsWhenRipgrepCannotBeProvisioned(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+
+	for _, tc := range []struct {
+		name    string
+		pkgBody string
+		want    string
+	}{
+		{
+			name: "pkg unavailable",
+			want: "pkg install -y ripgrep",
+		},
+		{
+			name:    "pkg fails",
+			pkgBody: "#!/bin/sh\nexit 17\n",
+			want:    "failed to install ripgrep with pkg",
+		},
+		{
+			name:    "pkg succeeds without rg",
+			pkgBody: "#!/bin/sh\nexit 0\n",
+			want:    "did not make rg available",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newTermuxInstallFixture(t)
+			if tc.pkgBody != "" {
+				writeExecutableFixture(t, filepath.Join(fixture.binDir, "pkg"), tc.pkgBody)
+			}
+			out, err := fixture.run(t)
+			if err == nil {
+				t.Fatalf("Termux install unexpectedly succeeded without rg\n%s", out)
+			}
+			if !strings.Contains(string(out), tc.want) {
+				t.Fatalf("Termux ripgrep error missing %q:\n%s", tc.want, out)
+			}
+			if _, err := os.Stat(filepath.Join(fixture.prefix, "bin", "juex")); !os.IsNotExist(err) {
+				t.Fatalf("failed Termux install wrote the Juex binary: %v", err)
+			}
+		})
 	}
 }
 
@@ -640,6 +822,111 @@ func TestPowerShellReleaseInstallerInstallsManagedPackage(t *testing.T) {
 type tarFixture struct {
 	body []byte
 	mode int64
+}
+
+type termuxInstallFixture struct {
+	script      string
+	work        string
+	prefix      string
+	binDir      string
+	releaseDir  string
+	checksumDir string
+	pkgLog      string
+}
+
+func newTermuxInstallFixture(t *testing.T) termuxInstallFixture {
+	t.Helper()
+	_, script := releaseInstallScript(t)
+	work := t.TempDir()
+	prefix := filepath.Join(work, "usr")
+	binDir := filepath.Join(prefix, "bin")
+	releaseDir := filepath.Join(work, "release")
+	for _, dir := range []string{binDir, releaseDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{
+		"awk", "basename", "cat", "chmod", "cp", "dirname", "find", "mkdir",
+		"mktemp", "rm", "sed", "tar", "tr",
+	} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Skipf("%s is required for isolated installer test", name)
+		}
+		if err := os.Symlink(path, filepath.Join(binDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	version := "0.0.1"
+	archive := filepath.Join(releaseDir, "juex_"+version+"_linux_arm64.tar.gz")
+	rgBody := []byte("bundled rg must not be installed on Termux")
+	rgDigest := fmt.Sprintf("%x", sha256.Sum256(rgBody))
+	manifest := fmt.Sprintf(`{"schema_version":1,"juex_version":"%s","platform":{"os":"linux","arch":"arm64"},"ripgrep":{"version":"15.1.0","path":"juex-path/rg","sha256":"%s"}}`, version, rgDigest)
+	binary := []byte(`#!/bin/sh
+if [ "${1:-} ${2:-}" = "fleet service-installed" ]; then
+  echo false
+  exit 0
+fi
+echo juex Termux fixture
+`)
+	root := "juex_" + version + "_linux_arm64"
+	writeTarGzEntries(t, archive, map[string]tarFixture{
+		root + "/juex-package.json":                           {body: []byte(manifest), mode: 0o644},
+		root + "/bin/juex":                                    {body: binary, mode: 0o755},
+		root + "/juex-path/rg":                                {body: rgBody, mode: 0o755},
+		root + "/juex-resources/licenses/ripgrep/LICENSE-MIT": {body: []byte("MIT"), mode: 0o644},
+		root + "/juex-resources/licenses/ripgrep/UNLICENSE":   {body: []byte("Unlicense"), mode: 0o644},
+	})
+	if err := os.WriteFile(
+		filepath.Join(releaseDir, "checksums.txt"),
+		[]byte(fmt.Sprintf("%s  %s\n", sha256File(t, archive), filepath.Base(archive))),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	return termuxInstallFixture{
+		script:      script,
+		work:        work,
+		prefix:      prefix,
+		binDir:      binDir,
+		releaseDir:  releaseDir,
+		checksumDir: installEscapedSHA256SumFixture(t, work),
+		pkgLog:      filepath.Join(work, "pkg.log"),
+	}
+}
+
+func (fixture termuxInstallFixture) run(t *testing.T) ([]byte, error) {
+	t.Helper()
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is required")
+	}
+	cmd := exec.Command(bashPath, fixture.script, "--version", "0.0.1")
+	cmd.Dir = fixture.work
+	cmd.Env = []string{
+		"ANDROID_ROOT=/system",
+		"ANDROID_DATA=/data",
+		"PREFIX=" + fixture.prefix,
+		"HOME=" + filepath.Join(fixture.work, "home"),
+		"JUEX_INSTALL_ARCH=arm64",
+		"JUEX_INSTALL_LIBC=musl",
+		"JUEX_INSTALL_RELEASE_BASE_URL=" + fixture.releaseDir,
+		"JUEX_TEST_SHA256_TOOL=" + os.Getenv("JUEX_TEST_SHA256_TOOL"),
+		"JUEX_TEST_SHA256_MODE=" + os.Getenv("JUEX_TEST_SHA256_MODE"),
+		"TERMUX_TEST_BIN=" + fixture.binDir,
+		"TERMUX_TEST_PKG_LOG=" + fixture.pkgLog,
+		"PATH=" + fixture.binDir + string(os.PathListSeparator) + fixture.checksumDir,
+	}
+	return cmd.CombinedOutput()
+}
+
+func writeExecutableFixture(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func installEscapedSHA256SumFixture(t *testing.T, work string) string {
