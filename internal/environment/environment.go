@@ -262,23 +262,9 @@ func redactJSONValue(value *any, configuredValues []string) bool {
 			}
 		}
 		return changed
-	case json.Number:
-		return redactJSONScalar(value, current.String(), configuredValues)
-	case bool:
-		return redactJSONScalar(value, fmt.Sprint(current), configuredValues)
-	case nil:
-		return redactJSONScalar(value, "null", configuredValues)
 	default:
 		return false
 	}
-}
-
-func redactJSONScalar(value *any, text string, configuredValues []string) bool {
-	redacted, changed := redactBytesWithValues([]byte(text), configuredValues)
-	if changed {
-		*value = string(redacted)
-	}
-	return changed
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

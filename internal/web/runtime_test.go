@@ -138,6 +138,7 @@ func TestRuntimeAPIAlwaysRedactsConfiguredEnvironmentValues(t *testing.T) {
 	mustWriteRuntimeFile(t, filepath.Join(work, ".juex", "juex.yaml"), `environment:
   variables:
     RUNTIME_API_MARKER: runtime-api-environment-secret
+    RUNTIME_API_BOOLEAN_COLLISION: "false"
 `)
 	cfg, err := config.LoadWithOptions(config.LoadOptions{
 		WorkDir:    work,

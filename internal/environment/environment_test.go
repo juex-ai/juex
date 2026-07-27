@@ -420,7 +420,7 @@ func TestRedactConfiguredJSONPreservesKeysAndSyntaxForShortValues(t *testing.T) 
 	}
 }
 
-func TestRedactConfiguredJSONCoversNonStringScalars(t *testing.T) {
+func TestRedactConfiguredJSONPreservesNonStringScalarTypes(t *testing.T) {
 	snapshot, err := Resolve(Options{Layers: []Layer{{
 		Source: SourceDotenv,
 		Path:   "/work/.env",
@@ -434,21 +434,28 @@ func TestRedactConfiguredJSONCoversNonStringScalars(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, changed, err := snapshot.RedactConfiguredJSON([]byte(`{"number":1234,"boolean":true,"nothing":null,"safe":99}`))
+	got, changed, err := snapshot.RedactConfiguredJSON([]byte(`{"secret":"1234","number":1234,"boolean":true,"nothing":null,"safe":99}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !changed {
-		t.Fatal("JSON scalar redaction did not report a change")
+		t.Fatal("JSON string redaction did not report a change")
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(got, &decoded); err != nil {
 		t.Fatalf("redacted JSON invalid: %v\n%s", err, got)
 	}
-	for _, key := range []string{"number", "boolean", "nothing"} {
-		if decoded[key] != "[REDACTED_ENV]" {
-			t.Fatalf("%s scalar = %#v, want redacted marker", key, decoded[key])
-		}
+	if decoded["secret"] != "[REDACTED_ENV]" {
+		t.Fatalf("secret string = %#v, want redacted marker", decoded["secret"])
+	}
+	if decoded["number"] != float64(1234) {
+		t.Fatalf("number scalar = %#v, want numeric 1234", decoded["number"])
+	}
+	if decoded["boolean"] != true {
+		t.Fatalf("boolean scalar = %#v, want boolean true", decoded["boolean"])
+	}
+	if decoded["nothing"] != nil {
+		t.Fatalf("null scalar = %#v, want null", decoded["nothing"])
 	}
 	if decoded["safe"] != float64(99) {
 		t.Fatalf("safe scalar = %#v, want 99", decoded["safe"])

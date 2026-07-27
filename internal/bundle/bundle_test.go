@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 )
 
 func TestCreateIncludesSessionFilesManifestAndRedacts(t *testing.T) {
@@ -242,13 +243,16 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
 		t.Fatal(err)
 	}
-	if first["value"] != "[REDACTED_ENV]" {
+	if first["v[REDACTED_ENV]lue"] != "[REDACTED_ENV]" {
 		t.Fatalf("first JSONL record = %#v", first)
 	}
-	for _, key := range []string{"number", "flag"} {
+	for _, key := range []string{"number", "fl[REDACTED_ENV]g"} {
 		if first[key] != "[REDACTED_ENV]" {
 			t.Fatalf("first JSONL scalar %s = %#v", key, first)
 		}
+	}
+	if first["st[REDACTED_ENV]ble"] != "first" {
+		t.Fatalf("first JSONL redacted key content = %#v", first)
 	}
 
 	manifestPath, _ := cfg.EnvironmentSnapshot().RedactConfiguredValues(
@@ -274,6 +278,49 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 		if entry.SHA256 != hex.EncodeToString(sum[:]) {
 			t.Fatalf("hash mismatch for %s: %s", entry.Path, entry.SHA256)
 		}
+	}
+}
+
+func TestRedactConfiguredArchiveJSONCoversKeysScalarsAndCollisions(t *testing.T) {
+	snapshot, err := environment.Resolve(environment.Options{Layers: []environment.Layer{{
+		Source: environment.SourceDotenv,
+		Path:   "/work/.env",
+		Values: map[string]string{
+			"KEY_SECRET":    "secret",
+			"NUMBER_SECRET": "1234",
+			"BOOL_SECRET":   "true",
+			"NULL_SECRET":   "null",
+		},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, changed, err := redactConfiguredArchiveJSON(
+		snapshot,
+		[]byte(`{"secret":"key-value","[REDACTED_ENV]":"existing","number":1234,"flag":true,"none":null,"safe":false}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("strict archive JSON redaction did not report a change")
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatalf("redacted archive JSON invalid: %v\n%s", err, got)
+	}
+	if decoded["[REDACTED_ENV]"] != "existing" ||
+		decoded["[REDACTED_ENV]~[REDACTED_ENV]"] != "key-value" {
+		t.Fatalf("redacted key collision lost content: %#v", decoded)
+	}
+	for _, key := range []string{"number", "flag", "none"} {
+		if decoded[key] != "[REDACTED_ENV]" {
+			t.Fatalf("strict scalar %s = %#v, want redacted marker", key, decoded[key])
+		}
+	}
+	if decoded["safe"] != false {
+		t.Fatalf("unmatched scalar type changed: %#v", decoded["safe"])
 	}
 }
 

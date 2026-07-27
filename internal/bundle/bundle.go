@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -331,7 +332,7 @@ func uniqueRedactedArchivePath(snapshot environment.Snapshot, archivePath string
 func redactConfiguredArchiveData(snapshot environment.Snapshot, archivePath string, data []byte) ([]byte, bool) {
 	switch strings.ToLower(filepath.Ext(archivePath)) {
 	case ".json":
-		if redacted, changed, err := snapshot.RedactConfiguredJSON(data); err == nil {
+		if redacted, changed, err := redactConfiguredArchiveJSON(snapshot, data); err == nil {
 			return redacted, changed
 		}
 	case ".jsonl":
@@ -349,7 +350,7 @@ func redactConfiguredArchiveData(snapshot environment.Snapshot, archivePath stri
 			}
 			if len(bytes.TrimSpace(payload)) == 0 {
 				output.Write(payload)
-			} else if redacted, lineChanged, err := snapshot.RedactConfiguredJSON(payload); err == nil {
+			} else if redacted, lineChanged, err := redactConfiguredArchiveJSON(snapshot, payload); err == nil {
 				if !lineChanged {
 					output.Write(payload)
 				} else {
@@ -372,6 +373,106 @@ func redactConfiguredArchiveData(snapshot environment.Snapshot, archivePath stri
 		return output.Bytes(), changed
 	}
 	return snapshot.RedactConfiguredValues(data)
+}
+
+// redactConfiguredArchiveJSON is intentionally lossier than the schema-safe
+// Snapshot redactor used by APIs. Debug bundles must scrub configured values
+// even when an artifact encoded them as object keys or non-string scalars.
+func redactConfiguredArchiveJSON(snapshot environment.Snapshot, data []byte) ([]byte, bool, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, false, fmt.Errorf("bundle: JSON payload contains multiple values")
+		}
+		return nil, false, err
+	}
+	changed := redactConfiguredArchiveJSONValue(snapshot, &value)
+	if !changed {
+		return append([]byte(nil), data...), false, nil
+	}
+	out, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return append(out, '\n'), true, nil
+}
+
+func redactConfiguredArchiveJSONValue(snapshot environment.Snapshot, value *any) bool {
+	switch current := (*value).(type) {
+	case string:
+		redacted, changed := snapshot.RedactConfiguredValues([]byte(current))
+		if changed {
+			*value = string(redacted)
+		}
+		return changed
+	case []any:
+		changed := false
+		for index := range current {
+			if redactConfiguredArchiveJSONValue(snapshot, &current[index]) {
+				changed = true
+			}
+		}
+		return changed
+	case map[string]any:
+		keys := make([]string, 0, len(current))
+		for key := range current {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		redactedMap := make(map[string]any, len(current))
+		changed := false
+		for _, key := range keys {
+			item := current[key]
+			if redactConfiguredArchiveJSONValue(snapshot, &item) {
+				changed = true
+			}
+			redactedKey, keyChanged := snapshot.RedactConfiguredValues([]byte(key))
+			outputKey := uniqueRedactedJSONKey(redactedMap, string(redactedKey))
+			if keyChanged || outputKey != key {
+				changed = true
+			}
+			redactedMap[outputKey] = item
+		}
+		if changed {
+			*value = redactedMap
+		}
+		return changed
+	case json.Number:
+		return redactConfiguredArchiveJSONScalar(snapshot, value, current.String())
+	case bool:
+		return redactConfiguredArchiveJSONScalar(snapshot, value, fmt.Sprint(current))
+	case nil:
+		return redactConfiguredArchiveJSONScalar(snapshot, value, "null")
+	default:
+		return false
+	}
+}
+
+func redactConfiguredArchiveJSONScalar(snapshot environment.Snapshot, value *any, text string) bool {
+	redacted, changed := snapshot.RedactConfiguredValues([]byte(text))
+	if changed {
+		*value = string(redacted)
+	}
+	return changed
+}
+
+func uniqueRedactedJSONKey(values map[string]any, key string) string {
+	if _, exists := values[key]; !exists {
+		return key
+	}
+	candidate := key
+	for {
+		candidate += "~[REDACTED_ENV]"
+		if _, exists := values[candidate]; !exists {
+			return candidate
+		}
+	}
 }
 
 func entriesContainRedaction(entries []archiveEntry) bool {
