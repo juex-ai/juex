@@ -24,13 +24,6 @@ func (s *turnAdmissionRuntimeStub) ReserveTurnID(turnID string) error {
 	return s.reserve(turnID)
 }
 
-func (s *turnAdmissionRuntimeStub) ReserveTurnIDWithOptions(
-	turnID string,
-	_ runtime.TurnReservationOptions,
-) error {
-	return s.reserve(turnID)
-}
-
 func (s *turnAdmissionRuntimeStub) EnqueuePendingMessage(
 	ctx context.Context,
 	msg llm.Message,
@@ -536,8 +529,8 @@ func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 	compactStatus := a.Status.Snapshot()
 	if compactStatus.Turn == nil ||
 		compactStatus.Turn.ID != compactID ||
-		compactStatus.Turn.CanInterrupt {
-		t.Fatalf("compact admission status = %+v, want non-interruptible", compactStatus.Turn)
+		!compactStatus.Turn.CanInterrupt {
+		t.Fatalf("compact admission status = %+v, want interruptible", compactStatus.Turn)
 	}
 
 	queued := a.AdmitTurn(context.Background(), TurnAdmissionRequest{

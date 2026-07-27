@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -13,6 +15,45 @@ import (
 )
 
 const DefaultContextWindowTokens = runtimepolicy.DefaultContextWindowTokens
+
+const compactionCanceledMessage = "Compaction canceled"
+
+type compactionError struct {
+	Err error
+}
+
+func (e *compactionError) Error() string {
+	if e == nil || e.Err == nil {
+		return "compact context failed"
+	}
+	if cancellation.IsUserCancelled(e.Err) {
+		return compactionCanceledMessage
+	}
+	return "compact context: " + e.Err.Error()
+}
+
+func (e *compactionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func newCompactionError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	var compactErr *compactionError
+	if errors.As(err, &compactErr) {
+		return err
+	}
+	return &compactionError{Err: cancellation.NormalizeErrorWithContext(ctx, err)}
+}
+
+func isCompactionCancellation(err error) bool {
+	var compactErr *compactionError
+	return errors.As(err, &compactErr) && cancellation.IsUserCancelled(compactErr)
+}
 
 type CompactionResult struct {
 	MessageID          string `json:"message_id,omitempty"`
@@ -65,6 +106,8 @@ func (e *Engine) Compact(ctx context.Context, turnID, systemPrompt, reason strin
 func (e *Engine) CompactWithInstructions(ctx context.Context, turnID, systemPrompt, reason string, auto bool, instructions string) (CompactionResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	ctx, finishOperation := e.beginActiveOperation(ctx)
+	defer finishOperation()
 	return e.compactLocked(ctx, turnID, systemPrompt, e.compactionToolsLocked(), reason, auto, instructions)
 }
 
@@ -87,7 +130,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	}
 	summaryState, err := e.compactionSummaryStateLocked()
 	if err != nil {
-		compactErr := fmt.Errorf("compact context: %w", err)
+		compactErr := newCompactionError(ctx, err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
@@ -100,7 +143,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	preReq.CompactAuto = auto
 	preResults, err := e.runHooks(ctx, preReq)
 	if err != nil {
-		compactErr := fmt.Errorf("compact context: %w", err)
+		compactErr := newCompactionError(ctx, err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
@@ -129,7 +172,7 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	generation, err := e.generateCompactionSummaryLocked(ctx, turnID, systemPrompt, selection.PreviousSummary, selection.SummaryInput, summaryState, policy, instructions)
 	if err != nil {
 		sess.RecordResponseUsage(generation.Usage, nil)
-		compactErr := fmt.Errorf("compact context: %w", err)
+		compactErr := newCompactionError(ctx, err)
 		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
 			Reason: reason,
 			Auto:   auto,
@@ -140,6 +183,15 @@ func (e *Engine) compactLockedForContextWindow(ctx context.Context, turnID, syst
 	resp := generation.Response
 	summaryProvider := generation.Provider
 	summary := generation.Summary
+	if contextErr := cancellation.ContextError(ctx); contextErr != nil {
+		compactErr := newCompactionError(ctx, contextErr)
+		e.emit(events.Event{Type: "context.compact.errored", TurnID: turnID, Payload: ContextCompactErroredPayload{
+			Reason: reason,
+			Auto:   auto,
+			Error:  compactErr.Error(),
+		}})
+		return CompactionResult{}, compactErr
+	}
 
 	model := resp.Message.Model
 	if model == "" && summaryProvider != nil {

@@ -25,6 +25,7 @@ import (
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
+	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/web"
 )
 
@@ -55,6 +56,36 @@ func (p *webProvider) history(idx int) []llm.Message {
 		return nil
 	}
 	return append([]llm.Message(nil), p.histories[idx]...)
+}
+
+type interruptibleCompactWebProvider struct {
+	mu             sync.Mutex
+	calls          int
+	compactStarted chan struct{}
+	release        chan struct{}
+	startOnce      sync.Once
+}
+
+func (p *interruptibleCompactWebProvider) Name() string { return "web-compact-cancel" }
+
+func (p *interruptibleCompactWebProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	p.mu.Lock()
+	call := p.calls
+	p.calls++
+	p.mu.Unlock()
+	if call == 0 {
+		return llm.Response{
+			Message:    llm.TextMessage(llm.RoleAssistant, "seeded"),
+			StopReason: llm.StopEndTurn,
+		}, nil
+	}
+	p.startOnce.Do(func() { close(p.compactStarted) })
+	select {
+	case <-ctx.Done():
+		return llm.Response{}, ctx.Err()
+	case <-p.release:
+		return llm.Response{}, context.Canceled
+	}
 }
 
 func TestWeb_RuntimeToolCatalogIncludesMCPDescriptorsWithoutSession(t *testing.T) {
@@ -205,6 +236,150 @@ func TestWeb_TurnRoundTripPersists(t *testing.T) {
 		}
 		return false
 	})
+}
+
+func TestWeb_InterruptCancelsCompactionWithoutPersistingMarker(t *testing.T) {
+	work := t.TempDir()
+	prov := &interruptibleCompactWebProvider{
+		compactStarted: make(chan struct{}),
+		release:        make(chan struct{}),
+	}
+	compaction := config.DefaultCompactionConfig()
+	compaction.KeepRecentTokens = 0
+	compaction.TailTurns = 0
+	srv := web.NewServer(web.Options{
+		Cfg: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    work,
+			Compaction: compaction,
+		},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	defer close(prov.release)
+
+	sessionID := createWebSession(t, ts.URL)
+	seed, err := http.Post(
+		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"`+strings.Repeat("old context ", 200)+`"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seededTurn webStartTurnResponse
+	if err := json.NewDecoder(seed.Body).Decode(&seededTurn); err != nil {
+		seed.Body.Close()
+		t.Fatal(err)
+	}
+	seed.Body.Close()
+	waitForWebTranscript(t, ts.URL, sessionID, seededTurn.TurnID, 10*time.Second, "seed turn", func(messages []webTranscriptMessage) bool {
+		for _, message := range messages {
+			for _, block := range message.Blocks {
+				if block.Type == "text" && block.Text == "seeded" {
+					return true
+				}
+			}
+		}
+		return false
+	})
+
+	type compactResult struct {
+		response *http.Response
+		err      error
+	}
+	compactDone := make(chan compactResult, 1)
+	go func() {
+		response, requestErr := http.Post(
+			ts.URL+"/api/sessions/"+sessionID+"/turns",
+			"application/json",
+			strings.NewReader(`{"prompt":"/compact"}`),
+		)
+		compactDone <- compactResult{response: response, err: requestErr}
+	}()
+	select {
+	case <-prov.compactStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("compaction provider did not start")
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		response, requestErr := http.Get(ts.URL + "/api/sessions/" + sessionID + "/status")
+		if requestErr != nil {
+			return false
+		}
+		defer response.Body.Close()
+		var status juexruntime.StatusSnapshot
+		return response.StatusCode == http.StatusOK &&
+			json.NewDecoder(response.Body).Decode(&status) == nil &&
+			status.Turn != nil &&
+			status.Turn.Phase == juexruntime.TurnPhaseCompacting &&
+			status.Turn.CanInterrupt
+	})
+
+	interrupt, err := http.Post(ts.URL+"/api/sessions/"+sessionID+"/interrupt", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var interruptBody struct {
+		Cancelled bool `json:"cancelled"`
+	}
+	if err := json.NewDecoder(interrupt.Body).Decode(&interruptBody); err != nil {
+		interrupt.Body.Close()
+		t.Fatal(err)
+	}
+	interrupt.Body.Close()
+	if !interruptBody.Cancelled {
+		t.Fatal("interrupt returned cancelled=false")
+	}
+
+	select {
+	case result := <-compactDone:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		defer result.response.Body.Close()
+		var body struct {
+			Message string `json:"message"`
+		}
+		if err := json.NewDecoder(result.response.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if result.response.StatusCode != http.StatusInternalServerError ||
+			body.Message != "Compaction canceled" {
+			t.Fatalf("compact status=%d body=%+v", result.response.StatusCode, body)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("compact request did not stop after interrupt")
+	}
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		response, requestErr := http.Get(ts.URL + "/api/sessions/" + sessionID + "/status")
+		if requestErr != nil {
+			return false
+		}
+		defer response.Body.Close()
+		var status juexruntime.StatusSnapshot
+		return response.StatusCode == http.StatusOK &&
+			json.NewDecoder(response.Body).Decode(&status) == nil &&
+			status.Turn != nil &&
+			status.Turn.State == juexruntime.TurnLifecycleCancelled &&
+			status.LastError != nil &&
+			status.LastError.Message == "Compaction canceled"
+	})
+	messages, err := fetchWebTranscript(http.DefaultClient, ts.URL, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if message.Kind == llm.MessageKindCompact {
+			t.Fatalf("unexpected compact marker after cancellation: %+v", message)
+		}
+	}
 }
 
 func TestWeb_ComposerImageUpload(t *testing.T) {

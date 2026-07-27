@@ -416,7 +416,7 @@ test("projectLiveSessionEvent preserves queued attachments across compact termin
     type: "turn.admitted",
     ts: "2026-06-15T00:00:00Z",
     turn_id: "compact-1",
-    payload: { non_interruptible: true },
+    payload: {},
   });
   state = apply(state, {
     id: "e1",
@@ -434,6 +434,7 @@ test("projectLiveSessionEvent preserves queued attachments across compact termin
       tail_turns: 2,
     },
   });
+  assert.equal(state.compactAdmissionTurnID, "compact-1");
   state = projectQueuedInput(state, "", "user", 1, [imageMedia]);
   state = apply(state, {
     id: "e2",

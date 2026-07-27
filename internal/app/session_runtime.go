@@ -155,6 +155,16 @@ func (a *App) PendingInputStatus() runtime.PendingInputStatus {
 	return a.Engine.PendingInputStatus()
 }
 
+// CancelActiveTurn forwards cancellation to the current runtime operation.
+func (a *App) CancelActiveTurn(cause error) bool {
+	if a == nil || a.Engine == nil {
+		return false
+	}
+	a.sessionMu.RLock()
+	defer a.sessionMu.RUnlock()
+	return a.Engine.CancelActiveTurn(cause)
+}
+
 // RunAdmittedTurn keeps the App lifecycle stable for a transport-reserved
 // turn while preserving the caller's turn id.
 func (a *App) RunAdmittedTurn(ctx context.Context, turnID string, message llm.Message) (string, error) {

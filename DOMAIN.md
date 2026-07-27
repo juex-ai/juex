@@ -145,6 +145,8 @@ domain boundary.
    usage metadata.
 4. Future Provider requests use the latest compact marker plus retained
    messages; the persisted original transcript remains inspectable.
+5. Cancellation stops summary work before a compact marker is committed, so
+   future active context remains unchanged.
 
 ## Domain Invariants
 

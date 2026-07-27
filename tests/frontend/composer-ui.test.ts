@@ -171,6 +171,18 @@ test("deferred submit keeps follow-up text and attachment counts authoritative",
   assert.doesNotMatch(composerSource, /setAttachmentCount\(0\)/);
 });
 
+test("manual compaction clears only its submitted draft when compaction starts", () => {
+  assert.match(
+    composerSource,
+    /isCompactCommandInput\(text\)[\s\S]*setPendingCompactText\(submittedText\)/,
+  );
+  assert.match(
+    composerSource,
+    /runtimeStatus\?\.turn\?\.phase !== "compacting"[\s\S]*settleSubmittedComposerText\(current, pendingCompactText\)/,
+  );
+  assert.match(composerSource, /value=\{draft\}/);
+});
+
 test("active session composer floats without consuming conversation layout", () => {
   assert.match(composerSource, /new ResizeObserver/);
   assert.match(

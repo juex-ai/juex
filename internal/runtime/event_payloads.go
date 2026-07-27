@@ -50,6 +50,9 @@ type TurnErroredPayload struct {
 func NewTurnErroredPayload(err error) TurnErroredPayload {
 	classification := errorclass.Classify(err)
 	publicErr := errorclass.PublicMessage(err, errorclass.MessageOptions{})
+	if isCompactionCancellation(err) {
+		publicErr = compactionCanceledMessage
+	}
 	payload := TurnErroredPayload{
 		Error:     publicErr,
 		ErrorKind: string(classification.Kind),

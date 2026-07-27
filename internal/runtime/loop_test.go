@@ -17,6 +17,7 @@ import (
 	"github.com/juex-ai/juex/internal/artifact"
 	"github.com/juex-ai/juex/internal/cancellation"
 	"github.com/juex-ai/juex/internal/chunkedwrite"
+	"github.com/juex-ai/juex/internal/errorclass"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
@@ -32,6 +33,18 @@ type errorProvider struct{}
 func (errorProvider) Name() string { return "errprov" }
 func (errorProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
 	return llm.Response{}, fmt.Errorf("boom")
+}
+
+type cancellableProvider struct {
+	started chan struct{}
+}
+
+func (p *cancellableProvider) Name() string { return "cancellable" }
+
+func (p *cancellableProvider) Complete(ctx context.Context, sys string, h []llm.Message, t []llm.ToolSpec) (llm.Response, error) {
+	signal(p.started)
+	<-ctx.Done()
+	return llm.Response{}, ctx.Err()
 }
 
 // mockProvider scripts a sequence of LLM responses. Each Complete() call
@@ -711,6 +724,84 @@ func TestCompactWithInstructionsResetsAutoCompactionFailures(t *testing.T) {
 	}
 	if eng.autoCompactFailures != 0 {
 		t.Fatalf("autoCompactFailures = %d, want reset after manual compact", eng.autoCompactFailures)
+	}
+}
+
+func TestCancelActiveTurnCancelsRuntimeOwnedProviderRequest(t *testing.T) {
+	prov := &cancellableProvider{started: make(chan struct{}, 1)}
+	eng, _ := newEngine(t, prov, false)
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.Turn(context.Background(), "wait for cancellation")
+		done <- err
+	}()
+	waitSignal(t, prov.started, "provider start")
+
+	if !eng.CancelActiveTurn(cancellation.ErrUserCancelled) {
+		t.Fatal("CancelActiveTurn returned false for active provider request")
+	}
+	if eng.CancelActiveTurn(cancellation.ErrUserCancelled) {
+		t.Fatal("second CancelActiveTurn returned true")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, cancellation.ErrUserCancelled) {
+			t.Fatalf("turn err = %v, want ErrUserCancelled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn did not stop after runtime cancellation")
+	}
+}
+
+func TestCancelActiveTurnCancelsCompactionWithoutAppendingMarker(t *testing.T) {
+	prov := &cancellableProvider{started: make(chan struct{}, 1)}
+	eng, bus := newEngine(t, prov, false)
+	eng.ContextWindow = 100
+	eng.Compaction = DefaultCompactionPolicy()
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, strings.Repeat("old ", 80))); err != nil {
+		t.Fatal(err)
+	}
+	var compactError ContextCompactErroredPayload
+	bus.Subscribe("context.compact.errored", func(event events.Event) {
+		compactError, _ = event.Payload.(ContextCompactErroredPayload)
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := eng.CompactWithInstructions(
+			context.Background(),
+			"compact-cancel",
+			"system",
+			"manual",
+			false,
+			"",
+		)
+		done <- err
+	}()
+	waitSignal(t, prov.started, "compaction provider start")
+
+	if !eng.CancelActiveTurn(cancellation.ErrUserCancelled) {
+		t.Fatal("CancelActiveTurn returned false for active compaction")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, cancellation.ErrUserCancelled) {
+			t.Fatalf("compact err = %v, want ErrUserCancelled", err)
+		}
+		payload := NewTurnErroredPayload(err)
+		if payload.Error != "Compaction canceled" || payload.ErrorKind != string(errorclass.KindCancelled) {
+			t.Fatalf("turn error payload = %+v", payload)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("compaction did not stop after runtime cancellation")
+	}
+	if compactError.Error != "Compaction canceled" {
+		t.Fatalf("compact event error = %q", compactError.Error)
+	}
+	for _, msg := range eng.Session.History {
+		if msg.Kind == llm.MessageKindCompact {
+			t.Fatalf("unexpected compact marker after cancellation: %+v", msg)
+		}
 	}
 }
 
@@ -1999,8 +2090,8 @@ func TestCompactDoesNotFallbackAfterContextCancellation(t *testing.T) {
 	})
 
 	_, err := eng.Compact(ctx, "compact-turn", "system", "manual", false)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want context canceled", err)
+	if !errors.Is(err, cancellation.ErrUserCancelled) || err.Error() != compactionCanceledMessage {
+		t.Fatalf("error = %v, want compaction cancellation", err)
 	}
 	if summary.calls != 1 || main.calls != 0 || fallbacks != 0 {
 		t.Fatalf("summary/main/fallbacks = %d/%d/%d, want 1/0/0", summary.calls, main.calls, fallbacks)

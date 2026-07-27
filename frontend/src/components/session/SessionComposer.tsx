@@ -34,6 +34,7 @@ import {
   settleSubmittedComposerText,
   type ComposerSubmitAction,
 } from "@/lib/composer-submit";
+import { isCompactCommandInput } from "@/lib/compact-ui";
 import { sessionComposerClearance } from "@/lib/conversation-scroll";
 import type { LiveSessionProjection } from "@/lib/live-session-projection";
 import { sessionReadOnlyMessage } from "@/lib/session-access";
@@ -85,6 +86,22 @@ export function SessionComposer({
   const [draft, setDraft] = useState("");
   const [attachmentCount, setAttachmentCount] = useState(0);
   const [overlayNode, setOverlayNode] = useState<HTMLDivElement | null>(null);
+  const [pendingCompactText, setPendingCompactText] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (
+      runtimeStatus?.turn?.phase !== "compacting" ||
+      pendingCompactText === null
+    ) {
+      return;
+    }
+    setDraft((current) =>
+      settleSubmittedComposerText(current, pendingCompactText),
+    );
+    setPendingCompactText(null);
+  }, [pendingCompactText, runtimeStatus?.turn?.phase]);
 
   useLayoutEffect(() => {
     if (!canSend || !overlayNode) {
@@ -172,7 +189,15 @@ export function SessionComposer({
                   files,
                   onUploadAttachment,
                 );
-                const sent = await onSend(text, attachments);
+                if (isCompactCommandInput(text)) {
+                  setPendingCompactText(submittedText);
+                }
+                let sent: boolean;
+                try {
+                  sent = await onSend(text, attachments);
+                } finally {
+                  setPendingCompactText(null);
+                }
                 if (!sent) {
                   throw new Error("start turn failed");
                 }
@@ -189,6 +214,7 @@ export function SessionComposer({
                   onPromptInput();
                 }}
                 placeholder="Ask juex anything..."
+                value={draft}
               />
               <PromptInputFooter className="flex-nowrap items-end gap-2">
                 <TooltipProvider>

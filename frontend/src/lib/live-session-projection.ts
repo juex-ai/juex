@@ -352,6 +352,9 @@ export function projectLiveSessionEvent(
       effects.push({ type: "refresh" });
       break;
     case "context.compact.started":
+      if (!event.payload.auto && event.turn_id) {
+        next = { ...next, compactAdmissionTurnID: event.turn_id };
+      }
       next = projectPendingCompact(next);
       break;
     case "context.compact.completed":

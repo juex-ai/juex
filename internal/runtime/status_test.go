@@ -475,11 +475,14 @@ func TestStatusSnapshotJSONResumeRestoresPreCompactionPhase(t *testing.T) {
 
 func TestStatusStandaloneCompactionCompletesAdmittedTurn(t *testing.T) {
 	store := NewStatusStore(StatusSeed{SessionID: "session-1"})
-	store.Publish(statusEvent("1", TurnAdmittedType, "compact-1", TurnAdmittedPayload{NonInterruptible: true}))
-	if snapshot := store.Snapshot(); snapshot.Turn == nil || snapshot.Turn.CanInterrupt {
-		t.Fatalf("admitted standalone compact turn = %+v, want non-interruptible", snapshot.Turn)
+	store.Publish(statusEvent("1", TurnAdmittedType, "compact-1", TurnAdmittedPayload{}))
+	if snapshot := store.Snapshot(); snapshot.Turn == nil || !snapshot.Turn.CanInterrupt {
+		t.Fatalf("admitted standalone compact turn = %+v, want interruptible", snapshot.Turn)
 	}
 	store.Publish(statusEvent("2", "context.compact.started", "compact-1", ContextCompactStartedPayload{}))
+	if snapshot := store.Snapshot(); snapshot.Turn == nil || !snapshot.Turn.CanInterrupt {
+		t.Fatalf("active standalone compact turn = %+v, want interruptible", snapshot.Turn)
+	}
 	store.Publish(statusEvent("3", "context.compact.completed", "compact-1", ContextCompactCompletedPayload{}))
 	assertTurnStatus(t, store.Snapshot(), TurnLifecycleAdmitted, "", false)
 	store.Publish(statusEvent("4", "turn.completed", "compact-1", TurnCompletedPayload{}))
