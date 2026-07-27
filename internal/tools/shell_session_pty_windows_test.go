@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -37,6 +38,42 @@ func TestWindowsEnvironmentBlock(t *testing.T) {
 	}
 	if _, err := windowsEnvironmentBlock([]string{"BAD=value\x00tail"}); err == nil || !strings.Contains(err.Error(), "NUL") {
 		t.Fatalf("NUL environment error = %v", err)
+	}
+}
+
+func TestWindowsCommandEnvironmentUsesExecNormalization(t *testing.T) {
+	cmd := exec.Command("cmd.exe")
+	cmd.Env = []string{
+		"Path=first",
+		"PATH=second",
+		"JUEX_TEST=value",
+	}
+	env := windowsCommandEnvironment(cmd)
+	pathCount := 0
+	systemRootFound := false
+	for _, item := range env {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.EqualFold(key, "PATH"):
+			pathCount++
+			if value != "second" {
+				t.Fatalf("normalized PATH = %q, want later value", value)
+			}
+		case strings.EqualFold(key, "SYSTEMROOT"):
+			systemRootFound = true
+		}
+	}
+	if pathCount != 1 {
+		t.Fatalf("normalized PATH count = %d, environment = %#v", pathCount, env)
+	}
+	if !systemRootFound {
+		t.Fatalf("normalized environment missing SYSTEMROOT: %#v", env)
+	}
+	if got := windowsCommandEnvironment(&exec.Cmd{}); got != nil {
+		t.Fatalf("nil command environment = %#v, want inherited nil", got)
 	}
 }
 

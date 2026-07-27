@@ -163,6 +163,9 @@ func Create(opts Options) (Result, error) {
 		Version:       version.Build(),
 		Entries:       manifestEntries(entries),
 	}
+	if redactManifestMetadata(opts.Config.EnvironmentSnapshot(), &manifest) {
+		manifest.Redacted = true
+	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return Result{}, err
@@ -178,6 +181,33 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	return Result{Path: outPath, SessionID: sessionID, Files: len(entries), Bytes: st.Size(), Redacted: manifest.Redacted}, nil
+}
+
+func redactManifestMetadata(snapshot environment.Snapshot, manifest *Manifest) bool {
+	if manifest == nil {
+		return false
+	}
+	changed := redactManifestString(snapshot, &manifest.WorkDir)
+	if redactManifestString(snapshot, &manifest.SessionID) {
+		changed = true
+	}
+	for index := range manifest.Entries {
+		if redactManifestString(snapshot, &manifest.Entries[index].SourcePath) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+func redactManifestString(snapshot environment.Snapshot, value *string) bool {
+	if value == nil || *value == "" {
+		return false
+	}
+	redacted, changed := snapshot.RedactConfiguredValues([]byte(*value))
+	if changed {
+		*value = string(redacted)
+	}
+	return changed
 }
 
 func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]archiveEntry, error) {

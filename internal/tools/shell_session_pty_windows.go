@@ -23,7 +23,7 @@ const (
 )
 
 func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, error) {
-	environmentBlock, err := windowsEnvironmentBlock(cmd.Env)
+	environmentBlock, err := windowsEnvironmentBlock(windowsCommandEnvironment(cmd))
 	if err != nil {
 		return nil, fmt.Errorf("exec_command: build ConPTY environment: %w", err)
 	}
@@ -209,6 +209,15 @@ func createWindowsPipe() (windows.Handle, windows.Handle, error) {
 		return 0, 0, err
 	}
 	return read, write, nil
+}
+
+func windowsCommandEnvironment(cmd *exec.Cmd) []string {
+	if cmd == nil || cmd.Env == nil {
+		return nil
+	}
+	// Environ applies os/exec's Windows contract: case-insensitive duplicate
+	// removal with later values winning, plus a parent SYSTEMROOT fallback.
+	return cmd.Environ()
 }
 
 // windowsEnvironmentBlock converts exec.Cmd.Env into the sorted, double-NUL

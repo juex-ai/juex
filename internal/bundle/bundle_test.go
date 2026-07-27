@@ -192,7 +192,8 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(work, ".env"), []byte("SHORT_ENV=a\nNUMBER_ENV=1234\nBOOL_ENV=true\n"), 0o600); err != nil {
+	envBody := "SHORT_ENV=a\nNUMBER_ENV=1234\nBOOL_ENV=true\nPROJECT_DIR=" + work + "\n"
+	if err := os.WriteFile(filepath.Join(work, ".env"), []byte(envBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.LoadWithOptions(config.LoadOptions{
@@ -248,17 +249,20 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 	}
 
 	manifestBody := files["juex-debug-bundle/manifest.json"]
-	if strings.Contains(string(manifestBody), "[REDACTED_ENV]") {
-		t.Fatalf("manifest structural data was redacted:\n%s", manifestBody)
-	}
 	var manifest Manifest
 	if err := json.Unmarshal(manifestBody, &manifest); err != nil {
 		t.Fatal(err)
+	}
+	if manifest.WorkDir != "[REDACTED_ENV]" {
+		t.Fatalf("manifest work_dir = %q, want redacted marker", manifest.WorkDir)
 	}
 	for _, entry := range manifest.Entries {
 		body, ok := files[entry.Path]
 		if !ok {
 			t.Fatalf("manifest entry missing from archive: %+v", entry)
+		}
+		if strings.Contains(entry.SourcePath, work) {
+			t.Fatalf("manifest source_path leaked configured work dir: %+v", entry)
 		}
 		sum := sha256.Sum256(body)
 		if entry.SHA256 != hex.EncodeToString(sum[:]) {
