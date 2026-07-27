@@ -115,3 +115,30 @@ environment:
 		})
 	}
 }
+
+func TestAgentConfigRedactionAcceptsNullEnvironmentVariables(t *testing.T) {
+	tests := map[string]string{
+		"explicit": "environment:\n  variables: null\n",
+		"implicit": "environment:\n  variables:\n",
+	}
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := AgentConfig{Exists: true, Content: content}
+			redacted, err := RedactAgentConfig(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if redacted.Content != content {
+				t.Fatalf("redacted content = %q, want unchanged %q", redacted.Content, content)
+			}
+
+			merged, err := mergeRedactedEnvironmentValues([]byte(content), state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(merged) != content {
+				t.Fatalf("merged content = %q, want unchanged %q", merged, content)
+			}
+		})
+	}
+}

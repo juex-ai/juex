@@ -125,6 +125,9 @@ func parseEnvironmentVariables(data []byte) (*yaml.Node, *yaml.Node, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if variables != nil && variables.Kind == yaml.ScalarNode && variables.Tag == "!!null" {
+		variables = nil
+	}
 	if variables != nil && variables.Kind != yaml.MappingNode {
 		return nil, nil, fmt.Errorf("environment.variables must be a mapping")
 	}
