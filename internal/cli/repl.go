@@ -7,7 +7,7 @@ import (
 )
 
 func newREPLCmd(flags *persistentFlags) *cobra.Command {
-	var rf resumeFlags
+	var alias string
 	var newSession bool
 	var ephemeral bool
 	var keep bool
@@ -31,13 +31,6 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 			if err := ensureSelectedRuntimeConfig(cfg); err != nil {
 				return err
 			}
-			resumeDir, err := resolveSessionDir(rf, cfg.SessionsDir(), cfg.HistoryPath(), cmd.InOrStdin(), cmd.OutOrStdout(), stdinIsTTY())
-			if err != nil {
-				return err
-			}
-			if newSession && (rf.Resume != "" || rf.Session != "") {
-				return &usageError{msg: "pass --new or --resume/--session, not both"}
-			}
 			mode := app.SessionModeAttachActive
 			if newSession {
 				mode = app.SessionModeNewPrimary
@@ -49,8 +42,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 				LogLevel:    flags.logLevel,
 				WorkDir:     cfg.WorkDir,
 				Stderr:      cmd.ErrOrStderr(),
-				ResumeDir:   resumeDir,
-				Alias:       rf.Alias,
+				Alias:       alias,
 				SessionMode: mode,
 			})
 			if err != nil {
@@ -65,10 +57,7 @@ func newREPLCmd(flags *persistentFlags) *cobra.Command {
 	cmd.Flags().BoolVar(&newSession, "new", false, "create a new primary session and make it active")
 	cmd.Flags().BoolVar(&ephemeral, "ephemeral", false, "use isolated temporary agent state and remove it on exit")
 	cmd.Flags().BoolVar(&keep, "keep", false, "retain and print ephemeral agent state after exit (requires --ephemeral)")
-	cmd.Flags().StringVar(&rf.Resume, "resume", "", "deprecated: resume a past session by id, alias, or 'last'; use sessions activate")
-	cmd.Flags().Lookup("resume").NoOptDefVal = resumePick
-	cmd.Flags().StringVar(&rf.Session, "session", "", "resume a specific session id")
-	cmd.Flags().StringVar(&rf.Alias, "alias", "", "set or update the session alias")
+	cmd.Flags().StringVar(&alias, "alias", "", "set or update the session alias")
 	declareAgentStatePolicy(cmd, agentStateMint)
 	return cmd
 }

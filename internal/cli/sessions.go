@@ -25,15 +25,46 @@ type sessionsListOutput struct {
 func newSessionsCmd(flags *persistentFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sessions",
-		Short: "List, show, delete, and resume past sessions",
+		Short: "List, inspect, continue, and delete sessions",
 	}
 	cmd.AddCommand(newSessionsListCmd(flags))
 	cmd.AddCommand(newSessionsShowCmd(flags))
+	cmd.AddCommand(newSessionsContinueCmd(flags))
 	cmd.AddCommand(newSessionsContextCmd(flags))
 	cmd.AddCommand(newSessionsCompactCmd(flags))
 	cmd.AddCommand(newSessionsActivateCmd(flags))
 	cmd.AddCommand(newSessionsDeleteCmd(flags))
 	declareAgentStatePolicy(cmd, agentStateExisting)
+	return cmd
+}
+
+func newSessionsContinueCmd(flags *persistentFlags) *cobra.Command {
+	var (
+		jsonOut     bool
+		attachPaths []string
+	)
+	cmd := &cobra.Command{
+		Use:   "continue <id> [prompt]",
+		Short: "Run one turn in a recorded session without changing its kind",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return &usageError{msg: "juex sessions continue: <id> required"}
+			}
+			if len(args) < 2 && len(attachPaths) == 0 {
+				return &usageError{msg: "juex sessions continue: prompt or --attach required"}
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return executeRunCommand(cmd, flags, args[1:], runCommandOptions{
+				jsonOut:         jsonOut,
+				attachPaths:     attachPaths,
+				continueSession: args[0],
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "emit a JSON result on stdout (and JSON errors on stderr)")
+	cmd.Flags().StringArrayVar(&attachPaths, "attach", nil, "attach an image to this turn (repeatable; relative to workdir)")
 	return cmd
 }
 
@@ -99,6 +130,14 @@ func renderSessionsTable(cmd *cobra.Command, infos []session.Info) {
 		fmt.Fprintf(w, "%-32s  %-8s  %-6s  %-16s  %-20s  %5d  %s\n",
 			s.ID, s.Kind, active, truncateRunes(s.Alias, 16), s.LastActiveAt.Format("2006-01-02 15:04:05"), s.Turns, truncateRunes(s.Preview, 60))
 	}
+}
+
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 type sessionsShowOutput struct {

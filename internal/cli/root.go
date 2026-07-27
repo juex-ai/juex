@@ -154,7 +154,6 @@ type persistentFlags struct {
 	cwd                       string
 	model                     string
 	enableUserAgentsResources string
-	enableUserGlobalResources string
 	debug                     bool
 	logLevel                  string
 	verbose                   bool
@@ -239,12 +238,6 @@ operate on an agent.`,
 			return cmd.Help()
 		},
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if flag := cmd.Root().PersistentFlags().Lookup("enable-user-global-resources"); flag != nil && flag.Changed {
-				fmt.Fprintln(
-					cmd.ErrOrStderr(),
-					"juex: warning: --enable-user-global-resources is deprecated; use --enable-user-agents-resources",
-				)
-			}
 			if isFleetCommand(cmd) {
 				for _, name := range []string{"cwd", "config", "model"} {
 					flag := cmd.Root().PersistentFlags().Lookup(name)
@@ -269,10 +262,6 @@ operate on an agent.`,
 	cmd.PersistentFlags().StringVar(&flags.model, "model", "", "model override in provider:model form")
 	cmd.PersistentFlags().StringVar(&flags.enableUserAgentsResources, "enable-user-agents-resources", "", "enable personal ~/.agents resources (true/false or 1/0; default from config)")
 	if flag := cmd.PersistentFlags().Lookup("enable-user-agents-resources"); flag != nil {
-		flag.NoOptDefVal = "true"
-	}
-	cmd.PersistentFlags().StringVar(&flags.enableUserGlobalResources, "enable-user-global-resources", "", "deprecated: use --enable-user-agents-resources")
-	if flag := cmd.PersistentFlags().Lookup("enable-user-global-resources"); flag != nil {
 		flag.NoOptDefVal = "true"
 	}
 	// --verbose has no short form at root level so each subcommand can use
@@ -366,13 +355,6 @@ func loadConfigWithPolicy(flags *persistentFlags, policy agentStatePolicy) (conf
 		}
 		return cfg, err
 	}
-	if flags != nil && flags.enableUserGlobalResources != "" {
-		enabled, err := config.ParseBoolValue(flags.enableUserGlobalResources)
-		if err != nil {
-			return cfg, &usageError{msg: "--enable-user-global-resources: " + err.Error()}
-		}
-		cfg.EnableUserAgentsResources = enabled
-	}
 	if flags != nil && flags.enableUserAgentsResources != "" {
 		enabled, err := config.ParseBoolValue(flags.enableUserAgentsResources)
 		if err != nil {
@@ -400,9 +382,6 @@ func loadConfigForCommand(cmd *cobra.Command, flags *persistentFlags) (config.Co
 }
 
 func writeConfigMessages(cmd *cobra.Command, cfg config.Config) {
-	for _, warning := range cfg.DeprecationWarnings {
-		fmt.Fprintf(cmd.ErrOrStderr(), "juex: warning: %s\n", warning)
-	}
 	for _, notice := range cfg.AgentStateNotices {
 		fmt.Fprintf(cmd.ErrOrStderr(), "juex: notice: %s\n", notice)
 	}

@@ -177,6 +177,7 @@ operate on an agent. `juex init` sets up either the shared user config
 | `/new`, `/status`, `/compact [instructions]` | Local slash commands accepted by `run`, `repl`, and the web composer. |
 | `juex sessions list` | List recorded sessions. |
 | `juex sessions show <id>` | Print session metadata and transcript. |
+| `juex sessions continue <id> "<prompt>"` | Run another turn in a recorded session; side sessions remain inactive. |
 | `juex sessions activate <id>` | Make a primary session the active workspace session. |
 | `juex sessions context <id>` | Print the active provider context for a session. |
 | `juex sessions compact <id> --instructions "<focus>"` | Append a manual compact summary marker to a session. |
@@ -291,14 +292,12 @@ extension bundles under `$JUEX_HOME/extensions/<name>/`. Set
 `enable_user_agents_resources: false` in `juex.yaml`, or pass
 `--enable-user-agents-resources=false`, to ignore only the personal
 `~/.agents` resources for a run. Home extension bundles remain enabled because
-they are explicit configuration of the selected JueX home. The deprecated
-`enable_user_global_resources` key and `--enable-user-global-resources` flag
-remain aliases for one release and warn with the new spelling. Project-local
+they are explicit configuration of the selected JueX home. Project-local
 AGENTS.md, skills, and MCP servers still come from `.agents/`, and project
-extension bundles still come from `.juex/extensions/<name>/`. Extension
-bundles may provide `skills/`, `mcp.json`, and `hooks.yaml`; runtime status
-reports them with source `ext:<name>`. Work-local extension hooks must set
-`trusted: true`; JueX-home extension hooks are trusted by location.
+extension bundles still come from `.juex/extensions/<name>/`. Extension bundles
+may provide `skills/`, `mcp.json`, and `hooks.yaml`; runtime status reports them
+with source `ext:<name>`. Work-local extension hooks must set `trusted: true`;
+JueX-home extension hooks are trusted by location.
 Extension MCP servers receive `JUEX_EXT_DIR` alongside `WORKDIR` and
 `JUEX_WORKDIR`. Identity-owned runtime state lives under
 `$JUEX_HOME/agents/<id>`; workspace artifacts and Observable

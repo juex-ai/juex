@@ -55,7 +55,6 @@ juex/
 │   │   ├── root.go
 │   │   ├── run.go
 │   │   ├── repl.go
-│   │   ├── resume.go
 │   │   ├── schema.go
 │   │   ├── listen.go
 │   │   ├── sessions.go
@@ -1080,6 +1079,7 @@ juex [--version | -v]
 ├── sessions
 │   ├── list   [--limit N] [--format json|table]
 │   ├── show <id> [--format json|text]
+│   ├── continue <id> ["<prompt>"] [--attach <path>]... [--json]
 │   ├── activate <id> [--format json|text]
 │   ├── context <id> [--format json|text]
 │   ├── compact <id> [--reason <reason>] [--format json|text]
@@ -1144,7 +1144,6 @@ Persistent flags inherited by all subcommands:
 | `--config` |  | unset (path to `juex.yaml` override) |
 | `--cwd` | `-C` | `$PWD` (mirrors `git -C`) |
 | `--enable-user-agents-resources` |  | config value (true/false or 1/0) |
-| `--enable-user-global-resources` |  | deprecated alias; warns and defers to the new spelling when both are present |
 | `--verbose` |  | false (stream events to stderr) |
 
 Every executable Cobra command declares an agent-state policy through an
@@ -1380,6 +1379,8 @@ derived by `internal/session` from canonical message IDs. This timestamp is not
 added to `llm.Message` or persisted JSONL; legacy IDs simply omit it.
 Only the active primary session accepts `POST /turns`; inactive primary
 sessions must be activated first, and side sessions are read-only in the Web UI.
+The CLI continues a recorded side session through `juex sessions continue`
+without making it active.
 The web handler is a transport adapter over app-level turn admission: it
 validates HTTP/session access, decodes request JSON, renders admission results,
 updates its in-memory session cache when `/new` switches sessions, and owns
@@ -1643,7 +1644,6 @@ compaction:
 | `model` | active model reference in `provider:model` form |
 | `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
 | `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; `$JUEX_HOME/extensions` remains enabled |
-| `enable_user_global_resources` | deprecated one-release alias for `enable_user_agents_resources`; emits a warning, and the new spelling wins when both appear in one file |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
