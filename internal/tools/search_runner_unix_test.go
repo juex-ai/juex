@@ -153,8 +153,8 @@ func TestRipgrepRunnerCancellationKillsProcessGroup(t *testing.T) {
 	body := `#!/bin/sh
 (while :; do sleep 1; done) &
 child=$!
-printf '%s\n' "$child" > "$JUEX_TEST_RG_CHILD_PID"
 printf '%s\n' '{"type":"match","data":{"path":{"text":"partial.txt"},"lines":{"text":"partial match\n"},"line_number":1}}'
+printf '%s\n' "$child" > "$JUEX_TEST_RG_CHILD_PID"
 while :; do sleep 1; done
 `
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
@@ -179,8 +179,9 @@ while :; do sleep 1; done
 	}()
 
 	var pid int
-	// Race-enabled package matrices can delay the helper shell while other
-	// packages are compiling. This gate waits for startup, not cancellation.
+	// The helper records its PID only after writing the partial match, so the
+	// gate proves both startup and that the data expected after cancellation
+	// has reached the stdout pipe.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(pidFile)
