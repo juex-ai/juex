@@ -3,12 +3,12 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
 
-	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 )
 
@@ -58,6 +58,28 @@ func HasConversation(dir string) bool {
 // StartedAt descending. A missing root is treated as "no sessions" and
 // returns nil + nil error so callers can render an empty list cleanly.
 func List(root string) ([]Info, error) {
+	return list(root, nil)
+}
+
+// ListWithHistory enumerates canonical session directories like List while
+// reusing transcript summaries recorded in historyPath when their transcript
+// modification time still matches. Current metadata and event usage are always
+// read from their canonical session files.
+func ListWithHistory(root, historyPath string) ([]Info, error) {
+	history, err := LoadHistory(historyPath)
+	if err != nil {
+		return nil, err
+	}
+	recorded := make(map[string]Info, len(history.Sessions))
+	for _, info := range history.Sessions {
+		if info.ID != "" {
+			recorded[info.ID] = info
+		}
+	}
+	return list(root, recorded)
+}
+
+func list(root string, recorded map[string]Info) ([]Info, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -71,7 +93,7 @@ func List(root string) ([]Info, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		info, _, err := loadInfoSummary(dir)
+		info, err := cachedOrScannedInfo(dir, e.Name(), recorded)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -80,13 +102,46 @@ func List(root string) ([]Info, error) {
 		}
 		out = append(out, info)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].LastActiveAt.Equal(out[j].LastActiveAt) {
-			return out[i].LastActiveAt.After(out[j].LastActiveAt)
-		}
-		return out[i].StartedAt.After(out[j].StartedAt)
-	})
+	sortInfos(out)
 	return out, nil
+}
+
+func cachedOrScannedInfo(dir, id string, recorded map[string]Info) (Info, error) {
+	convPath := filepath.Join(dir, conversationFile)
+	st, err := os.Stat(convPath)
+	if err != nil {
+		return Info{}, err
+	}
+	cached, ok := recorded[id]
+	if !ok || !cached.LastActiveAt.Equal(st.ModTime()) {
+		info, _, err := loadInfoSummary(dir)
+		return info, err
+	}
+	meta, err := loadMetadata(dir)
+	if err != nil {
+		return Info{}, err
+	}
+	info := Info{
+		ID:           id,
+		Alias:        meta.Alias,
+		Dir:          dir,
+		Kind:         meta.Kind,
+		StartedAt:    parseStartedAt(id, st.ModTime()),
+		LastActiveAt: st.ModTime(),
+		Turns:        cached.Turns,
+		Preview:      cached.Preview,
+	}
+	info.TokenUsage, info.ContextUsage, _ = loadLatestSessionUsage(dir)
+	return info, nil
+}
+
+func sortInfos(infos []Info) {
+	sort.SliceStable(infos, func(i, j int) bool {
+		if !infos[i].LastActiveAt.Equal(infos[j].LastActiveAt) {
+			return infos[i].LastActiveAt.After(infos[j].LastActiveAt)
+		}
+		return infos[i].StartedAt.After(infos[j].StartedAt)
+	})
 }
 
 // LoadInfo returns both the Info summary and the full message slice for
@@ -142,71 +197,58 @@ func loadInfoSummary(dir string) (Info, transcriptIndex, error) {
 }
 
 func loadLatestSessionUsage(dir string) (llm.Usage, *llm.ContextUsage, error) {
-	data, err := os.ReadFile(filepath.Join(dir, eventsFile))
+	file, err := os.Open(filepath.Join(dir, eventsFile))
+	if err != nil {
+		return llm.Usage{}, nil, err
+	}
+	defer file.Close()
+	reader, err := newReverseLineReader(file)
 	if err != nil {
 		return llm.Usage{}, nil, err
 	}
 	var tokenUsage llm.Usage
-	var latest *llm.ContextUsage
-	for _, line := range splitLines(data) {
-		if len(line) == 0 {
+	var contextUsage *llm.ContextUsage
+	tokenFound := false
+	contextFound := false
+	for !tokenFound || !contextFound {
+		line, err := reader.next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return llm.Usage{}, nil, err
+		}
+		var envelope struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(line, &envelope); err != nil || envelope.Type != "llm.responded" {
 			continue
 		}
-		var e events.Event
-		if err := json.Unmarshal(line, &e); err != nil {
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			continue
 		}
-		if e.Type != "llm.responded" {
-			continue
+		if !tokenFound {
+			if raw, ok := payload["token_usage"]; ok {
+				var usage llm.Usage
+				if err := json.Unmarshal(raw, &usage); err == nil {
+					tokenUsage = usage
+					tokenFound = true
+				}
+			}
 		}
-		if usage, ok := tokenUsageFromPayload(e.Payload); ok {
-			tokenUsage = usage
+		if !contextFound {
+			if raw, ok := payload["context_usage"]; ok {
+				var usage llm.ContextUsage
+				if err := json.Unmarshal(raw, &usage); err == nil {
+					contextUsage = &usage
+					contextFound = true
+				}
+			}
 		}
-		if usage, ok := contextUsageFromPayload(e.Payload); ok {
-			latest = &usage
-		}
 	}
-	return tokenUsage, latest, nil
-}
-
-func tokenUsageFromPayload(payload any) (llm.Usage, bool) {
-	p, ok := payload.(map[string]any)
-	if !ok {
-		return llm.Usage{}, false
-	}
-	raw, ok := p["token_usage"]
-	if !ok {
-		return llm.Usage{}, false
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return llm.Usage{}, false
-	}
-	var usage llm.Usage
-	if err := json.Unmarshal(data, &usage); err != nil {
-		return llm.Usage{}, false
-	}
-	return usage, true
-}
-
-func contextUsageFromPayload(payload any) (llm.ContextUsage, bool) {
-	p, ok := payload.(map[string]any)
-	if !ok {
-		return llm.ContextUsage{}, false
-	}
-	raw, ok := p["context_usage"]
-	if !ok {
-		return llm.ContextUsage{}, false
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return llm.ContextUsage{}, false
-	}
-	var usage llm.ContextUsage
-	if err := json.Unmarshal(data, &usage); err != nil {
-		return llm.ContextUsage{}, false
-	}
-	return usage, true
+	return tokenUsage, contextUsage, nil
 }
 
 // parseStartedAt extracts the timestamp prefix from a session id

@@ -1,0 +1,59 @@
+package session
+
+import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestReverseLineReader(t *testing.T) {
+	long := strings.Repeat("x", reverseLineBlockBytes+17)
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, []byte("first\r\n\n"+long+"\nlast"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	reader, err := newReverseLineReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for index, want := range []string{"last", long, "first"} {
+		got, err := reader.next()
+		if err != nil {
+			t.Fatalf("line %d: %v", index, err)
+		}
+		if string(got) != want {
+			t.Fatalf("line %d = %q, want %q", index, got, want)
+		}
+	}
+	if _, err := reader.next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final error = %v, want EOF", err)
+	}
+}
+
+func TestReverseLineReaderRejectsOversizedLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxEventLineBytes+1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	reader, err := newReverseLineReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.next(); !errors.Is(err, errEventLineTooLong) {
+		t.Fatalf("error = %v, want errEventLineTooLong", err)
+	}
+}

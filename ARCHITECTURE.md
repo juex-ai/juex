@@ -921,7 +921,14 @@ and `repl`.
 
 `session.List(root)` returns a time-sorted summary of every session
 directory under `root`; `session.LoadInfo(dir)` returns one session's
-summary plus its full message slice. Both are read-only.
+summary plus its full message slice. `session.ListWithHistory(root,
+historyPath)` is the Web-oriented form: it reuses transcript-derived summaries
+from the Agent history index only while the canonical transcript modification
+time matches, reloads small session metadata directly, and reads cumulative
+usage backward from the event-journal tail. Missing or stale summaries fall
+back to the same strict disk scan as `List`. All three operations are
+read-only.
+
 ### 3.6 App + Runtime
 
 ```go
@@ -1385,11 +1392,15 @@ Slow clients are dropped after a 5s buffer-full timeout.
 
 The server merges active in-memory sessions into `GET /api/sessions` and
 `GET /api/sessions/<id>` so a newly created empty chat is visible in the web
-UI without forcing an immediate disk write. Session transcript responses are
-windowed by default: `GET /api/sessions/<id>` returns the latest compact marker
-and following messages when one exists, otherwise a bounded recent message
-window. Clients can request older windows with `before=<message_id>` and can
-lower or raise the window with `limit`, capped by the server.
+UI without forcing an immediate disk write. The list route uses the Agent
+history index as a validated transcript-summary cache instead of replaying
+every full transcript on each page load; canonical directory enumeration,
+metadata reads, event-tail usage, and strict stale-entry fallback preserve the
+disk-list contract. Session transcript responses are windowed by default:
+`GET /api/sessions/<id>` returns the latest compact marker and following
+messages when one exists, otherwise a bounded recent message window. Clients
+can request older windows with `before=<message_id>` and can lower or raise the
+window with `limit`, capped by the server.
 Each message response may also include an RFC3339 `created_at` read-model field
 derived by `internal/session` from canonical message IDs. This timestamp is not
 added to `llm.Message` or persisted JSONL; IDs without the canonical timestamp

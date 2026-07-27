@@ -471,21 +471,6 @@ func normalizeLoadedMessage(path string, line int, m llm.Message) (llm.Message, 
 	return m, nil
 }
 
-func splitLines(data []byte) [][]byte {
-	var out [][]byte
-	start := 0
-	for i, b := range data {
-		if b == '\n' {
-			out = append(out, data[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		out = append(out, data[start:])
-	}
-	return out
-}
-
 func (s *Session) historyInfoLocked() (Info, bool) {
 	if s.historyPath == "" {
 		return Info{}, false

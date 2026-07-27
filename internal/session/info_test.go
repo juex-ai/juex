@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,228 @@ func TestList_SortsByLastActiveDesc(t *testing.T) {
 	}
 	if got[1].ID != "20260501T100000-aaaa1111" {
 		t.Errorf("got[1].ID = %s, want older second", got[1].ID)
+	}
+}
+
+func TestListWithHistoryUsesRecordedTranscriptSummaryAndFreshUsage(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	id := "20260727T120000-cached01"
+	dir := makeSession(t, root, id, nil, mtime)
+	convPath := filepath.Join(dir, conversationFile)
+	if err := os.WriteFile(convPath, []byte("not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(convPath, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordSession(historyPath, Info{
+		ID:           id,
+		Dir:          "/stale/recorded/path",
+		Kind:         KindPrimary,
+		Active:       true,
+		StartedAt:    mtime,
+		LastActiveAt: mtime,
+		Turns:        99,
+		Preview:      "cached transcript summary",
+		TokenUsage:   llm.Usage{InputTokens: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetKind(dir, KindSide); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAlias(dir, "current alias"); err != nil {
+		t.Fatal(err)
+	}
+	writeEvents(t, dir, []events.Event{
+		{
+			Type: "llm.responded",
+			Payload: map[string]any{
+				"token_usage":   llm.Usage{InputTokens: 10, OutputTokens: 2},
+				"context_usage": llm.ContextUsage{Model: "mock", TotalTokens: 12},
+			},
+		},
+		{
+			Type: "llm.responded",
+			Payload: map[string]any{
+				"token_usage": llm.Usage{InputTokens: 20, OutputTokens: 4},
+			},
+		},
+	})
+	eventsPath := filepath.Join(dir, eventsFile)
+	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("malformed tail"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListWithHistory(root, historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1; got %+v", len(got), got)
+	}
+	info := got[0]
+	if info.ID != id || info.Dir != dir {
+		t.Fatalf("identity = %q %q, want %q %q", info.ID, info.Dir, id, dir)
+	}
+	if info.Alias != "current alias" || info.Kind != KindSide || info.Active {
+		t.Fatalf("metadata = alias %q kind %q active %t", info.Alias, info.Kind, info.Active)
+	}
+	if info.Turns != 99 || info.Preview != "cached transcript summary" {
+		t.Fatalf("transcript summary = turns %d preview %q", info.Turns, info.Preview)
+	}
+	if info.TokenUsage != (llm.Usage{InputTokens: 20, OutputTokens: 4}) {
+		t.Fatalf("token usage = %+v", info.TokenUsage)
+	}
+	if info.ContextUsage == nil || info.ContextUsage.Model != "mock" || info.ContextUsage.TotalTokens != 12 {
+		t.Fatalf("context usage = %+v", info.ContextUsage)
+	}
+}
+
+func TestListWithHistoryInvalidatesChangedTranscript(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	id := "20260727T120000-stale001"
+	dir := makeSession(t, root, id,
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "before")},
+		mtime)
+	if err := RecordSession(historyPath, Info{
+		ID:           id,
+		Dir:          dir,
+		Kind:         KindPrimary,
+		StartedAt:    mtime,
+		LastActiveAt: mtime,
+		Turns:        1,
+		Preview:      "before",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	convPath := filepath.Join(dir, conversationFile)
+	if err := os.WriteFile(convPath, []byte("not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed := mtime.Add(time.Second)
+	if err := os.Chtimes(convPath, changed, changed); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ListWithHistory(root, historyPath); err == nil {
+		t.Fatal("ListWithHistory accepted a changed malformed transcript")
+	}
+}
+
+func TestListWithHistoryScansDiskOnlyAndOmitsStaleHistory(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	id := "20260727T120000-diskonly"
+	makeSession(t, root, id,
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "disk only")},
+		mtime)
+	if err := RecordSession(historyPath, Info{
+		ID:           "20260727T110000-stale001",
+		Dir:          "/outside/old/session",
+		Kind:         KindPrimary,
+		StartedAt:    mtime.Add(-time.Hour),
+		LastActiveAt: mtime.Add(-time.Hour),
+		Turns:        10,
+		Preview:      "stale",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListWithHistory(root, historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != id || got[0].Preview != "disk only" {
+		t.Fatalf("sessions = %+v, want only disk session %s", got, id)
+	}
+}
+
+func TestListWithHistoryMatchesStrictListWithStaleRecordedUsage(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	id := "20260727T120000-exact001"
+	dir := makeSession(t, root, id,
+		[]llm.Message{
+			llm.TextMessage(llm.RoleUser, "hello"),
+			llm.TextMessage(llm.RoleAssistant, "world"),
+		},
+		mtime)
+	writeEvents(t, dir, []events.Event{
+		{
+			Type: "llm.responded",
+			Payload: map[string]any{
+				"token_usage":   llm.Usage{InputTokens: 10, OutputTokens: 2},
+				"context_usage": llm.ContextUsage{Model: "mock", TotalTokens: 12},
+			},
+		},
+		{
+			Type: "llm.responded",
+			Payload: map[string]any{
+				"token_usage": llm.Usage{InputTokens: 20, OutputTokens: 4},
+			},
+		},
+	})
+	strict, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strict) != 1 {
+		t.Fatalf("strict sessions = %+v", strict)
+	}
+	stale := strict[0]
+	stale.TokenUsage = llm.Usage{InputTokens: 1}
+	stale.ContextUsage = nil
+	if err := RecordSession(historyPath, stale); err != nil {
+		t.Fatal(err)
+	}
+
+	cached, err := ListWithHistory(root, historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cached, strict) {
+		t.Fatalf("cached = %+v, want strict %+v", cached, strict)
+	}
+}
+
+func TestListWithHistoryReturnsMetadataErrorOnCacheHit(t *testing.T) {
+	root := t.TempDir()
+	historyPath := filepath.Join(t.TempDir(), "history.json")
+	mtime := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	id := "20260727T120000-badmeta1"
+	dir := makeSession(t, root, id,
+		[]llm.Message{llm.TextMessage(llm.RoleUser, "hello")},
+		mtime)
+	if err := RecordSession(historyPath, Info{
+		ID:           id,
+		Dir:          dir,
+		LastActiveAt: mtime,
+		Turns:        1,
+		Preview:      "hello",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, metadataFile), []byte("not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ListWithHistory(root, historyPath); err == nil {
+		t.Fatal("ListWithHistory accepted malformed session metadata")
 	}
 }
 
