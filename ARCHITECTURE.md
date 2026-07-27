@@ -189,6 +189,7 @@ implementation decisions live.
 | `internal/fleet` | Registry-wide binding and health projection, per-Agent lifecycle locking, reconciliation, detached Agent start/stop/restart, logs, config replacement orchestration, intentional removal and GC policy | Browser routes/DTOs, native service registration, endpoint schemes, arbitrary user-authored Workspace content |
 | `internal/fleetservice` | Per-user launchd/systemd/Termux supervisor definitions and service-manager transactions | Individual Agent lifecycle, Fleet address policy, CLI presentation |
 | `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
+| `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
 | `internal/extensions` | Home/Workspace extension discovery, source identity, duplicate-name rejection, resource references, trust requirement projection | Skill/MCP/hook parsing, runtime registration, extension execution |
 | `internal/config` | YAML/environment and user/Workspace config layering, Provider selection inputs, path and policy projection | Canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
@@ -1306,6 +1307,15 @@ enrichment failure leaves the process-health roster usable. The aggregate
 agent status streams. Browser subscribers share one upstream stream per healthy
 agent; periodic roster reconciliation only discovers process lifecycle changes.
 
+`internal/processmetrics` samples RSS plus cumulative user and system CPU time
+for a caller-owned key. CPU is emitted only after an elapsed baseline and uses
+single-core-equals-100% semantics without a host-core divisor or upper clamp.
+`internal/fleet` attaches usage only after a recorded Agent process and endpoint
+identity are both verified healthy; sampling failure does not change health or
+append a problem. `internal/fleetweb` owns a separate sampler for the resident
+Fleet server and exposes it through `GET /api/fleet/status`, so Fleet metric
+failure remains independent from roster availability.
+
 `/agents/<id>/api/...` asks `fleet.Manager.Endpoint` to re-read and probe a
 bound healthy runtime immediately before forwarding. It then uses the parsed
 `endpoint.Target` transport for either Unix or numeric-loopback TCP endpoints.
@@ -1444,6 +1454,7 @@ proxy as `/agents/<id>/api/...`. Fleet browser and management routes are:
 | GET | `/settings` | Fleet settings SPA route |
 | GET | `/assets/*` | embedded JS/CSS/font assets |
 | GET | `/api/agents` | Fleet roster JSON with best-effort live activity for healthy agents |
+| GET | `/api/fleet/status` | Resident Fleet process RSS and interval CPU usage |
 | POST | `/api/agents` | Register an absolute workspace, optionally set metadata and start |
 | GET | `/api/fs/dirs?path=&show_hidden=` | Browse one level of server-side directories |
 | POST | `/api/fs/dirs` | Create one empty child directory under a browsed absolute parent |

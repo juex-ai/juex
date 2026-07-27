@@ -12,6 +12,7 @@ import (
 	"github.com/juex-ai/juex/internal/agentstate"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/homestore"
+	"github.com/juex-ai/juex/internal/processmetrics"
 	"github.com/juex-ai/juex/internal/statusapi"
 )
 
@@ -31,22 +32,23 @@ const (
 )
 
 type AgentStatus struct {
-	ID                string        `json:"id"`
-	Name              string        `json:"name,omitempty"`
-	Workspace         string        `json:"workspace,omitempty"`
-	Enabled           bool          `json:"enabled"`
-	Autostart         bool          `json:"autostart"`
-	Binding           BindingState  `json:"binding"`
-	RuntimeHealth     RuntimeHealth `json:"runtime_health"`
-	PID               int           `json:"pid,omitempty"`
-	Endpoint          string        `json:"endpoint,omitempty"`
-	StartedAt         time.Time     `json:"started_at,omitempty"`
-	BinaryVersion     string        `json:"binary_version,omitempty"`
-	RuntimePresent    bool          `json:"runtime_present"`
-	ProcessAlive      bool          `json:"process_alive"`
-	EndpointReachable bool          `json:"endpoint_reachable"`
-	EndpointMatched   bool          `json:"endpoint_matched"`
-	Problem           string        `json:"problem,omitempty"`
+	ID                string                `json:"id"`
+	Name              string                `json:"name,omitempty"`
+	Workspace         string                `json:"workspace,omitempty"`
+	Enabled           bool                  `json:"enabled"`
+	Autostart         bool                  `json:"autostart"`
+	Binding           BindingState          `json:"binding"`
+	RuntimeHealth     RuntimeHealth         `json:"runtime_health"`
+	PID               int                   `json:"pid,omitempty"`
+	Endpoint          string                `json:"endpoint,omitempty"`
+	StartedAt         time.Time             `json:"started_at,omitempty"`
+	BinaryVersion     string                `json:"binary_version,omitempty"`
+	RuntimePresent    bool                  `json:"runtime_present"`
+	ProcessAlive      bool                  `json:"process_alive"`
+	Process           *processmetrics.Usage `json:"process,omitempty"`
+	EndpointReachable bool                  `json:"endpoint_reachable"`
+	EndpointMatched   bool                  `json:"endpoint_matched"`
+	Problem           string                `json:"problem,omitempty"`
 }
 
 type RestartResume struct {
@@ -242,6 +244,12 @@ type dependencies struct {
 	spawn               func(string, string, agentstate.RegistryEntry) (spawnedProcess, error)
 }
 
+type processMetricsSampler interface {
+	processmetrics.Provider
+	Forget(string)
+	Retain([]string)
+}
+
 func defaultDependencies() dependencies {
 	return dependencies{
 		listRegistry:     agentstate.ListRegistry,
@@ -270,13 +278,14 @@ func defaultDependencies() dependencies {
 }
 
 type Manager struct {
-	homeDir      string
-	homeStore    *homestore.Store
-	executable   string
-	startTimeout time.Duration
-	stopTimeout  time.Duration
-	probeTimeout time.Duration
-	deps         dependencies
+	homeDir        string
+	homeStore      *homestore.Store
+	executable     string
+	startTimeout   time.Duration
+	stopTimeout    time.Duration
+	probeTimeout   time.Duration
+	processMetrics processMetricsSampler
+	deps           dependencies
 }
 
 func New(opts Options) (*Manager, error) {
@@ -313,13 +322,14 @@ func New(opts Options) (*Manager, error) {
 	}
 	store := homestore.New(homeDir)
 	return &Manager{
-		homeDir:      homeDir,
-		homeStore:    &store,
-		executable:   executable,
-		startTimeout: opts.StartTimeout,
-		stopTimeout:  opts.StopTimeout,
-		probeTimeout: opts.ProbeTimeout,
-		deps:         defaultDependencies(),
+		homeDir:        homeDir,
+		homeStore:      &store,
+		executable:     executable,
+		startTimeout:   opts.StartTimeout,
+		stopTimeout:    opts.StopTimeout,
+		probeTimeout:   opts.ProbeTimeout,
+		processMetrics: processmetrics.New(),
+		deps:           defaultDependencies(),
 	}, nil
 }
 
