@@ -21,6 +21,7 @@ import {
 import {
   addAgent,
   createDirectory,
+  getFleetStatus,
   listAgents,
   listDirectories,
   removeAgent,
@@ -56,6 +57,10 @@ import {
   validateNewDirectoryName,
   workspacePathUpdate,
 } from "@/lib/fleet-directories";
+import {
+  formatProcessCPU,
+  formatProcessMemory,
+} from "@/lib/fleet-process-metrics";
 import { agentPagePath } from "@/lib/fleet-routes";
 import {
   agentActionWarning,
@@ -64,16 +69,17 @@ import {
   nextFleetRosterLifecycleAction,
 } from "@/lib/fleet-shell";
 import { cn } from "@/lib/utils";
-import type { AgentStatus, DirectoryListing } from "@/types";
+import type { AgentStatus, DirectoryListing, FleetStatus } from "@/types";
 
 type LifecycleAction = "start" | "stop" | "restart";
 
 const FLEET_ROSTER_GRID_CLASS =
-  "grid grid-cols-[minmax(13rem,1fr)_minmax(18rem,1.4fr)_8rem_15rem]";
+  "grid grid-cols-[minmax(13rem,1fr)_minmax(18rem,1.4fr)_8rem_9rem_15rem]";
 
 export function Fleet() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [agents, setAgents] = useState<AgentStatus[]>([]);
+  const [fleetStatus, setFleetStatus] = useState<FleetStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyAgent, setBusyAgent] = useState<string | null>(null);
@@ -85,11 +91,23 @@ export function Fleet() {
     if (!quiet) setRefreshing(true);
     setError(null);
     try {
-      setAgents(await listAgents());
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Failed to load fleet roster.",
-      );
+      const [agentsResult, fleetStatusResult] = await Promise.allSettled([
+        listAgents(),
+        getFleetStatus(),
+      ]);
+      if (agentsResult.status === "fulfilled") {
+        setAgents(agentsResult.value);
+      } else {
+        const cause = agentsResult.reason;
+        setError(
+          cause instanceof Error ? cause.message : "Failed to load fleet roster.",
+        );
+      }
+      if (fleetStatusResult.status === "fulfilled") {
+        setFleetStatus(fleetStatusResult.value);
+      } else {
+        setFleetStatus(null);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -210,7 +228,16 @@ export function Fleet() {
             </div>
           ) : null}
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <FleetSettingCard
+              label="Fleet process"
+              value={
+                fleetStatus
+                  ? `${formatProcessMemory(fleetStatus.process.rss_bytes)} · CPU ${formatProcessCPU(fleetStatus.process.cpu_percent)}`
+                  : "Unavailable"
+              }
+              detail={window.location.host}
+            />
             <FleetSettingCard
               label="Fleet server"
               value={window.location.host}
@@ -241,7 +268,7 @@ export function Fleet() {
           </div>
 
           <div className="overflow-x-auto rounded-md border bg-card shadow-[var(--shadow-xs)]">
-            <div className="min-w-[54rem]">
+            <div className="min-w-[63rem]">
               <div
                 className={cn(
                   FLEET_ROSTER_GRID_CLASS,
@@ -251,6 +278,7 @@ export function Fleet() {
                 <div className="px-3 py-2 font-medium">Agent</div>
                 <div className="px-3 py-2 font-medium">Workspace</div>
                 <div className="px-3 py-2 font-medium">State</div>
+                <div className="px-3 py-2 font-medium">Process</div>
                 <div className="px-3 py-2 text-right font-medium">Actions</div>
               </div>
               {loading ? (
@@ -390,6 +418,27 @@ function AgentRow({
         <div className="mt-1 font-mono text-[10px] text-muted-foreground">
           {agent.binding}
         </div>
+      </div>
+      <div
+        className="px-3 py-3 font-mono text-xs text-muted-foreground"
+        title={
+          agent.process
+            ? `${formatProcessMemory(agent.process.rss_bytes)}, CPU ${formatProcessCPU(agent.process.cpu_percent)}`
+            : "Process metrics unavailable"
+        }
+      >
+        {agent.process ? (
+          <>
+            <div className="text-foreground">
+              {formatProcessMemory(agent.process.rss_bytes)}
+            </div>
+            <div className="mt-1 text-[10px]">
+              CPU {formatProcessCPU(agent.process.cpu_percent)}
+            </div>
+          </>
+        ) : (
+          "—"
+        )}
       </div>
       <div className="flex items-center justify-end gap-1 px-3 py-3">
         <TooltipProvider delayDuration={250}>

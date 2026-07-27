@@ -30,6 +30,7 @@ import type {
   RemovedAgent,
   AgentRuntimeStatusSnapshot,
   FleetAgentStatusEvent,
+  FleetStatus,
 } from "./types";
 import { agentBasePath } from "./lib/fleet-routes.ts";
 
@@ -341,6 +342,10 @@ export async function listObservableObservations(
 
 export async function listAgents(): Promise<AgentStatus[]> {
   return jsonOrThrow(await fetch("/api/agents"));
+}
+
+export async function getFleetStatus(): Promise<FleetStatus> {
+  return jsonOrThrow(await fetch("/api/fleet/status"));
 }
 
 export function subscribeFleetEvents(opts: {

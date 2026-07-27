@@ -1035,6 +1035,15 @@ export interface FleetAgentStatusEvent {
   activity: AgentActivity;
 }
 
+export interface ProcessUsage {
+  rss_bytes: number;
+  cpu_percent?: number;
+}
+
+export interface FleetStatus {
+  process: ProcessUsage;
+}
+
 export interface AgentStatus {
   id: string;
   name?: string;
@@ -1049,6 +1058,7 @@ export interface AgentStatus {
   binary_version?: string;
   runtime_present: boolean;
   process_alive: boolean;
+  process?: ProcessUsage;
   endpoint_reachable: boolean;
   endpoint_matched: boolean;
   problem?: string;

@@ -2,8 +2,10 @@
 
 This package owns registry-wide resident-agent health and lifecycle policy.
 
-- `Status` preserves workspace binding and runtime health as separate axes and
-  projects the serving binary version from runtime metadata.
+- `Status` preserves workspace binding and runtime health as separate axes,
+  projects the serving binary version from runtime metadata, and adds
+  best-effort RSS and interval CPU usage only after the process and endpoint
+  identity are verified healthy.
 - `Add` registers an existing absolute workspace through the standard marker
   rules, applies optional name/autostart metadata, and can start it immediately.
 - `SetEnabled` makes disable reversible: disable stops before persisting the
@@ -40,7 +42,8 @@ This package owns registry-wide resident-agent health and lifecycle policy.
 
 The package composes `internal/agentstate` for registry identity,
 `internal/endpoint` for runtime identity and maintenance guards, and
-`internal/config` for replacement workspace config validation. HTTP routing,
+`internal/config` for replacement workspace config validation, and
+`internal/processmetrics` for cross-platform process counters. HTTP routing,
 JSON shapes, and reverse proxy behavior stay in `internal/fleetweb`; Cobra
 output, prompts, and stable CLI exit categories stay in `internal/cli`.
 Native launchd, systemd user, and termux-services registration stays in

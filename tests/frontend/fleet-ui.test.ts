@@ -243,6 +243,14 @@ test("stage remounts existing pages through tabs and gates offline composers", (
 
 test("fleet operations expose roster lifecycle logs and config workflows", () => {
   assert.match(fleetSource, /listAgents/);
+  assert.match(fleetSource, /getFleetStatus/);
+  assert.match(apiSource, /function getFleetStatus/);
+  assert.match(
+    fleetSource,
+    /Promise\.allSettled\(\[\s*listAgents\(\),\s*getFleetStatus\(\),?\s*\]\)/,
+    "Fleet metric failure must not block the roster refresh",
+  );
+  assert.match(fleetSource, /Unavailable/);
   assert.match(fleetSource, /runAgentAction/);
   assert.match(fleetSource, /agentActionWarning\(action, next\)/);
   assert.match(fleetSource, /"start" \| "stop" \| "restart"/);
@@ -332,18 +340,17 @@ test("fleet operations expose roster lifecycle logs and config workflows", () =>
 test("fleet settings condenses roster state and actions without losing lifecycle semantics", () => {
   assert.match(
     fleetSource,
-    /const FLEET_ROSTER_GRID_CLASS =\s+"grid grid-cols-\[minmax\(13rem,1fr\)_minmax\(18rem,1\.4fr\)_8rem_15rem\]"/,
+    /const FLEET_ROSTER_GRID_CLASS =\s+"grid grid-cols-\[minmax\(13rem,1fr\)_minmax\(18rem,1\.4fr\)_8rem_9rem_15rem\]"/,
   );
   assert.equal(
     fleetSource.match(/FLEET_ROSTER_GRID_CLASS/g)?.length,
     3,
     "the header and rows must share one complete grid",
   );
-  for (const heading of ["Agent", "Workspace", "State", "Actions"]) {
+  for (const heading of ["Agent", "Workspace", "State", "Process", "Actions"]) {
     assert.match(fleetSource, new RegExp(`>${heading}<`));
   }
   assert.doesNotMatch(fleetSource, />Health</);
-  assert.doesNotMatch(fleetSource, />Process</);
   assert.doesNotMatch(fleetSource, /agent\.pid/);
   assert.doesNotMatch(fleetSource, /<HealthBadge/);
   assert.doesNotMatch(fleetSource, /label="Open agent"/);
@@ -355,6 +362,8 @@ test("fleet settings condenses roster state and actions without losing lifecycle
   assert.match(fleetSource, /nextFleetRosterLifecycleAction\(agent\)/);
   assert.match(fleetSource, /agentStateLabel\(agent\)/);
   assert.match(fleetSource, /\{agent\.binding\}/);
+  assert.match(fleetSource, /formatProcessMemory/);
+  assert.match(fleetSource, /formatProcessCPU/);
   assert.match(
     fleetSource,
     /lifecycleAction === "start" \? "Start agent" : "Stop agent"/,

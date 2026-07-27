@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
+	"github.com/juex-ai/juex/internal/processmetrics"
 	"github.com/juex-ai/juex/internal/session"
 	"github.com/juex-ai/juex/internal/web"
 )
@@ -28,10 +30,11 @@ const (
 )
 
 type Options struct {
-	Manager      *fleet.Manager
-	Addr         string
-	AllowAnyBind bool
-	OnReady      func(string)
+	Manager        *fleet.Manager
+	Addr           string
+	AllowAnyBind   bool
+	OnReady        func(string)
+	ProcessMetrics processmetrics.Provider
 }
 
 type backend interface {
@@ -61,6 +64,7 @@ type Server struct {
 	readActivity    func(context.Context, fleet.AgentStatus) (*agentActivity, error)
 	activityClients *activityClientPool
 	fleetStatus     *fleetStatusHub
+	processMetrics  processmetrics.Provider
 }
 
 func New(opts Options) (*Server, error) {
@@ -76,6 +80,10 @@ func newServer(manager backend, opts Options) *Server {
 		addr = config.DefaultFleetAddr
 	}
 	activityClients := newActivityClientPool()
+	processMetricProvider := opts.ProcessMetrics
+	if processMetricProvider == nil {
+		processMetricProvider = processmetrics.New()
+	}
 	server := &Server{
 		manager:         manager,
 		addr:            addr,
@@ -84,6 +92,7 @@ func newServer(manager backend, opts Options) *Server {
 		spa:             web.SPAHandler(),
 		readActivity:    activityClients.fetch,
 		activityClients: activityClients,
+		processMetrics:  processMetricProvider,
 	}
 	server.fleetStatus = newFleetStatusHub(manager, activityClients)
 	return server
@@ -94,6 +103,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/agents", s.handleAgents)
 	mux.HandleFunc("/api/agents/", s.dispatchAgentAPI)
+	mux.HandleFunc("/api/fleet/status", s.handleFleetStatus)
 	mux.HandleFunc("/api/fleet/events", s.handleFleetEvents)
 	mux.HandleFunc("/api/fs/dirs", s.handleDirectories)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
@@ -102,6 +112,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/agents/", s.dispatchAgentRoute)
 	mux.Handle("/", s.spa)
 	return mux
+}
+
+func (s *Server) handleFleetStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+	usage, err := s.processMetrics.Sample(r.Context(), "fleet", os.Getpid())
+	if err != nil {
+		writeError(
+			w,
+			http.StatusServiceUnavailable,
+			"metrics_unavailable",
+			"Fleet process metrics are unavailable",
+		)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Process processmetrics.Usage `json:"process"`
+	}{
+		Process: usage,
+	})
 }
 
 func (s *Server) Run(ctx context.Context) error {

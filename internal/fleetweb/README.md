@@ -5,6 +5,9 @@ This package adapts `fleet.Manager` to the loopback browser surface used by
 
 - Fleet API routes return the existing fleet status, lifecycle, bounded log,
   and workspace config types.
+- `GET /api/fleet/status` samples the resident Fleet server process through an
+  injected process-metrics provider. Collection failure is isolated from the
+  Agent roster.
 - `GET /api/fs/dirs` browses one server-side directory level and
   `POST /api/fs/dirs` creates exactly one validated empty child directory for
   the Add agent workflow. The mutation requires `application/json`, so a
@@ -23,6 +26,7 @@ This package adapts `fleet.Manager` to the loopback browser surface used by
   filesystem-mutation surface to remote clients. Shutdown drains active
   requests with a bounded timeout.
 
-Registry, runtime ownership, lifecycle locking, and config update policy remain
-in `internal/fleet`. Single-agent routes and frontend assets remain in
-`internal/web`.
+Registry, runtime ownership, lifecycle locking, Agent process-metric policy, and
+config update policy remain in `internal/fleet`. Cross-platform process counter
+collection remains in `internal/processmetrics`. Single-agent routes and
+frontend assets remain in `internal/web`.

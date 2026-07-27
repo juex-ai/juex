@@ -17,8 +17,13 @@ func (m *Manager) Status(ctx context.Context) ([]AgentStatus, error) {
 		return nil, err
 	}
 	statuses := make([]AgentStatus, 0, len(entries))
+	metricKeys := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		metricKeys = append(metricKeys, entry.ID)
 		statuses = append(statuses, m.inspectStatus(ctx, entry))
+	}
+	if m.processMetrics != nil {
+		m.processMetrics.Retain(metricKeys)
 	}
 	return statuses, nil
 }
@@ -30,6 +35,13 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 		Workspace: entry.Agent.Workspace,
 		Enabled:   entry.Agent.Enabled,
 		Autostart: entry.Agent.Autostart,
+	}
+	if m.processMetrics != nil {
+		defer func() {
+			if status.RuntimeHealth != RuntimeHealthy {
+				m.processMetrics.Forget(status.ID)
+			}
+		}()
 	}
 	binding := m.deps.inspectBinding(entry)
 	switch binding.Kind {
@@ -108,6 +120,14 @@ func (m *Manager) inspectStatus(ctx context.Context, entry agentstate.RegistryEn
 		status.Problem = appendProblem(status.Problem, "recorded process and endpoint are not alive")
 	default:
 		status.RuntimeHealth = RuntimeAmbiguous
+	}
+	if m.processMetrics != nil {
+		if status.RuntimeHealth == RuntimeHealthy {
+			usage, sampleErr := m.processMetrics.Sample(ctx, status.ID, status.PID)
+			if sampleErr == nil {
+				status.Process = &usage
+			}
+		}
 	}
 	return status
 }

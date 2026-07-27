@@ -285,12 +285,15 @@ narrower screens. Session history is opened from the stage header as
 ### 6.1 Fleet settings (`/settings`)
 
 Fleet settings is a stage view reached from the sidebar footer. It presents
-fleet listener and version details, system-service state, model/provider and
-extension ownership, followed by the dense operational roster. Each roster row
-uses the shared `Agent`, `Workspace`, `State`, and `Actions` grid. State combines
-the operational stopped/idle/working/failed projection with the runtime
-binding; process IDs and a separate health column are omitted. Actions expose
-one state-derived Start/Stop control, Restart, distinct Enable/Disable icons,
+the Fleet server process RSS and interval CPU usage first, then listener and
+version details, system-service state, model/provider and extension ownership,
+followed by the dense operational roster. Each roster row uses the shared
+`Agent`, `Workspace`, `State`, `Process`, and `Actions` grid. State combines the
+operational stopped/idle/working/failed projection with the runtime binding.
+Process shows RSS in decimal MB or GB and CPU where one fully occupied core is
+100%; it uses an em dash when unavailable and never clamps multi-core values.
+Process IDs and a separate health column are omitted. Actions expose one
+state-derived Start/Stop control, Restart, distinct Enable/Disable icons,
 bounded logs, config, and a transparent destructive Remove action. Disabled
 agents use a muted row treatment while their configuration and recovery actions
 remain available.

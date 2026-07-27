@@ -24,6 +24,7 @@ import (
 	"github.com/juex-ai/juex/internal/endpoint"
 	"github.com/juex-ai/juex/internal/fleet"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/processmetrics"
 	"github.com/juex-ai/juex/internal/session"
 )
 
@@ -71,6 +72,23 @@ func (f *fakeBackend) Add(_ context.Context, opts fleet.AddOptions) (fleet.AddRe
 	defer f.mu.Unlock()
 	f.addOptions = opts
 	return f.added, f.addErr
+}
+
+type fakeProcessMetrics struct {
+	usage processmetrics.Usage
+	err   error
+	key   string
+	pid   int
+}
+
+func (f *fakeProcessMetrics) Sample(
+	_ context.Context,
+	key string,
+	pid int,
+) (processmetrics.Usage, error) {
+	f.key = key
+	f.pid = pid
+	return f.usage, f.err
 }
 
 func (f *fakeBackend) Start(context.Context, string) (fleet.AgentStatus, error) {
@@ -271,11 +289,16 @@ func TestReadOnlyAgentPathsStayNarrow(t *testing.T) {
 }
 
 func TestFleetAPIResponseShapes(t *testing.T) {
+	cpuPercent := 125.5
 	status := fleet.AgentStatus{
 		ID:            "aaaaaaaa",
 		Name:          "alpha",
 		Binding:       fleet.BindingBound,
 		RuntimeHealth: fleet.RuntimeHealthy,
+		Process: &processmetrics.Usage{
+			RSSBytes:   96_000_000,
+			CPUPercent: &cpuPercent,
+		},
 	}
 	configState := fleet.AgentConfig{
 		Path:    "/workspace/.juex/juex.yaml",
@@ -296,7 +319,13 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		updated:      configState,
 		updateStatus: status,
 	}
-	server := newServer(backend, Options{Addr: "127.0.0.1:0"})
+	metrics := &fakeProcessMetrics{
+		usage: processmetrics.Usage{RSSBytes: 64_000_000},
+	}
+	server := newServer(backend, Options{
+		Addr:           "127.0.0.1:0",
+		ProcessMetrics: metrics,
+	})
 
 	tests := []struct {
 		name       string
@@ -307,6 +336,32 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 		assert     func(*testing.T, []byte)
 	}{
 		{
+			name:       "fleet status",
+			method:     http.MethodGet,
+			path:       "/api/fleet/status",
+			wantStatus: http.StatusOK,
+			assert: func(t *testing.T, body []byte) {
+				var got struct {
+					Process *processmetrics.Usage `json:"process"`
+				}
+				decodeJSON(t, body, &got)
+				if got.Process == nil ||
+					got.Process.RSSBytes != 64_000_000 {
+					t.Fatalf("fleet status = %+v", got)
+				}
+				if metrics.key != "fleet" || metrics.pid != os.Getpid() {
+					t.Fatalf("metrics target = %q/%d", metrics.key, metrics.pid)
+				}
+			},
+		},
+		{
+			name:       "fleet status requires get",
+			method:     http.MethodPost,
+			path:       "/api/fleet/status",
+			wantStatus: http.StatusMethodNotAllowed,
+			assert:     func(*testing.T, []byte) {},
+		},
+		{
 			name:       "roster",
 			method:     http.MethodGet,
 			path:       "/api/agents",
@@ -314,7 +369,12 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			assert: func(t *testing.T, body []byte) {
 				var got []fleet.AgentStatus
 				decodeJSON(t, body, &got)
-				if len(got) != 1 || got[0].ID != status.ID {
+				if len(got) != 1 ||
+					got[0].ID != status.ID ||
+					got[0].Process == nil ||
+					got[0].Process.RSSBytes != 96_000_000 ||
+					got[0].Process.CPUPercent == nil ||
+					*got[0].Process.CPUPercent != cpuPercent {
 					t.Fatalf("roster = %+v", got)
 				}
 			},
@@ -465,6 +525,26 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 			}
 			test.assert(t, body)
 		})
+	}
+}
+
+func TestFleetStatusReportsMetricCollectionFailure(t *testing.T) {
+	server := newServer(&fakeBackend{}, Options{
+		Addr: "127.0.0.1:0",
+		ProcessMetrics: &fakeProcessMetrics{
+			err: errors.New("access denied"),
+		},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/fleet/status", nil)
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"code":"metrics_unavailable"`) {
+		t.Fatalf("body = %s", response.Body.String())
 	}
 }
 
