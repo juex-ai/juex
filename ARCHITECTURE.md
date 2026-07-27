@@ -1266,11 +1266,10 @@ enabled, bound, healthy agents from one status snapshot, reports every
 restarted, skipped, or failed item, and continues after individual failures.
 The service definition runs `juex fleet serve` without an
 address argument, so config edits take effect after a service restart. Before
-replacing an existing launchd, systemd, or Termux definition, install reads its
-legacy `fleet serve` arguments. With no explicit replacement flags, a
-non-default baked-in address is migrated to home config and
-`--unsafe-bind-any` is retained. The legacy default `127.0.0.1:8080` follows
-the current default instead of being persisted.
+replacing an existing launchd, systemd, or Termux definition, install validates
+that it is a recognized Juex fleet service. The address comes only from the
+current flag, home config, or current default; unsafe binding requires the
+current command flag.
 
 Installation resolves the current executable and effective `JUEX_HOME`, then
 derives a filesystem-safe service identity from that home. It writes
@@ -2275,7 +2274,7 @@ symlink. The command symlink points directly at the immutable generation;
 `current` is operator metadata and never sits in the executable path. Every
 install gets a unique generation suffix; previous generations
 remain intact so a same-version reinstall cannot invalidate the package root
-of a running process. Legacy binary-only archives remain installable. Windows
+of a running process. Windows
 keeps the same generated package layout but copies `juex.exe` into the bin
 directory, then records the active generation in `current.txt` only after the
 copy succeeds. A relative Windows bin directory is normalized before deriving

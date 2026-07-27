@@ -309,6 +309,21 @@ func TestCIWorkflowExercisesReleaseInstaller(t *testing.T) {
 		"GITHUB_PATH",
 		"juex version",
 		"juex.exe version",
+		`--juex-version "$version"`,
+		`cp -R .tmp/ci-ripgrep/. "$package_root/"`,
+		`Copy-Item -Path ".tmp/ci-ripgrep/*" -Destination $packageRoot`,
+		`internal/version.Version=${version}`,
+		`internal/version.Version=$version`,
+		`${package_root}/bin/juex`,
+		`$packageRoot "bin/juex.exe"`,
+		`juex doctor --format json --offline`,
+		`juex.exe doctor --format json --offline`,
+		`"$doctor_status" -eq 7`,
+		`$doctorStatus -ne 7`,
+		`'"source": "package"'`,
+		`$ripgrepCheck.details.source -ne "package"`,
+		`"$package_root/juex-path/rg" --version`,
+		`& $ripgrepCheck.details.path --version`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("ci.yml missing %q", want)
@@ -405,7 +420,7 @@ func TestReleaseInstallScriptDryRunResolvesLatestVersion(t *testing.T) {
 	}
 }
 
-func TestReleaseInstallScriptInstallsFromReleaseDirectory(t *testing.T) {
+func TestReleaseInstallScriptRejectsArchiveWithoutPackageManifest(t *testing.T) {
 	skipReleaseInstallScriptTestIfUnsupported(t)
 	_, script := releaseInstallScript(t)
 	work := t.TempDir()
@@ -437,26 +452,15 @@ echo juex fixture
 		"HOME="+t.TempDir(),
 	)
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("install failed: %v\n%s", err, out)
+	if err == nil {
+		t.Fatalf("install unexpectedly accepted archive without juex-package.json\n%s", out)
 	}
-	if !strings.Contains(string(out), "Installed juex to ") {
-		t.Fatalf("install output missing success line\n%s", out)
+	if !strings.Contains(string(out), "juex-package.json") {
+		t.Fatalf("install error does not name expected juex-package.json\n%s", out)
 	}
 	installed := filepath.Join(binDir, "juex")
-	got, err := os.ReadFile(installed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(binary) {
-		t.Fatalf("installed binary = %q, want %q", got, binary)
-	}
-	info, err := os.Stat(installed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&0o111 == 0 {
-		t.Fatalf("installed binary mode = %v, want executable bit", info.Mode())
+	if _, statErr := os.Stat(installed); !os.IsNotExist(statErr) {
+		t.Fatalf("failed install wrote binary: %v", statErr)
 	}
 }
 
@@ -560,7 +564,19 @@ case "${1:-} ${2:-}" in
     ;;
 esac
 `)
-			writeTarGz(t, archive, "juex_0.0.1_linux_amd64/juex", fixture)
+			rgBody := []byte("packaged rg fixture")
+			manifest := fmt.Sprintf(
+				`{"schema_version":1,"juex_version":"0.0.1","platform":{"os":"linux","arch":"amd64"},"ripgrep":{"version":"15.1.0","path":"juex-path/rg","sha256":"%x"}}`,
+				sha256.Sum256(rgBody),
+			)
+			packageRoot := "juex_0.0.1_linux_amd64"
+			writeTarGzEntries(t, archive, map[string]tarFixture{
+				packageRoot + "/juex-package.json":                           {body: []byte(manifest), mode: 0o644},
+				packageRoot + "/bin/juex":                                    {body: fixture, mode: 0o755},
+				packageRoot + "/juex-path/rg":                                {body: rgBody, mode: 0o755},
+				packageRoot + "/juex-resources/licenses/ripgrep/LICENSE-MIT": {body: []byte("MIT"), mode: 0o644},
+				packageRoot + "/juex-resources/licenses/ripgrep/UNLICENSE":   {body: []byte("Unlicense"), mode: 0o644},
+			})
 			sum := sha256File(t, archive)
 			if err := os.WriteFile(
 				filepath.Join(releaseDir, "checksums.txt"),

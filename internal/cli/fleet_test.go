@@ -21,6 +21,8 @@ import (
 type fakeFleetServiceInstaller struct {
 	existing      fleetservice.InstalledServeOptions
 	existingFound bool
+	existingErr   error
+	existingCalls int
 	registration  fleetservice.Registration
 	installCalls  int
 }
@@ -30,7 +32,8 @@ func (f *fakeFleetServiceInstaller) ExistingServeOptions() (
 	bool,
 	error,
 ) {
-	return f.existing, f.existingFound, nil
+	f.existingCalls++
+	return f.existing, f.existingFound, f.existingErr
 }
 
 func (f *fakeFleetServiceInstaller) Install(context.Context) (fleetservice.Registration, error) {
@@ -422,7 +425,7 @@ func TestFleetAddressPrecedenceUsesFlagThenHomeConfigThenDefault(t *testing.T) {
 	}
 }
 
-func TestFleetInstallMigratesLegacyCustomServiceOptions(t *testing.T) {
+func TestFleetInstallUsesCurrentDefaultWithoutPersisting(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("JUEX_HOME", home)
 	fleetCfg, err := config.LoadHomeFleetConfig()
@@ -435,89 +438,60 @@ func TestFleetInstallMigratesLegacyCustomServiceOptions(t *testing.T) {
 		config.DefaultFleetAddr,
 		false,
 		fleetCfg,
-		fleetservice.InstalledServeOptions{
-			Addr:          "0.0.0.0:8181",
-			UnsafeBindAny: true,
-		},
-		true,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Addr != "0.0.0.0:8181" ||
-		!settings.UnsafeBindAny ||
-		!settings.MigratedLegacyAddr ||
-		!settings.PreservedLegacyBind ||
-		settings.ConfigPath == "" {
+	if settings.Addr != config.DefaultFleetAddr ||
+		settings.UnsafeBindAny ||
+		settings.ConfigPath != "" {
 		t.Fatalf("settings = %+v", settings)
 	}
 	loaded, err := config.LoadHomeFleetConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Addr != "0.0.0.0:8181" || !loaded.AddrConfigured {
-		t.Fatalf("migrated config = %+v", loaded)
+	if loaded.Addr != config.DefaultFleetAddr || loaded.AddrConfigured {
+		t.Fatalf("home config = %+v", loaded)
 	}
 }
 
-func TestFleetInstallMovesLegacyDefaultButPreservesHomeConfig(t *testing.T) {
-	t.Run("legacy default adopts new default", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("JUEX_HOME", home)
-		fleetCfg, err := config.LoadHomeFleetConfig()
-		if err != nil {
-			t.Fatal(err)
-		}
-		settings, err := resolveFleetInstallSettings(
-			newFleetInstallCmd(nil),
-			config.DefaultFleetAddr,
-			false,
-			fleetCfg,
-			fleetservice.InstalledServeOptions{Addr: config.LegacyDefaultFleetAddr},
-			true,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if settings.Addr != config.DefaultFleetAddr ||
-			settings.MigratedLegacyAddr ||
-			settings.ConfigPath != "" {
-			t.Fatalf("settings = %+v", settings)
-		}
-	})
-
-	t.Run("explicit home config wins and unsafe is retained", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("JUEX_HOME", home)
-		if _, err := config.SetHomeFleetAddr("0.0.0.0:6843"); err != nil {
-			t.Fatal(err)
-		}
-		fleetCfg, err := config.LoadHomeFleetConfig()
-		if err != nil {
-			t.Fatal(err)
-		}
-		settings, err := resolveFleetInstallSettings(
-			newFleetInstallCmd(nil),
-			config.DefaultFleetAddr,
-			false,
-			fleetCfg,
-			fleetservice.InstalledServeOptions{
-				Addr:          "0.0.0.0:8181",
-				UnsafeBindAny: true,
-			},
-			true,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if settings.Addr != "0.0.0.0:6843" ||
-			!settings.UnsafeBindAny ||
-			settings.MigratedLegacyAddr ||
-			!settings.PreservedLegacyBind ||
-			settings.ConfigPath != "" {
-			t.Fatalf("settings = %+v", settings)
-		}
-	})
+func TestFleetInstallRequiresExplicitUnsafeBindForNonLoopbackHomeConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	if _, err := config.SetHomeFleetAddr("0.0.0.0:6843"); err != nil {
+		t.Fatal(err)
+	}
+	fleetCfg, err := config.LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := newFleetInstallCmd(nil)
+	if _, err := resolveFleetInstallSettings(
+		cmd,
+		config.DefaultFleetAddr,
+		false,
+		fleetCfg,
+	); err == nil || !strings.Contains(err.Error(), "--unsafe-bind-any") {
+		t.Fatalf("error = %v, want explicit unsafe-bind requirement", err)
+	}
+	if err := cmd.Flags().Set("unsafe-bind-any", "true"); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := resolveFleetInstallSettings(
+		cmd,
+		config.DefaultFleetAddr,
+		true,
+		fleetCfg,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Addr != "0.0.0.0:6843" ||
+		!settings.UnsafeBindAny ||
+		settings.ConfigPath != "" {
+		t.Fatalf("settings = %+v", settings)
+	}
 }
 
 func TestFleetInstallExplicitFlagsOverrideExistingServiceOptions(t *testing.T) {
@@ -536,21 +510,113 @@ func TestFleetInstallExplicitFlagsOverrideExistingServiceOptions(t *testing.T) {
 		"127.0.0.1:6844",
 		false,
 		fleetCfg,
-		fleetservice.InstalledServeOptions{
-			Addr:          "0.0.0.0:8181",
-			UnsafeBindAny: true,
-		},
-		true,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if settings.Addr != "127.0.0.1:6844" ||
 		settings.UnsafeBindAny ||
-		settings.MigratedLegacyAddr ||
-		settings.PreservedLegacyBind ||
 		settings.ConfigPath == "" {
 		t.Fatalf("settings = %+v", settings)
+	}
+}
+
+func TestFleetInstallReinstallsAfterReadingButIgnoringExistingDefinition(t *testing.T) {
+	t.Setenv("JUEX_HOME", t.TempDir())
+	service := &fakeFleetServiceInstaller{
+		existing: fleetservice.InstalledServeOptions{
+			Addr:          "0.0.0.0:8181",
+			UnsafeBindAny: true,
+		},
+		existingFound: true,
+		registration: fleetservice.Registration{
+			Platform:       fleetservice.PlatformLaunchd,
+			Name:           "dev.juex.fleet",
+			DefinitionPath: "/tmp/dev.juex.fleet.plist",
+		},
+	}
+	var managerUnsafeArgs []bool
+	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
+		newServiceManager: func(unsafeBindAny bool) (fleetServiceInstaller, error) {
+			managerUnsafeArgs = append(managerUnsafeArgs, unsafeBindAny)
+			return service, nil
+		},
+		newAgentManager: func() (fleetAgentRestarter, error) {
+			return &fakeFleetAgentRestarter{}, nil
+		},
+	})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if service.existingCalls != 1 || service.installCalls != 1 {
+		t.Fatalf(
+			"existing reads = %d, install calls = %d, want 1/1",
+			service.existingCalls,
+			service.installCalls,
+		)
+	}
+	if len(managerUnsafeArgs) != 2 || managerUnsafeArgs[0] || managerUnsafeArgs[1] {
+		t.Fatalf("service manager unsafe args = %v, want [false false]", managerUnsafeArgs)
+	}
+}
+
+func TestFleetInstallRejectsUnreadableExistingDefinitionBeforeInstall(t *testing.T) {
+	t.Setenv("JUEX_HOME", t.TempDir())
+	service := &fakeFleetServiceInstaller{
+		existingErr: errors.New("malformed existing definition"),
+	}
+	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
+		newServiceManager: func(bool) (fleetServiceInstaller, error) {
+			return service, nil
+		},
+		newAgentManager: func() (fleetAgentRestarter, error) {
+			return &fakeFleetAgentRestarter{}, nil
+		},
+	})
+
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "malformed existing definition") {
+		t.Fatalf("error = %v, want existing-definition parse failure", err)
+	}
+	if service.existingCalls != 1 || service.installCalls != 0 {
+		t.Fatalf(
+			"existing reads = %d, install calls = %d, want 1/0",
+			service.existingCalls,
+			service.installCalls,
+		)
+	}
+}
+
+func TestFleetInstallExplicitAddressPersistsThroughCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("JUEX_HOME", home)
+	service := &fakeFleetServiceInstaller{
+		registration: fleetservice.Registration{
+			Platform:       fleetservice.PlatformLaunchd,
+			Name:           "dev.juex.fleet",
+			DefinitionPath: "/tmp/dev.juex.fleet.plist",
+		},
+	}
+	cmd := newFleetInstallCmdWithDeps(fleetInstallCommandDeps{
+		newServiceManager: func(bool) (fleetServiceInstaller, error) {
+			return service, nil
+		},
+		newAgentManager: func() (fleetAgentRestarter, error) {
+			return &fakeFleetAgentRestarter{}, nil
+		},
+	})
+	cmd.SetArgs([]string{"--addr", "127.0.0.1:6844"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.LoadHomeFleetConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Addr != "127.0.0.1:6844" || !loaded.AddrConfigured {
+		t.Fatalf("home config = %+v", loaded)
 	}
 }
 

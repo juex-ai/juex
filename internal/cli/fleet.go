@@ -186,11 +186,9 @@ func resolveFleetAddr(cmd *cobra.Command, flagAddr string, stable bool) (string,
 }
 
 type fleetInstallSettings struct {
-	Addr                string
-	UnsafeBindAny       bool
-	ConfigPath          string
-	MigratedLegacyAddr  bool
-	PreservedLegacyBind bool
+	Addr          string
+	UnsafeBindAny bool
+	ConfigPath    string
 }
 
 type fleetServiceInstaller interface {
@@ -223,8 +221,6 @@ func resolveFleetInstallSettings(
 	flagAddr string,
 	unsafeBindAny bool,
 	fleetCfg config.FleetConfig,
-	existing fleetservice.InstalledServeOptions,
-	existingFound bool,
 ) (fleetInstallSettings, error) {
 	explicitAddr := cmd.Flags().Changed("addr")
 	addr := strings.TrimSpace(flagAddr)
@@ -232,21 +228,6 @@ func resolveFleetInstallSettings(
 		addr = fleetCfg.Addr
 	}
 	settings := fleetInstallSettings{Addr: addr, UnsafeBindAny: unsafeBindAny}
-	if !explicitAddr &&
-		!fleetCfg.AddrConfigured &&
-		existingFound &&
-		existing.Addr != "" &&
-		existing.Addr != config.LegacyDefaultFleetAddr {
-		settings.Addr = existing.Addr
-		settings.MigratedLegacyAddr = true
-	}
-	if !explicitAddr &&
-		!cmd.Flags().Changed("unsafe-bind-any") &&
-		existingFound &&
-		existing.UnsafeBindAny {
-		settings.UnsafeBindAny = true
-		settings.PreservedLegacyBind = true
-	}
 	if err := config.ValidateStableFleetAddr(settings.Addr); err != nil {
 		return fleetInstallSettings{}, &usageError{msg: "juex fleet: --addr " + err.Error()}
 	}
@@ -255,7 +236,7 @@ func resolveFleetInstallSettings(
 			msg: "juex fleet install: --addr must bind to loopback (got " + settings.Addr + "). Pass --unsafe-bind-any if you have your own network protection.",
 		}
 	}
-	if explicitAddr || settings.MigratedLegacyAddr {
+	if explicitAddr {
 		configPath, err := config.SetHomeFleetAddr(settings.Addr)
 		if err != nil {
 			return fleetInstallSettings{}, err
@@ -301,7 +282,9 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			existing, existingFound, err := probeManager.ExistingServeOptions()
+			// Parse an existing definition so a malformed or foreign service is
+			// not overwritten. Its baked-in options are not configuration inputs.
+			_, _, err = probeManager.ExistingServeOptions()
 			if err != nil {
 				return err
 			}
@@ -310,8 +293,6 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 				addr,
 				unsafeBindAny,
 				fleetCfg,
-				existing,
-				existingFound,
 			)
 			if err != nil {
 				return err
@@ -322,17 +303,6 @@ func newFleetInstallCmdWithDeps(deps fleetInstallCommandDeps) *cobra.Command {
 			manager, err := deps.newServiceManager(settings.UnsafeBindAny)
 			if err != nil {
 				return err
-			}
-			if settings.MigratedLegacyAddr {
-				fmt.Fprintf(
-					cmd.OutOrStdout(),
-					"Migrated existing fleet address %s to %s.\n",
-					settings.Addr,
-					settings.ConfigPath,
-				)
-			}
-			if settings.PreservedLegacyBind {
-				fmt.Fprintln(cmd.OutOrStdout(), "Preserved existing fleet --unsafe-bind-any option.")
 			}
 			registration, err := manager.Install(cmd.Context())
 			if err != nil {

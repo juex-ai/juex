@@ -14,20 +14,3 @@
   create workspace identities, registry entries, or global Git excludes.
 - Fleet CLI and API log requests now explain when an agent has no
   fleet-owned log instead of exposing a raw file-open error.
-
-### Compatibility
-
-- Release installers now use versioned package directories under
-  `<prefix>/lib/juex`; each install creates a new immutable generation and
-  preserves older generations used by running processes. Existing binary-only
-  archives remain installable.
-  On Termux/Android arm64 and armv7, the POSIX installer verifies the matching
-  Linux archive, installs only its static Juex binary under `$PREFIX/bin`, and
-  uses native ripgrep from `PATH`, installing it with `pkg` when absent.
-  The Linux arm64 managed release package requires glibc
-  because that is the only upstream arm64 asset; release and local
-  managed-package installers reject musl or an unverified libc before using
-  it. Windows switches `current.txt` only after the new executable copy
-  succeeds and accepts relative bin-directory overrides. POSIX launchers point
-  directly at immutable generations. Unpackaged source builds require `rg` on
-  `PATH` or an explicit `JUEX_RG` path.

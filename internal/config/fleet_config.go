@@ -12,10 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	DefaultFleetAddr       = "127.0.0.1:5839"
-	LegacyDefaultFleetAddr = "127.0.0.1:8080"
-)
+const DefaultFleetAddr = "127.0.0.1:5839"
 
 type FleetConfig struct {
 	Addr           string

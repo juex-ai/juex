@@ -764,6 +764,22 @@ func TestPowerShellReleaseInstallerSwitchesPointerAfterBinaryCopy(t *testing.T) 
 	if normalizeBinDir < 0 || derivePackageHome < 0 || normalizeBinDir > derivePackageHome {
 		t.Fatalf("PowerShell installer must normalize BinDir before deriving package home")
 	}
+	for _, forbidden := range [][]byte{
+		[]byte(`Install-Binary -Source $extracted`),
+		[]byte(`if ($packageManifest)`),
+	} {
+		if bytes.Contains(body, forbidden) {
+			t.Fatalf("PowerShell installer still contains legacy archive fallback %q", forbidden)
+		}
+	}
+	for _, required := range [][]byte{
+		[]byte(`if (-not $packageManifest)`),
+		[]byte(`release archive is missing expected juex-package.json package manifest`),
+	} {
+		if !bytes.Contains(body, required) {
+			t.Fatalf("PowerShell installer is missing hard-fail contract %q", required)
+		}
+	}
 }
 
 func TestPowerShellReleaseInstallerDryRunAcceptsRelativeBinDir(t *testing.T) {
@@ -869,6 +885,58 @@ func TestPowerShellReleaseInstallerInstallsManagedPackage(t *testing.T) {
 	}
 }
 
+func TestPowerShellReleaseInstallerRejectsArchiveWithoutPackageManifest(t *testing.T) {
+	powerShell, ok := findPowerShell()
+	if !ok {
+		t.Skip("PowerShell not found; missing-manifest contract runs on Windows CI")
+	}
+	_, script := powerShellInstallScript(t)
+	work := t.TempDir()
+	releaseDir := filepath.Join(work, "release")
+	if err := os.MkdirAll(releaseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(releaseDir, "juex_0.0.1_windows_amd64.zip")
+	writeZipEntries(t, archive, map[string]tarFixture{
+		"juex_0.0.1_windows_amd64/juex.exe": {
+			body: []byte("legacy bare binary"),
+			mode: 0o755,
+		},
+	})
+	if err := os.WriteFile(
+		filepath.Join(releaseDir, "checksums.txt"),
+		[]byte(fmt.Sprintf("%s  %s\n", sha256File(t, archive), filepath.Base(archive))),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	prefix := filepath.Join(work, "prefix")
+	cmd := exec.Command(
+		powerShell,
+		"-NoProfile",
+		"-ExecutionPolicy", "Bypass",
+		"-File", script,
+		"-Version", "0.0.1",
+		"-Prefix", prefix,
+	)
+	cmd.Env = append(os.Environ(),
+		"JUEX_INSTALL_OS=windows",
+		"JUEX_INSTALL_ARCH=amd64",
+		"JUEX_INSTALL_RELEASE_BASE_URL="+releaseDir,
+		"USERPROFILE="+filepath.Join(work, "home"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("PowerShell installer accepted archive without juex-package.json\n%s", out)
+	}
+	if !strings.Contains(string(out), "juex-package.json") {
+		t.Fatalf("PowerShell install error does not name expected manifest\n%s", out)
+	}
+	if _, statErr := os.Stat(filepath.Join(prefix, "bin", "juex.exe")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed PowerShell install wrote binary: %v", statErr)
+	}
+}
+
 type tarFixture struct {
 	body []byte
 	mode int64
@@ -912,8 +980,6 @@ func newTermuxInstallFixture(t *testing.T) termuxInstallFixture {
 	version := "0.0.1"
 	archive := filepath.Join(releaseDir, "juex_"+version+"_linux_arm64.tar.gz")
 	rgBody := []byte("bundled rg must not be installed on Termux")
-	rgDigest := fmt.Sprintf("%x", sha256.Sum256(rgBody))
-	manifest := fmt.Sprintf(`{"schema_version":1,"juex_version":"%s","platform":{"os":"linux","arch":"arm64"},"ripgrep":{"version":"15.1.0","path":"juex-path/rg","sha256":"%s"}}`, version, rgDigest)
 	binary := []byte(`#!/bin/sh
 if [ "${1:-} ${2:-}" = "fleet service-installed" ]; then
   echo false
@@ -923,9 +989,8 @@ echo juex Termux fixture
 `)
 	root := "juex_" + version + "_linux_arm64"
 	writeTarGzEntries(t, archive, map[string]tarFixture{
-		root + "/juex-package.json":                           {body: []byte(manifest), mode: 0o644},
-		root + "/bin/juex":                                    {body: binary, mode: 0o755},
-		root + "/juex-path/rg":                                {body: rgBody, mode: 0o755},
+		root + "/bin/juex":     {body: binary, mode: 0o755},
+		root + "/juex-path/rg": {body: rgBody, mode: 0o755},
 		root + "/juex-resources/licenses/ripgrep/LICENSE-MIT": {body: []byte("MIT"), mode: 0o644},
 		root + "/juex-resources/licenses/ripgrep/UNLICENSE":   {body: []byte("Unlicense"), mode: 0o644},
 	})

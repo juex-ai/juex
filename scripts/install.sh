@@ -437,15 +437,6 @@ extract_archive() {
   esac
 }
 
-find_extracted_binary() {
-  local out_dir="$1"
-  local binary_name="$2"
-  local extracted
-  extracted=$(find "$out_dir" -type f -name "$binary_name" -print | sed -n '1p')
-  [[ -n "$extracted" ]] || die "binary ${binary_name} not found in archive"
-  printf '%s\n' "$extracted"
-}
-
 find_packaged_binary() {
   local out_dir="$1"
   local binary_name="$2"
@@ -459,9 +450,8 @@ find_package_root() {
   local out_dir="$1"
   local manifest
   manifest=$(find "$out_dir" -type f -name juex-package.json -print | sed -n '1p')
-  if [[ -n "$manifest" ]]; then
-    dirname "$manifest"
-  fi
+  [[ -n "$manifest" ]] || die "release archive is missing expected juex-package.json package manifest"
+  dirname "$manifest"
 }
 
 install_binary() {
@@ -691,12 +681,7 @@ EOF
     install_binary "$extracted" "$install_target"
   else
     package_root=$(find_package_root "$extract_dir")
-    if [[ -n "$package_root" ]]; then
-      install_managed_package "$package_root" "$package_home" "$release_key" "$binary_name" "$install_target"
-    else
-      extracted=$(find_extracted_binary "$extract_dir" "$binary_name")
-      install_binary "$extracted" "$install_target"
-    fi
+    install_managed_package "$package_root" "$package_home" "$release_key" "$binary_name" "$install_target"
   fi
 
   printf 'Installed juex to %s\n' "$install_target"
