@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -161,7 +162,11 @@ func TestMetadataNeverContainsValues(t *testing.T) {
 
 func TestSnapshotLookPathUsesResolvedPath(t *testing.T) {
 	dir := t.TempDir()
-	executable := filepath.Join(dir, "snapshot-command")
+	commandName := "snapshot-command"
+	executable := filepath.Join(dir, commandName)
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
 	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +181,21 @@ func TestSnapshotLookPathUsesResolvedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := snapshot.LookPath("snapshot-command")
+	got, err := snapshot.LookPath(commandName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != executable {
+		t.Fatalf("LookPath = %q, want %q", got, executable)
+	}
+}
+
+func TestZeroSnapshotLookPathUsesInheritedPlatformRules(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (Snapshot{}).LookPath(executable)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -287,6 +287,9 @@ func (s Snapshot) Lookup(key string) (string, bool) {
 // LookPath resolves an executable using this snapshot's PATH (and PATHEXT on
 // Windows), instead of the ambient process environment.
 func (s Snapshot) LookPath(file string) (string, error) {
+	if !s.resolved {
+		s = FromEnviron(os.Environ())
+	}
 	if strings.TrimSpace(file) == "" {
 		return "", exec.ErrNotFound
 	}
