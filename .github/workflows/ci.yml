@@ -109,9 +109,9 @@ jobs:
           set -e
           cat "${work}/doctor.json"
           [[ "$doctor_status" -eq 0 || "$doctor_status" -eq 6 || "$doctor_status" -eq 7 ]]
-          grep -B 8 -A 4 '"name": "ripgrep"' "${work}/doctor.json" |
+          grep -B 8 -A 8 '"name": "ripgrep"' "${work}/doctor.json" |
             grep -q '"status": "ok"'
-          grep -B 8 -A 4 '"name": "ripgrep"' "${work}/doctor.json" |
+          grep -B 8 -A 8 '"name": "ripgrep"' "${work}/doctor.json" |
             grep -q '"source": "package"'
           installed_binary="$(readlink "$HOME/.local/bin/juex")"
           package_root="$(cd "$(dirname "$installed_binary")/.." && pwd -P)"
