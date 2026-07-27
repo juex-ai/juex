@@ -104,7 +104,11 @@ func TestReplayEventsReadOnlyMalformedTailPreservesBytes(t *testing.T) {
 	if err := os.WriteFile(path, contents, 0o400); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(path, 0o600)
+	t.Cleanup(func() {
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Errorf("restore journal mode: %v", err)
+		}
+	})
 
 	var got []events.Event
 	err := ReplayEvents(dir, func(event events.Event) {
@@ -135,7 +139,11 @@ func TestReplayEventsReadOnlyValidTailWithoutNewlineSucceeds(t *testing.T) {
 	if err := os.WriteFile(path, contents, 0o400); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(path, 0o600)
+	t.Cleanup(func() {
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Errorf("restore journal mode: %v", err)
+		}
+	})
 
 	var got []events.Event
 	if err := ReplayEvents(dir, func(event events.Event) {
