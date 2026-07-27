@@ -179,7 +179,9 @@ while :; do sleep 1; done
 	}()
 
 	var pid int
-	deadline := time.Now().Add(3 * time.Second)
+	// Race-enabled package matrices can delay the helper shell while other
+	// packages are compiling. This gate waits for startup, not cancellation.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(pidFile)
 		if err == nil {
