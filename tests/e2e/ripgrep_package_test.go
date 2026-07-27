@@ -847,8 +847,8 @@ func newTermuxInstallFixture(t *testing.T) termuxInstallFixture {
 		}
 	}
 	for _, name := range []string{
-		"awk", "basename", "cat", "chmod", "cp", "dirname", "find", "mkdir",
-		"mktemp", "rm", "sed", "tar", "tr",
+		"awk", "basename", "cat", "chmod", "cp", "dirname", "find", "gzip",
+		"mkdir", "mktemp", "rm", "sed", "tar", "tr",
 	} {
 		path, err := exec.LookPath(name)
 		if err != nil {
