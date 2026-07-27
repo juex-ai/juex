@@ -395,10 +395,21 @@ find_package_root() {
 install_binary() {
   local source="$1"
   local target="$2"
+  local tmp
   mkdir -p "$(dirname "$target")"
-  rm -f "$target"
-  cp "$source" "$target"
-  chmod +x "$target"
+  tmp=$(mktemp "${target}.tmp.XXXXXX")
+  if ! cp "$source" "$tmp"; then
+    rm -f "$tmp"
+    die "could not stage JueX binary for installation: $target"
+  fi
+  if ! chmod 0755 "$tmp"; then
+    rm -f "$tmp"
+    die "could not make staged JueX binary executable: $target"
+  fi
+  if ! mv -f "$tmp" "$target"; then
+    rm -f "$tmp"
+    die "could not atomically install JueX binary: $target"
+  fi
 }
 
 replace_symlink() {

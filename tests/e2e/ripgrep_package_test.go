@@ -477,8 +477,8 @@ chmod +x "$TERMUX_TEST_BIN/rg"
 				t.Fatal(err)
 			}
 			canonicalInstalled := filepath.Join(canonicalPrefix, "bin", "juex")
-			if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-				t.Fatalf("Termux install mode = %v, want executable regular file", info.Mode())
+			if !info.Mode().IsRegular() || info.Mode().Perm() != 0o755 {
+				t.Fatalf("Termux install mode = %v, want regular file with 0755 permissions", info.Mode())
 			}
 			if _, err := os.Stat(filepath.Join(fixture.prefix, "lib", "juex")); !os.IsNotExist(err) {
 				t.Fatalf("Termux install created managed package home: %v", err)
@@ -538,6 +538,54 @@ func TestReleaseInstallScriptTermuxFailsWhenRipgrepCannotBeProvisioned(t *testin
 				t.Fatalf("failed Termux install wrote the Juex binary: %v", err)
 			}
 		})
+	}
+}
+
+func TestReleaseInstallScriptTermuxPreservesExistingBinaryWhenPublishFails(t *testing.T) {
+	skipReleaseInstallScriptTestIfUnsupported(t)
+
+	fixture := newTermuxInstallFixture(t)
+	writeExecutableFixture(t, filepath.Join(fixture.binDir, "rg"), "#!/bin/sh\nprintf 'ripgrep 15.1.0 fixture\\n'\n")
+	writeExecutableFixture(t, filepath.Join(fixture.binDir, "pkg"), "#!/bin/sh\nexit 91\n")
+
+	installed := filepath.Join(fixture.prefix, "bin", "juex")
+	oldBinary := []byte("#!/bin/sh\necho existing juex\n")
+	if err := os.WriteFile(installed, oldBinary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cpPath, err := exec.LookPath("cp")
+	if err != nil {
+		t.Skip("cp is required")
+	}
+	if err := os.Remove(filepath.Join(fixture.binDir, "cp")); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutableFixture(
+		t,
+		filepath.Join(fixture.binDir, "cp"),
+		fmt.Sprintf("#!/bin/sh\ncase \"${2:-}\" in\n  */bin/juex.tmp.*) exit 23 ;;\nesac\nexec %q \"$@\"\n", cpPath),
+	)
+
+	out, err := fixture.run(t)
+	if err == nil {
+		t.Fatalf("Termux install unexpectedly succeeded when publishing failed\n%s", out)
+	}
+	if !strings.Contains(string(out), "could not stage JueX binary for installation") {
+		t.Fatalf("publish error missing atomic staging failure:\n%s", out)
+	}
+	got, err := os.ReadFile(installed)
+	if err != nil {
+		t.Fatalf("existing Juex binary was removed: %v", err)
+	}
+	if !bytes.Equal(got, oldBinary) {
+		t.Fatalf("existing Juex binary changed after publish failure: %q", got)
+	}
+	temps, err := filepath.Glob(installed + ".tmp.*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Fatalf("failed publish left temporary files: %v", temps)
 	}
 }
 
@@ -848,7 +896,7 @@ func newTermuxInstallFixture(t *testing.T) termuxInstallFixture {
 	}
 	for _, name := range []string{
 		"awk", "basename", "cat", "chmod", "cp", "dirname", "find", "gzip",
-		"mkdir", "mktemp", "rm", "sed", "tar", "tr",
+		"mkdir", "mktemp", "mv", "rm", "sed", "tar", "tr",
 	} {
 		path, err := exec.LookPath(name)
 		if err != nil {
