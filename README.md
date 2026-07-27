@@ -230,13 +230,13 @@ not depend on an interactive shell profile such as `.zshrc`.
 Each workspace has one resident-agent identity. The narrow workspace marker
 binds it to state under `JUEX_HOME`, which defaults to `~/.juex`:
 
-Only a normal `run`, `repl`, or `serve` may create this durable identity.
+Only a normal `run`, `repl`, or `listen` may create this durable identity.
 Session and bundle commands require an existing marker and never create,
 migrate, or rebind one. `doctor` reports a missing marker as a warning, while
 `version`, `schema`, `init`, and fleet registry commands do not require a
 workspace identity.
 
-`run`, `repl`, and `serve` accept `--ephemeral` for one-off work. Ephemeral
+`run`, `repl`, and `listen` accept `--ephemeral` for one-off work. Ephemeral
 mode keeps normal workspace and user configuration/resource loading, but
 replaces identity-owned state with a private temporary home that is deleted on
 exit. It ignores an existing marker, never changes the durable agent state or
