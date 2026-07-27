@@ -572,7 +572,7 @@ func TestLoadRejectsMessageWithoutID(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load accepted a message without an id")
 	}
-	for _, want := range []string{path, ":2", "internal/session/transcript_repair.go"} {
+	for _, want := range []string{path, ":2", "manually add a unique non-empty \"id\"", "internal/session/transcript_repair.go"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Load error = %q, want %q", err, want)
 		}
@@ -594,7 +594,7 @@ func TestReadTranscriptMessagesRejectsMessageWithoutID(t *testing.T) {
 	if err == nil {
 		t.Fatal("readTranscriptMessages accepted a message without an id")
 	}
-	for _, want := range []string{path, ":4", "internal/session/transcript_repair.go"} {
+	for _, want := range []string{path, ":4", "manually add a unique non-empty \"id\"", "internal/session/transcript_repair.go"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("readTranscriptMessages error = %q, want %q", err, want)
 		}

@@ -460,7 +460,7 @@ func prepareNewMessage(m llm.Message) llm.Message {
 func normalizeLoadedMessage(path string, line int, m llm.Message) (llm.Message, error) {
 	if m.ID == "" {
 		return llm.Message{}, fmt.Errorf(
-			"session: load %s:%d: message id is empty; inspect and repair the transcript with internal/session/transcript_repair.go",
+			"session: load %s:%d: message id is empty; manually add a unique non-empty \"id\" to this JSONL object; related structural repair code is in internal/session/transcript_repair.go",
 			path,
 			line,
 		)

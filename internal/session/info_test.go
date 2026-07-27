@@ -263,7 +263,7 @@ func TestListRejectsMessageWithoutID(t *testing.T) {
 	if err == nil {
 		t.Fatal("List accepted a message without an id")
 	}
-	for _, want := range []string{path, ":1", "internal/session/transcript_repair.go"} {
+	for _, want := range []string{path, ":1", "manually add a unique non-empty \"id\"", "internal/session/transcript_repair.go"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("List error = %q, want %q", err, want)
 		}
