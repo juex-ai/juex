@@ -3,6 +3,7 @@ package environment
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -185,7 +186,10 @@ func TestSnapshotLookPathUsesResolvedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != executable {
+	if runtime.GOOS == "windows" && !strings.EqualFold(got, executable) {
+		t.Fatalf("LookPath = %q, want case-insensitive %q", got, executable)
+	}
+	if runtime.GOOS != "windows" && got != executable {
 		t.Fatalf("LookPath = %q, want %q", got, executable)
 	}
 }
@@ -221,15 +225,29 @@ func TestSnapshotLookPathInDirResolvesSlashRelativeExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != executable {
+	if runtime.GOOS == "windows" && !strings.EqualFold(got, executable) {
+		t.Fatalf("LookPathInDir = %q, want case-insensitive %q", got, executable)
+	}
+	if runtime.GOOS != "windows" && got != executable {
 		t.Fatalf("LookPathInDir = %q, want %q", got, executable)
 	}
+	t.Chdir(dir)
 	got, err = snapshot.LookPath(relative)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != relative {
-		t.Fatalf("LookPath without child dir = %q, want preserved %q", got, relative)
+	wantRelative := relative
+	if runtime.GOOS == "windows" {
+		wantRelative += ".exe"
+	}
+	if runtime.GOOS == "windows" && !strings.EqualFold(got, wantRelative) {
+		t.Fatalf("LookPath without child dir = %q, want case-insensitive %q", got, wantRelative)
+	}
+	if runtime.GOOS != "windows" && got != wantRelative {
+		t.Fatalf("LookPath without child dir = %q, want %q", got, wantRelative)
+	}
+	if _, err := snapshot.LookPath("." + string(filepath.Separator) + "missing"); err != exec.ErrNotFound {
+		t.Fatalf("missing slash-relative LookPath error = %v, want exec.ErrNotFound", err)
 	}
 }
 
@@ -306,6 +324,39 @@ func TestRedactConfiguredValuesCoversRawAndJSONEscapedForms(t *testing.T) {
 	for _, leaked := range []string{"plain-secret", `line\nsecret`} {
 		if strings.Contains(text, leaked) {
 			t.Fatalf("redaction leaked %q: %s", leaked, text)
+		}
+	}
+	if strings.Count(text, "[REDACTED_ENV]") != 2 {
+		t.Fatalf("redacted payload = %q", text)
+	}
+}
+
+func TestRedactConfiguredValuesRetainsOverriddenLayerValues(t *testing.T) {
+	snapshot, err := Resolve(Options{Layers: []Layer{
+		{
+			Source: SourceUserConfig,
+			Path:   "/home/test/.juex/juex.yaml",
+			Values: map[string]string{"TOKEN": "old-secret"},
+			Strict: true,
+		},
+		{
+			Source: SourceWorkspaceConfig,
+			Path:   "/work/.juex/juex.yaml",
+			Values: map[string]string{"TOKEN": "new-secret"},
+			Strict: true,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, changed := snapshot.RedactConfiguredValues([]byte("before=old-secret after=new-secret"))
+	if !changed {
+		t.Fatal("redaction did not report a change")
+	}
+	text := string(got)
+	for _, leaked := range []string{"old-secret", "new-secret"} {
+		if strings.Contains(text, leaked) {
+			t.Fatalf("redaction leaked overridden value %q: %s", leaked, text)
 		}
 	}
 	if strings.Count(text, "[REDACTED_ENV]") != 2 {

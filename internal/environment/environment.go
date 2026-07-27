@@ -73,7 +73,7 @@ type entry struct {
 type Snapshot struct {
 	entries          map[string]entry
 	configured       map[string]Metadata
-	configuredValues map[string]string
+	configuredValues []string
 	caseInsensitive  bool
 	resolved         bool
 }
@@ -93,7 +93,7 @@ func Resolve(opts Options) (Snapshot, error) {
 	snapshot := Snapshot{
 		entries:          make(map[string]entry),
 		configured:       make(map[string]Metadata),
-		configuredValues: make(map[string]string),
+		configuredValues: make([]string, 0),
 		caseInsensitive:  caseInsensitive,
 		resolved:         true,
 	}
@@ -118,7 +118,7 @@ func Resolve(opts Options) (Snapshot, error) {
 					Source: layer.Source,
 					Path:   layer.Path,
 				}
-				snapshot.configuredValues[canonical] = value
+				snapshot.configuredValues = append(snapshot.configuredValues, value)
 			}
 		}
 	}
@@ -291,8 +291,7 @@ func (s Snapshot) LookPath(file string) (string, error) {
 }
 
 // LookPathInDir resolves slash-relative executables against the child working
-// directory. A blank dir preserves the relative path so os/exec can resolve it
-// after the caller assigns Cmd.Dir.
+// directory. A blank dir validates them against the current working directory.
 func (s Snapshot) LookPathInDir(file, dir string) (string, error) {
 	return s.lookPathInDir(file, dir)
 }
@@ -305,11 +304,8 @@ func (s Snapshot) lookPathInDir(file, dir string) (string, error) {
 		return "", exec.ErrNotFound
 	}
 	if strings.ContainsAny(file, `/\`) {
-		if !filepath.IsAbs(file) && strings.TrimSpace(dir) == "" {
-			return file, nil
-		}
 		candidate := file
-		if !filepath.IsAbs(candidate) {
+		if !filepath.IsAbs(candidate) && strings.TrimSpace(dir) != "" {
 			candidate = filepath.Join(dir, candidate)
 		}
 		return s.resolveExecutableCandidate(candidate)
