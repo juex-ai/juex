@@ -34,6 +34,13 @@ const (
 	ExitDryRun        = 10
 )
 
+const (
+	workspaceCommandGroupID = "workspace"
+	debugCommandGroupID     = "debug"
+	fleetCommandGroupID     = "fleet"
+	cliCommandGroupID       = "cli"
+)
+
 // Execute runs the root cobra command and returns the process exit code.
 // We handle error printing ourselves (cobra is silenced) so we can suppress
 // the message for dry-run sentinels and choose the appropriate exit code
@@ -214,8 +221,14 @@ func newRootCmd() *cobra.Command {
 	flags := &persistentFlags{}
 	var showVersion bool
 	cmd := &cobra.Command{
-		Use:           "juex",
-		Short:         "Juex agent runtime",
+		Use:   "juex",
+		Short: "Juex agent runtime",
+		Long: `Juex agent runtime.
+
+Agent, session, and troubleshooting commands resolve the workspace agent from
+the current directory or --cwd. juex fleet commands manage all agents
+registered under the effective $JUEX_HOME. CLI information commands do not
+operate on an agent.`,
 		SilenceUsage:  true,
 		SilenceErrors: true, // Execute() prints errors itself so it can suppress dry-run sentinels
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -268,16 +281,39 @@ func newRootCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "minimum session log level: debug, info, warn, or error (default info)")
 	cmd.PersistentFlags().BoolVar(&flags.verbose, "verbose", false, "stream runtime lifecycle events to stderr")
 
-	cmd.AddCommand(newRunCmd(flags))
-	cmd.AddCommand(newREPLCmd(flags))
-	cmd.AddCommand(newInitCmd(flags))
-	cmd.AddCommand(newDoctorCmd(flags))
-	cmd.AddCommand(newVersionCmd(flags))
-	cmd.AddCommand(newSchemaCmd(flags))
-	cmd.AddCommand(newSessionsCmd(flags))
-	cmd.AddCommand(newBundleCmd(flags))
-	cmd.AddCommand(newServeCmd(flags))
-	cmd.AddCommand(newFleetCmd(flags))
+	cmd.AddGroup(
+		&cobra.Group{ID: workspaceCommandGroupID, Title: "Workspace agent (current directory)"},
+		&cobra.Group{ID: debugCommandGroupID, Title: "Troubleshooting (current directory)"},
+		&cobra.Group{ID: fleetCommandGroupID, Title: "Fleet (all agents under $JUEX_HOME)"},
+		&cobra.Group{ID: cliCommandGroupID, Title: "About this CLI"},
+	)
+	cmd.SetHelpCommandGroupID(cliCommandGroupID)
+	cmd.SetCompletionCommandGroupID(cliCommandGroupID)
+	addGrouped := func(groupID string, commands ...*cobra.Command) {
+		for _, command := range commands {
+			command.GroupID = groupID
+		}
+		cmd.AddCommand(commands...)
+	}
+	addGrouped(
+		workspaceCommandGroupID,
+		newRunCmd(flags),
+		newREPLCmd(flags),
+		newServeCmd(flags),
+		newSessionsCmd(flags),
+		newInitCmd(flags),
+	)
+	addGrouped(
+		debugCommandGroupID,
+		newDoctorCmd(flags),
+		newBundleCmd(flags),
+	)
+	addGrouped(fleetCommandGroupID, newFleetCmd(flags))
+	addGrouped(
+		cliCommandGroupID,
+		newVersionCmd(flags),
+		newSchemaCmd(flags),
+	)
 	return cmd
 }
 

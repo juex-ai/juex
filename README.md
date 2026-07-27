@@ -161,11 +161,17 @@ continuation.
 
 ## Common Commands
 
+Agent, session, and troubleshooting commands resolve the workspace agent from
+the current directory or `--cwd`. `juex fleet ...` manages all agents
+registered under the effective `$JUEX_HOME`. CLI information commands do not
+operate on an agent. `juex init` sets up either the shared user config
+(default) or the current workspace config.
+
+### Workspace agent (current directory)
+
 | Command | Purpose |
 | --- | --- |
-| `juex --version` / `juex -v` | Print the short build version; equivalent to `juex version`. |
 | `juex init` | Create or merge a first-run runtime config in `$JUEX_HOME/juex.yaml` or the workspace. |
-| `juex doctor` | Run read-only checks for workspace identity, config, credentials, connectivity, shell, MCP, and skills. |
 | `juex run "<prompt>"` | Run one prompt in the active primary session and exit. |
 | `juex run --ephemeral "<prompt>"` | Run with isolated temporary agent state; add `--keep` to retain and print the state path. |
 | `juex run --attach <path> ["<prompt>"]` | Attach one or more local images to a text, image-only, or mixed-content turn; repeat `--attach` for multiple images. |
@@ -183,11 +189,22 @@ continuation.
 | `juex sessions context <id>` | Print the active provider context for a session. |
 | `juex sessions compact <id> --instructions "<focus>"` | Append a manual compact summary marker to a session. |
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
-| `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
 | `juex serve` | Serve the current agent JSON/SSE API through its canonical endpoint only. |
 | `juex serve --ephemeral` | Serve from isolated temporary state without fleet registration; add `--keep` to retain the state after shutdown. |
 | `juex serve --addr 127.0.0.1:9000` | Add an explicit loopback TCP listener for the agent JSON/SSE API. |
 | `juex serve --headless` | Compatibility form of endpoint-only `juex serve`; implied without `--addr`. |
+
+### Troubleshooting (current directory)
+
+| Command | Purpose |
+| --- | --- |
+| `juex doctor` | Run read-only checks for workspace identity, config, credentials, connectivity, shell, MCP, and skills. |
+| `juex bundle --session <id> --out debug.tar.gz` | Create a redacted portable debug bundle for one session. |
+
+### Fleet (all agents under `$JUEX_HOME`)
+
+| Command | Purpose |
+| --- | --- |
 | `juex fleet serve [--addr 127.0.0.1:5839]` | Reconcile autostart agents and serve the fleet API plus embedded SPA. |
 | `juex fleet install [--addr 127.0.0.1:5839] [--restart-agents]` | Persist an explicit address when provided, register and start the fleet supervisor, and optionally refresh eligible running agents. |
 | `juex fleet uninstall` | Stop and remove the supervisor service without stopping detached agents. |
@@ -198,6 +215,12 @@ continuation.
 | `juex fleet start\|stop\|restart <agent>` | Manage one resident agent through verified endpoint identity; restart resumes active session work after the replacement is healthy. |
 | `juex fleet logs <agent> [--lines 200]` | Tail bounded output for fleet-started agents; adopted external processes retain their original logging destination. |
 | `juex fleet gc [--yes]` | Review and explicitly delete definitely orphaned agent state. |
+
+### About this CLI
+
+| Command | Purpose |
+| --- | --- |
+| `juex --version` / `juex -v` | Print the short build version; equivalent to `juex version`. |
 | `juex schema` | Emit the command tree as JSON for tools and agents. |
 
 On macOS, `fleet install` writes a LaunchAgent under
