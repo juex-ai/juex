@@ -63,7 +63,7 @@ juex init --scope workspace
 juex doctor
 ```
 
-Juex loads a runtime environment once for `run`, `repl`, `serve`, and manual
+Juex loads a runtime environment once for `run`, `repl`, `listen`, and manual
 session compaction. `environment.load_dotenv` defaults to `true` and reads
 exactly `<WorkDir>/.env`; parent directories are never searched and dotenv
 content is parsed as data, not evaluated by a shell. A missing file is fine,
@@ -250,7 +250,7 @@ reboot is required. Installed services persist the absolute entries from the
 installer's `PATH`, prepend the JueX executable directory and `~/.local/bin`,
 and add platform defaults. Resident agents and their MCP servers therefore do
 not depend on an interactive shell profile such as `.zshrc`. Each detached
-`juex -C <workspace> serve --headless` child resolves that workspace's own
+`juex -C <workspace> listen` child resolves that workspace's own
 YAML and `.env`; the Fleet supervisor never imports one agent's environment
 into another.
 
