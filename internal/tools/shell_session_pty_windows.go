@@ -70,11 +70,10 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 		windows.ClosePseudoConsole(pseudoConsole)
 		return nil, err
 	}
-	pseudoConsoleValue := pseudoConsole
 	if err := attrList.Update(
 		windows.PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-		unsafe.Pointer(&pseudoConsoleValue),
-		unsafe.Sizeof(pseudoConsoleValue),
+		unsafe.Pointer(pseudoConsole),
+		unsafe.Sizeof(pseudoConsole),
 	); err != nil {
 		attrList.Delete()
 		_ = inputFile.Close()

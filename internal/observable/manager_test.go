@@ -959,7 +959,12 @@ func TestManager_ExitedSubscriberCloseDrainsOnExitDelivery(t *testing.T) {
 	bus.Subscribe(observable.EventObservableExited, func(events.Event) {
 		terminalEvents.Add(1)
 		close(closeEntered)
-		closeResult <- mgr.Close()
+		err := mgr.Close()
+		var deferred *observable.CloseDeferredError
+		if errors.As(err, &deferred) {
+			err = deferred.Wait()
+		}
+		closeResult <- err
 	})
 	var err error
 	mgr, err = observable.NewManager(observable.ManagerOptions{
