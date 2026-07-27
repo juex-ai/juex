@@ -414,6 +414,85 @@ func TestWeb_PendingInputQueuesDuringActiveTurn(t *testing.T) {
 	t.Fatal("pending input never reached second provider call")
 }
 
+func TestWeb_PendingInputQueuesDuringObservableTurn(t *testing.T) {
+	work := t.TempDir()
+	writeE2EObservableConfig(t, work)
+	prov := newPendingWebProvider()
+	srv := web.NewServer(web.Options{
+		Cfg:      config.Config{ProviderID: "openai", APIKey: "x", Model: "m", WorkDir: work},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	sessionID := createWebSession(t, ts.URL)
+	select {
+	case <-prov.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("observable turn did not reach provider")
+	}
+
+	queued, err := http.Post(
+		ts.URL+"/api/sessions/"+sessionID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"steer observable work"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(queued.Body)
+		queued.Body.Close()
+		t.Fatalf("queued status = %d body=%s", queued.StatusCode, body)
+	}
+	var queuedBody struct {
+		TurnID       string `json:"turn_id"`
+		Queued       bool   `json:"queued"`
+		PendingCount int    `json:"pending_count"`
+	}
+	if err := json.NewDecoder(queued.Body).Decode(&queuedBody); err != nil {
+		queued.Body.Close()
+		t.Fatal(err)
+	}
+	queued.Body.Close()
+	if queuedBody.TurnID == "" || !queuedBody.Queued || queuedBody.PendingCount != 1 {
+		t.Fatalf("queued body = %+v", queuedBody)
+	}
+
+	close(prov.release)
+	waitForWebTranscript(
+		t,
+		ts.URL,
+		sessionID,
+		queuedBody.TurnID,
+		30*time.Second,
+		"observable turn queued input",
+		func(messages []webTranscriptMessage) bool {
+			inputCount := 0
+			hasAssistant := false
+			for _, message := range messages {
+				for _, block := range message.Blocks {
+					if block.Type != "text" {
+						continue
+					}
+					if block.Text == "steer observable work" {
+						inputCount++
+					}
+					if message.Role == "assistant" && block.Text == "second" {
+						hasAssistant = true
+					}
+				}
+			}
+			return inputCount == 1 && hasAssistant
+		},
+	)
+	history := prov.secondHistory()
+	if len(history) == 0 || history[len(history)-1].FirstText() != "steer observable work" {
+		t.Fatalf("second provider history = %+v", history)
+	}
+}
+
 func TestWeb_ObservablesStartAndSurfaceObservation(t *testing.T) {
 	work := t.TempDir()
 	writeE2EObservableConfig(t, work)

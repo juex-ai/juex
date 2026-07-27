@@ -15,6 +15,35 @@ type testTurnIDs struct {
 	next map[string]int
 }
 
+type turnAdmissionRuntimeStub struct {
+	reserve func(string) error
+	enqueue func(context.Context, llm.Message) (runtime.PendingInputStatus, error)
+}
+
+func (s *turnAdmissionRuntimeStub) ReserveTurnID(turnID string) error {
+	return s.reserve(turnID)
+}
+
+func (s *turnAdmissionRuntimeStub) ReserveTurnIDWithOptions(
+	turnID string,
+	_ runtime.TurnReservationOptions,
+) error {
+	return s.reserve(turnID)
+}
+
+func (s *turnAdmissionRuntimeStub) EnqueuePendingMessage(
+	ctx context.Context,
+	msg llm.Message,
+) (runtime.PendingInputStatus, error) {
+	return s.enqueue(ctx, msg)
+}
+
+func (s *turnAdmissionRuntimeStub) PromotePendingInputTurn(
+	_, _ string,
+) (llm.Message, runtime.PendingInputStatus, bool) {
+	return llm.Message{}, runtime.PendingInputStatus{}, false
+}
+
 func (g *testTurnIDs) NextTurnID(prefix string) string {
 	if g.next == nil {
 		g.next = map[string]int{}
@@ -241,6 +270,225 @@ func TestAdmitTurnQueuesWhileRunning(t *testing.T) {
 	}
 }
 
+func TestAdmitTurnQueuesWhileEngineTurnRunsOutsideAdmission(t *testing.T) {
+	a, _ := newStubApp(t)
+	if err := a.Engine.ReserveTurnID("external-turn"); err != nil {
+		t.Fatal(err)
+	}
+
+	result := a.AdmitTurn(context.Background(), TurnAdmissionRequest{
+		Prompt: "steer external turn",
+		IDs:    &testTurnIDs{},
+	})
+
+	if result.Kind != TurnAdmissionQueued {
+		t.Fatalf("kind = %s, want %s; error=%+v", result.Kind, TurnAdmissionQueued, result.Error)
+	}
+	if result.TurnID != "external-turn" || !result.Queued || result.PendingCount != 1 {
+		t.Fatalf("queued result = %+v", result)
+	}
+	records, err := a.Engine.PendingInputQueue.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("pending records = %+v, want one persisted input", records)
+	}
+	if phase, turnID := a.admissionQueue().snapshot(); phase != turnAdmissionIdle || turnID != "" {
+		t.Fatalf("app admission = (%q, %q), want idle for externally owned turn", phase, turnID)
+	}
+}
+
+func TestAdmitTurnStartsWhenExternalTurnEndsBetweenReserveAndQueue(t *testing.T) {
+	admission := turnAdmission{}
+	reserveCalls := 0
+	enqueueCalls := 0
+	engine := &turnAdmissionRuntimeStub{
+		reserve: func(turnID string) error {
+			reserveCalls++
+			if reserveCalls == 1 {
+				return runtime.ErrActiveTurnExists
+			}
+			if turnID != "turn-2" {
+				t.Fatalf("second reserved turn = %q, want turn-2", turnID)
+			}
+			return nil
+		},
+		enqueue: func(context.Context, llm.Message) (runtime.PendingInputStatus, error) {
+			enqueueCalls++
+			return runtime.PendingInputStatus{}, runtime.ErrNoActiveTurn
+		},
+	}
+
+	result := (turnAdmissionQueue{state: &admission, engine: engine}).admitUser(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "keep this input"),
+		&testTurnIDs{},
+	)
+
+	if result.Kind != TurnAdmissionStarted || result.Start == nil ||
+		result.TurnID != "turn-2" || result.Start.Message.FirstText() != "keep this input" {
+		t.Fatalf("result = %+v, want second-attempt start", result)
+	}
+	if reserveCalls != 2 || enqueueCalls != 1 {
+		t.Fatalf("calls reserve=%d enqueue=%d, want 2 and 1", reserveCalls, enqueueCalls)
+	}
+}
+
+func TestAdmitTurnReconcilesStaleRunningPhase(t *testing.T) {
+	admission := turnAdmission{phase: turnAdmissionRunning, turnID: "finished-turn"}
+	reserveCalls := 0
+	engine := &turnAdmissionRuntimeStub{
+		reserve: func(turnID string) error {
+			reserveCalls++
+			if turnID != "turn-1" {
+				t.Fatalf("reserved turn = %q, want turn-1", turnID)
+			}
+			return nil
+		},
+		enqueue: func(context.Context, llm.Message) (runtime.PendingInputStatus, error) {
+			return runtime.PendingInputStatus{}, runtime.ErrNoActiveTurn
+		},
+	}
+	queue := turnAdmissionQueue{state: &admission, engine: engine}
+
+	result := queue.admitUser(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "after completion"),
+		&testTurnIDs{},
+	)
+
+	if result.Kind != TurnAdmissionStarted || result.TurnID != "turn-1" || reserveCalls != 1 {
+		t.Fatalf("result = %+v reserveCalls=%d, want reconciled start", result, reserveCalls)
+	}
+	if phase, turnID := queue.snapshot(); phase != turnAdmissionRunning || turnID != "turn-1" {
+		t.Fatalf("app admission = (%q, %q), want new running turn", phase, turnID)
+	}
+}
+
+func TestAdmitTurnTransitionRetryIsBounded(t *testing.T) {
+	admission := turnAdmission{}
+	reserveCalls := 0
+	enqueueCalls := 0
+	engine := &turnAdmissionRuntimeStub{
+		reserve: func(string) error {
+			reserveCalls++
+			return runtime.ErrActiveTurnExists
+		},
+		enqueue: func(context.Context, llm.Message) (runtime.PendingInputStatus, error) {
+			enqueueCalls++
+			return runtime.PendingInputStatus{}, runtime.ErrNoActiveTurn
+		},
+	}
+
+	result := (turnAdmissionQueue{state: &admission, engine: engine}).admitUser(
+		context.Background(),
+		llm.TextMessage(llm.RoleUser, "unstable turn"),
+		&testTurnIDs{},
+	)
+
+	if result.Kind != TurnAdmissionConflict || !errors.Is(result.Err, errTurnAdmissionChanged) {
+		t.Fatalf("result = %+v, want bounded transition conflict", result)
+	}
+	if strings.Contains(result.Error.Message, runtime.ErrActiveTurnExists.Error()) {
+		t.Fatalf("user-facing error leaked internal conflict: %q", result.Error.Message)
+	}
+	if reserveCalls != maxTurnAdmissionAttempts || enqueueCalls != maxTurnAdmissionAttempts {
+		t.Fatalf(
+			"calls reserve=%d enqueue=%d, want %d each",
+			reserveCalls,
+			enqueueCalls,
+			maxTurnAdmissionAttempts,
+		)
+	}
+}
+
+func TestAdmitTurnDoesNotRetryNonTransitionQueueErrors(t *testing.T) {
+	persistErr := errors.New("persist pending input")
+	tests := []struct {
+		name       string
+		err        error
+		wantKind   TurnAdmissionKind
+		wantErr    error
+		wantStatus runtime.PendingInputStatus
+	}{
+		{
+			name:       "queue full",
+			err:        runtime.ErrPendingInputQueueFull,
+			wantKind:   TurnAdmissionRejected,
+			wantErr:    runtime.ErrPendingInputQueueFull,
+			wantStatus: runtime.PendingInputStatus{TurnID: "active-turn", PendingCount: 16, MaxPendingInputs: 16},
+		},
+		{
+			name:       "persistence",
+			err:        persistErr,
+			wantKind:   TurnAdmissionError,
+			wantErr:    persistErr,
+			wantStatus: runtime.PendingInputStatus{TurnID: "active-turn", PendingCount: 2, MaxPendingInputs: 16},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			admission := turnAdmission{phase: turnAdmissionRunning, turnID: "active-turn"}
+			enqueueCalls := 0
+			engine := &turnAdmissionRuntimeStub{
+				reserve: func(string) error {
+					t.Fatal("reserve must not run for a non-transition queue error")
+					return nil
+				},
+				enqueue: func(context.Context, llm.Message) (runtime.PendingInputStatus, error) {
+					enqueueCalls++
+					return tt.wantStatus, tt.err
+				},
+			}
+
+			result := (turnAdmissionQueue{state: &admission, engine: engine}).admitUser(
+				context.Background(),
+				llm.TextMessage(llm.RoleUser, "queued input"),
+				&testTurnIDs{},
+			)
+
+			if result.Kind != tt.wantKind || !errors.Is(result.Err, tt.wantErr) {
+				t.Fatalf("result = %+v, want kind %s error %v", result, tt.wantKind, tt.wantErr)
+			}
+			if enqueueCalls != 1 {
+				t.Fatalf("enqueue calls = %d, want 1", enqueueCalls)
+			}
+		})
+	}
+}
+
+func TestAdmitTurnDoesNotReconcileExclusivePhases(t *testing.T) {
+	for _, phase := range []turnAdmissionPhase{turnAdmissionCommand, turnAdmissionCompacting} {
+		t.Run(string(phase), func(t *testing.T) {
+			admission := turnAdmission{phase: phase, turnID: "exclusive-turn"}
+			engine := &turnAdmissionRuntimeStub{
+				reserve: func(string) error {
+					t.Fatal("reserve must not run while admission is exclusive")
+					return nil
+				},
+				enqueue: func(context.Context, llm.Message) (runtime.PendingInputStatus, error) {
+					return runtime.PendingInputStatus{TurnID: "exclusive-turn"}, runtime.ErrNoActiveTurn
+				},
+			}
+			queue := turnAdmissionQueue{state: &admission, engine: engine}
+
+			result := queue.admitUser(
+				context.Background(),
+				llm.TextMessage(llm.RoleUser, "wait for exclusive work"),
+				&testTurnIDs{},
+			)
+
+			if result.Kind != TurnAdmissionConflict || !errors.Is(result.Err, runtime.ErrNoActiveTurn) {
+				t.Fatalf("result = %+v, want no-active conflict", result)
+			}
+			if gotPhase, turnID := queue.snapshot(); gotPhase != phase || turnID != "exclusive-turn" {
+				t.Fatalf("app admission = (%q, %q), want unchanged %q", gotPhase, turnID, phase)
+			}
+		})
+	}
+}
+
 func TestAdmitTurnQueuesImageBlocksWhileRunning(t *testing.T) {
 	a, _ := newStubApp(t)
 	ids := &testTurnIDs{}
@@ -449,7 +697,7 @@ func TestAdmitTurnMapsQueueFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("no active turn", func(t *testing.T) {
+	t.Run("stale running phase", func(t *testing.T) {
 		a, _ := newStubApp(t)
 		a.turnAdmission.mu.Lock()
 		a.turnAdmission.phase = turnAdmissionRunning
@@ -461,8 +709,8 @@ func TestAdmitTurnMapsQueueFailures(t *testing.T) {
 			IDs:    &testTurnIDs{},
 		})
 
-		if result.Kind != TurnAdmissionConflict || !errors.Is(result.Err, runtime.ErrNoActiveTurn) {
-			t.Fatalf("result = %+v", result)
+		if result.Kind != TurnAdmissionStarted || result.TurnID != "turn-1" {
+			t.Fatalf("result = %+v, want a new turn after stale phase reconciliation", result)
 		}
 	})
 }

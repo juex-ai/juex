@@ -24,6 +24,7 @@ import (
 	"github.com/juex-ai/juex/internal/config"
 	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
+	"github.com/juex-ai/juex/internal/mcp"
 	"github.com/juex-ai/juex/internal/observable"
 	juexruntime "github.com/juex-ai/juex/internal/runtime"
 	"github.com/juex-ai/juex/internal/session"
@@ -1897,6 +1898,100 @@ func TestPostTurn_QueuesWhileRunning(t *testing.T) {
 	if len(secondHistory) == 0 || secondHistory[len(secondHistory)-1].FirstText() != "follow up" {
 		t.Fatalf("second provider history = %+v", secondHistory)
 	}
+}
+
+func TestPostTurn_QueuesWhileMCPNotificationTurnRuns(t *testing.T) {
+	prov := newPendingProvider(
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "notification handled"), StopReason: llm.StopEndTurn},
+		llm.Response{Message: llm.TextMessage(llm.RoleAssistant, "follow-up handled"), StopReason: llm.StopEndTurn},
+	)
+	srv := NewServer(Options{
+		Cfg: config.Config{
+			ProviderID: "openai",
+			APIKey:     "x",
+			Model:      "m",
+			WorkDir:    t.TempDir(),
+			Compaction: config.DefaultCompactionConfig(),
+		},
+		Provider: prov,
+	})
+	t.Cleanup(srv.Close)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	created, err := http.Post(ts.URL+"/api/sessions", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c struct{ ID string }
+	if err := json.NewDecoder(created.Body).Decode(&c); err != nil {
+		created.Body.Close()
+		t.Fatal(err)
+	}
+	created.Body.Close()
+
+	notificationDone := make(chan error, 1)
+	go func() {
+		notificationDone <- srv.handleMCPNotification(context.Background(), mcp.Notification{
+			ServerName: "test",
+			Method:     "notifications/message",
+			EventType:  "demo",
+			Content:    "external work",
+		})
+	}()
+	waitPendingProviderStarted(t, prov, "MCP notification turn did not start")
+	value, ok := srv.sessions.Load(c.ID)
+	if !ok {
+		t.Fatal("created session not active")
+	}
+	activeTurnID := value.(*activeSession).app.Engine.PendingInputStatus().TurnID
+	if activeTurnID == "" {
+		t.Fatal("MCP notification turn has no canonical runtime turn id")
+	}
+
+	followUp, err := http.Post(
+		ts.URL+"/api/sessions/"+c.ID+"/turns",
+		"application/json",
+		strings.NewReader(`{"prompt":"steer external work"}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued struct {
+		TurnID       string `json:"turn_id"`
+		Queued       bool   `json:"queued"`
+		PendingCount int    `json:"pending_count"`
+	}
+	if err := json.NewDecoder(followUp.Body).Decode(&queued); err != nil {
+		followUp.Body.Close()
+		t.Fatal(err)
+	}
+	followUp.Body.Close()
+	if followUp.StatusCode != http.StatusAccepted || !queued.Queued ||
+		queued.TurnID != activeTurnID || queued.PendingCount != 1 {
+		t.Fatalf("queued response status=%d body=%+v", followUp.StatusCode, queued)
+	}
+
+	close(prov.release)
+	select {
+	case err := <-notificationDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("MCP notification turn did not finish")
+	}
+	waitForHTTPTranscript(t, ts.URL, c.ID, queued.TurnID, 30*time.Second, "MCP turn queued input transcript", func(messages []testTranscriptMessage) bool {
+		count := 0
+		for _, message := range messages {
+			for _, block := range message.Blocks {
+				if block.Type == "text" && block.Text == "steer external work" {
+					count++
+				}
+			}
+		}
+		return count == 1 && transcriptContains(messages, "follow-up handled")
+	})
 }
 
 func TestPostTurn_QueuesBeforeEngineGoroutineStarts(t *testing.T) {

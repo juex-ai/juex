@@ -123,6 +123,12 @@ test("composer stages image previews above draft text at the top-left", () => {
 test("composer feedback is announced and queued inputs stay bounded", () => {
   assert.match(composerSource, /role=\{tone === "error" \? "alert" : "status"\}/);
   assert.match(composerSource, /aria-live=/);
+  const footer = composerSource.match(
+    /<PromptInputFooter[\s\S]*?<\/PromptInputFooter>/,
+  )?.[0];
+  assert.ok(footer);
+  assert.match(footer, /composerHint \|\| composerError/);
+  assert.doesNotMatch(footer, /border-t/);
   assert.match(queuedSource, /max-h-/);
   assert.match(queuedSource, /overflow-y-auto/);
   assert.match(queuedSource, /Queued.*items\.length/s);
