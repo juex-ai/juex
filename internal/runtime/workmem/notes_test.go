@@ -8,11 +8,8 @@ import (
 	"unicode/utf8"
 )
 
-func TestNotesStoreUpdatesSnapshotsAndIgnoresLegacyWorkingState(t *testing.T) {
+func TestNotesStoreUpdatesSnapshots(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "working_state.json"), []byte(`{invalid`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	store := NewNotesStore(dir)
 	if snapshot, err := store.StatusSnapshot(); err != nil || snapshot != nil {
 		t.Fatalf("initial snapshot = %+v, err = %v", snapshot, err)

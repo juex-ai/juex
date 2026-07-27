@@ -313,8 +313,8 @@ func TestVerbose_PrintsJSONDecodedResponseBlocksInOrder(t *testing.T) {
 			{"type": "reasoning", "text": "think"},
 			{"type": "text", "text": "tail"}
 		],
-		"text": "legacy fallback",
-		"thinking": "legacy thinking"
+		"text": "flattened fallback",
+		"thinking": "flattened thinking"
 	}`), &payload); err != nil {
 		t.Fatal(err)
 	}
@@ -332,8 +332,8 @@ func TestVerbose_PrintsJSONDecodedResponseBlocksInOrder(t *testing.T) {
 	if lead >= think || think >= tail {
 		t.Fatalf("JSON-decoded blocks printed out of order:\n%s", out)
 	}
-	if strings.Contains(out, "legacy fallback") || strings.Contains(out, "legacy thinking") {
-		t.Fatalf("used legacy fallback despite decoded blocks:\n%s", out)
+	if strings.Contains(out, "flattened fallback") || strings.Contains(out, "flattened thinking") {
+		t.Fatalf("used flattened fallback despite decoded blocks:\n%s", out)
 	}
 }
 

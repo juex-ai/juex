@@ -37,7 +37,7 @@ func TestProjectMessageLockedDoesNotMutateOriginalBlocks(t *testing.T) {
 	policy := effectiveCompactionPolicy(cfg, DefaultContextWindowTokens)
 	original := "head-" + strings.Repeat("secret ", 40) + "-tail"
 	if err := eng.Session.Append(llm.Message{
-		ID:   "legacy",
+		ID:   "message-1",
 		Role: llm.RoleUser,
 		Blocks: []llm.Block{{
 			Type: llm.BlockText,

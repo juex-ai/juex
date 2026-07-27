@@ -3,11 +3,9 @@ import {
   createBrowserRouter,
   Navigate,
   RouterProvider,
-  useParams,
 } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { LoadingState } from "@/components/LoadingState";
-import { agentPagePath } from "@/lib/fleet-routes";
 
 const Fleet = lazy(() =>
   import("@/pages/Fleet").then((module) => ({ default: module.Fleet }))
@@ -115,10 +113,6 @@ const router = createBrowserRouter([
             ),
           },
           {
-            path: "history/sessions/:id",
-            element: <HistorySessionRedirect />,
-          },
-          {
             path: "runtime",
             element: (
               <RouteSuspense>
@@ -148,19 +142,6 @@ const router = createBrowserRouter([
     ],
   },
 ]);
-
-function HistorySessionRedirect() {
-  const { agentId = "", id = "" } = useParams<{
-    agentId: string;
-    id: string;
-  }>();
-  return (
-    <Navigate
-      to={agentPagePath(agentId, `/sessions/${encodeURIComponent(id)}`)}
-      replace
-    />
-  );
-}
 
 export default function App() {
   return <RouterProvider router={router} />;

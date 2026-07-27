@@ -695,9 +695,6 @@ func TestLiveBinary_CLIRunExecCommandTool(t *testing.T) {
 	if !requestHasTool(first, "exec_command") || !requestHasTool(first, "write_stdin") || !requestHasTool(first, "list_shell_sessions") {
 		t.Fatalf("first provider request missing shell tool family: %+v", first["tools"])
 	}
-	if requestHasTool(first, "shell") || requestHasTool(first, "shell_input") {
-		t.Fatalf("first provider request exposed legacy shell tools: %+v", first["tools"])
-	}
 	if !requestHasToolResult(second, "call_exec_cli", marker) {
 		t.Fatalf("second provider request missing exec_command result containing %q: %+v", marker, second["messages"])
 	}
@@ -1451,9 +1448,6 @@ func assertConversationExecCommandToolRoundTrip(t *testing.T, path string, toolU
 			case llm.BlockToolUse:
 				if block.ToolUseID == toolUseID && block.ToolName == "exec_command" {
 					sawToolUse = true
-				}
-				if block.ToolName == "shell" || block.ToolName == "shell_input" {
-					t.Fatalf("conversation contains legacy shell tool_use on line %d: %s", i, line)
 				}
 			case llm.BlockToolResult:
 				if block.ToolUseID == toolUseID && strings.Contains(block.Content, wantOutput) && strings.Contains(block.Content, "Process exited with code 0") {

@@ -416,10 +416,10 @@ func TestFleetAPIResponseShapes(t *testing.T) {
 					backend.action != "restart" {
 					t.Fatalf("status/action = %+v/%q", got, backend.action)
 				}
-				var legacy fleet.AgentStatus
-				decodeJSON(t, body, &legacy)
-				if legacy.ID != status.ID || legacy.RuntimeHealth != status.RuntimeHealth {
-					t.Fatalf("legacy status decode = %+v", legacy)
+				var statusProjection fleet.AgentStatus
+				decodeJSON(t, body, &statusProjection)
+				if statusProjection.ID != status.ID || statusProjection.RuntimeHealth != status.RuntimeHealth {
+					t.Fatalf("status projection decode = %+v", statusProjection)
 				}
 			},
 		},

@@ -114,18 +114,6 @@ func TestAgentStatusRejectsNonGET(t *testing.T) {
 	}
 }
 
-func TestLegacyAgentActivityRouteReturnsNotFound(t *testing.T) {
-	server := NewServer(Options{})
-	request := httptest.NewRequest(http.MethodGet, "/api/activity", nil)
-	response := httptest.NewRecorder()
-
-	server.APIHandler().ServeHTTP(response, request)
-
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
-	}
-}
-
 func TestAgentStatusStreamReturnsCurrentSnapshotOnSameCursorReconnect(t *testing.T) {
 	server := NewServer(Options{})
 	status := runtime.NewStatusStore(runtime.StatusSeed{SessionID: "session-1"})

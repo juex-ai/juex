@@ -7,7 +7,7 @@ test("assistantBlocksFromEventPayload prefers ordered canonical blocks", () => {
     thinking: "flattened thinking",
     text: "flattened text",
     tool_calls: [
-      { tool_use_id: "legacy", name: "grep", input: { pattern: "x" } },
+      { tool_use_id: "flat-call", name: "grep", input: { pattern: "x" } },
     ],
     blocks: [
       { type: "text", text: "lead text" },
@@ -59,18 +59,18 @@ test("assistantBlocksFromEventPayload prefers ordered canonical blocks", () => {
   ]);
 });
 
-test("assistantBlocksFromEventPayload keeps legacy llm.responded payloads working", () => {
+test("assistantBlocksFromEventPayload decodes flattened llm.responded payloads", () => {
   const blocks = assistantBlocksFromEventPayload({
-    thinking: "legacy thinking",
-    text: "legacy answer",
+    thinking: "flattened thinking",
+    text: "flattened answer",
     tool_calls: [
       { tool_use_id: "tu1", name: "read", input: { path: "x" }, timeout_seconds: 30 },
     ],
   });
 
   assert.deepEqual(blocks, [
-    { type: "reasoning", text: "legacy thinking" },
-    { type: "text", text: "legacy answer" },
+    { type: "reasoning", text: "flattened thinking" },
+    { type: "text", text: "flattened answer" },
     {
       type: "tool_use",
       tool_use_id: "tu1",

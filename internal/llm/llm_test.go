@@ -3725,30 +3725,30 @@ func TestProjectProviderTranscriptFoldsFailedChunkAttemptsAfterCommit(t *testing
 	}
 }
 
-func TestProjectProviderTranscriptDoesNotParseLegacyChunkedWriteResultText(t *testing.T) {
-	const writeID = "legacy-write"
+func TestProjectProviderTranscriptDoesNotParsePlainTextChunkedWriteResults(t *testing.T) {
+	const writeID = "plain-text-write"
 	history := []Message{
 		{Role: RoleAssistant, Blocks: []Block{{
 			Type:      BlockToolUse,
-			ToolUseID: "begin_legacy",
+			ToolUseID: "begin_text",
 			ToolName:  "write_begin",
-			Input:     map[string]any{"path": "reports/legacy.md", "mode": "create"},
+			Input:     map[string]any{"path": "reports/plain.md", "mode": "create"},
 		}}},
 		{Role: RoleUser, Blocks: []Block{{
 			Type:      BlockToolResult,
-			ToolUseID: "begin_legacy",
-			Content:   "write_begin: write_id=" + writeID + " path=reports/legacy.md mode=create",
+			ToolUseID: "begin_text",
+			Content:   "write_begin: write_id=" + writeID + " path=reports/plain.md mode=create",
 		}}},
 		{Role: RoleAssistant, Blocks: []Block{{
 			Type:      BlockToolUse,
-			ToolUseID: "commit_legacy",
+			ToolUseID: "commit_text",
 			ToolName:  "write_commit",
 			Input:     map[string]any{"write_id": writeID, "expected_chunks": 0},
 		}}},
 		{Role: RoleUser, Blocks: []Block{{
 			Type:      BlockToolResult,
-			ToolUseID: "commit_legacy",
-			Content:   "write_commit: write_id=legacy-write path=reports/legacy.md bytes=0 chars=0 chunks=0 sha256=legacy",
+			ToolUseID: "commit_text",
+			Content:   "write_commit: write_id=plain-text-write path=reports/plain.md bytes=0 chars=0 chunks=0 sha256=text",
 		}}},
 	}
 
@@ -3757,10 +3757,10 @@ func TestProjectProviderTranscriptDoesNotParseLegacyChunkedWriteResultText(t *te
 	}, providerProjectionOptions{})
 	text := providerProjectionDebugString(projected)
 	if strings.Contains(text, "Chunked write provider replay summary") {
-		t.Fatalf("legacy text-only transcript should not be parsed as lifecycle state:\n%s", text)
+		t.Fatalf("plain-text results should not be parsed as lifecycle state:\n%s", text)
 	}
 	if got := providerProjectionToolUseNames(projected); len(got) != 2 {
-		t.Fatalf("legacy tool calls should remain visible, got %+v", got)
+		t.Fatalf("plain-text lifecycle tool calls should remain visible, got %+v", got)
 	}
 }
 

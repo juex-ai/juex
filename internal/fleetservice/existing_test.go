@@ -14,7 +14,7 @@ func TestExistingDefinitionArgsPreserveServeOptionsAcrossPlatforms(t *testing.T)
 		want     InstalledServeOptions
 	}{
 		{
-			name:     "launchd legacy address and unsafe flag",
+			name:     "launchd address and unsafe flag",
 			platform: PlatformLaunchd,
 			body: `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
@@ -28,7 +28,7 @@ func TestExistingDefinitionArgsPreserveServeOptionsAcrossPlatforms(t *testing.T)
 			want: InstalledServeOptions{Addr: "0.0.0.0:8181", UnsafeBindAny: true},
 		},
 		{
-			name:     "systemd legacy custom loopback",
+			name:     "systemd custom loopback",
 			platform: PlatformSystemd,
 			body: `[Service]
 ExecStart="/home/test/JueX Bin/juex" fleet serve --addr 127.0.0.1:8182
@@ -46,7 +46,7 @@ ExecStart=/home/test/juex fleet serve \
 			want: InstalledServeOptions{Addr: "0.0.0.0:8184", UnsafeBindAny: true},
 		},
 		{
-			name:     "Termux legacy address and unsafe flag",
+			name:     "Termux address and unsafe flag",
 			platform: PlatformTermux,
 			body: `#!/data/data/com.termux/files/usr/bin/sh
 exec '/data/data/com.termux/files/home/JueX Bin/juex' 'fleet' 'serve' '--addr' '0.0.0.0:8183' '--unsafe-bind-any'

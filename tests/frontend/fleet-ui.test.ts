@@ -51,6 +51,7 @@ test("router exposes fleet and selected-agent pages", () => {
   ]) {
     assert.match(appSource, new RegExp(route.replace(/[/:]/g, "\\$&")));
   }
+  assert.doesNotMatch(appSource, /history\/sessions\/:id/);
 });
 
 test("agent shell keeps the fleet rail mounted around selected-agent pages", () => {

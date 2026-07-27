@@ -16,11 +16,10 @@ type ContractArtifacts struct {
 }
 
 type ContractExpectations struct {
-	RequiredTools         []string
-	AllowLegacyShellTools bool
-	RequireTTYExec        bool
-	ExecResultToken       string
-	Events                EventContractExpectations
+	RequiredTools   []string
+	RequireTTYExec  bool
+	ExecResultToken string
+	Events          EventContractExpectations
 }
 
 type EventContractExpectations struct {
@@ -70,12 +69,6 @@ func ValidateContractArtifacts(artifacts ContractArtifacts, expect ContractExpec
 			}
 		}
 	}
-	if !expect.AllowLegacyShellTools && len(conv.legacyShellUses) > 0 {
-		issues = append(issues, ContractIssue{
-			Code:    "conversation.shell.legacy",
-			Message: "conversation contains legacy shell tool_use: " + strings.Join(conv.legacyShellUses, ", "),
-		})
-	}
 	if expect.RequireTTYExec && !conv.sawTTYExec {
 		issues = append(issues, ContractIssue{Code: "conversation.exec.tty", Message: "missing exec_command tool_use with tty:true"})
 	}
@@ -91,12 +84,11 @@ func ValidateContractArtifacts(artifacts ContractArtifacts, expect ContractExpec
 }
 
 type conversationContractSummary struct {
-	issues          []ContractIssue
-	toolNames       map[string]int
-	toolUseNames    map[string]string
-	legacyShellUses []string
-	sawTTYExec      bool
-	sawExecResult   bool
+	issues        []ContractIssue
+	toolNames     map[string]int
+	toolUseNames  map[string]string
+	sawTTYExec    bool
+	sawExecResult bool
 }
 
 func inspectConversationArtifact(path string, expect ContractExpectations) conversationContractSummary {
@@ -135,9 +127,6 @@ func inspectConversationArtifact(path string, expect ContractExpectations) conve
 				}
 				if toolName == "exec_command" && block.Input["tty"] == true {
 					summary.sawTTYExec = true
-				}
-				if toolName == "shell" || toolName == "shell_input" {
-					summary.legacyShellUses = append(summary.legacyShellUses, fmt.Sprintf("%d:%s", lineNumber+1, toolName))
 				}
 			case llm.BlockToolResult:
 				if expect.ExecResultToken == "" {

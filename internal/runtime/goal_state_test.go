@@ -130,55 +130,6 @@ func TestGoalStateGateContinuesOnlyForInProgressGoal(t *testing.T) {
 	}
 }
 
-func TestGoalStateStoreIgnoresRemovedLegacyFieldsWithoutMigrating(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "goal_state.json"), []byte(`{
-  "version": 1,
-  "description": "current description survives",
-  "acceptance_criteria": ["legacy criterion"],
-  "required_artifacts": ["legacy.txt"],
-  "verification_method": "legacy verification",
-  "status": "success",
-  "budget": {"continuations_used": 2},
-  "last_progress": "old"
-}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	state, err := NewGoalStateStore(dir, GoalStateOptions{}).Snapshot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.Description != "current description survives" || state.Acceptance != "" || state.Status != GoalStatusSuccess || state.ContinuationCount != 0 {
-		t.Fatalf("legacy state = %+v", state)
-	}
-}
-
-func TestGoalStateStoreDoesNotResurrectLegacyStatusWithDescription(t *testing.T) {
-	for _, status := range []string{"complete", "blocked"} {
-		t.Run(status, func(t *testing.T) {
-			dir := t.TempDir()
-			data := `{
-  "version": 1,
-  "objective": "legacy objective",
-  "description": "legacy description",
-  "acceptance_criteria": ["legacy criterion"],
-  "status": "` + status + `",
-  "budget": {"continuations_used": 2}
-			}`
-			if err := os.WriteFile(filepath.Join(dir, "goal_state.json"), []byte(data), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			snapshot, err := NewGoalStateStore(dir, GoalStateOptions{}).StatusSnapshot()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if snapshot != nil {
-				t.Fatalf("goal with legacy status should be absent: %+v", snapshot)
-			}
-		})
-	}
-}
-
 func TestGoalStateProviderContextRendersCompactContract(t *testing.T) {
 	state := GoalState{
 		Description:  "complete\ndocs",

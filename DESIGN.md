@@ -388,10 +388,8 @@ sorted by the server. Rows show the preview, relative last-active time, kind,
 active state, and turn count. Clicking a row opens
 `/agents/<id>/sessions/<session-id>` so the session URL is the same regardless
 of entry point. Active primary sessions keep the composer; inactive primary
-and side sessions are read-only. The legacy
-`/agents/<id>/history/sessions/:id` route redirects to the canonical selected
-agent session route. The history page owns deletion and a compact `New chat`
-button.
+and side sessions are read-only. The history page owns deletion and a compact
+`New chat` button.
 
 ### 6.5 Runtime detail (`/agents/:agentId/runtime`)
 

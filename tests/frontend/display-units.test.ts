@@ -11,10 +11,10 @@ import {
 } from "../../frontend/src/lib/message-copy.ts";
 import type { Message } from "../../frontend/src/types.ts";
 
-test("messagesToGroups normalizes legacy text blocks without text", () => {
+test("messagesToGroups normalizes text blocks without text", () => {
   const messages = [
     {
-      id: "legacy-empty-text",
+      id: "empty-text",
       role: "assistant",
       blocks: [{ type: "text" }],
     },

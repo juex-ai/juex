@@ -410,150 +410,6 @@ func TestObservableCreatePersistsTaggedSpecAndStartsCommand(t *testing.T) {
 	}
 }
 
-func TestObservableCreateRoutesLegacyAndScheduleShapesWithoutMisleading(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   map[string]any
-		want    string
-		notWant string
-	}{
-		{
-			name: "nested command source",
-			input: map[string]any{
-				"id": "nested-command",
-				"source": map[string]any{
-					"type": "command", "command": "echo",
-				},
-			},
-			want:    "flat command input",
-			notWant: "schedule_create",
-		},
-		{
-			name: "nested command fields without discriminator",
-			input: map[string]any{
-				"id":     "nested-command",
-				"source": map[string]any{"command": "echo"},
-			},
-			want:    "flat command input",
-			notWant: "schedule_create",
-		},
-		{
-			name: "top level command discriminator",
-			input: map[string]any{
-				"id": "tagged-command", "type": "command", "command": "echo",
-			},
-			want:    "flat command input",
-			notWant: "schedule_create",
-		},
-		{
-			name: "nested command config",
-			input: map[string]any{
-				"id": "config-command", "command_config": map[string]any{"command": "echo"},
-			},
-			want:    "flat command input",
-			notWant: "schedule_create",
-		},
-		{
-			name: "nested schedule source",
-			input: map[string]any{
-				"id": "nested-schedule",
-				"source": map[string]any{
-					"type":     "schedule",
-					"interval": map[string]any{"every_seconds": float64(60)},
-				},
-				"observation": map[string]any{"content": "tick"},
-			},
-			want: "schedule_create",
-		},
-		{
-			name: "top level schedule discriminator",
-			input: map[string]any{
-				"id": "tagged-schedule", "type": "schedule",
-			},
-			want: "schedule_create",
-		},
-		{
-			name: "flat schedule recurrence",
-			input: map[string]any{
-				"id":          "flat-schedule",
-				"interval":    map[string]any{"every_seconds": float64(60)},
-				"observation": map[string]any{"content": "tick"},
-			},
-			want: "schedule_create",
-		},
-		{
-			name: "schedule observation content",
-			input: map[string]any{
-				"id":          "schedule-content",
-				"command":     "echo",
-				"observation": map[string]any{"content": "tick"},
-			},
-			want: "schedule_create",
-		},
-		{
-			name: "schedule observation attachments",
-			input: map[string]any{
-				"id": "schedule-attachments",
-				"observation": map[string]any{
-					"attachments": []any{map[string]any{"path": "brief.md"}},
-				},
-			},
-			want: "schedule_create",
-		},
-		{
-			name: "legacy tagged persisted shape",
-			input: map[string]any{
-				"id": "legacy-tagged", "type": "schedule",
-				"schedule_config": map[string]any{
-					"interval":    map[string]any{"every_seconds": float64(60)},
-					"observation": map[string]any{"content": "tick"},
-				},
-			},
-			want: "schedule_create",
-		},
-		{
-			name: "unknown discriminator",
-			input: map[string]any{
-				"id": "unknown-source", "source": map[string]any{"type": "http"},
-			},
-			want:    "unknown source discriminator",
-			notWant: "schedule_create",
-		},
-		{
-			name: "mixed discriminators",
-			input: map[string]any{
-				"id": "mixed-source", "type": "command",
-				"source": map[string]any{"type": "schedule"},
-			},
-			want:    "mixed command and schedule",
-			notWant: "schedule_create",
-		},
-		{
-			name: "command discriminator with schedule config",
-			input: map[string]any{
-				"id": "mixed-config", "type": "command",
-				"schedule_config": map[string]any{"interval": map[string]any{"every_seconds": float64(60)}},
-			},
-			want:    "mixed command and schedule",
-			notWant: "schedule_create",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mgr := newToolTestManager(t)
-			reg := tools.NewRegistry()
-			if err := observable.RegisterTools(reg, mgr); err != nil {
-				t.Fatal(err)
-			}
-			if _, _, err := reg.CallWithInfo(context.Background(), "observable_create", tt.input); err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("observable_create error = %v, want containing %q", err, tt.want)
-			} else if tt.notWant != "" && strings.Contains(err.Error(), tt.notWant) {
-				t.Fatalf("observable_create error = %v, must not contain misleading %q", err, tt.notWant)
-			}
-		})
-	}
-}
-
 func TestCreateHandlersRejectUnknownCrossSourceFields(t *testing.T) {
 	mgr := newToolTestManager(t)
 	reg := tools.NewRegistry()
@@ -567,10 +423,35 @@ func TestCreateHandlersRejectUnknownCrossSourceFields(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("schedule_create command-field error = %v, want strict unknown field", err)
 	}
-	if _, _, err := reg.CallWithInfo(context.Background(), "observable_create", map[string]any{
-		"id": "bad-command", "command": "echo", "mystery": true,
-	}); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("observable_create unknown-field error = %v, want strict unknown field", err)
+	for _, test := range []struct {
+		name  string
+		input map[string]any
+		field string
+	}{
+		{
+			name: "nested command config",
+			input: map[string]any{
+				"id": "bad-command-config", "command": "echo",
+				"command_config": map[string]any{"command": "echo"},
+			},
+			field: "command_config",
+		},
+		{
+			name: "mixed schedule field",
+			input: map[string]any{
+				"id": "mixed-command", "command": "echo",
+				"interval": map[string]any{"every_seconds": float64(60)},
+			},
+			field: "interval",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := reg.CallWithInfo(context.Background(), "observable_create", test.input)
+			want := `json: unknown field "` + test.field + `"`
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("observable_create error = %v, want containing %q", err, want)
+			}
+		})
 	}
 }
 

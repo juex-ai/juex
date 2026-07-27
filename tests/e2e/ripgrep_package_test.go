@@ -769,7 +769,7 @@ func TestPowerShellReleaseInstallerSwitchesPointerAfterBinaryCopy(t *testing.T) 
 		[]byte(`if ($packageManifest)`),
 	} {
 		if bytes.Contains(body, forbidden) {
-			t.Fatalf("PowerShell installer still contains legacy archive fallback %q", forbidden)
+			t.Fatalf("PowerShell installer still contains archive fallback %q", forbidden)
 		}
 	}
 	for _, required := range [][]byte{
@@ -899,7 +899,7 @@ func TestPowerShellReleaseInstallerRejectsArchiveWithoutPackageManifest(t *testi
 	archive := filepath.Join(releaseDir, "juex_0.0.1_windows_amd64.zip")
 	writeZipEntries(t, archive, map[string]tarFixture{
 		"juex_0.0.1_windows_amd64/juex.exe": {
-			body: []byte("legacy bare binary"),
+			body: []byte("bare binary"),
 			mode: 0o755,
 		},
 	})
