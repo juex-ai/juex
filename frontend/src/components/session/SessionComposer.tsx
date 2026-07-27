@@ -190,22 +190,22 @@ export function SessionComposer({
                 }}
                 placeholder="Ask juex anything..."
               />
-              {composerHint || composerError ? (
-                <div className="border-t border-border/60 px-2.5 py-1.5">
-                  {composerError ? (
-                    <ComposerFeedback tone="error">
-                      {composerError}
-                    </ComposerFeedback>
-                  ) : composerHint ? (
-                    <ComposerFeedback tone="hint">
-                      {composerHint}
-                    </ComposerFeedback>
-                  ) : null}
-                </div>
-              ) : null}
               <PromptInputFooter className="flex-nowrap items-end gap-2">
                 <TooltipProvider>
                   <PromptInputTools className="min-w-0 flex-1 flex-wrap gap-2">
+                    {composerHint || composerError ? (
+                      <div className="min-w-0 basis-full px-1 pb-0.5">
+                        {composerError ? (
+                          <ComposerFeedback tone="error">
+                            {composerError}
+                          </ComposerFeedback>
+                        ) : composerHint ? (
+                          <ComposerFeedback tone="hint">
+                            {composerHint}
+                          </ComposerFeedback>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div
                       className="flex shrink-0 items-center gap-1"
                       aria-label="Composer actions"
