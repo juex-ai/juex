@@ -40,7 +40,9 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   restarts under the same lifecycle lock. Fleet HTTP responses replace every
   `environment.variables` value with `[REDACTED_ENV]`; PUT merges unchanged
   placeholders with the existing file before validation so browser edits
-  neither expose nor erase secrets.
+  neither expose nor erase secrets. To intentionally write that exact literal
+  value, submit `!juex/literal "[REDACTED_ENV]"`; Fleet strips the control tag
+  before persisting the string.
 - `GCCandidates` lists only definite workspace orphans, while `DeleteOrphans`
   locks and revalidates each candidate before agentstate performs atomic
   registry-boundary deletion. GC remains separate from intentional `Remove`.

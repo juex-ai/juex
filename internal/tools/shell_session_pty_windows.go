@@ -84,6 +84,10 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 
 	startupInfo := windows.StartupInfoEx{}
 	startupInfo.StartupInfo.Cb = uint32(unsafe.Sizeof(startupInfo))
+	// Leave the standard handles zero while opting into STARTF_USESTDHANDLES.
+	// This prevents redirected handles inherited by the Juex process from
+	// bypassing ConPTY; the pseudoconsole supplies the child's stdio instead.
+	startupInfo.StartupInfo.Flags = windows.STARTF_USESTDHANDLES
 	startupInfo.ProcThreadAttributeList = attrList.List()
 
 	commandLine, err := windows.UTF16PtrFromString(windowsCommandLine(cmd.Args))

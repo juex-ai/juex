@@ -527,6 +527,50 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	if runtimeStatus.Provider.Model != "new-model" {
 		t.Fatalf("updated proxied model = %q", runtimeStatus.Provider.Model)
 	}
+
+	literalContent := strings.Replace(
+		update.Config.Content,
+		`    SECRET_TOKEN: "[REDACTED_ENV]"`,
+		"    SECRET_TOKEN: \"[REDACTED_ENV]\"\n    LITERAL_PLACEHOLDER: !juex/literal \"[REDACTED_ENV]\"",
+		1,
+	)
+	if literalContent == update.Config.Content {
+		t.Fatalf("redacted config did not contain the expected environment placeholder:\n%s", update.Config.Content)
+	}
+	literalBody, err := json.Marshal(map[string]string{"content": literalContent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var literalUpdate struct {
+		Config fleet.AgentConfig `json:"config"`
+		Agent  fleet.AgentStatus `json:"agent"`
+	}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPut,
+		baseURL+"/api/agents/"+agentID+"/config",
+		string(literalBody),
+		http.StatusOK,
+		&literalUpdate,
+	)
+	literalRawConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(literalRawConfig), `LITERAL_PLACEHOLDER: "[REDACTED_ENV]"`) ||
+		strings.Contains(string(literalRawConfig), "!juex/literal") {
+		t.Fatalf("literal placeholder escape was not persisted as a plain string:\n%s", literalRawConfig)
+	}
+	if strings.Contains(literalUpdate.Config.Content, "!juex/literal") ||
+		strings.Count(literalUpdate.Config.Content, "[REDACTED_ENV]") < 2 ||
+		literalUpdate.Agent.RuntimeHealth != fleet.RuntimeHealthy {
+		t.Fatalf("literal placeholder update response = %+v", literalUpdate)
+	}
+	thirdRuntime := waitFleetRuntime(t, agentAddress)
+	if thirdRuntime.InstanceID == secondRuntime.InstanceID {
+		t.Fatalf("literal placeholder update reused runtime instance %q", thirdRuntime.InstanceID)
+	}
 }
 
 func assertProcessMetrics(

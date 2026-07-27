@@ -51,3 +51,41 @@ func TestAgentConfigRedactedPlaceholderCannotCreateUnknownValue(t *testing.T) {
 		t.Fatalf("err = %v, want unknown placeholder error", err)
 	}
 }
+
+func TestAgentConfigLiteralPlaceholderTagWritesExactValue(t *testing.T) {
+	current := AgentConfig{
+		Exists:  true,
+		Content: "environment:\n  variables:\n    EXISTING: old-value\n",
+	}
+	merged, err := mergeRedactedEnvironmentValues(
+		[]byte(`environment:
+  variables:
+    EXISTING: "[REDACTED_ENV]"
+    LITERAL: !juex/literal "[REDACTED_ENV]"
+`),
+		current,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(merged)
+	if !strings.Contains(body, "EXISTING: old-value") {
+		t.Fatalf("existing placeholder was not merged:\n%s", body)
+	}
+	if !strings.Contains(body, `LITERAL: "[REDACTED_ENV]"`) {
+		t.Fatalf("literal placeholder was not written:\n%s", body)
+	}
+	if strings.Contains(body, literalEnvironmentValueYAMLTag) {
+		t.Fatalf("literal control tag was persisted:\n%s", body)
+	}
+}
+
+func TestAgentConfigLiteralPlaceholderTagRejectsOtherValues(t *testing.T) {
+	_, err := mergeRedactedEnvironmentValues(
+		[]byte("environment:\n  variables:\n    BAD: !juex/literal other-value\n"),
+		AgentConfig{},
+	)
+	if err == nil || !strings.Contains(err.Error(), literalEnvironmentValueYAMLTag) {
+		t.Fatalf("err = %v, want invalid literal-tag error", err)
+	}
+}

@@ -154,16 +154,24 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	snapshot := opts.Config.EnvironmentSnapshot()
+	usedArchivePaths := map[string]struct{}{}
+	manifestPath, manifestPathRedacted := uniqueRedactedArchivePath(
+		snapshot,
+		pathInBundle("manifest.json"),
+		usedArchivePaths,
+	)
+	pathsRedacted := redactConfiguredArchivePaths(snapshot, entries, usedArchivePaths)
 	manifest := Manifest{
 		SchemaVersion: 1,
 		GeneratedAt:   now(),
 		WorkDir:       workDir,
 		SessionID:     opts.SessionID,
-		Redacted:      opts.Redact || entriesContainRedaction(entries),
+		Redacted:      opts.Redact || manifestPathRedacted || pathsRedacted || entriesContainRedaction(entries),
 		Version:       version.Build(),
 		Entries:       manifestEntries(entries),
 	}
-	if redactManifestMetadata(opts.Config.EnvironmentSnapshot(), &manifest) {
+	if redactManifestMetadata(snapshot, &manifest) {
 		manifest.Redacted = true
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
@@ -171,7 +179,7 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	manifestBytes = append(manifestBytes, '\n')
-	entries = append([]archiveEntry{newEntry(pathInBundle("manifest.json"), "", manifestBytes, false, true)}, entries...)
+	entries = append([]archiveEntry{newEntry(manifestPath, "", manifestBytes, manifestPathRedacted, true)}, entries...)
 
 	if err := writeArchive(outPath, entries, now(), opts.Force); err != nil {
 		return Result{}, err
@@ -281,6 +289,43 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, nil
+}
+
+func redactConfiguredArchivePaths(snapshot environment.Snapshot, entries []archiveEntry, used map[string]struct{}) bool {
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	changed := false
+	for index := range entries {
+		redactedPath, redacted := uniqueRedactedArchivePath(snapshot, entries[index].Path, used)
+		if redactedPath == entries[index].Path {
+			continue
+		}
+		entries[index].Path = redactedPath
+		entries[index].Redacted = true
+		changed = changed || redacted
+	}
+	return changed
+}
+
+func uniqueRedactedArchivePath(snapshot environment.Snapshot, archivePath string, used map[string]struct{}) (string, bool) {
+	redacted, configuredValueRedacted := snapshot.RedactConfiguredValues([]byte(archivePath))
+	candidate := string(redacted)
+	if _, exists := used[candidate]; !exists {
+		used[candidate] = struct{}{}
+		return candidate, configuredValueRedacted
+	}
+	dir, base := path.Split(candidate)
+	ext := path.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for suffix := 2; ; suffix++ {
+		rawUnique := fmt.Sprintf("%s%s~%d%s", dir, stem, suffix, ext)
+		redactedUnique, _ := snapshot.RedactConfiguredValues([]byte(rawUnique))
+		unique := string(redactedUnique)
+		if _, exists := used[unique]; exists {
+			continue
+		}
+		used[unique] = struct{}{}
+		return unique, true
+	}
 }
 
 func redactConfiguredArchiveData(snapshot environment.Snapshot, archivePath string, data []byte) ([]byte, bool) {

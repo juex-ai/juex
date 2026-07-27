@@ -225,7 +225,10 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 	}
 
 	files := readBundleArchive(t, out)
-	conversation := files["juex-debug-bundle/session/conversation.jsonl"]
+	conversationPath, _ := cfg.EnvironmentSnapshot().RedactConfiguredValues(
+		[]byte(pathInBundle("session/conversation.jsonl")),
+	)
+	conversation := files[string(conversationPath)]
 	lines := strings.Split(strings.TrimSuffix(string(conversation), "\n"), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("JSONL record count = %d, body:\n%s", len(lines), conversation)
@@ -248,7 +251,10 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 		}
 	}
 
-	manifestBody := files["juex-debug-bundle/manifest.json"]
+	manifestPath, _ := cfg.EnvironmentSnapshot().RedactConfiguredValues(
+		[]byte(pathInBundle("manifest.json")),
+	)
+	manifestBody := files[string(manifestPath)]
 	var manifest Manifest
 	if err := json.Unmarshal(manifestBody, &manifest); err != nil {
 		t.Fatal(err)
@@ -263,6 +269,97 @@ func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing
 		}
 		if strings.Contains(entry.SourcePath, work) {
 			t.Fatalf("manifest source_path leaked configured work dir: %+v", entry)
+		}
+		sum := sha256.Sum256(body)
+		if entry.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("hash mismatch for %s: %s", entry.Path, entry.SHA256)
+		}
+	}
+}
+
+func TestCreateRedactsConfiguredValuesFromArchivePathsAndResolvesCollisions(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envBody := "ARCHIVE_ROOT=juex\nARTIFACT_ONE=alpha-private\nARTIFACT_TWO=beta-private\nCOLLISION_SUFFIX=2\n"
+	if err := os.WriteFile(filepath.Join(work, ".env"), []byte(envBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(work, ".juex")
+	sessionID := "20260727T120000-path-redaction"
+	seedBundleSession(t, work, sessionID, map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": "{}\n",
+		"events.jsonl":       "{}\n",
+	})
+	writeBundleFile(t, filepath.Join(work, ".juex", "artifacts", "run", "alpha-private.txt"), "alpha body")
+	writeBundleFile(t, filepath.Join(work, ".juex", "artifacts", "run", "beta-private.txt"), "beta body")
+
+	out := filepath.Join(t.TempDir(), "debug.tar.gz")
+	result, err := Create(Options{
+		WorkDir:          work,
+		SessionID:        sessionID,
+		OutPath:          out,
+		IncludeArtifacts: true,
+		Config:           cfg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Redacted {
+		t.Fatal("archive path redaction was not reported")
+	}
+
+	files := readBundleArchive(t, out)
+	keys := sortedBundleKeys(files)
+	keyList := strings.Join(keys, "\n")
+	for _, leaked := range []string{"juex", "alpha-private", "beta-private"} {
+		if strings.Contains(keyList, leaked) {
+			t.Fatalf("archive paths leaked %q:\n%s", leaked, keyList)
+		}
+	}
+	root := "[REDACTED_ENV]-debug-bundle"
+	artifactPaths := []string{
+		root + "/artifacts/run/[REDACTED_ENV].txt",
+		root + "/artifacts/run/[REDACTED_ENV]~[REDACTED_ENV].txt",
+	}
+	payloads := map[string]bool{}
+	for _, archivePath := range artifactPaths {
+		body, ok := files[archivePath]
+		if !ok {
+			t.Fatalf("archive missing remapped path %q; files=%v", archivePath, keys)
+		}
+		payloads[string(body)] = true
+	}
+	if !payloads["alpha body"] || !payloads["beta body"] {
+		t.Fatalf("remapped artifact payloads = %#v", payloads)
+	}
+
+	var manifest Manifest
+	if err := json.Unmarshal(files[root+"/manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]struct{}{}
+	for _, entry := range manifest.Entries {
+		if _, duplicate := seen[entry.Path]; duplicate {
+			t.Fatalf("duplicate manifest path after redaction: %q", entry.Path)
+		}
+		seen[entry.Path] = struct{}{}
+		body, ok := files[entry.Path]
+		if !ok {
+			t.Fatalf("manifest entry missing from archive: %+v", entry)
 		}
 		sum := sha256.Sum256(body)
 		if entry.SHA256 != hex.EncodeToString(sum[:]) {

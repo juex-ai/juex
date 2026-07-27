@@ -1348,8 +1348,11 @@ lifecycle lock across preflight, write, stop, and start. A valid config remains
 written if the later restart fails. Fleet config GET and PUT responses replace
 every `environment.variables` value with `[REDACTED_ENV]`; PUT treats that
 placeholder as "retain the existing value" and rejects it when no existing key
-can be merged. This keeps the management API round-trippable without returning
-raw environment values.
+can be merged. A caller that intentionally needs the literal placeholder value
+uses the explicit YAML tag
+`!juex/literal "[REDACTED_ENV]"`; Fleet removes the control tag before writing.
+This keeps the management API round-trippable without returning raw environment
+values.
 
 ### 3.9 Web Layer
 

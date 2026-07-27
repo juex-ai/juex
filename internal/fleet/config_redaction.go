@@ -7,7 +7,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const redactedEnvironmentValue = "[REDACTED_ENV]"
+const (
+	redactedEnvironmentValue       = "[REDACTED_ENV]"
+	literalEnvironmentValueYAMLTag = "!juex/literal"
+)
 
 // RedactAgentConfig replaces environment.variables values with a stable
 // placeholder before a workspace config crosses the Fleet HTTP boundary.
@@ -43,13 +46,31 @@ func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte
 		return content, err
 	}
 	needsMerge := false
+	escapedLiteral := false
+	literalNodes := map[*yaml.Node]struct{}{}
 	for i := 1; i < len(variables.Content); i += 2 {
-		if variables.Content[i].Value == redactedEnvironmentValue {
+		value := variables.Content[i]
+		if value.Tag == literalEnvironmentValueYAMLTag {
+			if value.Value != redactedEnvironmentValue {
+				return nil, fmt.Errorf(
+					"fleet: %s is only valid for the redacted environment placeholder",
+					literalEnvironmentValueYAMLTag,
+				)
+			}
+			value.Tag = "!!str"
+			value.Style = yaml.DoubleQuotedStyle
+			literalNodes[value] = struct{}{}
+			escapedLiteral = true
+			continue
+		}
+		if value.Value == redactedEnvironmentValue {
 			needsMerge = true
-			break
 		}
 	}
 	if !needsMerge {
+		if escapedLiteral {
+			return marshalYAMLDocument(doc)
+		}
 		return content, nil
 	}
 	if !current.Exists {
@@ -68,6 +89,9 @@ func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte
 	for i := 0; i+1 < len(variables.Content); i += 2 {
 		key := variables.Content[i].Value
 		value := variables.Content[i+1]
+		if _, literal := literalNodes[value]; literal {
+			continue
+		}
 		if value.Value != redactedEnvironmentValue {
 			continue
 		}
