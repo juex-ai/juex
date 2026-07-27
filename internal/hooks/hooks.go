@@ -236,7 +236,7 @@ func runCommandHook(parent context.Context, hook CommandHook, req Request, snaps
 	if err != nil {
 		return result, fmt.Errorf("hooks: encode input for %q: %w", hook.Name, err)
 	}
-	command, err := snapshot.LookPath(hook.Command[0])
+	command, err := snapshot.LookPathInDir(hook.Command[0], req.CWD)
 	if err != nil {
 		return result, fmt.Errorf("hooks: %s executable %q: %w", hook.Name, hook.Command[0], err)
 	}

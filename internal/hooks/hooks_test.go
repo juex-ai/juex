@@ -83,6 +83,29 @@ func TestRunnerPropagatesResolvedEnvironment(t *testing.T) {
 	}
 }
 
+func TestRunnerResolvesRelativeCommandFromRequestCWD(t *testing.T) {
+	workDir := t.TempDir()
+	command := copyHookHelperExecutable(t, workDir)
+	r, err := NewRunner(Config{Commands: []CommandHook{{
+		Name:    "relative",
+		Events:  []EventName{EventSessionStart},
+		Command: []string{command, "-test.run=TestHookHelperProcess", "--", "stdout:relative"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := r.Run(context.Background(), Request{
+		EventName: EventSessionStart,
+		CWD:       workDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Stdout != "relative" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
 func TestRunnerRunExitTwoReturnsTextResult(t *testing.T) {
 	r, err := NewRunner(Config{Commands: []CommandHook{
 		{Name: "guard", Events: []EventName{EventPreToolUse}, Command: helperCommand("block")},
@@ -217,6 +240,26 @@ func TestLoadFileConfigEmptyFile(t *testing.T) {
 
 func helperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=TestHookHelperProcess", "--", mode}
+}
+
+func copyHookHelperExecutable(t *testing.T, workDir string) string {
+	t.Helper()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "hook-helper"
+	if filepath.Ext(source) != "" {
+		name += filepath.Ext(source)
+	}
+	body, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, name), body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "." + string(filepath.Separator) + name
 }
 
 func TestHookHelperProcess(t *testing.T) {

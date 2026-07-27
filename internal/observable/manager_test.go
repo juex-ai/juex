@@ -148,6 +148,41 @@ func TestManagerCommandPropagatesResolvedEnvironment(t *testing.T) {
 	}
 }
 
+func TestManagerCommandResolvesRelativeExecutableFromWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	command := copyObservableHelperExecutable(t, dir)
+	spec := helperSpec("relative-command", "json-once")
+	spec = mutateCommandSpec(spec, func(config *observable.CommandSourceSpec) {
+		config.Command = command
+	})
+	writeObservableConfig(t, dir, spec)
+	delivered := make(chan observable.ObservationRecord, 1)
+	mgr, err := observable.NewManager(observable.ManagerOptions{
+		ConfigPath: configPath(dir),
+		StateDir:   stateDir(dir),
+		WorkDir:    dir,
+		Deliver: func(_ context.Context, record observable.ObservationRecord) (observable.DeliveryOutcome, error) {
+			delivered <- record
+			return observable.DeliveryOutcome{State: observable.ObservationStateDelivered}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if err := mgr.StartAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case record := <-delivered:
+		if record.Content != "hello from observable" {
+			t.Fatalf("record = %+v", record)
+		}
+	case <-time.After(asyncWaitTimeout):
+		t.Fatal("timed out waiting for relative observable command")
+	}
+}
+
 func TestManager_StartAllContinuesAfterOneStartError(t *testing.T) {
 	dir := t.TempDir()
 	bad := validSpec("bad-start")
@@ -1810,6 +1845,26 @@ func helperSpec(id, mode string) observable.Spec {
 			SeverityField: "level",
 		}
 	})
+}
+
+func copyObservableHelperExecutable(t *testing.T, workDir string) string {
+	t.Helper()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "observable-helper"
+	if filepath.Ext(source) != "" {
+		name += filepath.Ext(source)
+	}
+	body, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, name), body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "." + string(filepath.Separator) + name
 }
 
 func scheduleOnceSpec(id string, at time.Time) observable.Spec {

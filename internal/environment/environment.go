@@ -287,6 +287,17 @@ func (s Snapshot) Lookup(key string) (string, bool) {
 // LookPath resolves an executable using this snapshot's PATH (and PATHEXT on
 // Windows), instead of the ambient process environment.
 func (s Snapshot) LookPath(file string) (string, error) {
+	return s.lookPathInDir(file, "")
+}
+
+// LookPathInDir resolves slash-relative executables against the child working
+// directory. A blank dir preserves the relative path so os/exec can resolve it
+// after the caller assigns Cmd.Dir.
+func (s Snapshot) LookPathInDir(file, dir string) (string, error) {
+	return s.lookPathInDir(file, dir)
+}
+
+func (s Snapshot) lookPathInDir(file, dir string) (string, error) {
 	if !s.resolved {
 		s = FromEnviron(os.Environ())
 	}
@@ -294,35 +305,21 @@ func (s Snapshot) LookPath(file string) (string, error) {
 		return "", exec.ErrNotFound
 	}
 	if strings.ContainsAny(file, `/\`) {
-		if executableFile(file, s.caseInsensitive) {
+		if !filepath.IsAbs(file) && strings.TrimSpace(dir) == "" {
 			return file, nil
 		}
-		return "", exec.ErrNotFound
+		candidate := file
+		if !filepath.IsAbs(candidate) {
+			candidate = filepath.Join(dir, candidate)
+		}
+		return s.resolveExecutableCandidate(candidate)
 	}
 	pathValue, _ := s.Lookup("PATH")
-	extensions := []string{""}
-	if s.caseInsensitive && filepath.Ext(file) == "" {
-		pathext, ok := s.Lookup("PATHEXT")
-		if !ok || strings.TrimSpace(pathext) == "" {
-			pathext = ".COM;.EXE;.BAT;.CMD"
-		}
-		extensions = nil
-		for _, ext := range strings.Split(pathext, ";") {
-			ext = strings.TrimSpace(ext)
-			if ext == "" {
-				continue
-			}
-			if !strings.HasPrefix(ext, ".") {
-				ext = "." + ext
-			}
-			extensions = append(extensions, ext)
-		}
-	}
 	for _, dir := range filepath.SplitList(pathValue) {
 		if dir == "" {
 			dir = "."
 		}
-		for _, ext := range extensions {
+		for _, ext := range s.executableExtensions(file) {
 			candidate := filepath.Join(dir, file+ext)
 			if !executableFile(candidate, s.caseInsensitive) {
 				continue
@@ -334,6 +331,38 @@ func (s Snapshot) LookPath(file string) (string, error) {
 		}
 	}
 	return "", exec.ErrNotFound
+}
+
+func (s Snapshot) resolveExecutableCandidate(file string) (string, error) {
+	for _, ext := range s.executableExtensions(file) {
+		candidate := file + ext
+		if executableFile(candidate, s.caseInsensitive) {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+func (s Snapshot) executableExtensions(file string) []string {
+	if !s.caseInsensitive || filepath.Ext(file) != "" {
+		return []string{""}
+	}
+	pathext, ok := s.Lookup("PATHEXT")
+	if !ok || strings.TrimSpace(pathext) == "" {
+		pathext = ".COM;.EXE;.BAT;.CMD"
+	}
+	extensions := make([]string, 0, 4)
+	for _, ext := range strings.Split(pathext, ";") {
+		ext = strings.TrimSpace(ext)
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		extensions = append(extensions, ext)
+	}
+	return extensions
 }
 
 // Environ returns a sorted, duplicate-free environment. Overlays are applied

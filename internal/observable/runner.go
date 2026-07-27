@@ -57,7 +57,7 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 			cwd = filepath.Join(r.opts.workDir, cwd)
 		}
 	}
-	command, err := r.opts.environment.LookPath(r.opts.spec.Command)
+	command, err := r.opts.environment.LookPathInDir(r.opts.spec.Command, cwd)
 	if err != nil {
 		return nil, err
 	}

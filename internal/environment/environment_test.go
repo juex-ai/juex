@@ -204,6 +204,35 @@ func TestZeroSnapshotLookPathUsesInheritedPlatformRules(t *testing.T) {
 	}
 }
 
+func TestSnapshotLookPathInDirResolvesSlashRelativeExecutable(t *testing.T) {
+	dir := t.TempDir()
+	commandName := "collector"
+	executable := filepath.Join(dir, commandName)
+	if runtime.GOOS == "windows" {
+		executable += ".exe"
+	}
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := FromEnviron(os.Environ())
+
+	relative := "." + string(filepath.Separator) + commandName
+	got, err := snapshot.LookPathInDir(relative, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != executable {
+		t.Fatalf("LookPathInDir = %q, want %q", got, executable)
+	}
+	got, err = snapshot.LookPath(relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != relative {
+		t.Fatalf("LookPath without child dir = %q, want preserved %q", got, relative)
+	}
+}
+
 func TestSnapshotIsImmutableAndActivationRestoresProcess(t *testing.T) {
 	const key = "JUEX_ENVIRONMENT_ACTIVATION_TEST"
 	original, originallySet := os.LookupEnv(key)

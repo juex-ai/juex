@@ -183,6 +183,85 @@ func TestCreateEnvironmentMetadataNeverIncludesValuesRegardlessOfRedaction(t *te
 	}
 }
 
+func TestCreateEnvironmentRedactionPreservesJSONLAndManifestIntegrity(t *testing.T) {
+	home := t.TempDir()
+	work := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	if err := os.MkdirAll(filepath.Join(work, ".juex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, ".env"), []byte("SHORT_ENV=a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(work, ".juex")
+	sessionID := "20260727T120000-jsonl"
+	seedBundleSession(t, work, sessionID, map[string]string{
+		"session.json":       `{"kind":"primary"}`,
+		"conversation.jsonl": "{\"value\":\"a\",\"stable\":\"first\"}\n{\"value\":\"second\"}\n",
+		"events.jsonl":       "{\"type\":\"stable\"}\n",
+	})
+	out := filepath.Join(t.TempDir(), "debug.tar.gz")
+	result, err := Create(Options{
+		WorkDir:   work,
+		SessionID: sessionID,
+		OutPath:   out,
+		Config:    cfg,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Redacted {
+		t.Fatal("configured value redaction was not reported")
+	}
+
+	files := readBundleArchive(t, out)
+	conversation := files["juex-debug-bundle/session/conversation.jsonl"]
+	lines := strings.Split(strings.TrimSuffix(string(conversation), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("JSONL record count = %d, body:\n%s", len(lines), conversation)
+	}
+	for index, line := range lines {
+		if !json.Valid([]byte(line)) {
+			t.Fatalf("JSONL record %d is invalid: %q", index, line)
+		}
+	}
+	var first map[string]string
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first["value"] != "[REDACTED_ENV]" {
+		t.Fatalf("first JSONL record = %#v", first)
+	}
+
+	manifestBody := files["juex-debug-bundle/manifest.json"]
+	if strings.Contains(string(manifestBody), "[REDACTED_ENV]") {
+		t.Fatalf("manifest structural data was redacted:\n%s", manifestBody)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(manifestBody, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range manifest.Entries {
+		body, ok := files[entry.Path]
+		if !ok {
+			t.Fatalf("manifest entry missing from archive: %+v", entry)
+		}
+		sum := sha256.Sum256(body)
+		if entry.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("hash mismatch for %s: %s", entry.Path, entry.SHA256)
+		}
+	}
+}
+
 func TestCreateFailsForMissingSessionAndRequiredFiles(t *testing.T) {
 	work := t.TempDir()
 	out := filepath.Join(work, "missing.tar.gz")

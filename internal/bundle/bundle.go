@@ -168,23 +168,7 @@ func Create(opts Options) (Result, error) {
 		return Result{}, err
 	}
 	manifestBytes = append(manifestBytes, '\n')
-	manifestBytes, manifestEnvironmentRedacted, err := opts.Config.EnvironmentSnapshot().RedactConfiguredJSON(manifestBytes)
-	if err != nil {
-		return Result{}, err
-	}
-	if manifestEnvironmentRedacted && !manifest.Redacted {
-		manifest.Redacted = true
-		manifestBytes, err = json.MarshalIndent(manifest, "", "  ")
-		if err != nil {
-			return Result{}, err
-		}
-		manifestBytes = append(manifestBytes, '\n')
-		manifestBytes, _, err = opts.Config.EnvironmentSnapshot().RedactConfiguredJSON(manifestBytes)
-		if err != nil {
-			return Result{}, err
-		}
-	}
-	entries = append([]archiveEntry{newEntry(pathInBundle("manifest.json"), "", manifestBytes, manifestEnvironmentRedacted, true)}, entries...)
+	entries = append([]archiveEntry{newEntry(pathInBundle("manifest.json"), "", manifestBytes, false, true)}, entries...)
 
 	if err := writeArchive(outPath, entries, now(), opts.Force); err != nil {
 		return Result{}, err
@@ -291,8 +275,16 @@ func redactConfiguredArchiveData(snapshot environment.Snapshot, archivePath stri
 			if len(bytes.TrimSpace(payload)) == 0 {
 				output.Write(payload)
 			} else if redacted, lineChanged, err := snapshot.RedactConfiguredJSON(payload); err == nil {
-				output.Write(bytes.TrimSuffix(redacted, []byte{'\n'}))
-				changed = changed || lineChanged
+				if !lineChanged {
+					output.Write(payload)
+				} else {
+					var compact bytes.Buffer
+					if err := json.Compact(&compact, redacted); err != nil {
+						return snapshot.RedactConfiguredValues(data)
+					}
+					output.Write(compact.Bytes())
+					changed = true
+				}
 			} else {
 				redacted, lineChanged := snapshot.RedactConfiguredValues(payload)
 				output.Write(redacted)
