@@ -235,7 +235,7 @@ func TestSnapshotLookPathContinuesPATHEXTAfterMissingDottedName(t *testing.T) {
 			Path:   filepath.Join(dir, ".env"),
 			Values: map[string]string{
 				"PATH":    dir,
-				"PATHEXT": ".EXE",
+				"PATHEXT": ".exe",
 			},
 			Strict: true,
 		}},
