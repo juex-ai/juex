@@ -7,8 +7,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -20,6 +23,11 @@ const (
 )
 
 func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, error) {
+	environmentBlock, err := windowsEnvironmentBlock(cmd.Env)
+	if err != nil {
+		return nil, fmt.Errorf("exec_command: build ConPTY environment: %w", err)
+	}
+
 	inputRead, inputWrite, err := createWindowsPipe()
 	if err != nil {
 		return nil, err
@@ -100,14 +108,20 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 	}
 
 	var processInfo windows.ProcessInformation
+	var environment *uint16
+	creationFlags := uint32(windows.EXTENDED_STARTUPINFO_PRESENT)
+	if len(environmentBlock) > 0 {
+		environment = &environmentBlock[0]
+		creationFlags |= windows.CREATE_UNICODE_ENVIRONMENT
+	}
 	if err := windows.CreateProcess(
 		nil,
 		commandLine,
 		nil,
 		nil,
 		false,
-		windows.EXTENDED_STARTUPINFO_PRESENT,
-		nil,
+		creationFlags,
+		environment,
 		currentDir,
 		&startupInfo.StartupInfo,
 		&processInfo,
@@ -118,6 +132,7 @@ func startPTYSession(cmd *exec.Cmd, session *shellSession) (io.WriteCloser, erro
 		windows.ClosePseudoConsole(pseudoConsole)
 		return nil, err
 	}
+	runtime.KeepAlive(environmentBlock)
 	_ = windows.CloseHandle(processInfo.Thread)
 
 	outputDone := make(chan struct{})
@@ -194,6 +209,41 @@ func createWindowsPipe() (windows.Handle, windows.Handle, error) {
 		return 0, 0, err
 	}
 	return read, write, nil
+}
+
+// windowsEnvironmentBlock converts exec.Cmd.Env into the sorted, double-NUL
+// terminated UTF-16 block required by CreateProcess. A nil environment keeps
+// the CreateProcess inheritance behavior used by exec.Cmd.
+func windowsEnvironmentBlock(env []string) ([]uint16, error) {
+	if env == nil {
+		return nil, nil
+	}
+	if len(env) == 0 {
+		return []uint16{0, 0}, nil
+	}
+
+	sorted := append([]string(nil), env...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return strings.ToUpper(windowsEnvironmentKey(sorted[i])) < strings.ToUpper(windowsEnvironmentKey(sorted[j]))
+	})
+	block := make([]uint16, 0)
+	for _, item := range sorted {
+		if strings.IndexByte(item, 0) >= 0 {
+			return nil, fmt.Errorf("environment entry contains NUL")
+		}
+		block = append(block, utf16.Encode([]rune(item))...)
+		block = append(block, 0)
+	}
+	block = append(block, 0)
+	return block, nil
+}
+
+func windowsEnvironmentKey(item string) string {
+	index := strings.IndexByte(item, '=')
+	if index < 0 {
+		return ""
+	}
+	return item[:index]
 }
 
 func windowsCommandLine(args []string) string {
