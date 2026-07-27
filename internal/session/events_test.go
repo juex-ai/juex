@@ -3,6 +3,9 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/juex-ai/juex/internal/events"
@@ -32,6 +35,123 @@ func TestReadEvents(t *testing.T) {
 		if got[i].ID != want[i].ID || got[i].Type != want[i].Type || got[i].TurnID != want[i].TurnID {
 			t.Fatalf("event %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+func TestReplayEventsMatchesReadEvents(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(
+		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n"+
+			"{\"id\":\"2\",\"type\":\"turn.completed\",\"turn_id\":\"turn-1\"}\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	want, err := ReadEvents(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []events.Event
+	if err := ReplayEvents(dir, func(event events.Event) {
+		got = append(got, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("replayed events = %#v, want %#v", got, want)
+	}
+}
+
+func TestReplayEventsRepairsOversizedTailAfterValidPrefix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, eventsFile)
+	valid := []byte("{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n")
+	oversized := []byte(strings.Repeat("x", maxEventLineBytes+1))
+	if err := os.WriteFile(path, append(valid, oversized...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []events.Event
+	err := ReplayEvents(dir, func(event events.Event) {
+		got = append(got, event)
+	})
+	if err == nil || !strings.Contains(err.Error(), errEventLineTooLong.Error()) ||
+		!strings.Contains(err.Error(), "repaired corrupt tail") {
+		t.Fatalf("ReplayEvents() error = %v, want repaired oversized-tail error", err)
+	}
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("partial events = %+v, want first valid event", got)
+	}
+	repaired, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repaired, valid) {
+		t.Fatalf("repaired journal bytes = %d, want valid prefix bytes = %d", len(repaired), len(valid))
+	}
+}
+
+func TestReplayEventsReadOnlyMalformedTailPreservesBytes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only file mode fallback is not portable to Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, eventsFile)
+	contents := []byte(
+		"{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}\n" +
+			"not-json\n",
+	)
+	if err := os.WriteFile(path, contents, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(path, 0o600)
+
+	var got []events.Event
+	err := ReplayEvents(dir, func(event events.Event) {
+		got = append(got, event)
+	})
+	if err == nil || strings.Contains(err.Error(), "repaired corrupt tail") {
+		t.Fatalf("ReplayEvents() error = %v, want unrepaired decode error", err)
+	}
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("partial events = %+v, want first valid event", got)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, contents) {
+		t.Fatalf("read-only journal changed:\ngot  %q\nwant %q", after, contents)
+	}
+}
+
+func TestReplayEventsReadOnlyValidTailWithoutNewlineSucceeds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only file mode fallback is not portable to Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, eventsFile)
+	contents := []byte("{\"id\":\"1\",\"type\":\"turn.started\",\"turn_id\":\"turn-1\"}")
+	if err := os.WriteFile(path, contents, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(path, 0o600)
+
+	var got []events.Event
+	if err := ReplayEvents(dir, func(event events.Event) {
+		got = append(got, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "1" {
+		t.Fatalf("events = %+v, want first valid event", got)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, contents) {
+		t.Fatalf("read-only valid journal changed:\ngot  %q\nwant %q", after, contents)
 	}
 }
 

@@ -870,7 +870,12 @@ assistant `tool_use` blocks that no longer have a matching result before normal
 conversation continues, then records `transcript.repaired` evidence in
 `events.jsonl`. The latest `token_usage` and `context_usage` are restored from
 `llm.responded` events and exposed through session `Info`, not through
-individual messages.
+individual messages. Agent startup and active-session replacement stream this
+journal through `session.ReplayEvents` into an isolated runtime status
+projection, retaining only the bounded status history instead of materializing
+the complete event journal. A damaged suffix still delivers its valid prefix
+before the existing repair warning is returned. `ReadEvents` remains the
+slice-based compatibility adapter for callers that explicitly need all events.
 
 Every persisted session also owns a `scratchpad/` directory. Eager sessions
 create it with the transcript files; lazy sessions create it on the first
