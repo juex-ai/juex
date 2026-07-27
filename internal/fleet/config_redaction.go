@@ -98,39 +98,36 @@ func mergeRedactedEnvironmentValues(content []byte, current AgentConfig) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	existing := map[string][]*yaml.Node{}
+	existing := map[string]*yaml.Node{}
 	if existingVariables != nil {
 		err = walkEnvironmentVariableValues(existingVariables, func(key string, value *yaml.Node) error {
 			scalar, scalarErr := scalarEnvironmentValue(value)
 			if scalarErr != nil {
 				return scalarErr
 			}
-			existing[key] = append(existing[key], scalar)
+			existing[key] = scalar
 			return nil
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
-	occurrences := map[string]int{}
 	err = walkEnvironmentVariableValues(variables, func(key string, value *yaml.Node) error {
 		scalar, scalarErr := scalarEnvironmentValue(value)
 		if scalarErr != nil {
 			return scalarErr
 		}
-		index := occurrences[key]
-		occurrences[key] = index + 1
 		if _, literal := literalNodes[scalar]; literal {
 			return nil
 		}
 		if scalar.Value != redactedEnvironmentValue {
 			return nil
 		}
-		values := existing[key]
-		if index >= len(values) {
+		existingValue, ok := existing[key]
+		if !ok {
 			return fmt.Errorf("fleet: redacted environment placeholder for %q has no existing value", key)
 		}
-		*scalar = *values[index]
+		*scalar = *existingValue
 		return nil
 	})
 	if err != nil {
@@ -143,7 +140,14 @@ func walkEnvironmentVariableValues(
 	variables *yaml.Node,
 	visit func(key string, value *yaml.Node) error,
 ) error {
-	return walkEnvironmentVariableNode(variables, visit, map[*yaml.Node]struct{}{})
+	seenKeys := map[string]struct{}{}
+	return walkEnvironmentVariableNode(variables, func(key string, value *yaml.Node) error {
+		if _, exists := seenKeys[key]; exists {
+			return fmt.Errorf("ambiguous duplicate environment variable key %q through YAML merge", key)
+		}
+		seenKeys[key] = struct{}{}
+		return visit(key, value)
+	}, map[*yaml.Node]struct{}{})
 }
 
 func walkEnvironmentVariableNode(

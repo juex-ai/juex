@@ -238,6 +238,32 @@ func TestAgentConfigEnvironmentMergeSequenceRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAgentConfigRejectsAmbiguousMergeOverridePlaceholders(t *testing.T) {
+	current := AgentConfig{
+		Exists: true,
+		Content: `environment:
+  variables:
+    <<: &defaults
+      TOKEN: merged-secret
+    TOKEN: direct-secret
+`,
+	}
+	_, err := RedactAgentConfig(current)
+	if err == nil || !strings.Contains(err.Error(), `ambiguous duplicate environment variable key "TOKEN"`) {
+		t.Fatalf("redaction err = %v, want ambiguous TOKEN rejection", err)
+	}
+
+	_, err = mergeRedactedEnvironmentValues([]byte(`environment:
+  variables:
+    <<: &defaults
+      TOKEN: "[REDACTED_ENV]"
+    TOKEN: "[REDACTED_ENV]"
+`), current)
+	if err == nil || !strings.Contains(err.Error(), `ambiguous duplicate environment variable key "TOKEN"`) {
+		t.Fatalf("placeholder merge err = %v, want ambiguous TOKEN rejection", err)
+	}
+}
+
 func TestAgentConfigMultiDocumentRoundTripPreservesEveryDocument(t *testing.T) {
 	current := AgentConfig{
 		Exists: true,

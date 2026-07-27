@@ -357,7 +357,7 @@ func (s Snapshot) resolveExecutableCandidate(file string) (string, error) {
 }
 
 func (s Snapshot) executableExtensions(file string) []string {
-	if !s.caseInsensitive || filepath.Ext(file) != "" {
+	if !s.caseInsensitive {
 		return []string{""}
 	}
 	pathext, ok := s.Lookup("PATHEXT")
@@ -374,6 +374,11 @@ func (s Snapshot) executableExtensions(file string) []string {
 			ext = "." + ext
 		}
 		extensions = append(extensions, ext)
+	}
+	if filepath.Ext(file) != "" {
+		// Match os/exec on Windows: try an explicitly dotted name as-is,
+		// then continue through PATHEXT if that exact file does not exist.
+		return append([]string{""}, extensions...)
 	}
 	return extensions
 }

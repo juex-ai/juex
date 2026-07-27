@@ -221,6 +221,37 @@ func TestSnapshotLookPathUsesResolvedPath(t *testing.T) {
 	}
 }
 
+func TestSnapshotLookPathContinuesPATHEXTAfterMissingDottedName(t *testing.T) {
+	dir := t.TempDir()
+	const commandName = "language.server"
+	executable := filepath.Join(dir, commandName+".exe")
+	if err := os.WriteFile(executable, []byte("windows executable"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Resolve(Options{
+		GOOS: "windows",
+		Layers: []Layer{{
+			Source: SourceDotenv,
+			Path:   filepath.Join(dir, ".env"),
+			Values: map[string]string{
+				"PATH":    dir,
+				"PATHEXT": ".EXE",
+			},
+			Strict: true,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := snapshot.LookPath(commandName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.EqualFold(got, executable) {
+		t.Fatalf("LookPath = %q, want case-insensitive %q", got, executable)
+	}
+}
+
 func TestZeroSnapshotLookPathUsesInheritedPlatformRules(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
