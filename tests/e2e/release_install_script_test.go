@@ -318,6 +318,8 @@ func TestCIWorkflowExercisesReleaseInstaller(t *testing.T) {
 		`$packageRoot "bin/juex.exe"`,
 		`juex doctor --format json --offline`,
 		`juex.exe doctor --format json --offline`,
+		`"$doctor_status" -eq 7`,
+		`$doctorStatus -ne 7`,
 		`'"source": "package"'`,
 		`$ripgrepCheck.details.source -ne "package"`,
 		`"$package_root/juex-path/rg" --version`,

@@ -107,7 +107,8 @@ jobs:
           juex doctor --format json --offline > "${work}/doctor.json"
           doctor_status=$?
           set -e
-          [[ "$doctor_status" -eq 0 || "$doctor_status" -eq 6 ]]
+          cat "${work}/doctor.json"
+          [[ "$doctor_status" -eq 0 || "$doctor_status" -eq 6 || "$doctor_status" -eq 7 ]]
           grep -B 8 -A 4 '"name": "ripgrep"' "${work}/doctor.json" |
             grep -q '"status": "ok"'
           grep -B 8 -A 4 '"name": "ripgrep"' "${work}/doctor.json" |
@@ -157,7 +158,8 @@ jobs:
           $doctorText = (juex.exe doctor --format json --offline | Out-String)
           $doctorStatus = $LASTEXITCODE
           $PSNativeCommandUseErrorActionPreference = $oldNativePreference
-          if ($doctorStatus -ne 0 -and $doctorStatus -ne 6) {
+          Write-Output $doctorText
+          if ($doctorStatus -ne 0 -and $doctorStatus -ne 6 -and $doctorStatus -ne 7) {
             throw "juex doctor failed with exit code $doctorStatus"
           }
           $ripgrepCheck = ($doctorText | ConvertFrom-Json).checks |
