@@ -47,6 +47,7 @@ type ShellStartRequest struct {
 	Binary          string
 	Args            []string
 	Command         string
+	Env             []string
 	Cwd             string
 	WorkspaceRoots  []string
 	Sandbox         sandbox.Policy
@@ -288,6 +289,7 @@ func prepareShellExecSpec(ctx context.Context, req ShellStartRequest) (sandbox.E
 		Binary: req.Binary,
 		Args:   argv,
 		Dir:    req.Cwd,
+		Env:    append([]string(nil), req.Env...),
 	}
 	if !req.Sandbox.Enabled {
 		return spec, nil

@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -54,14 +55,21 @@ type juexPackageManifest struct {
 }
 
 func ResolveRipgrep() (ResolvedRipgrep, error) {
+	return ResolveRipgrepWithEnvironment(environment.FromEnviron(os.Environ()))
+}
+
+func ResolveRipgrepWithEnvironment(snapshot environment.Snapshot) (ResolvedRipgrep, error) {
 	executable, _ := os.Executable()
 	return resolveRipgrep(ripgrepResolveOptions{
 		ExecutablePath: executable,
 		RuntimeOS:      runtime.GOOS,
 		RuntimeArch:    runtime.GOARCH,
 		JuexVersion:    version.Version,
-		Getenv:         os.Getenv,
-		LookPath:       exec.LookPath,
+		Getenv: func(key string) string {
+			value, _ := snapshot.Lookup(key)
+			return value
+		},
+		LookPath: snapshot.LookPath,
 	})
 }
 

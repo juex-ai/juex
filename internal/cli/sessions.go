@@ -356,10 +356,15 @@ func newSessionsCompactCmd(flags *persistentFlags) *cobra.Command {
 			}
 			return nil
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfigForCommand(cmd, flags)
+		RunE: func(cmd *cobra.Command, args []string) (runErr error) {
+			cfg, lifecycle, err := loadRuntimeConfigForCommand(cmd, flags, false)
 			if err != nil {
 				return err
+			}
+			if lifecycle != nil {
+				defer func() {
+					runErr = lifecycle.finish(cmd, runErr)
+				}()
 			}
 			result, err := compactSession(cmd.Context(), cfg, args[0], reason, instructions, nil, flags.debug, flags.logLevel)
 			if err != nil {

@@ -13,7 +13,9 @@ This package owns registry-wide resident-agent health and lifecycle policy.
 - `Remove` requires transport confirmation, stops and locks the endpoint, then
   delegates intentional registry and matching-marker deletion to agentstate.
 - `Start` launches a detached `juex -C <workspace> listen` child and
-  waits for an exact PID and endpoint identity.
+  waits for an exact PID and endpoint identity. The supervisor passes only its
+  inherited launch environment plus `JUEX_HOME`; the child resolves its own
+  workspace YAML and `.env`, preventing cross-agent environment leakage.
 - `Stop` requests instance-bound self-shutdown; it never signals or force-kills
   a recorded PID.
 - `Restart` detects active or pending-drain session work before graceful
@@ -35,7 +37,12 @@ This package owns registry-wide resident-agent health and lifecycle policy.
   process and exact endpoint identity for an immediate proxy request.
 - `Config` reads the bound workspace config without creating identity.
   `UpdateConfig` validates and atomically writes a replacement config, then
-  restarts under the same lifecycle lock.
+  restarts under the same lifecycle lock. Fleet HTTP responses replace every
+  `environment.variables` value with `[REDACTED_ENV]`; PUT merges unchanged
+  placeholders with the existing file before validation so browser edits
+  neither expose nor erase secrets. To intentionally write that exact literal
+  value, submit `!juex/literal "[REDACTED_ENV]"`; Fleet strips the control tag
+  before persisting the string.
 - `GCCandidates` lists only definite workspace orphans, while `DeleteOrphans`
   locks and revalidates each candidate before agentstate performs atomic
   registry-boundary deletion. GC remains separate from intentional `Remove`.

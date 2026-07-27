@@ -5,11 +5,13 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
 type BuiltinOptions struct {
 	WorkDir            string
+	Environment        environment.Snapshot
 	Shell              ShellProfile
 	ShellSessions      *ShellSessionManager
 	SearchRunner       SearchRunner
@@ -45,6 +47,7 @@ type builtinDefinitionProvider interface {
 
 type BuiltinProviderContext struct {
 	WorkDir            string
+	Environment        environment.Snapshot
 	Shell              ShellProfile
 	ShellSessions      *ShellSessionManager
 	SearchRunner       SearchRunner
@@ -119,6 +122,7 @@ func newBuiltinProviderContext(r *Registry, opts BuiltinOptions) BuiltinProvider
 	toolTimeoutSeconds = normalizedTimeoutSeconds(toolTimeoutSeconds)
 	return BuiltinProviderContext{
 		WorkDir:            workDir,
+		Environment:        opts.Environment,
 		Shell:              shell,
 		ShellSessions:      shellSessions,
 		SearchRunner:       opts.SearchRunner,

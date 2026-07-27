@@ -151,7 +151,9 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "general_error", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, status)
+	if err := writeEnvironmentSafeJSON(w, http.StatusOK, status, s.opts.Cfg.EnvironmentSnapshot()); err != nil {
+		s.logVerbose("juex serve: write runtime status: %v", err)
+	}
 }
 
 func (s *Server) runtimeStatus() (runtimeStatusResponse, error) {

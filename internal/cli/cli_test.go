@@ -398,6 +398,62 @@ func TestVersionCmd_JSONForm(t *testing.T) {
 	}
 }
 
+func TestVersionCmd_RedactsConfiguredRuntimeValues(t *testing.T) {
+	const configuredBaseURL = "https://version-configured-secret.example"
+
+	previous, existed := os.LookupEnv("PROVIDER_API_BASE")
+	if err := os.Unsetenv("PROVIDER_API_BASE"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv("PROVIDER_API_BASE", previous)
+		} else {
+			_ = os.Unsetenv("PROVIDER_API_BASE")
+		}
+	})
+
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	if err := writeJuexConfigFile(
+		filepath.Join(work, ".juex", "juex.yaml"),
+		"openai",
+		"https://default.example",
+		"k",
+		"m",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(
+		filepath.Join(work, ".env"),
+		"PROVIDER_API_BASE="+configuredBaseURL+"\n",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"-C", work, "version", "--json"},
+		{"-C", work, "version", "--verbose"},
+	} {
+		t.Run(args[len(args)-1], func(t *testing.T) {
+			root := newRootCmd()
+			var out bytes.Buffer
+			root.SetOut(&out)
+			root.SetErr(&out)
+			root.SetArgs(args)
+			if err := root.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(out.String(), configuredBaseURL) {
+				t.Fatalf("version output leaked configured value:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), "[REDACTED_ENV]") {
+				t.Fatalf("version output missing redaction marker:\n%s", out.String())
+			}
+		})
+	}
+}
+
 func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -725,6 +781,47 @@ func TestLoadConfig_EnableUserAgentsResourcesFlagRejectsInvalidBool(t *testing.T
 	}
 }
 
+func TestLoadRuntimeConfigForCommandActivatesAndRestoresEnvironment(t *testing.T) {
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	path := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(path, "openai", "https://x", "k", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(path, "environment:\n  variables:\n    JUEX_RUNTIME_ACTIVATION_TEST: configured\n"); err != nil {
+		t.Fatal(err)
+	}
+	original, originallySet := os.LookupEnv("JUEX_RUNTIME_ACTIVATION_TEST")
+	if err := os.Unsetenv("JUEX_RUNTIME_ACTIVATION_TEST"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if originallySet {
+			_ = os.Setenv("JUEX_RUNTIME_ACTIVATION_TEST", original)
+		} else {
+			_ = os.Unsetenv("JUEX_RUNTIME_ACTIVATION_TEST")
+		}
+	})
+
+	root := newRootCmd()
+	runCmd, _, err := root.Find([]string{"run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, lifecycle, err := loadRuntimeConfigForCommand(runCmd, &persistentFlags{cwd: work}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("JUEX_RUNTIME_ACTIVATION_TEST"); got != "configured" {
+		t.Fatalf("activated environment = %q", got)
+	}
+	if err := lifecycle.finish(runCmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := os.LookupEnv("JUEX_RUNTIME_ACTIVATION_TEST"); ok {
+		t.Fatal("runtime environment was not restored")
+	}
+}
 func TestRunCmd_EnableUserAgentsResourcesBareFlagMeansTrue(t *testing.T) {
 	home := setHomeForCLITest(t)
 	work := t.TempDir()
@@ -822,6 +919,37 @@ func TestRunCmd_DryRunReturnsDryRunOK(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("plan missing %q in:\n%s", want, body)
 		}
+	}
+}
+
+func TestRunCmdDryRunNeverEmitsConfiguredEnvironmentValues(t *testing.T) {
+	const secret = "dry-run-environment-secret"
+	setHomeForCLITest(t)
+	work := t.TempDir()
+	path := filepath.Join(work, ".juex", "juex.yaml")
+	if err := writeJuexConfigFile(path, "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendTextFile(path, "environment:\n  variables:\n    DRY_RUN_SECRET: "+secret+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	root := newRootCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"-C", work, "run", "--dry-run", "--json", secret})
+	err := root.Execute()
+	var dry *dryRunOK
+	if !errors.As(err, &dry) {
+		t.Fatalf("execute = %T %v\nstdout=%s\nstderr=%s", err, err, stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	if strings.Contains(combined, secret) {
+		t.Fatalf("dry-run leaked configured environment value:\n%s", combined)
+	}
+	if !strings.Contains(stdout.String(), "[REDACTED_ENV]") {
+		t.Fatalf("dry-run did not mark redacted value:\n%s", stdout.String())
 	}
 }
 
@@ -1434,6 +1562,10 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
 		t.Fatal(err)
 	}
+	const environmentSecret = "doctor-environment-secret-sentinel"
+	if err := writeTextFile(filepath.Join(work, ".env"), "DOCTOR_ENV_SECRET="+environmentSecret+"\n"); err != nil {
+		t.Fatal(err)
+	}
 	mcpConfig, err := json.Marshal(map[string]any{
 		"mcpServers": map[string]any{
 			"self": map[string]any{"command": os.Args[0]},
@@ -1473,13 +1605,103 @@ func TestDoctorCmd_JSONOfflineValidConfig(t *testing.T) {
 			skillsMessage, _ = row["message"].(string)
 		}
 	}
-	for _, want := range []string{"config", "credentials", "connectivity", "shell", "ripgrep", "workdir", "mcp", "skills"} {
+	for _, want := range []string{"config", "environment", "credentials", "connectivity", "shell", "ripgrep", "workdir", "mcp", "skills"} {
 		if !seen[want] {
 			t.Fatalf("missing check %q in:\n%s", want, out.String())
 		}
 	}
+	if strings.Contains(out.String(), environmentSecret) {
+		t.Fatalf("doctor leaked environment value:\n%s", out.String())
+	}
+	for _, want := range []string{"DOCTOR_ENV_SECRET", `"source": "dotenv"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("doctor environment metadata missing %q:\n%s", want, out.String())
+		}
+	}
 	if skillsMessage != "4 skill(s) loaded" {
 		t.Fatalf("skills doctor message = %q, want project plus three builtin guides", skillsMessage)
+	}
+}
+
+func TestDoctorConnectivityCheckActivatesRuntimeEnvironmentForProbe(t *testing.T) {
+	const proxy = "http://127.0.0.1:18765"
+	setHomeForCLITest(t)
+	previous, existed := os.LookupEnv("HTTP_PROXY")
+	if err := os.Unsetenv("HTTP_PROXY"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if existed {
+			_ = os.Setenv("HTTP_PROXY", previous)
+		} else {
+			_ = os.Unsetenv("HTTP_PROXY")
+		}
+	})
+
+	work := t.TempDir()
+	if err := writeJuexConfigFile(
+		filepath.Join(work, ".juex", "juex.yaml"),
+		"openai",
+		"https://example.invalid",
+		"sk-test",
+		"gpt-4.1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".env"), "HTTP_PROXY="+proxy+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := doctorConnectivityCheckWithOptions(
+		context.Background(),
+		cfg,
+		providerreadiness.ConnectivityOptions{Probe: providerreadiness.ProbeFunc(
+			func(_ context.Context, _ llm.ProviderProfile) error {
+				if got := os.Getenv("HTTP_PROXY"); got != proxy {
+					return errors.New("probe did not receive resolved HTTP_PROXY")
+				}
+				return nil
+			},
+		)},
+	)
+	if check.Status != doctorStatusOK {
+		t.Fatalf("connectivity check = %+v, want ok", check)
+	}
+	if _, ok := os.LookupEnv("HTTP_PROXY"); ok {
+		t.Fatal("doctor connectivity check did not restore HTTP_PROXY")
+	}
+}
+
+func TestDoctorCmdReportsMalformedDotenvWithoutPartialValues(t *testing.T) {
+	setHomeForCLITest(t)
+	root := newRootCmd()
+	var out bytes.Buffer
+	work := t.TempDir()
+	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://example.invalid", "sk-test", "gpt-4.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTextFile(filepath.Join(work, ".env"), "SAFE_BEFORE=must-not-leak\nNOT_AN_ASSIGNMENT\n"); err != nil {
+		t.Fatal(err)
+	}
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"-C", work, "doctor", "--format", "json", "--offline"})
+	err := root.Execute()
+	var doctorErr *doctorExitError
+	if !errors.As(err, &doctorErr) || doctorErr.status != doctorStatusFail {
+		t.Fatalf("doctor execute: %T %v, want failure\n%s", err, err, out.String())
+	}
+	if !strings.Contains(out.String(), ".env line 2") {
+		t.Fatalf("doctor did not report malformed dotenv:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "must-not-leak") {
+		t.Fatalf("doctor leaked partial dotenv value:\n%s", out.String())
 	}
 }
 

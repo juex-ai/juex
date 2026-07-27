@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juex-ai/juex/internal/environment"
 )
 
 func TestCommandHookMatchesEventAndTool(t *testing.T) {
@@ -51,6 +53,56 @@ func TestRunnerRunStableOrderAndStdout(t *testing.T) {
 	}
 	if results[1].Hook.Name != "second" || results[1].ExitCode != 0 || results[1].Stdout != "second" {
 		t.Fatalf("second result = %+v", results[1])
+	}
+}
+
+func TestRunnerPropagatesResolvedEnvironment(t *testing.T) {
+	snapshot, err := environment.Resolve(environment.Options{Layers: []environment.Layer{{
+		Source: environment.SourceDotenv,
+		Path:   "/work/.env",
+		Values: map[string]string{"HOOK_RUNTIME_MARKER": "from-snapshot"},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRunnerWithOptions(Config{Commands: []CommandHook{{
+		Name:    "environment",
+		Events:  []EventName{EventSessionStart},
+		Command: helperCommand("environment"),
+	}}}, RunnerOptions{Environment: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := r.Run(context.Background(), Request{EventName: EventSessionStart})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Stdout != "from-snapshot" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestRunnerResolvesRelativeCommandFromRequestCWD(t *testing.T) {
+	workDir := t.TempDir()
+	command := copyHookHelperExecutable(t, workDir)
+	r, err := NewRunner(Config{Commands: []CommandHook{{
+		Name:    "relative",
+		Events:  []EventName{EventSessionStart},
+		Command: []string{command, "-test.run=TestHookHelperProcess", "--", "stdout:relative"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := r.Run(context.Background(), Request{
+		EventName: EventSessionStart,
+		CWD:       workDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].Stdout != "relative" {
+		t.Fatalf("results = %+v", results)
 	}
 }
 
@@ -190,6 +242,26 @@ func helperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=TestHookHelperProcess", "--", mode}
 }
 
+func copyHookHelperExecutable(t *testing.T, workDir string) string {
+	t.Helper()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "hook-helper"
+	if filepath.Ext(source) != "" {
+		name += filepath.Ext(source)
+	}
+	body, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, name), body, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "." + string(filepath.Separator) + name
+}
+
 func TestHookHelperProcess(t *testing.T) {
 	if len(os.Args) < 3 || os.Args[len(os.Args)-2] != "--" {
 		return
@@ -209,6 +281,8 @@ func TestHookHelperProcess(t *testing.T) {
 		time.Sleep(5 * time.Second)
 	case mode == "large":
 		_, _ = os.Stdout.WriteString(strings.Repeat("x", 32))
+	case mode == "environment":
+		_, _ = os.Stdout.WriteString(os.Getenv("HOOK_RUNTIME_MARKER"))
 	}
 	os.Exit(0)
 }

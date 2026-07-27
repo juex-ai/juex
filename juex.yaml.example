@@ -19,6 +19,22 @@ model: openai:gpt-4.1
 # this workspace or run. JUEX_HOME/extensions remains enabled.
 # enable_user_agents_resources: true
 
+# Runtime environment is resolved once when run, repl, listen, or manual
+# compaction starts. Juex loads exactly <WorkDir>/.env by default; it does not
+# search parent directories or evaluate shell syntax. Restart the runtime after
+# changing YAML or .env.
+# environment:
+#   load_dotenv: true
+#   variables:
+#     NODE_ENV: production
+#     HTTP_PROXY: http://proxy.example.com:8080
+#
+# Runtime values are granted to provider code and every managed MCP,
+# Observable, hook, shell, and grep child. Keep non-secret defaults in YAML,
+# put secrets in the gitignored <WorkDir>/.env, and scope both carefully.
+# JUEX_HOME, HOME, USERPROFILE, WORKDIR, JUEX_WORKDIR, and JUEX_EXT_DIR cannot
+# be declared here or in .env because Juex owns their bootstrap/runtime meaning.
+
 # Optional extension bundles live at ~/.juex/extensions/<name> and
 # .juex/extensions/<name>. Each bundle may contain skills/<skill>/SKILL.md,
 # mcp.json, and hooks.yaml. Work-local extension hooks must set trusted: true

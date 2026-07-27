@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/config"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -41,7 +43,6 @@ type Options struct {
 	IncludeWorktreeSummary bool
 	IncludeArtifacts       bool
 	Now                    func() time.Time
-	Env                    []string
 	Config                 config.Config
 	ExtraFiles             []ExtraFile
 }
@@ -80,15 +81,15 @@ type ManifestEntry struct {
 }
 
 type RuntimeSnapshot struct {
-	WorkDir    string              `json:"work_dir"`
-	SessionID  string              `json:"session_id"`
-	SessionDir string              `json:"session_dir"`
-	Provider   RuntimeProvider     `json:"provider"`
-	Version    version.Info        `json:"version"`
-	OS         string              `json:"os"`
-	Arch       string              `json:"arch"`
-	Paths      config.RuntimePaths `json:"paths"`
-	Env        map[string]string   `json:"env,omitempty"`
+	WorkDir     string                 `json:"work_dir"`
+	SessionID   string                 `json:"session_id"`
+	SessionDir  string                 `json:"session_dir"`
+	Provider    RuntimeProvider        `json:"provider"`
+	Version     version.Info           `json:"version"`
+	OS          string                 `json:"os"`
+	Arch        string                 `json:"arch"`
+	Paths       config.RuntimePaths    `json:"paths"`
+	Environment []environment.Metadata `json:"environment,omitempty"`
 }
 
 type RuntimeProvider struct {
@@ -96,7 +97,6 @@ type RuntimeProvider struct {
 	Protocol string `json:"protocol,omitempty"`
 	Model    string `json:"model,omitempty"`
 	BaseURL  string `json:"base_url,omitempty"`
-	APIKey   string `json:"api_key,omitempty"`
 }
 
 type archiveEntry struct {
@@ -155,21 +155,32 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	snapshot := opts.Config.EnvironmentSnapshot()
+	usedArchivePaths := map[string]struct{}{}
+	manifestPath, manifestPathRedacted := uniqueRedactedArchivePath(
+		snapshot,
+		pathInBundle("manifest.json"),
+		usedArchivePaths,
+	)
+	pathsRedacted := redactConfiguredArchivePaths(snapshot, entries, usedArchivePaths)
 	manifest := Manifest{
 		SchemaVersion: 1,
 		GeneratedAt:   now(),
 		WorkDir:       workDir,
 		SessionID:     opts.SessionID,
-		Redacted:      opts.Redact,
+		Redacted:      opts.Redact || manifestPathRedacted || pathsRedacted || entriesContainRedaction(entries),
 		Version:       version.Build(),
 		Entries:       manifestEntries(entries),
+	}
+	if redactManifestMetadata(snapshot, &manifest) {
+		manifest.Redacted = true
 	}
 	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return Result{}, err
 	}
 	manifestBytes = append(manifestBytes, '\n')
-	entries = append([]archiveEntry{newEntry(pathInBundle("manifest.json"), "", manifestBytes, false, true)}, entries...)
+	entries = append([]archiveEntry{newEntry(manifestPath, "", manifestBytes, manifestPathRedacted, true)}, entries...)
 
 	if err := writeArchive(outPath, entries, now(), opts.Force); err != nil {
 		return Result{}, err
@@ -178,7 +189,34 @@ func Create(opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{Path: outPath, SessionID: sessionID, Files: len(entries), Bytes: st.Size(), Redacted: opts.Redact}, nil
+	return Result{Path: outPath, SessionID: sessionID, Files: len(entries), Bytes: st.Size(), Redacted: manifest.Redacted}, nil
+}
+
+func redactManifestMetadata(snapshot environment.Snapshot, manifest *Manifest) bool {
+	if manifest == nil {
+		return false
+	}
+	changed := redactManifestString(snapshot, &manifest.WorkDir)
+	if redactManifestString(snapshot, &manifest.SessionID) {
+		changed = true
+	}
+	for index := range manifest.Entries {
+		if redactManifestString(snapshot, &manifest.Entries[index].SourcePath) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+func redactManifestString(snapshot environment.Snapshot, value *string) bool {
+	if value == nil || *value == "" {
+		return false
+	}
+	redacted, changed := snapshot.RedactConfiguredValues([]byte(*value))
+	if changed {
+		*value = string(redacted)
+	}
+	return changed
 }
 
 func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]archiveEntry, error) {
@@ -241,8 +279,209 @@ func collectEntries(opts Options, workDir, sessionDir string, now time.Time) ([]
 		}
 		entries = append(entries, newEntry(pathInBundle(path), "", data, redacted, false))
 	}
+	snapshot := opts.Config.EnvironmentSnapshot()
+	for i := range entries {
+		data, redacted := redactConfiguredArchiveData(snapshot, entries[i].Path, entries[i].Data)
+		if !redacted {
+			continue
+		}
+		entry := entries[i]
+		entries[i] = newEntry(entry.Path, entry.SourcePath, data, true, entry.Required)
+	}
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, nil
+}
+
+func redactConfiguredArchivePaths(snapshot environment.Snapshot, entries []archiveEntry, used map[string]struct{}) bool {
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	changed := false
+	for index := range entries {
+		redactedPath, redacted := uniqueRedactedArchivePath(snapshot, entries[index].Path, used)
+		if redactedPath == entries[index].Path {
+			continue
+		}
+		entries[index].Path = redactedPath
+		entries[index].Redacted = true
+		changed = changed || redacted
+	}
+	return changed
+}
+
+func uniqueRedactedArchivePath(snapshot environment.Snapshot, archivePath string, used map[string]struct{}) (string, bool) {
+	redacted, configuredValueRedacted := snapshot.RedactConfiguredValues([]byte(archivePath))
+	candidate := string(redacted)
+	if _, exists := used[candidate]; !exists {
+		used[candidate] = struct{}{}
+		return candidate, configuredValueRedacted
+	}
+	dir, base := path.Split(candidate)
+	ext := path.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for suffix := 2; ; suffix++ {
+		rawUnique := fmt.Sprintf("%s%s~%d%s", dir, stem, suffix, ext)
+		redactedUnique, _ := snapshot.RedactConfiguredValues([]byte(rawUnique))
+		unique := string(redactedUnique)
+		if _, exists := used[unique]; exists {
+			continue
+		}
+		used[unique] = struct{}{}
+		return unique, true
+	}
+}
+
+func redactConfiguredArchiveData(snapshot environment.Snapshot, archivePath string, data []byte) ([]byte, bool) {
+	switch strings.ToLower(filepath.Ext(archivePath)) {
+	case ".json":
+		if redacted, changed, err := redactConfiguredArchiveJSON(snapshot, data); err == nil {
+			return redacted, changed
+		}
+	case ".jsonl":
+		lines := bytes.SplitAfter(data, []byte{'\n'})
+		var output bytes.Buffer
+		changed := false
+		for _, line := range lines {
+			if len(line) == 0 {
+				continue
+			}
+			hasNewline := line[len(line)-1] == '\n'
+			payload := line
+			if hasNewline {
+				payload = line[:len(line)-1]
+			}
+			if len(bytes.TrimSpace(payload)) == 0 {
+				output.Write(payload)
+			} else if redacted, lineChanged, err := redactConfiguredArchiveJSON(snapshot, payload); err == nil {
+				if !lineChanged {
+					output.Write(payload)
+				} else {
+					var compact bytes.Buffer
+					if err := json.Compact(&compact, redacted); err != nil {
+						return snapshot.RedactConfiguredValues(data)
+					}
+					output.Write(compact.Bytes())
+					changed = true
+				}
+			} else {
+				redacted, lineChanged := snapshot.RedactConfiguredValues(payload)
+				output.Write(redacted)
+				changed = changed || lineChanged
+			}
+			if hasNewline {
+				output.WriteByte('\n')
+			}
+		}
+		return output.Bytes(), changed
+	}
+	return snapshot.RedactConfiguredValues(data)
+}
+
+// redactConfiguredArchiveJSON is intentionally lossier than the schema-safe
+// Snapshot redactor used by APIs. Debug bundles must scrub configured values
+// even when an artifact encoded them as object keys or non-string scalars.
+func redactConfiguredArchiveJSON(snapshot environment.Snapshot, data []byte) ([]byte, bool, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, false, fmt.Errorf("bundle: JSON payload contains multiple values")
+		}
+		return nil, false, err
+	}
+	changed := redactConfiguredArchiveJSONValue(snapshot, &value)
+	if !changed {
+		return append([]byte(nil), data...), false, nil
+	}
+	out, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return append(out, '\n'), true, nil
+}
+
+func redactConfiguredArchiveJSONValue(snapshot environment.Snapshot, value *any) bool {
+	switch current := (*value).(type) {
+	case string:
+		redacted, changed := snapshot.RedactConfiguredValues([]byte(current))
+		if changed {
+			*value = string(redacted)
+		}
+		return changed
+	case []any:
+		changed := false
+		for index := range current {
+			if redactConfiguredArchiveJSONValue(snapshot, &current[index]) {
+				changed = true
+			}
+		}
+		return changed
+	case map[string]any:
+		keys := make([]string, 0, len(current))
+		for key := range current {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		redactedMap := make(map[string]any, len(current))
+		changed := false
+		for _, key := range keys {
+			item := current[key]
+			if redactConfiguredArchiveJSONValue(snapshot, &item) {
+				changed = true
+			}
+			redactedKey, keyChanged := snapshot.RedactConfiguredValues([]byte(key))
+			outputKey := uniqueRedactedJSONKey(redactedMap, string(redactedKey))
+			if keyChanged || outputKey != key {
+				changed = true
+			}
+			redactedMap[outputKey] = item
+		}
+		if changed {
+			*value = redactedMap
+		}
+		return changed
+	case json.Number:
+		return redactConfiguredArchiveJSONScalar(snapshot, value, current.String())
+	case bool:
+		return redactConfiguredArchiveJSONScalar(snapshot, value, fmt.Sprint(current))
+	case nil:
+		return redactConfiguredArchiveJSONScalar(snapshot, value, "null")
+	default:
+		return false
+	}
+}
+
+func redactConfiguredArchiveJSONScalar(snapshot environment.Snapshot, value *any, text string) bool {
+	redacted, changed := snapshot.RedactConfiguredValues([]byte(text))
+	if changed {
+		*value = string(redacted)
+	}
+	return changed
+}
+
+func uniqueRedactedJSONKey(values map[string]any, key string) string {
+	if _, exists := values[key]; !exists {
+		return key
+	}
+	candidate := key
+	for {
+		candidate += "~[REDACTED_ENV]"
+		if _, exists := values[candidate]; !exists {
+			return candidate
+		}
+	}
+}
+
+func entriesContainRedaction(entries []archiveEntry) bool {
+	for _, entry := range entries {
+		if entry.Redacted {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeSnapshot(opts Options, workDir, sessionDir string) RuntimeSnapshot {
@@ -259,13 +498,12 @@ func runtimeSnapshot(opts Options, workDir, sessionDir string) RuntimeSnapshot {
 			Protocol: cfg.ProviderProtocol,
 			Model:    cfg.Model,
 			BaseURL:  cfg.BaseURL,
-			APIKey:   cfg.APIKey,
 		},
-		Version: version.Build(),
-		OS:      runtime.GOOS,
-		Arch:    runtime.GOARCH,
-		Paths:   cfg.RuntimePaths(),
-		Env:     envMap(opts.Env),
+		Version:     version.Build(),
+		OS:          runtime.GOOS,
+		Arch:        runtime.GOARCH,
+		Paths:       cfg.RuntimePaths(),
+		Environment: cfg.EnvironmentSnapshot().ConfiguredMetadata(),
 	}
 }
 
@@ -428,21 +666,6 @@ func isWindowsAbsolutePath(path string) bool {
 	}
 	drive := path[0]
 	return (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z')
-}
-
-func envMap(env []string) map[string]string {
-	if len(env) == 0 {
-		env = os.Environ()
-	}
-	out := map[string]string{}
-	for _, item := range env {
-		key, value, ok := strings.Cut(item, "=")
-		if !ok || strings.TrimSpace(key) == "" {
-			continue
-		}
-		out[key] = value
-	}
-	return out
 }
 
 func isRedactableArchivePath(path string) bool {

@@ -287,8 +287,12 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		secondWorkspace,
 		secondAgentID,
 	)
+	const configSecret = "fleet-web-config-secret-sentinel"
 	configPath := filepath.Join(workspace, ".juex", "juex.yaml")
-	initialConfig := fleetWebConfig("old-model")
+	initialConfig := append(
+		fleetWebConfig("old-model"),
+		[]byte("environment:\n  variables:\n    SECRET_TOKEN: "+configSecret+"\n")...,
+	)
 	if err := os.WriteFile(configPath, initialConfig, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -413,6 +417,21 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 		t.Fatalf("initial proxied model = %q", runtimeStatus.Provider.Model)
 	}
 
+	var visibleConfig fleet.AgentConfig
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodGet,
+		baseURL+"/api/agents/"+agentID+"/config",
+		"",
+		http.StatusOK,
+		&visibleConfig,
+	)
+	if strings.Contains(visibleConfig.Content, configSecret) ||
+		!strings.Contains(visibleConfig.Content, "[REDACTED_ENV]") {
+		t.Fatalf("fleet config response was not redacted:\n%s", visibleConfig.Content)
+	}
+
 	var sessions struct {
 		Sessions []struct {
 			ID string `json:"id"`
@@ -458,7 +477,7 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	}
 
 	validBody, err := json.Marshal(map[string]string{
-		"content": string(fleetWebConfig("new-model")),
+		"content": strings.ReplaceAll(visibleConfig.Content, "old-model", "new-model"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -478,8 +497,17 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	)
 	if !update.Config.Exists ||
 		!strings.Contains(update.Config.Content, "new-model") ||
+		strings.Contains(update.Config.Content, configSecret) ||
+		!strings.Contains(update.Config.Content, "[REDACTED_ENV]") ||
 		update.Agent.RuntimeHealth != fleet.RuntimeHealthy {
 		t.Fatalf("config update response = %+v", update)
+	}
+	updatedRawConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(updatedRawConfig), configSecret) {
+		t.Fatalf("placeholder PUT did not retain the existing secret:\n%s", updatedRawConfig)
 	}
 	secondRuntime := waitFleetRuntime(t, agentAddress)
 	if secondRuntime.InstanceID == firstRuntime.InstanceID {
@@ -498,6 +526,50 @@ func TestFleetWebProxyAndConfigRestart(t *testing.T) {
 	)
 	if runtimeStatus.Provider.Model != "new-model" {
 		t.Fatalf("updated proxied model = %q", runtimeStatus.Provider.Model)
+	}
+
+	literalContent := strings.Replace(
+		update.Config.Content,
+		`    SECRET_TOKEN: "[REDACTED_ENV]"`,
+		"    SECRET_TOKEN: \"[REDACTED_ENV]\"\n    LITERAL_PLACEHOLDER: !juex/literal \"[REDACTED_ENV]\"",
+		1,
+	)
+	if literalContent == update.Config.Content {
+		t.Fatalf("redacted config did not contain the expected environment placeholder:\n%s", update.Config.Content)
+	}
+	literalBody, err := json.Marshal(map[string]string{"content": literalContent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var literalUpdate struct {
+		Config fleet.AgentConfig `json:"config"`
+		Agent  fleet.AgentStatus `json:"agent"`
+	}
+	fleetWebJSON(
+		t,
+		client,
+		http.MethodPut,
+		baseURL+"/api/agents/"+agentID+"/config",
+		string(literalBody),
+		http.StatusOK,
+		&literalUpdate,
+	)
+	literalRawConfig, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(literalRawConfig), `LITERAL_PLACEHOLDER: "[REDACTED_ENV]"`) ||
+		strings.Contains(string(literalRawConfig), "!juex/literal") {
+		t.Fatalf("literal placeholder escape was not persisted as a plain string:\n%s", literalRawConfig)
+	}
+	if strings.Contains(literalUpdate.Config.Content, "!juex/literal") ||
+		strings.Count(literalUpdate.Config.Content, "[REDACTED_ENV]") < 2 ||
+		literalUpdate.Agent.RuntimeHealth != fleet.RuntimeHealthy {
+		t.Fatalf("literal placeholder update response = %+v", literalUpdate)
+	}
+	thirdRuntime := waitFleetRuntime(t, agentAddress)
+	if thirdRuntime.InstanceID == secondRuntime.InstanceID {
+		t.Fatalf("literal placeholder update reused runtime instance %q", thirdRuntime.InstanceID)
 	}
 }
 

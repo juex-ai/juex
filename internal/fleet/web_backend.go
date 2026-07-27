@@ -136,6 +136,14 @@ func (m *Manager) UpdateConfig(
 			Reason:  "runtime ownership is ambiguous; refusing config update",
 		}
 	}
+	currentConfig, err := readAgentConfig(entry)
+	if err != nil {
+		return AgentConfig{}, status, err
+	}
+	content, err = mergeRedactedEnvironmentValues(content, currentConfig)
+	if err != nil {
+		return AgentConfig{}, status, &ConfigValidationError{Err: err}
+	}
 	if _, err := config.ValidateWorkspaceConfig(content, entry.Agent.Workspace); err != nil {
 		return AgentConfig{}, status, &ConfigValidationError{Err: err}
 	}

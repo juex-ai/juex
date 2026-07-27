@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -44,7 +43,6 @@ func newBundleCmd(flags *persistentFlags) *cobra.Command {
 				IncludeArtifacts:       includeArtifacts,
 				IncludeWorktreeSummary: includeWorktreeSummary,
 				Config:                 cfg,
-				Env:                    os.Environ(),
 			})
 			if err != nil {
 				switch {

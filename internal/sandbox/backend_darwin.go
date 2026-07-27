@@ -15,10 +15,14 @@ func prepareDarwin(lookPath func(string) (string, error), req Request) (ExecSpec
 	if err != nil {
 		return ExecSpec{}, err
 	}
+	targetBinary, targetArgs, launcherEnv, err := sandboxTargetLaunch(req.Spec)
+	if err != nil {
+		return ExecSpec{}, NewError(ErrorCodePolicyUnavailable, "darwin", "sandbox-exec", "environment", req.Policy, "Unable to prepare the target environment for sandboxed execution.", err)
+	}
 	wrapped := cloneExecSpec(req.Spec)
-	original := append([]string{req.Spec.Binary}, req.Spec.Args...)
 	wrapped.Binary = helper
-	wrapped.Args = append([]string{"-p", profile}, original...)
+	wrapped.Args = append([]string{"-p", profile, targetBinary}, targetArgs...)
+	wrapped.Env = launcherEnv
 	return wrapped, nil
 }
 

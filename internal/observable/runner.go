@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -17,6 +17,7 @@ type runnerOptions struct {
 	spec          commandRuntimeSpec
 	runID         string
 	workDir       string
+	environment   environment.Snapshot
 	sandboxPolicy sandbox.Policy
 	sandboxRunner sandbox.Runner
 	store         *Store
@@ -56,8 +57,12 @@ func (r *runner) start(callCtx context.Context, runCtx context.Context) (*exec.C
 			cwd = filepath.Join(r.opts.workDir, cwd)
 		}
 	}
+	command, err := r.opts.environment.LookPathInDir(r.opts.spec.Command, cwd)
+	if err != nil {
+		return nil, err
+	}
 	spec := sandbox.ExecSpec{
-		Binary: r.opts.spec.Command,
+		Binary: command,
 		Args:   append([]string(nil), r.opts.spec.Args...),
 		Dir:    cwd,
 		Env:    r.env(),
@@ -263,10 +268,15 @@ func (r *runner) watchesStream(stream string) bool {
 }
 
 func (r *runner) env() []string {
-	env := os.Environ()
-	env = append(env, "WORKDIR="+r.opts.workDir, "JUEX_WORKDIR="+r.opts.workDir)
+	child := make(map[string]string, len(r.opts.spec.Env))
 	for key, value := range r.opts.spec.Env {
-		env = append(env, key+"="+ExpandVariables(value, r.opts.workDir))
+		child[key] = ExpandVariables(value, r.opts.workDir)
 	}
-	return env
+	return r.opts.environment.Environ(
+		child,
+		map[string]string{
+			"WORKDIR":      r.opts.workDir,
+			"JUEX_WORKDIR": r.opts.workDir,
+		},
+	)
 }

@@ -12,8 +12,181 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/llm"
 )
+
+func TestLoadWithOptionsResolvesRuntimeEnvironmentPrecedenceAndMetadata(t *testing.T) {
+	home := prepareConfigTest(t)
+	workDir := t.TempDir()
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "override.yaml")
+
+	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), `environment:
+  variables:
+    USER_ONLY: user
+    SHARED: user
+`)
+	writeTextFile(t, filepath.Join(workDir, ".env"), "DOTENV_ONLY=dotenv\nSHARED=dotenv\nEMPTY=\n")
+	writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), `environment:
+  variables:
+    WORKSPACE_ONLY: workspace
+    SHARED: workspace
+`)
+	writeTextFile(t, explicitPath, `environment:
+  variables:
+    EXPLICIT_ONLY: explicit
+    SHARED: explicit
+`)
+	t.Setenv("SHARED", "inherited")
+
+	cfg, err := LoadWithOptions(LoadOptions{
+		WorkDir:    workDir,
+		ConfigPath: explicitPath,
+		AgentState: AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := cfg.EnvironmentSnapshot()
+	for key, want := range map[string]string{
+		"USER_ONLY":      "user",
+		"DOTENV_ONLY":    "dotenv",
+		"WORKSPACE_ONLY": "workspace",
+		"EXPLICIT_ONLY":  "explicit",
+		"SHARED":         "inherited",
+		"EMPTY":          "",
+	} {
+		got, ok := snapshot.Lookup(key)
+		if !ok || got != want {
+			t.Fatalf("%s = %q, %v, want %q", key, got, ok, want)
+		}
+	}
+	status := cfg.EnvironmentStatus()
+	if !status.DotenvLoaded || status.DotenvPath != filepath.Join(workDir, ".env") {
+		t.Fatalf("environment status = %+v", status)
+	}
+	sources := map[string]environment.Source{}
+	for _, item := range snapshot.ConfiguredMetadata() {
+		sources[item.Key] = item.Source
+	}
+	for key, want := range map[string]environment.Source{
+		"USER_ONLY":      environment.SourceUserConfig,
+		"DOTENV_ONLY":    environment.SourceDotenv,
+		"WORKSPACE_ONLY": environment.SourceWorkspaceConfig,
+		"EXPLICIT_ONLY":  environment.SourceExplicitConfig,
+	} {
+		if got := sources[key]; got != want {
+			t.Fatalf("%s source = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestLoadWithOptionsDotenvPolicyAndProviderOverrides(t *testing.T) {
+	t.Run("loads only workdir dotenv and provider uses snapshot", func(t *testing.T) {
+		prepareConfigTest(t)
+		workDir := t.TempDir()
+		explicitDir := t.TempDir()
+		explicitPath := filepath.Join(explicitDir, "override.yaml")
+		writeTextFile(t, filepath.Join(workDir, ".env"), "PROVIDER_API_KEY=dotenv-key\nWORK_MARKER=work\n")
+		writeTextFile(t, filepath.Join(explicitDir, ".env"), "WORK_MARKER=wrong\n")
+		writeTextFile(t, explicitPath, "environment:\n  variables:\n    EXPLICIT_MARKER: explicit\n")
+		if err := os.Unsetenv("PROVIDER_API_KEY"); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadWithOptions(LoadOptions{
+			WorkDir:    workDir,
+			ConfigPath: explicitPath,
+			AgentState: AgentStateNone,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.APIKey != "dotenv-key" {
+			t.Fatalf("APIKey = %q, want dotenv-key", cfg.APIKey)
+		}
+		if got, _ := cfg.EnvironmentSnapshot().Lookup("WORK_MARKER"); got != "work" {
+			t.Fatalf("WORK_MARKER = %q, want work", got)
+		}
+	})
+
+	t.Run("load_dotenv false", func(t *testing.T) {
+		home := prepareConfigTest(t)
+		workDir := t.TempDir()
+		writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), "environment:\n  load_dotenv: false\n")
+		writeTextFile(t, filepath.Join(workDir, ".env"), "SHOULD_NOT_LOAD=value\n")
+
+		cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := cfg.EnvironmentSnapshot().Lookup("SHOULD_NOT_LOAD"); ok {
+			t.Fatal("dotenv variable loaded while environment.load_dotenv=false")
+		}
+		if status := cfg.EnvironmentStatus(); status.DotenvLoaded {
+			t.Fatalf("environment status = %+v", status)
+		}
+	})
+}
+
+func TestLoadWithOptionsRedactsConfiguredValuesFromValidationErrors(t *testing.T) {
+	prepareConfigTest(t)
+	workDir := t.TempDir()
+	const configuredValue = "private-thinking-sentinel"
+	writeTextFile(t, filepath.Join(workDir, ".env"), "PROVIDER_THINKING_EFFORT="+configuredValue+"\n")
+	if err := os.Unsetenv("PROVIDER_THINKING_EFFORT"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+	if err == nil {
+		t.Fatal("expected invalid configured thinking effort")
+	}
+	if strings.Contains(err.Error(), configuredValue) {
+		t.Fatalf("config error leaked configured value: %q", err)
+	}
+	if !strings.Contains(err.Error(), "[REDACTED_ENV]") ||
+		!strings.Contains(err.Error(), "PROVIDER_THINKING_EFFORT") {
+		t.Fatalf("config error = %q, want redacted provider context", err)
+	}
+	if got, ok := cfg.EnvironmentSnapshot().Lookup("PROVIDER_THINKING_EFFORT"); !ok || got != configuredValue {
+		t.Fatalf("partial config snapshot = %q, %v, want configured value retained internally", got, ok)
+	}
+	var redactedErr *configuredEnvironmentError
+	if !errors.As(err, &redactedErr) {
+		t.Fatalf("config error type = %T, want configuredEnvironmentError", err)
+	}
+}
+
+func TestLoadWithOptionsRejectsMalformedOrReservedEnvironment(t *testing.T) {
+	tests := []struct {
+		name       string
+		configBody string
+		dotenvBody string
+		want       string
+	}{
+		{name: "reserved yaml", configBody: "environment:\n  variables:\n    JUEX_HOME: /other\n", want: "reserved"},
+		{name: "invalid yaml name", configBody: "environment:\n  variables:\n    BAD-NAME: value\n", want: "BAD-NAME"},
+		{name: "malformed dotenv", dotenvBody: "NOT_AN_ASSIGNMENT\n", want: "line 1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prepareConfigTest(t)
+			workDir := t.TempDir()
+			if tc.configBody != "" {
+				writeTextFile(t, filepath.Join(workDir, ".juex", "juex.yaml"), tc.configBody)
+			}
+			if tc.dotenvBody != "" {
+				writeTextFile(t, filepath.Join(workDir, ".env"), tc.dotenvBody)
+			}
+			_, err := LoadWithOptions(LoadOptions{WorkDir: workDir, AgentState: AgentStateNone})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
 
 func TestLoadFromFile(t *testing.T) {
 	prepareConfigTest(t)

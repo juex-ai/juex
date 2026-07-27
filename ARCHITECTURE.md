@@ -65,6 +65,7 @@ juex/
 │   │   ├── values.go             # resolved ProviderSelection, paths, and limits
 │   │   ├── shell.go
 │   │   └── codex_auth.go
+│   ├── environment/              # dotenv parsing, immutable snapshots, propagation metadata
 │   ├── cancellation/             # typed user, signal, and runtime-restart cancellation causes
 │   ├── errorclass/               # shared runtime error classification and public wording
 │   ├── extensions/               # home/workspace extension discovery and resource references
@@ -190,7 +191,8 @@ implementation decisions live.
 | `internal/fleetweb` | Fleet HTTP/SSE transport, roster DTOs, directory-browser endpoints, verified Agent reverse proxy, embedded SPA fallback | Registry/process policy, single-Agent routes, frontend domain policy |
 | `internal/processmetrics` | Cross-platform per-process RSS and cumulative CPU-time sampling, interval CPU derivation, process-identity baseline reset | Polling cadence, Agent health policy, HTTP DTOs, UI formatting, persistence |
 | `internal/extensions` | Home/Workspace extension discovery, source identity, duplicate-name rejection, resource references, trust requirement projection | Skill/MCP/hook parsing, runtime registration, extension execution |
-| `internal/config` | YAML/environment and user/Workspace config layering, Provider selection inputs, path and policy projection | Canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
+| `internal/config` | YAML and user/Workspace config layering, runtime-environment layer ordering, Provider selection inputs, path and policy projection | Dotenv syntax, mutable process-global environment ownership, canonical Provider Profile semantics, Turn behavior, Provider requests, HTTP routing |
+| `internal/environment` | Portable environment-name validation, deterministic dotenv parsing, immutable effective snapshots, child overlays, value-free metadata, controlled single-workspace activation | Config-file discovery, subprocess ownership, runtime policy, diagnostic presentation |
 | `internal/providerreadiness` | Provider selection, credential, construction, and connectivity readiness checks | Provider Protocol semantics, runtime fallback, CLI presentation |
 | `internal/llm` | Canonical messages and blocks, Provider interfaces/profiles, Protocol and Capability resolution, wire/SDK adapters, provider transport/API/stream retry, model health | Model-chain fallback, Session lifecycle, Tool execution, CLI/HTTP DTOs |
 | `internal/runtime` | Turn lifecycle, Provider-iteration and Tool Call ordering, pending-input queue, model-chain fallback and Turn-level retry, active context, compaction, context projection, runtime fact emission | Provider SDK and transport retry, Session discovery, MCP process lifecycle, transport parsing |
@@ -693,6 +695,14 @@ filesystem tools so sensitive paths stay inaccessible regardless of whether the
 broader preset is `read_write` or `read_only`. Linux bubblewrap cannot mask a
 blocked path that does not exist without creating a host-visible mountpoint, so
 that backend fails closed for missing blocked paths instead of creating them.
+Sandbox helper discovery uses the inherited launch snapshot rather than a
+workspace-controlled runtime `PATH`. Dynamic-loader variables such as `LD_*`,
+`DYLD_*`, and `GLIBC_TUNABLES` are removed from the wrapper process and restored
+only inside the enforced boundary for the target command. Deferred loader
+entries travel in an opaque wrapper-environment carrier and are applied by the
+Juex target helper; environment values are never placed in `sandbox-exec` or
+`bwrap` argv. This keeps the effective runtime environment available to the
+command without allowing it to change how the sandbox wrapper itself starts.
 Non-TTY sessions use regular stdout/stderr pipes and close stdin at start,
 matching Codex's unified exec behavior; Ctrl-C (`\x03`) is the supported
 follow-up exception and maps to shell-session interrupt. `tty: true` allocates
@@ -1108,12 +1118,15 @@ verbose build and runtime context.
 `internal/config`; it does not change runtime config semantics. `doctor` is a
 read-only diagnostic surface that maps `internal/providerreadiness` results
 into CLI checks, then adds shell resolution, MCP config loading without
-starting servers, and skill scanning.
+starting servers, skill scanning, and value-free runtime-environment metadata.
 
 `bundle` is implemented as a thin CLI wrapper over `internal/bundle`. The
 package owns session file collection, tar.gz writing, manifest hashes,
 runtime/config/env snapshots, optional artifacts, and conservative text
-redaction. The manifest lists every bundled payload file except
+redaction. Configured runtime-environment values are mandatory redaction inputs
+for every archive entry and the manifest regardless of `--redact`; only
+key/source/path metadata may be serialized. The manifest lists every bundled
+payload file except
 `manifest.json` itself because the manifest hash would otherwise be
 self-referential.
 
@@ -1332,7 +1345,14 @@ Config PUT validates the request as a replacement workspace layer over the
 effective user config before writing. `internal/config` publishes the candidate
 with a sibling temporary file and rename. `internal/fleet` holds the per-agent
 lifecycle lock across preflight, write, stop, and start. A valid config remains
-written if the later restart fails.
+written if the later restart fails. Fleet config GET and PUT responses replace
+every `environment.variables` value with `[REDACTED_ENV]`; PUT treats that
+placeholder as "retain the existing value" and rejects it when no existing key
+can be merged. A caller that intentionally needs the literal placeholder value
+uses the explicit YAML tag
+`!juex/literal "[REDACTED_ENV]"`; Fleet removes the control tag before writing.
+This keeps the management API round-trippable without returning raw environment
+values.
 
 ### 3.9 Web Layer
 
@@ -1581,6 +1601,10 @@ model: openai:gpt-4.1
 fallback_models:
   - anthropic:claude-sonnet-5
 enable_user_agents_resources: true
+environment:
+  load_dotenv: true
+  variables:
+    NODE_ENV: production
 skills:
   prompt_budget_chars: 8000
   include: []
@@ -1644,6 +1668,8 @@ compaction:
 | `model` | active model reference in `provider:model` form |
 | `fallback_models` | optional ordered `provider:model` list used after eligible request failures; an explicit empty list clears an inherited list |
 | `enable_user_agents_resources` | optional boolean; defaults to `true`; accepts `true`/`false`, `1`/`0`, `yes`/`no`, and `on`/`off`; when false Juex ignores only `~/.agents/AGENTS.md`, `~/.agents/skills`, and `~/.agents/mcp.json`; `$JUEX_HOME/extensions` remains enabled |
+| `environment.load_dotenv` | optional boolean; defaults to `true`; reads exactly `<WorkDir>/.env` once during runtime config loading; a missing file is allowed and malformed input fails startup |
+| `environment.variables` | optional string map merged into the immutable runtime environment; portable names are required and Juex-owned identity/path names are rejected |
 | `skills.prompt_budget_chars` | optional compact skill catalog budget in characters; defaults to `8000` and is capped by the model context-window policy |
 | `skills.include` | optional filesystem skill-name whitelist applied after user, extension, and project merging; when non-empty, `skills.exclude` is ignored; required builtin guides remain loaded |
 | `skills.exclude` | optional filesystem skill-name blacklist applied after merging when `skills.include` is empty; required builtin guides remain loaded |
@@ -1696,18 +1722,39 @@ compaction:
 | `compaction.tool_result_preview_tail_bytes` | trailing bytes kept inline for externalized tool output |
 | `compaction.max_auto_failures` | consecutive automatic compaction failures before the session pauses proactive compaction with a clear error |
 
-Resolution order (later wins): `defaults` < `$JUEX_HOME/juex.yaml` <
-`<WorkDir>/.juex/juex.yaml` (or `<WorkDir>/juex.yaml` when `WorkDir` is a
-`.juex` directory) < `--config <path>` (if supplied) < `os.Environ` <
-explicit CLI flags. `--model provider:model` selects a configured
+YAML resolution order (later wins) is `defaults` <
+`$JUEX_HOME/juex.yaml` < `<WorkDir>/.juex/juex.yaml` (or
+`<WorkDir>/juex.yaml` when `WorkDir` is a `.juex` directory) <
+`--config <path>` (if supplied) < supported environment overrides < explicit
+CLI flags. `--model provider:model` selects a configured
 provider:model after YAML merge and wins over `PROVIDER_API_ID`,
 `PROVIDER_API_PROTOCOL`, and `PROVIDER_API_MODEL`; non-conflicting env overrides
 such as `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_THINKING_EFFORT`,
-and `PROVIDER_CONTEXT_WINDOW` still apply. `.env` is no longer read by default.
+and `PROVIDER_CONTEXT_WINDOW` still apply.
 `PROVIDER_API_MODEL` remains a model-id-only override under the selected
 provider. Primary overrides preserve `fallback_models`; any fallback selected
 as the primary by YAML layering, environment, or CLI override is removed from
 the effective chain.
+
+The runtime child-process environment is a separate immutable snapshot with
+this precedence (later wins): user YAML `environment.variables` <
+`<WorkDir>/.env` < workspace YAML `environment.variables` < explicit
+`--config` YAML `environment.variables` < the environment inherited when Juex
+started < child-local MCP or Observable values < Juex-owned runtime injection.
+The final merged `environment.load_dotenv` toggle is evaluated before reading
+the fixed workspace dotenv path. Dotenv input is data only: variable expansion,
+shell commands, and startup-time reloads are not performed. Empty inherited
+values are preserved; provider compatibility overrides continue to ignore an
+empty `PROVIDER_API_*` value.
+
+Runtime-bearing CLI commands activate one workspace snapshot for in-process
+provider and SDK lookups and explicitly pass the same snapshot to MCP,
+Observable, hook, shell, and grep subprocesses. Config validation, doctor,
+bundle, Fleet supervision, and generic `internal/config` loads remain
+side-effect-free. Fleet starts each child with only the supervisor's inherited
+environment plus required bootstrap identity, and the child resolves its own
+workspace YAML and `.env`. A process may activate only one workspace snapshot
+at a time.
 Provider definitions merge by `providers[].id` and
 `providers[].models[].id`, so a workspace config can set only `model:
 provider:model` or override a few fields while inheriting missing values
@@ -1718,11 +1765,13 @@ workspace `shell: {}` resets any user-global shell config back to auto.
 After loading, `internal/config` exposes narrower value objects for composition:
 `ProviderSelection` for profile resolution, `RuntimePaths` for work-local
 runtime storage, `ResourcePaths` for AGENTS/skills/MCP/extension inputs, and
-`RuntimeLimits` for context window and compaction policy. The older `Config`
-path/profile methods remain compatibility delegates. Config does not construct
-providers; app resolves the profile and asks `internal/llm` to build the
-adapter. `internal/providerreadiness` reuses the same selection/profile
-boundary when commands need preflight checks before app composition.
+`RuntimeLimits` for context window and compaction policy. It also exposes the
+immutable effective and inherited launch environment snapshots plus value-free
+load metadata. The older `Config` path/profile methods remain compatibility
+delegates. Config does not construct providers or mutate process-global
+environment; app resolves the profile and asks `internal/llm` to build the
+adapter. `internal/providerreadiness` reuses the same selection/profile boundary
+when commands need preflight checks before app composition.
 
 The resolved `ShellProfile` is included in `juex run --dry-run --json`,
 `/api/runtime`, the system prompt operating context, and the `exec_command`
@@ -1744,6 +1793,10 @@ writes.
 Environment overrides include `PROVIDER_API_ID`, `PROVIDER_API_PROTOCOL`,
 `PROVIDER_API_BASE`, `PROVIDER_API_KEY`, `PROVIDER_API_MODEL`,
 `PROVIDER_THINKING_EFFORT`, and `PROVIDER_CONTEXT_WINDOW`.
+Juex-owned diagnostic and serialization surfaces never enumerate raw runtime
+environment values. Managed child programs can still deliberately print values
+they receive; their stdout and stderr remain ordinary tool or extension output
+and are not an implicit secret store.
 
 ### Lifecycle Hooks
 
@@ -2113,7 +2166,9 @@ active work directory. It injects `WORKDIR` and `JUEX_WORKDIR` into every MCP
 server environment, using the absolute runtime `<WorkDir>` value. The same
 variables are expanded in MCP `command`, `args`, and `env` values using
 `${WORKDIR}`, `$WORKDIR`, `${JUEX_WORKDIR}`, or `$JUEX_WORKDIR`. Explicit
-server `env` entries still win over injected defaults after expansion.
+server `env` entries win over the global runtime snapshot after expansion, but
+Juex injects its reserved `WORKDIR`, `JUEX_WORKDIR`, and `JUEX_EXT_DIR` values
+last so server-local config cannot spoof runtime identity or extension paths.
 Extension MCP servers also receive and may expand `JUEX_EXT_DIR`, the absolute
 path to the extension bundle root.
 

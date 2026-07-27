@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/chunkedwrite"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
@@ -404,6 +405,35 @@ func TestBuiltins_ExecCommandUsesConfiguredProfileAndWorkdir(t *testing.T) {
 	}
 }
 
+func TestBuiltinsExecCommandPropagatesResolvedEnvironment(t *testing.T) {
+	snapshot, err := environment.Resolve(environment.Options{Layers: []environment.Layer{{
+		Source: environment.SourceDotenv,
+		Path:   "/work/.env",
+		Values: map[string]string{
+			"JUEX_FAKE_SHELL":          "1",
+			"JUEX_FAKE_SHELL_MODE":     "environment",
+			"SHELL_RUNTIME_ENV_MARKER": "from-snapshot",
+		},
+		Strict: true,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRegistry()
+	RegisterBuiltins(r, BuiltinOptions{
+		WorkDir:     t.TempDir(),
+		Environment: snapshot,
+		Shell:       fakeShellProfile(),
+	})
+	out, err := r.Call(context.Background(), "exec_command", map[string]any{"cmd": "ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "from-snapshot") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
 func TestBuiltins_ExecCommandRelativeWorkdirResolvesFromWorkDir(t *testing.T) {
 	r := NewRegistry()
 	workDir := t.TempDir()
@@ -567,6 +597,15 @@ func TestShellHelperProcess(t *testing.T) {
 	}
 	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "binary" {
 		_, _ = os.Stdout.Write(testBinaryShellOutput())
+		os.Exit(0)
+	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "environment" {
+		fmt.Fprintln(os.Stdout, os.Getenv("SHELL_RUNTIME_ENV_MARKER"))
+		os.Exit(0)
+	}
+	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "environment-delayed" {
+		time.Sleep(500 * time.Millisecond)
+		fmt.Fprintln(os.Stdout, os.Getenv("SHELL_RUNTIME_ENV_MARKER"))
 		os.Exit(0)
 	}
 	if os.Getenv("JUEX_FAKE_SHELL_MODE") == "tty" {

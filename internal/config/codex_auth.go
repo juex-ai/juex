@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/juex-ai/juex/internal/environment"
 )
 
 type codexAuthFile struct {
@@ -35,7 +37,7 @@ func resolveCodexAuth(cfg *Config) error {
 	if cfg.APIKey != "" {
 		return nil
 	}
-	path, err := codexAuthPath()
+	path, err := codexAuthPath(cfg.EnvironmentSnapshot())
 	if err != nil {
 		return err
 	}
@@ -69,8 +71,8 @@ func routeCodexChatGPTProvider(cfg *Config) {
 	}
 }
 
-func codexAuthPath() (string, error) {
-	if home := os.Getenv("CODEX_HOME"); home != "" {
+func codexAuthPath(snapshot environment.Snapshot) (string, error) {
+	if home, ok := snapshot.Lookup("CODEX_HOME"); ok && home != "" {
 		return filepath.Join(home, "auth.json"), nil
 	}
 	home, err := os.UserHomeDir()

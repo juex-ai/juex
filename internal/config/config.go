@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juex-ai/juex/internal/agentstate"
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/hooks"
 	"github.com/juex-ai/juex/internal/llm"
 	runtimepolicy "github.com/juex-ai/juex/internal/runtime/policy"
@@ -64,6 +65,12 @@ type Config struct {
 	modelRef        string
 	shellConfig     ShellConfig
 	providerConfigs map[string]providerConfig
+
+	loadDotenv         bool
+	environmentLayers  []environment.Layer
+	runtimeEnvironment environment.Snapshot
+	launchEnvironment  environment.Snapshot
+	runtimeEnvStatus   EnvironmentStatus
 }
 
 type AgentStateMode uint8
@@ -81,18 +88,33 @@ type LoadOptions struct {
 	AgentState AgentStateMode
 }
 
+// EnvironmentStatus contains value-free diagnostics for the runtime
+// environment resolved during config loading.
+type EnvironmentStatus struct {
+	DotenvPath          string
+	DotenvEnabled       bool
+	DotenvLoaded        bool
+	ConfiguredVariables int
+}
+
 type fileConfig struct {
-	Model                     string           `yaml:"model"`
-	FallbackModels            *[]string        `yaml:"fallback_models"`
-	EnableUserAgentsResources optionalBool     `yaml:"enable_user_agents_resources"`
-	Providers                 []providerConfig `yaml:"providers"`
-	Compaction                compactionConfig `yaml:"compaction"`
-	Hooks                     hooks.FileConfig `yaml:"hooks"`
-	Runtime                   runtimeConfig    `yaml:"runtime"`
-	Shell                     *ShellConfig     `yaml:"shell"`
-	Sandbox                   sandboxConfig    `yaml:"sandbox"`
-	Skills                    skillsConfig     `yaml:"skills"`
-	Fleet                     *fleetFileConfig `yaml:"fleet"`
+	Model                     string            `yaml:"model"`
+	FallbackModels            *[]string         `yaml:"fallback_models"`
+	EnableUserAgentsResources optionalBool      `yaml:"enable_user_agents_resources"`
+	Providers                 []providerConfig  `yaml:"providers"`
+	Compaction                compactionConfig  `yaml:"compaction"`
+	Hooks                     hooks.FileConfig  `yaml:"hooks"`
+	Runtime                   runtimeConfig     `yaml:"runtime"`
+	Shell                     *ShellConfig      `yaml:"shell"`
+	Sandbox                   sandboxConfig     `yaml:"sandbox"`
+	Skills                    skillsConfig      `yaml:"skills"`
+	Fleet                     *fleetFileConfig  `yaml:"fleet"`
+	Environment               environmentConfig `yaml:"environment"`
+}
+
+type environmentConfig struct {
+	LoadDotenv optionalBool      `yaml:"load_dotenv"`
+	Variables  map[string]string `yaml:"variables"`
 }
 
 type providerConfig struct {
@@ -319,12 +341,13 @@ var allowedThinkingEfforts = map[string]struct{}{
 
 const allowedThinkingEffortText = "low, medium, high, xhigh, max"
 
-// Load resolves config from ~/.juex/juex.yaml, the work-local juex.yaml, and
-// OS env vars.
+// Load resolves config from ~/.juex/juex.yaml, the work-local juex.yaml,
+// <WorkDir>/.env when enabled, and the inherited process environment.
 //
-// Priority (later wins): defaults < ~/.juex/juex.yaml <
-// <WorkDir>/.juex/juex.yaml (or <WorkDir>/juex.yaml when WorkDir is .juex) <
-// os.Environ.
+// YAML priority (later wins): defaults < ~/.juex/juex.yaml <
+// <WorkDir>/.juex/juex.yaml (or <WorkDir>/juex.yaml when WorkDir is .juex).
+// Runtime-environment priority is documented by internal/environment and the
+// architecture guide; config loading itself does not mutate os.Environ.
 func Load() (Config, error) {
 	return LoadForWorkDir("")
 }
@@ -337,7 +360,7 @@ func LoadWithOptions(opts LoadOptions) (Config, error) {
 		return cfg, err
 	}
 	if strings.TrimSpace(opts.ConfigPath) != "" {
-		if err := applyYAMLFile(&cfg, opts.ConfigPath, false, "project", true); err != nil {
+		if err := applyYAMLFile(&cfg, opts.ConfigPath, false, "project", true, environment.SourceExplicitConfig); err != nil {
 			return cfg, err
 		}
 	}
@@ -390,7 +413,7 @@ func loadConfigFilesForWorkDir(workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true, "project", true); err != nil {
+	if err := applyYAMLFile(&cfg, cfg.RuntimeConfigPath(), true, "project", true, environment.SourceWorkspaceConfig); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -408,6 +431,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 		Fleet:                     FleetConfig{Addr: DefaultFleetAddr},
 		EnableUserAgentsResources: true,
 		providerConfigs:           map[string]providerConfig{},
+		loadDotenv:                true,
 	}
 
 	if workDir == "" {
@@ -430,7 +454,7 @@ func loadUserConfigForWorkDir(workDir string) (Config, error) {
 	}
 	cfg.HomeJuexDir = juexHome
 
-	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true, "user", false); err != nil {
+	if err := applyYAMLFile(&cfg, cfg.HomeRuntimeConfigPath(), true, "user", false, environment.SourceUserConfig); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
@@ -448,7 +472,7 @@ func LoadFromFileForWorkDir(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, path, false, "project", true)
+	err = applyYAMLFile(&cfg, path, false, "project", true, environment.SourceExplicitConfig)
 	if err != nil {
 		return cfg, err
 	}
@@ -465,7 +489,7 @@ func LoadFromFileForWorkDirForValidation(path, workDir string) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	if err := applyYAMLFile(&cfg, path, false, "project", true); err != nil {
+	if err := applyYAMLFile(&cfg, path, false, "project", true, environment.SourceExplicitConfig); err != nil {
 		return cfg, err
 	}
 	if err := finalizeConfigLoadForValidation(&cfg, "", true); err != nil {
@@ -481,7 +505,7 @@ func LoadFromFileForWorkDirWithModelOverride(path, workDir, modelRef string) (Co
 	if err != nil {
 		return cfg, err
 	}
-	err = applyYAMLFile(&cfg, path, false, "project", true)
+	err = applyYAMLFile(&cfg, path, false, "project", true, environment.SourceExplicitConfig)
 	if err != nil {
 		return cfg, err
 	}
@@ -499,7 +523,18 @@ func finalizeConfigLoadForValidation(cfg *Config, modelRef string, resolveAuth b
 	return finalizeConfigLoadWithAgentState(cfg, modelRef, resolveAuth, AgentStateNone)
 }
 
-func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth bool, agentStateMode AgentStateMode) error {
+func finalizeConfigLoadWithAgentState(
+	cfg *Config,
+	modelRef string,
+	resolveAuth bool,
+	agentStateMode AgentStateMode,
+) (loadErr error) {
+	if err := resolveRuntimeEnvironment(cfg); err != nil {
+		return err
+	}
+	defer func() {
+		loadErr = redactConfiguredEnvironmentError(cfg.EnvironmentSnapshot(), loadErr)
+	}()
 	if err := validateConfiguredFallbackModels(cfg); err != nil {
 		return err
 	}
@@ -523,6 +558,34 @@ func finalizeConfigLoadWithAgentState(cfg *Config, modelRef string, resolveAuth 
 		return err
 	}
 	return finalizeLoadedConfig(cfg, resolveAuth, agentStateMode)
+}
+
+type configuredEnvironmentError struct {
+	message string
+	err     error
+}
+
+func (e *configuredEnvironmentError) Error() string {
+	return e.message
+}
+
+func (e *configuredEnvironmentError) Unwrap() error {
+	return e.err
+}
+
+func redactConfiguredEnvironmentError(snapshot environment.Snapshot, err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	redacted, changed := snapshot.RedactConfiguredValues([]byte(message))
+	if !changed {
+		return err
+	}
+	return &configuredEnvironmentError{
+		message: string(redacted),
+		err:     err,
+	}
 }
 
 func finalizeLoadedConfig(cfg *Config, resolveAuth bool, agentStateMode AgentStateMode) error {
@@ -647,7 +710,31 @@ func (c Config) MCPConfigPaths() []string {
 	return c.ResourcePaths().MCPConfigPaths
 }
 
-func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, requireHookTrust bool) error {
+// EnvironmentSnapshot returns the immutable effective environment resolved for
+// this config. Manually constructed Config values fall back to the current
+// inherited environment for compatibility with package-level tests.
+func (c Config) EnvironmentSnapshot() environment.Snapshot {
+	if c.runtimeEnvironment.IsZero() {
+		return environment.FromEnviron(os.Environ())
+	}
+	return c.runtimeEnvironment
+}
+
+// LaunchEnvironmentSnapshot is the inherited process environment captured
+// before workspace values are applied. It is reserved for trusted bootstrap
+// helpers such as sandbox backends.
+func (c Config) LaunchEnvironmentSnapshot() environment.Snapshot {
+	if c.launchEnvironment.IsZero() {
+		return environment.FromEnviron(os.Environ())
+	}
+	return c.launchEnvironment
+}
+
+func (c Config) EnvironmentStatus() EnvironmentStatus {
+	return c.runtimeEnvStatus
+}
+
+func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, requireHookTrust bool, envSource environment.Source) error {
 	if path == "" {
 		return nil
 	}
@@ -658,10 +745,10 @@ func applyYAMLFile(cfg *Config, path string, missingOK bool, hookSource string, 
 		}
 		return err
 	}
-	return applyYAMLData(cfg, data, path, hookSource, requireHookTrust)
+	return applyYAMLData(cfg, data, path, hookSource, requireHookTrust, envSource)
 }
 
-func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireHookTrust bool) error {
+func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireHookTrust bool, envSource environment.Source) error {
 	var fc fileConfig
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -676,6 +763,17 @@ func applyYAMLData(cfg *Config, data []byte, source, hookSource string, requireH
 	}
 	if fc.EnableUserAgentsResources.Set {
 		cfg.EnableUserAgentsResources = fc.EnableUserAgentsResources.Value
+	}
+	if fc.Environment.LoadDotenv.Set {
+		cfg.loadDotenv = fc.Environment.LoadDotenv.Value
+	}
+	if fc.Environment.Variables != nil {
+		cfg.environmentLayers = append(cfg.environmentLayers, environment.Layer{
+			Source: envSource,
+			Path:   source,
+			Values: cloneEnvironmentVariables(fc.Environment.Variables),
+			Strict: true,
+		})
 	}
 	if err := applyProvidersConfig(cfg, fc.Providers); err != nil {
 		return fmt.Errorf("config: parse %s: %w", source, err)
@@ -1201,15 +1299,68 @@ func applyOSEnv(cfg *Config) error {
 
 func applyOSEnvExcept(cfg *Config, excluded map[string]struct{}) error {
 	values := map[string]string{}
+	snapshot := cfg.EnvironmentSnapshot()
 	for _, key := range providerEnvKeys {
 		if _, skip := excluded[key]; skip {
 			continue
 		}
-		if v, ok := os.LookupEnv(key); ok && v != "" {
+		if v, ok := snapshot.Lookup(key); ok && v != "" {
 			values[key] = v
 		}
 	}
 	return applyEnvMap(cfg, values)
+}
+
+func resolveRuntimeEnvironment(cfg *Config) error {
+	dotenvPath := filepath.Join(cfg.WorkDir, ".env")
+	layers := make([]environment.Layer, 0, len(cfg.environmentLayers)+1)
+	for _, layer := range cfg.environmentLayers {
+		if layer.Source == environment.SourceUserConfig {
+			layers = append(layers, layer)
+		}
+	}
+	status := EnvironmentStatus{DotenvPath: dotenvPath, DotenvEnabled: cfg.loadDotenv}
+	if cfg.loadDotenv {
+		result, err := environment.LoadDotenv(dotenvPath, environment.LoadDotenvOptions{})
+		if err != nil {
+			return err
+		}
+		status.DotenvLoaded = result.Loaded
+		if result.Loaded {
+			layers = append(layers, environment.Layer{
+				Source: environment.SourceDotenv,
+				Path:   result.Path,
+				Values: result.Values,
+				Strict: true,
+			})
+		}
+	}
+	for _, layer := range cfg.environmentLayers {
+		if layer.Source != environment.SourceUserConfig {
+			layers = append(layers, layer)
+		}
+	}
+	inherited := os.Environ()
+	snapshot, err := environment.Resolve(environment.Options{
+		Layers:    layers,
+		Inherited: inherited,
+	})
+	if err != nil {
+		return err
+	}
+	status.ConfiguredVariables = len(snapshot.ConfiguredMetadata())
+	cfg.runtimeEnvironment = snapshot
+	cfg.launchEnvironment = environment.FromEnviron(inherited)
+	cfg.runtimeEnvStatus = status
+	return nil
+}
+
+func cloneEnvironmentVariables(values map[string]string) map[string]string {
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func applyEnvMap(cfg *Config, values map[string]string) error {

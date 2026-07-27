@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/version"
 )
 
@@ -26,6 +29,7 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 			// honour both.
 			showRuntime := verbose || flags.verbose || jsonOut
 			info := version.Build()
+			var runtimeEnvironment environment.Snapshot
 			if showRuntime {
 				// Soft-fail: if config can't load (missing override file, etc.) we
 				// still surface as much runtime context as we can. cfg's
@@ -33,6 +37,7 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 				// on os.Getwd, so they are usually populated even when the
 				// config override is missing.
 				cfg, _ := loadConfigForCommand(cmd, flags)
+				runtimeEnvironment = cfg.EnvironmentSnapshot()
 				info.WorkDir = cfg.WorkDir
 				info.ConfigFile = configFileForPlan(flags)
 				if cfg.ProviderID != "" || cfg.ProviderProtocol != "" {
@@ -49,9 +54,14 @@ func newVersionCmd(flags *persistentFlags) *cobra.Command {
 			}
 			switch {
 			case jsonOut:
-				cmdPrintln(cmd, info.JSON())
+				data, _, err := runtimeEnvironment.RedactConfiguredJSON([]byte(info.JSON()))
+				if err != nil {
+					return fmt.Errorf("redact version JSON: %w", err)
+				}
+				cmdPrintln(cmd, string(data))
 			case showRuntime:
-				cmdPrintln(cmd, info.Verbose())
+				data, _ := runtimeEnvironment.RedactConfiguredValues([]byte(info.Verbose()))
+				cmdPrintln(cmd, string(data))
 			default:
 				cmdPrintln(cmd, version.String())
 			}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juex-ai/juex/internal/environment"
 	"github.com/juex-ai/juex/internal/sandbox"
 )
 
@@ -26,7 +27,7 @@ func (ShellToolProvider) definitions(opts BuiltinDefinitionOptions) []ToolDefini
 
 func (ShellToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	return []Tool{
-		execCommandTool(ctx.WorkDir, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.SandboxRunner),
+		execCommandTool(ctx.WorkDir, ctx.Environment, ctx.Shell, ctx.ShellSessions, ctx.Sandbox, ctx.SandboxRunner),
 		listShellSessionsTool(ctx.ShellSessions),
 		writeStdinTool(ctx.ShellSessions),
 	}
@@ -112,7 +113,7 @@ func writeStdinToolDefinition() ToolDefinition {
 	}
 }
 
-func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner) Tool {
+func execCommandTool(defaultWorkdir string, snapshot environment.Snapshot, profile ShellProfile, sessions *ShellSessionManager, sandboxPolicy sandbox.Policy, sandboxRunner sandbox.Runner) Tool {
 	return execCommandToolDefinition(profile).BindResult(func(ctx context.Context, in map[string]any) (Result, error) {
 		cmd, _ := in["cmd"].(string)
 		if cmd == "" {
@@ -134,6 +135,7 @@ func execCommandTool(defaultWorkdir string, profile ShellProfile, sessions *Shel
 			Binary:          profile.Binary,
 			Args:            profile.Args,
 			Command:         cmd,
+			Env:             snapshot.Environ(map[string]string{"PWD": workdir}),
 			Cwd:             workdir,
 			WorkspaceRoots:  shellWorkspaceRoots(defaultWorkdir),
 			Sandbox:         sandboxPolicy,

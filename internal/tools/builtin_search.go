@@ -19,6 +19,7 @@ func (SearchToolProvider) Tools(ctx BuiltinProviderContext) []Tool {
 	if runner == nil {
 		runner = NewRipgrepRunner(RipgrepRunnerOptions{
 			WorkDir:       ctx.WorkDir,
+			Environment:   ctx.Environment,
 			Sandbox:       ctx.Sandbox,
 			SandboxRunner: ctx.SandboxRunner,
 		})

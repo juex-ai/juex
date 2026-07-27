@@ -128,6 +128,50 @@ func TestRuntimeStatusReportsStableServerStartTime(t *testing.T) {
 	}
 }
 
+func TestRuntimeAPIAlwaysRedactsConfiguredEnvironmentValues(t *testing.T) {
+	const secret = "runtime-api-environment-secret"
+	home := t.TempDir()
+	work := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("JUEX_HOME", "")
+	mustWriteRuntimeFile(t, filepath.Join(work, ".juex", "juex.yaml"), `environment:
+  variables:
+    RUNTIME_API_MARKER: runtime-api-environment-secret
+    RUNTIME_API_BOOLEAN_COLLISION: "false"
+`)
+	cfg, err := config.LoadWithOptions(config.LoadOptions{
+		WorkDir:    work,
+		AgentState: config.AgentStateNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.AgentStateDir = filepath.Join(work, ".juex")
+	cfg.ProviderID = "test"
+	cfg.ProviderProtocol = "openai/responses"
+	cfg.Model = secret
+
+	srv := NewServer(Options{Cfg: cfg})
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime", nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if strings.Contains(body, secret) {
+		t.Fatalf("runtime API leaked configured environment value:\n%s", body)
+	}
+	if !strings.Contains(body, "[REDACTED_ENV]") {
+		t.Fatalf("runtime API did not mark redacted semantic field:\n%s", body)
+	}
+	var decoded runtimeStatusResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("redacted runtime response is invalid JSON: %v\n%s", err, body)
+	}
+}
+
 func TestRuntimeStatusResponseSerializesEmptyCatalogCollectionsAsArrays(t *testing.T) {
 	response := runtimeStatusResponseFromApp(app.RuntimeStatus{
 		Tools: app.RuntimeToolsStatus{},
