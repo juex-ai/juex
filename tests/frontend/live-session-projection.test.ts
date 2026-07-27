@@ -501,6 +501,43 @@ test("projectLiveSessionEvent preserves queued attachments across compact termin
   assert.equal(state.messages[1]?.pending, true);
 });
 
+test("projectLiveSessionEvent preserves queued attachments when compact fails before start", () => {
+  let state = createLiveSessionProjection();
+  state = apply(state, {
+    id: "e0",
+    type: "turn.admitted",
+    ts: "2026-06-15T00:00:00Z",
+    turn_id: "compact-1",
+    payload: { operation: "compact" },
+  });
+  assert.equal(state.compactAdmissionTurnID, "compact-1");
+
+  state = projectQueuedInput(state, "", "user", 1, [imageMedia]);
+  state = apply(state, {
+    id: "e1",
+    type: "turn.errored",
+    ts: "2026-06-15T00:00:01Z",
+    turn_id: "compact-1",
+    payload: { error: "pre-compact hook failed", error_kind: "internal" },
+  });
+  assert.equal(state.compactAdmissionTurnID, null);
+  assert.equal(state.queuedInput.items.length, 1);
+
+  state = apply(state, {
+    id: "e2",
+    type: "pending_input.promoted",
+    ts: "2026-06-15T00:00:02Z",
+    turn_id: "turn-2",
+    payload: { pending_count: 0, max_pending_inputs: 4 },
+  });
+
+  assert.equal(state.queuedInput.items.length, 0);
+  assert.deepEqual(state.messages[0]?.blocks, [
+    { type: "image", media: imageMedia },
+  ]);
+  assert.equal(state.messages[0]?.turn_id, "turn-2");
+});
+
 test("projectLiveSessionEvent drains queued input before the pending assistant placeholder", () => {
   let state = createLiveSessionProjection();
   state = projectQueuedInput(state, "queued follow-up", undefined, 1);

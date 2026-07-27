@@ -77,6 +77,30 @@ func TestBrowserEventFromRuntimeExposesPendingInputPromotion(t *testing.T) {
 	}
 }
 
+func TestBrowserEventFromRuntimeExposesCompactAdmissionOperation(t *testing.T) {
+	got, visible, err := browserEventFromRuntime(events.Event{
+		ID:     "compact-admitted-1",
+		Type:   juexruntime.TurnAdmittedType,
+		TurnID: "compact-1",
+		Payload: juexruntime.TurnAdmittedPayload{
+			Operation: juexruntime.TurnAdmissionOperationCompact,
+		},
+	}, statusapi.Snapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !visible {
+		t.Fatal("compact admission should be browser-visible")
+	}
+	var payload juexruntime.TurnAdmittedPayload
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Operation != juexruntime.TurnAdmissionOperationCompact {
+		t.Fatalf("compact admission operation = %q", payload.Operation)
+	}
+}
+
 func TestBrowserEventFromRuntimeValidatesKnownPayload(t *testing.T) {
 	_, visible, err := browserEventFromRuntime(events.Event{
 		ID:      "bad-1",

@@ -16,6 +16,7 @@ const maxTurnAdmissionAttempts = 2
 
 type turnAdmissionRuntime interface {
 	ReserveTurnID(string) error
+	ReserveCompactionTurnID(string) error
 	EnqueuePendingMessage(context.Context, llm.Message) (runtime.PendingInputStatus, error)
 	PromotePendingInputTurn(string, string) (llm.Message, runtime.PendingInputStatus, bool)
 }
@@ -113,7 +114,7 @@ func (q turnAdmissionQueue) beginCompact(turnID string) error {
 	if q.state.phase != turnAdmissionIdle {
 		return errTurnAdmissionBusy
 	}
-	if err := q.engine.ReserveTurnID(turnID); err != nil {
+	if err := q.engine.ReserveCompactionTurnID(turnID); err != nil {
 		return err
 	}
 	q.state.phase = turnAdmissionCompacting

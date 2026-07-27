@@ -161,6 +161,16 @@ func (e *Engine) Turn(ctx context.Context, userInput string) (string, error) {
 }
 
 func (e *Engine) ReserveTurnID(turnID string) error {
+	return e.reserveTurnID(turnID, TurnAdmittedPayload{})
+}
+
+func (e *Engine) ReserveCompactionTurnID(turnID string) error {
+	return e.reserveTurnID(turnID, TurnAdmittedPayload{
+		Operation: TurnAdmissionOperationCompact,
+	})
+}
+
+func (e *Engine) reserveTurnID(turnID string, payload TurnAdmittedPayload) error {
 	if e == nil {
 		return ErrNoActiveTurn
 	}
@@ -176,7 +186,7 @@ func (e *Engine) ReserveTurnID(turnID string) error {
 	e.activeTurnID = turnID
 	e.pendingMu.Unlock()
 	if admitted {
-		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: TurnAdmittedPayload{}})
+		e.emit(events.Event{Type: TurnAdmittedType, TurnID: turnID, Payload: payload})
 	}
 	return nil
 }

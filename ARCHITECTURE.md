@@ -976,7 +976,10 @@ entrypoint, while the unexported `turn_admission_queue.go` domain service owns
 admission phase transitions, runtime pending-input coordination, turn id
 reservation, and compact-command promotion. Transports render that result and
 start any returned turn message; they should not duplicate busy, compact,
-pending-input, or slash-command policy.
+pending-input, or slash-command policy. Manual compact reservation marks its
+`turn.admitted` event with `operation: "compact"` so transcript projection can
+preserve queued input even when a pre-compact hook fails before compaction
+starts.
 
 ```go
 // internal/runtime/loop.go

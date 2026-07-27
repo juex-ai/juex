@@ -10,14 +10,16 @@ import (
 )
 
 const (
-	TurnAdmittedType         = "turn.admitted"
-	TurnPhaseType            = "turn.phase"
-	PendingInputDrainingType = "pending_input.draining"
-	PendingInputPromotedType = "pending_input.promoted"
+	TurnAdmittedType              = "turn.admitted"
+	TurnAdmissionOperationCompact = "compact"
+	TurnPhaseType                 = "turn.phase"
+	PendingInputDrainingType      = "pending_input.draining"
+	PendingInputPromotedType      = "pending_input.promoted"
 )
 
 type TurnAdmittedPayload struct {
-	NonInterruptible bool `json:"non_interruptible,omitempty"`
+	NonInterruptible bool   `json:"non_interruptible,omitempty"`
+	Operation        string `json:"operation,omitempty"`
 }
 
 type TurnPhasePayload struct {

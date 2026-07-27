@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juex-ai/juex/internal/events"
 	"github.com/juex-ai/juex/internal/llm"
 	"github.com/juex-ai/juex/internal/runtime"
 )
@@ -21,6 +22,10 @@ type turnAdmissionRuntimeStub struct {
 }
 
 func (s *turnAdmissionRuntimeStub) ReserveTurnID(turnID string) error {
+	return s.reserve(turnID)
+}
+
+func (s *turnAdmissionRuntimeStub) ReserveCompactionTurnID(turnID string) error {
 	return s.reserve(turnID)
 }
 
@@ -522,9 +527,18 @@ func TestAdmitTurnQueuesImageBlocksWhileRunning(t *testing.T) {
 func TestAdmitTurnQueuesDuringCompactAndPromotesPendingInput(t *testing.T) {
 	a, _ := newStubApp(t)
 	ids := &testTurnIDs{}
+	var admitted runtime.TurnAdmittedPayload
+	unsubscribe := a.Bus.Subscribe(runtime.TurnAdmittedType, func(event events.Event) {
+		admitted, _ = event.Payload.(runtime.TurnAdmittedPayload)
+	})
+	defer unsubscribe()
+
 	compactID := ids.NextTurnID("compact")
 	if err := a.beginCompactAdmission(compactID); err != nil {
 		t.Fatal(err)
+	}
+	if admitted.Operation != runtime.TurnAdmissionOperationCompact {
+		t.Fatalf("compact admission operation = %q, want %q", admitted.Operation, runtime.TurnAdmissionOperationCompact)
 	}
 	compactStatus := a.Status.Snapshot()
 	if compactStatus.Turn == nil ||

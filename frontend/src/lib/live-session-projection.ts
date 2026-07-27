@@ -214,7 +214,11 @@ export function projectLiveSessionEvent(
 
   switch (event.type) {
     case "turn.admitted":
-      if (event.turn_id && event.payload.non_interruptible) {
+      if (
+        event.turn_id &&
+        (event.payload.operation === "compact" ||
+          event.payload.non_interruptible)
+      ) {
         next = { ...next, compactAdmissionTurnID: event.turn_id };
       }
       break;
