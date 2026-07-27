@@ -28,7 +28,7 @@ func spawnDetached(executable, homeDir string, entry agentstate.RegistryEntry) (
 	}
 	defer stdin.Close()
 
-	cmd := exec.Command(executable, "-C", entry.Agent.Workspace, "serve", "--headless")
+	cmd := exec.Command(executable, "-C", entry.Agent.Workspace, "listen")
 	cmd.Dir = entry.Agent.Workspace
 	cmd.Env = withEnvironment(os.Environ(), "JUEX_HOME", homeDir)
 	cmd.Stdin = stdin

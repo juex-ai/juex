@@ -301,7 +301,7 @@ func TestREPLCmd_LoadsMCPAtStartup(t *testing.T) {
 	assertPathExists(t, marker)
 }
 
-func TestServeCmd_LoadsMCPAtStartup(t *testing.T) {
+func TestListenCmd_LoadsMCPAtStartup(t *testing.T) {
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "juex.yaml")
 	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
@@ -317,7 +317,7 @@ func TestServeCmd_LoadsMCPAtStartup(t *testing.T) {
 	root.SetContext(ctx)
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "serve", "--addr", "127.0.0.1:0"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "listen", "--addr", "127.0.0.1:0"})
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- root.Execute() }()
@@ -326,10 +326,10 @@ func TestServeCmd_LoadsMCPAtStartup(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if err != nil {
-			t.Fatalf("serve returned error after cancel: %v", err)
+			t.Fatalf("listen returned error after cancel: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("serve did not stop after context cancellation")
+		t.Fatal("listen did not stop after context cancellation")
 	}
 }
 

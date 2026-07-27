@@ -46,7 +46,7 @@ type Options struct {
 	Config   config.Config
 	Provider llm.Provider // optional; if nil, derived from Config
 	// ModelCandidates takes precedence over Provider and config-derived models.
-	// ModelHealth may be shared by multiple Apps, as juex serve does.
+	// ModelHealth may be shared by multiple Apps, as juex listen does.
 	ModelCandidates []runtime.ModelCandidate
 	ModelHealth     *llm.ModelHealth
 	// SummaryProvider, when set, overrides compaction.summary_model provider

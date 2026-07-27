@@ -57,7 +57,7 @@ juex/
 │   │   ├── repl.go
 │   │   ├── resume.go
 │   │   ├── schema.go
-│   │   ├── serve.go
+│   │   ├── listen.go
 │   │   ├── sessions.go
 │   │   └── version.go
 │   ├── version/    version.go    # ldflags-injected build metadata
@@ -882,7 +882,7 @@ fallback for older events that predate those fields.
 
 Each resident agent has one active primary session recorded in
 `$JUEX_HOME/agents/<id>/history.json` as `{active, sessions}`. `run`, `repl`, and
-`serve` attach to that active primary by default; `--new` and `/new` create a
+`listen` attach to that active primary by default; `--new` and `/new` create a
 new primary and switch active. Side sessions are durable and listed, but never
 become active and are not valid Web turn targets.
 Workspace session attachment is an app-level policy. `internal/app` chooses
@@ -947,7 +947,7 @@ func (a *App) Close() error
 ```
 
 `run` and `repl` create an app-local MCP manager because each command owns one
-runtime process and one active app. `serve` first ensures `history.active` has
+runtime process and one active app. `listen` first ensures `history.active` has
 an active primary session record, then creates one process-scoped MCP manager.
 The HTTP listener is allowed to come up before MCP warmup finishes, but session
 opening waits for the in-flight MCP startup so every web session registers
@@ -1011,7 +1011,7 @@ cooldown ladder and single-request half-open reservations. `internal/runtime`
 owns request replay, candidate-specific context preflight, `llm.fallback`
 events, and `model_fallback` notices. A successful switch atomically appends
 the notice and assistant response; failed attempts never persist a notice.
-`juex serve` shares one health instance across all session Apps.
+`juex listen` shares one health instance across all session Apps.
 
 Turns are Codex-aligned long-running loops: the runtime does not enforce a
 per-turn provider-request count or wall-clock duration cap. A turn stops when
@@ -1084,7 +1084,7 @@ juex [--version | -v]
 │   ├── context <id> [--format json|text]
 │   ├── compact <id> [--reason <reason>] [--format json|text]
 │   └── delete <id>
-├── serve [--addr <host:port>] [--unsafe-bind-any] [--headless]
+├── listen [--addr <host:port>] [--unsafe-bind-any]
 ├── fleet
 │   ├── serve [--addr <host:port>] [--unsafe-bind-any]
 │   ├── install [--addr <host:port>] [--unsafe-bind-any] [--restart-agents]
@@ -1148,7 +1148,7 @@ Persistent flags inherited by all subcommands:
 | `--verbose` |  | false (stream events to stderr) |
 
 Every executable Cobra command declares an agent-state policy through an
-annotation. Normal `run`, `repl`, and `serve` use `mint`; the `sessions` and
+annotation. Normal `run`, `repl`, and `listen` use `mint`; the `sessions` and
 `bundle` trees use `existing`; and state-independent commands use `none`.
 Classification fails when a new executable command has no declaration.
 `internal/config.LoadWithOptions` carries the corresponding
@@ -1161,7 +1161,7 @@ directories, updating global excludes, migrating state, or rebinding a moved
 workspace. A moved workspace must run a normal stateful command once before
 read-only commands can use it.
 
-Explicit `--ephemeral` on `run`, `repl`, and `serve`, plus the internal scratch
+Explicit `--ephemeral` on `run`, `repl`, and `listen`, plus the internal scratch
 mode used by `run --dry-run`, loads configuration with `AgentStateNone` and
 then binds a private `<temp-root>/agents/<random-id>` state directory. The
 temporary layout places endpoint locks under
@@ -1213,7 +1213,7 @@ or orphaned agents remain visible even when running.
 adopts only exact endpoint identities, removes only confirmed stale runtime
 records, and starts enabled autostart agents. After reconciliation it binds the
 fleet browser listener, then keeps both services resident. Detached children
-execute the current binary as `-C <workspace> serve --headless`, inherit the
+execute the current binary as `-C <workspace> listen`, inherit the
 effective home, and append stdout and stderr to `logs/fleet.log`. Supervisor
 or browser-listener exit never stops them.
 
@@ -1346,12 +1346,10 @@ func (s *Server) APIHandler() http.Handler
 func (s *Server) Run(ctx) error
 ```
 
-`juex serve` always starts the canonical agent endpoint and records it in the
+`juex listen` always starts the canonical agent endpoint and records it in the
 identity-owned `runtime.json`. It opens no additional TCP listener by default.
 Passing `--addr` explicitly adds the loopback JSON/SSE API listener; binding
-beyond loopback also requires `--unsafe-bind-any`. The retained `--headless`
-flag is a compatibility form of the flagless endpoint-only command and cannot
-be combined with TCP listener flags.
+beyond loopback also requires `--unsafe-bind-any`.
 
 The canonical endpoint uses `APIHandler`, where unmatched routes keep ordinary
 404 semantics. The explicit TCP listener uses `Handler`, which serves the same
@@ -1944,7 +1942,7 @@ $JUEX_HOME/
 │   └── skills/<skill>/SKILL.md   # extension skills
 ├── fleet.lock                    # one resident fleet supervisor
 ├── .locks/
-│   ├── endpoints/<agent-id>.lock # serve lifetime and GC maintenance
+│   ├── endpoints/<agent-id>.lock # listener lifetime and GC maintenance
 │   └── fleet/<agent-id>.lock     # per-agent lifecycle serialization
 └── agents/<agent-id>/            # resident-agent registry entry and state
     ├── agent.json                # identity + workspace reverse pointer
@@ -2045,7 +2043,7 @@ The workspace marker is globally ignored through Git's user excludes file,
 never by editing project `.gitignore`.
 
 Read-only `existing` resolution never runs this migration. It also never
-performs moved-workspace rebinding; a normal `run`, `repl`, or `serve` owns
+performs moved-workspace rebinding; a normal `run`, `repl`, or `listen` owns
 that write before read-only commands retry.
 
 ---
@@ -2062,7 +2060,7 @@ Handwritten stdio client (no external SDK). Supports:
 
 Each MCP tool is registered as `mcp__<server>__<tool>` to avoid name clashes.
 `mcp.Manager` owns the stdio clients for one process and can register those
-tools into multiple per-session registries. In `serve`, session tool handlers
+tools into multiple per-session registries. In `listen`, session tool handlers
 forward calls into the shared manager; closing a session does not close MCP.
 `Manager.ToolDescriptors` returns a defensive deep copy of the per-server
 descriptors cached during startup, sorted by tool name within each server. Map
@@ -2083,7 +2081,7 @@ attachments are called out in structured text instead of being silently
 dropped. `params.content` remains a
 display preview, while metadata under `params.meta` is visible to the Agent.
 For `run` and `repl`, notifications target the command's only primary app. For
-`serve`, notifications target the resident agent's `history.json.active`: the
+`listen`, notifications target the resident agent's `history.json.active`: the
 active primary session. Side sessions do not declare the
 `experimental["claude/channel"]` initialize capability and do not become
 notification targets.

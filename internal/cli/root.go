@@ -299,7 +299,7 @@ operate on an agent.`,
 		workspaceCommandGroupID,
 		newRunCmd(flags),
 		newREPLCmd(flags),
-		newServeCmd(flags),
+		newListenCmd(flags),
 		newSessionsCmd(flags),
 		newInitCmd(flags),
 	)

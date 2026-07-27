@@ -247,7 +247,7 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 // It blocks until cancellation or a listener/startup failure.
 func (s *Server) Run(ctx context.Context) error {
 	if s.opts.Addr != "" && !s.opts.AllowAnyBind && !validLoopback(s.opts.Addr) {
-		return fmt.Errorf("juex serve: --addr must bind to loopback (got %q)", s.opts.Addr)
+		return fmt.Errorf("juex listen: --addr must bind to loopback (got %q)", s.opts.Addr)
 	}
 	if err := app.EnsureActivePrimarySessionRecord(s.opts.Cfg); err != nil {
 		return err
@@ -255,7 +255,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	address := s.opts.Cfg.AgentAddress
 	if address.ID() == "" {
-		return errors.New("juex serve: agent address is empty")
+		return errors.New("juex listen: agent address is empty")
 	}
 	binding, err := endpoint.Listen(ctx, address, version.Version)
 	if err != nil {
@@ -533,7 +533,7 @@ func (s *Server) openSession(ctx context.Context, resumeDir string, mode app.Ses
 	})
 	if err != nil {
 		s.recordMCPError(err)
-		s.logVerbose("juex serve: open session failed: %v", err)
+		s.logVerbose("juex listen: open session failed: %v", err)
 		return nil, err
 	}
 	workCtx, workCancel := context.WithCancel(context.Background())
@@ -661,7 +661,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 			return
 		}
 		if err := s.handleMCPNotification(context.Background(), n); err != nil {
-			s.logVerbose("juex serve: MCP notification dropped: %v", err)
+			s.logVerbose("juex listen: MCP notification dropped: %v", err)
 		}
 	}
 	mgr, err := mcp.NewManagerLayeredSoft(ctx, mcpConfigs, mcp.ConnectOptions{
@@ -670,7 +670,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 	})
 	if err != nil {
 		s.recordMCPError(err)
-		s.logVerbose("juex serve: MCP startup failed: %v", err)
+		s.logVerbose("juex listen: MCP startup failed: %v", err)
 		return nil
 	}
 	s.setMCPErrors(mgr.StartupErrors())
@@ -679,7 +679,7 @@ func (s *Server) ensureMCPStarted(ctx context.Context) (err error) {
 	if s.isClosed() {
 		s.mcpMu.Unlock()
 		if err := mgr.Close(); err != nil {
-			s.logVerbose("juex serve: MCP shutdown failed: %v", err)
+			s.logVerbose("juex listen: MCP shutdown failed: %v", err)
 		}
 		return nil
 	}
@@ -734,7 +734,7 @@ func (s *Server) handleMCPNotification(ctx context.Context, n mcp.Notification) 
 		return err
 	}
 	if !ok {
-		s.logVerbose("juex serve: MCP notification dropped: no active primary session")
+		s.logVerbose("juex listen: MCP notification dropped: no active primary session")
 		return nil
 	}
 	as, err := s.getActiveSession(ctx, id)

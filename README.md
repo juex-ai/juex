@@ -77,9 +77,8 @@ juex run --attach screenshot.png "describe this image"
 juex --model openai:gpt-4.1 run "summarize this repository"
 juex --debug run --json "summarize this repository"
 juex repl
-juex serve
-juex serve --addr 127.0.0.1:9000
-juex serve --headless
+juex listen
+juex listen --addr 127.0.0.1:9000
 juex fleet serve
 juex fleet status
 ```
@@ -107,17 +106,10 @@ do not fall back to `PATH` when their pinned `rg` payload is missing or invalid.
 The Termux bare-binary install is intentionally unpackaged and therefore
 reports native `rg` as the `system` source.
 
-`juex serve` publishes the current agent's JSON/SSE API through its canonical
+`juex listen` publishes the current agent's JSON/SSE API through its canonical
 local endpoint without opening a separate TCP port. Pass `--addr` explicitly
 to add a TCP API listener. That listener does not serve the React SPA; its
 non-API routes point users to `juex fleet serve` for the browser UI.
-`--headless` remains accepted for compatibility and is implied when `--addr`
-is omitted.
-
-Compatibility: scripts that used the old implicit
-`http://127.0.0.1:8080/api/...` listener must now pass an explicit address,
-for example `juex serve --addr 127.0.0.1:8080`. See the
-[release notes](docs/release-notes.md).
 
 `juex fleet` manages all resident agents registered under the effective
 `JUEX_HOME`. `fleet add` registers an explicit absolute workspace;
@@ -189,10 +181,9 @@ operate on an agent. `juex init` sets up either the shared user config
 | `juex sessions context <id>` | Print the active provider context for a session. |
 | `juex sessions compact <id> --instructions "<focus>"` | Append a manual compact summary marker to a session. |
 | `juex sessions delete <id>` | Delete one session and remove it from history. |
-| `juex serve` | Serve the current agent JSON/SSE API through its canonical endpoint only. |
-| `juex serve --ephemeral` | Serve from isolated temporary state without fleet registration; add `--keep` to retain the state after shutdown. |
-| `juex serve --addr 127.0.0.1:9000` | Add an explicit loopback TCP listener for the agent JSON/SSE API. |
-| `juex serve --headless` | Compatibility form of endpoint-only `juex serve`; implied without `--addr`. |
+| `juex listen` | Publish the current agent JSON/SSE API through its canonical endpoint only. |
+| `juex listen --ephemeral` | Listen from isolated temporary state without fleet registration; add `--keep` to retain the state after shutdown. |
+| `juex listen --addr 127.0.0.1:9000` | Add an explicit loopback TCP listener for the agent JSON/SSE API. |
 
 ### Troubleshooting (current directory)
 
@@ -239,13 +230,13 @@ not depend on an interactive shell profile such as `.zshrc`.
 Each workspace has one resident-agent identity. The narrow workspace marker
 binds it to state under `JUEX_HOME`, which defaults to `~/.juex`:
 
-Only a normal `run`, `repl`, or `serve` may create this durable identity.
+Only a normal `run`, `repl`, or `listen` may create this durable identity.
 Session and bundle commands require an existing marker and never create,
 migrate, or rebind one. `doctor` reports a missing marker as a warning, while
 `version`, `schema`, `init`, and fleet registry commands do not require a
 workspace identity.
 
-`run`, `repl`, and `serve` accept `--ephemeral` for one-off work. Ephemeral
+`run`, `repl`, and `listen` accept `--ephemeral` for one-off work. Ephemeral
 mode keeps normal workspace and user configuration/resource loading, but
 replaces identity-owned state with a private temporary home that is deleted on
 exit. It ignores an existing marker, never changes the durable agent state or

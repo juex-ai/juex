@@ -164,7 +164,7 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Name:       "agent",
 			Status:     doctorStatusWarn,
 			Message:    noAgent.Error(),
-			Suggestion: "run juex run, repl, or serve to create a durable workspace agent",
+			Suggestion: "run juex run, repl, or listen to create a durable workspace agent",
 		}
 	}
 	var rebind *agentstate.RebindRequiredError
@@ -173,7 +173,7 @@ func doctorAgentCheck(workDir string) doctorCheck {
 			Name:       "agent",
 			Status:     doctorStatusFail,
 			Message:    rebind.Error(),
-			Suggestion: "run juex run, repl, or serve once to automatically rebind the workspace agent",
+			Suggestion: "run juex run, repl, or listen once to automatically rebind the workspace agent",
 		}
 	}
 	var copied *agentstate.WorkspaceCopyError

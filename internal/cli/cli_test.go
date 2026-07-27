@@ -211,11 +211,11 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 		"Fleet (all agents under $JUEX_HOME)",
 		"About this CLI",
 		"Create a user or workspace juex.yaml config (user by default)",
+		"listen",
 		"run",
 		"repl",
 		"sessions",
 		"bundle",
-		"serve",
 		"version",
 	} {
 		if !strings.Contains(body, want) {
@@ -249,10 +249,10 @@ func TestRootHelpGroupsSubcommandsByScope(t *testing.T) {
 		"fleet":      "fleet",
 		"help":       "cli",
 		"init":       "workspace",
+		"listen":     "workspace",
 		"repl":       "workspace",
 		"run":        "workspace",
 		"schema":     "cli",
-		"serve":      "workspace",
 		"sessions":   "workspace",
 		"version":    "cli",
 	}
@@ -292,6 +292,33 @@ func TestUnknownSubcommandIsError(t *testing.T) {
 	root.SetArgs([]string{"totally-bogus"})
 	if err := root.Execute(); err == nil {
 		t.Fatal("expected error for unknown command")
+	}
+}
+
+func TestRemovedServeCommandAndLegacyFlagAreUnknown(t *testing.T) {
+	removedFlag := "--" + "head" + "less"
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "serve command", args: []string{"serve"}, want: `unknown command "serve"`},
+		{name: "removed flag", args: []string{"listen", removedFlag}, want: "unknown flag: " + removedFlag},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := newRootCmd()
+			var out bytes.Buffer
+			root.SetOut(&out)
+			root.SetErr(&out)
+			root.SetArgs(test.args)
+			err := root.Execute()
+			if err == nil {
+				t.Fatalf("args %v unexpectedly succeeded", test.args)
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("args %v error = %q, want %q", test.args, err, test.want)
+			}
+		})
 	}
 }
 
@@ -351,12 +378,11 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		`"name": "sessions"`,
 		`"name": "list"`,
 		`"name": "show"`,
-		`"name": "serve"`,
+		`"name": "listen"`,
 		`"name": "bundle"`,
 		`"name": "include-artifacts"`,
 		`"name": "include-worktree-summary"`,
 		`"name": "addr"`,
-		`"name": "headless"`,
 		`"name": "unsafe-bind-any"`,
 		`"name": "resume"`,  // flag
 		`"name": "session"`, // flag
@@ -373,6 +399,10 @@ func TestSchemaCmd_OutputsCommandTree(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("schema missing %q in:\n%s", want, body)
 		}
+	}
+	removedFlagName := "head" + "less"
+	if strings.Contains(body, `"name": "`+removedFlagName+`"`) {
+		t.Errorf("schema still exposes removed flag %q:\n%s", removedFlagName, body)
 	}
 }
 
@@ -496,7 +526,7 @@ func TestDoctorAgentCheckExplainsStatefulRebind(t *testing.T) {
 	if !strings.Contains(check.Message, resolution.Agent.ID) {
 		t.Fatalf("message = %q, want agent id %q", check.Message, resolution.Agent.ID)
 	}
-	const want = "run juex run, repl, or serve once to automatically rebind the workspace agent"
+	const want = "run juex run, repl, or listen once to automatically rebind the workspace agent"
 	if check.Suggestion != want {
 		t.Fatalf("suggestion = %q, want %q", check.Suggestion, want)
 	}
@@ -2047,7 +2077,7 @@ func TestREPLCmd_AcceptsResumeFlags(t *testing.T) {
 	}
 }
 
-func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
+func TestListenCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	// Without --unsafe-bind-any, a non-loopback addr is a usage error.
 	root := newRootCmd()
 	var out bytes.Buffer
@@ -2058,7 +2088,7 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	if err := writeJuexConfigFile(configFile, "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	root.SetArgs([]string{"-C", dir, "--config", configFile, "serve", "--addr", "0.0.0.0:0"})
+	root.SetArgs([]string{"-C", dir, "--config", configFile, "listen", "--addr", "0.0.0.0:0"})
 	err := root.Execute()
 	if _, ok := err.(*usageError); !ok {
 		t.Fatalf("expected *usageError without --unsafe-bind-any, got %T: %v", err, err)
@@ -2073,7 +2103,7 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	var out2 bytes.Buffer
 	root2.SetOut(&out2)
 	root2.SetErr(&out2)
-	root2.SetArgs([]string{"-C", dir, "--config", configFile, "serve", "--addr", "300.300.300.300:0", "--unsafe-bind-any"})
+	root2.SetArgs([]string{"-C", dir, "--config", configFile, "listen", "--addr", "300.300.300.300:0", "--unsafe-bind-any"})
 	err2 := root2.Execute()
 	if err2 == nil {
 		t.Fatal("expected non-nil error from invalid bind address")
@@ -2087,11 +2117,11 @@ func TestServeCmd_UnsafeBindAnyBypassesLoopbackCheck(t *testing.T) {
 	}
 }
 
-func TestServeCmdAddrDefaultIsEndpointOnly(t *testing.T) {
-	cmd := newServeCmd(&persistentFlags{})
+func TestListenCmdAddrDefaultIsEndpointOnly(t *testing.T) {
+	cmd := newListenCmd(&persistentFlags{})
 	flag := cmd.Flags().Lookup("addr")
 	if flag == nil {
-		t.Fatal("serve command has no --addr flag")
+		t.Fatal("listen command has no --addr flag")
 	}
 	if flag.DefValue != "" {
 		t.Fatalf("--addr default = %q, want empty endpoint-only default", flag.DefValue)
@@ -2101,27 +2131,23 @@ func TestServeCmdAddrDefaultIsEndpointOnly(t *testing.T) {
 	}
 }
 
-func TestValidateServeListenerOptions(t *testing.T) {
+func TestValidateListenOptions(t *testing.T) {
 	tests := []struct {
 		name        string
 		addr        string
 		addrChanged bool
-		headless    bool
 		unsafe      bool
 		wantError   bool
 	}{
 		{name: "flagless"},
-		{name: "explicit headless", headless: true},
 		{name: "explicit TCP", addr: "127.0.0.1:9000", addrChanged: true},
-		{name: "headless with address", addr: "127.0.0.1:9000", addrChanged: true, headless: true, wantError: true},
-		{name: "headless with unsafe", headless: true, unsafe: true, wantError: true},
 		{name: "unsafe without address", unsafe: true, wantError: true},
 		{name: "explicit empty address", addrChanged: true, wantError: true},
 		{name: "explicit whitespace address", addr: " ", addrChanged: true, wantError: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := validateServeListenerOptions(test.addr, test.addrChanged, test.headless, test.unsafe)
+			err := validateListenOptions(test.addr, test.addrChanged, test.unsafe)
 			if (err != nil) != test.wantError {
 				t.Fatalf("error = %v, wantError = %v", err, test.wantError)
 			}
@@ -2135,12 +2161,10 @@ func TestValidateServeListenerOptions(t *testing.T) {
 	}
 }
 
-func TestServeCmdRejectsInvalidListenerFlagCombinationsBeforeConfig(t *testing.T) {
+func TestListenCmdRejectsInvalidListenerFlagCombinationsBeforeConfig(t *testing.T) {
 	for _, args := range [][]string{
-		{"serve", "--headless", "--addr", "127.0.0.1:9000"},
-		{"serve", "--headless", "--unsafe-bind-any"},
-		{"serve", "--unsafe-bind-any"},
-		{"serve", "--addr="},
+		{"listen", "--unsafe-bind-any"},
+		{"listen", "--addr="},
 	} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			root := newRootCmd()
@@ -2154,21 +2178,21 @@ func TestServeCmdRejectsInvalidListenerFlagCombinationsBeforeConfig(t *testing.T
 	}
 }
 
-func TestReportServeReadyIncludesEndpointSchemeAndFallback(t *testing.T) {
+func TestReportListenReadyIncludesEndpointSchemeAndFallback(t *testing.T) {
 	cmd := &cobra.Command{}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
 
-	reportServeReady(cmd, web.ReadyInfo{
+	reportListenReady(cmd, web.ReadyInfo{
 		AgentEndpoint:  "tcp://127.0.0.1:43123",
 		TCPAddress:     "127.0.0.1:8080",
 		FallbackReason: "unix sockets unsupported",
 	})
 	for _, want := range []string{
 		"tcp://127.0.0.1:43123",
-		"juex serve agent JSON/SSE API (no web UI) listening on http://127.0.0.1:8080",
+		"juex listen agent JSON/SSE API (no web UI) listening on http://127.0.0.1:8080",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())

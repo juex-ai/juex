@@ -7,7 +7,7 @@ deferral.
 
 | # | Principle | Status | Evidence |
 |---|---|---|---|
-| 1 | **Noun-verb command tree** | Good — lifecycle entrypoints remain verbs (`run`, `repl`, `serve`), while managed resources use noun-verb form (`sessions list/show/delete`). | `internal/cli/{root,run,repl,sessions,serve,version,schema}.go` |
+| 1 | **Noun-verb command tree** | Good — lifecycle entrypoints remain verbs (`run`, `repl`, `listen`), while managed resources use noun-verb form (`sessions list/show/delete`). | `internal/cli/{root,run,repl,sessions,listen,version,schema}.go` |
 | 2 | **Long flags first** | ✅ Every flag has a long form. `-v` is reserved for subcommand-local "verbose" (version's verbose output); the root `--verbose` (event streaming) has **no shorthand** to avoid the `-v`/`-V` confusion called out in the article. | `internal/cli/root.go` (persistent flags), `internal/cli/version.go` (`-v`) |
 | 3 | **Output is contract** | ✅ `juex run --json` emits a stable JSON shape `{text, session_id, session_dir, duration_ms}` to stdout; lifecycle events go to stderr (when `--verbose`); `juex version --json`, `juex schema`, and `juex sessions ...` JSON output are tested contracts. | `internal/cli/run.go`, `internal/cli/sessions.go`, `internal/cli/version.go`, `internal/cli/schema.go` |
 | 4 | **Sense the environment (TTY)** | Partial — we never emit colour, spinners, or interactive prompts, so non-TTY behaviour is already safe. We do **not** auto-switch to JSON in non-TTY (deferred — would surprise humans piping `juex run` into `wc`). Agents pass `--json` explicitly. | n/a |
