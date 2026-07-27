@@ -91,7 +91,7 @@ test("the session keeps its conversation scroller behind a bounded composer over
   );
   assertHasClassTokens(
     sessionComposerClasses,
-    "pointer-events-auto min-h-0 overflow-hidden",
+    "pointer-events-auto min-h-0 overflow-visible",
   );
 });
 

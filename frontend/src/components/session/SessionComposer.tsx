@@ -143,7 +143,7 @@ export function SessionComposer({
             aria-hidden="true"
           />
           <div
-            className="pointer-events-auto flex min-h-0 flex-col overflow-hidden"
+            className="pointer-events-auto flex min-h-0 flex-col overflow-visible"
             data-testid="session-composer-stack"
           >
             <QueuedInputStack items={queuedInputs} />
@@ -214,7 +214,7 @@ export function SessionComposer({
                       <ComposerAttachmentButton />
                     </div>
                     <Separator
-                      className="h-4 self-center"
+                      className="h-4 !self-center"
                       orientation="vertical"
                       decorative
                     />
