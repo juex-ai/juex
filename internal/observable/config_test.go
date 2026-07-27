@@ -98,7 +98,7 @@ func TestTaggedSpecsRoundTripAndDefensivelyCopy(t *testing.T) {
 	}
 }
 
-func TestLoadConfigLenientReportsLegacyEntriesAndKeepsValidSibling(t *testing.T) {
+func TestLoadConfigLenientReportsInvalidEntriesAndKeepsValidSibling(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "observables.json")
 	body := `{"observables":[` +
 		`{"id":"old-flat","command":"echo"},` +

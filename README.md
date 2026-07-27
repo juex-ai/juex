@@ -483,8 +483,7 @@ rewrites the whole Markdown document through `update_notes`; there is no read
 tool because the current notes are recited after Goal on every provider
 request. Notes are limited to 2048 Unicode characters, survive compaction, and
 may use Markdown task items (`- [ ]` and `- [x]`) for visible progress. Juex
-does not infer or mirror runtime facts into notes, and it never reads or
-migrates legacy `working_state.json` files.
+does not infer or mirror runtime facts into notes.
 
 Compaction summary requests carry the current goal contract and Notes as
 authoritative session state. The summary model copies the contract into `Goal`
@@ -511,9 +510,8 @@ goal. The active contract is intentionally small: `description`,
 text for criteria, artifacts, constraints, and verification requirements; a
 missing `status_reason` has no behavioral effect. The model accesses this state
 only through `get_goal`, `create_goal`, and `update_goal`; ordinary user
-messages do not create goals, and command hook output cannot mutate goals.
-Legacy goal fields are not migrated or normalized and are ignored when old
-state is loaded. The built-in
+messages do not create goals, and command hook output cannot mutate goals. The
+built-in
 `goal-completion-gate` reads the persisted status and queues one continuation
 when the goal is still `in_progress`; project-specific hooks can still add
 plain-text context or request Stop continuation with exit code `2`.

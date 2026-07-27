@@ -633,7 +633,7 @@ func readProjectedArtifact(t *testing.T, eng *Engine, projection *llm.ContextArt
 	return data
 }
 
-func TestTurn_ProjectsLegacyLargeHistoryBeforeProviderRequest(t *testing.T) {
+func TestTurn_ProjectsLargeUnprojectedHistoryBeforeProviderRequest(t *testing.T) {
 	prov := &mockProvider{script: []llm.Response{
 		{Message: llm.TextMessage(llm.RoleAssistant, "answer"), StopReason: llm.StopEndTurn},
 	}}
@@ -643,8 +643,8 @@ func TestTurn_ProjectsLegacyLargeHistoryBeforeProviderRequest(t *testing.T) {
 	eng.Compaction.UserInputInlineMaxBytes = 64
 	eng.Compaction.UserInputPreviewHeadBytes = 10
 	eng.Compaction.UserInputPreviewTailBytes = 10
-	legacy := "old-head\n" + strings.Repeat("LEGACY-SECRET ", 80) + "\nold-tail"
-	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, legacy)); err != nil {
+	original := "old-head\n" + strings.Repeat("ARCHIVED-SECRET ", 80) + "\nold-tail"
+	if err := eng.Session.Append(llm.TextMessage(llm.RoleUser, original)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -652,11 +652,11 @@ func TestTurn_ProjectsLegacyLargeHistoryBeforeProviderRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	providerText := messagesText(prov.histories[0])
-	if strings.Contains(providerText, "LEGACY-SECRET LEGACY-SECRET") {
-		t.Fatalf("provider received unbounded legacy input:\n%s", providerText)
+	if strings.Contains(providerText, "ARCHIVED-SECRET ARCHIVED-SECRET") {
+		t.Fatalf("provider received unbounded historical input:\n%s", providerText)
 	}
 	if !strings.Contains(providerText, "User input stored outside context.") || !strings.Contains(providerText, "old-head") || !strings.Contains(providerText, "old-tail") {
-		t.Fatalf("legacy projection missing:\n%s", providerText)
+		t.Fatalf("historical input projection missing:\n%s", providerText)
 	}
 }
 
@@ -2802,7 +2802,7 @@ func TestTurn_HookGoalStateOutputDoesNotModifyGoal(t *testing.T) {
 	eng, _ := newEngine(t, prov, false)
 	eng.GoalState = NewGoalStateStore(eng.Session.Dir, GoalStateOptions{})
 	runner, err := hooks.NewRunner(hooks.Config{Commands: []hooks.CommandHook{{
-		Name:    "legacy-goal-output",
+		Name:    "ignored-goal-output",
 		Events:  []hooks.EventName{hooks.EventStop},
 		Command: runtimeHookCommand("goal-output"),
 	}}})
@@ -3990,7 +3990,7 @@ func TestRunToolCalls_SerializesGoalCallsInProviderOrder(t *testing.T) {
 	}
 }
 
-func TestTurn_AllowsMoreThanLegacyIterationBudget(t *testing.T) {
+func TestTurn_AllowsLongToolSequence(t *testing.T) {
 	const toolTurns = 30
 	script := make([]llm.Response, 0, toolTurns+1)
 	for i := 0; i < toolTurns; i++ {

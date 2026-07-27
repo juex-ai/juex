@@ -821,7 +821,7 @@ func TestWeb_RunScheduleObservableOnce(t *testing.T) {
 func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
 	work := t.TempDir()
 	configBody := `{"observables":[` +
-		`{"id":"legacy-command","command":"echo"},` +
+		`{"id":"invalid-command","command":"echo"},` +
 		`{"id":"valid-schedule","type":"schedule","schedule_config":{"interval":{"every_seconds":3600},"observation":{"content":"valid sibling"}}}` +
 		`]}`
 	configPath := filepath.Join(work, ".juex", "observables.json")
@@ -853,12 +853,12 @@ func TestWeb_OldObservableShapeIsVisibleAndBlocksTaggedEdits(t *testing.T) {
 			return false
 		}
 		statuses = body.Observables
-		valid, legacy := observableStatusByID(statuses, "valid-schedule"), observableStatusByID(statuses, "legacy-command")
-		return valid != nil && valid.State == observable.RunStateRunning && legacy != nil && legacy.State == observable.RunStateErrored
+		valid, invalid := observableStatusByID(statuses, "valid-schedule"), observableStatusByID(statuses, "invalid-command")
+		return valid != nil && valid.State == observable.RunStateRunning && invalid != nil && invalid.State == observable.RunStateErrored
 	})
-	legacy := observableStatusByID(statuses, "legacy-command")
-	if legacy == nil || !strings.Contains(legacy.LastError, "type plus command_config") {
-		t.Fatalf("legacy config issue = %+v, want rewrite hint", legacy)
+	invalid := observableStatusByID(statuses, "invalid-command")
+	if invalid == nil || !strings.Contains(invalid.LastError, "type plus command_config") {
+		t.Fatalf("invalid config issue = %+v, want rewrite hint", invalid)
 	}
 
 	createBody := strings.NewReader(`{"id":"blocked-command","type":"command","command_config":{"command":"echo"}}`)

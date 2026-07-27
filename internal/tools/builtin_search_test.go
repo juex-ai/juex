@@ -80,7 +80,7 @@ func TestBuiltinsGrepFormatsPartialTermination(t *testing.T) {
 	}
 }
 
-func TestRipgrepArgsPreserveLegacyTraversalContract(t *testing.T) {
+func TestRipgrepArgsPreserveTraversalContract(t *testing.T) {
 	got := ripgrepArgs("a.*b", ".")
 	want := []string{
 		"--json",
@@ -294,7 +294,7 @@ func TestResolveRipgrepValidatesPackagedBinaryDigest(t *testing.T) {
 }
 
 func TestResolveRipgrepUsesWindowsManagedPackagePointer(t *testing.T) {
-	t.Run("legacy release key", func(t *testing.T) {
+	t.Run("release pointer", func(t *testing.T) {
 		testResolveRipgrepUsesWindowsManagedPackagePointer(t, false)
 	})
 	t.Run("immutable generation", func(t *testing.T) {
@@ -466,7 +466,7 @@ func TestRipgrepRunnerPreservesSingleFileOutputPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Matches) != 1 || result.Matches[0].Path != "." {
-		t.Fatalf("single-file matches = %+v, want legacy path .", result.Matches)
+		t.Fatalf("single-file matches = %+v, want path .", result.Matches)
 	}
 }
 

@@ -123,9 +123,9 @@ func TestObservationRecordJSONUsesUnixMilliseconds(t *testing.T) {
 	}
 }
 
-func TestObservationRecordJSONAcceptsLegacyRFC3339Timestamps(t *testing.T) {
+func TestObservationRecordJSONAcceptsRFC3339Timestamps(t *testing.T) {
 	data := []byte(`{
-		"id":"obs-legacy",
+		"id":"obs-rfc3339",
 		"observable_id":"lark-events",
 		"kind":"lark_notification",
 		"severity":"info",
@@ -145,7 +145,7 @@ func TestObservationRecordJSONAcceptsLegacyRFC3339Timestamps(t *testing.T) {
 		!decoded.WindowEnd.Equal(fixedTime.Add(10*time.Second)) ||
 		!decoded.CreatedAt.Equal(fixedTime.Add(12*time.Second)) ||
 		!decoded.DeliveredAt.Equal(fixedTime.Add(15*time.Second)) {
-		t.Fatalf("decoded legacy observation = %+v", decoded)
+		t.Fatalf("decoded RFC3339 observation = %+v", decoded)
 	}
 }
 

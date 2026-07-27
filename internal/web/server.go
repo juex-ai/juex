@@ -236,8 +236,6 @@ func (s *Server) dispatchSession(w http.ResponseWriter, r *http.Request) {
 		s.handleSessionContext(w, r, id)
 	case rest == "scratchpad" && r.Method == http.MethodGet:
 		s.handleSessionScratchpad(w, r, id)
-	case strings.HasPrefix(rest, "turns/"):
-		writeErr(w, http.StatusNotFound, "not_found", "session API route not found")
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "unsupported method or sub-path")
 	}

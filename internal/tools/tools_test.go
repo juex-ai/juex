@@ -3773,12 +3773,6 @@ func TestSpecs_OrderedAndComplete(t *testing.T) {
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("want %v, got %v", want, names)
 	}
-	if _, ok := r.Get("shell"); ok {
-		t.Fatal("legacy shell tool should not be registered")
-	}
-	if _, ok := r.Get("shell_input"); ok {
-		t.Fatal("legacy shell_input tool should not be registered")
-	}
 }
 
 func TestBuiltinSchemas_ExecCommandAndWriteStdinShape(t *testing.T) {
@@ -3800,7 +3794,7 @@ func TestBuiltinSchemas_ExecCommandAndWriteStdinShape(t *testing.T) {
 		t.Fatalf("exec_command schema should not expose runtime timeout: %+v", execProps)
 	}
 	if _, ok := execProps["cwd"]; ok {
-		t.Fatalf("exec_command schema exposes legacy cwd: %+v", execProps)
+		t.Fatalf("exec_command schema exposes unexpected cwd: %+v", execProps)
 	}
 
 	stdinProps := schemaProperties(t, byName["write_stdin"])
@@ -3813,7 +3807,7 @@ func TestBuiltinSchemas_ExecCommandAndWriteStdinShape(t *testing.T) {
 		t.Fatalf("write_stdin schema should not expose runtime timeout: %+v", stdinProps)
 	}
 	if _, ok := stdinProps["stdin"]; ok {
-		t.Fatalf("write_stdin schema exposes legacy stdin: %+v", stdinProps)
+		t.Fatalf("write_stdin schema exposes unexpected stdin: %+v", stdinProps)
 	}
 	sessionIDSchema, _ := stdinProps["session_id"].(map[string]any)
 	if sessionIDSchema["type"] != "integer" {

@@ -295,33 +295,6 @@ func TestUnknownSubcommandIsError(t *testing.T) {
 	}
 }
 
-func TestRemovedServeCommandAndLegacyFlagAreUnknown(t *testing.T) {
-	removedFlag := "--" + "head" + "less"
-	for _, test := range []struct {
-		name string
-		args []string
-		want string
-	}{
-		{name: "serve command", args: []string{"serve"}, want: `unknown command "serve"`},
-		{name: "removed flag", args: []string{"listen", removedFlag}, want: "unknown flag: " + removedFlag},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := newRootCmd()
-			var out bytes.Buffer
-			root.SetOut(&out)
-			root.SetErr(&out)
-			root.SetArgs(test.args)
-			err := root.Execute()
-			if err == nil {
-				t.Fatalf("args %v unexpectedly succeeded", test.args)
-			}
-			if !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("args %v error = %q, want %q", test.args, err, test.want)
-			}
-		})
-	}
-}
-
 func TestRemovedSessionSelectorFlagsAreUnknown(t *testing.T) {
 	removedNames := []string{"re" + "sume", "ses" + "sion"}
 	for _, commandName := range []string{"run", "repl"} {

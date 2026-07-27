@@ -581,19 +581,6 @@ providers:
 	}
 }
 
-func TestLoadFromFile_RejectsLegacyProviderConfig(t *testing.T) {
-	prepareConfigTest(t)
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "juex.yaml")
-	body := "provider:\n  id: openai\n  api_key: sk-x\n  model: gpt-test\n"
-	writeTextFile(t, configPath, body)
-
-	_, err := LoadFromFile(configPath)
-	if err == nil || !strings.Contains(err.Error(), "field provider not found") {
-		t.Fatalf("err = %v, want legacy provider field rejection", err)
-	}
-}
-
 func TestLoadFromFile_RejectsScalarShellConfig(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()

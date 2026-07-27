@@ -70,6 +70,9 @@ cannot be explained by updating the canonical docs alone. Put new ADRs under
 - Preserve unrelated live work; do not revert changes you did not make.
 - Clean your code: remove dead code, unused imports, and commented-out leftovers you create.
 - Fail loud: report skipped checks, uncertainty, and remaining risk.
+- Before the first user release, delete superseded behavior in the same change:
+  do not leave deprecation aliases, compatibility warnings, or removal notes.
+  Revisit this policy only after a real release has users.
 
 ## Verification
 

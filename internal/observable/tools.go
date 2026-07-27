@@ -199,9 +199,6 @@ type scheduleCreateInput struct {
 }
 
 func commandSpecFromCreateInput(in map[string]any) (Spec, error) {
-	if err := rejectCommandCreateRouting(in); err != nil {
-		return Spec{}, err
-	}
 	input, err := decodeCreateInput[commandCreateInput](in)
 	if err != nil {
 		return Spec{}, fmt.Errorf("observable_create: %w", err)
@@ -233,89 +230,6 @@ func scheduleSpecFromCreateInput(in map[string]any) (Spec, error) {
 		CatchUp:     input.CatchUp,
 		Observation: input.Observation,
 	})
-}
-
-func rejectCommandCreateRouting(in map[string]any) error {
-	commandRoute, scheduleRoute, err := legacyCreateRoutes(in)
-	if err != nil {
-		return err
-	}
-	flatSchedule := hasAnyCreateField(in, "timezone", "once", "daily", "interval", "catch_up")
-	observation, ok := in["observation"].(map[string]any)
-	if ok && hasAnyCreateField(observation, "content", "attachments") {
-		flatSchedule = true
-	}
-	if commandRoute && (scheduleRoute || flatSchedule) {
-		return fmt.Errorf("observable_create: mixed command and schedule source routing fields are not allowed")
-	}
-	if scheduleRoute || flatSchedule {
-		return fmt.Errorf("observable_create creates command Observables; use schedule_create for scheduled Observations")
-	}
-	if commandRoute {
-		return fmt.Errorf("observable_create expects flat command input; move nested command fields to the top level and remove source, type, or command_config")
-	}
-	return nil
-}
-
-func legacyCreateRoutes(in map[string]any) (command, schedule bool, err error) {
-	if value, exists := in["type"]; exists {
-		command, schedule, err = createRouteFromDiscriminator("type", value)
-		if err != nil {
-			return false, false, err
-		}
-	}
-	if _, exists := in["command_config"]; exists {
-		command = true
-	}
-	if _, exists := in["schedule_config"]; exists {
-		schedule = true
-	}
-	value, exists := in["source"]
-	if !exists {
-		return command, schedule, nil
-	}
-	source, ok := value.(map[string]any)
-	if !ok {
-		return false, false, fmt.Errorf("observable_create: source must be an object")
-	}
-	sourceCommand := hasAnyCreateField(source, "command", "args", "cwd", "env", "streams", "parser", "filters", "batch", "on_exit")
-	sourceSchedule := hasAnyCreateField(source, "timezone", "once", "daily", "interval", "catch_up")
-	if discriminator, exists := source["type"]; exists {
-		discriminatorCommand, discriminatorSchedule, discriminatorErr := createRouteFromDiscriminator("source.type", discriminator)
-		if discriminatorErr != nil {
-			return false, false, discriminatorErr
-		}
-		sourceCommand = sourceCommand || discriminatorCommand
-		sourceSchedule = sourceSchedule || discriminatorSchedule
-	}
-	if !sourceCommand && !sourceSchedule {
-		return false, false, fmt.Errorf("observable_create: source must identify command or schedule fields")
-	}
-	return command || sourceCommand, schedule || sourceSchedule, nil
-}
-
-func createRouteFromDiscriminator(field string, value any) (command, schedule bool, err error) {
-	discriminator, ok := value.(string)
-	if !ok {
-		return false, false, fmt.Errorf("observable_create: unknown source discriminator %s=%v; expected command or schedule", field, value)
-	}
-	switch strings.TrimSpace(discriminator) {
-	case SourceTypeCommand:
-		return true, false, nil
-	case SourceTypeSchedule:
-		return false, true, nil
-	default:
-		return false, false, fmt.Errorf("observable_create: unknown source discriminator %s=%q; expected command or schedule", field, discriminator)
-	}
-}
-
-func hasAnyCreateField(in map[string]any, fields ...string) bool {
-	for _, field := range fields {
-		if _, exists := in[field]; exists {
-			return true
-		}
-	}
-	return false
 }
 
 func decodeCreateInput[T any](in map[string]any) (T, error) {
