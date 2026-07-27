@@ -237,7 +237,8 @@ test("active session composer floats without consuming conversation layout", () 
   assert.match(composerSource, /data-testid="session-composer-stack"/);
   assert.match(
     composerSource,
-    /pointer-events-auto[\s\S]*min-h-0[\s\S]*overflow-hidden/,
+    /className="pointer-events-auto flex min-h-0 flex-col overflow-visible"[\s\S]*data-testid="session-composer-stack"/,
+    "the stack must not rectangularly clip the prompt surface shadow",
   );
   assert.match(
     composerSource,
@@ -246,7 +247,8 @@ test("active session composer floats without consuming conversation layout", () 
   assert.match(composerSource, /safe-area-inset-bottom/);
   assert.match(
     composerSource,
-    /<Separator[\s\S]*className="h-4 self-center"[\s\S]*orientation="vertical"/,
+    /<Separator[\s\S]*className="h-4 !self-center"[\s\S]*orientation="vertical"/,
+    "the vertical separator must override the primitive's stretch alignment",
   );
   assert.doesNotMatch(composerSource, /max-h-\[calc\(100dvh_/);
   assert.doesNotMatch(
