@@ -109,6 +109,7 @@ func TestReplayEventsReadOnlyMalformedTailPreservesBytes(t *testing.T) {
 			t.Errorf("restore journal mode: %v", err)
 		}
 	})
+	requireReadOnlyJournal(t, path)
 
 	var got []events.Event
 	err := ReplayEvents(dir, func(event events.Event) {
@@ -144,6 +145,7 @@ func TestReplayEventsReadOnlyValidTailWithoutNewlineSucceeds(t *testing.T) {
 			t.Errorf("restore journal mode: %v", err)
 		}
 	})
+	requireReadOnlyJournal(t, path)
 
 	var got []events.Event
 	if err := ReplayEvents(dir, func(event events.Event) {
@@ -161,6 +163,18 @@ func TestReplayEventsReadOnlyValidTailWithoutNewlineSucceeds(t *testing.T) {
 	if !reflect.DeepEqual(after, contents) {
 		t.Fatalf("read-only valid journal changed:\ngot  %q\nwant %q", after, contents)
 	}
+}
+
+func requireReadOnlyJournal(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Skip("process privileges bypass read-only file mode")
 }
 
 func TestReadEventsMissingJournal(t *testing.T) {
