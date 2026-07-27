@@ -472,14 +472,14 @@ providers:
 	}
 }
 
-func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
+func TestLoadConfigForCommandKeepsWorkspaceStateSilent(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	legacyMemory := filepath.Join(work, ".juex", "memory", "MEMORY.md")
-	if err := writeTextFile(legacyMemory, "# legacy\n"); err != nil {
+	workspaceMemory := filepath.Join(work, ".juex", "memory", "MEMORY.md")
+	if err := writeTextFile(workspaceMemory, "# workspace\n"); err != nil {
 		t.Fatal(err)
 	}
 	root := newRootCmd()
@@ -494,9 +494,14 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stderr.String(), "juex: notice: migrated workspace runtime state") ||
-		!strings.Contains(stderr.String(), cfg.AgentStateDir) {
-		t.Fatalf("migration stderr = %q", stderr.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("config load stderr = %q, want empty", stderr.String())
+	}
+	if data, err := os.ReadFile(workspaceMemory); err != nil || string(data) != "# workspace\n" {
+		t.Fatalf("workspace memory = %q, err = %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.AgentStateDir, "memory", "MEMORY.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("workspace memory unexpectedly copied into agent state: %v", err)
 	}
 	stderr.Reset()
 	if _, err := loadConfigForCommand(runCmd, &persistentFlags{cwd: work}); err != nil {
@@ -507,13 +512,13 @@ func TestLoadConfigForCommandPrintsMigrationNoticeOnce(t *testing.T) {
 	}
 }
 
-func TestDoctorDoesNotMigrateAgentState(t *testing.T) {
+func TestDoctorDoesNotCreateAgentState(t *testing.T) {
 	setHomeForCLITest(t)
 	work := t.TempDir()
 	if err := writeJuexConfigFile(filepath.Join(work, ".juex", "juex.yaml"), "openai", "https://x", "k", "m"); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTextFile(filepath.Join(work, ".juex", "memory", "MEMORY.md"), "# legacy\n"); err != nil {
+	if err := writeTextFile(filepath.Join(work, ".juex", "memory", "MEMORY.md"), "# workspace\n"); err != nil {
 		t.Fatal(err)
 	}
 	root := newRootCmd()
@@ -529,7 +534,7 @@ func TestDoctorDoesNotMigrateAgentState(t *testing.T) {
 		t.Fatalf("doctor err = %T %v, want warning\n%s", err, err, stdout.String())
 	}
 	if stderr.Len() != 0 {
-		t.Fatalf("doctor emitted migration notice: %q", stderr.String())
+		t.Fatalf("doctor stderr = %q, want empty", stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "no agent exists") {
 		t.Fatalf("doctor output missing no-agent warning:\n%s", stdout.String())
@@ -538,7 +543,7 @@ func TestDoctorDoesNotMigrateAgentState(t *testing.T) {
 		t.Fatalf("doctor created marker: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(work, ".juex", "memory", "MEMORY.md")); err != nil {
-		t.Fatalf("doctor migrated legacy memory: %v", err)
+		t.Fatalf("doctor changed workspace memory: %v", err)
 	}
 }
 
@@ -1061,7 +1066,7 @@ func TestRunCmd_DryRunJSONShape(t *testing.T) {
 	}
 }
 
-func TestRunCmd_DryRunOmitsLegacyRuntimeBudgetPlan(t *testing.T) {
+func TestRunCmd_DryRunRejectsUnknownRuntimeKey(t *testing.T) {
 	root := newRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
@@ -1076,15 +1081,12 @@ func TestRunCmd_DryRunOmitsLegacyRuntimeBudgetPlan(t *testing.T) {
 	}
 	root.SetArgs([]string{"-C", dir, "--config", configFile, "run", "--dry-run", "--json", "hello"})
 	err := root.Execute()
-	if _, ok := err.(*dryRunOK); !ok {
-		t.Fatalf("expected *dryRunOK, got %T: %v", err, err)
+	var emitted *emittedError
+	if !errors.As(err, &emitted) {
+		t.Fatalf("expected emitted error, got %T: %v", err, err)
 	}
-	var plan map[string]any
-	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := plan["runtime"]; ok {
-		t.Fatalf("dry-run plan should omit runtime budget block: %s", out.String())
+	if !strings.Contains(out.String(), "runtime.max_iters") {
+		t.Fatalf("error output = %s, want runtime.max_iters", out.String())
 	}
 }
 

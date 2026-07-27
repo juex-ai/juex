@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,26 @@ func seedSession(t *testing.T, work, id string, jsonlBody string) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(jsonlBody), 0o644); err != nil {
+	var normalized strings.Builder
+	for i, line := range strings.Split(jsonlBody, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var msg llm.Message
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.ID == "" {
+			msg.ID = fmt.Sprintf("m%d", i+1)
+		}
+		data, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		normalized.Write(data)
+		normalized.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(normalized.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir

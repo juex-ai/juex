@@ -555,25 +555,49 @@ func TestAppend_AssignsMessageID(t *testing.T) {
 	}
 }
 
-func TestLoad_AssignsDeterministicLegacyIDs(t *testing.T) {
+func TestLoadRejectsMessageWithoutID(t *testing.T) {
 	root := t.TempDir()
-	dir := filepath.Join(root, "20260515T010203-legacy")
+	dir := filepath.Join(root, "20260515T010203-missingid")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"role":"user","blocks":[{"type":"text","text":"old"}]}` + "\n" +
+	body := `{"id":"m1","role":"user","blocks":[{"type":"text","text":"old"}]}` + "\n" +
 		`{"role":"assistant","blocks":[{"type":"text","text":"reply"}]}` + "\n"
-	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte(body), 0o644); err != nil {
+	path := filepath.Join(dir, conversationFile)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	s, err := Load(dir)
-	if err != nil {
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load accepted a message without an id")
+	}
+	for _, want := range []string{path, ":2", "internal/session/transcript_repair.go"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load error = %q, want %q", err, want)
+		}
+	}
+}
+
+func TestReadTranscriptMessagesRejectsMessageWithoutID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), conversationFile)
+	body := []byte(`{"role":"user","blocks":[]}` + "\n")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	if s.History[0].ID != "legacy-000001" || s.History[1].ID != "legacy-000002" {
-		t.Fatalf("legacy IDs = %q, %q", s.History[0].ID, s.History[1].ID)
+
+	_, err := readTranscriptMessages(path, []transcriptIndexEntry{{
+		LineIndex: 3,
+		Offset:    0,
+		Length:    len(body),
+	}})
+	if err == nil {
+		t.Fatal("readTranscriptMessages accepted a message without an id")
+	}
+	for _, want := range []string{path, ":4", "internal/session/transcript_repair.go"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("readTranscriptMessages error = %q, want %q", err, want)
+		}
 	}
 }
 
@@ -784,7 +808,7 @@ func TestSession_LoadNormalizesNullBlocks(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte(`{"role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, conversationFile), []byte(`{"id":"m1","role":"assistant","blocks":null}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

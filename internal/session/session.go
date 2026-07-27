@@ -457,14 +457,18 @@ func prepareNewMessage(m llm.Message) llm.Message {
 	return m
 }
 
-func normalizeLoadedMessage(m llm.Message, index int) llm.Message {
+func normalizeLoadedMessage(path string, line int, m llm.Message) (llm.Message, error) {
 	if m.ID == "" {
-		m.ID = fmt.Sprintf("legacy-%06d", index+1)
+		return llm.Message{}, fmt.Errorf(
+			"session: load %s:%d: message id is empty; inspect and repair the transcript with internal/session/transcript_repair.go",
+			path,
+			line,
+		)
 	}
 	if m.Blocks == nil {
 		m.Blocks = []llm.Block{}
 	}
-	return m
+	return m, nil
 }
 
 func splitLines(data []byte) [][]byte {
@@ -556,7 +560,7 @@ func idCreatedAt(id string) (time.Time, bool) {
 }
 
 // MessageCreatedAt extracts the creation time encoded in a canonical message
-// ID. Legacy and caller-supplied message IDs do not carry this metadata.
+// ID. Caller-supplied message IDs do not carry this metadata.
 func MessageCreatedAt(id string) (time.Time, bool) {
 	const prefix = "msg-"
 	if !strings.HasPrefix(id, prefix) {

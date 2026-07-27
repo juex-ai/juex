@@ -532,7 +532,7 @@ providers:
 	}
 }
 
-func TestLoad_LegacyRuntimeBudgetKeysAreIgnored(t *testing.T) {
+func TestLoad_RejectsUnknownRuntimeKey(t *testing.T) {
 	home := prepareConfigTest(t)
 	work := t.TempDir()
 	t.Chdir(work)
@@ -545,21 +545,15 @@ providers:
       - id: gpt-global
 runtime:
   max_iters: 5
-  max_duration: 20s
-`
-	local := `runtime:
-  max_iters: 0
-  max_duration: forever
 `
 	writeTextFile(t, filepath.Join(home, ".juex", "juex.yaml"), global)
-	writeTextFile(t, filepath.Join(work, ".juex", "juex.yaml"), local)
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatal(err)
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "runtime.max_iters") {
+		t.Fatalf("Load error = %v, want runtime.max_iters", err)
 	}
-	if cfg.ProviderID != "openai" || cfg.Model != "gpt-global" {
-		t.Fatalf("cfg = %+v", cfg)
+	if _, statErr := os.Stat(filepath.Join(work, ".juex", "juex.local.json")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unknown runtime key created an agent marker: %v", statErr)
 	}
 }
 
@@ -1684,7 +1678,7 @@ func TestLoadFromFile_CompactionDefaults(t *testing.T) {
 	}
 }
 
-func TestLoadFromFile_LegacyRuntimeBudgetKeysAreIgnored(t *testing.T) {
+func TestLoadFromFile_RejectsUnknownRuntimeKey(t *testing.T) {
 	prepareConfigTest(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "juex.yaml")
@@ -1696,17 +1690,13 @@ providers:
     models:
       - id: gpt-4
 runtime:
-  max_iters: 42
   max_duration: 15m
 `
 	writeTextFile(t, configPath, body)
 
-	cfg, err := LoadFromFile(configPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.ProviderID != "openai" || cfg.Model != "gpt-4" {
-		t.Fatalf("cfg = %+v", cfg)
+	_, err := LoadFromFile(configPath)
+	if err == nil || !strings.Contains(err.Error(), "runtime.max_duration") {
+		t.Fatalf("LoadFromFile error = %v, want runtime.max_duration", err)
 	}
 }
 

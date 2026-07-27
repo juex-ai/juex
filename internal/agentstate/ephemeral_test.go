@@ -46,8 +46,8 @@ func TestResolveExistingReadsIdentityWithoutMaintenanceWrites(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(home, ".locks")); err != nil {
 		t.Fatal(err)
 	}
-	legacyPath := filepath.Join(workDir, ".juex", "sessions", "legacy", "conversation.jsonl")
-	writeText(t, legacyPath, "legacy\n")
+	workspaceStatePath := filepath.Join(workDir, ".juex", "sessions", "stale", "conversation.jsonl")
+	writeText(t, workspaceStatePath, "workspace-state\n")
 
 	existing, err := ResolveExisting(Options{HomeDir: home, WorkDir: workDir})
 	if err != nil {
@@ -59,12 +59,12 @@ func TestResolveExistingReadsIdentityWithoutMaintenanceWrites(t *testing.T) {
 	assertFileBytes(t, resolved.MarkerPath, markerBefore)
 	assertFileBytes(t, agentPath, agentBefore)
 	assertFileBytes(t, excludePath, excludeBefore)
-	assertFileBytes(t, legacyPath, []byte("legacy\n"))
+	assertFileBytes(t, workspaceStatePath, []byte("workspace-state\n"))
 	if _, err := os.Stat(filepath.Join(home, ".locks")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read-only resolution created locks: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(resolved.Address.StateDir(), "sessions", "legacy")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read-only resolution migrated legacy state: %v", err)
+	if _, err := os.Stat(filepath.Join(resolved.Address.StateDir(), "sessions", "stale")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only resolution copied workspace state: %v", err)
 	}
 }
 
